@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import threading
 import time
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 
 from agent.tool_execution import ToolExecutionCoordinator
 from run_agent import AIAgent
+from VoidCube_app.tool_events import ToolEventKind
 
 
 pytestmark = [pytest.mark.smoke, pytest.mark.unit]
@@ -58,13 +60,11 @@ def _agent() -> AIAgent:
     agent.log_prefix_chars = 80
     agent.log_prefix = ""
     agent._print_fn = None
-    agent.tool_progress_callback = None
-    agent.tool_start_callback = None
-    agent.tool_complete_callback = None
+    agent.tool_event_sink = None
     agent.tool_delay = 0
     agent.session_id = "session-tools"
     agent.valid_tool_names = ["custom_tool", "read_file", "search_files"]
-    agent.clarify_callback = None
+    agent.clarification_sink = None
     agent._current_main_runtime = lambda: {"provider": "safe"}
     agent._touch_activity = lambda _message: None
     agent._vprint = lambda *_args, **_kwargs: None
@@ -204,19 +204,11 @@ def test_sequential_delay_runs_only_between_started_calls():
 def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch):
     import run_agent
 
-    events: list[tuple] = []
+    events = []
     routed: list[dict] = []
     budgeted: list[list[dict]] = []
     agent = _agent()
-    agent.tool_progress_callback = lambda event, name, *_args, **kwargs: events.append(
-        (event, name, kwargs.get("is_error"))
-    )
-    agent.tool_start_callback = lambda call_id, name, args: events.append(
-        ("start", call_id, name, args)
-    )
-    agent.tool_complete_callback = lambda call_id, name, args, result: events.append(
-        ("complete", call_id, name, args, result)
-    )
+    agent.tool_event_sink = events.append
     agent._subdirectory_hints = SimpleNamespace(
         check_tool_call=lambda name, _args: f"\n[hint:{name}]"
     )
@@ -257,12 +249,14 @@ def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch
             "main_runtime": {"provider": "safe"},
         }
     ]
-    assert [event[0] for event in events] == [
-        "tool.started",
-        "start",
-        "tool.completed",
-        "complete",
+    assert [event.kind for event in events] == [
+        ToolEventKind.STARTED,
+        ToolEventKind.COMPLETED,
     ]
+    assert [event.call_id for event in events] == ["call-1", "call-1"]
+    assert events[0].arguments == {"value": 3}
+    assert events[1].result == "raw-result"
+    assert events[1].is_error is False
     assert messages == [
         {
             "role": "tool",
@@ -273,10 +267,46 @@ def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch
     assert budgeted == [messages]
 
 
+def test_agent_clarify_route_passes_options_to_shared_sink() -> None:
+    from VoidCube_app.interaction_contract import (
+        ClarificationDecision,
+        ClarificationStatus,
+    )
+
+    agent = _agent()
+    requests = []
+    agent.clarification_sink = lambda request: (
+        requests.append(request)
+        or ClarificationDecision(
+            ClarificationStatus.ANSWERED,
+            answer="staging",
+        )
+    )
+    call = SimpleNamespace(
+        name="clarify",
+        arguments={
+            "question": "Which environment?",
+            "options": ["staging", "production"],
+        },
+        call_id="clarify-1",
+    )
+
+    result = json.loads(
+        agent._route_tool_call(call, messages=[], effective_task_id="task-clarify")
+    )
+
+    assert requests[0].question == "Which environment?"
+    assert requests[0].options == ("staging", "production")
+    assert result["status"] == "answered"
+    assert result["answer"] == "staging"
+
+
 def test_agent_parallel_path_writes_results_in_assistant_order(monkeypatch):
     import run_agent
 
     agent = _agent()
+    events = []
+    agent.tool_event_sink = events.append
     release_first = threading.Event()
     second_finished = threading.Event()
 
@@ -312,6 +342,39 @@ def test_agent_parallel_path_writes_results_in_assistant_order(monkeypatch):
         "call-2",
     ]
     assert [message["content"] for message in messages] == ["a.txt", "b.txt"]
+    assert [(event.kind, event.call_id) for event in events] == [
+        (ToolEventKind.STARTED, "call-1"),
+        (ToolEventKind.STARTED, "call-2"),
+        (ToolEventKind.COMPLETED, "call-1"),
+        (ToolEventKind.COMPLETED, "call-2"),
+    ]
+
+
+def test_tool_event_sink_failure_does_not_interrupt_execution(monkeypatch):
+    import run_agent
+
+    agent = _agent()
+    agent.tool_event_sink = lambda _event: (_ for _ in ()).throw(
+        RuntimeError("renderer stopped")
+    )
+    monkeypatch.setattr(run_agent, "handle_function_call", lambda *_args, **_kwargs: "ok")
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+    assistant = SimpleNamespace(
+        tool_calls=[_tool_call("call-1", "read_file", {"path": "README.md"})]
+    )
+    messages = []
+
+    agent._execute_tool_calls(assistant, messages, "task-sink-failure")
+
+    assert messages == [
+        {"role": "tool", "content": "ok", "tool_call_id": "call-1"}
+    ]
 
 
 def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
@@ -319,8 +382,8 @@ def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
 
     agent = _agent()
     agent._interrupt_requested = True
-    started: list[str] = []
-    agent.tool_start_callback = lambda call_id, *_args: started.append(call_id)
+    events = []
+    agent.tool_event_sink = events.append
     monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
     monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
     assistant = SimpleNamespace(
@@ -333,7 +396,7 @@ def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
 
     agent._execute_tool_calls(assistant, messages, "task-interrupt")
 
-    assert started == []
+    assert events == []
     assert [message["tool_call_id"] for message in messages] == [
         "call-1",
         "call-2",
@@ -411,3 +474,12 @@ def test_tool_worker_inherits_interrupt_that_arrived_before_registration():
 
     assert observed == [True, False]
     assert agent._tool_thread_ids == set()
+
+
+def test_agent_constructor_exposes_only_structured_tool_event_port() -> None:
+    parameters = inspect.signature(AIAgent.__init__).parameters
+
+    assert "tool_event_sink" in parameters
+    assert "tool_progress_callback" not in parameters
+    assert "tool_start_callback" not in parameters
+    assert "tool_complete_callback" not in parameters

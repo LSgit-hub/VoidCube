@@ -116,13 +116,9 @@ def _check_disk_usage_warning():
 # Session-cached sudo password (persists until CLI exits)
 _cached_sudo_password: str = ""
 
-# Optional UI callbacks for interactive prompts. When set, these are called
-# instead of the default /dev/tty or input() readers. The CLI registers these
-# so prompts route through prompt_toolkit's event loop.
-#   _sudo_password_callback() -> str  (return password or "" to skip)
-#   _approval_callback(command, description) -> str  ("once"/"session"/"always"/"deny")
+# Optional UI ports for interactive prompts. The CLI owns their rendering.
 _sudo_password_callback = None
-_approval_callback = None
+_approval_sink = None
 
 
 def set_sudo_password_callback(cb):
@@ -131,10 +127,10 @@ def set_sudo_password_callback(cb):
     _sudo_password_callback = cb
 
 
-def set_approval_callback(cb):
-    """Register a callback for dangerous command approval prompts (used by CLI)."""
-    global _approval_callback
-    _approval_callback = cb
+def set_approval_sink(sink):
+    """Register the application approval port used by dangerous commands."""
+    global _approval_sink
+    _approval_sink = sink
 
 # =============================================================================
 # Dangerous Command Approval System
@@ -148,9 +144,8 @@ from tools.approval import (
 
 
 def _check_all_guards(command: str, env_type: str) -> dict:
-    """Delegate to consolidated guard (tirith + dangerous cmd) with CLI callback."""
-    return _check_all_guards_impl(command, env_type,
-                                  approval_callback=_approval_callback)
+    """Delegate to the consolidated guard with the registered approval port."""
+    return _check_all_guards_impl(command, env_type, approval_sink=_approval_sink)
 
 
 # Allowlist: characters that can legitimately appear in directory paths.

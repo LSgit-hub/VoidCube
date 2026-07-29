@@ -82,6 +82,10 @@ class SessionPersistence:
         """Start SQLite persistence at the first message of a new session."""
         self._last_flushed_db_idx = 0
 
+    def set_flush_cursor(self, persisted_message_count: int) -> None:
+        """Align incremental persistence after application history mutation."""
+        self._last_flushed_db_idx = max(0, int(persisted_message_count))
+
     def persist(
         self,
         messages: list[Message],
@@ -144,14 +148,19 @@ class SessionPersistence:
         except Exception as exc:
             logger.warning("Session DB append_message failed: %s", exc)
 
-    def save_log(self, messages: list[Message] | None = None) -> None:
+    def save_log(
+        self,
+        messages: list[Message] | None = None,
+        *,
+        allow_truncate: bool = False,
+    ) -> None:
         """Write the latest complete raw transcript to its JSON session log."""
         if not self.enabled:
             return
         if messages is not None:
             self.messages = messages
-        active_messages = messages or self.messages
-        if not active_messages:
+        active_messages = self.messages if messages is None else messages
+        if not active_messages and not allow_truncate:
             return
 
         try:
@@ -169,7 +178,7 @@ class SessionPersistence:
                     existing_count = existing.get(
                         "message_count", len(existing.get("messages", []))
                     )
-                    if existing_count > len(cleaned):
+                    if existing_count > len(cleaned) and not allow_truncate:
                         logger.debug(
                             "Skipping session log overwrite: existing has %d messages, current has %d",
                             existing_count,

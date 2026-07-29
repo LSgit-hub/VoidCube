@@ -113,7 +113,7 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     cli.checkpoints_enabled = False
     cli.checkpoint_max_snapshots = 0
     cli.pass_session_id = False
-    cli._on_tool_progress = None
+    cli._on_tool_event = None
     cli._inline_diffs_enabled = False
     cli.streaming_enabled = False
     cli._stream_delta = None
@@ -135,7 +135,7 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     cli._ensure_runtime_credentials = lambda: True
     cli._resumed = False
     cli.conversation_history = []
-    cli._clarify_callback = None
+    cli._clarification_sink = None
     cli._pending_title = None
 
     ok = cli._init_agent()
@@ -657,7 +657,6 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     cli._spinner_text = "working"
     cli._tool_start_time = 12.0
     cli._current_tool_name = "shell"
-    cli._pending_tool_info = {"tool": "shell"}
     cli._last_scrollback_tool = "shell"
     cli._voice_mode = False
     cli._voice_continuous = False
@@ -690,7 +689,6 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     assert cli._spinner_text == ""
     assert cli._tool_start_time == 0.0
     assert cli._current_tool_name == ""
-    assert cli._pending_tool_info == {}
     assert cli._last_scrollback_tool == ""
     assert app.invalidate_calls >= 2
 
@@ -702,7 +700,6 @@ def test_embedded_autonomous_component_execute_pending_input_stays_out_of_main_s
     cli._spinner_text = "working"
     cli._tool_start_time = 12.0
     cli._current_tool_name = "shell"
-    cli._pending_tool_info = {"tool": "shell"}
     cli._last_scrollback_tool = "shell"
     cli._voice_mode = False
     cli._voice_continuous = False
@@ -734,7 +731,6 @@ def test_embedded_autonomous_component_execute_pending_input_stays_out_of_main_s
     assert cli._spinner_text == ""
     assert cli._tool_start_time == 0.0
     assert cli._current_tool_name == ""
-    assert cli._pending_tool_info == {}
     assert cli._last_scrollback_tool == ""
 
 
@@ -746,7 +742,6 @@ def test_embedded_autonomous_component_tool_progress_records_panel_events_withou
     cli._autonomous_execution_events = []
     cli._tool_start_time = 0.0
     cli._current_tool_name = ""
-    cli._pending_tool_info = {}
     cli._last_scrollback_tool = ""
     cli.tool_progress_mode = "all"
     cli._invalidate = lambda *args, **kwargs: None
@@ -755,8 +750,21 @@ def test_embedded_autonomous_component_tool_progress_records_panel_events_withou
     scrollback = []
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append((args, kwargs)))
 
-    cli._on_tool_progress("tool.started", function_name="shell")
-    cli._on_tool_progress("tool.completed", function_name="shell", duration=1.2, is_error=False)
+    from VoidCube_app.tool_events import ToolEvent
+
+    cli._on_tool_event(
+        ToolEvent.started(call_id="call-1", name="shell", arguments={})
+    )
+    cli._on_tool_event(
+        ToolEvent.completed(
+            call_id="call-1",
+            name="shell",
+            arguments={},
+            result="ok",
+            duration=1.2,
+            is_error=False,
+        )
+    )
 
     assert scrollback == []
     assert [event["stage"] for event in cli._autonomous_execution_events] == [

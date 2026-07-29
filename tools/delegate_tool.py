@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tools.toolsets import TOOLSETS
+from VoidCube_app.tool_events import ToolEvent, ToolEventKind
 
 
 # Tools that children must never have access to
@@ -171,40 +172,40 @@ def _strip_blocked_tools(toolsets: List[str]) -> List[str]:
     return [t for t in toolsets if t not in blocked_toolset_names]
 
 
-def _build_child_progress_callback(
+def _build_child_event_sink(
     task_index: int,
     parent_agent,
     task_count: int = 1,
     display_manager=None,
     task_id: str = None,
 ) -> Optional[callable]:
-    """Build a callback that relays child agent tool calls to the parent display.
+    """Build a sink that relays child tool events to the parent display.
 
     Three display paths (in order of priority):
       1. SubagentDisplayManager: Rich CLI visualization (tree view, status panel)
       2. CLI spinner: Tree-view lines above the parent's delegation spinner
-      3. Gateway: Batches tool names and relays to parent's progress callback
+      3. Gateway: Batches tool names and relays to the parent's event sink
 
     Returns None if no display mechanism is available, in which case the
-    child agent runs with no progress callback (identical to current behavior).
+    child agent runs without a tool event sink.
     """
     # Priority 1: Use SubagentDisplayManager if available.
     if display_manager is not None:
         # Get goal from parent_agent if available
         goal = getattr(parent_agent, '_current_delegate_goal', "")
-        return _build_subagent_display_callback(
+        return _build_subagent_display_sink(
             task_id or f"task-{task_index}",
             task_index,
             display_manager,
             goal=goal,
         )
     
-    # Priority 2: Legacy CLI spinner callback
+    # Priority 2: CLI spinner projection
     spinner = getattr(parent_agent, '_delegate_spinner', None)
-    parent_cb = getattr(parent_agent, 'tool_progress_callback', None)
+    parent_sink = getattr(parent_agent, 'tool_event_sink', None)
 
-    if not spinner and not parent_cb:
-        return None  # No display → no callback → zero behavior change
+    if not spinner and not parent_sink:
+        return None
 
     # Show 1-indexed prefix only in batch mode (multiple tasks)
     prefix = f"[{task_index + 1}] " if task_count > 1 else ""
@@ -213,13 +214,9 @@ def _build_child_progress_callback(
     _BATCH_SIZE = 5
     _batch: List[str] = []
 
-    def _callback(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
-        # event_type is one of: "tool.started", "tool.completed",
-        # "reasoning.available", "_thinking", "subagent_progress"
-
-        # "_thinking" / reasoning events
-        if event_type in ("_thinking", "reasoning.available"):
-            text = preview or tool_name or ""
+    def _sink(event: ToolEvent) -> None:
+        if event.kind is ToolEventKind.REASONING:
+            text = event.text
             if spinner:
                 short = (text[:55] + "...") if len(text) > 55 else text
                 try:
@@ -229,16 +226,17 @@ def _build_child_progress_callback(
             # Don't relay thinking to gateway (too noisy for chat)
             return
 
-        # tool.completed — no display needed here (spinner shows on started)
-        if event_type == "tool.completed":
+        if event.kind is ToolEventKind.COMPLETED:
+            return
+        if event.kind is not ToolEventKind.STARTED:
             return
 
-        # tool.started — display and batch for parent relay
         if spinner:
-            short = (preview[:35] + "...") if preview and len(preview) > 35 else (preview or "")
+            preview = event.preview
+            short = (preview[:35] + "...") if len(preview) > 35 else preview
             from agent.display import get_tool_emoji
-            emoji = get_tool_emoji(tool_name or "")
-            line = f" {prefix}├─ {emoji} {tool_name}"
+            emoji = get_tool_emoji(event.name)
+            line = f" {prefix}├─ {emoji} {event.name}"
             if short:
                 line += f"  \"{short}\""
             try:
@@ -246,32 +244,32 @@ def _build_child_progress_callback(
             except Exception as e:
                 logger.debug("Spinner print_above failed: %s", e)
 
-        if parent_cb:
-            _batch.append(tool_name or "")
+        if parent_sink:
+            _batch.append(event.name)
             if len(_batch) >= _BATCH_SIZE:
                 summary = ", ".join(_batch)
                 try:
-                    parent_cb("subagent_progress", f"🔀 {prefix}{summary}")
+                    parent_sink(ToolEvent.subagent_progress(f"🔀 {prefix}{summary}"))
                 except Exception as e:
-                    logger.debug("Parent callback failed: %s", e)
+                    logger.debug("Parent tool event sink failed: %s", e)
                 _batch.clear()
 
     def _flush():
         """Flush remaining batched tool names to gateway on completion."""
-        if parent_cb and _batch:
+        if parent_sink and _batch:
             summary = ", ".join(_batch)
             try:
-                parent_cb("subagent_progress", f"🔀 {prefix}{summary}")
+                parent_sink(ToolEvent.subagent_progress(f"🔀 {prefix}{summary}"))
             except Exception as e:
-                logger.debug("Parent callback flush failed: %s", e)
+                logger.debug("Parent tool event sink flush failed: %s", e)
             _batch.clear()
 
-    _callback._flush = _flush
-    return _callback
+    _sink._flush = _flush
+    return _sink
 
 
-def _build_subagent_display_callback(task_id: str, task_index: int, display_manager, goal: str = ""):
-    """Build a callback using SubagentDisplayManager for rich CLI visualization.
+def _build_subagent_display_sink(task_id: str, task_index: int, display_manager, goal: str = ""):
+    """Build a structured event sink for rich subagent visualization.
     
     This provides a structured display with:
     - Real-time status panel
@@ -279,48 +277,34 @@ def _build_subagent_display_callback(task_id: str, task_index: int, display_mana
     - Thinking/reasoning display
     - Background task management
     
-    Note: Task entry is typically created by delegate_task() before this callback
+    Note: Task entry is typically created by delegate_task() before this sink
     is built, so we don't create it here to avoid duplicates.
     """
     _tool_depth = 1  # Current tool nesting depth
     _iteration = 0   # Current iteration
     
-    def _callback(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
+    def _sink(event: ToolEvent) -> None:
         nonlocal _tool_depth, _iteration
-        
-        # Thinking/reasoning events
-        # Subagent sends: "_thinking", "reasoning.available"
-        if event_type in ("_thinking", "reasoning.available"):
-            # For "_thinking", tool_name contains the text
-            # For "reasoning.available", preview contains the text
-            thinking_text = preview or tool_name or ""
-            display_manager.on_thinking(task_id, thinking_text, _iteration)
+        if event.kind is ToolEventKind.REASONING:
+            display_manager.on_thinking(task_id, event.text, _iteration)
         
         # Tool execution started
-        elif event_type == "tool.started":
+        elif event.kind is ToolEventKind.STARTED:
             display_manager.on_tool_start(
                 task_id,
-                tool_name or "",
-                args_preview=preview or "",
+                event.name,
+                args_preview=event.preview,
                 depth=_tool_depth,
                 iteration=_iteration,
             )
         
         # Tool execution completed
-        elif event_type == "tool.completed":
-            status = "ok"
-            result = ""
-            is_error = kwargs.get("is_error", False)
-            
-            if is_error:
-                status = "error"
-                result = kwargs.get("error", "")
-            
+        elif event.kind is ToolEventKind.COMPLETED:
             display_manager.on_tool_complete(
                 task_id,
-                tool_name or "",
-                result_preview=result,
-                status=status,
+                event.name,
+                result_preview=event.result if event.is_error else "",
+                status="error" if event.is_error else "ok",
             )
     
     def _flush():
@@ -328,8 +312,8 @@ def _build_subagent_display_callback(task_id: str, task_index: int, display_mana
         # Render final state
         display_manager.render(clear=False)
     
-    _callback._flush = _flush
-    return _callback
+    _sink._flush = _flush
+    return _sink
 
 
 def _build_child_agent(
@@ -397,8 +381,8 @@ def _build_child_agent(
     if (not parent_api_key) and hasattr(parent_agent, "_client_kwargs"):
         parent_api_key = parent_agent._client_kwargs.get("api_key")
 
-    # Build progress callback to relay tool calls to parent display
-    child_progress_cb = _build_child_progress_callback(
+    # Build one event sink to relay tool calls to the parent display.
+    child_event_sink = _build_child_event_sink(
         task_index, parent_agent, display_manager=display_manager, task_id=task_id
     )
 
@@ -408,14 +392,14 @@ def _build_child_agent(
     # max_iterations.  The user controls the per-subagent cap in config.yaml.
 
     child_thinking_cb = None
-    if child_progress_cb:
+    if child_event_sink:
         def _child_thinking(text: str) -> None:
             if not text:
                 return
             try:
-                child_progress_cb("_thinking", text)
+                child_event_sink(ToolEvent.reasoning(text))
             except Exception as e:
-                logger.debug("Child thinking callback relay failed: %s", e)
+                logger.debug("Child thinking event relay failed: %s", e)
 
         child_thinking_cb = _child_thinking
 
@@ -464,7 +448,6 @@ def _build_child_agent(
         platform=getattr(parent_agent, 'platform', 'cli') if parent_agent else 'cli',
         skip_context_files=True,
         skip_memory=True,
-        clarify_callback=None,
         thinking_callback=child_thinking_cb,
         session_db=getattr(parent_agent, '_session_db', None) if parent_agent else None,
         parent_session_id=getattr(parent_agent, 'session_id', None) if parent_agent else None,
@@ -472,7 +455,7 @@ def _build_child_agent(
         providers_ignored=getattr(parent_agent, 'providers_ignored', None) if parent_agent else None,
         providers_order=getattr(parent_agent, 'providers_order', None) if parent_agent else None,
         provider_sort=getattr(parent_agent, 'provider_sort', None) if parent_agent else None,
-        tool_progress_callback=child_progress_cb,
+        tool_event_sink=child_event_sink,
         iteration_budget=None,  # fresh budget per subagent
     )
     child._print_fn = getattr(parent_agent, '_print_fn', None)
@@ -518,8 +501,7 @@ def _run_single_child(
     """
     child_start = time.monotonic()
 
-    # Get the progress callback from the child agent
-    child_progress_cb = getattr(child, 'tool_progress_callback', None)
+    child_event_sink = getattr(child, 'tool_event_sink', None)
 
     # Restore parent tool names using the value saved before child construction
     # mutated the global. This is the correct parent toolset, not the child's.
@@ -580,12 +562,12 @@ def _run_single_child(
     try:
         result = child.run_conversation(user_message=goal)
 
-        # Flush any remaining batched progress to gateway
-        if child_progress_cb and hasattr(child_progress_cb, '_flush'):
+        # Flush any remaining batched progress to the parent sink.
+        if child_event_sink and hasattr(child_event_sink, '_flush'):
             try:
-                child_progress_cb._flush()
+                child_event_sink._flush()
             except Exception as e:
-                logger.debug("Progress callback flush failed: %s", e)
+                logger.debug("Tool event sink flush failed: %s", e)
 
         duration = round(time.monotonic() - child_start, 2)
 

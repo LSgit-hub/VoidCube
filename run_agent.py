@@ -40,6 +40,8 @@ from VoidCube_core.constants import get_VoidCube_home
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from VoidCube_app.environment import load_VoidCube_dotenv
+from VoidCube_app.interaction_contract import ClarificationSink
+from VoidCube_app.tool_events import ToolEvent, ToolEventSink
 
 _VoidCube_home = get_VoidCube_home()
 _project_env = Path(__file__).parent / '.env'
@@ -267,12 +269,10 @@ class AIAgent:
         provider_require_parameters: bool = False,
         provider_data_collection: str = None,
         session_id: str = None,
-        tool_progress_callback: callable = None,
-        tool_start_callback: callable = None,
-        tool_complete_callback: callable = None,
+        tool_event_sink: ToolEventSink | None = None,
         thinking_callback: callable = None,
         reasoning_callback: callable = None,
-        clarify_callback: callable = None,
+        clarification_sink: ClarificationSink | None = None,
         step_callback: callable = None,
         stream_delta_callback: callable = None,
         interim_assistant_callback: callable = None,
@@ -319,9 +319,9 @@ class AIAgent:
             providers_order (List[str]): OpenRouter providers to try in order (optional)
             provider_sort (str): Sort providers by price/throughput/latency (optional)
             session_id (str): Pre-generated session ID for logging (optional, auto-generated if not provided)
-            tool_progress_callback (callable): Callback function(tool_name, args_preview) for progress notifications
-            clarify_callback (callable): Callback function(question, choices) -> str for interactive user questions.
-                Provided by the platform layer (CLI or gateway). If None, the clarify tool returns an error.
+            tool_event_sink: UI-independent sink for tool lifecycle and reasoning events.
+            clarification_sink: UI-independent port for interactive user questions.
+                If None, the clarify tool reports that interaction is unavailable.
             max_tokens (int): Maximum tokens for model responses (optional, uses model default if not set)
             reasoning_config (Dict): OpenRouter reasoning configuration override (e.g. {"effort": "none"} to disable thinking).
                 If None, defaults to {"enabled": True, "effort": "medium"} for OpenRouter. Set to disable/customize reasoning.
@@ -385,13 +385,11 @@ class AIAgent:
                 daemon=True,
             ).start()
 
-        self.tool_progress_callback = tool_progress_callback
-        self.tool_start_callback = tool_start_callback
-        self.tool_complete_callback = tool_complete_callback
+        self.tool_event_sink = tool_event_sink
         self.suppress_status_output = False
         self.thinking_callback = thinking_callback
         self.reasoning_callback = reasoning_callback
-        self.clarify_callback = clarify_callback
+        self.clarification_sink = clarification_sink
         self.step_callback = step_callback
         self.stream_delta_callback = stream_delta_callback
         self.interim_assistant_callback = interim_assistant_callback
@@ -642,14 +640,6 @@ class AIAgent:
         # Session logs go into ~/.VoidCube/sessions/ alongside gateway sessions
         VoidCube_home = get_VoidCube_home()
         self.logs_dir = VoidCube_home / "sessions"
-        
-        # Session state management
-        self._session_state = None
-        try:
-            from VoidCube_cli.session_state import SessionState
-            self._session_state = SessionState(self.session_id, VoidCube_home)
-        except Exception:
-            pass
         
         # Cached system prompt -- built once per session, only rebuilt on compression
         self._cached_system_prompt: Optional[str] = None
@@ -1028,6 +1018,38 @@ class AIAgent:
         # Context engine reset (works for both built-in compressor and plugins)
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_reset()
+
+    def activate_session(
+        self,
+        session_id: str,
+        *,
+        session_start: datetime,
+    ) -> None:
+        """Switch this runtime to a session selected by the application layer."""
+        self.session_id = session_id
+        self.session_start = session_start
+        self.reset_session_state()
+        self._session_persistence.session_start = session_start
+        self._session_persistence.reset_flush_cursor()
+
+        from tools.todo_tool import TodoStore
+
+        self._todo_store = TodoStore()
+        self._invalidate_system_prompt()
+
+    def mark_session_history_persisted(self, message_count: int) -> None:
+        """Align persistence after the application truncates session history."""
+        self._session_persistence.set_flush_cursor(message_count)
+
+    def replace_persisted_session_history(
+        self,
+        conversation_history: List[Dict[str, Any]],
+    ) -> None:
+        """Replace the JSON transcript after an explicit history mutation."""
+        self._session_persistence.save_log(
+            conversation_history,
+            allow_truncate=True,
+        )
     
     def switch_model(self, new_model, new_provider, api_key='', base_url=''):
         """Switch the model/provider in-place for a live agent.
@@ -1182,13 +1204,21 @@ class AIAgent:
     def _should_emit_quiet_tool_messages(self) -> bool:
         """Return True when quiet-mode tool summaries should print directly.
 
-        When the caller provides ``tool_progress_callback`` (for example the CLI
-        TUI or a gateway progress renderer), that callback owns progress display.
+        When the caller provides ``tool_event_sink`` (for example the CLI TUI or
+        a gateway progress renderer), that sink owns progress display.
         Emitting quiet-mode summary lines here duplicates progress and leaks tool
         previews into flows that are expected to stay silent, such as
         ``VoidCube chat -q``.
         """
-        return self.quiet_mode and not self.tool_progress_callback
+        return self.quiet_mode and not self.tool_event_sink
+
+    def _emit_tool_event(self, event: ToolEvent) -> None:
+        if self.tool_event_sink is None:
+            return
+        try:
+            self.tool_event_sink(event)
+        except Exception as exc:
+            logger.debug("Tool event sink failed: %s", exc)
 
     def _emit_status(self, message: str) -> None:
         """Emit a lifecycle status message to both CLI and gateway channels.
@@ -3023,19 +3053,14 @@ class AIAgent:
             self._current_tool = call.name
             self._touch_activity(f"executing tool: {call.name}")
 
-        if self.tool_progress_callback:
-            try:
-                preview = _build_tool_preview(call.name, call.arguments)
-                self.tool_progress_callback(
-                    "tool.started", call.name, preview, call.arguments
-                )
-            except Exception as exc:
-                logger.debug("Tool progress callback error: %s", exc)
-        if self.tool_start_callback:
-            try:
-                self.tool_start_callback(call.call_id, call.name, call.arguments)
-            except Exception as exc:
-                logger.debug("Tool start callback error: %s", exc)
+        self._emit_tool_event(
+            ToolEvent.started(
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.arguments,
+                preview=_build_tool_preview(call.name, call.arguments),
+            )
+        )
 
     def _checkpoint_tool_call(self, call: PreparedToolCall) -> None:
         if not self._checkpoint_mgr.enabled:
@@ -3212,8 +3237,8 @@ class AIAgent:
             from tools.clarify_tool import clarify_tool as _clarify_tool
             return _clarify_tool(
                 question=function_args.get("question", ""),
-                choices=function_args.get("choices"),
-                callback=self.clarify_callback,
+                options=function_args.get("options"),
+                sink=self.clarification_sink,
             )
         else:
             return handle_function_call(
@@ -3322,30 +3347,20 @@ class AIAgent:
                 len(result),
             )
 
-        if self.tool_progress_callback:
-            try:
-                self.tool_progress_callback(
-                    "tool.completed",
-                    call.name,
-                    None,
-                    None,
-                    duration=outcome.duration,
-                    is_error=outcome.is_error,
-                )
-            except Exception as exc:
-                logger.debug("Tool progress callback error: %s", exc)
-
         self._current_tool = None
         self._touch_activity(
             f"tool completed: {call.name} ({outcome.duration:.1f}s)"
         )
-        if self.tool_complete_callback:
-            try:
-                self.tool_complete_callback(
-                    call.call_id, call.name, call.arguments, result
-                )
-            except Exception as exc:
-                logger.debug("Tool complete callback error: %s", exc)
+        self._emit_tool_event(
+            ToolEvent.completed(
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.arguments,
+                result=result,
+                duration=outcome.duration,
+                is_error=outcome.is_error,
+            )
+        )
 
         persisted_result = maybe_persist_tool_result(
             content=result,
@@ -4942,25 +4957,19 @@ class AIAgent:
                     else:
                         self._vprint(f"{self.log_prefix}🤖 Assistant: {assistant_message.content[:100]}{'...' if len(assistant_message.content) > 100 else ''}")
 
-                # Notify progress callback of model's thinking (used by subagent
+                # Notify the event sink of model reasoning (used by subagent
                 # delegation to relay the child's reasoning to the parent display).
-                if (assistant_message.content and self.tool_progress_callback):
+                if assistant_message.content and self.tool_event_sink:
                     _think_text = assistant_message.content.strip()
                     # Strip reasoning XML tags that shouldn't leak to parent display
                     _think_text = strip_thinking_tags(_think_text).strip()
-                    # For subagents: relay first line to parent display (existing behaviour).
-                    # For all agents with a structured callback: emit reasoning.available event.
+                    # Subagents relay a short first line; foreground agents may
+                    # expose a larger preview to their adapter.
                     first_line = _think_text.split('\n')[0][:80] if _think_text else ""
                     if first_line and getattr(self, '_delegate_depth', 0) > 0:
-                        try:
-                            self.tool_progress_callback("_thinking", first_line)
-                        except Exception:
-                            pass
+                        self._emit_tool_event(ToolEvent.reasoning(first_line))
                     elif _think_text:
-                        try:
-                            self.tool_progress_callback("reasoning.available", "_thinking", _think_text[:500], None)
-                        except Exception:
-                            pass
+                        self._emit_tool_event(ToolEvent.reasoning(_think_text[:500]))
                 
                 # Check for tool calls
                 if assistant_message.tool_calls:

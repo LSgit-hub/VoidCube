@@ -142,6 +142,41 @@ def test_save_log_does_not_replace_longer_existing_transcript(tmp_path):
     assert saved["messages"] == long_history
 
 
+def test_explicit_history_mutation_can_replace_longer_transcript(tmp_path):
+    persistence, _ = _persistence(tmp_path)
+    persistence.save_log(
+        [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+    )
+
+    persistence.save_log(
+        [{"role": "user", "content": "replacement"}],
+        allow_truncate=True,
+    )
+
+    saved = json.loads(persistence.session_log_file.read_text(encoding="utf-8"))
+    assert saved["messages"] == [{"role": "user", "content": "replacement"}]
+
+
+def test_explicit_history_mutation_can_clear_transcript(tmp_path):
+    persistence, _ = _persistence(tmp_path)
+    persistence.save_log(
+        [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+    )
+
+    persistence.save_log([], allow_truncate=True)
+
+    saved = json.loads(persistence.session_log_file.read_text(encoding="utf-8"))
+    assert saved["message_count"] == 0
+    assert saved["messages"] == []
+    assert persistence.messages == []
+
+
 def test_disabled_persistence_does_not_write_or_mutate_messages(tmp_path):
     persistence, _ = _persistence(
         tmp_path,
@@ -169,3 +204,69 @@ def test_agent_class_does_not_keep_legacy_session_persistence_methods():
     assert not hasattr(AIAgent, "_persist_session")
     assert not hasattr(AIAgent, "_flush_messages_to_session_db")
     assert not hasattr(AIAgent, "_save_session_log")
+
+
+def test_agent_activate_session_resets_runtime_and_persistence_cursor(monkeypatch):
+    class _Persistence:
+        def __init__(self) -> None:
+            self.session_start = datetime(2026, 7, 1)
+            self.reset_count = 0
+
+        def reset_flush_cursor(self) -> None:
+            self.reset_count += 1
+
+    class _TodoStore:
+        pass
+
+    agent = AIAgent.__new__(AIAgent)
+    agent.session_id = "old-session"
+    agent.session_start = datetime(2026, 7, 1)
+    agent._session_persistence = _Persistence()
+    agent._todo_store = object()
+    agent._cached_system_prompt = "cached"
+    monkeypatch.setattr("tools.todo_tool.TodoStore", _TodoStore)
+    started_at = datetime(2026, 7, 29, 20, 3, 0)
+
+    agent.activate_session("new-session", session_start=started_at)
+
+    assert agent.session_id == "new-session"
+    assert agent.session_start == started_at
+    assert agent._session_persistence.session_start == started_at
+    assert agent._session_persistence.reset_count == 1
+    assert isinstance(agent._todo_store, _TodoStore)
+    assert agent._cached_system_prompt is None
+    assert agent.session_total_tokens == 0
+
+
+def test_agent_marks_mutated_history_as_persisted() -> None:
+    persistence = type(
+        "Persistence",
+        (),
+        {"set_flush_cursor": lambda self, count: setattr(self, "cursor", count)},
+    )()
+    agent = AIAgent.__new__(AIAgent)
+    agent._session_persistence = persistence
+
+    agent.mark_session_history_persisted(3)
+
+    assert persistence.cursor == 3
+
+
+def test_agent_replaces_json_history_after_mutation() -> None:
+    calls: list[tuple[list[dict], bool]] = []
+    persistence = type(
+        "Persistence",
+        (),
+        {
+            "save_log": lambda self, messages, *, allow_truncate=False: calls.append(
+                (messages, allow_truncate)
+            )
+        },
+    )()
+    agent = AIAgent.__new__(AIAgent)
+    agent._session_persistence = persistence
+    history = [{"role": "user", "content": "remaining"}]
+
+    agent.replace_persisted_session_history(history)
+
+    assert calls == [(history, True)]

@@ -67,7 +67,48 @@ from VoidCube_app.gateway import (
     is_gateway_running as _is_gateway_running,
     register_session as _register_gateway_session,
 )
+from VoidCube_app.interaction_contract import (
+    ApprovalDecision,
+    ApprovalRequest,
+    ApprovalStatus,
+    ClarificationDecision,
+    ClarificationRequest,
+    ClarificationStatus,
+)
 from VoidCube_app.session_identity import resolve_session_identity
+from VoidCube_app.session_lifecycle import (
+    HistoryMutationResult,
+    HistoryMutationStatus,
+    SessionAlreadyActiveError,
+    SessionHydration,
+    SessionHydrationStatus,
+    SessionLifecycleState,
+    SessionNotFoundError,
+    SessionTitleStatus,
+    branch_session,
+    hydrate_session,
+    remove_last_user_turn,
+    get_session_title,
+    set_session_title,
+    resume_session,
+    start_new_session,
+)
+from VoidCube_app.turn_contract import begin_turn, normalize_turn_outcome
+from VoidCube_app.tool_events import ToolEvent
+from VoidCube_app.turn_queue import (
+    TurnInterruptReason,
+    TurnInputRoute,
+    cancel_turn,
+    interrupt_text,
+    normalize_busy_input_mode,
+    resolve_interrupted_followup,
+)
+from VoidCube_cli.turn_queue_adapter import (
+    InterruptPollStatus,
+    enqueue_turn_input,
+    poll_interrupt_input,
+    requeue_interrupted_inputs,
+)
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -78,6 +119,14 @@ from VoidCube_cli.command_router import (
 from VoidCube_cli.command_execution import (
     initialize_command_execution,
 )
+from VoidCube_cli.interaction_adapter import (
+    approval_choices as _approval_choices_view,
+    approval_display_fragments as _approval_display_fragments_view,
+    approval_sink as _approval_sink_view,
+    clarification_sink as _clarification_sink_view,
+    handle_approval_selection as _handle_approval_selection_view,
+)
+from VoidCube_cli.tool_event_adapter import project_tool_event as _project_tool_event_view
 
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
@@ -160,36 +209,6 @@ except (ImportError, AttributeError):
     _STEADY_CURSOR = None  # type: ignore[assignment]
 import threading
 import queue
-
-
-def _interrupt_text(payload: Any) -> str:
-    """Return the text sent to Agent.interrupt without discarding attachments."""
-    if isinstance(payload, tuple) and payload:
-        return str(payload[0] or "")
-    return str(payload or "")
-
-
-def _requeue_interrupted_payloads(
-    pending_queue: queue.Queue,
-    interrupt_queue: queue.Queue,
-    first_payload: Any,
-) -> list[Any]:
-    """Requeue interrupted input in order, preserving multimodal payloads."""
-    payloads = [first_payload]
-    while not interrupt_queue.empty():
-        try:
-            payload = interrupt_queue.get_nowait()
-        except queue.Empty:
-            break
-        if payload:
-            payloads.append(payload)
-
-    if all(isinstance(payload, str) for payload in payloads):
-        pending_queue.put("\n".join(payloads))
-    else:
-        for payload in payloads:
-            pending_queue.put(payload)
-    return payloads
 
 # Lazy import for agent.usage_pricing — defers ~180ms (openai + usage_pricing import chain)
 _usage_pricing_imported = False
@@ -490,7 +509,7 @@ _validate_toolset_fn = None
 _cleanup_all_terminals_fn = None
 _cleanup_all_browsers_fn = None
 _set_sudo_password_callback_fn = None
-_set_approval_callback_fn = None
+_set_approval_sink_fn = None
 _set_secret_capture_callback_fn = None
 _prompt_for_secret_fn = None
 
@@ -585,12 +604,12 @@ def _get_set_sudo_password_callback(cb):
     return _set_sudo_password_callback_fn(cb)
 
 
-def _get_set_approval_callback(cb):
-    global _set_approval_callback_fn
-    if _set_approval_callback_fn is None:
-        from tools.terminal_tool import set_approval_callback as _fn
-        _set_approval_callback_fn = _fn
-    return _set_approval_callback_fn(cb)
+def _get_set_approval_sink(sink):
+    global _set_approval_sink_fn
+    if _set_approval_sink_fn is None:
+        from tools.terminal_tool import set_approval_sink as _fn
+        _set_approval_sink_fn = _fn
+    return _set_approval_sink_fn(sink)
 
 
 def _get_set_secret_capture_callback():
@@ -913,7 +932,7 @@ class VoidcubeCLI:
         self.show_reasoning = display_config.get("show_reasoning", False)
         # busy_input_mode: "interrupt" (Enter interrupts current run) or "queue" (Enter queues for next turn)
         _bim = display_config.get("busy_input_mode", "interrupt")
-        self.busy_input_mode = "queue" if str(_bim).strip().lower() == "queue" else "interrupt"
+        self.busy_input_mode = normalize_busy_input_mode(_bim).value
 
         self.verbose = verbose if verbose is not None else (self.tool_progress_mode == "verbose")
         
@@ -1071,6 +1090,7 @@ class VoidcubeCLI:
         )
         self.session_id = session_identity.session_id
         self._resumed = session_identity.resumed
+        self._session_hydration: SessionHydration | None = None
         if session_identity.resume_lookup_error:
             logger.warning(
                 "Failed to auto-resume last session: %s",
@@ -1116,7 +1136,6 @@ class VoidcubeCLI:
         self._spinner_text: str = ""  # thinking spinner text for TUI
         self._tool_start_time: float = 0.0  # monotonic timestamp when current tool started (for live elapsed)
         self._current_tool_name: str = ""  # function_name of currently running tool ("" when idle)
-        self._pending_tool_info: dict = {}  # function_name -> list of (preview, args) for stacked scrollback
         self._last_scrollback_tool: str = ""  # last tool name printed to scrollback (for "new" dedup)
         self._command_running = False
         self._command_status = ""
@@ -1775,7 +1794,6 @@ class VoidcubeCLI:
             self._spinner_text = ""
             self._tool_start_time = 0.0
             self._current_tool_name = ""
-            self._pending_tool_info.clear()
             self._last_scrollback_tool = ""
 
             if app is not None:
@@ -2448,43 +2466,30 @@ class VoidcubeCLI:
             except Exception as e:
                 logger.warning("SQLite session store not available — session will NOT be indexed: %s", e)
         
-        # If resuming, validate the session exists and load its history.
-        # _preload_resumed_session() may have already loaded it (called from
-        # run() for immediate display).  In that case, conversation_history
-        # is non-empty and we skip the DB round-trip.
+        # Single-query callers do not run the interactive preload path.
         if self._resumed and self._session_db and not self.conversation_history:
-            session_meta = self._session_db.get_session(self.session_id)
-            if not session_meta:
-                _cprint(f"\033[1;31mSession not found: {self.session_id}{_RST}")
-                _cprint(f"{_DIM}Use a session ID from a previous CLI run (VoidCube sessions list).{_RST}")
+            hydration, loaded_now = self._hydrate_resumed_session()
+            if hydration.status is SessionHydrationStatus.MISSING:
+                if loaded_now:
+                    _cprint(f"\033[1;31mSession not found: {self.session_id}{_RST}")
+                    _cprint(f"{_DIM}Use a session ID from a previous CLI run (VoidCube sessions list).{_RST}")
                 return False
-            restored = self._session_db.get_messages_as_conversation(self.session_id)
-            if restored:
-                restored = [m for m in restored if m.get("role") != "session_meta"]
-                self.conversation_history = restored
+            if loaded_now and hydration.status is SessionHydrationStatus.READY:
+                restored = hydration.conversation_history
                 msg_count = len([m for m in restored if m.get("role") == "user"])
                 title_part = ""
-                if session_meta.get("title"):
-                    title_part = f" \"{session_meta['title']}\""
+                if hydration.metadata and hydration.metadata.get("title"):
+                    title_part = f" \"{hydration.metadata['title']}\""
                 ChatConsole().print(
                     f"[bold {_accent_hex()}]↻ {t('prompts.resumed_session', default='Resumed session')}[/] "
                     f"[bold]{_escape(self.session_id)}[/]"
                     f"[bold {_accent_hex()}]{_escape(title_part)}[/] "
                     f"({msg_count} {t('prompts.user_messages', default='user message')}{'s' if msg_count != 1 else ''}, {len(restored)} {t('prompts.total_messages', default='total messages')})"
                 )
-            else:
+            elif loaded_now:
                 ChatConsole().print(
                     f"[bold {_accent_hex()}]Session {_escape(self.session_id)} found but has no messages. Starting fresh.[/]"
                 )
-            # Re-open the session (clear ended_at so it's active again)
-            try:
-                self._session_db._conn.execute(
-                    "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
-                    (self.session_id,),
-                )
-                self._session_db._conn.commit()
-            except Exception:
-                pass
         
         try:
             runtime = runtime_override or {
@@ -2522,7 +2527,7 @@ class VoidcubeCLI:
                 session_id=self.session_id,
                 platform="cli",
                 session_db=self._session_db,
-                clarify_callback=self._clarify_callback,
+                clarification_sink=self._clarification_sink,
                 reasoning_callback=self._current_reasoning_callback(),
 
                 fallback_model=self._fallback_model,
@@ -2530,9 +2535,7 @@ class VoidcubeCLI:
                 checkpoints_enabled=self.checkpoints_enabled,
                 checkpoint_max_snapshots=self.checkpoint_max_snapshots,
                 pass_session_id=self.pass_session_id,
-                tool_progress_callback=self._on_tool_progress,
-                tool_start_callback=self._on_tool_start if self._inline_diffs_enabled else None,
-                tool_complete_callback=self._on_tool_complete if self._inline_diffs_enabled else None,
+                tool_event_sink=self._on_tool_event,
                 stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
                 tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
             )
@@ -2556,12 +2559,20 @@ class VoidcubeCLI:
 
             if self._pending_title and self._session_db:
                 try:
-                    self._session_db.set_session_title(self.session_id, self._pending_title)
-                    _cprint(f"  Session title applied: {self._pending_title}")
-                    self._pending_title = None
-                except (ValueError, Exception) as e:
+                    title_result = set_session_title(
+                        repository=self._session_db,
+                        session_id=self.session_id,
+                        raw_title=self._pending_title,
+                    )
+                    if title_result.status is SessionTitleStatus.UPDATED:
+                        _cprint(f"  Session title applied: {title_result.title}")
+                    elif title_result.status is SessionTitleStatus.CONFLICT:
+                        _cprint(f"  Could not apply pending title: {title_result.error}")
+                    else:
+                        _cprint("  Could not apply pending title: session is not persisted")
+                except Exception as e:
                     _cprint(f"  Could not apply pending title: {e}")
-                    self._pending_title = None
+                self._pending_title = None
 
             # ── Gateway observability ───────────────────────────────────
             # The interactive CLI remains the canonical API-A runtime for
@@ -2667,6 +2678,20 @@ class VoidcubeCLI:
 
         self.console.print()
 
+    def _hydrate_resumed_session(self) -> tuple[SessionHydration, bool]:
+        """Return one cached hydration result for the selected session."""
+        hydration = self._session_hydration
+        loaded_now = hydration is None
+        if hydration is None:
+            hydration = hydrate_session(
+                repository=self._session_db,
+                session_id=self.session_id,
+            )
+            self._session_hydration = hydration
+        if hydration.status is SessionHydrationStatus.READY:
+            self.conversation_history = list(hydration.conversation_history)
+        return hydration, loaded_now
+
     def _preload_resumed_session(self) -> bool:
         """Load a resumed session's history from the DB early (before first chat).
 
@@ -2675,14 +2700,13 @@ class VoidcubeCLI:
         ``self.conversation_history`` and prints the one-liner status.  Returns
         True if history was loaded, False otherwise.
 
-        The corresponding block in ``_init_agent()`` checks whether history is
-        already populated and skips the DB round-trip.
+        The corresponding block in ``_init_agent()`` reuses the cached outcome.
         """
         if not self._resumed or not self._session_db:
             return False
 
-        session_meta = self._session_db.get_session(self.session_id)
-        if not session_meta:
+        hydration, _ = self._hydrate_resumed_session()
+        if hydration.status is SessionHydrationStatus.MISSING:
             self.console.print(
                 f"[bold red]Session not found: {self.session_id}[/]"
             )
@@ -2692,14 +2716,12 @@ class VoidcubeCLI:
             )
             return False
 
-        restored = self._session_db.get_messages_as_conversation(self.session_id)
-        if restored:
-            restored = [m for m in restored if m.get("role") != "session_meta"]
-            self.conversation_history = restored
+        if hydration.status is SessionHydrationStatus.READY:
+            restored = hydration.conversation_history
             msg_count = len([m for m in restored if m.get("role") == "user"])
             title_part = ""
-            if session_meta.get("title"):
-                title_part = f' "{session_meta["title"]}"'
+            if hydration.metadata and hydration.metadata.get("title"):
+                title_part = f' "{hydration.metadata["title"]}"'
             accent_color = _accent_hex()
             self.console.print(
                 f"[{accent_color}]↻ {t('prompts.resumed_session', default='Resumed session')} [bold]{self.session_id}[/bold]"
@@ -2714,17 +2736,6 @@ class VoidcubeCLI:
                 f"messages. Starting fresh.[/]"
             )
             return False
-
-        # Re-open the session (clear ended_at so it's active again)
-        try:
-            self._session_db._conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL "
-                "WHERE id = ?",
-                (self.session_id,),
-            )
-            self._session_db._conn.commit()
-        except Exception:
-            pass
 
         return True
 
@@ -3705,61 +3716,44 @@ class VoidcubeCLI:
         except Exception:
             pass
 
+    def _apply_session_lifecycle_state(self, state: SessionLifecycleState) -> None:
+        """Apply shared session state and synchronize the active Agent runtime."""
+        self.session_id = state.session_id
+        self.session_start = state.session_start
+        self.conversation_history = list(state.conversation_history)
+        self._pending_title = state.pending_title
+        self._resumed = state.resumed
+        self._session_hydration = None
+        if self.agent:
+            self.agent.activate_session(
+                state.session_id,
+                session_start=state.session_start,
+            )
+
     def new_session(self, silent=False):
         """Start a fresh session with a new session ID and cleared agent state."""
-        if self.agent and self.conversation_history:
+        if self.agent:
             self._notify_session_boundary("on_session_finalize")
-        elif self.agent:
-            # First session or empty history — still finalize the old session
-            self._notify_session_boundary("on_session_finalize")
-
-        old_session_id = self.session_id
-        if self._session_db and old_session_id:
-            try:
-                self._session_db.end_session(old_session_id, "new_session")
-            except Exception:
-                pass
 
         # Per-interaction trace_id for end-to-end observability (C-03).
         # A new trace_id is generated for each user message so the full
         # chain (CLI → Gateway → Agent → Tool → Response) can be correlated.
         self._current_trace_id: str = ""
-        self.session_start = datetime.now()
-        timestamp_str = self.session_start.strftime("%Y%m%d_%H%M%S")
-        short_uuid = uuid.uuid4().hex[:6]
-        self.session_id = f"{timestamp_str}_{short_uuid}"
-        self.conversation_history = []
-        self._pending_title = None
-        self._resumed = False
+        state = start_new_session(
+            repository=self._session_db,
+            current_session_id=self.session_id,
+            started_at=datetime.now(),
+            source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
+            model=self.model,
+            model_config={
+                "max_iterations": self.max_turns,
+                "reasoning_config": self.reasoning_config,
+            },
+            create_record=self.agent is not None,
+        )
+        self._apply_session_lifecycle_state(state)
 
         if self.agent:
-            self.agent.session_id = self.session_id
-            self.agent.session_start = self.session_start
-            self.agent.reset_session_state()
-            if hasattr(self.agent, "_last_flushed_db_idx"):
-                self.agent._last_flushed_db_idx = 0
-            if hasattr(self.agent, "_todo_store"):
-                try:
-                    from tools.todo_tool import TodoStore
-                    self.agent._todo_store = TodoStore()
-                except Exception:
-                    pass
-            if hasattr(self.agent, "_invalidate_system_prompt"):
-                self.agent._invalidate_system_prompt()
-
-            if self._session_db:
-                try:
-                    self._session_db.create_session(
-                        session_id=self.session_id,
-                        source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
-                        model=self.model,
-                        model_config={
-                            "max_iterations": self.max_turns,
-                            "reasoning_config": self.reasoning_config,
-                        },
-                    )
-                except Exception:
-                    pass
             self._notify_session_boundary("on_session_reset")
 
         if not silent:
@@ -3797,53 +3791,24 @@ class VoidcubeCLI:
             resolved = _resolve_session_by_name_or_id(target)
             target_id = resolved or target
 
-        session_meta = self._session_db.get_session(target_id)
-        if not session_meta:
+        try:
+            result = resume_session(
+                repository=self._session_db,
+                current_session_id=self.session_id,
+                target_session_id=target_id,
+                session_start=self.session_start,
+            )
+        except SessionNotFoundError:
             _cprint(f"  Session not found: {target}")
             _cprint(t('  Use /history or `VoidCube sessions list` to see available sessions.'))
             return
-
-        if target_id == self.session_id:
+        except SessionAlreadyActiveError:
             _cprint(t('  Already on that session.'))
             return
+        self._apply_session_lifecycle_state(result.state)
+        self._session_hydration = result.hydration
 
-        # End current session
-        try:
-            self._session_db.end_session(self.session_id, "resumed_other")
-        except Exception:
-            pass
-
-        # Switch to the target session
-        self.session_id = target_id
-        self._resumed = True
-        self._pending_title = None
-
-        # Load conversation history (strip transcript-only metadata entries)
-        restored = self._session_db.get_messages_as_conversation(target_id)
-        restored = [m for m in (restored or []) if m.get("role") != "session_meta"]
-        self.conversation_history = restored
-
-        # Re-open the target session so it's not marked as ended
-        try:
-            self._session_db.reopen_session(target_id)
-        except Exception:
-            pass
-
-        # Sync the agent if already initialised
-        if self.agent:
-            self.agent.session_id = target_id
-            self.agent.reset_session_state()
-            if hasattr(self.agent, "_last_flushed_db_idx"):
-                self.agent._last_flushed_db_idx = len(self.conversation_history)
-            if hasattr(self.agent, "_todo_store"):
-                try:
-                    from tools.todo_tool import TodoStore
-                    self.agent._todo_store = TodoStore()
-                except Exception:
-                    pass
-            if hasattr(self.agent, "_invalidate_system_prompt"):
-                self.agent._invalidate_system_prompt()
-
+        session_meta = result.metadata
         title_part = f" \"{session_meta['title']}\"" if session_meta.get("title") else ""
         msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
         if self.conversation_history:
@@ -3877,98 +3842,33 @@ class VoidcubeCLI:
         parts = cmd_original.split(None, 1)
         branch_name = parts[1].strip() if len(parts) > 1 else ""
 
-        # Generate the new session ID
         now = datetime.now()
-        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
-        short_uuid = uuid.uuid4().hex[:6]
-        new_session_id = f"{timestamp_str}_{short_uuid}"
-
-        # Determine branch title
-        if branch_name:
-            branch_title = branch_name
-        else:
-            # Auto-generate from the current session title
-            current_title = None
-            if self._session_db:
-                current_title = self._session_db.get_session_title(self.session_id)
-            base = current_title or "branch"
-            branch_title = self._session_db.get_next_title_in_lineage(base)
-
-        # Save the current session's state before branching
-        parent_session_id = self.session_id
-
-        # End the old session
         try:
-            self._session_db.end_session(self.session_id, "branched")
-        except Exception:
-            pass
-
-        # Create the new session with parent link
-        try:
-            self._session_db.create_session(
-                session_id=new_session_id,
+            result = branch_session(
+                repository=self._session_db,
+                current_session_id=self.session_id,
+                conversation_history=self.conversation_history,
+                started_at=now,
+                requested_title=branch_name,
                 source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
                 model=self.model,
                 model_config={
                     "max_iterations": self.max_turns,
                     "reasoning_config": self.reasoning_config,
                 },
-                parent_session_id=parent_session_id,
             )
         except Exception as e:
             _cprint(f"  Failed to create branch session: {e}")
             return
-
-        # Copy conversation history to the new session
-        for msg in self.conversation_history:
-            try:
-                self._session_db.append_message(
-                    session_id=new_session_id,
-                    role=msg.get("role", "user"),
-                    content=msg.get("content"),
-                    tool_name=msg.get("tool_name") or msg.get("name"),
-                    tool_calls=msg.get("tool_calls"),
-                    tool_call_id=msg.get("tool_call_id"),
-                    reasoning=msg.get("reasoning"),
-                )
-            except Exception:
-                pass  # Best-effort copy
-
-        # Set title on the branch
-        try:
-            self._session_db.set_session_title(new_session_id, branch_title)
-        except Exception:
-            pass
-
-        # Switch to the new session
-        self.session_id = new_session_id
-        self.session_start = now
-        self._pending_title = None
-        self._resumed = True  # Prevents auto-title generation
-
-        # Sync the agent
-        if self.agent:
-            self.agent.session_id = new_session_id
-            self.agent.session_start = now
-            self.agent.reset_session_state()
-            if hasattr(self.agent, "_last_flushed_db_idx"):
-                self.agent._last_flushed_db_idx = len(self.conversation_history)
-            if hasattr(self.agent, "_todo_store"):
-                try:
-                    from tools.todo_tool import TodoStore
-                    self.agent._todo_store = TodoStore()
-                except Exception:
-                    pass
-            if hasattr(self.agent, "_invalidate_system_prompt"):
-                self.agent._invalidate_system_prompt()
+        self._apply_session_lifecycle_state(result.state)
 
         msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
         _cprint(
-            f"  ⑂ Branched session \"{branch_title}\""
+            f"  ⑂ Branched session \"{result.title}\""
             f" ({msg_count} user message{'s' if msg_count != 1 else ''})"
         )
-        _cprint(f"  Original session: {parent_session_id}")
-        _cprint(f"  Branch session:   {new_session_id}")
+        _cprint(f"  Original session: {result.parent_session_id}")
+        _cprint(f"  Branch session:   {result.state.session_id}")
 
     def save_conversation(self):
         """Save the current conversation to a file."""
@@ -3990,66 +3890,60 @@ class VoidcubeCLI:
         except Exception as e:
             print(f"(x_x) Failed to save: {e}")
     
-    def retry_last(self):
-        """Retry the last user message by removing the last exchange and re-sending.
-        
-        Removes the last assistant response (and any tool-call messages) and
-        the last user message, then re-sends that user message to the agent.
-        Returns the message to re-send, or None if there's nothing to retry.
-        """
-        if not self.conversation_history:
-            print(t('no_messages_to_retry'))
-            return None
-        
-        # Walk backwards to find the last user message
-        last_user_idx = None
-        for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
-                last_user_idx = i
-                break
-        
-        if last_user_idx is None:
-            print(t('no_user_message_found_to_retry'))
-            return None
-        
-        # Extract the message text and remove everything from that point forward
-        last_message = self.conversation_history[last_user_idx].get("content", "")
-        self.conversation_history = self.conversation_history[:last_user_idx]
-        
-        print(f"(^_^)b Retrying: \"{last_message[:60]}{'...' if len(last_message) > 60 else ''}\"")
-        return last_message
-    
     def undo_last(self):
         """Remove the last user/assistant exchange from conversation history.
         
         Walks backwards and removes all messages from the last user message
         onward (including assistant responses, tool calls, etc.).
         """
-        if not self.conversation_history:
-            print(t('no_messages_to_undo'))
+        result = self._remove_last_user_turn(
+            empty_message='no_messages_to_undo',
+            no_user_message='no_user_message_found_to_undo',
+        )
+        if result is None:
             return
-        
-        # Walk backwards to find the last user message
-        last_user_idx = None
-        for i in range(len(self.conversation_history) - 1, -1, -1):
-            if self.conversation_history[i].get("role") == "user":
-                last_user_idx = i
-                break
-        
-        if last_user_idx is None:
-            print(t('no_user_message_found_to_undo'))
-            return
-        
-        # Count how many messages we're removing
-        removed_count = len(self.conversation_history) - last_user_idx
-        removed_msg = self.conversation_history[last_user_idx].get("content", "")
-        
-        # Truncate history to before the last user message
-        self.conversation_history = self.conversation_history[:last_user_idx]
-        
-        print(f"(^_^)b Undid {removed_count} message(s). Removed: \"{removed_msg[:60]}{'...' if len(removed_msg) > 60 else ''}\"")
+
+        preview = str(result.user_message or "")
+        removed_count = len(result.removed_messages)
+        print(f"(^_^)b Undid {removed_count} message(s). Removed: \"{preview[:60]}{'...' if len(preview) > 60 else ''}\"")
         remaining = len(self.conversation_history)
         print(f"  {remaining} message(s) remaining in history.")
+
+    def _remove_last_user_turn(
+        self,
+        *,
+        empty_message: str,
+        no_user_message: str,
+    ) -> HistoryMutationResult | None:
+        result = remove_last_user_turn(
+            self.conversation_history,
+            repository=self._session_db,
+            session_id=self.session_id,
+        )
+        if result.status is HistoryMutationStatus.EMPTY:
+            print(t(empty_message))
+            return None
+        if result.status is HistoryMutationStatus.NO_USER_MESSAGE:
+            print(t(no_user_message))
+            return None
+        if result.status is HistoryMutationStatus.PERSISTENCE_FAILED:
+            print(f"(x_x) Could not update session history: {result.persistence_error}")
+            return None
+
+        self.conversation_history = list(result.conversation_history)
+        if self.agent:
+            self.agent.mark_session_history_persisted(len(self.conversation_history))
+            self.agent.replace_persisted_session_history(self.conversation_history)
+
+        self._session_hydration = result.hydration(
+            session_id=self.session_id,
+            metadata=(
+                self._session_hydration.metadata
+                if self._session_hydration
+                else None
+            ),
+        )
+        return result
     
     def _run_curses_picker(self, title: str, items: list[str], default_index: int = 0) -> int | None:
         """Run curses_single_select via run_in_terminal so prompt_toolkit handles terminal ownership cleanly."""
@@ -4963,15 +4857,19 @@ class VoidcubeCLI:
     def _handle_title_command(self, command: str) -> None:
         parts = command.split(maxsplit=1)
         if len(parts) == 1:
-            if not self._session_db:
+            result = get_session_title(
+                repository=self._session_db,
+                session_id=self.session_id,
+                pending_title=self._pending_title,
+            )
+            if result.status is SessionTitleStatus.UNAVAILABLE:
                 _cprint(t("  Session database not available."))
                 return
-            _cprint(f"  Session ID: {self.session_id}")
-            session = self._session_db.get_session(self.session_id)
-            if session and session.get("title"):
-                _cprint(f"  Title: {session['title']}")
-            elif self._pending_title:
-                _cprint(f"  Title (pending): {self._pending_title}")
+            _cprint(f"  Session ID: {result.session_id}")
+            if result.status is SessionTitleStatus.CURRENT:
+                _cprint(f"  Title: {result.title}")
+            elif result.status is SessionTitleStatus.PENDING:
+                _cprint(f"  Title (pending): {result.title}")
             else:
                 _cprint("  No title set. Usage: /title <your session title>")
             return
@@ -4980,39 +4878,34 @@ class VoidcubeCLI:
         if not raw_title:
             _cprint("  Usage: /title <your session title>")
             return
-        if not self._session_db:
+        result = set_session_title(
+            repository=self._session_db,
+            session_id=self.session_id,
+            raw_title=raw_title,
+        )
+        if result.status is SessionTitleStatus.UNAVAILABLE:
             _cprint(t("  Session database not available."))
-            return
-
-        try:
-            from VoidCube_core.state import SessionDB
-
-            new_title = SessionDB.sanitize_title(raw_title)
-        except ValueError as exc:
-            _cprint(f"  {exc}")
-            new_title = None
-        if not new_title:
-            _cprint("  Title is empty after cleanup. Please use printable characters.")
-            return
-        if self._session_db.get_session(self.session_id):
-            try:
-                if self._session_db.set_session_title(self.session_id, new_title):
-                    _cprint(f"  Session title set: {new_title}")
-                else:
-                    _cprint("  Session not found in database.")
-            except ValueError as exc:
-                _cprint(f"  {exc}")
-            return
-
-        existing = self._session_db.get_session_by_title(new_title)
-        if existing:
+        elif result.status is SessionTitleStatus.INVALID:
             _cprint(
-                f"  Title '{new_title}' is already in use by session {existing['id']}"
+                f"  {result.error}"
+                if result.error
+                else "  Title is empty after cleanup. Please use printable characters."
             )
-        else:
-            self._pending_title = new_title
+        elif result.status is SessionTitleStatus.UPDATED:
+            _cprint(f"  Session title set: {result.title}")
+        elif result.status is SessionTitleStatus.NOT_FOUND:
+            _cprint("  Session not found in database.")
+        elif result.status is SessionTitleStatus.CONFLICT and result.error:
+            _cprint(f"  {result.error}")
+        elif result.status is SessionTitleStatus.CONFLICT:
             _cprint(
-                f"  Session title queued: {new_title} (will be saved on first message)"
+                f"  Title '{result.title}' is already in use by session "
+                f"{result.conflicting_session_id}"
+            )
+        elif result.status is SessionTitleStatus.QUEUED:
+            self._pending_title = result.title
+            _cprint(
+                f"  Session title queued: {result.title} (will be saved on first message)"
             )
 
     def _handle_provider_command(self, command: str) -> None:
@@ -5057,7 +4950,15 @@ class VoidcubeCLI:
         )
 
     def _handle_retry_command(self) -> None:
-        retry_message = self.retry_last()
+        result = self._remove_last_user_turn(
+            empty_message='no_messages_to_retry',
+            no_user_message='no_user_message_found_to_retry',
+        )
+        if result is None:
+            return
+        retry_message = result.user_message
+        preview = str(retry_message or "")
+        print(f"(^_^)b Retrying: \"{preview[:60]}{'...' if len(preview) > 60 else ''}\"")
         if retry_message and hasattr(self, "_pending_input"):
             self._pending_input.put(retry_message)
 
@@ -6345,136 +6246,16 @@ class VoidcubeCLI:
         _cprint(f"  ┊ {emoji} preparing {tool_name}…")
 
     # ====================================================================
-    # Tool progress callback (audio cues for voice mode)
+    # Tool event adapter (TUI state, voice cues, and inline diffs)
     # ====================================================================
 
-    def _on_tool_progress(self, event_type: str, function_name: Optional[str] = None, preview: Optional[str] = None, function_args: Optional[dict] = None, **kwargs):
-        """Called on tool lifecycle events (tool.started, tool.completed, reasoning.available, etc.).
-
-        Updates the TUI spinner widget so the user can see what the agent
-        is doing during tool execution (fills the gap between thinking
-        spinner and next response).  Also plays audio cue in voice mode.
-
-        On tool.started, records a monotonic timestamp so get_spinner_text()
-        can show a live elapsed timer (the TUI poll loop already invalidates
-        every ~0.15s, so the counter updates automatically).
-
-        When tool_progress_mode is "all" or "new", also prints a persistent
-        stacked line to scrollback on tool.completed so users can see the
-        full history of tool calls (not just the current one in the spinner).
-        """
-        if event_type == "tool.completed":
-            import time as _time
-            self._tool_start_time = 0.0
-            self._current_tool_name = ""
-            if (
-                getattr(self, "_autonomous_gate_active", False)
-                and getattr(self, "_current_autonomous_task", None)
-                and function_name
-            ):
-                duration = kwargs.get("duration", 0.0)
-                suffix = f" ({duration:.1f}s)" if duration else ""
-                _append_autonomous_execution_event_view(
-                    self,
-                    f"工具完成: {function_name}{suffix}",
-                    tone="success" if not kwargs.get("is_error", False) else "error",
-                    stage="tool_completed",
-                )
-            # Print stacked scrollback line for "all" / "new" modes
-            if function_name and self.tool_progress_mode in ("all", "new"):
-                duration = kwargs.get("duration", 0.0)
-                is_error = kwargs.get("is_error", False)
-                # Pop stored args from tool.started for this function
-                stored = self._pending_tool_info.get(function_name)
-                stored_args = stored.pop(0) if stored else {}
-                if stored is not None and not stored:
-                    del self._pending_tool_info[function_name]
-                # "new" mode: skip consecutive repeats of the same tool
-                if self.tool_progress_mode == "new" and function_name == self._last_scrollback_tool:
-                    self._invalidate()
-                    return
-                self._last_scrollback_tool = function_name
-                if self._should_emit_scrollback_output():
-                    try:
-                        from agent.display import get_cute_tool_message
-                        line = get_cute_tool_message(function_name, stored_args, duration)
-                        if is_error:
-                            line = f"{line} [error]"
-                        _cprint(f"  {line}")
-                    except Exception:
-                        pass
-            self._invalidate()
-            return
-        if event_type != "tool.started":
-            return
-        if function_name and not function_name.startswith("_"):
-            import time as _time
-            from agent.display import get_tool_emoji
-            emoji = get_tool_emoji(function_name)
-            label = preview or function_name
-            from agent.display import get_tool_preview_max_len
-            _pl = get_tool_preview_max_len()
-            if _pl > 0 and len(label) > _pl:
-                label = label[:_pl - 3] + "..."
-            self._spinner_text = f"{emoji} {label}"
-            self._tool_start_time = _time.monotonic()
-            self._current_tool_name = function_name
-            # Store args for stacked scrollback line on completion
-            self._pending_tool_info.setdefault(function_name, []).append(
-                function_args if function_args is not None else {}
-            )
-            if getattr(self, "_autonomous_gate_active", False) and getattr(self, "_current_autonomous_task", None):
-                _append_autonomous_execution_event_view(
-                    self,
-                    f"工具启动: {function_name}",
-                    tone="info",
-                    stage="tool_started",
-                )
-            self._invalidate()
-
-        if not self._voice_mode:
-            return
-        if not function_name or function_name.startswith("_"):
-            return
-        try:
-            from tools.voice_mode import play_beep
-            threading.Thread(
-                target=play_beep,
-                kwargs={"frequency": 1200, "duration": 0.06, "count": 1},
-                daemon=True,
-            ).start()
-        except Exception:
-            pass
-
-    def _on_tool_start(self, tool_call_id: str, function_name: str, function_args: dict):
-        """Capture local before-state for write-capable tools."""
-        try:
-            from agent.display import capture_local_edit_snapshot
-
-            snapshot = capture_local_edit_snapshot(function_name, function_args)
-            if snapshot is not None:
-                self._pending_edit_snapshots[tool_call_id] = snapshot
-        except Exception:
-            logger.debug("Edit snapshot capture failed for %s", function_name, exc_info=True)
-
-    def _on_tool_complete(self, tool_call_id: str, function_name: str, function_args: dict, function_result: str):
-        """Render file edits with inline diff after write-capable tools complete."""
-        if not self._should_emit_scrollback_output():
-            self._pending_edit_snapshots.pop(tool_call_id, None)
-            return
-        snapshot = self._pending_edit_snapshots.pop(tool_call_id, None)
-        try:
-            from agent.display import render_edit_diff_with_delta
-
-            render_edit_diff_with_delta(
-                function_name,
-                function_result,
-                function_args=function_args,
-                snapshot=snapshot,
-                print_fn=_cprint,
-            )
-        except Exception:
-            logger.debug("Edit diff preview failed for %s", function_name, exc_info=True)
+    def _on_tool_event(self, event: ToolEvent) -> None:
+        _project_tool_event_view(
+            self,
+            event,
+            append_autonomous_event=_append_autonomous_execution_event_view,
+            emit_line=_cprint,
+        )
 
     # ====================================================================
     # Voice mode methods
@@ -6998,68 +6779,18 @@ class VoidcubeCLI:
             _cprint(f"  Unknown subcommand: {subcmd}")
             _cprint("  Usage: /connect [list|add|use|test|remove|show|clear] [name]")
 
-    def _clarify_callback(self, question, choices):
-        """
-        Platform callback for the clarify tool. Called from the agent thread.
-
-        Sets up the interactive selection UI (or freetext prompt for open-ended
-        questions), then blocks until the user responds via the prompt_toolkit
-        key bindings.  If no response arrives within the configured timeout the
-        question is dismissed and the agent is told to decide on its own.
-        """
-        import time as _time
-
+    def _clarification_sink(
+        self,
+        request: ClarificationRequest,
+    ) -> ClarificationDecision:
         timeout = CLI_CONFIG.get("clarify", {}).get("timeout", 120)
-        response_queue = queue.Queue()
-        is_open_ended = not choices
-
-        self._clarify_state = {
-            "question": question,
-            "choices": choices if not is_open_ended else [],
-            "selected": 0,
-            "response_queue": response_queue,
-        }
-        self._clarify_deadline = _time.monotonic() + timeout
-        # Open-ended questions skip straight to freetext input
-        self._clarify_freetext = is_open_ended
-
-        # Trigger prompt_toolkit repaint from this (non-main) thread
-        self._invalidate()
-
-        # Poll for the user's response.  The countdown in the hint line
-        # updates on each invalidate — but frequent repaints cause visible
-        # flicker in some terminals (Kitty, ghostty).  We only refresh the
-        # countdown every 5 s; selection changes (↑/↓) trigger instant
-        # Poll for the user's response.  The countdown in the hint line
-        # updates on each invalidate — but frequent repaints cause visible
-        # flicker in some terminals (Kitty, ghostty).  We only refresh the
-        # countdown every 5 s; selection changes (↑/↓) trigger instant
-        # repaints via the key bindings.
-        _last_countdown_refresh = _time.monotonic()
-        while True:
-            try:
-                result = response_queue.get(timeout=1)
-                self._clarify_deadline = 0
-                return result
-            except queue.Empty:
-                remaining = self._clarify_deadline - _time.monotonic()
-                if remaining <= 0:
-                    break
-                # Only repaint every 5 s for the countdown — avoids flicker
-                now = _time.monotonic()
-                if now - _last_countdown_refresh >= 5.0:
-                    _last_countdown_refresh = now
-                    self._invalidate()
-
-        # Timed out — tear down the UI and let the agent decide
-        self._clarify_state = None
-        self._clarify_freetext = False
-        self._clarify_deadline = 0
-        self._invalidate()
-        _cprint(f"\n{_DIM}(clarify timed out after {timeout}s — agent will decide){_RST}")
-        return (
-            "The user did not provide a response within the time limit. "
-            "Use your best judgement to make the choice and proceed."
+        return _clarification_sink_view(
+            self,
+            request,
+            timeout=timeout,
+            notify_timeout=lambda seconds: _cprint(
+                f"\n{_DIM}(clarify timed out after {seconds:g}s — agent will decide){_RST}"
+            ),
         )
 
     def _sudo_password_callback(self) -> str:
@@ -7108,170 +6839,24 @@ class VoidcubeCLI:
         _cprint(f"\n{_DIM}  ⏱ Timeout — continuing without sudo{_RST}")
         return ""
 
-    def _approval_callback(self, command: str, description: str,
-                           *, allow_permanent: bool = True) -> str:
-        """
-        Prompt for dangerous command approval through the prompt_toolkit UI.
+    def _approval_sink(self, request: ApprovalRequest) -> ApprovalDecision:
+        return _approval_sink_view(
+            self,
+            request,
+            timeout=60,
+            notify_timeout=lambda: _cprint(
+                f"\n{_DIM}  ⏱ Timeout — denying command{_RST}"
+            ),
+        )
 
-        Called from the agent thread. Shows a selection UI similar to clarify
-        with choices: once / session / always / deny. When allow_permanent
-        is False (tirith warnings present), the 'always' option is hidden.
-        Long commands also get a 'view' option so the full command can be
-        expanded before deciding.
-
-        Uses _approval_lock to serialize concurrent requests (e.g. from
-        parallel delegation subtasks) so each prompt gets its own turn
-        and the shared _approval_state / _approval_deadline aren't clobbered.
-        """
-        import time as _time
-
-        with self._approval_lock:
-            timeout = 60
-            response_queue: queue.Queue = queue.Queue()
-
-            self._approval_state = {
-                "command": command,
-                "description": description,
-                "choices": self._approval_choices(command, allow_permanent=allow_permanent),
-                "selected": 0,
-                "response_queue": response_queue,
-            }
-            self._approval_deadline = _time.monotonic() + timeout
-
-            self._invalidate()
-
-            _last_countdown_refresh = _time.monotonic()
-            while True:
-                try:
-                    result = response_queue.get(timeout=1)
-                    self._approval_state = None
-                    self._approval_deadline = 0
-                    self._invalidate()
-                    return result
-                except queue.Empty:
-                    remaining = self._approval_deadline - _time.monotonic()
-                    if remaining <= 0:
-                        break
-                    now = _time.monotonic()
-                    if now - _last_countdown_refresh >= 5.0:
-                        _last_countdown_refresh = now
-                        self._invalidate()
-
-            self._approval_state = None
-            self._approval_deadline = 0
-            self._invalidate()
-            _cprint(f"\n{_DIM}  ⏱ Timeout — denying command{_RST}")
-            return "deny"
-
-    def _approval_choices(self, command: str, *, allow_permanent: bool = True) -> list[str]:
-        """Return approval choices for a dangerous command prompt."""
-        choices = ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
-        if len(command) > 70:
-            choices.append("view")
-        return choices
+    def _approval_choices(self, command: str) -> list[str]:
+        return _approval_choices_view(command)
 
     def _handle_approval_selection(self) -> None:
-        """Process the currently selected dangerous-command approval choice."""
-        state = self._approval_state
-        if not state:
-            return
-
-        selected = state.get("selected", 0)
-        choices = state.get("choices") or []
-        if not (0 <= selected < len(choices)):
-            return
-
-        chosen = choices[selected]
-        if chosen == "view":
-            state["show_full"] = True
-            state["choices"] = [choice for choice in choices if choice != "view"]
-            if state["selected"] >= len(state["choices"]):
-                state["selected"] = max(0, len(state["choices"]) - 1)
-            self._invalidate()
-            return
-
-        state["response_queue"].put(chosen)
-        self._approval_state = None
-        self._invalidate()
+        _handle_approval_selection_view(self)
 
     def _get_approval_display_fragments(self):
-        """Render the dangerous-command approval panel for the prompt_toolkit UI."""
-        state = self._approval_state
-        if not state:
-            return []
-
-        def _panel_box_width(title_text: str, content_lines: list[str], min_width: int = 46, max_width: int = 76) -> int:
-            term_cols = shutil.get_terminal_size((100, 20)).columns
-            longest = max([len(title_text)] + [len(line) for line in content_lines] + [min_width - 4])
-            inner = min(max(longest + 4, min_width - 2), max_width - 2, max(24, term_cols - 6))
-            return inner + 2
-
-        def _wrap_panel_text(text: str, width: int, subsequent_indent: str = "") -> list[str]:
-            wrapped = textwrap.wrap(
-                text,
-                width=max(8, width),
-                replace_whitespace=False,
-                drop_whitespace=False,
-                subsequent_indent=subsequent_indent,
-            )
-            return wrapped or [""]
-
-        def _append_panel_line(lines, border_style: str, content_style: str, text: str, box_width: int) -> None:
-            inner_width = max(0, box_width - 2)
-            lines.append((border_style, "│ "))
-            lines.append((content_style, text.ljust(inner_width)))
-            lines.append((border_style, " │\n"))
-
-        def _append_blank_panel_line(lines, border_style: str, box_width: int) -> None:
-            lines.append((border_style, "│" + (" " * box_width) + "│\n"))
-
-        command = state["command"]
-        description = state["description"]
-        choices = state["choices"]
-        selected = state.get("selected", 0)
-        show_full = state.get("show_full", False)
-
-        title = "⚠️  Dangerous Command"
-        cmd_display = command if show_full or len(command) <= 70 else command[:70] + '...'
-        choice_labels = {
-            "once": "Allow once",
-            "session": "Allow for this session",
-            "always": "Add to permanent allowlist",
-            "deny": "Deny",
-            "view": "Show full command",
-        }
-
-        preview_lines = _wrap_panel_text(description, 60)
-        preview_lines.extend(_wrap_panel_text(cmd_display, 60))
-        for i, choice in enumerate(choices):
-            prefix = '❯ ' if i == selected else '  '
-            preview_lines.extend(_wrap_panel_text(
-                f"{prefix}{choice_labels.get(choice, choice)}",
-                60,
-                subsequent_indent="  ",
-            ))
-
-        box_width = _panel_box_width(title, preview_lines)
-        inner_text_width = max(8, box_width - 2)
-
-        lines = []
-        lines.append(('class:approval-border', '╭' + ('─' * box_width) + '╮\n'))
-        _append_panel_line(lines, 'class:approval-border', 'class:approval-title', title, box_width)
-        _append_blank_panel_line(lines, 'class:approval-border', box_width)
-        for wrapped in _wrap_panel_text(description, inner_text_width):
-            _append_panel_line(lines, 'class:approval-border', 'class:approval-desc', wrapped, box_width)
-        for wrapped in _wrap_panel_text(cmd_display, inner_text_width):
-            _append_panel_line(lines, 'class:approval-border', 'class:approval-cmd', wrapped, box_width)
-        _append_blank_panel_line(lines, 'class:approval-border', box_width)
-        for i, choice in enumerate(choices):
-            label = choice_labels.get(choice, choice)
-            style = 'class:approval-selected' if i == selected else 'class:approval-choice'
-            prefix = '❯ ' if i == selected else '  '
-            for wrapped in _wrap_panel_text(f"{prefix}{label}", inner_text_width, subsequent_indent="  "):
-                _append_panel_line(lines, 'class:approval-border', style, wrapped, box_width)
-        _append_blank_panel_line(lines, 'class:approval-border', box_width)
-        lines.append(('class:approval-border', '╰' + ('─' * box_width) + '╯\n'))
-        return lines
+        return _approval_display_fragments_view(self)
 
     def _secret_capture_callback(self, var_name: str, prompt: str, metadata=None) -> dict:
         return _get_prompt_for_secret()(self, var_name, prompt, metadata)
@@ -7408,8 +6993,8 @@ class VoidcubeCLI:
             from agent.message_sanitizer import sanitize_surrogates
             message = sanitize_surrogates(message)
 
-        # Add user message to history
-        self.conversation_history.append({"role": "user", "content": message})
+        turn_input = begin_turn(self.conversation_history, message)
+        self.conversation_history = list(turn_input.conversation_history)
 
         if self._should_emit_scrollback_output():
             ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
@@ -7491,7 +7076,7 @@ class VoidcubeCLI:
                     self._current_trace_id = str(uuid.uuid4())
                     result = self.agent.run_conversation(
                         user_message=agent_message,
-                        conversation_history=self.conversation_history[:-1],
+                        conversation_history=list(turn_input.prior_history),
                         stream_callback=stream_callback,
                         task_id=self.session_id,
                         trace_id=self._current_trace_id,
@@ -7521,7 +7106,7 @@ class VoidcubeCLI:
             # When a clarify question is active, user input is handled entirely
             # by the Enter key binding (routed to the clarify response queue),
             # so we skip interrupt processing to avoid stealing that input.
-            interrupt_msg = None
+            turn_interrupt = None
             while agent_thread.is_alive():
                 if autonomous_task_run_id and not autonomous_timeout_reported:
                     timed_out_task = getattr(self, "_current_autonomous_task", None)
@@ -7545,37 +7130,34 @@ class VoidcubeCLI:
                             and getattr(self, "_current_autonomous_task", None) is None
                         )
                         if autonomous_timeout_reported:
+                            turn_interrupt = cancel_turn(TurnInterruptReason.TIMEOUT)
                             try:
-                                self.agent.interrupt("__AUTONOMOUS_TIMEOUT__")
+                                self.agent.interrupt(turn_interrupt.agent_message)
                             except Exception:
                                 pass
                 if hasattr(self, '_interrupt_queue'):
-                    try:
-                        interrupt_msg = self._interrupt_queue.get(timeout=0.1)
-                        if interrupt_msg:
-                            # ── Sentinel values for internal control (not user messages) ──
-                            if isinstance(interrupt_msg, str) and interrupt_msg.startswith("__") and interrupt_msg.endswith("__"):
-                                # __AUTONOMOUS_Q_EXIT__ / __FORCE_QUIT__ — just wake the loop,
-                                # don't pass to agent.interrupt()
-                                continue
-                            # If clarify is active, the Enter handler routes
-                            # input directly; this queue shouldn't have anything.
-                            # But if it does (race condition), don't interrupt.
-                            if self._clarify_state or self._clarify_freetext:
-                                continue
-                            print("\n🔧 New message detected, interrupting...")
-                            # Signal TTS to stop on interrupt
-                            if stop_event is not None:
-                                stop_event.set()
-                            self.agent.interrupt(_interrupt_text(interrupt_msg))
-                            break
-                    except queue.Empty:
+                    poll_result = poll_interrupt_input(
+                        self._pending_input,
+                        self._interrupt_queue,
+                        timeout=0.1,
+                        defer=bool(self._clarify_state or self._clarify_freetext),
+                    )
+                    if poll_result.status is InterruptPollStatus.DEFERRED:
+                        continue
+                    if poll_result.interrupt is None:
                         # Force prompt_toolkit to flush any pending stdout
                         # output from the agent thread.  Without this, the
                         # StdoutProxy buffer only flushes on renderer passes
                         # triggered by input events — on macOS this causes
                         # the CLI to appear frozen until the user types. (#1624)
                         self._invalidate(min_interval=0.15)
+                        continue
+                    turn_interrupt = poll_result.interrupt
+                    print("\n🔧 New message detected, interrupting...")
+                    if stop_event is not None:
+                        stop_event.set()
+                    self.agent.interrupt(turn_interrupt.agent_message)
+                    break
                 else:
                     # Fallback for non-interactive mode (e.g., single-query)
                     agent_thread.join(0.1)
@@ -7609,21 +7191,13 @@ class VoidcubeCLI:
             sys.stdout.flush()
             _time.sleep(0.15)
 
-            # Update history with full conversation
-            self.conversation_history = result.get("messages", self.conversation_history) if result else self.conversation_history
-
-            # Get the final response
-            response = result.get("final_response", "") if result else ""
-            turn_result = {
-                "failed": bool(result.get("failed")) if result else True,
-                "partial": bool(result.get("partial")) if result else False,
-                "interrupted": bool(result.get("interrupted")) if result else False,
-                "error": str(result.get("error", "") or "") if result else "No result returned",
-                # Preserve the agent's finding text so the autonomous writeback can flow
-                # it back to Mem Tier1 (P0-2 成果回流). Without this it is discarded
-                # here and the learning/improvement output never leaves the CLI.
-                "response": str(response or ""),
-            }
+            outcome = normalize_turn_outcome(
+                result,
+                fallback_history=self.conversation_history,
+            )
+            self.conversation_history = list(outcome.conversation_history)
+            response = outcome.response
+            turn_result = outcome.observation()
             if autonomous_timeout_reported:
                 turn_result.update(
                     {
@@ -7667,7 +7241,7 @@ class VoidcubeCLI:
                     )
 
             # Auto-generate session title after first exchange (non-blocking)
-            if response and result and not result.get("failed") and not result.get("partial"):
+            if outcome.usable:
                 try:
                     from agent.title_generator import maybe_auto_title
                     maybe_auto_title(
@@ -7683,9 +7257,9 @@ class VoidcubeCLI:
             # Handle failed or partial results (e.g., non-retryable errors, rate limits,
             # truncated output, invalid tool calls). Both "failed" and "partial" with
             # an empty final_response mean the agent couldn't produce a usable answer.
-            if result and (result.get("failed") or result.get("partial")) and not response:
-                error_detail = result.get("error", "Unknown error")
-                response = f"Error: {error_detail}"
+            if (outcome.failed or outcome.partial) and not response:
+                response = outcome.response_or_error()
+                turn_result["response"] = response
                 # Stop continuous voice mode on persistent errors (e.g. 429 rate limit)
                 # to avoid an infinite error → record → error loop
                 if self._voice_continuous:
@@ -7694,24 +7268,22 @@ class VoidcubeCLI:
 
             # Handle interrupt - check if we were interrupted
             pending_message = None
-            if result and result.get("interrupted"):
-                pending_message = (
-                    interrupt_msg
-                    if interrupt_msg is not None
-                    else result.get("interrupt_message")
+            if outcome.interrupted:
+                pending_message = resolve_interrupted_followup(
+                    turn_interrupt, outcome.interrupt_message
                 )
                 # Add indicator that we were interrupted
                 if response and pending_message:
                     response = response + "\n\n---\n_[Interrupted - processing new message]_"
 
-            response_previewed = result.get("response_previewed", False) if result else False
+            response_previewed = outcome.response_previewed
 
             # Display reasoning (thinking) box if enabled and available.
             # Intermediate tool turns reset stream framing but preserve this
             # user-turn-level flag so reasoning is not rendered twice.
             _reasoning_already_shown = self._stream_render_state.reasoning_shown_this_turn
-            if self.show_reasoning and result and not _reasoning_already_shown:
-                reasoning = result.get("last_reasoning")
+            if self.show_reasoning and not _reasoning_already_shown:
+                reasoning = outcome.last_reasoning
                 if reasoning:
                     w = shutil.get_terminal_size().columns
                     r_label = " Reasoning "
@@ -7733,7 +7305,7 @@ class VoidcubeCLI:
                 _resp_color = "#CD7F32"
                 _resp_text = "#FFF8DC"
 
-                is_error_response = result and (result.get("failed") or result.get("partial"))
+                is_error_response = outcome.failed or outcome.partial
                 already_streamed = (
                     self._stream_render_state.started
                     and self._stream_render_state.response_box_open
@@ -7782,15 +7354,15 @@ class VoidcubeCLI:
             # In "queue" mode Enter routes directly to _pending_input so this
             # block is never hit.
             if pending_message and hasattr(self, '_pending_input'):
-                payloads = _requeue_interrupted_payloads(
+                batch = requeue_interrupted_inputs(
                     self._pending_input,
                     self._interrupt_queue,
                     pending_message,
                 )
-                preview_text = _interrupt_text(payloads[0])
+                preview_text = interrupt_text(batch.payloads[0])
                 preview = preview_text[:50] + ("..." if len(preview_text) > 50 else "")
-                if len(payloads) > 1:
-                    print(f"\n🔧 Sending {len(payloads)} messages after interrupt: '{preview}'")
+                if len(batch.payloads) > 1:
+                    print(f"\n🔧 Sending {len(batch.payloads)} messages after interrupt: '{preview}'")
                 else:
                     print(f"\n🔧 Sending after interrupt: '{preview}'")
             
@@ -8216,7 +7788,7 @@ class VoidcubeCLI:
 
         # Register callbacks so terminal_tool prompts route through our UI
         _get_set_sudo_password_callback(self._sudo_password_callback)
-        _get_set_approval_callback(self._approval_callback)
+        _get_set_approval_sink(self._approval_sink)
         _get_set_secret_capture_callback()(self._secret_capture_callback)
 
         # Ensure tirith security scanner is available (downloads if needed).
@@ -8397,19 +7969,19 @@ class VoidcubeCLI:
                             )
                             event.app.invalidate()
                             return
-
-                if self._agent_running and not (text and _looks_like_slash_command(text)):
-                    if self.busy_input_mode == "queue":
-                        # Queue for the next turn instead of interrupting
-                        self._pending_input.put(payload)
-                        preview = text if text else f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
-                        _cprint(f"  Queued for the next turn: {preview[:80]}{'...' if len(preview) > 80 else ''}")
-                    else:
-                        self._interrupt_queue.put(payload)
-                else:
-                    self._pending_input.put(payload)
+                is_command = bool(text and _looks_like_slash_command(text))
+                input_route = enqueue_turn_input(
+                    self._pending_input,
+                    self._interrupt_queue,
+                    payload,
+                    agent_running=self._agent_running,
+                    is_command=is_command,
+                    busy_input_mode=self.busy_input_mode,
+                )
+                if input_route is TurnInputRoute.NEXT_TURN and self._agent_running and not is_command:
+                    preview = text if text else f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
+                    _cprint(f"  Queued for the next turn: {preview[:80]}{'...' if len(preview) > 80 else ''}")
                 event.app.current_buffer.reset(append_to_history=True)
-        
         @kb.add('escape', 'enter')
         def handle_alt_enter(event):
             """Alt+Enter inserts a newline for multi-line input."""
@@ -8565,7 +8137,7 @@ class VoidcubeCLI:
 
             # Cancel approval prompt (deny)
             if self._approval_state:
-                self._approval_state["response_queue"].put("deny")
+                self._approval_state["response_queue"].put(ApprovalStatus.DENIED.value)
                 self._approval_state = None
                 event.app.invalidate()
                 return
@@ -8580,7 +8152,7 @@ class VoidcubeCLI:
             # Cancel clarify prompt
             if self._clarify_state:
                 self._clarify_state["response_queue"].put(
-                    "The user cancelled. Use your best judgement to proceed."
+                    ClarificationDecision(ClarificationStatus.CANCELLED)
                 )
                 self._clarify_state = None
                 self._clarify_freetext = False
@@ -8591,7 +8163,7 @@ class VoidcubeCLI:
             # Interrupt running agent
             if self._agent_running and self.agent:
                 self._last_ctrl_c_time = now
-                self.agent.interrupt()
+                self.agent.interrupt(cancel_turn(TurnInterruptReason.USER_CANCELLED).agent_message)
                 return
 
             # Idle: clear input if there's text, otherwise no-op
@@ -9055,7 +8627,7 @@ class VoidcubeCLI:
             if not state:
                 return []
 
-            question = state["question"]
+            question = state["request"].question
             choices = state.get("choices") or []
             selected = state.get("selected", 0)
             preview_lines = _wrap_panel_text(question, 60)
@@ -9472,7 +9044,7 @@ class VoidcubeCLI:
             mouse_support=False,
             **({'cursor': _STEADY_CURSOR} if _STEADY_CURSOR is not None else {}),
         )
-        self._app = app  # Store reference for clarify_callback
+        self._app = app  # Store reference for interactive modal adapters
 
         # ── Fix ghost status-bar lines on terminal resize ──────────────
         # When the terminal shrinks (e.g. un-maximize), the emulator reflows
@@ -9744,7 +9316,7 @@ class VoidcubeCLI:
                 pass
             # Unregister callbacks to avoid dangling references
             _get_set_sudo_password_callback(None)
-            _get_set_approval_callback(None)
+            _get_set_approval_sink(None)
             _get_set_secret_capture_callback()(None)
             # Close session in SQLite
             if hasattr(self, '_session_db') and self._session_db and self.agent:

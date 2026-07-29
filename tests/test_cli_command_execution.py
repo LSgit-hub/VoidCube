@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,14 @@ from VoidCube_cli.command_execution import (
 )
 from VoidCube_cli.command_router import parse_cli_command
 from VoidCube_cli.commands import COMMAND_REGISTRY
+from VoidCube_app.session_lifecycle import (
+    SessionHydration,
+    SessionHydrationStatus,
+    SessionLifecycleState,
+)
+from VoidCube_app.interaction_contract import ApprovalStatus
+from VoidCube_app.turn_queue import interrupt_text
+from VoidCube_cli.turn_queue_adapter import requeue_interrupted_inputs
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -79,13 +88,13 @@ def test_interrupted_text_payloads_are_combined_for_the_next_turn() -> None:
     interrupts = queue.Queue()
     interrupts.put("second")
 
-    payloads = cli_module._requeue_interrupted_payloads(
+    batch = requeue_interrupted_inputs(
         pending,
         interrupts,
         "first",
     )
 
-    assert payloads == ["first", "second"]
+    assert batch.payloads == ("first", "second")
     assert pending.get_nowait() == "first\nsecond"
 
 
@@ -95,14 +104,14 @@ def test_interrupted_multimodal_payload_keeps_attachments_and_order() -> None:
     first = ("inspect this", ["screen.png"])
     interrupts.put("then summarize")
 
-    payloads = cli_module._requeue_interrupted_payloads(
+    batch = requeue_interrupted_inputs(
         pending,
         interrupts,
         first,
     )
 
-    assert cli_module._interrupt_text(first) == "inspect this"
-    assert payloads == [first, "then summarize"]
+    assert interrupt_text(first) == "inspect this"
+    assert batch.payloads == (first, "then summarize")
     assert pending.get_nowait() == first
     assert pending.get_nowait() == "then summarize"
 
@@ -238,3 +247,123 @@ def test_cli_process_uses_execution_table_for_queue(monkeypatch) -> None:
     assert app.process_command("/queue Keep MixedCase") is True
     assert app._pending_input.get_nowait() == "Keep MixedCase"
     assert output == ["  Queued for the next turn: Keep MixedCase"]
+
+
+def test_cli_approval_choices_only_expose_implemented_decisions() -> None:
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+
+    assert app._approval_choices("echo short") == [
+        ApprovalStatus.APPROVED.value,
+        ApprovalStatus.DENIED.value,
+    ]
+    assert app._approval_choices("x" * 71) == [
+        ApprovalStatus.APPROVED.value,
+        ApprovalStatus.DENIED.value,
+        "view",
+    ]
+
+
+def test_cli_applies_shared_session_state_through_public_agent_port() -> None:
+    calls: list[tuple[str, datetime]] = []
+    agent = SimpleNamespace(
+        activate_session=lambda session_id, *, session_start: calls.append(
+            (session_id, session_start)
+        )
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app.agent = agent
+    app._session_hydration = SessionHydration(
+        session_id="old",
+        status=SessionHydrationStatus.EMPTY,
+    )
+    started_at = datetime(2026, 7, 29, 20, 4, 0)
+    state = SessionLifecycleState(
+        session_id="target",
+        session_start=started_at,
+        conversation_history=({"role": "user", "content": "hello"},),
+        resumed=True,
+        pending_title=None,
+    )
+
+    app._apply_session_lifecycle_state(state)
+
+    assert app.session_id == "target"
+    assert app.session_start == started_at
+    assert app.conversation_history == [{"role": "user", "content": "hello"}]
+    assert app._pending_title is None
+    assert app._resumed is True
+    assert app._session_hydration is None
+    assert calls == [("target", started_at)]
+
+
+def test_cli_reuses_one_shared_hydration_result(monkeypatch) -> None:
+    calls: list[tuple[object, str]] = []
+    hydration = SessionHydration(
+        session_id="target",
+        status=SessionHydrationStatus.READY,
+        metadata={"id": "target"},
+        conversation_history=({"role": "user", "content": "hello"},),
+    )
+
+    def fake_hydrate_session(*, repository, session_id):
+        calls.append((repository, session_id))
+        return hydration
+
+    monkeypatch.setattr(cli_module, "hydrate_session", fake_hydrate_session)
+    repository = object()
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._session_db = repository
+    app.session_id = "target"
+    app.conversation_history = []
+    app._session_hydration = None
+
+    first, first_loaded_now = app._hydrate_resumed_session()
+    second, second_loaded_now = app._hydrate_resumed_session()
+
+    assert first is second is hydration
+    assert first_loaded_now is True
+    assert second_loaded_now is False
+    assert calls == [(repository, "target")]
+    assert app.conversation_history == [{"role": "user", "content": "hello"}]
+
+
+def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
+    calls: list[int] = []
+    repository = SimpleNamespace(truncate_last_user_turn=lambda _session_id: 2)
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._session_db = repository
+    app.session_id = "active"
+    app.conversation_history = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "one"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "two"},
+    ]
+    json_history: list[list[dict]] = []
+    app.agent = SimpleNamespace(
+        mark_session_history_persisted=calls.append,
+        replace_persisted_session_history=lambda history: json_history.append(
+            list(history)
+        ),
+    )
+    app._session_hydration = SessionHydration(
+        session_id="active",
+        status=SessionHydrationStatus.READY,
+        metadata={"id": "active", "title": "Work"},
+        conversation_history=tuple(app.conversation_history),
+    )
+
+    result = app._remove_last_user_turn(
+        empty_message="no_messages_to_undo",
+        no_user_message="no_user_message_found_to_undo",
+    )
+
+    assert app.conversation_history == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "one"},
+    ]
+    assert result.user_message == "second"
+    assert calls == [2]
+    assert json_history == [app.conversation_history]
+    assert app._session_hydration.metadata["title"] == "Work"
+    assert app._session_hydration.conversation_history == tuple(app.conversation_history)

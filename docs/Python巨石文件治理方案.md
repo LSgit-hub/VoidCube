@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器与 Stage 3 首个 session identity use case 已完成，下一批处理 session lifecycle command。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器与 Stage 3 session/turn/interaction/tool/cancel/queue contract 已完成，下一批进入 CLI-3 command handler 分域。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -20,7 +20,7 @@
 
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
-| `VoidCube_cli/app.py` | 10,157 行 | `VoidcubeCLI` 有 178 个方法，运行时、TUI、命令、会话和语音共享大量可变状态 | P0 |
+| `VoidCube_cli/app.py` | 9,729 行 | `VoidcubeCLI` 仍混合 Agent 编排、TUI、命令和语音；session/turn/interaction/tool/cancel/queue contract 与 CLI adapter 已迁出 | P0 |
 | `systems/supervisor/planning_runtime.py` | 9,460 行 | `PlanningRuntimeMixin` 有 186 个方法，持久化、认知、排程、治理和执行交接混合 | P0 |
 | `systems/supervisor/endogenous_drive.py` | 9,303 行 | `EndogenousDriveEngine` 有 124 个方法，感知、候选、LM 上下文、证据和策略记忆混合 | P0 |
 | `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与全部只读 UI 投影已外移；runtime 仅保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
@@ -158,7 +158,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 
 ### 6.1 当前问题
 
-`VoidcubeCLI.__init__` 约 317 行，混合以下状态：
+`VoidcubeCLI.__init__` 约 291 行，混合以下状态：
 
 - Provider、模型、凭证和 Agent；
 - session、conversation、checkpoint 和 resume；
@@ -167,7 +167,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 - 语音录制、TTS 和持续监听；
 - 自主组件、后台任务、scheduled execution 和执行锁。
 
-`run()` 约 1,733 行，`chat()` 约 521 行。已有 `chat_stream_*`、`command_execution.py` 等模块，但部分模块仍通过 `host: Any` 或反向导入 `cli.py` 访问聚合状态，说明拆分尚未形成稳定依赖方向。
+`run()` 约 1,732 行，`chat()` 约 505 行。已有 `chat_stream_*`、`command_execution.py` 等模块，但部分模块仍通过 `host: Any` 访问聚合状态，说明拆分尚未形成完整的显式端口边界。
 
 ### 6.2 目标结构
 
@@ -665,8 +665,94 @@ systems/supervisor/web/
 
 ## 27. 下一次实施起点
 
-下一批继续 **Stage 3 session lifecycle command**：
+2026-07-29 已完成 **Stage 3 session lifecycle command**：
 
-1. 从 `new_session`、`/resume` 和 `/branch` 提取共享的 session state transition use case，明确 DB 操作、history 装载/复制、title 与 agent 同步的输入输出。
-2. CLI 保留 recent-session 的选择、命令解析、交互提示与终端渲染；共享层不能接收 `VoidcubeCLI`、ANSI 或 prompt_toolkit 对象。
-3. 先为每个 transition 补最小 characterization test，再切换生产调用者并删除旧命令中失效的 ID/DB 分支。
+1. `VoidCube_app.session_lifecycle` 接管新建、恢复和分支的 session transition；它通过显式 repository port 完成结束/重开、history 装载/复制、title 和 parent link，不接收 `VoidcubeCLI` 或终端对象。
+2. CLI 保留 recent-session 选择、title/ID 解析、交互提示与 history 渲染，并只应用共享层返回的 `SessionLifecycleState`。
+3. `AIAgent.activate_session()` 成为 adapter 同步 session 的公开端口，统一重置 token/context、Todo、system prompt 和 `SessionPersistence` 游标；CLI 对已经删除的 `_last_flushed_db_idx` 兼容探测已清理。
+4. 删除无人读取的 `VoidCube_cli.session_state` JSON 状态旁路及 `run_agent.py` 初始化，不再保留与 SQLite/session lifecycle 并行的旧状态 owner。
+5. 新建、恢复、分支的成功/失败顺序和 Agent 同步均已有脱离 TUI 的 characterization tests；P0 增长护栏降至 10,052 行。
+
+## 28. 下一次实施起点
+
+2026-07-29 已完成 **Stage 3 session hydration**：
+
+1. `hydrate_session()` 通过 repository 公开端口统一 session 校验、history 读取、`session_meta` 过滤和 reopen，并显式返回 `missing`、`empty` 或 `ready`。
+2. `_preload_resumed_session()` 与 `_init_agent()` 共享同一个 hydration cache；交互启动、single query 和首个 turn 不再重复读取或重复显示空/缺失会话。
+3. `/resume` 直接复用 transition 已加载的 hydration 结果，首个 turn 前切换到空会话也不会再次查询。
+4. CLI 中两处 `SessionDB._conn` 私有写入已删除，session reopen 只经过 repository 公共方法；缺失、空、仅 metadata 和有历史四类结果均有直接测试。
+5. P0 增长护栏降至 10,045 行。
+
+## 29. 下一次实施起点
+
+2026-07-29 已完成 **Stage 3 history mutation command**：
+
+1. `remove_last_user_turn()` 接管最后 user turn 的定位和内存 transition，显式区分 empty、no-user、persistence-failed 与 applied。
+2. `SessionDB.truncate_last_user_turn()` 原子删除 SQLite 中最后 user 消息及其后的 assistant/tool 消息，并重算 message/tool-call 计数；resume 不再恢复已撤销内容。
+3. Agent 的公开 history mutation 端口同步增量写游标并允许显式缩短 JSON transcript；普通 `save_log()` 仍保留防止短暂局部历史覆盖完整日志的保护。
+4. CLI 保留 retry 入队、undo/rollback 提示与渲染；旧的单调用者 `retry_last()` 委托层已删除。SQLite 截断失败时不再只改内存形成双真相。
+5. 共享 transition、真实 SQLite、JSON transcript 和 CLI/Agent 接线测试均已覆盖；`VoidCube_cli/app.py` 为 10,050 行，较 Stage 3 lifecycle 批次前净减少 107 行。
+
+## 30. 下一次实施起点
+
+2026-07-29 已完成 **Stage 3 session title command**：
+
+1. `get_session_title()` / `set_session_title()` 接管 title 查询、canonical sanitize、唯一性判断、立即更新或 pending 结果，并返回结构化状态。
+2. 共享层仅通过 repository port 调用 sanitize/get/set，不导入 concrete `SessionDB`；CLI 已删除动态 `SessionDB.sanitize_title` 和重复存在性分支。
+3. 首次 Agent 创建后的 pending title 写入也复用同一 use case，不再保留第二条 CLI 私有落库逻辑。
+4. current、pending、unset、unavailable、updated、queued、conflict、invalid 与过长 title 均有直接测试；过长 title 不再额外误报“清理后为空”。
+5. `VoidCube_cli/app.py` 为 10,060 行，较本轮 Stage 3 开始前净减少 97 行。
+
+## 31. 下一次实施起点
+
+2026-07-29 已完成 **Stage 3 首个 turn contract**：
+
+1. `VoidCube_app.turn_contract` 新增 `TurnInput` / `TurnOutcome`，统一 prior/current history、Agent result、response、failed/partial/interrupted/error、reasoning 与 preview 状态。
+2. `chat()` 已切换 user input/history transition 和最终 Agent result normalization；线程、interrupt queue、TTS、renderer 与自主超时编排仍留在 CLI adapter。
+3. malformed messages 使用当前 history，no-result 显式为失败，空失败/部分结果统一生成 error response；自主 observation 同步用户实际看到的 fallback response，不再保留空写回。
+4. 纯 contract tests 覆盖 multimodal input、不原地修改 history、无结果、完整结果、interrupt payload、malformed history 和 error fallback。
+5. `VoidCube_cli/app.py` 为 10,053 行，较本轮 Stage 3 开始前净减少 104 行。
+
+## 32. Stage 3 approval/clarify event contract 实施记录
+
+2026-07-29 已完成：
+
+1. `VoidCube_app.interaction_contract` 新增 `ApprovalRequest/Decision/Status/Sink` 与 `ClarificationRequest/Decision/Status/Sink`；共享层只表达请求、决定和保守解析，不包含 Queue、锁、deadline、ANSI、键位或 CLI host。
+2. `VoidCube_cli.interaction_adapter` 接管 clarify/approval 的阻塞等待、超时清理、长命令展开和审批面板；secret 与 sudo 继续作为 CLI 私有敏感输入，不混入共享 contract。
+3. Agent 的 `clarify_callback` 已替换为结构化 `clarification_sink`，并修复模型 schema 使用 `options`、Agent 却读取 `choices` 且旧工具完全忽略 callback 的断链。
+4. dangerous-command guard 改为读取 `ApprovalDecision.approved`；旧实现会把非空字符串 `"deny"` 当真值从而错误放行，当前缺失、异常、非法和明确拒绝均 fail closed。无人使用的全局 `ApprovalGate`、auto-approve 分支，以及实际没有缓存/持久化语义的 session/always 选项均已删除。
+5. history mutation 的显式空列表现在可写出 `message_count: 0` 与空 JSON transcript，撤销全部历史不会再残留旧日志。共享 contract、Agent/tool 路由、CLI adapter、架构与打包契约均有直接测试。
+6. `VoidCube_cli/app.py` 降至 9,872 行，较本轮 Stage 3 开始前净减少 285 行；`chat()` 为 505 行，`run()` 为 1,732 行，P0 增长基线已同步下调。
+7. 最终相关回归为 181 passed，完整 smoke 为 324 passed / 1169 deselected；wheel 构建、源码清单和退役集成扫描均通过。归档包含 interaction/session/turn contract 与 CLI interaction adapter，且不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 33. Stage 3 tool event contract 实施记录
+
+2026-07-29 已完成：
+
+1. `VoidCube_app.tool_events` 新增 `ToolEvent`、`ToolEventKind` 与 `ToolEventSink`；真实工具调用统一发出共享 `call_id` 的 started/completed 事件，并携带只读 arguments 快照、result、duration 与 error 状态。共享 contract 不包含 ANSI、spinner、inline diff 或 prompt_toolkit。
+2. Agent 的 `tool_progress_callback`、`tool_start_callback`、`tool_complete_callback` 已收敛为单一 `tool_event_sink`；全部生产调用者完成切换，旧参数与兼容分派归零。sink 异常只记录诊断，不改变工具执行结果。
+3. `VoidCube_cli.tool_event_adapter` 接管 spinner、autonomous activity、voice cue、scrollback 与 inline diff 投影；CLI 的 `_on_tool_event()` 仅做薄转发。completed event 自带 arguments，旧 `_pending_tool_info` 第二套状态 owner 已删除。
+4. delegation 子 Agent、gateway 批量进度与 rich subagent display 已全部消费结构化事件；reasoning 与 subagent progress 使用专用 event kind，不再借用工具 callback。started/completed 的并行顺序和相同 `call_id` 已有直接测试。
+5. `tool_progress_mode="new"` 现在只抑制重复 scrollback，不会再提前跳过 inline diff 等 completed 消费者；未实际启动的 skipped tool call 不产生 started/completed 事件。
+6. `VoidCube_cli/app.py` 降至 9,750 行，较本轮 Stage 3 开始前 10,157 行净减少 407 行；`chat()` 为 505 行，`run()` 为 1,732 行，`VoidcubeCLI.__init__` 为 290 行，P0 增长基线已同步下调。
+7. 最终相关回归为 222 passed，完整 smoke 为 332 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。归档包含 interaction/session/turn/tool event contract 与两类 CLI adapter，且不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 34. Stage 3 cancel/queue contract 实施记录
+
+2026-07-29 已完成：
+
+1. `VoidCube_app.turn_queue` 新增 canonical busy-input mode、pending/interrupt route、`TurnInterrupt` reason、multimodal interrupt text 与 interrupted-input batch transition；共享层不持有 Queue、锁、键位或 prompt_toolkit 对象。
+2. `VoidCube_cli.turn_queue_adapter` 接管实际 Queue route、poll、drain 与 requeue，并显式返回 EMPTY、DEFERRED、READY；`chat()` 和 Enter handler 只消费结构化结果。全字符串中断仍合并为一个下一 turn，多模态 payload 保持附件和输入顺序。
+3. 已删除 `app.py` 的 `_interrupt_text` / `_requeue_interrupted_payloads` 重复实现，以及没有任何生产者的 `__AUTONOMOUS_Q_EXIT__` / `__FORCE_QUIT__` sentinel 兼容判断。普通 `__HELLO__` 形式的用户输入不会再被误判并静默吞掉。
+4. autonomous timeout 与 Ctrl+C 分别映射为 TIMEOUT / USER_CANCELLED；取消不再借用 `__AUTONOMOUS_TIMEOUT__` 魔法用户消息，也不会被 Agent outcome 当作下一条 prompt 重新入队。新输入中断仍把原始 text/image payload 保留给下一 turn。
+5. clarify 活跃期间已落入 interrupt queue 的竞态 payload 现在转入 pending queue，不再 `continue` 后永久丢失。Queue adapter 不使用 `Queue.empty()` 作为并发 guard，而是 drain 到 `queue.Empty`。
+6. `VoidCube_cli/app.py` 降至 9,729 行，较本轮 Stage 3 开始前 10,157 行净减少 428 行；`chat()`、`run()` 与 `VoidcubeCLI.__init__` 未突破既有大方法基线，P0 总行数基线已同步下调。
+7. 最终相关回归为 240 passed，完整 smoke 为 350 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。归档包含 turn queue contract 与 CLI Queue adapter，且继续不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 35. 下一次实施起点
+
+下一批进入 **CLI-3 command handler 分域**：
+
+1. 盘点 `process_command()` 路由表与 `_handle_*` 方法，优先选择依赖最少、已有 characterization tests 的 command domain。
+2. handler 接收显式 context/port，不接收整个 `VoidcubeCLI` 作为无边界 host；slash 解析、Rich/ANSI 输出和 prompt_toolkit 交互继续属于 CLI adapter。
+3. 每迁出一个 command domain 即切换 execution table、删除原方法与兼容分派，并运行 command router、CLI smoke、架构、打包和退役扫描。

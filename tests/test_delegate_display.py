@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_agent
 from tools import delegate_tool
+from VoidCube_app.tool_events import ToolEvent, ToolEventKind
 
 
 def _build_minimal_agent(*, print_fn):
@@ -26,9 +27,7 @@ def _build_minimal_agent(*, print_fn):
     agent.log_prefix = ""
     agent._current_tool = None
     agent._touch_activity = lambda *_args, **_kwargs: None
-    agent.tool_progress_callback = None
-    agent.tool_start_callback = None
-    agent.tool_complete_callback = None
+    agent.tool_event_sink = None
     agent._checkpoint_mgr = SimpleNamespace(enabled=False)
     agent._should_emit_quiet_tool_messages = lambda: True
     agent._should_start_quiet_spinner = lambda: True
@@ -194,3 +193,70 @@ def test_delegate_task_rejects_missing_declared_worktree(tmp_path):
 
     assert result["error"]
     assert "worktree_path does not exist" in result["error"]
+
+
+@pytest.mark.unit
+def test_child_event_sink_batches_started_tools_for_parent() -> None:
+    parent_events = []
+    parent = SimpleNamespace(tool_event_sink=parent_events.append, _delegate_spinner=None)
+    sink = delegate_tool._build_child_event_sink(0, parent)
+
+    for index in range(5):
+        sink(
+            ToolEvent.started(
+                call_id=f"call-{index}",
+                name=f"tool-{index}",
+                arguments={},
+            )
+        )
+
+    assert len(parent_events) == 1
+    assert parent_events[0].kind is ToolEventKind.SUBAGENT_PROGRESS
+    assert parent_events[0].text == (
+        "🔀 tool-0, tool-1, tool-2, tool-3, tool-4"
+    )
+
+
+@pytest.mark.unit
+def test_rich_subagent_sink_maps_structured_events() -> None:
+    calls = []
+    manager = SimpleNamespace(
+        on_thinking=lambda *args: calls.append(("thinking", args)),
+        on_tool_start=lambda *args, **kwargs: calls.append(
+            ("started", args, kwargs)
+        ),
+        on_tool_complete=lambda *args, **kwargs: calls.append(
+            ("completed", args, kwargs)
+        ),
+        render=lambda **kwargs: calls.append(("render", kwargs)),
+    )
+    sink = delegate_tool._build_subagent_display_sink("task-1", 0, manager)
+
+    sink(ToolEvent.reasoning("checking"))
+    sink(
+        ToolEvent.started(
+            call_id="call-1",
+            name="read_file",
+            arguments={"path": "README.md"},
+            preview="README.md",
+        )
+    )
+    sink(
+        ToolEvent.completed(
+            call_id="call-1",
+            name="read_file",
+            arguments={"path": "README.md"},
+            result="failed",
+            duration=0.5,
+            is_error=True,
+        )
+    )
+    sink._flush()
+
+    assert calls[0] == ("thinking", ("task-1", "checking", 0))
+    assert calls[1][0] == "started"
+    assert calls[1][1][:2] == ("task-1", "read_file")
+    assert calls[1][2]["args_preview"] == "README.md"
+    assert calls[2][0] == "completed"
+    assert calls[2][2] == {"result_preview": "failed", "status": "error"}
+    assert calls[3] == ("render", {"clear": False})

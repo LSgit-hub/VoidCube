@@ -932,6 +932,53 @@ class SessionDB:
             messages.append(msg)
         return messages
 
+    def truncate_last_user_turn(self, session_id: str) -> int:
+        """Delete the latest user message and all later messages atomically."""
+        def _do(conn):
+            boundary = conn.execute(
+                "SELECT id, timestamp FROM messages "
+                "WHERE session_id = ? AND role = 'user' "
+                "ORDER BY timestamp DESC, id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if boundary is None:
+                return 0
+
+            cursor = conn.execute(
+                "DELETE FROM messages WHERE session_id = ? AND "
+                "(timestamp > ? OR (timestamp = ? AND id >= ?))",
+                (
+                    session_id,
+                    boundary["timestamp"],
+                    boundary["timestamp"],
+                    boundary["id"],
+                ),
+            )
+            remaining_tool_calls = conn.execute(
+                "SELECT tool_calls FROM messages "
+                "WHERE session_id = ? AND tool_calls IS NOT NULL",
+                (session_id,),
+            ).fetchall()
+            tool_call_count = 0
+            for row in remaining_tool_calls:
+                try:
+                    calls = json.loads(row["tool_calls"])
+                    tool_call_count += len(calls) if isinstance(calls, list) else 1
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            message_count = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE sessions SET message_count = ?, tool_call_count = ? "
+                "WHERE id = ?",
+                (message_count, tool_call_count, session_id),
+            )
+            return cursor.rowcount
+
+        return self._execute_write(_do)
+
     # =========================================================================
     # Search
     # =========================================================================
