@@ -9,14 +9,18 @@ import pytest
 
 import cli as cli_module
 from cli import VoidcubeCLI
+import VoidCube_cli.command_handlers.registry as command_handler_registry
 from VoidCube_cli.command_execution import (
     BUILTIN_COMMAND_SPECS,
     CommandBusyLifecycle,
     initialize_command_execution,
 )
 from VoidCube_cli.command_router import parse_cli_command
+from VoidCube_cli.command_handlers.registry import install_cli_command_execution
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
+    BranchSessionResult,
+    ResumeSessionResult,
     SessionHydration,
     SessionHydrationStatus,
     SessionLifecycleState,
@@ -123,7 +127,10 @@ def test_builtin_table_is_complete_and_contains_no_removed_commands() -> None:
     for spec in BUILTIN_COMMAND_SPECS.values():
         if spec.exits:
             continue
-        assert hasattr(VoidcubeCLI, spec.handler_name), spec.handler_name
+        if spec.handler_key:
+            assert not spec.handler_name
+        else:
+            assert hasattr(VoidcubeCLI, spec.handler_name), spec.handler_name
 
 
 def test_retired_cron_integration_has_no_active_runtime_or_config_surface() -> None:
@@ -241,12 +248,320 @@ def test_cli_process_uses_execution_table_for_queue(monkeypatch) -> None:
     app._invalidate = lambda **kwargs: None
     app._pending_input = queue.Queue()
     app._agent_running = True
-    initialize_command_execution(app)
-    monkeypatch.setattr(cli_module, "_cprint", output.append)
+    install_cli_command_execution(app, emit=output.append)
 
     assert app.process_command("/queue Keep MixedCase") is True
     assert app._pending_input.get_nowait() == "Keep MixedCase"
     assert output == ["  Queued for the next turn: Keep MixedCase"]
+
+
+def test_cli_process_routes_resume_through_registry_and_shared_use_case(
+    monkeypatch,
+) -> None:
+    output: list[str] = []
+    applied: list[SessionLifecycleState] = []
+    observed: list[dict[str, object]] = []
+    started_at = datetime(2026, 7, 29, 20, 30, 0)
+    state = SessionLifecycleState(
+        session_id="target-id",
+        session_start=started_at,
+        conversation_history=(),
+        resumed=True,
+    )
+
+    def fake_resume_session(**kwargs):
+        observed.append(kwargs)
+        return ResumeSessionResult(state=state, metadata={"title": "Saved"})
+
+    monkeypatch.setattr(command_handler_registry, "resume_session", fake_resume_session)
+    repository = object()
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._session_db = repository
+    app.session_id = "current-id"
+    app.session_start = started_at
+    app._list_recent_sessions = lambda *, limit: [{"id": "target-id"}]
+    app._show_recent_sessions = lambda *, reason: False
+    app._apply_session_lifecycle_state = applied.append
+    app._display_resumed_history = lambda: pytest.fail(
+        "empty resumed history must not render"
+    )
+    app._session_hydration = None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/resume 1") is True
+    assert observed == [
+        {
+            "repository": repository,
+            "current_session_id": "current-id",
+            "target_session_id": "target-id",
+            "session_start": started_at,
+        }
+    ]
+    assert applied == [state]
+    assert app._session_hydration.session_id == "target-id"
+    assert output == [
+        '  ↻ Resumed session target-id "Saved" — no messages, starting fresh.'
+    ]
+
+
+def test_cli_process_routes_branch_through_registry_with_runtime_snapshot(
+    monkeypatch,
+) -> None:
+    output: list[str] = []
+    applied: list[SessionLifecycleState] = []
+    observed: list[dict[str, object]] = []
+    history = [{"role": "user", "content": "question"}]
+    state = SessionLifecycleState(
+        session_id="branch-id",
+        session_start=datetime(2026, 7, 29, 20, 31, 0),
+        conversation_history=tuple(history),
+        resumed=True,
+    )
+
+    def fake_branch_session(**kwargs):
+        observed.append(kwargs)
+        return BranchSessionResult(
+            state=state,
+            parent_session_id="current-id",
+            title="Mixed Case",
+            copied_message_count=1,
+        )
+
+    monkeypatch.setattr(command_handler_registry, "branch_session", fake_branch_session)
+    monkeypatch.setenv("VOIDCUBE_SESSION_SOURCE", "integration-test")
+    repository = object()
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._session_db = repository
+    app.session_id = "current-id"
+    app.conversation_history = history
+    app.model = "active-model"
+    app.max_turns = 7
+    app.reasoning_config = {"effort": "medium"}
+    app._apply_session_lifecycle_state = applied.append
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/branch Mixed Case") is True
+    assert len(observed) == 1
+    call = observed[0]
+    assert call["repository"] is repository
+    assert call["current_session_id"] == "current-id"
+    assert call["conversation_history"] is history
+    assert call["requested_title"] == "Mixed Case"
+    assert call["source"] == "integration-test"
+    assert call["model"] == "active-model"
+    assert call["model_config"] == {
+        "max_iterations": 7,
+        "reasoning_config": {"effort": "medium"},
+    }
+    assert isinstance(call["started_at"], datetime)
+    assert applied == [state]
+    assert output == [
+        '  ⑂ Branched session "Mixed Case" (1 user message)',
+        "  Original session: current-id",
+        "  Branch session:   branch-id",
+    ]
+
+
+def test_cli_process_routes_new_through_shared_session_transition(
+    monkeypatch,
+) -> None:
+    events: list[object] = []
+    observed: list[dict[str, object]] = []
+    state = SessionLifecycleState(
+        session_id="new-id",
+        session_start=datetime(2026, 7, 29, 20, 32, 0),
+        conversation_history=(),
+        resumed=False,
+    )
+
+    def fake_start_new_session(**kwargs):
+        observed.append(kwargs)
+        events.append("start")
+        return state
+
+    monkeypatch.setattr(
+        command_handler_registry,
+        "start_new_session",
+        fake_start_new_session,
+    )
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_notify_session_boundary",
+        lambda _host, event: events.append(("hook", event)),
+    )
+    monkeypatch.setenv("VOIDCUBE_SESSION_SOURCE", "integration-test")
+    repository = object()
+    agent = object()
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._session_db = repository
+    app.session_id = "current-id"
+    app.model = "active-model"
+    app.max_turns = 9
+    app.reasoning_config = {"effort": "high"}
+    app.agent = agent
+    app._current_trace_id = "old-trace"
+    app._apply_session_lifecycle_state = lambda value: events.append(
+        ("apply", value)
+    )
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/new") is True
+    assert app._current_trace_id == ""
+    assert events == [
+        ("hook", "on_session_finalize"),
+        "start",
+        ("apply", state),
+        ("hook", "on_session_reset"),
+    ]
+    assert len(observed) == 1
+    call = observed[0]
+    assert call["repository"] is repository
+    assert call["current_session_id"] == "current-id"
+    assert call["source"] == "integration-test"
+    assert call["model"] == "active-model"
+    assert call["model_config"] == {
+        "max_iterations": 9,
+        "reasoning_config": {"effort": "high"},
+    }
+    assert call["create_record"] is True
+    assert isinstance(call["started_at"], datetime)
+
+
+def test_cli_process_routes_clear_transition_before_tui_display(monkeypatch) -> None:
+    events: list[object] = []
+    output: list[str] = []
+    state = SessionLifecycleState(
+        session_id="new-id",
+        session_start=datetime(2026, 7, 29, 20, 33, 0),
+        conversation_history=(),
+        resumed=False,
+    )
+
+    monkeypatch.setattr(
+        command_handler_registry,
+        "start_new_session",
+        lambda **_kwargs: events.append("start") or state,
+    )
+    terminal_output = SimpleNamespace(
+        erase_screen=lambda: events.append("erase"),
+        cursor_goto=lambda x, y: events.append(("cursor", x, y)),
+        flush=lambda: events.append("flush"),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._session_db = object()
+    app.session_id = "current-id"
+    app.model = "active-model"
+    app.max_turns = 9
+    app.reasoning_config = {}
+    app.agent = None
+    app._current_trace_id = "old-trace"
+    app._app = SimpleNamespace(output=terminal_output)
+    app.compact = True
+    app.enabled_toolsets = []
+    app.conversation_history = [{"role": "user"}]
+    app.show_banner = lambda: pytest.fail("TUI clear must not show standalone banner")
+    app._apply_session_lifecycle_state = lambda value: events.append(
+        ("apply", value)
+    )
+    console = SimpleNamespace(print=lambda value: events.append(("banner", value)))
+    install_cli_command_execution(
+        app,
+        emit=output.append,
+        chat_console_factory=lambda: console,
+        compact_banner_factory=lambda: "compact-banner",
+    )
+
+    assert app.process_command("/clear") is True
+    assert app._current_trace_id == ""
+    assert events == [
+        "start",
+        ("apply", state),
+        "erase",
+        ("cursor", 0, 0),
+        "flush",
+        ("banner", "compact-banner"),
+    ]
+    assert output == [
+        "  ✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.\n"
+    ]
+
+
+def test_cli_process_projects_plugin_manager_dict_values(monkeypatch, capsys) -> None:
+    manager = SimpleNamespace(
+        list_plugins=lambda: {
+            "plugin-id": {
+                "name": "example",
+                "enabled": True,
+                "version": "1.0",
+                "tools": 1,
+                "hooks": 0,
+                "error": "",
+            }
+        }
+    )
+    monkeypatch.setattr(command_handler_registry, "_discover_plugins", lambda: None)
+    monkeypatch.setattr(
+        "VoidCube_cli.plugins.get_plugin_manager",
+        lambda: manager,
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/plugins") is True
+
+    assert capsys.readouterr().out.splitlines() == [
+        "Plugins (1):",
+        "  ✓ example v1.0 (1 tools)",
+    ]
+
+
+def test_cli_process_routes_image_arguments_to_host_attachment_state(
+    monkeypatch,
+) -> None:
+    output: list[str] = []
+    image = Path("Mixed Image.PNG")
+    monkeypatch.setattr(command_handler_registry, "_is_termux", lambda: False)
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_resolve_attachment_path",
+        lambda value: image if value == "Mixed Image.PNG" else None,
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._attached_images = []
+    app._try_attach_clipboard_image = lambda: False
+    install_cli_command_execution(app, emit=output.append)
+
+    assert (
+        app.process_command('/image "Mixed Image.PNG" Describe CamelCase')
+        is True
+    )
+
+    assert app._attached_images == [image]
+    assert output == [
+        "  📎 Attached image: Mixed Image.PNG",
+        (
+            "  \033[2mNow type your prompt (or use --image in single-query mode): "
+            "Describe CamelCase\033[0m"
+        ),
+    ]
 
 
 def test_cli_approval_choices_only_expose_implemented_decisions() -> None:

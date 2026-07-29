@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器与 Stage 3 session/turn/interaction/tool/cancel/queue contract 已完成，下一批进入 CLI-3 command handler 分域。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract 与 CLI-3 session/clear/info/operations/attachments command adapter 拆分已完成。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -20,7 +20,7 @@
 
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
-| `VoidCube_cli/app.py` | 9,729 行 | `VoidcubeCLI` 仍混合 Agent 编排、TUI、命令和语音；session/turn/interaction/tool/cancel/queue contract 与 CLI adapter 已迁出 | P0 |
+| `VoidCube_cli/app.py` | 9,241 行 | `VoidcubeCLI` 仍混合 Agent 编排、TUI、命令和语音；shared contract 与 queue/statusbar/retry/title/resume/branch/new/clear/stop/profile/plugins/paste/image command handler 已迁出 | P0 |
 | `systems/supervisor/planning_runtime.py` | 9,460 行 | `PlanningRuntimeMixin` 有 186 个方法，持久化、认知、排程、治理和执行交接混合 | P0 |
 | `systems/supervisor/endogenous_drive.py` | 9,303 行 | `EndogenousDriveEngine` 有 124 个方法，感知、候选、LM 上下文、证据和策略记忆混合 | P0 |
 | `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与全部只读 UI 投影已外移；runtime 仅保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
@@ -751,8 +751,73 @@ systems/supervisor/web/
 
 ## 35. 下一次实施起点
 
-下一批进入 **CLI-3 command handler 分域**：
+2026-07-29 已完成 **CLI-3 首批 command handler 分域**：
 
-1. 盘点 `process_command()` 路由表与 `_handle_*` 方法，优先选择依赖最少、已有 characterization tests 的 command domain。
-2. handler 接收显式 context/port，不接收整个 `VoidcubeCLI` 作为无边界 host；slash 解析、Rich/ANSI 输出和 prompt_toolkit 交互继续属于 CLI adapter。
-3. 每迁出一个 command domain 即切换 execution table、删除原方法与兼容分派，并运行 command router、CLI smoke、架构、打包和退役扫描。
+1. 新增 `VoidCube_cli.command_handlers`，首批迁出 `/queue`、`/statusbar` 与 `/retry`；input/display handler 只接收 dataclass ports 和 `ParsedCliCommand`，不接收 `VoidcubeCLI`。
+2. execution table 新增显式 `handler_key`，已迁命令从 registry 获取 callable；未迁命令暂时保留 method handler。registry 是 CLI 组合根，负责把 Queue、状态 getter/setter 和文本输出映射为窄 ports。
+3. `VoidcubeCLI._handle_queue_command`、`_handle_statusbar_command`、`_handle_retry_command` 已删除，不保留同名委托壳；原参数大小写、queue/idle 提示、statusbar toggle 与 multimodal retry payload 行为保持不变。
+4. `VoidCube_cli/app.py` 降至 9,696 行，较本轮 Stage 3 开始前 10,157 行净减少 461 行；P0 总行数基线已同步下调。
+5. 该首批最终相关回归为 261 passed，完整 smoke 为 355 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。归档包含 `command_handlers` package、turn queue contract 与全部既有 shared contract，且继续不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 36. CLI-3 session command handler 实施记录
+
+2026-07-29 已完成：
+
+1. 新增 `command_handlers.session`，`/title` 现在通过 `TitleCommandPorts` 调用共享 `get_session_title()` / `set_session_title()` use case；handler 不访问 repository、CLI host 或 TUI 对象。
+2. current、pending、unset、unavailable、updated、queued、conflict、invalid 与 not-found 的 CLI 文案投影均有直接测试；queued title 只通过显式 setter port 回写。
+3. `VoidcubeCLI._handle_title_command` 已删除，不保留翻译或 title 委托壳；Agent 首次创建 session 后的 pending title 落库仍直接复用共享 use case。
+4. `/resume` 与 `/branch` 当前仍拥有 recent-session selection、title/ID resolution、history display 与 branch summary 等 CLI adapter 责任；本批不以整个 host port 强行迁移。
+5. `VoidCube_cli/app.py` 降至 9,641 行，较本轮 Stage 3 开始前 10,157 行净减少 516 行；P0 总行数基线已同步下调。
+6. 最终相关回归为 273 passed，完整 smoke 为 367 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。归档包含 `command_handlers.session` 与全部 shared contract/CLI adapter，且继续不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 37. CLI-3 session adapter 实施记录
+
+2026-07-29 已完成：
+
+1. 新增 `VoidCube_cli.session_command_adapter`，集中拥有 `/resume` 的目标选择与 resume/branch summary 纯投影；数字目标按 1-based recent-session 快照解析，零、负数和超范围索引显式失败，title/ID 继续复用现有 resolver。非数字目标不再触发无意义的 recent-session repository 查询。
+2. `command_handlers.session` 新增 `ResumeCommandPorts` / `BranchCommandPorts`；handler 只编排显式 callable ports、共享 `resume_session()` / `branch_session()` 和 state/hydration application，不访问 repository、CLI host 或 TUI 对象。recent-session 表格和完整 resumed history renderer 继续留在 CLI adapter。
+3. registry 作为 CLI 组合根快照 branch 的 source、model、reasoning config、history 与时间，并把 resume 的 recent selection、named resolver、翻译标签和 history renderer 接入 execution table；默认翻译器也遵循 `default=` fallback 语义。
+4. `VoidcubeCLI._handle_resume_command` / `_handle_branch_command` 已删除，不保留同名委托壳；连同此前迁出的 queue/statusbar/retry/title，六个旧 handler 名称扫描为零匹配。
+5. `VoidCube_cli/app.py` 降至 9,526 行，较本轮 Stage 3 开始前 10,157 行净减少 631 行；P0 总行数基线已同步下调。
+6. 最终治理相关回归为 182 passed，完整 smoke 为 394 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。355 项归档包含五个 `command_handlers` 文件、`session_command_adapter.py` 与 shared turn queue，且继续不包含已删除的 `VoidCube_cli/session_state.py`。
+
+## 38. CLI-3 new/clear command adapter 实施记录
+
+2026-07-29 已完成：
+
+1. `command_handlers.session` 新增 `NewSessionCommandPorts` / `ClearCommandPorts`；finalize hook、trace reset、共享 `start_new_session()`、state/Agent application、reset hook 与可选提示按显式顺序执行。Agent 存在性只在 transition 起点快照一次，同时决定 hook 对和 `create_record`，避免 hook 改变 runtime 后出现半套 transition。
+2. `/new` 与 `/clear` 均切换为 execution table 的 `handler_key`；tools 配置变更后的内部 reset 也改走统一 `/new` route。`VoidcubeCLI.new_session()`、`_notify_session_boundary()` 与 `_handle_clear_command()` 已删除，不保留委托壳或 silent 参数。
+3. 新增 `VoidCube_cli.clear_command_adapter`，只负责 prompt_toolkit erase/cursor/flush、compact/full banner 和 fresh-start 文案投影；共享 `start_new_session()` 不包含终端、banner 或翻译文本。standalone clear 不再先 `console.clear()` 后又由 `show_banner()` 重复清屏。
+4. 通用 `ChatConsole` 迁入 `cli_ui.py`，compact banner builder 迁入 `banner.py`；根 `cli.ChatConsole` / `cli._cprint` patch 契约通过可注入 emitter 保持。恒定返回 `None` 且只会渲染 `Tip: None` 的孤立 `VoidCube_cli/tips.py` 及旧 clear tip 分支已删除。
+5. `VoidCube_cli/app.py` 降至 9,359 行，较本轮 Stage 3 开始前 10,157 行净减少 798 行；P0 总行数基线已同步下调。
+6. 最终阶段相关回归为 275 passed，完整 smoke 为 403 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。355 项归档包含 clear/session adapters 与迁出的 banner/UI helper，不包含已删除的 `tips.py` 和 `session_state.py`。
+
+## 39. CLI-3 info/operations command handler 实施记录
+
+2026-07-29 已完成：
+
+1. 新增 `command_handlers.operations`，`/stop` 只通过 `StopCommandPorts` 获取 process snapshot 与执行 `kill_all()`；无运行任务不触发 mutation，有运行任务先输出 snapshot count，再输出真实 kill count。
+2. 新增 `command_handlers.info`，`/profile` 与 `/plugins` 只消费路径、discovery/list 和输出 ports。profile 名改用 `Path.parts[0]`，修复旧实现通过 `str(relative).split('/')` 在 Windows 反斜杠路径下会把整个子路径误当 profile 名的问题。
+3. plugin registry 的真实 `list_plugins()` 返回 dict；旧方法直接迭代后把字符串 key 当 record 访问，安装插件时会落入总异常分支。registry 现在显式投影 `values()`，handler 稳定消费 records 序列，并覆盖空 registry、enabled/disabled、version、tools/hooks 与 load error 文案。
+4. `/stop`、`/profile`、`/plugins` 均切换为 execution table `handler_key`；三个 `VoidcubeCLI._handle_*` 旧 owner 已删除，不保留 host 委托壳。process registry 与 plugin discovery 保持 lazy import，不增加 CLI 启动导入面。
+5. `VoidCube_cli/app.py` 降至 9,293 行，较本轮 Stage 3 开始前 10,157 行净减少 864 行；P0 总行数基线已同步下调。
+6. 最终阶段相关回归为 283 passed，完整 smoke 为 411 passed / 1171 deselected；wheel 构建、源码清单与退役集成扫描均通过。357 项归档包含 `command_handlers.info` / `operations`，不包含已删除的 `tips.py` 和 `session_state.py`。
+
+## 40. CLI-3 attachments command handler 实施记录
+
+2026-07-29 已完成：
+
+1. 新增 `command_handlers.attachments`，`/paste` 与 `/image` 仅通过显式 clipboard、attachment state、path/file helper 和 output ports 编排，不接收 `VoidcubeCLI` host；平台提示、ANSI 与 Termux 示例继续属于 CLI adapter。
+2. `/paste` 与 `/image` 均切换为 execution table 的 `handler_key`；`VoidcubeCLI._handle_paste_command` / `_handle_image_command` 已删除，不保留同名委托壳，旧 `_IMAGE_EXTENSIONS`、`_resolve_attachment_path` 与 `_split_path_input` imports 也已清理。
+3. `_try_attach_clipboard_image()` 继续留在 `app.py`，因为 bracketed paste、Ctrl+V、Alt+V 和 `/paste` 共用同一个键盘/命令图像提取 owner；command handler 只接收其窄 callable port，不复制提取状态。`/image` 直接消费原始 `ParsedCliCommand.arguments`，保留带空格的引号路径与 trailing prompt 的原始大小写。
+4. characterization 与 registry integration tests 已覆盖 Termux 短路和后续提示、clipboard empty/extraction failure/success、桌面与 Termux usage、missing/unsupported/supported file、带空格路径、trailing prompt，以及 resolved image 写入 host `_attached_images`。
+5. `VoidCube_cli/app.py` 降至 9,241 行，较本轮 Stage 3 开始前 10,157 行净减少 916 行；P0 总行数基线已同步下调。
+6. attachments/direct command/packaging 回归为 57 passed，受影响回归为 194 passed，阶段治理集为 301 passed，完整 smoke 为 421 passed / 1171 deselected；最新 wheel 构建与源码清单审计通过。358 项归档包含 `command_handlers.attachments`、info/operations/session handlers 与 clear/session adapters，不包含已删除的 `tips.py` 和 `session_state.py`。
+
+## 41. 下一次实施起点
+
+下一批评估 **CLI-3 history/save/undo command domain**：
+
+1. 先补齐 `/history`、`/save` 与 `/undo` 的直接 characterization tests，明确空历史、参数解析、默认输出路径、覆盖/写入失败、rollback 边界和用户提示。
+2. 分别梳理 history 只读投影、filesystem export 与 history mutation 所需 ports；若依赖面过宽，按边界拆成多个 handler 批次，不把文件写入和会话回滚装进同一个无边界 adapter。
+3. 每个命令切换到 execution table 后立即删除旧 `_handle_*` owner、失效 imports 和重复兼容分支，并继续以退役集成扫描、架构测试、wheel 构建与归档审计作为完成门禁。

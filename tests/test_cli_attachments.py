@@ -11,6 +11,15 @@ from VoidCube_cli.attachments import (
     _split_path_input,
     _termux_example_image_path,
 )
+from VoidCube_cli.command_handlers.attachments import (
+    ImageCommandPorts,
+    ImageCommandText,
+    PasteCommandPorts,
+    PasteCommandText,
+    handle_image_command,
+    handle_paste_command,
+)
+from VoidCube_cli.command_router import parse_cli_command
 
 
 pytestmark = pytest.mark.smoke
@@ -94,3 +103,174 @@ def test_termux_example_path_is_always_posix():
     assert _termux_example_image_path("sample.png") == (
         "~/storage/shared/Pictures/sample.png"
     )
+
+
+def _paste_ports(
+    output: list[str],
+    *,
+    termux: bool = False,
+    has_image: bool = False,
+    attach=lambda: False,
+    count: int = 0,
+) -> PasteCommandPorts:
+    return PasteCommandPorts(
+        is_termux=lambda: termux,
+        has_clipboard_image=lambda: has_image,
+        attach_clipboard_image=attach,
+        attachment_count=lambda: count,
+        emit=output.append,
+        text=PasteCommandText(
+            termux_unavailable="termux unavailable",
+            extraction_failed="extraction failed",
+            no_image="no image",
+        ),
+    )
+
+
+@pytest.mark.unit
+def test_paste_handler_stops_before_clipboard_check_on_termux():
+    output: list[str] = []
+
+    handle_paste_command(
+        parse_cli_command("/paste"),
+        ports=_paste_ports(
+            output,
+            termux=True,
+            attach=lambda: pytest.fail("Termux must not extract clipboard"),
+        ),
+    )
+
+    assert output == ["termux unavailable"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("has_image", "attached", "expected"),
+    [
+        (False, False, "no image"),
+        (True, False, "extraction failed"),
+        (True, True, "  📎 Image #3 attached from clipboard"),
+    ],
+)
+def test_paste_handler_projects_clipboard_outcomes(
+    has_image: bool,
+    attached: bool,
+    expected: str,
+):
+    output: list[str] = []
+
+    handle_paste_command(
+        parse_cli_command("/paste"),
+        ports=_paste_ports(
+            output,
+            has_image=has_image,
+            attach=lambda: attached,
+            count=3,
+        ),
+    )
+
+    assert output == [expected]
+
+
+def _image_ports(
+    output: list[str],
+    attached: list[Path],
+    *,
+    termux: bool = False,
+    resolved: Path | None = None,
+) -> ImageCommandPorts:
+    return ImageCommandPorts(
+        is_termux=lambda: termux,
+        split_path=_split_path_input,
+        resolve_path=lambda _value: resolved,
+        supported_extensions={".png", ".jpg"},
+        append_attachment=attached.append,
+        termux_example_path=_termux_example_image_path,
+        emit=output.append,
+        text=ImageCommandText(
+            dim_prefix="<dim>",
+            reset_suffix="</dim>",
+            tip_prefix="Tip:",
+        ),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("termux", "expected_hint"),
+    [(False, "/path/to/image.png"), (True, "~/storage/shared/Pictures/cat.png")],
+)
+def test_image_handler_projects_platform_usage_hint(
+    termux: bool,
+    expected_hint: str,
+):
+    output: list[str] = []
+
+    handle_image_command(
+        parse_cli_command("/image"),
+        ports=_image_ports(output, [], termux=termux),
+    )
+
+    assert output == [
+        f"  <dim>Usage: /image <path>  e.g. /image {expected_hint}</dim>"
+    ]
+
+
+@pytest.mark.unit
+def test_image_handler_rejects_missing_and_unsupported_files():
+    missing_output: list[str] = []
+    unsupported_output: list[str] = []
+
+    handle_image_command(
+        parse_cli_command("/image Missing File.png"),
+        ports=_image_ports(missing_output, []),
+    )
+    handle_image_command(
+        parse_cli_command("/image notes.txt"),
+        ports=_image_ports(unsupported_output, [], resolved=Path("notes.txt")),
+    )
+
+    assert missing_output == ["  <dim>(>_<) File not found: Missing</dim>"]
+    assert unsupported_output == [
+        "  <dim>(._.) Not a supported image file: notes.txt</dim>"
+    ]
+
+
+@pytest.mark.unit
+def test_image_handler_attaches_path_and_preserves_trailing_prompt_case():
+    output: list[str] = []
+    attached: list[Path] = []
+    image = Path("Mixed Image.PNG")
+
+    handle_image_command(
+        parse_cli_command('/image "Mixed Image.PNG" Describe CamelCase'),
+        ports=_image_ports(output, attached, resolved=image),
+    )
+
+    assert attached == [image]
+    assert output == [
+        "  📎 Attached image: Mixed Image.PNG",
+        (
+            "  <dim>Now type your prompt (or use --image in single-query mode): "
+            "Describe CamelCase</dim>"
+        ),
+    ]
+
+
+@pytest.mark.unit
+def test_image_handler_projects_termux_followup_for_attached_image():
+    output: list[str] = []
+    image = Path("sample.png")
+
+    handle_image_command(
+        parse_cli_command("/image sample.png"),
+        ports=_image_ports(output, [], termux=True, resolved=image),
+    )
+
+    assert output == [
+        "  📎 Attached image: sample.png",
+        (
+            "  <dim>Tip: type your next message, or run VoidCube chat -q "
+            "--image ~/storage/shared/Pictures/sample.png \"What do you see?\"</dim>"
+        ),
+    ]

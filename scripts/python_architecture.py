@@ -21,7 +21,7 @@ SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}
 FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 
 P0_LINE_BASELINES = {
-    "VoidCube_cli/app.py": 9_729,
+    "VoidCube_cli/app.py": 9_241,
     "systems/supervisor/planning_runtime.py": 9_460,
     "systems/supervisor/endogenous_drive.py": 9_303,
     "systems/supervisor/ui_runtime.py": 1_204,

@@ -86,6 +86,31 @@ def format_banner_version_label() -> str:
     return f"v{VERSION}"
 
 
+def build_compact_banner() -> str:
+    """Build the welcome banner used by narrow terminal adapters."""
+    from VoidCube_cli.style import BANNER_BORDER, BANNER_DIM, BANNER_TITLE
+
+    line1 = "> VoidCube - AI Agent"
+    tiny_line = "> VoidCube"
+    version_line = format_banner_version_label()
+    width = min(shutil.get_terminal_size().columns - 2, 88)
+    if width < 30:
+        return f"\n[{BANNER_TITLE}]{tiny_line}[/]\n"
+
+    content_width = width - 4
+    bar = "═" * width
+    line1 = line1[:content_width].ljust(content_width)
+    line2 = version_line[:content_width].ljust(content_width)
+    return (
+        f"\n[bold {BANNER_BORDER}]╔{bar}╗[/]\n"
+        f"[bold {BANNER_BORDER}]║[/] [{BANNER_TITLE}]{line1}[/] "
+        f"[bold {BANNER_BORDER}]║[/]\n"
+        f"[bold {BANNER_BORDER}]║[/] [dim {BANNER_DIM}]{line2}[/] "
+        f"[bold {BANNER_BORDER}]║[/]\n"
+        f"[bold {BANNER_BORDER}]╚{bar}╝[/]\n"
+    )
+
+
 def _format_context_length(tokens: int) -> str:
     """Format a token count for display."""
     if tokens >= 1_000_000:

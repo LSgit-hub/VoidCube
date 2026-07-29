@@ -53,7 +53,6 @@ if sys.platform == 'win32':
         kernel32.SetConsoleCP(65001)
     except Exception:
         pass
-from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
@@ -79,19 +78,13 @@ from VoidCube_app.session_identity import resolve_session_identity
 from VoidCube_app.session_lifecycle import (
     HistoryMutationResult,
     HistoryMutationStatus,
-    SessionAlreadyActiveError,
     SessionHydration,
     SessionHydrationStatus,
     SessionLifecycleState,
-    SessionNotFoundError,
     SessionTitleStatus,
-    branch_session,
     hydrate_session,
     remove_last_user_turn,
-    get_session_title,
     set_session_title,
-    resume_session,
-    start_new_session,
 )
 from VoidCube_app.turn_contract import begin_turn, normalize_turn_outcome
 from VoidCube_app.tool_events import ToolEvent
@@ -116,9 +109,7 @@ from VoidCube_cli.command_router import (
     parse_cli_command,
     resolve_dynamic_command,
 )
-from VoidCube_cli.command_execution import (
-    initialize_command_execution,
-)
+from VoidCube_cli.command_handlers.registry import install_cli_command_execution
 from VoidCube_cli.interaction_adapter import (
     approval_choices as _approval_choices_view,
     approval_display_fragments as _approval_display_fragments_view,
@@ -251,8 +242,9 @@ def _estimate_usage_cost_lazy(usage, **kwargs):
 def _CanonicalUsage_lazy(*args, **kwargs):
     _lazy_import_usage_pricing()
     return _CanonicalUsage(*args, **kwargs)
-from VoidCube_cli.banner import format_banner_version_label
+from VoidCube_cli.banner import build_compact_banner
 from VoidCube_cli.cli_ui import (
+    ChatConsole as _BaseChatConsole,
     _accent_hex,
     _rich_text_from_ansi,
     _cprint,
@@ -268,17 +260,21 @@ from VoidCube_cli.cli_handlers import (
     _git_improvement_diff,
 )
 from VoidCube_cli.attachments import (
-    _IMAGE_EXTENSIONS,
     _collect_query_images,
     _detect_file_drop,
     _format_image_attachment_badges,
-    _resolve_attachment_path,
     _should_auto_attach_clipboard_image_on_paste,
-    _split_path_input,
     _termux_example_image_path,
 )
 
 _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+
+class ChatConsole(_BaseChatConsole):
+    """Compatibility export bound to this module's patchable emitter."""
+
+    def __init__(self):
+        super().__init__(emit=_cprint)
 
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
@@ -694,85 +690,10 @@ _DIM = "\033[2m"
 _RST = "\033[0m"
 
 
-class ChatConsole:
-    """Rich Console adapter for prompt_toolkit's patch_stdout context.
-
-    Captures Rich's rendered ANSI output and routes it through _cprint
-    so colors and markup render correctly inside the interactive chat loop.
-    Drop-in replacement for Rich Console — just pass this to any function
-    that expects a console.print() interface.
-    """
-
-    def __init__(self):
-        from io import StringIO
-        self._buffer = StringIO()
-        self._inner = Console(
-            file=self._buffer,
-            force_terminal=True,
-            color_system="truecolor",
-            highlight=False,
-        )
-
-    def print(self, *args, **kwargs):
-        self._buffer.seek(0)
-        self._buffer.truncate()
-        # Read terminal width at render time so panels adapt to current size
-        self._inner.width = shutil.get_terminal_size((80, 24)).columns
-        self._inner.print(*args, **kwargs)
-        output = self._buffer.getvalue()
-        for line in output.rstrip("\n").split("\n"):
-            _cprint(line)
-
-    @contextmanager
-    def status(self, *_args, **_kwargs):
-        """Provide a no-op Rich-compatible status context.
-
-        Some slash command helpers use ``console.status(...)`` when running in
-        the standalone CLI. Interactive chat routes those helpers through
-        ``ChatConsole()``, which historically only implemented ``print()``.
-        Returning a silent context manager keeps slash commands compatible
-        without duplicating the higher-level busy indicator already shown by
-        ``VoidcubeCLI._busy_command()``.
-        """
-        yield self
-
 # ASCII Art - VOIDCUBE-AGENT logo (full width, single line - requires ~95 char terminal)
 VOIDCUBE_AGENT_LOGO = ""
 
 VOIDCUBE_HERO = ""
-
-
-
-def _build_compact_banner() -> str:
-    """Build a compact banner that fits the current terminal width."""
-    from VoidCube_cli.style import BANNER_BORDER, BANNER_DIM, BANNER_TITLE
-
-    border_color = BANNER_BORDER
-    title_color = BANNER_TITLE
-    dim_color = BANNER_DIM
-    line1 = "> VoidCube - AI Agent"
-    tiny_line = "> VoidCube"
-
-    version_line = format_banner_version_label()
-
-    w = min(shutil.get_terminal_size().columns - 2, 88)
-    if w < 30:
-        return f"\n[{title_color}]{tiny_line}[/]\n"
-
-    inner = w - 2  # inside the box border
-    bar = "═" * w
-    content_width = inner - 2
-
-    # Truncate and pad to fit
-    line1 = line1[:content_width].ljust(content_width)
-    line2 = version_line[:content_width].ljust(content_width)
-
-    return (
-        f"\n[bold {border_color}]╔{bar}╗[/]\n"
-        f"[bold {border_color}]║[/] [{title_color}]{line1}[/] [bold {border_color}]║[/]\n"
-        f"[bold {border_color}]║[/] [dim {dim_color}]{line2}[/] [bold {border_color}]║[/]\n"
-        f"[bold {border_color}]╚{bar}╝[/]\n"
-    )
 
 
 
@@ -1139,7 +1060,13 @@ class VoidcubeCLI:
         self._last_scrollback_tool: str = ""  # last tool name printed to scrollback (for "new" dedup)
         self._command_running = False
         self._command_status = ""
-        initialize_command_execution(self)
+        install_cli_command_execution(
+            self,
+            emit=_cprint,
+            translate=t,
+            chat_console_factory=ChatConsole,
+            compact_banner_factory=build_compact_banner,
+        )
         self._attached_images: list[Path] = []
         self._image_counter = 0
         self.preloaded_skills: list[str] = []
@@ -2612,7 +2539,7 @@ class VoidcubeCLI:
         use_compact = self.compact or term_width < 80
         
         if use_compact:
-            self.console.print(_build_compact_banner())
+            self.console.print(build_compact_banner())
             self._show_status()
         else:
             # Get tools for display
@@ -3062,73 +2989,6 @@ class VoidcubeCLI:
             # Treat as a git hash
             return ref
 
-    def _handle_stop_command(self):
-        """Handle /stop — kill all running background processes.
-
-        Interrupt stops the current turn, while /stop cleans up background processes.
-        """
-        from tools.process_registry import process_registry
-
-        processes = process_registry.list_sessions()
-        running = [p for p in processes if p.get("status") == "running"]
-
-        if not running:
-            print(f"  {t('prompts.no_running_background_processes')}")
-            return
-
-        print(f"  {t('prompts.stopping_background_processes', count=len(running))}")
-        killed = process_registry.kill_all()
-        print(f"  ✅ {t('prompts.stopped_background_processes', count=killed)}")
-
-    def _handle_paste_command(self):
-        """Handle /paste — explicitly check clipboard for an image.
-
-        This is the reliable fallback for terminals where BracketedPaste
-        doesn't fire for image-only clipboard content (e.g., VSCode terminal,
-        Windows Terminal with WSL2).
-        """
-        if _is_termux_environment():
-            _cprint(
-                f"  {_DIM}Clipboard image paste is not available on Termux — "
-                f"use /image <path> or paste a local image path like "
-                f"{_termux_example_image_path()}{_RST}"
-            )
-            return
-
-        from VoidCube_cli.clipboard import has_clipboard_image
-        if has_clipboard_image():
-            if self._try_attach_clipboard_image():
-                n = len(self._attached_images)
-                _cprint(f"  📎 Image #{n} attached from clipboard")
-            else:
-                _cprint(f"  {_DIM}(>_<) Clipboard has an image but extraction failed{_RST}")
-        else:
-            _cprint(f"  {_DIM}(._.) No image found in clipboard{_RST}")
-
-    def _handle_image_command(self, cmd_original: str):
-        """Handle /image <path> — attach a local image file for the next prompt."""
-        raw_args = (cmd_original.split(None, 1)[1].strip() if " " in cmd_original else "")
-        if not raw_args:
-            hint = _termux_example_image_path() if _is_termux_environment() else "/path/to/image.png"
-            _cprint(f"  {_DIM}Usage: /image <path>  e.g. /image {hint}{_RST}")
-            return
-
-        path_token, _remainder = _split_path_input(raw_args)
-        image_path = _resolve_attachment_path(path_token)
-        if image_path is None:
-            _cprint(f"  {_DIM}(>_<) File not found: {path_token}{_RST}")
-            return
-        if image_path.suffix.lower() not in _IMAGE_EXTENSIONS:
-            _cprint(f"  {_DIM}(._.) Not a supported image file: {image_path.name}{_RST}")
-            return
-
-        self._attached_images.append(image_path)
-        _cprint(f"  📎 Attached image: {image_path.name}")
-        if _remainder:
-            _cprint(f"  {_DIM}Now type your prompt (or use --image in single-query mode): {_remainder}{_RST}")
-        elif _is_termux_environment():
-            _cprint(f"  {_DIM}{t('tips.tip_prefix', default='Tip:')} type your next message, or run VoidCube chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
-
     def _preprocess_images_with_vision(self, text: str, images: list, *, announce: bool = True) -> str:
         """Analyze attached images via the vision tool and return enriched text.
 
@@ -3471,7 +3331,7 @@ class VoidcubeCLI:
         from VoidCube_cli.tools_config import _get_platform_tools
         from VoidCube_app.config import load_config
         self.enabled_toolsets = _get_platform_tools(load_config(), "cli")
-        self.new_session()
+        self.process_command("/new")
         _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
 
     def show_toolsets(self):
@@ -3519,28 +3379,6 @@ class VoidcubeCLI:
         )
         print()
     
-    def _handle_profile_command(self):
-        """Display active profile name and home directory."""
-        from VoidCube_core.constants import get_VoidCube_home, display_VoidCube_home
-
-        home = get_VoidCube_home()
-        display = display_VoidCube_home()
-
-        profiles_parent = Path.home() / ".VoidCube" / "profiles"
-        try:
-            rel = home.relative_to(profiles_parent)
-            profile_name = str(rel).split("/")[0]
-        except ValueError:
-            profile_name = None
-
-        print()
-        if profile_name:
-            print(f"  Profile: {profile_name}")
-        else:
-            print(t('profile_default'))
-        print(f"  Home:    {display}")
-        print()
-
     def show_config(self):
         """Display current configuration with kawaii ASCII art."""
         # Terminal settings are resolved from canonical config and environment.
@@ -3700,22 +3538,6 @@ class VoidcubeCLI:
         flush_tool_summary()
         print()
     
-    def _notify_session_boundary(self, event_type: str) -> None:
-        """Fire a session-boundary plugin hook (on_session_finalize or on_session_reset).
-
-        Non-blocking — errors are caught and logged.  Safe to call from any
-        lifecycle point (shutdown, /new, /reset).
-        """
-        try:
-            from VoidCube_cli.plugins import invoke_hook as _invoke_hook
-            _invoke_hook(
-                event_type,
-                session_id=self.agent.session_id if self.agent else None,
-                platform=getattr(self, "platform", None) or "cli",
-            )
-        except Exception:
-            pass
-
     def _apply_session_lifecycle_state(self, state: SessionLifecycleState) -> None:
         """Apply shared session state and synchronize the active Agent runtime."""
         self.session_id = state.session_id
@@ -3729,146 +3551,6 @@ class VoidcubeCLI:
                 state.session_id,
                 session_start=state.session_start,
             )
-
-    def new_session(self, silent=False):
-        """Start a fresh session with a new session ID and cleared agent state."""
-        if self.agent:
-            self._notify_session_boundary("on_session_finalize")
-
-        # Per-interaction trace_id for end-to-end observability (C-03).
-        # A new trace_id is generated for each user message so the full
-        # chain (CLI → Gateway → Agent → Tool → Response) can be correlated.
-        self._current_trace_id: str = ""
-        state = start_new_session(
-            repository=self._session_db,
-            current_session_id=self.session_id,
-            started_at=datetime.now(),
-            source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
-            model=self.model,
-            model_config={
-                "max_iterations": self.max_turns,
-                "reasoning_config": self.reasoning_config,
-            },
-            create_record=self.agent is not None,
-        )
-        self._apply_session_lifecycle_state(state)
-
-        if self.agent:
-            self._notify_session_boundary("on_session_reset")
-
-        if not silent:
-            print(t('new_session_started'))
-
-    def _handle_resume_command(self, cmd_original: str) -> None:
-        """Handle /resume <session_id_or_title_or_number> — switch to a previous session mid-conversation."""
-        parts = cmd_original.split(None, 1)
-        target = parts[1].strip() if len(parts) > 1 else ""
-
-        if not target:
-            _cprint(t('  Usage: /resume <session_id_or_title_or_number>'))
-            if self._show_recent_sessions(reason="resume"):
-                return
-            _cprint(t('tips.resume_hint', default='Tip:   Use /history or `VoidCube sessions list` to find sessions.'))
-            return
-
-        if not self._session_db:
-            _cprint(t('  Session database not available.'))
-            return
-
-        # Check if target is a number (index into recent sessions)
-        if target.isdigit():
-            idx = int(target) - 1  # convert to 0-based index
-            sessions = self._list_recent_sessions(limit=50)  # get enough sessions
-            if 0 <= idx < len(sessions):
-                target_id = sessions[idx]["id"]
-            else:
-                _cprint(f"  Session index out of range: {target} (there are {len(sessions)} recent sessions)")
-                _cprint(t('  Use /history or `VoidCube sessions list` to see available sessions.'))
-                return
-        else:
-            # Resolve title or ID
-            from VoidCube_cli.main import _resolve_session_by_name_or_id
-            resolved = _resolve_session_by_name_or_id(target)
-            target_id = resolved or target
-
-        try:
-            result = resume_session(
-                repository=self._session_db,
-                current_session_id=self.session_id,
-                target_session_id=target_id,
-                session_start=self.session_start,
-            )
-        except SessionNotFoundError:
-            _cprint(f"  Session not found: {target}")
-            _cprint(t('  Use /history or `VoidCube sessions list` to see available sessions.'))
-            return
-        except SessionAlreadyActiveError:
-            _cprint(t('  Already on that session.'))
-            return
-        self._apply_session_lifecycle_state(result.state)
-        self._session_hydration = result.hydration
-
-        session_meta = result.metadata
-        title_part = f" \"{session_meta['title']}\"" if session_meta.get("title") else ""
-        msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
-        if self.conversation_history:
-            _cprint(
-                f"  ↻ {t('prompts.resumed_session', default='Resumed session')} {target_id}{title_part}"
-                f" ({msg_count} {t('prompts.user_messages', default='user messages')},"
-                f" {len(self.conversation_history)} {t('prompts.total', default='total')})"
-            )
-        else:
-            _cprint(f"  ↻ {t('prompts.resumed_session', default='Resumed session')} {target_id}{title_part} — {t('prompts.no_messages_starting_fresh', default='no messages, starting fresh')}.")
-        
-        # 显示会话历史
-        if self.conversation_history:
-            self._display_resumed_history()
-
-    def _handle_branch_command(self, cmd_original: str) -> None:
-        """Handle /branch [name] — fork the current session into a new independent copy.
-
-        Copies the full conversation history to a new session so the user can
-        explore a different approach without losing the original session state.
-        Creates a new session branch from the current conversation.
-        """
-        if not self.conversation_history:
-            _cprint(t('  No conversation to branch — send a message first.'))
-            return
-
-        if not self._session_db:
-            _cprint(t('  Session database not available.'))
-            return
-
-        parts = cmd_original.split(None, 1)
-        branch_name = parts[1].strip() if len(parts) > 1 else ""
-
-        now = datetime.now()
-        try:
-            result = branch_session(
-                repository=self._session_db,
-                current_session_id=self.session_id,
-                conversation_history=self.conversation_history,
-                started_at=now,
-                requested_title=branch_name,
-                source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
-                model=self.model,
-                model_config={
-                    "max_iterations": self.max_turns,
-                    "reasoning_config": self.reasoning_config,
-                },
-            )
-        except Exception as e:
-            _cprint(f"  Failed to create branch session: {e}")
-            return
-        self._apply_session_lifecycle_state(result.state)
-
-        msg_count = len([m for m in self.conversation_history if m.get("role") == "user"])
-        _cprint(
-            f"  ⑂ Branched session \"{result.title}\""
-            f" ({msg_count} user message{'s' if msg_count != 1 else ''})"
-        )
-        _cprint(f"  Original session: {result.parent_session_id}")
-        _cprint(f"  Branch session:   {result.state.session_id}")
 
     def save_conversation(self):
         """Save the current conversation to a file."""
@@ -4795,119 +4477,6 @@ class VoidcubeCLI:
 
         run_api_config_wizard(self)
 
-    def _handle_clear_command(self) -> None:
-        self.new_session(silent=True)
-        if self._app:
-            output = self._app.output
-            output.erase_screen()
-            output.cursor_goto(0, 0)
-            output.flush()
-        else:
-            self.console.clear()
-
-        if self._app:
-            console = ChatConsole()
-            terminal_width = shutil.get_terminal_size().columns
-            if self.compact or terminal_width < 80:
-                console.print(_build_compact_banner())
-            else:
-                tools = _get_tool_definitions(
-                    enabled_toolsets=self.enabled_toolsets,
-                    quiet_mode=True,
-                )
-                cwd = os.getenv("TERMINAL_CWD", os.getcwd())
-                context_length = None
-                if (
-                    getattr(self, "agent", None)
-                    and hasattr(self.agent, "context_compressor")
-                ):
-                    context_length = self.agent.context_compressor.context_length
-                build_welcome_banner(
-                    console=console,
-                    model=self.model,
-                    cwd=cwd,
-                    tools=tools,
-                    enabled_toolsets=self.enabled_toolsets,
-                    session_id=self.session_id,
-                    context_length=context_length,
-                    conversation_history=self.conversation_history,
-                )
-            _cprint(
-                f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n"
-            )
-        else:
-            console = self.console
-            self.show_banner()
-            print(
-                f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n"
-            )
-
-        try:
-            from VoidCube_cli.tips import get_random_tip
-
-            tip = get_random_tip()
-            tip_color = "#B8860B"
-            console.print(
-                f"[dim {tip_color}]"
-                f"{t('tips.tip_prefix', default='✦ Tip:')} {tip}[/]"
-            )
-        except Exception:
-            pass
-
-    def _handle_title_command(self, command: str) -> None:
-        parts = command.split(maxsplit=1)
-        if len(parts) == 1:
-            result = get_session_title(
-                repository=self._session_db,
-                session_id=self.session_id,
-                pending_title=self._pending_title,
-            )
-            if result.status is SessionTitleStatus.UNAVAILABLE:
-                _cprint(t("  Session database not available."))
-                return
-            _cprint(f"  Session ID: {result.session_id}")
-            if result.status is SessionTitleStatus.CURRENT:
-                _cprint(f"  Title: {result.title}")
-            elif result.status is SessionTitleStatus.PENDING:
-                _cprint(f"  Title (pending): {result.title}")
-            else:
-                _cprint("  No title set. Usage: /title <your session title>")
-            return
-
-        raw_title = parts[1].strip()
-        if not raw_title:
-            _cprint("  Usage: /title <your session title>")
-            return
-        result = set_session_title(
-            repository=self._session_db,
-            session_id=self.session_id,
-            raw_title=raw_title,
-        )
-        if result.status is SessionTitleStatus.UNAVAILABLE:
-            _cprint(t("  Session database not available."))
-        elif result.status is SessionTitleStatus.INVALID:
-            _cprint(
-                f"  {result.error}"
-                if result.error
-                else "  Title is empty after cleanup. Please use printable characters."
-            )
-        elif result.status is SessionTitleStatus.UPDATED:
-            _cprint(f"  Session title set: {result.title}")
-        elif result.status is SessionTitleStatus.NOT_FOUND:
-            _cprint("  Session not found in database.")
-        elif result.status is SessionTitleStatus.CONFLICT and result.error:
-            _cprint(f"  {result.error}")
-        elif result.status is SessionTitleStatus.CONFLICT:
-            _cprint(
-                f"  Title '{result.title}' is already in use by session "
-                f"{result.conflicting_session_id}"
-            )
-        elif result.status is SessionTitleStatus.QUEUED:
-            self._pending_title = result.title
-            _cprint(
-                f"  Session title queued: {result.title} (will be saved on first message)"
-            )
-
     def _handle_provider_command(self, command: str) -> None:
         parts = command.split()
         use_ops_handler = (
@@ -4948,63 +4517,6 @@ class VoidcubeCLI:
             push_cli_agent_scene_callback=_push_cli_agent_scene,
             thread_factory=threading.Thread,
         )
-
-    def _handle_retry_command(self) -> None:
-        result = self._remove_last_user_turn(
-            empty_message='no_messages_to_retry',
-            no_user_message='no_user_message_found_to_retry',
-        )
-        if result is None:
-            return
-        retry_message = result.user_message
-        preview = str(retry_message or "")
-        print(f"(^_^)b Retrying: \"{preview[:60]}{'...' if len(preview) > 60 else ''}\"")
-        if retry_message and hasattr(self, "_pending_input"):
-            self._pending_input.put(retry_message)
-
-    def _handle_statusbar_command(self) -> None:
-        self._status_bar_visible = not self._status_bar_visible
-        state = "visible" if self._status_bar_visible else "hidden"
-        self.console.print(f"  Status bar {state}")
-
-    def _handle_plugins_command(self) -> None:
-        try:
-            from VoidCube_cli.plugins import discover_plugins, get_plugin_manager
-
-            discover_plugins()
-            plugins = get_plugin_manager().list_plugins()
-            if not plugins:
-                print("No plugins installed.")
-                print(
-                    f"Drop plugin directories into {display_VoidCube_home()}/plugins/ "
-                    "to get started."
-                )
-                return
-            print(f"Plugins ({len(plugins)}):")
-            for plugin in plugins:
-                status = "✓" if plugin["enabled"] else "✗"
-                version = f" v{plugin['version']}" if plugin["version"] else ""
-                tools = f"{plugin['tools']} tools" if plugin["tools"] else ""
-                hooks = f"{plugin['hooks']} hooks" if plugin["hooks"] else ""
-                detail_parts = [part for part in (tools, hooks) if part]
-                detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
-                error = f" — {plugin['error']}" if plugin["error"] else ""
-                print(f"  {status} {plugin['name']}{version}{detail}{error}")
-        except Exception as exc:
-            print(f"Plugin system error: {exc}")
-
-    def _handle_queue_command(self, command: str) -> None:
-        parts = command.split(None, 1)
-        payload = parts[1].strip() if len(parts) > 1 else ""
-        if not payload:
-            _cprint("  Usage: /queue <prompt>")
-            return
-        self._pending_input.put(payload)
-        preview = f"{payload[:80]}{'...' if len(payload) > 80 else ''}"
-        if self._agent_running:
-            _cprint(f"  Queued for the next turn: {preview}")
-        else:
-            _cprint(f"  Queued: {preview}")
 
     def _handle_language_command(self, command: str) -> None:
         from VoidCube_cli.language_command import handle_language_command

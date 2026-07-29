@@ -374,6 +374,17 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_cli/interaction_adapter.py" in expected
     assert "VoidCube_cli/tool_event_adapter.py" in expected
     assert "VoidCube_cli/turn_queue_adapter.py" in expected
+    assert "VoidCube_cli/command_handlers/__init__.py" in expected
+    assert "VoidCube_cli/command_handlers/attachments.py" in expected
+    assert "VoidCube_cli/command_handlers/display.py" in expected
+    assert "VoidCube_cli/command_handlers/input.py" in expected
+    assert "VoidCube_cli/command_handlers/info.py" in expected
+    assert "VoidCube_cli/command_handlers/operations.py" in expected
+    assert "VoidCube_cli/command_handlers/registry.py" in expected
+    assert "VoidCube_cli/command_handlers/session.py" in expected
+    assert "VoidCube_cli/clear_command_adapter.py" in expected
+    assert "VoidCube_cli/session_command_adapter.py" in expected
+    assert "VoidCube_cli/tips.py" not in expected
     assert "VoidCube_cli/session_state.py" not in expected
     assert "VoidCube_cli/style.py" in expected
     assert "VoidCube_cli/skin_engine.py" not in expected
