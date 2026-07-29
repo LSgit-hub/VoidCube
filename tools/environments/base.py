@@ -529,7 +529,12 @@ class BaseEnvironment(ABC):
                         _cb(f"terminal command running ({_elapsed}s elapsed)")
                     except Exception:
                         pass
-            time.sleep(0.2)
+            # ProcessHandle.wait() wakes as soon as the command exits while
+            # retaining the 200 ms cadence for interrupts and activity checks.
+            try:
+                proc.wait(timeout=min(0.2, max(0.0, deadline - time.monotonic())))
+            except subprocess.TimeoutExpired:
+                pass
 
         drain_thread.join(timeout=5)
 
@@ -667,4 +672,3 @@ class BaseEnvironment(ABC):
         from tools.terminal_tool import _transform_sudo_command
 
         return _transform_sudo_command(command)
-
