@@ -1344,8 +1344,8 @@ class AIAgent:
         """Clean up VM and browser resources for a given task.
 
         Skips ``cleanup_vm`` when the active terminal environment is marked
-        persistent (``persistent_filesystem=True``) so that long-lived sandbox
-        containers survive between turns. The idle reaper in
+        persistent so that long-lived sandboxes and local shell sessions survive
+        between turns. The idle reaper in
         ``terminal_tool._cleanup_inactive_envs`` still tears them down once
         ``terminal.lifetime_seconds`` is exceeded. Non-persistent backends are
         torn down per-turn as before to prevent resource leakage (the original

@@ -655,14 +655,15 @@ def _get_env_config() -> Dict[str, Any]:
         "ssh_user": os.getenv("TERMINAL_SSH_USER", ""),
         "ssh_port": _parse_env_var("TERMINAL_SSH_PORT", "22"),
         "ssh_key": os.getenv("TERMINAL_SSH_KEY", ""),
-        # Persistent shell: SSH defaults to the config-level persistent_shell
-        # setting (true by default for non-local backends); local is always opt-in.
-        # Per-backend env vars override if explicitly set.
+        # Per-backend variables override the shared persistent-shell setting.
         "ssh_persistent": os.getenv(
             "TERMINAL_SSH_PERSISTENT",
             os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
         ).lower() in ("true", "1", "yes"),
-        "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in ("true", "1", "yes"),
+        "local_persistent": os.getenv(
+            "TERMINAL_LOCAL_PERSISTENT",
+            os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
+        ).lower() in ("true", "1", "yes"),
         # Container resource config (applies to docker, singularity, modal, daytona -- ignored for local/ssh)
         "container_cpu": _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number"),
         "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),     # MB (default 5GB)
@@ -743,7 +744,11 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     if env_type == "local":
         from tools.environments.local import LocalEnvironment
 
-        return LocalEnvironment(cwd=cwd, timeout=timeout)
+        return LocalEnvironment(
+            cwd=cwd,
+            timeout=timeout,
+            persistent=bool((local_config or {}).get("persistent", False)),
+        )
     
     elif env_type == "docker":
         from tools.environments.docker import DockerEnvironment
@@ -1027,14 +1032,10 @@ def get_active_env(task_id: str):
 
 
 def is_persistent_env(task_id: str) -> bool:
-    """Return True if the active environment for task_id is configured for
-    cross-turn persistence (``persistent_filesystem=True``).
+    """Return whether the task's environment should survive between turns.
 
-    Used by the agent loop to skip per-turn teardown for backends whose whole
-    point is to survive between turns (docker with ``container_persistent``,
-    daytona, modal, etc.). Non-persistent backends (e.g. Morph) still get torn
-    down at end-of-turn to prevent leakage. The idle reaper
-    (``_cleanup_inactive_envs``) handles persistent envs once they exceed
+    This includes persistent filesystems for sandbox backends and the local
+    persistent shell. The idle reaper handles all of them once they exceed
     ``terminal.lifetime_seconds``.
     """
     env = get_active_env(task_id)
@@ -1045,32 +1046,22 @@ def is_persistent_env(task_id: str) -> bool:
 
 def get_active_environments_info() -> Dict[str, Any]:
     """Get information about currently active environments."""
-    info = {
-        "count": len(_active_environments),
-        "task_ids": list(_active_environments.keys()),
-        "workdirs": {},
+    with _env_lock:
+        environments = dict(_active_environments)
+    return {
+        "count": len(environments),
+        "task_ids": list(environments),
+        "workdirs": {
+            task_id: getattr(env, "cwd", None)
+            for task_id, env in environments.items()
+        },
     }
-    
-    # Calculate total disk usage (per-task to avoid double-counting)
-    total_size = 0
-    for task_id in _active_environments:
-        scratch_dir = _get_scratch_dir()
-        pattern = f"VoidCube-*{task_id[:8]}*"
-        import glob
-        for path in glob.glob(str(scratch_dir / pattern)):
-            try:
-                size = sum(f.stat().st_size for f in Path(path).rglob('*') if f.is_file())
-                total_size += size
-            except OSError as e:
-                logger.debug("Could not stat path %s: %s", path, e)
-    
-    info["total_disk_usage_mb"] = round(total_size / (1024 * 1024), 2)
-    return info
 
 
 def cleanup_all_environments():
     """Clean up ALL active environments. Use with caution."""
-    task_ids = list(_active_environments.keys())
+    with _env_lock:
+        task_ids = list(_active_environments)
     cleaned = 0
     
     for task_id in task_ids:
@@ -1079,17 +1070,7 @@ def cleanup_all_environments():
             cleaned += 1
         except Exception as e:
             logger.error("Error cleaning %s: %s", task_id, e, exc_info=True)
-    
-    # Also clean any orphaned directories
-    scratch_dir = _get_scratch_dir()
-    import glob
-    for path in glob.glob(str(scratch_dir / "VoidCube-*")):
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info("Removed orphaned: %s", path)
-        except OSError as e:
-            logger.debug("Failed to remove orphaned path %s: %s", path, e)
-    
+
     if cleaned > 0:
         logger.info("Cleaned %d environments", cleaned)
     return cleaned

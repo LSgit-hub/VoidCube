@@ -412,9 +412,8 @@ DEFAULT_CONFIG = {
         # Default off because passing host directories into a sandbox weakens isolation.
         "docker_mount_cwd_to_workspace": False,
         # Persistent shell — keep a long-lived bash shell across execute() calls
-        # so cwd/env vars/shell variables survive between commands.
-        # Enabled by default for non-local backends (SSH); local is always opt-in
-        # via TERMINAL_LOCAL_PERSISTENT env var.
+        # so cwd/env vars/shell variables survive between commands. Backend-specific
+        # TERMINAL_LOCAL_PERSISTENT / TERMINAL_SSH_PERSISTENT values can override it.
         "persistent_shell": True,
     },
     

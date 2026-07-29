@@ -38,3 +38,19 @@ def test_find_bash_rejects_wsl_launcher_when_only_which_matches(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Git Bash not found"):
         local_env._find_bash()
+
+
+@pytest.mark.unit
+def test_find_persistent_bash_prefers_real_git_binary(monkeypatch):
+    launcher = r"C:\Program Files\Git\bin\bash.exe"
+    runtime = r"C:\Program Files\Git\usr\bin\bash.exe"
+
+    monkeypatch.setattr(local_env, "_IS_WINDOWS", True)
+    monkeypatch.setattr(local_env, "_find_bash", lambda: launcher)
+    monkeypatch.setattr(
+        local_env.os.path,
+        "isfile",
+        lambda path: os.path.normcase(path) == os.path.normcase(runtime),
+    )
+
+    assert local_env._find_persistent_bash() == runtime
