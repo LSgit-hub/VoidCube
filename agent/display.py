@@ -23,68 +23,18 @@ logger = logging.getLogger(__name__)
 
 _ANSI_RESET = "\033[0m"
 
-# Diff colors — resolved lazily from the skin engine so they adapt
-# to light/dark themes.  Falls back to sensible defaults on import
-# failure.  We cache after first resolution for performance.
-_diff_colors_cached: dict[str, str] | None = None
-
-
 def _diff_ansi() -> dict[str, str]:
-    """Return ANSI escapes for diff display, resolved from the active skin."""
-    global _diff_colors_cached
-    if _diff_colors_cached is not None:
-        return _diff_colors_cached
-
-    # Defaults that work on dark terminals
-    dim = "\033[38;2;150;150;150m"
-    file_c = "\033[38;2;180;160;255m"
-    hunk = "\033[38;2;120;120;140m"
-    minus = "\033[38;2;255;255;255;48;2;120;20;20m"
-    plus = "\033[38;2;255;255;255;48;2;20;90;20m"
-
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
-        skin = get_active_skin()
-
-        def _hex_fg(key: str, fallback_rgb: tuple[int, int, int]) -> str:
-            h = skin.get_color(key, "")
-            if h and len(h) == 7 and h[0] == "#":
-                r, g, b = int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
-                return f"\033[38;2;{r};{g};{b}m"
-            r, g, b = fallback_rgb
-            return f"\033[38;2;{r};{g};{b}m"
-
-        dim = _hex_fg("banner_dim", (150, 150, 150))
-        file_c = _hex_fg("session_label", (180, 160, 255))
-        hunk = _hex_fg("session_border", (120, 120, 140))
-        # minus/plus use background colors — derive from ui_error/ui_ok
-        err_h = skin.get_color("ui_error", "#ef5350")
-        ok_h = skin.get_color("ui_ok", "#4caf50")
-        if err_h and len(err_h) == 7:
-            er, eg, eb = int(err_h[1:3], 16), int(err_h[3:5], 16), int(err_h[5:7], 16)
-            # Use a dark tinted version as background
-            minus = f"\033[38;2;255;255;255;48;2;{max(er//2,20)};{max(eg//4,10)};{max(eb//4,10)}m"
-        if ok_h and len(ok_h) == 7:
-            or_, og, ob = int(ok_h[1:3], 16), int(ok_h[3:5], 16), int(ok_h[5:7], 16)
-            plus = f"\033[38;2;255;255;255;48;2;{max(or_//4,10)};{max(og//2,20)};{max(ob//4,10)}m"
-    except (ValueError, TypeError, AttributeError):
-        # Invalid hex color format or missing skin attributes
-        pass
-
-    _diff_colors_cached = {
-        "dim": dim, "file": file_c, "hunk": hunk,
-        "minus": minus, "plus": plus,
+    """Return the fixed ANSI palette used for diff display."""
+    return {
+        "dim": "\033[38;2;150;150;150m",
+        "file": "\033[38;2;180;160;255m",
+        "hunk": "\033[38;2;120;120;140m",
+        "minus": "\033[38;2;255;255;255;48;2;120;20;20m",
+        "plus": "\033[38;2;255;255;255;48;2;20;90;20m",
     }
-    return _diff_colors_cached
 
 
-def reset_diff_colors() -> None:
-    """Reset cached diff colors (call after /skin switch)."""
-    global _diff_colors_cached
-    _diff_colors_cached = None
-
-
-# Module-level helpers — each call resolves from the active skin lazily.
+# Module-level helpers for the fixed diff palette.
 def _diff_dim():   return _diff_ansi()["dim"]
 def _diff_file():  return _diff_ansi()["file"]
 def _diff_hunk():  return _diff_ansi()["hunk"]
@@ -118,42 +68,11 @@ def get_tool_preview_max_len() -> int:
     return _tool_preview_max_len
 
 
-# =========================================================================
-# Skin-aware helpers (lazy import to avoid circular deps)
-# =========================================================================
-
-def _get_skin():
-    """Get the active skin config, or None if not available."""
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
-        return get_active_skin()
-    except Exception:
-        return None
-
-
-def get_skin_tool_prefix() -> str:
-    """Get tool output prefix character from active skin."""
-    skin = _get_skin()
-    if skin:
-        return skin.tool_prefix
-    return "┊"
-
-
 def get_tool_emoji(tool_name: str, default: str = "🔧") -> str:
     """Get the display emoji for a tool.
 
-    Resolution order:
-    1. Active skin's ``tool_emojis`` overrides (if a skin is loaded)
-    2. Tool registry's per-tool ``emoji`` field
-    3. *default* fallback
+    Resolution order: tool registry metadata, then *default*.
     """
-    # 1. Skin override
-    skin = _get_skin()
-    if skin and getattr(skin, 'tool_emojis', None):
-        override = skin.tool_emojis.get(tool_name)
-        if override:
-            return override
-    # 2. Registry default
     try:
         from tools.registry import registry
         emoji = registry.get_emoji(tool_name, default="")
@@ -161,7 +80,6 @@ def get_tool_emoji(tool_name: str, default: str = "🔧") -> str:
             return emoji
     except Exception:
         pass
-    # 3. Hardcoded fallback
     return default
 
 
@@ -686,21 +604,13 @@ class KawaiiSpinner:
                 time.sleep(0.1)
             return
 
-        # Cache skin wings at start (avoid per-frame imports)
-        skin = _get_skin()
-        wings = skin.get_spinner_wings() if skin else []
-
         while self.running:
             if os.getenv("VOIDCUBE_SPINNER_PAUSE"):
                 time.sleep(0.1)
                 continue
             frame = self.spinner_frames[self.frame_idx % len(self.spinner_frames)]
             elapsed = time.time() - self.start_time
-            if wings:
-                left, right = wings[self.frame_idx % len(wings)]
-                line = f"  {left} {frame} {self.message} {right} ({elapsed:.1f}s)"
-            else:
-                line = f"  {frame} {self.message} ({elapsed:.1f}s)"
+            line = f"  {frame} {self.message} ({elapsed:.1f}s)"
             pad = max(self.last_line_len - len(line), 0)
             self._write(f"\r{line}{' ' * pad}", end='', flush=True)
             self.last_line_len = len(line)
@@ -812,7 +722,6 @@ def get_cute_tool_message(
     """
     dur = f"{duration:.1f}s"
     is_failure, failure_suffix = _detect_tool_failure(tool_name, result)
-    skin_prefix = get_skin_tool_prefix()
 
     def _display_width(s: str) -> int:
         """Return the terminal display width of a string.
@@ -847,9 +756,7 @@ def get_cute_tool_message(
         return ("..." + p[-(n-3):]) if len(p) > n else p
 
     def _wrap(line: str) -> str:
-        """Apply skin tool prefix and failure suffix."""
-        if skin_prefix != "┊":
-            line = line.replace("┊", skin_prefix, 1)
+        """Apply the failure suffix to a fixed-format tool line."""
         if not is_failure:
             return line
         return f"{line}{failure_suffix}"

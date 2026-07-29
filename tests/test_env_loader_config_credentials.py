@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from VoidCube_cli.env_loader import is_placeholder_secret, load_VoidCube_dotenv
-from VoidCube_cli.auth import get_auth_status, read_credential_pool, write_credential_pool
+from VoidCube_app.provider_auth import get_auth_status, read_credential_pool, write_credential_pool
 
 
 @pytest.mark.parametrize(
@@ -73,6 +73,8 @@ def test_retired_display_settings_migrate_once_to_platforms(tmp_path, monkeypatc
     (home / "config.yaml").write_text(
         f"""_config_version: 20
 display:
+  skin: custom-theme
+  future_display_option: retained
   {unused_key}: true
   {retired_key}:
     telegram: all
@@ -91,6 +93,8 @@ display:
 
     assert retired_key not in loaded["display"]
     assert unused_key not in loaded["display"]
+    assert "skin" not in loaded["display"]
+    assert loaded["display"]["future_display_option"] == "retained"
     assert loaded["display"]["platforms"]["telegram"]["tool_progress"] == "off"
     assert loaded["display"]["platforms"]["slack"]["tool_progress"] == "verbose"
 
@@ -100,6 +104,8 @@ display:
     saved = yaml.safe_load(saved_text)
     assert retired_key not in saved["display"]
     assert unused_key not in saved["display"]
+    assert "skin" not in saved["display"]
+    assert saved["display"]["future_display_option"] == "retained"
     assert saved["display"]["platforms"] == loaded["display"]["platforms"]
     assert any("retired display overrides" in item for item in first_result["config_added"])
     assert "removed unused display progress command flag" in first_result["config_added"]
@@ -583,7 +589,7 @@ def test_migrate_config_preserves_canonical_and_conflicting_legacy_cache_files(
 
 def test_credential_pool_round_trips_by_provider(tmp_path, monkeypatch):
     auth_path = tmp_path / "auth_store.json"
-    monkeypatch.setattr("VoidCube_cli.auth._get_auth_store_path", lambda: auth_path)
+    monkeypatch.setattr("VoidCube_app.provider_auth._get_auth_store_path", lambda: auth_path)
 
     write_credential_pool(
         "deepseek",
@@ -631,7 +637,7 @@ def test_custom_provider_pool_key_uses_providers_map(monkeypatch):
 
 def test_auth_status_rejects_placeholder_provider_key(tmp_path, monkeypatch):
     auth_path = tmp_path / "auth_store.json"
-    monkeypatch.setattr("VoidCube_cli.auth._get_auth_store_path", lambda: auth_path)
+    monkeypatch.setattr("VoidCube_app.provider_auth._get_auth_store_path", lambda: auth_path)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-your-key-here")
 
     status = get_auth_status("deepseek")

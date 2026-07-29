@@ -104,7 +104,7 @@ _REMOTE_ENV_BACKENDS = frozenset({"docker", "singularity", "modal", "ssh", "dayt
 _secret_capture_callback = None
 
 
-from VoidCube_cli.config import load_env
+from VoidCube_app.config import load_env
 
 
 class SkillReadinessStatus(str, Enum):
@@ -481,7 +481,7 @@ def _is_skill_disabled(name: str, platform: str = None) -> bool:
     """Check if a skill is disabled in config."""
     import os
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         config = load_config()
         skills_cfg = config.get("skills", {})
         resolved_platform = platform or os.getenv("VOIDCUBE_PLATFORM")

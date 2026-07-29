@@ -219,11 +219,11 @@ def switch_model(
     Returns:
         ModelSwitchResult with all information the caller needs.
     """
-    from VoidCube_cli.models import (
+    from VoidCube_app.models import (
         detect_provider_for_model,
         validate_requested_model,
     )
-    from VoidCube_cli.runtime_provider import resolve_runtime_provider
+    from VoidCube_app.runtime_provider import resolve_runtime_provider
 
     new_model = raw_input.strip()
     target_provider = current_provider
@@ -246,7 +246,7 @@ def switch_model(
             )
             # Check for common config issues that cause provider resolution failures
             try:
-                from VoidCube_cli.config import validate_config_structure
+                from VoidCube_app.config import validate_config_structure
                 _cfg_issues = validate_config_structure()
                 if _cfg_issues:
                     _switch_err += "\n\nRun 'VoidCube doctor' — config issues detected:"
@@ -274,7 +274,7 @@ def switch_model(
         # If no model specified, try auto-detect from endpoint
         if not new_model:
             if pdef.base_url:
-                from VoidCube_cli.runtime_provider import _auto_detect_local_model
+                from VoidCube_app.runtime_provider import _auto_detect_local_model
                 detected = _auto_detect_local_model(pdef.base_url)
                 if detected:
                     new_model = detected
@@ -464,7 +464,7 @@ def list_configured_providers(
     max_models: int = 8,
 ) -> List[dict]:
     """List providers explicitly configured in config.yaml."""
-    from VoidCube_cli.models import curated_models_for_provider
+    from VoidCube_app.models import curated_models_for_provider
 
     results: List[dict] = []
     if not isinstance(user_providers, dict):
@@ -513,4 +513,3 @@ def list_configured_providers(
 
     results.sort(key=lambda r: (not r["is_current"], r["name"].lower()))
     return results
-

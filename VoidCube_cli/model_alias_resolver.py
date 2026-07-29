@@ -115,7 +115,7 @@ class ModelAliasResolver:
 
     def list_models_for_provider(self, provider_id: str) -> List[ModelResolution]:
         try:
-            from VoidCube_cli.models import provider_model_ids
+            from VoidCube_app.models import provider_model_ids
 
             available = self.check_availability(provider_id)
             return [

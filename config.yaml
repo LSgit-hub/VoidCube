@@ -113,8 +113,8 @@ display:
   streaming: false
   inline_diffs: true
   show_cost: false
-  skin: default
   interim_assistant_messages: true
+  tool_progress: all
   tool_preview_length: 0
   platforms: {}
 clarify:

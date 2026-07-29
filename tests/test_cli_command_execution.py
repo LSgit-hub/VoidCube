@@ -59,7 +59,6 @@ EXPECTED_BUILTINS = {
     "rollback",
     "save",
     "skills",
-    "skin",
     "status",
     "statusbar",
     "stop",

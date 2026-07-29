@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from VoidCube_cli.auth import RUNTIME_PROVIDER_IDS
+from VoidCube_app.provider_auth import RUNTIME_PROVIDER_IDS
 
 logger = logging.getLogger(__name__)
 

@@ -129,7 +129,7 @@ def _load_config_files() -> List[Dict[str, str]]:
 
     result: List[Dict[str, str]] = []
     try:
-        from VoidCube_cli.config import read_raw_config
+        from VoidCube_app.config import read_raw_config
         VoidCube_home = _resolve_VoidCube_home()
         cfg = read_raw_config()
         cred_files = cfg.get("terminal", {}).get("credential_files")

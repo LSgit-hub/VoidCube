@@ -12,15 +12,15 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 from VoidCube_cli.colors import Colors, color
-from VoidCube_cli.config import (
+from VoidCube_app.config import (
     get_active_provider_key,
     get_configured_providers,
     get_env_value,
     load_config,
     redact_key,
 )
-from VoidCube_cli.models import provider_label
-from VoidCube_cli.auth import has_usable_secret
+from VoidCube_app.models import provider_label
+from VoidCube_app.provider_auth import has_usable_secret
 from VoidCube_core.constants import OPENROUTER_MODELS_URL, get_env_path, get_VoidCube_home
 from tools.tool_backend_helpers import managed_nous_tools_enabled
 
@@ -255,7 +255,7 @@ def show_status(args):
     print(color("◆ Auth Providers", Colors.CYAN, Colors.BOLD))
 
     try:
-        from VoidCube_cli.auth import get_nous_auth_status, get_qwen_auth_status
+        from VoidCube_app.provider_auth import get_nous_auth_status, get_qwen_auth_status
         nous_status = get_nous_auth_status()
         qwen_status = get_qwen_auth_status()
     except Exception:

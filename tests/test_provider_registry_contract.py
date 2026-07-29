@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from VoidCube_cli.auth import (
+from VoidCube_app.provider_auth import (
     PROVIDER_REGISTRY,
     RUNTIME_PROVIDER_IDS,
     resolve_api_key_provider_credentials,
 )
-from VoidCube_cli.models import (
+from VoidCube_app.models import (
     curated_models_for_provider,
     list_available_providers,
     parse_model_input,
@@ -15,7 +15,7 @@ from VoidCube_cli.models import (
     validate_requested_model,
 )
 from VoidCube_cli.providers import resolve_provider_full
-from VoidCube_cli.runtime_provider import AuthError, resolve_runtime_provider
+from VoidCube_app.runtime_provider import AuthError, resolve_runtime_provider
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -57,7 +57,7 @@ def test_model_menu_contains_only_runtime_provider_ids():
 
 def test_model_catalogs_are_live_api_only(monkeypatch):
     monkeypatch.setattr(
-        "VoidCube_cli.runtime_provider.resolve_runtime_provider",
+        "VoidCube_app.runtime_provider.resolve_runtime_provider",
         lambda requested: {
             "provider": requested,
             "base_url": "https://models.example/v1",
@@ -70,7 +70,7 @@ def test_model_catalogs_are_live_api_only(monkeypatch):
         calls.append((api_key, base_url))
         return ["current-model", "new-model"]
 
-    monkeypatch.setattr("VoidCube_cli.models.fetch_api_models", fetch_models)
+    monkeypatch.setattr("VoidCube_app.models.fetch_api_models", fetch_models)
 
     assert provider_model_ids("kimi-coding") == ["current-model", "new-model"]
     assert curated_models_for_provider("kimi-coding") == [
@@ -85,14 +85,14 @@ def test_model_catalogs_are_live_api_only(monkeypatch):
 
 def test_model_catalog_api_failure_has_no_static_fallback(monkeypatch):
     monkeypatch.setattr(
-        "VoidCube_cli.runtime_provider.resolve_runtime_provider",
+        "VoidCube_app.runtime_provider.resolve_runtime_provider",
         lambda requested: {
             "provider": requested,
             "base_url": "https://models.example/v1",
             "api_key": "sk-model-list-token",
         },
     )
-    monkeypatch.setattr("VoidCube_cli.models.fetch_api_models", lambda *_args: None)
+    monkeypatch.setattr("VoidCube_app.models.fetch_api_models", lambda *_args: None)
 
     assert provider_model_ids("zai") == []
     assert curated_models_for_provider("zai") == []
@@ -100,7 +100,7 @@ def test_model_catalog_api_failure_has_no_static_fallback(monkeypatch):
 
 def test_model_validation_rejects_ids_missing_from_live_catalog(monkeypatch):
     monkeypatch.setattr(
-        "VoidCube_cli.models.fetch_api_models",
+        "VoidCube_app.models.fetch_api_models",
         lambda *_args: ["current-model", "new-model"],
     )
 
@@ -119,7 +119,7 @@ def test_model_validation_rejects_ids_missing_from_live_catalog(monkeypatch):
 def test_model_validation_allows_unverified_input_only_when_api_is_unavailable(
     monkeypatch,
 ):
-    monkeypatch.setattr("VoidCube_cli.models.fetch_api_models", lambda *_args: None)
+    monkeypatch.setattr("VoidCube_app.models.fetch_api_models", lambda *_args: None)
 
     result = validate_requested_model(
         "manual-model",
@@ -173,7 +173,7 @@ def test_unsupported_builtin_provider_has_no_catalog_or_runtime_fallback(
     provider,
 ):
     monkeypatch.setattr(
-        "VoidCube_cli.runtime_provider.load_config",
+        "VoidCube_app.runtime_provider.load_config",
         lambda: {"providers": {}, "runtime": {}, "agent": {}},
     )
 
@@ -218,7 +218,7 @@ def test_named_custom_provider_remains_runtime_resolvable(monkeypatch):
         "runtime": {},
         "agent": {},
     }
-    monkeypatch.setattr("VoidCube_cli.runtime_provider.load_config", lambda: config)
+    monkeypatch.setattr("VoidCube_app.runtime_provider.load_config", lambda: config)
 
     runtime = resolve_runtime_provider(requested="research-endpoint")
 

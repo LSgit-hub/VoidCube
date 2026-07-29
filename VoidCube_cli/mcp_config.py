@@ -15,7 +15,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from VoidCube_cli.config import (
+from VoidCube_app.config import (
     load_config,
     save_config,
     get_env_value,

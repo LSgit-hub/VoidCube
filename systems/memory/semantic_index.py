@@ -32,7 +32,7 @@ class SemanticIndexConfig:
     @classmethod
     def from_voidcube_config(cls) -> "SemanticIndexConfig":
         try:
-            from VoidCube_cli.config import get_env_value, load_config
+            from VoidCube_app.config import get_env_value, load_config
 
             raw = dict(load_config().get("memory", {}).get("semantic_recall", {}) or {})
             api_key_env = str(raw.get("api_key_env") or "").strip()

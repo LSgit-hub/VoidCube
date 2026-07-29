@@ -14,8 +14,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from VoidCube_core.constants import OPENROUTER_BASE_URL
-import VoidCube_cli.auth as auth_mod
-from VoidCube_cli.auth import (
+import VoidCube_app.provider_auth as auth_mod
+from VoidCube_app.provider_auth import (
     DEFAULT_AGENT_KEY_MIN_TTL_SECONDS,
     KIMI_CODE_BASE_URL,
     PROVIDER_REGISTRY,
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 def _load_config_safe() -> Optional[dict]:
     """Load config.yaml, returning None on any error."""
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
 
         return load_config()
     except (OSError, IOError, ImportError):
@@ -941,7 +941,7 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
     try:
         config = _load_config_safe()
         if config:
-            from VoidCube_cli.config import get_active_model_config, get_active_provider_key
+            from VoidCube_app.config import get_active_model_config, get_active_provider_key
 
             active_provider = str(get_active_provider_key(config) or "").strip().lower()
             model_cfg = get_active_model_config(config)

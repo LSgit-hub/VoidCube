@@ -66,3 +66,18 @@ def test_cli_only_product_has_no_retired_messaging_entrypoints():
     assert ("Set up " + "WhatsApp integration") not in main_source
     assert ("Messaging " + "Platforms") not in config_commands_source
     assert ("Messaging " + "Platforms") not in status_source
+
+
+@pytest.mark.unit
+@pytest.mark.smoke
+def test_cli_uses_one_builtin_style_without_skin_switching() -> None:
+    from VoidCube_app.config import DEFAULT_CONFIG
+    from VoidCube_cli.command_execution import BUILTIN_COMMAND_SPECS
+    from VoidCube_cli.commands import resolve_command
+
+    root = Path(__file__).resolve().parents[1]
+
+    assert not (root / "VoidCube_cli" / "skin_engine.py").exists()
+    assert "skin" not in DEFAULT_CONFIG["display"]
+    assert "skin" not in BUILTIN_COMMAND_SPECS
+    assert resolve_command("skin") is None

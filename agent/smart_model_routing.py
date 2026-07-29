@@ -133,7 +133,7 @@ def resolve_turn_route(user_message: str, routing_config: Optional[Dict[str, Any
             ),
         }
 
-    from VoidCube_cli.runtime_provider import resolve_runtime_provider
+    from VoidCube_app.runtime_provider import resolve_runtime_provider
 
     explicit_api_key = None
     api_key_env = str(route.get("api_key_env") or "").strip()

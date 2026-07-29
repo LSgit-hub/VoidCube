@@ -94,7 +94,7 @@ version = {attr = "VoidCube_cli.__version__"}
 
 [tool.setuptools.packages.find]
 where = [".", "Mem/src"]
-include = ["agent*", "tools*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*"]
+include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*"]
 
 [tool.setuptools.package-data]
 memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]

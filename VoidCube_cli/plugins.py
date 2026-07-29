@@ -8,56 +8,15 @@
   - 插件元数据
 """
 
-from typing import Dict, Any, List, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 
-class PluginManager:
-    def __init__(self):
-        self._hooks: Dict[str, List[Callable]] = {}
-        self._toolsets: Dict[str, Any] = {}
-        self._command_handlers: Dict[str, Callable] = {}
-        self._plugins: Dict[str, Dict[str, Any]] = {}
+from VoidCube_app.plugins import (
+    PluginManager,
+    get_plugin_manager,
+    invoke_hook,
+)
 
-    def register_hook(self, event: str, callback: Callable) -> None:
-        self._hooks.setdefault(event, []).append(callback)
-
-    def invoke_hook(self, event: str, **kwargs) -> None:
-        for cb in self._hooks.get(event, []):
-            try:
-                cb(**kwargs)
-            except Exception:
-                pass
-
-    def register_toolset(self, name: str, tools: Any) -> None:
-        self._toolsets[name] = tools
-
-    def get_toolsets(self) -> Dict[str, Any]:
-        return self._toolsets
-
-    def register_command_handler(self, name: str, handler: Callable) -> None:
-        self._command_handlers[name] = handler
-
-    def get_command_handler(self, name: str) -> Optional[Callable]:
-        return self._command_handlers.get(name)
-
-    def register_plugin(self, name: str, info: Dict[str, Any]) -> None:
-        """Register a plugin with metadata."""
-        self._plugins[name] = info
-
-    def list_plugins(self) -> Dict[str, Dict[str, Any]]:
-        """List all registered plugins with their metadata."""
-        return dict(self._plugins)
-
-    def get_plugin(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get a plugin's metadata by name."""
-        return self._plugins.get(name)
-
-_plugin_manager = PluginManager()
-
-def get_plugin_manager() -> PluginManager:
-    return _plugin_manager
-
-def invoke_hook(event: str, **kwargs) -> None:
-    _plugin_manager.invoke_hook(event, **kwargs)
+_plugin_manager = get_plugin_manager()
 
 def discover_plugins() -> List[str]:
     """Discover and auto-register built-in toolsets from VoidCube_cli/tools/."""

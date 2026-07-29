@@ -34,7 +34,7 @@ SUPERVISOR_PORT = 6002
 PID_DIR = Path.home() / ".VoidCube" / "run"
 
 try:
-    from VoidCube_cli.env_loader import load_VoidCube_dotenv
+    from VoidCube_app.environment import load_VoidCube_dotenv
 
     load_VoidCube_dotenv(project_env=Path(__file__).resolve().parents[2] / ".env")
 except Exception:
@@ -393,7 +393,7 @@ for path_entry in reversed({path_entries}):
     if path_entry not in sys.path:
         sys.path.insert(0, path_entry)
 os.chdir({json.dumps(str(Path.cwd()))})
-from VoidCube_cli.env_loader import load_VoidCube_dotenv
+from VoidCube_app.environment import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env={project_env_path}, force_reload=True)
 import uvicorn
 from VoidCube_cli.ops.serve import _build_service_app, _verify_canonical_mem_import_source

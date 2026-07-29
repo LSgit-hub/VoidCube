@@ -154,7 +154,7 @@ def last_assistant_reasoning(messages: list[dict[str, Any]]) -> str | None:
 
 
 def _default_hook_invoker(name: str, **kwargs: Any) -> Any:
-    from VoidCube_cli.plugins import invoke_hook
+    from VoidCube_app.plugins import invoke_hook
 
     return invoke_hook(name, **kwargs)
 

@@ -36,28 +36,6 @@ def cprint(text: str):
 
 
 # =========================================================================
-# Skin-aware color helpers
-# =========================================================================
-
-def _skin_color(key: str, fallback: str) -> str:
-    """Get a color from the active skin, or return fallback."""
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
-        return get_active_skin().get_color(key, fallback)
-    except Exception:
-        return fallback
-
-
-def _skin_branding(key: str, fallback: str) -> str:
-    """Get a branding string from the active skin, or return fallback."""
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
-        return get_active_skin().get_branding(key, fallback)
-    except Exception:
-        return fallback
-
-
-# =========================================================================
 # ASCII Art & Branding
 # =========================================================================
 
@@ -145,7 +123,9 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
                          conversation_history: List[dict] = None):
     """Build and print a welcome banner with ASCII art logo only."""
     
-    accent = _skin_color("banner_accent", "#58A6FF")
+    from VoidCube_cli.style import BANNER_ACCENT
+
+    accent = BANNER_ACCENT
 
     logo_lines = [line for line in VOIDCUBE_LOGO.split('\n') if line.strip()]
     if logo_lines:

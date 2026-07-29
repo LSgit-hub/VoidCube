@@ -142,10 +142,6 @@
           "off": "关闭"
         }
       },
-      "skin": {
-        "description": "显示或更改显示皮肤/主题",
-        "usage": "用法: /skin [名称]"
-      },
       "language": {
         "description": "显示或更改显示语言",
         "usage": "用法: /language [-CN|-EN]",
@@ -698,7 +694,6 @@
       "configurations": "配置",
       "profiles": "配置文件",
       "themes": "主题",
-      "skins": "皮肤",
       "layouts": "布局",
       "styles": "样式",
       "fonts": "字体",
@@ -2946,7 +2941,6 @@
       "prompts.already_on_that_session.": "  Already on that session.",
       "prompts.answers_using_session_context._no_tools,_not_persisted.": "  Answers using session context. No tools, not persisted.",
       "prompts.authenticated_providers_&_models": "  Authenticated providers & models:",
-      "prompts.available_skins": "  可用皮肤:",
       "prompts.cancelled.": "  Cancelled.",
       "prompts.example__background_summarize_the_top_hn_stories_today": "  Example: /background Summarize the top HN stories today",
       "prompts.example__btw_what_module_owns_session_title_sanitization?": "  Example: /btw what module owns session title sanitization?",
@@ -2956,9 +2950,7 @@
       "prompts.no_conversation_to_branch_—_send_a_message_first.": "  No conversation to branch — send a message first.",
       "prompts.no_personality_overlay_—_using_base_agent_behavior.": "  No personality overlay — using base agent behavior.",
       "prompts.no_title_set._usage__title_<your_session_title>": "  No title set. Usage: /title <your session title>",
-      "prompts.note_banner_colors_will_update_on_next_session_start.": "  Note: banner colors will update on next session start.",
       "prompts.profile_default": "  配置文件: 默认",
-      "prompts.prompt_+_tui_colors_updated.": "  Prompt + TUI colors updated.",
       "prompts.recent_sessions": "  最近会话:",
       "prompts.run_api_to_configure_provider_credentials": "  运行 /api 配置提供商凭证",
       "prompts.run__api": "  Run: /api",
@@ -3012,10 +3004,8 @@
       "prompts.(^_^)v_new_session_started!": "(^_^)v New session started!",
       "prompts.browser_is_not_connected_to_live_chrome_(already_using_default_mode)": "Browser is not connected to live Chrome (already using default mode)",
       "prompts.no_plugins_installed.": "No plugins installed.",
-      "prompts.skin_engine_not_available.": "Skin engine not available.",
       "prompts.usage__browser_connect|disconnect|status": "Usage: /browser connect|disconnect|status",
       "prompts.usage__voice_[on|off|tts|status]": "Usage: /voice [on|off|tts|status]",
-      "prompts.\\n_usage__skin_<name>": "\\n  Usage: /skin <name>",
       "prompts.\\n_[tools]": "\\n  [Tools]",
       "prompts.\\n🔧_force_exiting...": "\\n🔧 Force exiting...",
       "prompts.\\n🔧_interrupting_agent..._(press_ctrl+c_again_to_force_exit)": "\\n🔧 Interrupting agent... (press Ctrl+C again to force exit)",
@@ -3086,7 +3076,6 @@
       "model_switch": "/model 在会话中切换模型 — 尝试 /model sonnet 或 /model gpt-5。",
       "model_global": "/model --global 永久更改默认模型。",
       "personality_fun": "/personality pirate 设置有趣的人格 — 14种内置选项，从 kawaii 到 shakespeare。",
-      "skin_theme": "/skin 更改 CLI 主题 — 尝试 ares、mono、slate、poseidon 或 charizard。",
       "statusbar_toggle": "/statusbar 切换持久栏，显示模型、令牌、上下文填充率、成本和持续时间。",
       "tools_disable": "/tools disable browser 临时移除当前会话的浏览器工具。",
       "browser_connect": "/browser connect 通过 CDP 将浏览器工具附加到运行中的 Chrome 实例。",

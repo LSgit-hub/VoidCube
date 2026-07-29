@@ -24,7 +24,7 @@ API_A_PROVIDER_LABELS = {
 def load_current_config() -> dict:
     """加载当前配置"""
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         return load_config()
     except Exception:
         return {}
@@ -32,7 +32,7 @@ def load_current_config() -> dict:
 def save_env_value(key: str, value: str) -> bool:
     """保存环境变量到 .env 文件"""
     try:
-        from VoidCube_cli.config import save_env_value as _save_env
+        from VoidCube_app.config import save_env_value as _save_env
         _save_env(key, value)
         return True
     except Exception:
@@ -56,7 +56,7 @@ def save_provider_config(
 ) -> bool:
     """Persist API-A/user-interaction provider config and set it active."""
     try:
-        from VoidCube_cli.config import load_config, save_config
+        from VoidCube_app.config import load_config, save_config
 
         cfg = persist_api_a_config(
             load_config(),
@@ -88,7 +88,7 @@ def persist_api_a_config(
     auth_mode: str = "",
 ) -> dict[str, Any]:
     """Return config with only API-A/user-interaction provider fields updated."""
-    from VoidCube_cli.config import set_active_provider, upsert_provider
+    from VoidCube_app.config import set_active_provider, upsert_provider
 
     cfg = upsert_provider(
         dict(config or {}),
@@ -173,7 +173,7 @@ def persist_api_b_config(
 def save_memory_llm_config(provider: str, model: str) -> bool:
     """Persist API-B/Mem model config without touching API-A."""
     try:
-        from VoidCube_cli.config import load_config, save_config
+        from VoidCube_app.config import load_config, save_config
 
         cfg = persist_api_b_config(load_config(), provider=provider, model=model)
         save_config(cfg)
@@ -186,8 +186,8 @@ def has_configured_api_key(api_key_env: str) -> bool:
     if not api_key_env:
         return True
     try:
-        from VoidCube_cli.config import get_env_value
-        from VoidCube_cli.auth import has_usable_secret
+        from VoidCube_app.config import get_env_value
+        from VoidCube_app.provider_auth import has_usable_secret
 
         return has_usable_secret(get_env_value(api_key_env) or "")
     except Exception:
@@ -196,7 +196,7 @@ def has_configured_api_key(api_key_env: str) -> bool:
 
 def _secret_source_status(value: object) -> str:
     try:
-        from VoidCube_cli.auth import has_usable_secret
+        from VoidCube_app.provider_auth import has_usable_secret
 
         text = str(value or "").strip()
         if not text:
@@ -223,7 +223,7 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
 
     if api_key_env:
         try:
-            from VoidCube_cli.config import get_env_value
+            from VoidCube_app.config import get_env_value
 
             sources.append(
                 _credential_source_entry(
@@ -260,7 +260,7 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
             )
 
         try:
-            from VoidCube_cli.config import load_env
+            from VoidCube_app.config import load_env
             from VoidCube_core.constants import get_env_path
 
             env_vars = load_env()
@@ -290,7 +290,7 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
 
     if provider:
         try:
-            from VoidCube_cli.auth import _get_auth_store_path, _load_auth_store
+            from VoidCube_app.provider_auth import _get_auth_store_path, _load_auth_store
 
             store = _load_auth_store()
             state = store.get(provider)
@@ -318,7 +318,7 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
             )
 
         try:
-            from VoidCube_cli.auth import read_credential_pool
+            from VoidCube_app.provider_auth import read_credential_pool
 
             entries = read_credential_pool(provider)
             usable = False
@@ -365,11 +365,11 @@ def provider_has_usable_credential(provider: str, api_key_env: str = "") -> bool
         return True
 
     try:
-        from VoidCube_cli.auth import (
+        from VoidCube_app.provider_auth import (
             has_usable_secret,
             resolve_api_key_provider_credentials,
         )
-        from VoidCube_cli.config import get_env_value
+        from VoidCube_app.config import get_env_value
 
         if api_key_env and has_usable_secret(str(get_env_value(api_key_env) or "")):
             return True
@@ -385,7 +385,7 @@ def provider_has_usable_credential(provider: str, api_key_env: str = "") -> bool
     if provider:
         try:
             from agent.credential_pool import load_pool
-            from VoidCube_cli.auth import has_usable_secret
+            from VoidCube_app.provider_auth import has_usable_secret
 
             pool = load_pool(provider)
             entry = pool.select() if pool and pool.has_credentials() else None
@@ -409,7 +409,7 @@ def api_a_key_configured(provider_cfg: dict[str, Any]) -> bool:
     if auth_mode == "none":
         return True
     try:
-        from VoidCube_cli.auth import has_usable_secret
+        from VoidCube_app.provider_auth import has_usable_secret
 
         if has_usable_secret(str(provider_cfg.get("api_key") or "")):
             return True
@@ -543,8 +543,8 @@ def get_provider_models_from_api(
 ) -> list[tuple[str, str]]:
     """从 Provider API 获取模型列表，不使用静态回退。"""
     try:
-        from VoidCube_cli.auth import PROVIDER_REGISTRY
-        from VoidCube_cli.models import curated_models_for_provider, fetch_api_models
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY
+        from VoidCube_app.models import curated_models_for_provider, fetch_api_models
 
         if api_key or base_url:
             provider_config = PROVIDER_REGISTRY.get(provider)
@@ -1333,10 +1333,10 @@ def run_api_config_wizard(console=None):
                     ps("API Key 保存成功")
                 
                 try:
-                    from VoidCube_cli.config import load_config
-                    from cli import CLI_CONFIG
-                    new_config = load_config()
-                    CLI_CONFIG.update(new_config)
+                    from VoidCube_app.configuration import reload_application_config
+                    from VoidCube_app.config import load_config
+
+                    reload_application_config(load_config)
                     ps("配置已重新加载")
                 except Exception as e:
                     pi(f"重新加载配置时出错: {e}")

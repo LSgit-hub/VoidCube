@@ -358,7 +358,7 @@ class Supervisor(
         }
 
     async def get_companion_reminder_policy(self) -> Dict[str, Any]:
-        from VoidCube_cli.config import is_managed
+        from VoidCube_app.config import is_managed
 
         return {
             **self._companion_reminder_policy_payload(),
@@ -369,7 +369,7 @@ class Supervisor(
         self,
         request: CompanionReminderPolicyRequest,
     ) -> Dict[str, Any]:
-        from VoidCube_cli.config import (
+        from VoidCube_app.config import (
             format_managed_message,
             is_managed,
             read_raw_config,

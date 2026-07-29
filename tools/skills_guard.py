@@ -932,7 +932,7 @@ def _parse_llm_response(text: str, skill_name: str) -> List[Finding]:
 def _get_configured_model() -> str:
     """Load the user's configured model from ~/.VoidCube/config.yaml."""
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         config = load_config()
         return config.get("model", "")
     except Exception:

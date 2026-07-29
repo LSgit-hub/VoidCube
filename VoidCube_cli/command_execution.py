@@ -90,7 +90,6 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
             "_handle_language_command",
             pass_original=True,
         ),
-        "skin": BuiltinCommandSpec("_handle_skin_command", pass_original=True),
         "voice": BuiltinCommandSpec("_handle_voice_command", pass_original=True),
         "preset": BuiltinCommandSpec("_handle_preset_command", pass_original=True),
         "connect": BuiltinCommandSpec("_handle_connect_command", pass_original=True),

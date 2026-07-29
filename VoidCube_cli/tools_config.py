@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 
-from VoidCube_cli.config import (
+from VoidCube_app.config import (
     load_config, save_config, get_env_value, save_env_value,
 )
 from VoidCube_cli.colors import Colors, color
@@ -1002,7 +1002,7 @@ def _configure_simple_requirements(ts_key: str):
             if api_key and api_key.strip():
                 save_env_value("OPENAI_API_KEY", api_key.strip())
                 # Save vision base URL to config (not .env — only secrets go there)
-                from VoidCube_cli.config import load_config, save_config
+                from VoidCube_app.config import load_config, save_config
                 _cfg = load_config()
                 _aux = _cfg.setdefault("auxiliary", {}).setdefault("vision", {})
                 _aux["provider"] = "custom"

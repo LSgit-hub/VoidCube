@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from cli import VoidcubeCLI
+from typing import Any
 
 
-def handle_language_command(self: "VoidcubeCLI", cmd: str) -> None:
+def handle_language_command(self: Any, cmd: str) -> None:
     """Handle /language [-CN|-EN] — show or change the display language.
     
     Args:
@@ -97,7 +94,7 @@ def handle_language_command(self: "VoidcubeCLI", cmd: str) -> None:
     
     # Try to save to config
     try:
-        from VoidCube_cli.config import read_raw_config, save_config
+        from VoidCube_app.config import read_raw_config, save_config
         config = read_raw_config()
         if not config:
             config = {}

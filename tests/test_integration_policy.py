@@ -12,7 +12,7 @@ from memai.model_config import (
     resolve_mem_llm_client,
 )
 from tools.skills_guard import scan_skill, should_allow_install
-from VoidCube_cli import models as model_catalog
+from VoidCube_app import models as model_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,7 @@ _SURFACE_ROOTS = (
     "systems",
     "tests",
     "tools",
+    "VoidCube_app",
     "VoidCube_cli",
     "VoidCube_core",
 )

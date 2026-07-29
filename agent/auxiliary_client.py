@@ -99,7 +99,7 @@ def _to_openai_base_url(base_url: str) -> str:
 def _first_live_model(api_key: str, base_url: str) -> Optional[str]:
     """Return the first model currently reported by an OpenAI-compatible API."""
     try:
-        from VoidCube_cli.models import fetch_api_models
+        from VoidCube_app.models import fetch_api_models
 
         models = fetch_api_models(api_key, base_url)
     except Exception:
@@ -201,7 +201,7 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
     credentials, or (None, None) if none are configured.
     """
     try:
-        from VoidCube_cli.auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
     except ImportError:
         logger.debug("Could not import PROVIDER_REGISTRY for API-key fallback")
         return None, None
@@ -299,7 +299,7 @@ def _read_main_model() -> str:
     Environment variables are no longer consulted.
     """
     try:
-        from VoidCube_cli.config import get_active_model_config, load_config
+        from VoidCube_app.config import get_active_model_config, load_config
         cfg = load_config()
         model_cfg = get_active_model_config(cfg)
         default = model_cfg.get("default") or model_cfg.get("model") or ""
@@ -317,7 +317,7 @@ def _read_main_provider() -> str:
     if not configured.
     """
     try:
-        from VoidCube_cli.config import get_active_provider_key, load_config
+        from VoidCube_app.config import get_active_provider_key, load_config
         cfg = load_config()
         provider = get_active_provider_key(cfg)
         if isinstance(provider, str) and provider.strip():
@@ -335,7 +335,7 @@ def _resolve_custom_runtime() -> Tuple[Optional[str], Optional[str], Optional[st
     environment.
     """
     try:
-        from VoidCube_cli.runtime_provider import resolve_runtime_provider
+        from VoidCube_app.runtime_provider import resolve_runtime_provider
 
         runtime = resolve_runtime_provider(requested="custom")
     except Exception as exc:
@@ -489,7 +489,7 @@ def _fallback_chain_label(provider: str) -> str:
     if normalized in ("custom", "local/custom"):
         return "local/custom"
     try:
-        from VoidCube_cli.runtime_provider import _get_named_custom_provider
+        from VoidCube_app.runtime_provider import _get_named_custom_provider
 
         if _get_named_custom_provider(normalized):
             return "local/custom"
@@ -644,7 +644,7 @@ def _normalize_resolved_model(model_name: Optional[str], provider: str) -> Optio
     if not model_name:
         return model_name
     try:
-        from VoidCube_cli.model_normalize import normalize_model_for_provider
+        from VoidCube_app.model_normalization import normalize_model_for_provider
 
         return normalize_model_for_provider(model_name, provider)
     except Exception:
@@ -760,7 +760,7 @@ def resolve_provider_client(
 
     # ── Named custom providers (config.yaml providers map) ───
     try:
-        from VoidCube_cli.runtime_provider import _get_named_custom_provider
+        from VoidCube_app.runtime_provider import _get_named_custom_provider
         custom_entry = _get_named_custom_provider(provider)
         if custom_entry:
             custom_base = custom_entry.get("base_url", "").strip()
@@ -793,9 +793,9 @@ def resolve_provider_client(
 
     # ── API-key providers from PROVIDER_REGISTRY ─────────────────────
     try:
-        from VoidCube_cli.auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
     except ImportError:
-        logger.debug("VoidCube_cli.auth not available for provider %s", provider)
+        logger.debug("VoidCube_app.provider_auth not available for provider %s", provider)
         return None, None
 
     pconfig = PROVIDER_REGISTRY.get(provider)
@@ -1261,7 +1261,7 @@ def _resolve_task_provider_model(
 
     if task:
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             config = load_config()
         except ImportError:
             config = {}
@@ -1302,7 +1302,7 @@ def _get_task_timeout(task: str, default: float = _DEFAULT_AUX_TIMEOUT) -> float
     if not task:
         return default
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         config = load_config()
     except ImportError:
         return default
@@ -1394,7 +1394,7 @@ def _infer_active_provider(
     if host == "nousresearch.com" or host.endswith(".nousresearch.com"):
         return "nous"
     try:
-        from VoidCube_cli.auth import PROVIDER_REGISTRY
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY
 
         for provider_id, config in PROVIDER_REGISTRY.items():
             candidate_urls = (

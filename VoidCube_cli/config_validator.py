@@ -50,7 +50,7 @@ class AgentCheck:
 def load_config() -> dict:
     """加载当前配置"""
     try:
-        from VoidCube_cli.config import load_config as _load_config
+        from VoidCube_app.config import load_config as _load_config
 
         return _load_config()
     except Exception:
@@ -127,7 +127,7 @@ def _validate_api_a_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
 
         key_configured = api_a_key_configured(active_cfg)
     except Exception:
-        from VoidCube_cli.auth import has_usable_secret
+        from VoidCube_app.provider_auth import has_usable_secret
 
         key_configured = has_usable_secret(str(active_cfg.get("api_key") or ""))
 

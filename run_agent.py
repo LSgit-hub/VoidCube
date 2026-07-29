@@ -39,7 +39,7 @@ from VoidCube_core.constants import get_VoidCube_home
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from VoidCube_cli.env_loader import load_VoidCube_dotenv
+from VoidCube_app.environment import load_VoidCube_dotenv
 
 _VoidCube_home = get_VoidCube_home()
 _project_env = Path(__file__).parent / '.env'
@@ -105,7 +105,6 @@ from agent.error_classifier import (
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
-    build_nous_subscription_prompt,
 )
 from agent.model_metadata import (
     fetch_model_metadata,
@@ -367,12 +366,12 @@ class AIAgent:
         self.acp_args = list(acp_args or args or [])
 
         try:
-            from VoidCube_cli.model_normalize import (
-                _AGGREGATOR_PROVIDERS,
+            from VoidCube_app.model_normalization import (
+                AGGREGATOR_PROVIDERS,
                 normalize_model_for_provider,
             )
 
-            if self.provider not in _AGGREGATOR_PROVIDERS:
+            if self.provider not in AGGREGATOR_PROVIDERS:
                 self.model = normalize_model_for_provider(self.model, self.provider)
         except Exception:
             pass
@@ -714,7 +713,7 @@ class AIAgent:
         
         # Load config once for memory, skills, and compression sections
         try:
-            from VoidCube_cli.config import load_config as _load_agent_config
+            from VoidCube_app.config import load_config as _load_agent_config
             _agent_cfg = _load_agent_config()
         except Exception:
             _agent_cfg = {}
@@ -2044,9 +2043,6 @@ class AIAgent:
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
-        nous_subscription_prompt = build_nous_subscription_prompt(self.valid_tool_names)
-        if nous_subscription_prompt:
-            prompt_parts.append(nous_subscription_prompt)
         # Tool-use enforcement: tells the model to actually call tools instead
         # of describing intended actions.  Controlled by config.yaml
         # agent.tool_use_enforcement:
@@ -2254,7 +2250,7 @@ class AIAgent:
             return False
 
         try:
-            from VoidCube_cli.auth import resolve_nous_runtime_credentials
+            from VoidCube_app.provider_auth import resolve_nous_runtime_credentials
 
             creds = resolve_nous_runtime_credentials(
                 min_key_ttl_seconds=max(60, int(os.getenv("VOIDCUBE_NOUS_MIN_KEY_TTL_SECONDS", "1800"))),
@@ -2549,7 +2545,7 @@ class AIAgent:
                     fb_provider)
                 return self._try_activate_fallback()  # try next in chain
             try:
-                from VoidCube_cli.model_normalize import normalize_model_for_provider
+                from VoidCube_app.model_normalization import normalize_model_for_provider
 
                 fb_model = normalize_model_for_provider(fb_model, fb_provider)
             except Exception:

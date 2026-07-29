@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from functools import partial
 from typing import Any, Optional
 
 from VoidCube_cli.autonomous_panel import has_visible_autonomous_work
@@ -34,8 +35,15 @@ def run_autonomous_component_debug(
     only for diagnostics when the embedded component needs isolated inspection.
     """
     import cli as cli_module
+    from VoidCube_app.configuration import reload_application_config
+    from VoidCube_app.gateway import (
+        is_gateway_running,
+        register_session,
+    )
+    from VoidCube_cli.autonomous_presence import push_cli_agent_scene
+    from VoidCube_app.config import load_config
 
-    cli_module.CLI_CONFIG = cli_module._get_cli_config()
+    reload_application_config(load_config)
     VoidcubeCLI = cli_module.VoidcubeCLI
     from VoidCube_cli.autonomous_presence import (
         ensure_supervisor_task_session,
@@ -54,13 +62,14 @@ def run_autonomous_component_debug(
 
     runtime = autonomous_executor_runtime(
         host,
-        push_cli_agent_scene=cli_module._push_cli_agent_scene,
+        push_cli_agent_scene=push_cli_agent_scene,
         git_head_commit=_git_head_commit,
         git_improvement_diff=_git_improvement_diff,
         cprint=_plain_cprint,
     )
 
     has_rendered = False
+    register_with_gateway = partial(register_session, source="cli")
     if show_idle:
         print("\n  VoidCube API-A 自主执行组件调试面")
         print("  正常使用请在主 CLI 内执行 /auto；此入口只用于隔离诊断。")
@@ -74,9 +83,9 @@ def run_autonomous_component_debug(
             refresh_gateway_cli_presence(
                 host,
                 force=False,
-                is_gateway_running=cli_module._is_gateway_running,
-                register_with_gateway=cli_module._register_with_gateway,
-                push_cli_agent_scene=cli_module._push_cli_agent_scene,
+                is_gateway_running=is_gateway_running,
+                register_with_gateway=register_with_gateway,
+                push_cli_agent_scene=push_cli_agent_scene,
                 monotonic_time=time.monotonic,
             )
 
@@ -110,7 +119,7 @@ def run_autonomous_component_debug(
         print("\n  自主执行组件调试面已退出。\n")
     finally:
         try:
-            cli_module._push_cli_agent_scene(
+            push_cli_agent_scene(
                 "idle",
                 session_id=getattr(host, "session_id", None),
                 agent_role="supervisor_task",

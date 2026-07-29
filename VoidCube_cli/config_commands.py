@@ -12,7 +12,7 @@ from typing import Any, Dict
 import yaml
 
 from VoidCube_cli.colors import Colors, color
-from VoidCube_cli.config import (
+from VoidCube_app.config import (
     DEFAULT_CONFIG,
     OPTIONAL_ENV_VARS,
     REQUIRED_ENV_VARS,

@@ -211,15 +211,10 @@ def _default_terminal_width() -> int:
 
 
 def _response_style() -> tuple[str, str]:
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
+    from VoidCube_cli.style import BANNER_TEXT, RESPONSE_LABEL
 
-        skin = get_active_skin()
-        label = skin.get_branding("response_label", "> Voidcube")
-        text_hex = skin.get_color("banner_text", "#FFF8DC")
-    except Exception:
-        label = "> Voidcube"
-        text_hex = "#FFF8DC"
+    label = RESPONSE_LABEL
+    text_hex = BANNER_TEXT
     try:
         red = int(text_hex[1:3], 16)
         green = int(text_hex[3:5], 16)

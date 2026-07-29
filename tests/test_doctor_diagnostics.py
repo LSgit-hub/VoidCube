@@ -163,10 +163,10 @@ def _stub_api_b_key_sources(monkeypatch, *, env_value: str = "") -> None:
     monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: env_value)
     monkeypatch.setattr("VoidCube_cli.config.load_env", lambda: {})
     monkeypatch.setattr(
-        "VoidCube_cli.auth.resolve_api_key_provider_credentials",
+        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
         lambda provider: {"api_key": "", "access_token": ""},
     )
-    monkeypatch.setattr("VoidCube_cli.auth.read_credential_pool", lambda provider=None: [])
+    monkeypatch.setattr("VoidCube_app.provider_auth.read_credential_pool", lambda provider=None: [])
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: _EmptyCredentialPool())
 
 

@@ -25,6 +25,7 @@ from VoidCube_cli import __version__
 PACKAGE_DIRS = (
     "agent",
     "tools",
+    "VoidCube_app",
     "VoidCube_cli",
     "VoidCube_core",
     "systems",

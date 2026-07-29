@@ -1,16 +1,12 @@
-"""Model identifier handling.
-
-Provider model IDs are authoritative values returned by each live ``/models``
-endpoint. VoidCube therefore preserves them instead of guessing vendor
-prefixes or translating version names with local compatibility tables.
-"""
+"""CLI compatibility export for shared model identifier handling."""
 
 from __future__ import annotations
 
+from VoidCube_app.model_normalization import (
+    AGGREGATOR_PROVIDERS,
+    normalize_model_for_provider,
+)
 
-_AGGREGATOR_PROVIDERS: frozenset[str] = frozenset({"openrouter", "nous"})
+_AGGREGATOR_PROVIDERS = AGGREGATOR_PROVIDERS
 
-
-def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
-    """Return the provider-supplied model ID unchanged apart from whitespace."""
-    return str(model_input or "").strip()
+__all__ = ["_AGGREGATOR_PROVIDERS", "normalize_model_for_provider"]

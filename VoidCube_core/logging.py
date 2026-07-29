@@ -314,7 +314,7 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
         # Defer config import to avoid ~62ms import chain during early startup.
         # is_managed() defaults to False when unreadable.
         try:
-            from VoidCube_cli.config import is_managed
+            from VoidCube_app.config import is_managed
             self._managed = is_managed()
         except Exception:
             self._managed = False

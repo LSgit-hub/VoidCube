@@ -138,7 +138,7 @@ _apply_profile_override()
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from VoidCube_core.constants import get_VoidCube_home
-from VoidCube_cli.env_loader import load_VoidCube_dotenv
+from VoidCube_app.environment import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env=PROJECT_ROOT / '.env')
 
 # Initialize centralized file logging early — all `VoidCube` subcommands
@@ -151,7 +151,7 @@ except Exception:
 
 # Apply IPv4 preference early, before any HTTP clients are created.
 try:
-    from VoidCube_cli.config import load_config as _load_config_early
+    from VoidCube_app.config import load_config as _load_config_early
     from VoidCube_core.constants import apply_ipv4_preference as _apply_ipv4
     _early_cfg = _load_config_early()
     _net = _early_cfg.get("network", {})
@@ -678,7 +678,7 @@ def cmd_model(args):
 
 def select_provider_and_model(args=None):
     """Switch active provider/model only within the saved provider config."""
-    from VoidCube_cli.config import (
+    from VoidCube_app.config import (
         get_active_provider_key,
         get_configured_providers,
         load_config,
@@ -686,7 +686,7 @@ def select_provider_and_model(args=None):
         set_active_provider,
         set_provider_model,
     )
-    from VoidCube_cli.models import curated_models_for_provider
+    from VoidCube_app.models import curated_models_for_provider
 
     config = load_config()
     providers = get_configured_providers(config)
@@ -2228,7 +2228,7 @@ Examples:
     # the managed container.  This MUST run before parse_args() so that
     # --help, unrecognised flags, and every subcommand are forwarded
     # transparently instead of being intercepted by argparse on the host.
-    from VoidCube_cli.config import get_container_exec_info
+    from VoidCube_app.config import get_container_exec_info
     container_info = get_container_exec_info()
     if container_info:
         try:

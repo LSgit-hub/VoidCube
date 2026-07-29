@@ -13,7 +13,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from VoidCube_core.constants import get_VoidCube_home, is_wsl
-from VoidCube_cli.default_soul import (
+from VoidCube_app.default_identity import (
     DEFAULT_IDENTITY_PROMPT,
     PERSISTENT_IDENTITY_GUIDANCE,
 )
@@ -775,72 +775,6 @@ def build_skills_system_prompt(
     return result
 
 
-def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -> str:
-    """Build a compact Nous subscription capability block for the system prompt."""
-    try:
-        from VoidCube_cli.nous_subscription import get_nous_subscription_features
-        from tools.tool_backend_helpers import managed_nous_tools_enabled
-    except Exception as exc:
-        logger.debug("Failed to import Nous subscription helper: %s", exc)
-        return ""
-
-    if not managed_nous_tools_enabled():
-        return ""
-
-    valid_names = set(valid_tool_names or set())
-    relevant_tool_names = {
-        "web_search",
-        "web_extract",
-        "browser_navigate",
-        "browser_snapshot",
-        "browser_click",
-        "browser_type",
-        "browser_scroll",
-        "browser_console",
-        "browser_press",
-        "browser_get_images",
-        "browser_vision",
-        "image_generate",
-        "text_to_speech",
-        "terminal",
-        "process",
-        "execute_code",
-    }
-
-    if valid_names and not (valid_names & relevant_tool_names):
-        return ""
-
-    features = get_nous_subscription_features()
-
-    def _status_line(feature) -> str:
-        if feature.managed_by_nous:
-            return f"- {feature.label}: active via Nous subscription"
-        if feature.active:
-            current = feature.current_provider or "configured provider"
-            return f"- {feature.label}: currently using {current}"
-        if feature.included_by_default and features.nous_auth_present:
-            return f"- {feature.label}: included with Nous subscription, not currently selected"
-        if feature.key == "modal" and features.nous_auth_present:
-            return f"- {feature.label}: optional via Nous subscription"
-        return f"- {feature.label}: not currently available"
-
-    lines = [
-        "# Nous Subscription",
-        "Nous subscription includes managed web tools (Firecrawl), image generation (FAL), OpenAI TTS, and browser automation (Browser Use) by default. Modal execution is optional.",
-        "Current capability status:",
-    ]
-    lines.extend(_status_line(feature) for feature in features.items())
-    lines.extend(
-        [
-            "When a Nous-managed feature is active, do not ask the user for Firecrawl, FAL, OpenAI TTS, or Browser-Use API keys.",
-            "If the user is not subscribed and asks for a capability that Nous subscription would unlock or simplify, suggest Nous subscription as one option alongside direct setup or local alternatives.",
-            "Do not mention subscription unless the user asks about it or it directly solves the current missing capability.",
-            "Useful commands: /api, /api tools, /api terminal, VoidCube status."
-        ]
-    )
-    return "\n".join(lines)
-
-
 # =========================================================================
 # Context files (SOUL.md, AGENTS.md, .cursorrules)
 # =========================================================================
@@ -865,7 +799,7 @@ def load_soul_md() -> Optional[str]:
     ``skip_soul=True`` so SOUL.md isn't injected twice.
     """
     try:
-        from VoidCube_cli.config import ensure_VoidCube_home
+        from VoidCube_app.config import ensure_VoidCube_home
         ensure_VoidCube_home()
     except Exception as e:
         logger.debug("Could not ensure VOIDCUBE_HOME before loading SOUL.md: %s", e)
@@ -874,7 +808,7 @@ def load_soul_md() -> Optional[str]:
     if not soul_path.exists():
         # Create default SOUL.md if it doesn't exist
         try:
-            from VoidCube_cli.default_soul import DEFAULT_SOUL_MD
+            from VoidCube_app.default_identity import DEFAULT_SOUL_MD
             soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
             logger.info("Created default SOUL.md at %s", soul_path)
         except Exception as e:

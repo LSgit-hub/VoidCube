@@ -1162,7 +1162,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
     # Provider is configured — resolve full credentials
     try:
-        from VoidCube_cli.runtime_provider import resolve_runtime_provider
+        from VoidCube_app.runtime_provider import resolve_runtime_provider
         runtime = resolve_runtime_provider(requested=configured_provider)
     except Exception as exc:
         raise ValueError(
@@ -1190,24 +1190,12 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
 
 def _load_config() -> dict:
-    """Load delegation config from CLI_CONFIG or persistent config.
+    """Load delegation config through the shared application runtime."""
+    try:
+        from VoidCube_app.configuration import application_config
+        from VoidCube_app.config import load_config
 
-    Checks the runtime config (cli.py CLI_CONFIG) first, then falls back
-    to the persistent config (VoidCube_cli/config.py load_config()) so that
-    ``delegation.model`` / ``delegation.provider`` are picked up regardless
-    of the entry point (CLI or gateway).
-    """
-    try:
-        from cli import CLI_CONFIG
-        cfg = CLI_CONFIG.get("delegation", {})
-        if cfg:
-            return cfg
-    except Exception:
-        pass
-    try:
-        from VoidCube_cli.config import load_config
-        full = load_config()
-        return full.get("delegation", {})
+        return application_config.section("delegation", loader=load_config)
     except Exception:
         return {}
 

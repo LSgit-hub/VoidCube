@@ -74,7 +74,7 @@ def _has_env(name: str) -> bool:
 def _load_web_config() -> dict:
     """Load the ``web:`` section from ~/.VoidCube/config.yaml."""
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         return load_config().get("web", {})
     except (ImportError, Exception):
         return {}

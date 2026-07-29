@@ -1178,14 +1178,14 @@ def _load_mcp_config() -> Dict[str, dict]:
     ``os.environ`` (which includes ``~/.VoidCube/.env`` loaded at startup).
     """
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         config = load_config()
         servers = config.get("mcp_servers")
         if not servers or not isinstance(servers, dict):
             return {}
         # Ensure .env vars are available for interpolation
         try:
-            from VoidCube_cli.env_loader import load_VoidCube_dotenv
+            from VoidCube_app.environment import load_VoidCube_dotenv
             load_VoidCube_dotenv()
         except Exception:
             pass

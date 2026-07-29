@@ -92,9 +92,6 @@
       "fast": {
         "description": "Toggle fast mode — OpenAI Priority Processing (Normal/Fast)"
       },
-      "skin": {
-        "description": "Show or change the display skin/theme"
-      },
       "language": {
         "description": "Show or change the display language"
       },

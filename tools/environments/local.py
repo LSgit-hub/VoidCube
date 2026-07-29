@@ -27,7 +27,7 @@ def _build_provider_env_blocklist() -> frozenset:
     blocked: set[str] = set()
 
     try:
-        from VoidCube_cli.auth import PROVIDER_REGISTRY
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY
         for pconfig in PROVIDER_REGISTRY.values():
             api_key_env_vars = pconfig.get("api_key_env_vars", [])
             blocked.update(api_key_env_vars)
@@ -38,7 +38,7 @@ def _build_provider_env_blocklist() -> frozenset:
         pass
 
     try:
-        from VoidCube_cli.config import OPTIONAL_ENV_VARS
+        from VoidCube_app.config import OPTIONAL_ENV_VARS
         for name, metadata in OPTIONAL_ENV_VARS.items():
             category = metadata.get("category")
             if category in {"tool", "messaging"}:

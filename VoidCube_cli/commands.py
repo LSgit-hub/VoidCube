@@ -297,7 +297,7 @@ def _resolve_config_gates() -> set[str]:
     if not gated:
         return set()
     try:
-        from VoidCube_cli.config import read_raw_config
+        from VoidCube_app.config import read_raw_config
         cfg = read_raw_config()
     except Exception:
         return set()

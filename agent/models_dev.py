@@ -57,7 +57,7 @@ def fetch_models_dev() -> Dict[str, dict]:
 def list_provider_models(provider: str) -> List[str]:
     """List models currently returned by the provider API."""
     try:
-        from VoidCube_cli.models import provider_model_ids
+        from VoidCube_app.models import provider_model_ids
 
         return provider_model_ids(provider)
     except Exception:

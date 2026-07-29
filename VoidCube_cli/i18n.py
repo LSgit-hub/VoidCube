@@ -246,7 +246,7 @@ def init_i18n(locale: Optional[str] = None) -> None:
         target_locale = os.environ.get("VOIDCUBE_LANG")
     
     if target_locale is None:
-        # Check configuration file — read directly to avoid importing VoidCube_cli.config
+        # Check configuration file — read directly to avoid importing VoidCube_app.config
         # (~62ms import chain) at module init time
         try:
             from VoidCube_core.constants import get_config_path

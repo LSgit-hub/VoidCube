@@ -84,7 +84,7 @@ def test_api_b_key_configured_uses_provider_default_key_env(monkeypatch):
 def test_api_b_key_configured_uses_matching_provider_auth_store(monkeypatch):
     monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: "")
     monkeypatch.setattr(
-        "VoidCube_cli.auth.resolve_api_key_provider_credentials",
+        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
         lambda provider: {"api_key": "sk-deepseek-auth-store-token-123456"},
     )
 
@@ -111,7 +111,7 @@ def test_provider_has_usable_credential_uses_matching_pool(monkeypatch):
 
     monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: "")
     monkeypatch.setattr(
-        "VoidCube_cli.auth.resolve_api_key_provider_credentials",
+        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
         lambda provider: {"api_key": "", "access_token": ""},
     )
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: Pool())
@@ -128,7 +128,7 @@ def test_provider_credential_sources_reports_voidcube_env_without_secret(tmp_pat
     )
     monkeypatch.setenv("VOIDCUBE_HOME", str(home))
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_cli.auth._get_auth_store_path", lambda: home / "auth_store.json")
+    monkeypatch.setattr("VoidCube_app.provider_auth._get_auth_store_path", lambda: home / "auth_store.json")
 
     sources = provider_credential_sources("deepseek", "DEEPSEEK_API_KEY")
     rendered = "\n".join(f"{item['source']} {item['status']} {item['detail']}" for item in sources)

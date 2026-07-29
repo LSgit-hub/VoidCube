@@ -74,7 +74,7 @@ def _load_security_config() -> dict:
         "tirith_fail_open": True,
     }
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         cfg = load_config().get("security", {}) or {}
     except Exception:
         cfg = {}

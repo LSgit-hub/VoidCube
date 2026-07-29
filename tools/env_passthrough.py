@@ -66,7 +66,7 @@ def _load_config_passthrough() -> frozenset[str]:
 
     result: set[str] = set()
     try:
-        from VoidCube_cli.config import read_raw_config
+        from VoidCube_app.config import read_raw_config
         cfg = read_raw_config()
         passthrough = cfg.get("terminal", {}).get("env_passthrough")
         if isinstance(passthrough, list):

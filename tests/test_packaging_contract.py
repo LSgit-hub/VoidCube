@@ -63,6 +63,7 @@ def test_distribution_includes_runtime_subpackages_and_mem_resources():
         "tools.environments",
         "plugins.memory.mem",
         "memai",
+        "VoidCube_app",
     }
     for package in required_packages:
         assert any(fnmatchcase(package, pattern) for pattern in patterns), package
@@ -331,6 +332,25 @@ def test_wheel_contract_tracks_cli_locale_resources():
 
     assert "VoidCube_cli/locales/zh_CN.json" in expected
     assert "VoidCube_cli/locales/en_US.json" in expected
+
+
+@pytest.mark.unit
+def test_wheel_contract_tracks_shared_application_package():
+    expected = expected_wheel_files(ROOT)
+
+    assert "VoidCube_app/__init__.py" in expected
+    assert "VoidCube_app/config.py" in expected
+    assert "VoidCube_app/configuration.py" in expected
+    assert "VoidCube_app/default_identity.py" in expected
+    assert "VoidCube_app/environment.py" in expected
+    assert "VoidCube_app/gateway.py" in expected
+    assert "VoidCube_app/models.py" in expected
+    assert "VoidCube_app/model_normalization.py" in expected
+    assert "VoidCube_app/plugins.py" in expected
+    assert "VoidCube_app/provider_auth.py" in expected
+    assert "VoidCube_app/runtime_provider.py" in expected
+    assert "VoidCube_cli/style.py" in expected
+    assert "VoidCube_cli/skin_engine.py" not in expected
 
 
 @pytest.mark.unit

@@ -59,6 +59,14 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
+from VoidCube_app.configuration import (
+    get_application_config,
+    reload_application_config,
+)
+from VoidCube_app.gateway import (
+    is_gateway_running as _is_gateway_running,
+    register_session as _register_gateway_session,
+)
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -257,7 +265,7 @@ _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 # User-managed env files should override stale shell exports on restart.
 from VoidCube_core.constants import get_VoidCube_home, display_VoidCube_home
 from VoidCube_core.constants import is_termux as _is_termux_environment
-from VoidCube_cli.env_loader import load_VoidCube_dotenv
+from VoidCube_app.environment import load_VoidCube_dotenv
 
 _VoidCube_home = get_VoidCube_home()
 _project_env = Path(__file__).parent / '.env'
@@ -389,21 +397,16 @@ def _resolve_cli_provider_config(
 
 def load_cli_config() -> Dict[str, Any]:
     """Load the canonical user configuration."""
-    from VoidCube_cli.config import load_config
+    from VoidCube_app.config import load_config
 
-    return load_config()
-
-# Lazy-loaded configuration — defers ~62ms (VoidCube_cli.config import chain)
-# until first access.
-_CLI_CONFIG_CACHE = None
+    return reload_application_config(load_config)
 
 
 def _get_cli_config():
     """Lazy-load and cache the CLI configuration (called automatically on first access)."""
-    global _CLI_CONFIG_CACHE
-    if _CLI_CONFIG_CACHE is None:
-        _CLI_CONFIG_CACHE = load_cli_config()
-    return _CLI_CONFIG_CACHE
+    from VoidCube_app.config import load_config
+
+    return get_application_config(load_config)
 
 
 # Module __getattr__ for transparent lazy config access.
@@ -428,14 +431,8 @@ def _init_cli_runtime():
     cfg = _get_cli_config()
     # Validate config structure — print warnings before user hits cryptic errors
     try:
-        from VoidCube_cli.config import print_config_warnings
+        from VoidCube_app.config import print_config_warnings
         print_config_warnings()
-    except Exception:
-        pass
-    # Initialize the skin engine from config
-    try:
-        from VoidCube_cli.skin_engine import init_skin_from_config
-        init_skin_from_config(cfg)
     except Exception:
         pass
     # Initialize tool preview length from config
@@ -512,48 +509,14 @@ def _get_AIAgent():
     return _AIAgent_class
 
 
-def _is_gateway_running(timeout: float = 0.3) -> bool:
-    """Quick TCP check — returns True if Gateway is listening on 6000."""
-    import socket as _sock
-    try:
-        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(("127.0.0.1", 6000))
-        s.close()
-        return True
-    except OSError:
-        return False
-
-
 def _register_with_gateway(session_id: str, model: str, provider: str) -> bool:
-    """Register the current CLI session with the Gateway for activity tracking.
-
-    Called once per session so the Gateway can correlate gateway-level
-    activity with the CLI's conversation.
-    """
-    import json as _json
-    try:
-        import urllib.request as _req
-        payload = _json.dumps({
-            "session_id": session_id,
-            "model": model,
-            "provider": provider,
-            "source": "cli",
-        }).encode()
-        gateway_token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
-        headers = {"Content-Type": "application/json"}
-        if gateway_token:
-            headers["Authorization"] = f"Bearer {gateway_token}"
-        req = _req.Request(
-            "http://127.0.0.1:6000/v1/sessions/register",
-            data=payload,
-            headers=headers,
-            method="POST",
-        )
-        _req.urlopen(req, timeout=3)
-        return True
-    except Exception:
-        return False  # Best-effort — Gateway may not be started or doesn't support this endpoint
+    """Register this CLI session through the shared Gateway client."""
+    return _register_gateway_session(
+        session_id,
+        model,
+        provider,
+        source="cli",
+    )
 
 
 def _get_tool_definitions(*args, **kwargs):
@@ -762,24 +725,13 @@ VOIDCUBE_HERO = ""
 
 def _build_compact_banner() -> str:
     """Build a compact banner that fits the current terminal width."""
-    try:
-        from VoidCube_cli.skin_engine import get_active_skin
-        _skin = get_active_skin()
-    except Exception:
-        _skin = None
+    from VoidCube_cli.style import BANNER_BORDER, BANNER_DIM, BANNER_TITLE
 
-    skin_name = getattr(_skin, "name", "default") if _skin else "default"
-    border_color = _skin.get_color("banner_border", "#30363D") if _skin else "#30363D"  # type: ignore[attr-defined]
-    title_color = _skin.get_color("banner_title", "#58A6FF") if _skin else "#58A6FF"  # type: ignore[attr-defined]
-    dim_color = _skin.get_color("banner_dim", "#8B949E") if _skin else "#8B949E"  # type: ignore[attr-defined]
-
-    if skin_name == "default":
-        line1 = "> VoidCube - AI Agent"
-        tiny_line = "> VoidCube"
-    else:
-        agent_name = _skin.get_branding("agent_name", "Voidcube Agent") if _skin else "Voidcube Agent"  # type: ignore[attr-defined]
-        line1 = f"{agent_name} - AI Agent Framework"
-        tiny_line = agent_name
+    border_color = BANNER_BORDER
+    title_color = BANNER_TITLE
+    dim_color = BANNER_DIM
+    line1 = "> VoidCube - AI Agent"
+    tiny_line = "> VoidCube"
 
     version_line = format_banner_version_label()
 
@@ -808,7 +760,7 @@ def _build_compact_banner() -> str:
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
 
-# Lazy import for skill commands — defers tools.skills_tool → VoidCube_cli.config
+# Lazy import for skill commands — defers tools.skills_tool → VoidCube_app.config
 # (~62ms import chain) until first skill command is processed.
 _skill_commands_cache = None
 _skill_cmd_imports = None
@@ -889,7 +841,7 @@ def save_config_value(key_path: str, value: any) -> bool:
         True if successful, False otherwise
     """
     try:
-        from VoidCube_cli.config import load_config, save_config, _set_nested
+        from VoidCube_app.config import load_config, save_config, _set_nested
 
         config = load_config()
         _set_nested(config, key_path, value)
@@ -990,7 +942,7 @@ class VoidcubeCLI:
         if not self.model:
             _base_url = _active_provider_cfg.get("base_url", "")
             if "localhost" in _base_url or "127.0.0.1" in _base_url:
-                from VoidCube_cli.runtime_provider import _auto_detect_local_model
+                from VoidCube_app.runtime_provider import _auto_detect_local_model
                 _detected = _auto_detect_local_model(_base_url)
                 if _detected:
                     self.model = _detected
@@ -1920,7 +1872,7 @@ class VoidcubeCLI:
             and config_mtime <= self._config_cache_ts
         ):
             return self._config_cache
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         self._config_cache = load_config()
         self._config_cache_ts = now
         return self._config_cache
@@ -2300,12 +2252,12 @@ class VoidcubeCLI:
         changed = False
 
         try:
-            from VoidCube_cli.model_normalize import (
-                _AGGREGATOR_PROVIDERS,
+            from VoidCube_app.model_normalization import (
+                AGGREGATOR_PROVIDERS,
                 normalize_model_for_provider,
             )
 
-            if resolved_provider not in _AGGREGATOR_PROVIDERS:
+            if resolved_provider not in AGGREGATOR_PROVIDERS:
                 normalized_model = normalize_model_for_provider(current_model, resolved_provider)
                 if normalized_model and normalized_model != current_model:
                     if not self._model_is_default:
@@ -2383,7 +2335,7 @@ class VoidcubeCLI:
         are picked up without restarting the CLI.
         Returns True if credentials are ready, False on auth failure.
         """
-        from VoidCube_cli.runtime_provider import (
+        from VoidCube_app.runtime_provider import (
             resolve_runtime_provider,
             format_runtime_provider_error,
         )
@@ -2472,7 +2424,7 @@ class VoidcubeCLI:
     def _resolve_turn_agent_config(self, user_message: str) -> dict:
         """Resolve model/runtime overrides for a single user turn."""
         from agent.smart_model_routing import resolve_turn_route
-        from VoidCube_cli.models import resolve_fast_mode_overrides
+        from VoidCube_app.models import resolve_fast_mode_overrides
 
         route = resolve_turn_route(
             user_message,
@@ -2960,18 +2912,10 @@ class VoidcubeCLI:
         from rich.panel import Panel
         from rich.text import Text
 
-        try:
-            from VoidCube_cli.skin_engine import get_active_skin
-            _skin = get_active_skin()
-            _history_text_c = _skin.get_color("banner_text", "#FFF8DC")  # type: ignore[attr-defined]
-            _session_label_c = _skin.get_color("session_label", "#DAA520")  # type: ignore[attr-defined]
-            _session_border_c = _skin.get_color("session_border", "#8B8682")  # type: ignore[attr-defined]
-            _assistant_label_c = _skin.get_color("ui_ok", "#8FBC8F")  # type: ignore[attr-defined]
-        except Exception:
-            _history_text_c = "#FFF8DC"
-            _session_label_c = "#DAA520"
-            _session_border_c = "#8B8682"
-            _assistant_label_c = "#8FBC8F"
+        _history_text_c = "#FFF8DC"
+        _session_label_c = "#DAA520"
+        _session_border_c = "#8B8682"
+        _assistant_label_c = "#8FBC8F"
 
         # Simple text output without borders to avoid wrapping issues
         print()
@@ -3306,15 +3250,7 @@ class VoidcubeCLI:
         else:
             api_indicator = "[red bold]●[/]"
 
-        # Build status line with proper markup — skin-aware colors
-        try:
-            from VoidCube_cli.skin_engine import get_active_skin
-            skin = get_active_skin()
-            separator_color = skin.get_color("banner_dim", "#B8860B")  # type: ignore[attr-defined]
-            accent_color = skin.get_color("ui_accent", "#FFBF00")  # type: ignore[attr-defined]
-            label_color = skin.get_color("ui_label", "#4dd0e1")  # type: ignore[attr-defined]
-        except Exception:
-            separator_color, accent_color, label_color = "#B8860B", "#FFBF00", "cyan"
+        separator_color, accent_color, label_color = "#B8860B", "#FFBF00", "#4dd0e1"
         toolsets_info = ""
         if self.enabled_toolsets and "all" not in self.enabled_toolsets:
             toolsets_info = f" [dim {separator_color}]·[/] [{label_color}]toolsets: {', '.join(self.enabled_toolsets)}[/]"
@@ -3398,7 +3334,7 @@ class VoidcubeCLI:
     
     def _fast_command_available(self) -> bool:
         try:
-            from VoidCube_cli.models import model_supports_fast_mode
+            from VoidCube_app.models import model_supports_fast_mode
         except Exception:
             return False
         agent = getattr(self, "agent", None)
@@ -3428,11 +3364,7 @@ class VoidcubeCLI:
             tip_multiline = "多行输入: Alt+Enter 换行"
             tip_paste = "粘贴图片: Alt+V (或 /paste)"
 
-        try:
-            from VoidCube_cli.skin_engine import get_active_help_header
-            header = get_active_help_header(header_default)
-        except Exception:
-            header = header_default
+        header = header_default
         header = (header or "").strip() or header_default
         inner_width = 55
         if len(header) > inner_width:
@@ -3552,7 +3484,7 @@ class VoidcubeCLI:
 
         # Reset session so the new tool config is picked up from a clean state
         from VoidCube_cli.tools_config import _get_platform_tools
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         self.enabled_toolsets = _get_platform_tools(load_config(), "cli")
         self.new_session()
         _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
@@ -4283,7 +4215,7 @@ class VoidcubeCLI:
             _cprint(f"    ⚠ {result.warning_message}")
         if persist_global:
             try:
-                from VoidCube_cli.config import (
+                from VoidCube_app.config import (
                     load_config,
                     save_config,
                     set_active_provider,
@@ -4374,7 +4306,7 @@ class VoidcubeCLI:
 
         user_provs = None
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             cfg = load_config()
             user_provs = cfg.get("providers")
         except Exception:
@@ -4442,7 +4374,7 @@ class VoidcubeCLI:
 
         Use /model command to switch providers or models.
         """
-        from VoidCube_cli.config import load_config, get_active_provider_key
+        from VoidCube_app.config import load_config, get_active_provider_key
         from VoidCube_cli.model_switch import list_configured_providers
 
         parts = cmd_original.split(None, 1)
@@ -4634,7 +4566,7 @@ class VoidcubeCLI:
         print("\n  已配置的 MCP 服务器:")
         print()
         
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         
         config = load_config()
         mcp_servers = config.get("mcp_servers", {})
@@ -4670,7 +4602,7 @@ class VoidcubeCLI:
         print()
         
         try:
-            from VoidCube_cli.config import load_config, save_config
+            from VoidCube_app.config import load_config, save_config
             
             config = load_config()
             if "mcp_servers" not in config:
@@ -4703,7 +4635,7 @@ class VoidcubeCLI:
         print()
         
         try:
-            from VoidCube_cli.config import load_config, save_config
+            from VoidCube_app.config import load_config, save_config
             
             config = load_config()
             if "mcp_servers" in config and name in config["mcp_servers"]:
@@ -4732,7 +4664,7 @@ class VoidcubeCLI:
         print()
         
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             from tools.mcp_tool import MCPTool
             
             config = load_config()
@@ -5046,12 +4978,7 @@ class VoidcubeCLI:
             from VoidCube_cli.tips import get_random_tip
 
             tip = get_random_tip()
-            try:
-                from VoidCube_cli.skin_engine import get_active_skin
-
-                tip_color = get_active_skin().get_color("banner_dim", "#B8860B")
-            except Exception:
-                tip_color = "#B8860B"
+            tip_color = "#B8860B"
             console.print(
                 f"[dim {tip_color}]"
                 f"{t('tips.tip_prefix', default='✦ Tip:')} {tip}[/]"
@@ -5492,16 +5419,9 @@ class VoidcubeCLI:
                 _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
                 if response:
-                    try:
-                        from VoidCube_cli.skin_engine import get_active_skin
-                        _skin = get_active_skin()
-                        label = _skin.get_branding("response_label", "> Voidcube")  # type: ignore[attr-defined]
-                        _resp_color = _skin.get_color("response_border", "#CD7F32")  # type: ignore[attr-defined]
-                        _resp_text = _skin.get_color("banner_text", "#FFF8DC")  # type: ignore[attr-defined]
-                    except Exception:
-                        label = "> Voidcube"
-                        _resp_color = "#CD7F32"
-                        _resp_text = "#FFF8DC"
+                    label = "> Voidcube"
+                    _resp_color = "#CD7F32"
+                    _resp_text = "#FFF8DC"
 
                     _chat_console = ChatConsole()
                     _chat_console.print(Panel(
@@ -5737,12 +5657,7 @@ class VoidcubeCLI:
                 print()
 
                 if response:
-                    try:
-                        from VoidCube_cli.skin_engine import get_active_skin
-                        _skin = get_active_skin()
-                        _resp_color = _skin.get_color("response_border", "#4F6D4A")  # type: ignore[attr-defined]
-                    except Exception:
-                        _resp_color = "#4F6D4A"
+                    _resp_color = "#4F6D4A"
 
                     ChatConsole().print(Panel(
                         _rich_text_from_ansi(response),
@@ -5991,46 +5906,6 @@ class VoidcubeCLI:
             print("   disconnect   Revert to default browser backend")
             print("   status       Show current browser mode")
             print()
-
-    def _handle_skin_command(self, cmd: str):
-        """Handle /skin [name] — show or change the display skin."""
-        try:
-            from VoidCube_cli.skin_engine import list_skins, set_active_skin, get_active_skin_name
-        except ImportError:
-            print("Skin engine not available.")
-            return
-
-        parts = cmd.strip().split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            # Show current skin and list available
-            current = get_active_skin_name()
-            skins = list_skins()
-            print(f"\n  Current skin: {current}")
-            print("  Available skins:")
-            for s in skins:
-                marker = " ●" if s["name"] == current else "  "
-                source = f" ({s['source']})" if s["source"] == "user" else ""
-                print(f"   {marker} {s['name']}{source} — {s['description']}")
-            print("\n  Usage: /skin <name>")
-            print(f"  Custom skins: drop a YAML file in {display_VoidCube_home()}/skins/\n")
-            return
-
-        new_skin = parts[1].strip().lower()
-        available = {s["name"] for s in list_skins()}
-        if new_skin not in available:
-            print(f"  Unknown skin: {new_skin}")
-            print(f"  Available: {', '.join(sorted(available))}")
-            return
-
-        set_active_skin(new_skin)
-        _ACCENT.reset()  # Re-resolve ANSI color for the new skin
-        if save_config_value("display.skin", new_skin):
-            print(f"  Skin set to: {new_skin} (saved)")
-        else:
-            print(f"  Skin set to: {new_skin}")
-        print("  Note: banner colors will update on next session start.")
-        if self._apply_tui_skin_style():
-            print("  Prompt + TUI colors updated.")
 
     def _toggle_verbose(self):
         """Cycle tool progress mode: off → new → all → verbose → off."""
@@ -6674,7 +6549,7 @@ class VoidcubeCLI:
         # Load silence detection params from config
         voice_cfg = {}
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             voice_cfg = load_config().get("voice", {})
         except Exception:
             pass
@@ -6767,7 +6642,7 @@ class VoidcubeCLI:
             # Get STT model from config
             stt_model = None
             try:
-                from VoidCube_cli.config import load_config
+                from VoidCube_app.config import load_config
                 stt_config = load_config().get("stt", {})
                 stt_model = stt_config.get("model")
             except Exception:
@@ -6907,7 +6782,7 @@ class VoidcubeCLI:
 
         # Check config for auto_tts
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             voice_config = load_config().get("voice", {})
             if voice_config.get("auto_tts", False):
                 with self._voice_lock:
@@ -6921,7 +6796,7 @@ class VoidcubeCLI:
 
         tts_status = " (TTS enabled)" if self._voice_tts else ""
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             _raw_ptt = load_config().get("voice", {}).get("record_key", "ctrl+b")
             _ptt_key = _raw_ptt.lower().replace("ctrl+", "c-").replace("alt+", "a-")
         except Exception:
@@ -6981,7 +6856,7 @@ class VoidcubeCLI:
 
     def _show_voice_status(self):
         """Show current voice mode status."""
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
         from tools.voice_mode import check_voice_requirements
 
         reqs = check_voice_requirements()
@@ -7880,17 +7755,9 @@ class VoidcubeCLI:
                         _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
 
             if response and not response_previewed and self._should_emit_scrollback_output():
-                # Use skin engine for label/color with fallback
-                try:
-                    from VoidCube_cli.skin_engine import get_active_skin
-                    _skin = get_active_skin()
-                    label = _skin.get_branding("response_label", "> Voidcube")  # type: ignore[attr-defined]
-                    _resp_color = _skin.get_color("response_border", "#CD7F32")  # type: ignore[attr-defined]
-                    _resp_text = _skin.get_color("banner_text", "#FFF8DC")  # type: ignore[attr-defined]
-                except Exception:
-                    label = "> Voidcube"
-                    _resp_color = "#CD7F32"
-                    _resp_text = "#FFF8DC"
+                label = "> Voidcube"
+                _resp_color = "#CD7F32"
+                _resp_text = "#FFF8DC"
 
                 is_error_response = result and (result.get("failed") or result.get("partial"))
                 already_streamed = (
@@ -8031,28 +7898,19 @@ class VoidcubeCLI:
             print(f"{t('prompts.duration', default='Duration')}:       {duration_str}")
             print(f"{t('prompts.messages', default='Messages')}:       {msg_count} ({user_msgs} user, {tool_calls} tool calls)")
         else:
-            try:
-                from VoidCube_cli.skin_engine import get_active_goodbye
-                goodbye = get_active_goodbye("bye.")
-            except Exception:
-                goodbye = "bye."
-            print(goodbye)
+            print("bye.")
 
     def _get_tui_prompt_symbols(self) -> tuple[str, str]:
-        """Return ``(normal_prompt, state_suffix)`` for the active skin.
+        """Return ``(normal_prompt, state_suffix)`` for the fixed CLI style.
 
-        ``normal_prompt`` is the full ``branding.prompt_symbol``.
+        ``normal_prompt`` is the configured built-in prompt symbol.
         ``state_suffix`` is what special states (sudo/secret/approval/agent)
         should render after their leading icon.
 
         When a profile is active (not "default"), the profile name is
         prepended to the prompt symbol: ``coder ❯`` instead of ``❯``.
         """
-        try:
-            from VoidCube_cli.skin_engine import get_active_prompt_symbol
-            symbol = get_active_prompt_symbol("❯ ")
-        except Exception:
-            symbol = "❯ "
+        symbol = "❯ "
 
         symbol = (symbol or "❯ ").rstrip() + " "
 
@@ -8074,7 +7932,6 @@ class VoidcubeCLI:
         if any(ch in candidate for ch in arrow_chars):
             return symbol, candidate.rstrip() + " "
 
-        # Icon-only custom prompts should still remain visible in special states.
         return symbol, symbol
 
     def _audio_level_bar(self) -> str:
@@ -8130,24 +7987,6 @@ class VoidcubeCLI:
     def _get_tui_prompt_text(self) -> str:
         """Return the visible prompt text for width calculations."""
         return "".join(text for _, text in self._get_tui_prompt_fragments())
-
-    def _build_tui_style_dict(self) -> dict[str, str]:
-        """Layer the active skin's prompt_toolkit colors over the base TUI style."""
-        style_dict = dict(getattr(self, "_tui_style_base", {}) or {})
-        try:
-            from VoidCube_cli.skin_engine import get_prompt_toolkit_style_overrides
-            style_dict.update(get_prompt_toolkit_style_overrides())
-        except Exception:
-            pass
-        return style_dict
-
-    def _apply_tui_skin_style(self) -> bool:
-        """Refresh prompt_toolkit styling for a running interactive TUI."""
-        if not getattr(self, "_app", None) or not getattr(self, "_tui_style_base", None):
-            return False
-        self._app.style = PTStyle.from_dict(self._build_tui_style_dict())
-        self._invalidate(min_interval=0.0)
-        return True
 
     # --- Protected TUI extension hooks for wrapper CLIs ---
 
@@ -8249,7 +8088,7 @@ class VoidcubeCLI:
 
         memory_model_display = None
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             config = load_config()
             memory_config = config.get("memory", {})
             mem_llm = memory_config.get("llm", {})
@@ -8818,8 +8657,7 @@ class VoidcubeCLI:
                 return
             import os, signal as _sig
             from prompt_toolkit.application import run_in_terminal
-            from VoidCube_cli.skin_engine import get_active_skin
-            agent_name = get_active_skin().get_branding("agent_name", "Voidcube Agent")  # type: ignore[attr-defined]
+            agent_name = "Voidcube Agent"
             msg = f"\n{agent_name} has been suspended. Run `fg` to bring {agent_name} back."
             def _suspend():
                 os.write(1, msg.encode())
@@ -8830,7 +8668,7 @@ class VoidcubeCLI:
         # Default: Ctrl+B (avoids conflict with Ctrl+R readline reverse-search)
         # Config uses "ctrl+b" format; prompt_toolkit expects "c-b" format.
         try:
-            from VoidCube_cli.config import load_config
+            from VoidCube_app.config import load_config
             _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
             _voice_key = _raw_key.lower().replace("ctrl+", "c-").replace("alt+", "a-")
         except Exception:
@@ -9649,7 +9487,7 @@ class VoidcubeCLI:
             'voice-status': 'bg:#1a1a2e #58A6FF',
             'voice-status-recording': 'bg:#1a1a2e #F87171 bold',
         }
-        style = PTStyle.from_dict(self._build_tui_style_dict())
+        style = PTStyle.from_dict(dict(self._tui_style_base))
         
         # Create the application
         app = Application(
@@ -10120,7 +9958,7 @@ def main(
         _handle_serve_command(serve)
         return
 
-    # Deferred runtime initialization — logging, config, skin, tool preview.
+    # Deferred runtime initialization: logging, config, and tool preview.
     # Moved out of module-level to avoid ~300ms of import-chain cost at startup.
     _init_cli_runtime()
 
