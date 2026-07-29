@@ -72,6 +72,7 @@ def test_distribution_includes_runtime_subpackages_and_mem_resources():
     assert "identity/*.json" in setuptools["package-data"]["memai"]
     assert "identity/*.md" in setuptools["package-data"]["memai"]
     assert "locales/*.json" in setuptools["package-data"]["VoidCube_cli"]
+    assert "supervisor/web/*.html" in setuptools["package-data"]["systems"]
 
 
 @pytest.mark.unit
@@ -335,6 +336,21 @@ def test_wheel_contract_tracks_cli_locale_resources():
 
 
 @pytest.mark.unit
+def test_wheel_contract_tracks_supervisor_ui_resource():
+    expected = expected_wheel_files(ROOT)
+
+    assert "systems/supervisor/web/supervisor.html" in expected
+    assert "systems/supervisor/ui_assets.py" in expected
+    assert "systems/supervisor/ui_projection.py" in expected
+    assert "systems/supervisor/ui_cognition_projection.py" in expected
+    assert "systems/supervisor/ui_observation_projection.py" in expected
+    assert "systems/supervisor/ui_trace_projection.py" in expected
+    assert "systems/supervisor/ui_state_projection.py" in expected
+    assert "systems/supervisor/ui_body_projection.py" in expected
+    assert "systems/supervisor/ui_autonomous_projection.py" in expected
+
+
+@pytest.mark.unit
 def test_wheel_contract_tracks_shared_application_package():
     expected = expected_wheel_files(ROOT)
 
@@ -349,6 +365,7 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_app/plugins.py" in expected
     assert "VoidCube_app/provider_auth.py" in expected
     assert "VoidCube_app/runtime_provider.py" in expected
+    assert "VoidCube_app/session_identity.py" in expected
     assert "VoidCube_cli/style.py" in expected
     assert "VoidCube_cli/skin_engine.py" not in expected
 

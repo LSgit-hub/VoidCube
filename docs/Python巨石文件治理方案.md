@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0 第二批已完成，进入 CLI-0 组合根收口。  
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器与 Stage 3 首个 session identity use case 已完成，下一批处理 session lifecycle command。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -20,10 +20,10 @@
 
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
-| `cli.py` | 10,345 行 | `VoidcubeCLI` 有 178 个方法，运行时、TUI、命令、会话和语音共享大量可变状态 | P0 |
+| `VoidCube_cli/app.py` | 10,157 行 | `VoidcubeCLI` 有 178 个方法，运行时、TUI、命令、会话和语音共享大量可变状态 | P0 |
 | `systems/supervisor/planning_runtime.py` | 9,460 行 | `PlanningRuntimeMixin` 有 186 个方法，持久化、认知、排程、治理和执行交接混合 | P0 |
 | `systems/supervisor/endogenous_drive.py` | 9,303 行 | `EndogenousDriveEngine` 有 124 个方法，感知、候选、LM 上下文、证据和策略记忆混合 | P0 |
-| `systems/supervisor/ui_runtime.py` | 10,396 行 | 6,700 余行前端源码与 83 个状态投影/API 方法混在一个 Python 文件 | P0 |
+| `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与全部只读 UI 投影已外移；runtime 仅保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
 | `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
 
 次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与四条 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到阈值时才进入后续批次。
@@ -581,12 +581,92 @@ systems/supervisor/web/
 7. CLI 视觉固定为 `VoidCube_cli.style` 中唯一一套内建样式；已删除皮肤引擎、`/skin` 命令、`display.skin` 默认值、动态切换、皮肤插件覆盖、皮肤帮助和本地化入口。
 8. 配置迁移只清除历史 `display.skin`，不会误删其他未知或未来的 `display` 设置；旧值会在迁移时从用户配置中持久化移除。
 
-## 17. 下一次实施起点
+## 17. CLI-0 组合根收口实施记录
 
-下一批执行 **CLI-0 组合根收口**：
+2026-07-29 已完成：
 
-1. 为 `VoidcubeCLI` 机械迁移补充 import、single query、interactive startup 和 resume characterization tests。
-2. 将实现迁到 `VoidCube_cli.app`，同步切换 `VoidCube_cli.main` 与自主诊断入口，随后删除两个根导入例外。
-3. 根 `cli.py` 收口为稳定导出与入口；内部调用全部切换后删除全局配置兼容访问和无调用 helper。
+1. `VoidcubeCLI` 与 `main()` 的 canonical 实现已机械迁至 `VoidCube_cli.app`，根 `cli.py` 仅保留稳定模块别名和脚本入口。
+2. `VoidCube_cli.main` 与自主诊断入口均直接导入 canonical 模块；生产代码对根 `cli.py` 的运行时导入已归零。
+3. 根模块兼容别名与 canonical 模块指向同一对象，既保留公开 `cli` import，也不会形成第二套全局状态。
+4. P0 增长护栏已随实现转移到 `VoidCube_cli/app.py`，并删除根导入例外清单。
 
-下一批仍不展开 session/turn/TUI 责任迁移，避免在 canonical 实现移动时同时改变行为。
+## 18. Stage 2 静态资源外移实施记录
+
+2026-07-29 已完成：
+
+1. `UI_HTML` 已从 `systems/supervisor/ui_runtime.py` 完整移至 `systems/supervisor/web/supervisor.html`；Python 模块不再保留模板字符串或开发路径回退。
+2. `systems.supervisor.ui_assets.load_supervisor_ui_html()` 通过包资源加载并缓存模板，`/ui` 路由只负责响应映射。
+3. `systems` package data、源码到 wheel 内容契约和资源加载测试均已覆盖该 HTML；P0 增长护栏随实现降至 3,691 行。
+
+## 19. Stage 2 首批 UI 纯投影器实施记录
+
+2026-07-29 已完成：
+
+1. `ui_projection.py` 接管 SSE 格式化、默认 observation 快照、活动标签、近期自主活动、observation board 与 segment/stage 投影；所有函数都只接收显式快照。
+2. `ui_cognition_projection.py` 接管认知判断、不确定性、文案标签和百分比计算；它仅依赖输入快照和 `observation_count`，不持有或读取 `Supervisor`。
+3. 所有调用者已切换，旧 Mixin 方法与委托壳均已删除；P0 增长护栏降至 3,075 行，并增加无 Supervisor 构造的直接投影测试。
+
+## 20. Stage 2 链路 observation card 投影实施记录
+
+2026-07-29 已完成：
+
+1. `ui_observation_projection.py` 接管 task family、状态、排序、卡片、group、stage card 与 rail entry 的纯结构化映射。
+2. 新模块只依赖显式 task/stage 数据、状态规范化和活动标签；它不持有或读取 `Supervisor`、repository、trace 或 HTTP client。
+3. 所有调用者已切换，原 Mixin helper 与委托壳均已删除；P0 增长护栏降至 2,691 行，并增加独立 card/stage 测试。
+
+## 21. 下一次实施起点
+
+2026-07-29 已完成 Stage 2 链路活动与 trace 协调：
+
+1. `ui_trace_projection.py` 接管分段事件筛选、trace 聚合、链路状态/focus 投影、trace detail 裁剪，以及 observation 中 trace detail 的纯合并。
+2. trace records 的仓储、Supervisor activity、治理历史读取，以及 detail loader 的并发编排仍留在 runtime；投影器只接收显式 records、summary、timeline 和 observation 数据。
+3. 所有原 `SupervisorUIMixin` 分段 timeline/event/trace helper 已删除，不保留委托壳；P0 增长护栏降至 2,327 行，并增加独立 trace 投影测试。
+
+## 22. 下一次实施起点
+
+2026-07-29 已完成 Stage 2 首批 UI state 组合收口：
+
+1. `ui_state_projection.py` 接管 scene 决策、metrics 和 slot overview；它只消费已加载的 observation/body 快照和显式错误计数。
+2. body registry、memory service、voice、cognition 和 trace loader 的读取继续留在 runtime；daily-companion 的运行时覆盖规则保持在 `get_supervisor_ui_state()`。
+3. 所有原 Mixin state helper 已删除，测试改为替换运行时导入的纯 scene 投影；P0 增长护栏降至 2,099 行。
+
+## 23. 下一次实施起点
+
+2026-07-29 已完成 Stage 2 body observation 投影：
+
+1. `ui_body_projection.py` 接管 slot role/state 标签、upgrade signal 映射、树节点和 slot card 的纯结构化投影。
+2. worktree 文件系统枚举、body registry 元数据读取和完整性报告加载继续留在 runtime；投影器只接收 registry、meta、integrity 与已枚举目录快照。
+3. 原 Mixin body helper 与 registry object 兼容读取均已删除；slot-card 用例改为直接调用投影器，P0 增长护栏降至 1,833 行。
+
+## 24. 下一次实施起点
+
+2026-07-29 已完成 Stage 2 autonomous observation 主组装收口：
+
+1. `ui_autonomous_projection.py` 接管 task/candidate 去重与分类、writeback 摘要、segment、loop stage、rail、board 和 count 的完整只读组装。
+2. task/drive/timeline 的加载、trace detail 关联和 HTTP/SSE 路由继续留在 runtime；新模块只接收显式 snapshots，零 `Supervisor` 或 `self` 访问。
+3. 原 600 行 `_build_autonomous_observation()` 和 writeback helper 已删除，新增独立投影 characterization test，P0 增长护栏降至 1,204 行。
+
+## 25. 下一次实施起点
+
+下一批进入 **Stage 3 CLI session/turn/command**：
+
+1. 先盘点 `VoidCube_cli.app` 中 session、turn、slash command 的状态所有权与现有 helper 边界。
+2. 只为已有双前端价值的 session/turn/tool/approval/clarify contract 创建 `VoidCube_app` use case；CLI renderer 继续作为 adapter。
+3. 每完成一个 command/turn 责任即切换全部调用者、删除旧实现或兼容分支，并运行 CLI contract、架构、打包和退役扫描。
+
+## 26. Stage 3 session identity 实施记录
+
+2026-07-29 已完成：
+
+1. `VoidCube_app.session_identity` 成为显式 resume、自动恢复和新会话 ID 生成的唯一无界面 owner；它只依赖只读 session index port 与显式时间/随机输入。
+2. 保持原有优先级：显式 session 优先；随后是未结束的 `cli_supervisor_task_lane` owner session；再是有用户消息的最新 `cli` session；均不可用时创建 `YYYYMMDD_HHMMSS_<6hex>` ID。
+3. `VoidcubeCLI.__init__` 只负责创建 `SessionDB`、日志和 UI 状态赋值，旧的重复查询与 ID 选择分支已删除；索引异常仍会记录诊断并安全创建新 session。
+4. 新模块已纳入 wheel 源码契约，并有不构造 CLI 的直接 characterization tests。
+
+## 27. 下一次实施起点
+
+下一批继续 **Stage 3 session lifecycle command**：
+
+1. 从 `new_session`、`/resume` 和 `/branch` 提取共享的 session state transition use case，明确 DB 操作、history 装载/复制、title 与 agent 同步的输入输出。
+2. CLI 保留 recent-session 的选择、命令解析、交互提示与终端渲染；共享层不能接收 `VoidcubeCLI`、ANSI 或 prompt_toolkit 对象。
+3. 先为每个 transition 补最小 characterization test，再切换生产调用者并删除旧命令中失效的 ID/DB 分支。

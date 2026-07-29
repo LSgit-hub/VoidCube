@@ -34,6 +34,7 @@ PACKAGE_DIRS = (
 TOP_LEVEL_MODULES = ("voidcube.py", "cli.py", "run_agent.py")
 MEM_SOURCE_ROOT = Path("Mem/src")
 MEM_PACKAGE = MEM_SOURCE_ROOT / "memai"
+SUPERVISOR_UI_RESOURCE = Path("systems/supervisor/web/supervisor.html")
 
 
 class WheelContractError(RuntimeError):
@@ -110,6 +111,10 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
             if path.is_file()
         )
 
+    supervisor_ui = root / SUPERVISOR_UI_RESOURCE
+    if supervisor_ui.is_file():
+        expected.add(SUPERVISOR_UI_RESOURCE.as_posix())
+
     return expected
 
 
@@ -128,7 +133,7 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 and Path(name).suffix in {".json", ".md"}
             ) or (
                 name.startswith("VoidCube_cli/locales/") and name.endswith(".json")
-            )
+            ) or name == SUPERVISOR_UI_RESOURCE.as_posix()
         }
         retired_files = sorted(
             name

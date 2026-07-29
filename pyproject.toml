@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "voidcube-agent"
 dynamic = ["version"]
-description = "轻量安装·快速配置·友好交互 — 服务器运维与部署智能体"
+description = "自进化双api智能体"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 license = "MIT"
@@ -99,3 +99,4 @@ include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*
 [tool.setuptools.package-data]
 memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]
+systems = ["supervisor/web/*.html"]

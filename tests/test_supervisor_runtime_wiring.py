@@ -28,9 +28,302 @@ from systems.supervisor.autonomous_chain_store import (
     AutonomousChainStore,
 )
 from systems.supervisor.service_runtime import StellarMode
-from systems.supervisor.ui_runtime import UI_HTML
+from systems.supervisor.ui_assets import load_supervisor_ui_html
+from systems.supervisor.ui_autonomous_projection import project_autonomous_observation
+from systems.supervisor.ui_body_projection import project_body_slot_cards
+from systems.supervisor.ui_cognition_projection import (
+    project_cognition_judgement,
+    project_cognition_uncertainty,
+)
+from systems.supervisor.ui_observation_projection import (
+    build_observation_card,
+    observation_display_status,
+    project_observation_stage_card,
+)
+from systems.supervisor.ui_projection import (
+    default_observation_input_snapshot,
+    format_supervisor_ui_event,
+    observation_group,
+    observation_loop_stage,
+    project_observation_board,
+    project_recent_autonomous_activity,
+)
+from systems.supervisor.ui_trace_projection import (
+    attach_observation_trace_details,
+    project_chain_segment_activity,
+    project_trace_detail,
+    recent_observation_trace_ids,
+)
+from systems.supervisor.ui_state_projection import (
+    project_supervisor_scene,
+    project_ui_metrics,
+)
 from systems.self_learning import LearningRecommendation
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
+
+
+UI_HTML = load_supervisor_ui_html()
+
+
+@pytest.mark.unit
+def test_supervisor_ui_template_is_loaded_from_a_packaged_resource():
+    runtime_source = Path("systems/supervisor/ui_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "UI_HTML = r" not in runtime_source
+    assert "return HTMLResponse(load_supervisor_ui_html())" in runtime_source
+    assert UI_HTML.startswith("<!doctype html>")
+    assert UI_HTML.rstrip().endswith("</html>")
+    assert load_supervisor_ui_html() is UI_HTML
+
+
+@pytest.mark.unit
+def test_ui_projection_primitives_use_explicit_snapshots_only():
+    default_snapshot = default_observation_input_snapshot()
+    activity = project_recent_autonomous_activity(
+        {
+            "last_autonomous_chain_execute_at": "2026-07-29T10:00:00+00:00",
+            "recent_metadata": {
+                "autonomous_chain_execute": {
+                    "source_service": "executor",
+                    "task_identity": {"summary": "写回执行报告"},
+                    "execution_kind": "body_improvement",
+                }
+            },
+        }
+    )
+    observation = {
+        "counts": {"api_a_running": "2"},
+        "chain": {"segments": [{"key": "api_b_judgement", "count": 1}]},
+        "loop": {
+            "stage_cards": [
+                {"stage_key": "api_a_execution", "display_status": "执行中"}
+            ]
+        },
+    }
+
+    assert default_snapshot["snapshot_source"] == "default"
+    assert activity["title"] == "写回执行报告"
+    assert activity["source_label"] == "API-A 子执行面"
+    assert project_observation_board(
+        observation, recent_activity=activity
+    )["observation_notes"][0]["text"] == "还有 2 个执行中链路项，写回后会回到这里。"
+    assert observation_group(observation, "api_b_judgement")["count"] == 1
+    assert observation_loop_stage(observation, "api_a_execution")["status_label"] == "执行中"
+
+
+@pytest.mark.unit
+def test_ui_cognition_projections_use_explicit_snapshots_only():
+    snapshot = {
+        "governance": {"preferred_focus": "truthfulness"},
+        "judgement_core": {
+            "primary_need": {"need_type": "truthfulness_repair"},
+            "primary_intent": {"intent_type": "protect_truthfulness"},
+        },
+        "proposal_cognition": {
+            "assessment_trace": {
+                "dominant_constraint": "user_service_priority",
+                "why_not_improvement_now": (
+                    "prioritize truthfulness governance before direct body improvement."
+                ),
+            }
+        },
+        "perception": {"api_a_handoff_count": 1, "api_a_running_count": 2},
+        "uncertainty_ledger": {
+            "active_count": 1,
+            "highest_risk_domain": "truthfulness",
+            "entries": [
+                {
+                    "domain": "truthfulness",
+                    "risk": 0.8,
+                    "confidence": 0.25,
+                    "recommended_probe": (
+                        "review recent uncertain answers and correction signals"
+                    ),
+                }
+            ],
+        },
+    }
+
+    judgement = project_cognition_judgement(snapshot)
+    uncertainty = project_cognition_uncertainty(snapshot)
+
+    assert judgement["focus_label"] == "真实性"
+    assert judgement["api_a_running_count"] == 2
+    assert any(
+        "先处理真实性风险" in reason
+        for reason in judgement["why_not_direct_improvement"]
+    )
+    assert uncertainty["highest_risk_label"] == "真实性侧"
+    assert uncertainty["top_items"][0]["recommended_probe_label"] == (
+        "复核近期不确定回答与修正信号"
+    )
+
+
+@pytest.mark.unit
+def test_ui_observation_card_projections_use_explicit_snapshots_only():
+    card = build_observation_card(
+        {
+            "title": "候选任务",
+            "status": "approved",
+            "task_identity": {
+                "task_family": "self_learning",
+                "display_kind": "body_improvement",
+            },
+            "judgement_preview": {
+                "review_outcome": {"action": "approve", "reason": "证据充分"}
+            },
+        },
+        lane="agent",
+        observation_role="api_a_execution",
+    )
+    stage = project_observation_stage_card(
+        {
+            "key": "api_a_execution",
+            "label": "API-A 执行回报",
+            "status": "running",
+            "focus_task": {"title": "执行中任务", "status": "running"},
+        }
+    )
+
+    assert card is not None
+    assert card["display_status"] == "已转交"
+    assert card["observation_type_label"] == "API-A 执行回报"
+    assert "监督者已裁定: 转交" in card["judgement_hint"]
+    assert stage["display_status"] == "执行中"
+    assert stage["lane"] == "supervisor"
+
+
+@pytest.mark.unit
+def test_ui_trace_projections_use_explicit_records_only():
+    timeline = [
+        {
+            "recorded_at": "2026-07-29T10:02:00+00:00",
+            "source": "supervisor_activity",
+            "source_label": "监督者活动",
+            "event_type": "tasks_planned",
+            "event_label": "治理规划",
+            "summary": "已规划链路项。",
+            "task_id": "task-1",
+            "trace_id": "trace-1",
+            "decision_id": "decision-1",
+        }
+    ]
+    segments = project_chain_segment_activity(
+        chain_segments=[
+            {
+                "key": "api_b_judgement",
+                "items": [{"task_id": "task-1", "trace_id": "trace-1", "title": "治理任务", "status": "planned"}],
+                "item_label": "判断项",
+                "event_label": "动作",
+                "trace_label": "回合",
+                "source_label": "API-B",
+                "stage_label": "判断在途",
+                "summary": "正在观察。",
+            }
+        ],
+        timeline=timeline,
+    )
+    detail = project_trace_detail(
+        trace_id="trace-1",
+        summary={
+            "record_count": 1,
+            "sources": {"supervisor_activity": 1},
+            "source_labels": ["监督者活动"],
+            "task_ids": ["task-1"],
+            "decision_ids": ["decision-1"],
+        },
+        timeline=timeline,
+    )
+    observation = {"chain": {"segments": segments}}
+    enriched = attach_observation_trace_details(
+        observation,
+        details={"trace-1": detail},
+    )
+
+    assert segments[0]["recent_events"][0]["trace_id"] == "trace-1"
+    assert segments[0]["recent_traces"][0]["task_titles"] == ["治理任务"]
+    assert recent_observation_trace_ids(observation) == ["trace-1"]
+    assert enriched["chain"]["segments"][0]["latest_trace_detail"] == detail
+    assert "detail" not in observation["chain"]["segments"][0]["recent_traces"][0]
+
+
+@pytest.mark.unit
+def test_ui_state_projections_use_loaded_snapshots_only():
+    observation = {
+        "counts": {"api_b_judgement": 1, "api_a_running": 1},
+        "board": {"primary_focus": {"title": "治理任务"}},
+        "chain": {"segments": [{"key": "api_b_judgement", "payload_count": 1}]},
+        "loop": {
+            "stage_cards": [
+                {
+                    "stage_key": "api_a_execution",
+                    "status": "active",
+                    "focus_task": {"title": "执行任务"},
+                }
+            ]
+        },
+    }
+    metrics = project_ui_metrics(
+        [{"execution_kind": "body_improvement", "status": "completed", "governance_task_type": "self_learning"}],
+        autonomous_observation=observation,
+        body_status={"active_slot": "primary", "shell_slot": "candidate"},
+        error_count=2,
+    )
+
+    assert metrics["slot_overview"] == "primary / candidate"
+    assert metrics["learning_results"] == {"completed": 1, "failed": 0}
+    assert project_supervisor_scene(
+        autonomous_observation=observation,
+        observation_input_available=True,
+        error_count=2,
+    )[0] == "handoff"
+
+
+@pytest.mark.unit
+def test_autonomous_observation_projection_uses_explicit_task_snapshots_only():
+    observation = project_autonomous_observation(
+        [
+            {
+                "task_id": "supervisor-1",
+                "title": "治理判断",
+                "status": "planned",
+                "metadata": {},
+            },
+            {
+                "task_id": "agent-1",
+                "title": "待执行学习",
+                "governance_task_type": "self_learning",
+                "status": "approved",
+                "metadata": {},
+            },
+        ],
+        drive_candidates=[
+            {"title": "新候选", "stable_key": "candidate-1", "metadata": {}}
+        ],
+        history_tasks=[
+            {
+                "task_id": "completed-1",
+                "title": "已完成学习",
+                "governance_task_type": "self_learning",
+                "status": "completed",
+                "metadata": {"execution_result": {"summary": "已写回"}},
+            }
+        ],
+        timeline=[],
+    )
+
+    assert observation["counts"] == {
+        "candidates": 1,
+        "writebacks": 1,
+        "api_b_judgement": 1,
+        "api_a_handoff": 1,
+        "api_a_running": 0,
+    }
+    assert _observation_section(observation, "api_b_candidates")["items"][0]["title"] == "新候选"
+    assert _observation_loop_stage(observation, "api_a_execution")["status"] == "ready"
+    assert _observation_loop_stage(observation, "mem_writeback")["focus_task"]["title"] == "已完成学习"
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
@@ -1432,8 +1725,8 @@ def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
         slot_id: supervisor._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
         for slot_id in registry.slot_ids
     }
-    cards = supervisor._build_ui_body_slot_cards(
-        registry=registry,
+    cards = project_body_slot_cards(
+        registry=registry.model_dump(mode="json"),
         slot_metas=slot_metas,
         chain_history_projection=[
             {
@@ -1448,6 +1741,9 @@ def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
                 "changed_files": ["systems/supervisor/ui_runtime.py"],
             }
         ],
+        top_level_entries_by_slot={
+            shell_slot: sorted(child.name for child in shell_worktree.iterdir())
+        },
     )
 
     shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
@@ -1487,8 +1783,8 @@ def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tm
         slot_id: supervisor._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
         for slot_id in registry.slot_ids
     }
-    cards = supervisor._build_ui_body_slot_cards(
-        registry=registry,
+    cards = project_body_slot_cards(
+        registry=registry.model_dump(mode="json"),
         slot_metas=slot_metas,
         chain_history_projection=[
             {
@@ -1505,6 +1801,9 @@ def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tm
                 },
             }
         ],
+        top_level_entries_by_slot={
+            shell_slot: sorted(child.name for child in shell_worktree.iterdir())
+        },
     )
 
     shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
@@ -1646,7 +1945,7 @@ def test_supervisor_can_disable_built_in_room_ui(tmp_path):
 def test_supervisor_room_ui_event_frame_uses_sse_state_event(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    frame = supervisor._format_supervisor_ui_event(
+    frame = format_supervisor_ui_event(
         "state",
         {
             "status": "ok",
@@ -1835,7 +2134,7 @@ async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_l
 
 @pytest.mark.unit
 def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
-    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+    ui_source = load_supervisor_ui_html()
 
     assert "API-B 判断输入" in ui_source
     assert "label:'活跃会话'" not in ui_source
@@ -1843,7 +2142,7 @@ def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
 
 @pytest.mark.unit
 def test_continuous_voice_ui_treats_background_capture_as_listening():
-    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+    ui_source = load_supervisor_ui_html()
 
     assert "const continuousForeground = continuous && voice.active" in ui_source
     assert "continuous && !continuousForeground" in ui_source
@@ -1860,7 +2159,7 @@ def test_continuous_voice_ui_treats_background_capture_as_listening():
 
 @pytest.mark.unit
 def test_single_voice_button_reuses_vad_pipeline_without_fixed_duration():
-    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+    ui_source = load_supervisor_ui_html()
 
     assert set(VoiceCaptureRequest.model_fields) == {"session_id"}
     assert "'/voice/session/start',\n    {}," in ui_source
@@ -2830,22 +3129,22 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
 @pytest.mark.unit
 async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._map_supervisor_scene = Mock(  # type: ignore[method-assign]
+    with patch(
+        "systems.supervisor.ui_runtime.project_supervisor_scene",
         return_value=("planning", "Auto judgement", "Auto work is active."),
-    )
+    ):
+        daily = await supervisor.get_supervisor_ui_state()
 
-    daily = await supervisor.get_supervisor_ui_state()
+        assert daily["stellar_mode"]["mode"] == "daily_companion"
+        assert daily["scene"] == "idle"
+        assert daily["title"] == "日常陪伴中"
 
-    assert daily["stellar_mode"]["mode"] == "daily_companion"
-    assert daily["scene"] == "idle"
-    assert daily["title"] == "日常陪伴中"
+        supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+        auto = await supervisor.get_supervisor_ui_state()
 
-    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
-    auto = await supervisor.get_supervisor_ui_state()
-
-    assert auto["stellar_mode"]["mode"] == "auto_evolution"
-    assert auto["scene"] == "planning"
-    assert auto["title"] == "Auto judgement"
+        assert auto["stellar_mode"]["mode"] == "auto_evolution"
+        assert auto["scene"] == "planning"
+        assert auto["title"] == "Auto judgement"
 
 
 @pytest.mark.asyncio
@@ -3791,16 +4090,16 @@ async def test_governor_approved_verified_conclusion_creates_consent_candidate(
 def test_supervisor_display_and_trace_labels_leave_unknown_status_unchanged(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    assert supervisor._observation_display_status({"status": "orphaned"}) == "orphaned"
+    assert observation_display_status({"status": "orphaned"}) == "orphaned"
     assert supervisor._trace_status_label("orphaned") == "orphaned"
-    card = supervisor._build_observation_card(
+    card = build_observation_card(
         {"title": "未知状态链路项", "status": "orphaned"},
         lane="supervisor",
     )
     assert card is not None
     assert card["status"] == "orphaned"
     assert card["display_status"] == "orphaned"
-    assert supervisor._observation_display_status({"status": "completed"}) == "已完成"
+    assert observation_display_status({"status": "completed"}) == "已完成"
     assert supervisor._trace_status_label("completed") == "已写回"
 
 

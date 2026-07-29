@@ -641,7 +641,7 @@ def cmd_chat(args):
         os.environ["VOIDCUBE_SESSION_SOURCE"] = args.source
 
     # Import and run the CLI
-    from cli import main as cli_main
+    from VoidCube_cli.app import main as cli_main
     
     # Build kwargs from args
     kwargs = {

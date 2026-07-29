@@ -34,7 +34,7 @@ def run_autonomous_component_debug(
     Normal operation uses /auto inside the main CLI. This command is retained
     only for diagnostics when the embedded component needs isolated inspection.
     """
-    import cli as cli_module
+    from VoidCube_cli.app import VoidcubeCLI
     from VoidCube_app.configuration import reload_application_config
     from VoidCube_app.gateway import (
         is_gateway_running,
@@ -44,7 +44,6 @@ def run_autonomous_component_debug(
     from VoidCube_app.config import load_config
 
     reload_application_config(load_config)
-    VoidcubeCLI = cli_module.VoidcubeCLI
     from VoidCube_cli.autonomous_presence import (
         ensure_supervisor_task_session,
         refresh_gateway_cli_presence,

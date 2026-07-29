@@ -15,19 +15,12 @@ from scripts.python_architecture import (
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
-# Temporary CLI-0 exceptions. Each entry names the actual runtime import edge;
-# migrations may remove entries but must never add new ones.
-ROOT_CLI_IMPORT_EXCEPTIONS = {
-    ("VoidCube_cli/autonomous_runner.py", "cli"),
-    ("VoidCube_cli/main.py", "cli"),
-}
-
 def _edge_keys(edges) -> set[tuple[str, str]]:
     return {edge.key for edge in edges}
 
 
 def test_root_cli_runtime_imports_only_use_declared_migration_exceptions() -> None:
-    assert _edge_keys(root_cli_imports(ROOT)) <= ROOT_CLI_IMPORT_EXCEPTIONS
+    assert _edge_keys(root_cli_imports(ROOT)) == set()
 
 
 def test_shared_packages_do_not_import_frontend_packages() -> None:

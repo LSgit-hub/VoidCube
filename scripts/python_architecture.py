@@ -21,13 +21,13 @@ SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}
 FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 
 P0_LINE_BASELINES = {
-    "cli.py": 10_345,
+    "VoidCube_cli/app.py": 10_183,
     "systems/supervisor/planning_runtime.py": 9_460,
     "systems/supervisor/endogenous_drive.py": 9_303,
-    "systems/supervisor/ui_runtime.py": 10_396,
+    "systems/supervisor/ui_runtime.py": 1_204,
 }
 P0_LARGE_METHOD_BASELINES = {
-    "cli.py": {"__init__": 317, "chat": 521, "run": 1_733},
+    "VoidCube_cli/app.py": {"__init__": 317, "chat": 521, "run": 1_733},
     "systems/supervisor/planning_runtime.py": {
         "_derive_cognitive_self_regulation": 301,
         "evaluate_drive_input": 328,
@@ -39,9 +39,7 @@ P0_LARGE_METHOD_BASELINES = {
         "_build_lm_task_generation_context_snapshot": 484,
         "_materialize_lm_task_proposals": 351,
     },
-    "systems/supervisor/ui_runtime.py": {
-        "_build_autonomous_observation": 606,
-    },
+    "systems/supervisor/ui_runtime.py": {},
 }
 
 
