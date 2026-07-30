@@ -87,6 +87,10 @@ from VoidCube_cli.command_handlers.model import (
     ModelCommandPorts,
     handle_model_command,
 )
+from VoidCube_cli.command_handlers.mcp import (
+    McpCommandPorts,
+    handle_mcp_command,
+)
 from VoidCube_cli.command_handlers.personality import (
     PersonalityCommandPorts,
     handle_personality_command,
@@ -111,11 +115,15 @@ from VoidCube_cli.command_handlers.operations import (
     ApiCommandPorts,
     DebugCommandPorts,
     DoctorCommandPorts,
+    McpReloadRuntimePorts,
+    ReloadMcpCommandPorts,
     StopCommandPorts,
     handle_api_command,
     handle_debug_command,
     handle_doctor_command,
+    handle_reload_mcp_command,
     handle_stop_command,
+    reload_mcp_servers,
 )
 from VoidCube_cli.command_handlers.rollback import (
     RollbackCommandPorts,
@@ -265,6 +273,10 @@ def install_cli_command_execution(
                 request,
                 ports=_memory_display_ports(),
             ),
+            "mcp": lambda request: handle_mcp_command(
+                request,
+                ports=_mcp_command_ports(),
+            ),
             "history": lambda request: handle_history_command(
                 request,
                 ports=HistoryCommandPorts(
@@ -350,6 +362,12 @@ def install_cli_command_execution(
                     ),
                     enqueue=host._pending_input.put,
                     emit=print,
+                ),
+            ),
+            "reload-mcp": lambda request: handle_reload_mcp_command(
+                request,
+                ports=ReloadMcpCommandPorts(
+                    run_reload=lambda: reload_mcp_for_host(host, emit=emit),
                 ),
             ),
             "save": lambda request: handle_save_conversation_command(
@@ -852,6 +870,89 @@ def _debug_command_ports() -> DebugCommandPorts:
         run_debug_share=lambda: run_debug(
             SimpleNamespace(debug_command="share", lines=200, expire=7, local=False)
         )
+    )
+
+
+def _mcp_command_ports() -> McpCommandPorts:
+    from VoidCube_app.config import load_config, save_config
+    from VoidCube_cli.mcp_config import probe_mcp_server
+
+    return McpCommandPorts(
+        load_config=load_config,
+        save_config=save_config,
+        probe_tools=lambda name, config: [
+            {"name": tool_name}
+            for tool_name, _description in probe_mcp_server(name, dict(config))
+        ],
+        emit=print,
+    )
+
+
+def reload_mcp_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None] = print,
+) -> None:
+    """Run the shared MCP reload operation against a CLI host's runtime ports."""
+    reload_mcp_servers(ports=_mcp_reload_runtime_ports(host, emit=emit))
+
+
+def _mcp_reload_runtime_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> McpReloadRuntimePorts:
+    from tools.mcp_tool import (
+        _lock,
+        _servers,
+        discover_mcp_tools,
+        shutdown_mcp_servers,
+    )
+    from tools.model_tools import get_tool_definitions
+
+    def server_names() -> set[str]:
+        with _lock:
+            return set(_servers)
+
+    def refresh_agent_tools() -> int:
+        agent = getattr(host, "agent", None)
+        if agent is None:
+            return 0
+        tools = get_tool_definitions(
+            enabled_toolsets=(
+                agent.enabled_toolsets
+                if hasattr(agent, "enabled_toolsets")
+                else None
+            ),
+            quiet_mode=True,
+        )
+        agent.tools = tools
+        agent.valid_tool_names = (
+            {tool["function"]["name"] for tool in tools} if tools else set()
+        )
+        return len(tools)
+
+    def append_reload_note(note: str) -> None:
+        host.conversation_history.append({"role": "user", "content": note})
+
+    def persist_reload_note() -> None:
+        agent = getattr(host, "agent", None)
+        if agent is None:
+            return
+        try:
+            agent._session_persistence.persist(host.conversation_history)
+        except Exception:
+            pass
+
+    return McpReloadRuntimePorts(
+        server_names=server_names,
+        shutdown_servers=shutdown_mcp_servers,
+        discover_tools=discover_mcp_tools,
+        command_running=lambda: bool(getattr(host, "_command_running", False)),
+        refresh_agent_tools=refresh_agent_tools,
+        append_reload_note=append_reload_note,
+        persist_reload_note=persist_reload_note,
+        emit=emit,
     )
 
 

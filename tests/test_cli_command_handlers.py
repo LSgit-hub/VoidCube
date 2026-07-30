@@ -69,9 +69,13 @@ from VoidCube_cli.command_handlers.operations import (
     ApiCommandPorts,
     DebugCommandPorts,
     DoctorCommandPorts,
+    McpReloadRuntimePorts,
+    ReloadMcpCommandPorts,
     handle_api_command,
     handle_debug_command,
     handle_doctor_command,
+    handle_reload_mcp_command,
+    reload_mcp_servers,
 )
 from VoidCube_cli.command_handlers.personality import (
     PersonalityCommandPorts,
@@ -89,6 +93,14 @@ from VoidCube_cli.command_handlers.fast import (
 from VoidCube_cli.command_handlers.compression import (
     CompressionCommandPorts,
     handle_compression_command,
+)
+from VoidCube_cli.command_handlers.browser import (
+    BrowserCommandPorts,
+    handle_browser_command,
+)
+from VoidCube_cli.command_handlers.mcp import (
+    McpCommandPorts,
+    handle_mcp_command,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -869,6 +881,234 @@ def test_debug_handler_delegates_debug_report_sharing_through_a_port() -> None:
     )
 
     assert calls == ["share"]
+
+
+def test_reload_mcp_handler_delegates_to_the_shared_runtime_operation() -> None:
+    calls: list[str] = []
+
+    handle_reload_mcp_command(
+        parse_cli_command("/reload-mcp ignored"),
+        ports=ReloadMcpCommandPorts(run_reload=lambda: calls.append("reload")),
+    )
+
+    assert calls == ["reload"]
+
+
+def test_mcp_reload_operation_projects_changes_refreshes_and_persists() -> None:
+    output: list[str] = []
+    snapshots = iter(({"alpha"}, {"alpha", "beta"}))
+    events: list[str] = []
+    notes: list[str] = []
+    ports = McpReloadRuntimePorts(
+        server_names=lambda: next(snapshots),
+        shutdown_servers=lambda: events.append("shutdown"),
+        discover_tools=lambda: [{"name": "one"}, {"name": "two"}],
+        command_running=lambda: False,
+        refresh_agent_tools=lambda: events.append("refresh") or 3,
+        append_reload_note=notes.append,
+        persist_reload_note=lambda: events.append("persist"),
+        emit=output.append,
+    )
+
+    reload_mcp_servers(ports=ports)
+
+    assert events == ["shutdown", "refresh", "persist"]
+    assert output == [
+        "🔄 Reloading MCP servers...",
+        "  ♻️  Reconnected: alpha",
+        "  ➕ Added: beta",
+        "  🔧 2 tool(s) available from 2 server(s)",
+        "  ✅ Agent updated — 3 tool(s) available",
+    ]
+    assert notes == [
+        "[SYSTEM: MCP servers have been reloaded. Added servers: beta. "
+        "Reconnected servers: alpha. 2 MCP tool(s) now available. "
+        "The tool list for this conversation has been updated accordingly.]"
+    ]
+
+    failures: list[str] = []
+    reload_mcp_servers(
+        ports=McpReloadRuntimePorts(
+            server_names=lambda: set(),
+            shutdown_servers=lambda: None,
+            discover_tools=lambda: (_ for _ in ()).throw(RuntimeError("offline")),
+            command_running=lambda: True,
+            refresh_agent_tools=lambda: pytest.fail("must not refresh"),
+            append_reload_note=lambda _note: pytest.fail("must not append"),
+            persist_reload_note=lambda: pytest.fail("must not persist"),
+            emit=failures.append,
+        )
+    )
+    assert failures == ["  ❌ MCP reload failed: offline"]
+
+
+def test_mcp_handler_lists_mutates_and_tests_servers_through_ports() -> None:
+    output: list[str] = []
+    config: dict[str, object] = {
+        "mcp_servers": {
+            "stdio": {"command": "node", "type": "stdio"},
+            "remote": {"url": "https://mcp.example", "type": "http"},
+        }
+    }
+    saved: list[dict[str, object]] = []
+    probed: list[str] = []
+    ports = McpCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: saved.append(dict(value)),
+        probe_tools=lambda _name, config: probed.append(config["url"])
+        or [{"name": f"tool-{index}"} for index in range(6)],
+        emit=output.append,
+    )
+
+    handle_mcp_command(parse_cli_command("/mcp list"), ports=ports)
+    handle_mcp_command(
+        parse_cli_command("/mcp add added https://added.example"), ports=ports
+    )
+    handle_mcp_command(parse_cli_command("/mcp remove missing"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp remove stdio"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp test remote"), ports=ports)
+
+    assert "        命令: node" in output
+    assert config["mcp_servers"] == {
+        "remote": {"url": "https://mcp.example", "type": "http"},
+        "added": {"url": "https://added.example", "type": "http"},
+    }
+    assert len(saved) == 2
+    assert "    ❌ 未找到 MCP 服务器 'missing'" in output
+    assert probed == ["https://mcp.example"]
+    assert "    可用工具: 6 个" in output
+    assert "      - tool-4" in output
+    assert "      ... 还有 1 个工具" in output
+
+
+def test_mcp_handler_reports_usage_missing_server_and_probe_failure() -> None:
+    output: list[str] = []
+    ports = McpCommandPorts(
+        load_config=lambda: {"mcp_servers": {"bad": {"url": "https://bad"}}},
+        save_config=lambda _config: pytest.fail("must not save"),
+        probe_tools=lambda _name, _config: (_ for _ in ()).throw(RuntimeError("offline")),
+        emit=output.append,
+    )
+
+    handle_mcp_command(parse_cli_command("/mcp add"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp remove"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp test missing"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp test bad"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp unknown"), ports=ports)
+
+    assert "    用法: /mcp add <name> <url>" in output
+    assert "    用法: /mcp remove <name>" in output
+    assert "    ❌ 未找到 MCP 服务器 'missing'" in output
+    assert "    ❌ 连接失败: offline" in output
+    assert any(line.strip() == "MCP 服务器管理命令 (/mcp)" for line in output)
+
+
+def test_browser_handler_connects_and_notifies_the_agent_after_launch() -> None:
+    output: list[str] = []
+    cleanup_calls: list[str] = []
+    probes = iter([False, False, True])
+    configured: list[str] = []
+    notes: list[str] = []
+    sleeps: list[float] = []
+    launches: list[int] = []
+    ports = BrowserCommandPorts(
+        current_cdp_url=lambda: "",
+        set_cdp_url=configured.append,
+        clear_cdp_url=lambda: pytest.fail("must not disconnect"),
+        cleanup_browsers=lambda: cleanup_calls.append("cleanup"),
+        probe_port=lambda _port: next(probes),
+        launch_chrome_debug=lambda port: launches.append(port) or True,
+        system_name=lambda: "Windows",
+        chrome_data_dir=lambda: "chrome-data",
+        cloud_provider=lambda: SimpleNamespace(provider_name=lambda: "Browserbase"),
+        enqueue_system_note=notes.append,
+        sleep=sleeps.append,
+        emit=output.append,
+    )
+
+    handle_browser_command(parse_cli_command("/browser connect"), ports=ports)
+
+    assert cleanup_calls == ["cleanup"]
+    assert launches == [9222]
+    assert sleeps == [0.5]
+    assert configured == ["http://localhost:9222"]
+    assert "   ✓ Chrome launched and listening on port 9222" in output
+    assert output[-3:] == [
+        "🌐 Browser connected to live Chrome via CDP",
+        "   Endpoint: http://localhost:9222",
+        "",
+    ]
+    assert len(notes) == 1
+    assert "control their real browser" in notes[0]
+
+
+def test_browser_handler_projects_status_disconnect_and_invalid_usage() -> None:
+    output: list[str] = []
+    state = {"url": "ws://example.test:9333"}
+    cleanup_calls: list[str] = []
+    notes: list[str] = []
+    ports = BrowserCommandPorts(
+        current_cdp_url=lambda: state["url"],
+        set_cdp_url=lambda value: state.__setitem__("url", value),
+        clear_cdp_url=lambda: state.__setitem__("url", ""),
+        cleanup_browsers=lambda: cleanup_calls.append("cleanup"),
+        probe_port=lambda port: port == 9333,
+        launch_chrome_debug=lambda _port: pytest.fail("must not launch"),
+        system_name=lambda: "Windows",
+        chrome_data_dir=lambda: "chrome-data",
+        cloud_provider=lambda: SimpleNamespace(provider_name=lambda: "Browserbase"),
+        enqueue_system_note=notes.append,
+        sleep=lambda _seconds: pytest.fail("must not wait"),
+        emit=output.append,
+    )
+
+    handle_browser_command(parse_cli_command("/browser status"), ports=ports)
+    handle_browser_command(parse_cli_command("/browser disconnect"), ports=ports)
+    handle_browser_command(parse_cli_command("/browser invalid"), ports=ports)
+    handle_browser_command(parse_cli_command("/browser status"), ports=ports)
+
+    assert "   Status: ✓ reachable" in output
+    assert state["url"] == ""
+    assert cleanup_calls == ["cleanup"]
+    assert len(notes) == 1
+    assert "disconnected the browser tools" in notes[0]
+    assert "Usage: /browser connect|disconnect|status" in output
+    assert "🌐 Browser: Browserbase (cloud)" in output
+
+
+def test_browser_handler_reports_manual_and_custom_endpoint_fallbacks() -> None:
+    output: list[str] = []
+    configured: list[str] = []
+    ports = BrowserCommandPorts(
+        current_cdp_url=lambda: "",
+        set_cdp_url=configured.append,
+        clear_cdp_url=lambda: pytest.fail("must not disconnect"),
+        cleanup_browsers=lambda: None,
+        probe_port=lambda _port: False,
+        launch_chrome_debug=lambda _port: False,
+        system_name=lambda: "Darwin",
+        chrome_data_dir=lambda: "/tmp/chrome-data",
+        cloud_provider=lambda: None,
+        enqueue_system_note=lambda _note: None,
+        sleep=lambda _seconds: pytest.fail("must not wait after failed launch"),
+        emit=output.append,
+    )
+
+    handle_browser_command(parse_cli_command("/browser connect"), ports=ports)
+    handle_browser_command(
+        parse_cli_command("/browser connect ws://remote.example:9444/devtools"),
+        ports=ports,
+    )
+
+    assert any(
+        'open -a "Google Chrome" --args --remote-debugging-port=9222' in line
+        for line in output
+    )
+    assert "   ⚠ Port 9444 is not reachable at ws://remote.example:9444/devtools" in output
+    assert configured == [
+        "http://localhost:9222",
+        "ws://remote.example:9444/devtools",
+    ]
 
 
 def test_usage_handler_projects_rate_limits_cost_and_session_snapshot() -> None:

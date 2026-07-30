@@ -987,10 +987,43 @@ systems/supervisor/web/
 4. direct adapter、registry binding 和真实 command route tests 覆盖 operation 调用、默认 request 参数及 execution route；外部上传没有进入单元测试。
 5. `VoidCube_cli/app.py` 降至 8,177 行，较本轮 Stage 3 开始前 10,157 行净减少 1,980 行；P0 增长基线已按 Python 行数同步下调。
 
-## 58. 下一次实施起点
+## 58. CLI-3 browser command domain 实施记录
 
-下一批评估 `/browser` command domain：
+2026-07-30 已完成：
 
-1. 先确认 browser backend、CDP connection、配置写入和用户投影的状态边界，避免把浏览器 runtime 重新合并到 CLI host。
-2. 仅提取可验证的 command adapter 与显式 ports；保留 browser operation、配置 persistence 和外部 I/O 的专属 owner。
+1. 审计确认 `/browser` 仅编排 CDP endpoint 的连接、断开和状态投影；browser backend session cleanup、cloud provider 检测、socket 连通性、环境变量和 Chrome process launch 保持为显式 runtime ports。Chrome 启动 helper 保留在 CLI host，未把浏览器后端或进程管理并回 command handler。
+2. 新增 `command_handlers.browser` 的 `BrowserCommandPorts` 和 `handle_browser_command()`；handler 不接收 `VoidcubeCLI`，只消费 endpoint、cleanup、probe、launch、system note、cloud provider、sleep 与 output ports。
+3. `/browser` 切换为 execution table `handler_key`，registry 在调用时安全绑定 `BROWSER_CDP_URL`、browser cleanup/cloud provider、socket probe、Chrome data directory、pending-input note 和 host launch operation；`VoidcubeCLI._handle_browser_command()` 已删除，不保留委托壳。
+4. 保持已有语义：默认 CDP 自动启动与最多十次等待、custom endpoint 不自动启动、手动启动命令、connected/unreachable/cloud/local 状态、disconnect idempotence、用户影响提示和 invalid usage。
+5. direct handler、真实 route 与 registry port tests 覆盖 default launch、custom/manual fallback、status、disconnect、cloud projection、system note、环境变量和 host launch binding；旧 browser host owner 扫描为空。
+6. `VoidCube_cli/app.py` 降至 7,995 行，较本轮 Stage 3 开始前 10,157 行净减少 2,162 行；P0 增长基线已按 Python 行数同步下调。
+
+## 59. CLI-3 reload-mcp command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/reload-mcp` 与 config watcher 必须复用一个 lifecycle：服务器快照、disconnect、fresh config discovery、变更投影、Agent tool refresh、conversation system note 和 best-effort session persistence。仅迁移 slash route 会使 watcher 与手动路径重新分叉，因此未采用委托壳。
+2. `command_handlers.operations` 新增 `ReloadMcpCommandPorts`、`McpReloadRuntimePorts`、`handle_reload_mcp_command()` 和 `reload_mcp_servers()`；operation 不接收 `VoidcubeCLI`、MCP global、配置对象或 Agent，而只消费显式 runtime ports。
+3. `/reload-mcp` 切换为 execution table `handler_key`，registry 绑定 MCP server registry lock、disconnect/discovery、tool definition refresh、CLI history、Agent persistence 与 progress output。config watcher 也改为调用公开的 `reload_mcp_for_host()` composition adapter；`VoidcubeCLI._reload_mcp()` 已删除。
+4. 保持既有语义：slash command 的 busy progress 不重复输出、watcher reload 仍输出起始提示、added/removed/reconnected 投影、无 server 提示、Agent valid tool names 刷新、history note 追加和 persistence failure best-effort。
+5. direct handler、pure operation、真实 command route 与 registry runtime-port tests 覆盖委托、服务器差异、成功/失败输出、Agent tools/valid names、history 和 persistence；旧 reload host owner 扫描为空。
+6. `VoidCube_cli/app.py` 降至 7,912 行，较本轮 Stage 3 开始前 10,157 行净减少 2,245 行；P0 增长基线已按 Python 行数同步下调。
+
+## 60. CLI-3 MCP configuration command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/mcp` 仅管理交互式 help/list/add/remove/test；配置读写和实际单服务器连接探测都已有专属 owner。全局 `VoidCube mcp` 的 interactive configure/preset/OAuth 流程不与 slash command 合并，避免改变两条入口的参数和交互契约。
+2. 新增 `command_handlers.mcp` 的 `McpCommandPorts` 与 `handle_mcp_command()`；handler 不接收 `VoidcubeCLI`，仅经 config read/write、single-server probe 和 output ports 投影原有的中文命令语义。
+3. `/mcp` 切换为 execution table `handler_key`，registry 绑定 `VoidCube_app.config` 和 `mcp_config.probe_mcp_server()`。后者由旧的 private helper 升格为共享 operation，保留临时连接、tool discovery、shutdown 和 exception unwrapping；此前 host `/mcp test` 引用不存在的 `tools.mcp_tool.MCPTool`，现已修复。
+4. 保持 help、empty/server list、add/remove usage 与失败、config persistence、test missing/error/empty、多工具截断的既有用户可见行为；`VoidcubeCLI` 的 `/mcp` 及其四个子 owner 已删除。
+5. direct handler、真实 route 与 registry binding tests 覆盖 list、add/remove、test success/failure、usage、config persistence 和 shared probe 参数；旧 host owner、`MCPTool`、private probe adapter 扫描为空。
+6. `VoidCube_cli/app.py` 降至 7,748 行，较本轮 Stage 3 开始前 10,157 行净减少 2,409 行；P0 增长基线已按 Python 行数同步下调。
+
+## 61. 下一次实施起点
+
+下一批评估 `/tools` command domain：
+
+1. 先核对 list、enable、disable、toolset filtering、Agent refresh 和 session-only state 的所有权，确认其与已迁出的 `/toolsets` read-only 投影不重叠。
+2. 按 read-only catalog 和 mutation 两个 operation 边界提取，避免把 tool registry 或 Agent refresh 重新并入 CLI host。
 3. 每项切换执行架构测试、退役集成扫描、wheel 构建和归档审计。

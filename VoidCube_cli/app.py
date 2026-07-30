@@ -109,6 +109,7 @@ from VoidCube_cli.command_router import (
 )
 from VoidCube_cli.command_handlers.registry import (
     install_cli_command_execution,
+    reload_mcp_for_host,
     render_tools_for_host,
     render_toolsets_for_host,
 )
@@ -3287,170 +3288,6 @@ class VoidcubeCLI:
         print("    /skills uninstall <name> — 卸载技能")
         print()
 
-    def _handle_mcp_command(self, cmd: str):
-        """Handle /mcp slash command — MCP server management."""
-        args = cmd.split()
-        subcommand = args[1] if len(args) > 1 else "help"
-        
-        if subcommand == "list":
-            self._display_mcp_list()
-        elif subcommand == "add":
-            self._add_mcp_server(args)
-        elif subcommand == "remove":
-            self._remove_mcp_server(args)
-        elif subcommand == "test":
-            self._test_mcp_server(args)
-        else:
-            self._display_mcp_help()
-
-    def _display_mcp_help(self):
-        """Display MCP command help."""
-        print("\n  MCP 服务器管理命令 (/mcp)")
-        print()
-        print("  用法:")
-        print("    /mcp                  — 显示此帮助")
-        print("    /mcp list             — 列出已配置的 MCP 服务器")
-        print("    /mcp add <name> <url> — 添加 MCP 服务器")
-        print("    /mcp remove <name>    — 删除 MCP 服务器")
-        print("    /mcp test <name>      — 测试 MCP 服务器连接")
-        print()
-
-    def _display_mcp_list(self):
-        """Display list of configured MCP servers."""
-        print("\n  已配置的 MCP 服务器:")
-        print()
-        
-        from VoidCube_app.config import load_config
-        
-        config = load_config()
-        mcp_servers = config.get("mcp_servers", {})
-        
-        if not mcp_servers:
-            print("    暂无配置的 MCP 服务器")
-            print()
-            print("    使用 /mcp add <name> <url> 添加服务器")
-        else:
-            for name, server in mcp_servers.items():
-                print(f"    [{name}]")
-                print(f"        URL: {server.get('url', 'N/A')}")
-                print(f"        类型: {server.get('type', 'http')}")
-                if server.get('command'):
-                    print(f"        命令: {server.get('command')}")
-                print()
-        
-        print()
-
-    def _add_mcp_server(self, args: list):
-        """Add an MCP server."""
-        if len(args) < 4:
-            print("\n  ❌ 参数不足")
-            print("    用法: /mcp add <name> <url>")
-            print()
-            return
-        
-        name = args[2]
-        url = args[3]
-        
-        print(f"\n  添加 MCP 服务器: {name}")
-        print(f"  URL: {url}")
-        print()
-        
-        try:
-            from VoidCube_app.config import load_config, save_config
-            
-            config = load_config()
-            if "mcp_servers" not in config:
-                config["mcp_servers"] = {}
-            
-            config["mcp_servers"][name] = {
-                "url": url,
-                "type": "http"
-            }
-            
-            save_config(config)
-            print(f"    ✅ MCP 服务器 '{name}' 添加成功")
-            print(f"    重启会话后生效")
-        except Exception as e:
-            print(f"    ❌ 添加失败: {e}")
-        
-        print()
-
-    def _remove_mcp_server(self, args: list):
-        """Remove an MCP server."""
-        if len(args) < 3:
-            print("\n  ❌ 参数不足")
-            print("    用法: /mcp remove <name>")
-            print()
-            return
-        
-        name = args[2]
-        
-        print(f"\n  删除 MCP 服务器: {name}")
-        print()
-        
-        try:
-            from VoidCube_app.config import load_config, save_config
-            
-            config = load_config()
-            if "mcp_servers" in config and name in config["mcp_servers"]:
-                del config["mcp_servers"][name]
-                save_config(config)
-                print(f"    ✅ MCP 服务器 '{name}' 删除成功")
-                print(f"    重启会话后生效")
-            else:
-                print(f"    ❌ 未找到 MCP 服务器 '{name}'")
-        except Exception as e:
-            print(f"    ❌ 删除失败: {e}")
-        
-        print()
-
-    def _test_mcp_server(self, args: list):
-        """Test an MCP server connection."""
-        if len(args) < 3:
-            print("\n  ❌ 参数不足")
-            print("    用法: /mcp test <name>")
-            print()
-            return
-        
-        name = args[2]
-        
-        print(f"\n  测试 MCP 服务器: {name}")
-        print()
-        
-        try:
-            from VoidCube_app.config import load_config
-            from tools.mcp_tool import MCPTool
-            
-            config = load_config()
-            mcp_servers = config.get("mcp_servers", {})
-            
-            if name not in mcp_servers:
-                print(f"    ❌ 未找到 MCP 服务器 '{name}'")
-                print()
-                return
-            
-            server_config = mcp_servers[name]
-            url = server_config.get("url")
-            
-            print(f"    正在连接到: {url}")
-            
-            mcp_tool = MCPTool(url=url)
-            tools = mcp_tool.list_tools()
-            
-            if tools:
-                print(f"    ✅ 连接成功")
-                print(f"    可用工具: {len(tools)} 个")
-                for tool in tools[:5]:
-                    print(f"      - {tool.get('name', 'Unknown')}")
-                if len(tools) > 5:
-                    print(f"      ... 还有 {len(tools) - 5} 个工具")
-            else:
-                print(f"    ⚠️ 连接成功但未返回工具列表")
-        except Exception as e:
-            print(f"    ❌ 连接失败: {e}")
-        
-        print()
-
     def _display_skills_list(self):
         """Display list of installed skills."""
         try:
@@ -4354,7 +4191,7 @@ class VoidcubeCLI:
 
         Called from process_loop every CONFIG_WATCH_INTERVAL seconds.
         Compares config.yaml mtime + mcp_servers section against the last
-        known state.  When a change is detected, triggers _reload_mcp() and
+        known state.  When a change is detected, runs the shared MCP reload
         informs the user so they know the tool list has been refreshed.
         """
         import time
@@ -4399,96 +4236,12 @@ class VoidcubeCLI:
         print()
         print("🔄 MCP server config changed — reloading connections...")
         _reload_thread = threading.Thread(
-            target=self._reload_mcp, daemon=True
+            target=lambda: reload_mcp_for_host(self), daemon=True
         )
         _reload_thread.start()
         _reload_thread.join(timeout=30)
         if _reload_thread.is_alive():
             print("  ⚠️  MCP reload timed out (30s). Some servers may not have reconnected.")
-
-    def _reload_mcp(self):
-        """Reload MCP servers: disconnect all, re-read config.yaml, reconnect.
-
-        After reconnecting, refreshes the agent's tool list so the model
-        sees the updated tools on the next turn.
-        """
-        try:
-            from tools.mcp_tool import shutdown_mcp_servers, discover_mcp_tools, _servers, _lock
-
-            # Capture old server names
-            with _lock:
-                old_servers = set(_servers.keys())
-
-            if not self._command_running:
-                print("🔄 Reloading MCP servers...")
-
-            # Shutdown existing connections
-            shutdown_mcp_servers()
-
-            # Reconnect (reads config.yaml fresh)
-            new_tools = discover_mcp_tools()
-
-            # Compute what changed
-            with _lock:
-                connected_servers = set(_servers.keys())
-
-            added = connected_servers - old_servers
-            removed = old_servers - connected_servers
-            reconnected = connected_servers & old_servers
-
-            if reconnected:
-                print(f"  ♻️  Reconnected: {', '.join(sorted(reconnected))}")
-            if added:
-                print(f"  ➕ Added: {', '.join(sorted(added))}")
-            if removed:
-                print(f"  ➖ Removed: {', '.join(sorted(removed))}")
-            if not connected_servers:
-                print("  No MCP servers connected.")
-            else:
-                print(f"  🔧 {len(new_tools)} tool(s) available from {len(connected_servers)} server(s)")
-
-            # Refresh the agent's tool list so the model can call new tools
-            if self.agent is not None:
-                self.agent.tools = _get_tool_definitions(
-                    enabled_toolsets=self.agent.enabled_toolsets
-                    if hasattr(self.agent, "enabled_toolsets") else None,
-                    quiet_mode=True,
-                )
-                self.agent.valid_tool_names = {
-                    tool["function"]["name"] for tool in self.agent.tools
-                } if self.agent.tools else set()
-
-            # Inject a message at the END of conversation history so the
-            # model knows tools changed.  Appended after all existing
-            # messages to preserve prompt-cache for the prefix.
-            change_parts = []
-            if added:
-                change_parts.append(f"Added servers: {', '.join(sorted(added))}")
-            if removed:
-                change_parts.append(f"Removed servers: {', '.join(sorted(removed))}")
-            if reconnected:
-                change_parts.append(f"Reconnected servers: {', '.join(sorted(reconnected))}")
-            tool_summary = f"{len(new_tools)} MCP tool(s) now available" if new_tools else "No MCP tools available"
-            change_detail = ". ".join(change_parts) + ". " if change_parts else ""
-            self.conversation_history.append({
-                "role": "user",
-                "content": f"[SYSTEM: MCP servers have been reloaded. {change_detail}{tool_summary}. The tool list for this conversation has been updated accordingly.]",
-            })
-
-            # Persist session immediately so the session log reflects the
-            # updated tools list (self.agent.tools was refreshed above).
-            if self.agent is not None:
-                try:
-                    self.agent._session_persistence.persist(
-                        self.conversation_history
-                    )
-                except Exception:
-                    pass  # Best-effort
-
-            print(f"  ✅ Agent updated — {len(self.agent.tools if self.agent else [])} tool(s) available")
-
-        except Exception as e:
-            print(f"  ❌ MCP reload failed: {e}")
 
     # ====================================================================
     # Tool-call generation indicator (shown during streaming)

@@ -4,7 +4,7 @@
   "base_url": "https://api.example/v1",
   "platform": "cli",
   "session_start": "2026-07-21T12:00:00",
-  "last_updated": "2026-07-30T16:14:02.080208",
+  "last_updated": "2026-07-30T16:42:32.465620",
   "system_prompt": "system prompt",
   "tools": [
     {
@@ -18,11 +18,18 @@
   "messages": [
     {
       "role": "user",
-      "content": "already stored"
+      "content": "original user text"
     },
     {
       "role": "assistant",
-      "content": "new"
+      "content": "answer",
+      "reasoning": "checked",
+      "reasoning_details": [
+        {
+          "type": "summary",
+          "text": "checked"
+        }
+      ]
     }
   ]
 }

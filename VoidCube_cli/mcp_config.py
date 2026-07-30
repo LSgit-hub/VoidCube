@@ -156,7 +156,7 @@ def _apply_mcp_preset(
 
 # ─── Discovery (temporary connect) ───────────────────────────────────────────
 
-def _probe_single_server(
+def probe_mcp_server(
     name: str, config: dict, connect_timeout: float = 30
 ) -> List[Tuple[str, str]]:
     """Temporarily connect to one MCP server, list its tools, disconnect.
@@ -328,7 +328,7 @@ def cmd_mcp_add(args):
     print(color(f"  Connecting to '{name}'...", Colors.CYAN))
 
     try:
-        tools = _probe_single_server(name, server_config)
+        tools = probe_mcp_server(name, server_config)
     except Exception as exc:
         _error(f"Failed to connect: {exc}")
         if _confirm("Save config anyway (you can test later)?", default=False):
@@ -551,7 +551,7 @@ def cmd_mcp_test(args):
     # Attempt connection
     start = time.monotonic()
     try:
-        tools = _probe_single_server(name, cfg)
+        tools = probe_mcp_server(name, cfg)
         elapsed_ms = (time.monotonic() - start) * 1000
     except Exception as exc:
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -601,7 +601,7 @@ def cmd_mcp_configure(args):
     print(color(f"  Connecting to '{name}' to discover tools...", Colors.CYAN))
 
     try:
-        all_tools = _probe_single_server(name, cfg)
+        all_tools = probe_mcp_server(name, cfg)
     except Exception as exc:
         _error(f"Failed to connect: {exc}")
         return

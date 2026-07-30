@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,9 +33,13 @@ from VoidCube_cli.command_handlers.operations import (
     ApiCommandPorts,
     DebugCommandPorts,
     DoctorCommandPorts,
+    McpReloadRuntimePorts,
+    ReloadMcpCommandPorts,
 )
 from VoidCube_cli.command_handlers.personality import PersonalityCommandPorts
 from VoidCube_cli.command_handlers.compression import CompressionCommandPorts
+from VoidCube_cli.command_handlers.browser import BrowserCommandPorts
+from VoidCube_cli.command_handlers.mcp import McpCommandPorts, handle_mcp_command
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
@@ -342,6 +347,177 @@ def test_cli_process_routes_debug_through_operation_handler(monkeypatch) -> None
 
     assert app.process_command("/debug") is True
     assert calls == ["share"]
+
+
+def test_cli_process_routes_reload_mcp_through_operation_handler(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "reload_mcp_for_host",
+        lambda host, *, emit: calls.append((host, emit)),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/reload-mcp") is True
+    assert calls and calls[0][0] is app
+
+
+def test_cli_process_routes_mcp_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    configured: dict[str, object] = {"mcp_servers": {}}
+    saves: list[object] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_mcp_command_ports",
+        lambda: McpCommandPorts(
+            load_config=lambda: configured,
+            save_config=saves.append,
+            probe_tools=lambda _name, _config: [],
+            emit=output.append,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/mcp add local http://localhost:3000") is True
+    assert configured["mcp_servers"] == {
+        "local": {"url": "http://localhost:3000", "type": "http"}
+    }
+    assert saves == [configured]
+    assert "    ✅ MCP 服务器 'local' 添加成功" in output
+
+
+def test_mcp_command_ports_bind_config_storage_and_connection_probe(monkeypatch) -> None:
+    from VoidCube_app import config as config_module
+    from VoidCube_cli import mcp_config
+
+    config: dict[str, object] = {"mcp_servers": {}}
+    saved: list[object] = []
+    probed: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(config_module, "load_config", lambda: config)
+    monkeypatch.setattr(config_module, "save_config", saved.append)
+    monkeypatch.setattr(
+        mcp_config,
+        "probe_mcp_server",
+        lambda name, config: probed.append((name, config))
+        or [("remote-tool", "description")],
+    )
+    ports = command_handler_registry._mcp_command_ports()
+
+    handle_mcp_command(parse_cli_command("/mcp add remote https://mcp.example"), ports=ports)
+    handle_mcp_command(parse_cli_command("/mcp test remote"), ports=ports)
+
+    assert saved == [config]
+    assert probed == [
+        ("remote", {"url": "https://mcp.example", "type": "http"})
+    ]
+
+
+def test_mcp_reload_registry_ports_refresh_agent_and_persist_history(monkeypatch) -> None:
+    from tools import mcp_tool
+    from tools import model_tools
+
+    output: list[str] = []
+    servers = {"old": object()}
+    monkeypatch.setattr(mcp_tool, "_servers", servers)
+    monkeypatch.setattr(mcp_tool, "_lock", threading.RLock())
+    monkeypatch.setattr(mcp_tool, "shutdown_mcp_servers", servers.clear)
+    monkeypatch.setattr(
+        mcp_tool,
+        "discover_mcp_tools",
+        lambda: servers.update({"new": object()}) or [{"name": "mcp"}],
+    )
+    definitions = [{"function": {"name": "mcp_new"}}]
+    monkeypatch.setattr(model_tools, "get_tool_definitions", lambda **_kwargs: definitions)
+    persisted: list[list[dict[str, str]]] = []
+    agent = SimpleNamespace(
+        enabled_toolsets=["all"],
+        tools=[],
+        valid_tool_names=set(),
+        _session_persistence=SimpleNamespace(persist=lambda history: persisted.append(list(history)),),
+    )
+    host = SimpleNamespace(
+        agent=agent,
+        conversation_history=[],
+        _command_running=True,
+    )
+
+    ports = command_handler_registry._mcp_reload_runtime_ports(host, emit=output.append)
+    from VoidCube_cli.command_handlers.operations import reload_mcp_servers
+
+    reload_mcp_servers(ports=ports)
+
+    assert agent.tools == definitions
+    assert agent.valid_tool_names == {"mcp_new"}
+    assert len(host.conversation_history) == 1
+    assert persisted == [host.conversation_history]
+    assert output == [
+        "  ➕ Added: new",
+        "  ➖ Removed: old",
+        "  🔧 1 tool(s) available from 1 server(s)",
+        "  ✅ Agent updated — 1 tool(s) available",
+    ]
+
+
+def test_cli_process_routes_browser_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    configured: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_browser_command_ports",
+        lambda _host, *, emit: BrowserCommandPorts(
+            current_cdp_url=lambda: "",
+            set_cdp_url=configured.append,
+            clear_cdp_url=lambda: None,
+            cleanup_browsers=lambda: None,
+            probe_port=lambda _port: True,
+            launch_chrome_debug=lambda _port: pytest.fail("must not launch"),
+            system_name=lambda: "Windows",
+            chrome_data_dir=lambda: "chrome-data",
+            cloud_provider=lambda: None,
+            enqueue_system_note=lambda _note: None,
+            sleep=lambda _seconds: None,
+            emit=emit,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/browser connect ws://example.test:9333") is True
+    assert configured == ["ws://example.test:9333"]
+    assert "   ✓ Chrome is already listening on port 9333" in output
+
+
+def test_browser_ports_bind_environment_and_host_launch_operation(monkeypatch) -> None:
+    output: list[str] = []
+    launches: list[tuple[int, str]] = []
+    host = SimpleNamespace(
+        _try_launch_chrome_debug=lambda port, system: launches.append((port, system))
+        or True,
+        _pending_input=queue.Queue(),
+    )
+    monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+
+    ports = command_handler_registry._browser_command_ports(host, emit=output.append)
+    ports.set_cdp_url("ws://example.test:9224")
+    ports.launch_chrome_debug(9222)
+    ports.enqueue_system_note("connected")
+    ports.clear_cdp_url()
+
+    assert ports.current_cdp_url() == ""
+    assert launches == [(9222, "Windows")]
+    assert host._pending_input.get_nowait() == "connected"
 
 
 def test_debug_ports_bind_the_default_share_request(monkeypatch) -> None:
