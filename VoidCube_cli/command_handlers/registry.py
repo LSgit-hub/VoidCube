@@ -36,6 +36,21 @@ from VoidCube_cli.command_handlers.attachments import (
     handle_image_command,
     handle_paste_command,
 )
+from VoidCube_cli.command_handlers.autonomous import (
+    AutonomousCommandPorts,
+    handle_auto_command,
+    handle_auto_q_command,
+)
+from VoidCube_cli.command_handlers.background import (
+    BackgroundCommandPorts,
+    BackgroundCommandText,
+    handle_background_command,
+)
+from VoidCube_cli.command_handlers.btw import (
+    BtwCommandPorts,
+    BtwCommandText,
+    handle_btw_command,
+)
 from VoidCube_cli.command_handlers.browser import (
     BrowserCommandPorts,
     handle_browser_command,
@@ -83,6 +98,10 @@ from VoidCube_cli.command_handlers.info import (
     handle_profile_command,
     handle_usage_command,
 )
+from VoidCube_cli.command_handlers.language import (
+    LanguageCommandPorts,
+    handle_language_command,
+)
 from VoidCube_cli.command_handlers.model import (
     ModelCommandPorts,
     handle_model_command,
@@ -94,6 +113,15 @@ from VoidCube_cli.command_handlers.mcp import (
 from VoidCube_cli.command_handlers.personality import (
     PersonalityCommandPorts,
     handle_personality_command,
+)
+from VoidCube_cli.command_handlers.preset import (
+    PresetCommandPorts,
+    PresetCommandText,
+    handle_preset_command,
+)
+from VoidCube_cli.command_handlers.plan import (
+    PlanCommandPorts,
+    handle_plan_command,
 )
 from VoidCube_cli.command_handlers.reasoning import (
     ReasoningCommandPorts,
@@ -143,6 +171,27 @@ from VoidCube_cli.command_handlers.session import (
     handle_resume_command,
     handle_title_command,
 )
+from VoidCube_cli.command_handlers.skills import (
+    SkillRecord,
+    SkillSearchResult,
+    SkillsCommandPorts,
+    handle_skills_command,
+)
+from VoidCube_cli.command_handlers.tools import (
+    ToolsCommandPorts,
+    ToolsCommandText,
+    handle_tools_command,
+)
+from VoidCube_cli.command_handlers.voice import (
+    VoiceCommandPorts,
+    handle_voice_command,
+)
+from VoidCube_cli.command_handlers.tasks import (
+    BackgroundTaskSnapshot,
+    TaskMoveResult,
+    TasksCommandPorts,
+    handle_tasks_command,
+)
 from VoidCube_cli.session_command_adapter import ResumeSummaryLabels
 
 
@@ -158,11 +207,50 @@ def install_cli_command_execution(
     chat_console_factory: Callable[[], Any] | None = None,
     compact_banner_factory: Callable[[], str] | None = None,
     skill_commands: Callable[[], Mapping[str, Mapping[str, str]]] | None = None,
+    autonomous_command_ports: AutonomousCommandPorts | None = None,
 ) -> None:
     """Register migrated command domains against narrow callable ports."""
     initialize_command_execution(
         host,
         command_handlers={
+            "auto": lambda request: handle_auto_command(
+                request,
+                ports=_require_autonomous_command_ports(autonomous_command_ports),
+            ),
+            "auto-q": lambda request: handle_auto_q_command(
+                request,
+                ports=_require_autonomous_command_ports(autonomous_command_ports),
+            ),
+            "background": lambda request: handle_background_command(
+                request,
+                ports=BackgroundCommandPorts(
+                    start_background=host._start_background_agent_task,
+                    emit=emit,
+                    text=BackgroundCommandText(
+                        usage="  Usage: /background <prompt>",
+                        example="  Example: /background Summarize the top HN stories today",
+                        description=(
+                            "  The task runs in a separate session and results display here when done."
+                        ),
+                    ),
+                ),
+            ),
+            "btw": lambda request: handle_btw_command(
+                request,
+                ports=BtwCommandPorts(
+                    start_btw=host._start_btw_side_question,
+                    emit=emit,
+                    text=BtwCommandText(
+                        usage="  Usage: /btw <question>",
+                        example=(
+                            "  Example: /btw what module owns session title sanitization?"
+                        ),
+                        description=(
+                            "  Answers using session context. No tools, not persisted."
+                        ),
+                    ),
+                ),
+            ),
             "api": lambda request: handle_api_command(
                 request,
                 ports=_api_command_ports(host),
@@ -265,6 +353,10 @@ def install_cli_command_execution(
                     ),
                 ),
             ),
+            "language": lambda request: handle_language_command(
+                request,
+                ports=_language_command_ports(emit=emit),
+            ),
             "model": lambda request: handle_model_command(
                 request,
                 ports=_model_command_ports(host, emit=emit),
@@ -316,6 +408,14 @@ def install_cli_command_execution(
             "personality": lambda request: handle_personality_command(
                 request,
                 ports=_personality_command_ports(host),
+            ),
+            "preset": lambda request: handle_preset_command(
+                request,
+                ports=_preset_command_ports(emit=emit),
+            ),
+            "plan": lambda request: handle_plan_command(
+                request,
+                ports=_plan_command_ports(host, emit=emit),
             ),
             "reasoning": lambda request: handle_reasoning_command(
                 request,
@@ -382,6 +482,10 @@ def install_cli_command_execution(
                     emit=emit,
                     no_conversation_message=translate("no_conversation_to_save"),
                 ),
+            ),
+            "skills": lambda request: handle_skills_command(
+                request,
+                ports=_skills_command_ports(emit=emit),
             ),
             "resume": lambda request: handle_resume_command(
                 request,
@@ -457,13 +561,32 @@ def install_cli_command_execution(
                 request,
                 ports=_session_status_display_ports(host),
             ),
+            "tasks": lambda request: handle_tasks_command(
+                request,
+                ports=_tasks_command_ports(host, emit=emit),
+            ),
             "toolsets": lambda request: handle_toolsets_display_command(
                 request,
                 ports=_toolsets_display_ports(host, emit=emit, translate=translate),
             ),
+            "tools": lambda request: handle_tools_command(
+                request,
+                ports=_tools_command_ports(host, emit=emit, translate=translate),
+            ),
             "usage": lambda request: handle_usage_command(
                 request,
                 ports=_usage_command_ports(host, emit=print),
+            ),
+            "voice": lambda request: handle_voice_command(
+                request,
+                ports=VoiceCommandPorts(
+                    enable=host._enable_voice_mode,
+                    disable=host._disable_voice_mode,
+                    toggle_tts=host._toggle_voice_tts,
+                    show_status=host._show_voice_status,
+                    voice_mode_enabled=lambda: host._voice_mode,
+                    emit=emit,
+                ),
             ),
             "stop": lambda request: handle_stop_command(
                 request,
@@ -515,6 +638,137 @@ def install_cli_command_execution(
     )
 
 
+def _require_autonomous_command_ports(
+    ports: AutonomousCommandPorts | None,
+) -> AutonomousCommandPorts:
+    if ports is None:
+        raise RuntimeError("Autonomous command ports were not configured.")
+    return ports
+
+
+def _language_command_ports(*, emit: Callable[[str], None]) -> LanguageCommandPorts:
+    from VoidCube_app.config import read_raw_config, save_config
+    from VoidCube_cli.commands import rebuild_lookups
+    from VoidCube_cli.i18n import get_available_locales, get_i18n, set_locale, t
+
+    def persist_locale(locale: str) -> bool:
+        try:
+            config = read_raw_config() or {}
+            display = config.get("display")
+            config["display"] = dict(display) if isinstance(display, dict) else {}
+            config["display"]["language"] = locale
+            save_config(config)
+        except Exception:
+            return False
+        return True
+
+    def rebuild_lookups_safely() -> None:
+        try:
+            rebuild_lookups()
+        except Exception:
+            pass
+
+    return LanguageCommandPorts(
+        current_locale=lambda: get_i18n().get_current_locale(),
+        available_locales=get_available_locales,
+        translate=t,
+        set_locale=set_locale,
+        rebuild_command_lookups=rebuild_lookups_safely,
+        persist_locale=persist_locale,
+        emit=emit,
+    )
+
+
+def _preset_command_ports(*, emit: Callable[[str], None]) -> PresetCommandPorts:
+    from tools.preset_engine import apply_preset, list_presets, load_preset
+
+    return PresetCommandPorts(
+        list_presets=list_presets,
+        load_preset=load_preset,
+        apply_preset=apply_preset,
+        emit=emit,
+        text=PresetCommandText(
+            dim="\033[2m",
+            accent="\033[38;5;39m",
+            bold="\033[1m",
+            reset="\033[0m",
+        ),
+    )
+
+
+def autonomous_command_ports_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    refresh_gateway_cli_presence: Callable[..., None],
+    interrupt_current_task: Callable[..., bool],
+    push_cli_agent_scene: Callable[..., bool],
+    thread_factory: Callable[..., Any],
+) -> AutonomousCommandPorts:
+    """Compose autonomous-gate operations against explicit CLI runtime callbacks."""
+    from VoidCube_cli.autonomous_gate import (
+        handle_auto_command as activate_gate,
+        handle_auto_q_command as deactivate_gate,
+    )
+
+    def activate(focus: str) -> None:
+        command = "/auto" if not focus else f"/auto {focus}"
+        activate_gate(
+            host,
+            command,
+            cprint=emit,
+            refresh_gateway_cli_presence_callback=refresh_gateway_cli_presence,
+            thread_factory=thread_factory,
+        )
+
+    return AutonomousCommandPorts(
+        activate=activate,
+        deactivate=lambda: deactivate_gate(
+            host,
+            cprint=emit,
+            interrupt_current_task_callback=interrupt_current_task,
+            push_cli_agent_scene_callback=push_cli_agent_scene,
+            thread_factory=thread_factory,
+        ),
+    )
+
+
+def exit_autonomous_gate_fast_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    interrupt_current_task: Callable[..., bool],
+    push_cli_agent_scene: Callable[..., bool],
+) -> bool:
+    """Run the immediate autonomous-gate exit with the same runtime bindings."""
+    from VoidCube_cli.autonomous_gate import exit_autonomous_gate_fast
+
+    return exit_autonomous_gate_fast(
+        host,
+        cprint=emit,
+        interrupt_current_task_callback=interrupt_current_task,
+        push_cli_agent_scene_callback=push_cli_agent_scene,
+    )
+
+
+def force_quit_autonomous_gate_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    interrupt_current_task: Callable[..., bool],
+    push_cli_agent_scene: Callable[..., bool],
+) -> bool:
+    """Run the emergency autonomous-gate exit with the same runtime bindings."""
+    from VoidCube_cli.autonomous_gate import force_quit_autonomous_gate
+
+    return force_quit_autonomous_gate(
+        host,
+        cprint=emit,
+        interrupt_current_task_callback=interrupt_current_task,
+        push_cli_agent_scene_callback=push_cli_agent_scene,
+    )
+
+
 def _resolve_named_session(value: str) -> str | None:
     from VoidCube_cli.main import _resolve_session_by_name_or_id
 
@@ -546,6 +800,241 @@ def _new_session_ports(
         emit=print,
         started_message=translate("new_session_started"),
     )
+
+
+def _tools_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> ToolsCommandPorts:
+    from argparse import Namespace
+
+    from VoidCube_app.config import load_config
+    from VoidCube_cli.tools_config import _get_platform_tools, tools_disable_enable_command
+
+    return ToolsCommandPorts(
+        render_catalog=lambda: render_tools_for_host(
+            host, emit=emit, translate=translate
+        ),
+        list_configuration=lambda: tools_disable_enable_command(
+            Namespace(tools_action="list", platform="cli")
+        ),
+        change_configuration=lambda action, names: tools_disable_enable_command(
+            Namespace(tools_action=action, names=list(names), platform="cli")
+        ),
+        load_enabled_toolsets=lambda: _get_platform_tools(load_config(), "cli"),
+        set_enabled_toolsets=lambda value: setattr(host, "enabled_toolsets", value),
+        reset_session=lambda: handle_new_session_command(
+            parse_cli_command("/new"),
+            ports=_new_session_ports(host, translate=translate),
+        ),
+        emit=emit,
+        text=ToolsCommandText(
+            usage=lambda action: translate(
+                "prompts.tools_usage", subcommand=action
+            ),
+            builtin_example=lambda action: translate(
+                "prompts.tools_builtin_example", subcommand=action
+            ),
+            mcp_example=lambda action: translate(
+                "prompts.tools_mcp_example", subcommand=action
+            ),
+            changing=_format_tool_config_change,
+            session_reset=_format_tool_config_session_reset(),
+        ),
+    )
+
+
+def _tasks_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> TasksCommandPorts:
+    from time import time
+
+    from VoidCube_cli.cli_ui import ChatConsole, _rich_text_from_ansi
+
+    def managers() -> list[Any]:
+        agent = getattr(host, "agent", None)
+        if agent is None:
+            return []
+        result: list[Any] = []
+        manager_map = getattr(agent, "_subagent_display_managers", None)
+        if isinstance(manager_map, dict):
+            for manager in manager_map.values():
+                if manager is not None and manager not in result:
+                    result.append(manager)
+        manager = getattr(agent, "_subagent_display_manager", None)
+        if manager is not None and manager not in result:
+            result.append(manager)
+        return result
+
+    def render_subagent_tasks() -> str:
+        return "\n\n".join(str(manager.render_tasks_command()) for manager in managers())
+
+    def background_tasks() -> tuple[BackgroundTaskSnapshot, ...]:
+        threads = getattr(host, "_background_tasks", {})
+        details = getattr(host, "_background_task_info", {})
+        snapshots: list[BackgroundTaskSnapshot] = []
+        for task_id, thread in threads.items():
+            if not thread.is_alive():
+                continue
+            info = details.get(task_id, {})
+            snapshots.append(
+                BackgroundTaskSnapshot(
+                    task_id=str(task_id),
+                    thread_name=str(getattr(thread, "name", "")),
+                    task_num=info.get("task_num"),
+                    prompt_preview=str(info.get("prompt_preview") or task_id),
+                    started_at=float(info.get("started_at") or 0.0),
+                )
+            )
+        return tuple(snapshots)
+
+    def move(task_ref: str, *, background: bool) -> TaskMoveResult:
+        for manager in managers():
+            task = manager.resolve_task_ref(task_ref)
+            if task is None:
+                continue
+            try:
+                moved = (
+                    manager.send_to_background(task.task_id)
+                    if background
+                    else manager.bring_to_foreground(task.task_id)
+                )
+            except Exception as exc:
+                return TaskMoveResult(found=True, moved=False, error=str(exc))
+            return TaskMoveResult(found=True, moved=bool(moved))
+        return TaskMoveResult(found=False, moved=False)
+
+    def render_output(value: str) -> None:
+        ChatConsole().print(_rich_text_from_ansi(value))
+
+    return TasksCommandPorts(
+        has_display_managers=lambda: bool(managers()),
+        render_subagent_tasks=render_subagent_tasks,
+        background_tasks=background_tasks,
+        now=time,
+        move_to_background=lambda task_ref: move(task_ref, background=True),
+        bring_to_foreground=lambda task_ref: move(task_ref, background=False),
+        render_output=render_output,
+        emit=emit,
+        invalidate=lambda: host._invalidate(min_interval=0) if getattr(host, "_app", None) else None,
+    )
+
+
+def _plan_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> PlanCommandPorts:
+    from agent.skill_commands import build_plan_path, build_skill_invocation_message
+    from VoidCube_cli.cli_ui import ChatConsole
+
+    pending_input = getattr(host, "_pending_input", None)
+    return PlanCommandPorts(
+        build_plan_path=build_plan_path,
+        build_skill_message=lambda command, instruction, runtime_note: (
+            build_skill_invocation_message(
+                command,
+                instruction,
+                task_id=str(getattr(host, "session_id", "") or ""),
+                runtime_note=runtime_note,
+            )
+        ),
+        enqueue=pending_input.put if pending_input is not None else None,
+        emit=emit,
+        render_error=lambda message: ChatConsole().print(f"[bold red]{message}[/]"),
+    )
+
+
+def _skills_command_ports(*, emit: Callable[[str], None]) -> SkillsCommandPorts:
+    from agent.prompt_builder import clear_skills_system_prompt_cache
+    from agent.skill_utils import get_all_skills_dirs
+    from tools.skills_hub import (
+        HubLockFile,
+        create_source_router,
+        install_skill_from_sources,
+        unified_search,
+        uninstall_skill,
+    )
+
+    def builtin_skills() -> tuple[tuple[str, tuple[str, ...]], ...]:
+        import os
+
+        categories: dict[str, set[str]] = {}
+        excluded = {".git", ".github", ".hub", "__pycache__"}
+        for base_dir in get_all_skills_dirs():
+            if not base_dir.is_dir():
+                continue
+            for root, directories, files in os.walk(base_dir):
+                directories[:] = [item for item in directories if item not in excluded]
+                if "SKILL.md" not in files:
+                    continue
+                relative = Path(root).relative_to(base_dir).parts
+                if not relative:
+                    continue
+                category = relative[0] if len(relative) > 1 else "其他"
+                categories.setdefault(category, set()).add(relative[-1])
+        return tuple(
+            (category, tuple(sorted(names)))
+            for category, names in sorted(categories.items())
+        )
+
+    def installed_skills() -> tuple[SkillRecord, ...]:
+        return tuple(
+            SkillRecord(
+                name=str(skill.get("name") or "unknown"),
+                source=str(skill.get("source") or "unknown"),
+                trust_level=str(skill.get("trust_level") or "unknown"),
+            )
+            for skill in HubLockFile().list_installed()
+        )
+
+    def search(query: str) -> tuple[SkillSearchResult, ...]:
+        return tuple(
+            SkillSearchResult(
+                name=result.name,
+                description=result.description,
+                source=result.source,
+                trust_level=result.trust_level,
+                tags=tuple(result.tags),
+            )
+            for result in unified_search(query, create_source_router(), limit=10)
+        )
+
+    def refresh_cache() -> None:
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        import VoidCube_cli.app as cli_app
+
+        cli_app._skill_commands_cache = None
+        cli_app._skill_cmd_imports = None
+
+    return SkillsCommandPorts(
+        builtin_skills=builtin_skills,
+        installed_skills=installed_skills,
+        search=search,
+        install=lambda name: install_skill_from_sources(
+            name, sources=create_source_router()
+        ),
+        uninstall=uninstall_skill,
+        refresh_cache=refresh_cache,
+        emit=emit,
+    )
+
+
+def _format_tool_config_change(action: str, names: Sequence[str]) -> str:
+    from VoidCube_cli.cli_ui import _ACCENT, _RST
+
+    verb = "Disabling" if action == "disable" else "Enabling"
+    return f"{_ACCENT}{verb} {', '.join(names)}...{_RST}"
+
+
+def _format_tool_config_session_reset() -> str:
+    from VoidCube_cli.cli_ui import _DIM, _RST
+
+    return f"{_DIM}Session reset. New tool configuration is active.{_RST}"
 
 
 def _history_mutation_ports(

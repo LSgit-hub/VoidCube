@@ -40,6 +40,14 @@ from VoidCube_cli.command_handlers.personality import PersonalityCommandPorts
 from VoidCube_cli.command_handlers.compression import CompressionCommandPorts
 from VoidCube_cli.command_handlers.browser import BrowserCommandPorts
 from VoidCube_cli.command_handlers.mcp import McpCommandPorts, handle_mcp_command
+from VoidCube_cli.command_handlers.tools import ToolsCommandPorts, ToolsCommandText
+from VoidCube_cli.command_handlers.skills import SkillsCommandPorts
+from VoidCube_cli.command_handlers.tasks import TasksCommandPorts
+from VoidCube_cli.command_handlers.autonomous import AutonomousCommandPorts
+from VoidCube_cli.command_handlers.plan import PlanCommandPorts
+from VoidCube_cli.command_handlers.language import LanguageCommandPorts
+from VoidCube_cli.command_handlers.voice import VoiceCommandPorts
+from VoidCube_cli.command_handlers.preset import PresetCommandPorts, PresetCommandText
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
@@ -67,7 +75,6 @@ EXPECTED_BUILTINS = {
     "clear",
     "compress",
     "config",
-    "connect",
     "debug",
     "doctor",
     "fast",
@@ -147,6 +154,8 @@ def test_builtin_table_is_complete_and_contains_no_removed_commands() -> None:
     assert set(BUILTIN_COMMAND_SPECS) == EXPECTED_BUILTINS
     assert "cron" not in BUILTIN_COMMAND_SPECS
     assert "insights" not in BUILTIN_COMMAND_SPECS
+    assert "connect" not in BUILTIN_COMMAND_SPECS
+    assert not (Path("tools") / "connection_profiles.py").exists()
     for spec in BUILTIN_COMMAND_SPECS.values():
         if spec.exits:
             continue
@@ -199,14 +208,16 @@ def test_executor_distinguishes_exit_builtin_and_dynamic_command() -> None:
     assert dynamic_result.continue_running is True
 
 
-def test_executor_passes_original_command_only_when_declared() -> None:
+def test_executor_uses_registered_handler_for_tools_commands() -> None:
     calls: list[tuple[str, str | None]] = []
     host = SimpleNamespace(_command_running=False, _command_status="")
     host._invalidate = lambda **kwargs: None
-    host._handle_tools_command = lambda command: calls.append(("tools", command))
     initialize_command_execution(
         host,
-        command_handlers={"help": lambda _request: calls.append(("help", None))},
+        command_handlers={
+            "help": lambda _request: calls.append(("help", None)),
+            "tools": lambda request: calls.append(("tools", request.arguments)),
+        },
     )
 
     host._builtin_command_executor.execute(
@@ -214,7 +225,7 @@ def test_executor_passes_original_command_only_when_declared() -> None:
     )
     host._builtin_command_executor.execute(parse_cli_command("/help"))
 
-    assert calls == [("tools", "/tools Enable MixedCase"), ("help", None)]
+    assert calls == [("tools", "Enable MixedCase"), ("help", None)]
 
 
 def test_cli_process_routes_help_through_display_handler(monkeypatch) -> None:
@@ -268,6 +279,281 @@ def test_cli_process_routes_help_through_display_handler(monkeypatch) -> None:
         ("tip", "Paste", True),
     ]
     assert observed_skill_catalogs == [skill_catalog]
+
+
+def test_cli_process_routes_tools_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    events: list[object] = []
+    state: dict[str, object] = {"toolsets": ("terminal",)}
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_tools_command_ports",
+        lambda _host, *, emit, translate: ToolsCommandPorts(
+            render_catalog=lambda: events.append("catalog"),
+            list_configuration=lambda: events.append("list"),
+            change_configuration=lambda action, names: events.append((action, names)),
+            load_enabled_toolsets=lambda: ("web",),
+            set_enabled_toolsets=lambda value: state.__setitem__("toolsets", value),
+            reset_session=lambda: events.append("reset"),
+            emit=emit,
+            text=ToolsCommandText(
+                usage=lambda action: f"usage {action}",
+                builtin_example=lambda action: f"builtin {action}",
+                mcp_example=lambda action: f"mcp {action}",
+                changing=lambda action, names: f"{action}: {', '.join(names)}",
+                session_reset="session reset",
+            ),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/tools enable web") is True
+    assert events == [("enable", ("web",)), "reset"]
+    assert state["toolsets"] == ("web",)
+    assert output == ["enable: web", "session reset"]
+
+
+def test_cli_process_routes_skills_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    events: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_skills_command_ports",
+        lambda *, emit: SkillsCommandPorts(
+            builtin_skills=lambda: (),
+            installed_skills=lambda: (),
+            search=lambda query: events.append(f"search:{query}") or (),
+            install=lambda _name: pytest.fail("must not install"),
+            uninstall=lambda _name: pytest.fail("must not uninstall"),
+            refresh_cache=lambda: pytest.fail("must not refresh"),
+            emit=emit,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/skills search Mixed Case") is True
+    assert events == ["search:Mixed Case"]
+    assert output == ["\n  搜索技能: 'Mixed Case'", "    未找到匹配的技能"]
+
+
+def test_cli_process_routes_tasks_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    events: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_tasks_command_ports",
+        lambda _host, *, emit: TasksCommandPorts(
+            has_display_managers=lambda: True,
+            render_subagent_tasks=lambda: events.append("render") or "Subagent Panel",
+            background_tasks=lambda: pytest.fail("must not read CLI background tasks"),
+            now=lambda: pytest.fail("must not read time"),
+            move_to_background=lambda _task_ref: pytest.fail("must not move task"),
+            bring_to_foreground=lambda _task_ref: pytest.fail("must not move task"),
+            render_output=lambda text: events.append(text),
+            emit=emit,
+            invalidate=lambda: pytest.fail("must not invalidate"),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/tasks list") is True
+    assert events == ["render", "Subagent Panel"]
+    assert output == []
+
+
+def test_cli_process_routes_auto_commands_through_explicit_ports() -> None:
+    events: list[tuple[str, str]] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(
+        app,
+        emit=lambda _text: None,
+        autonomous_command_ports=AutonomousCommandPorts(
+            activate=lambda focus: events.append(("activate", focus)),
+            deactivate=lambda: events.append(("deactivate", "")),
+        ),
+    )
+
+    assert app.process_command("/auto Focus Mixed Case") is True
+    assert app.process_command("/auto-q") is True
+    assert events == [("activate", "Focus Mixed Case"), ("deactivate", "")]
+
+
+def test_cli_process_routes_plan_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    events: list[tuple[str, str]] = []
+    plan_path = Path(".VoidCube/plans/plan.md")
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_plan_command_ports",
+        lambda _host, *, emit: PlanCommandPorts(
+            build_plan_path=lambda _instruction: plan_path,
+            build_skill_message=lambda command, instruction, _note: events.append(
+                (command, instruction)
+            ) or "plan message",
+            enqueue=lambda message: events.append(("enqueue", message)),
+            emit=emit,
+            render_error=lambda message: pytest.fail(message),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/plan Preserve Case") is True
+    assert events == [("/plan", "Preserve Case"), ("enqueue", "plan message")]
+    assert output == [
+        f"  📝 Plan mode queued via skill. Markdown plan target: {plan_path}"
+    ]
+
+
+def test_cli_process_routes_background_through_explicit_ports() -> None:
+    output: list[str] = []
+    started: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._start_background_agent_task = started.append
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/background Preserve Case") is True
+    assert started == ["Preserve Case"]
+    assert output == []
+
+
+def test_cli_process_routes_btw_through_explicit_ports() -> None:
+    output: list[str] = []
+    started: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._start_btw_side_question = started.append
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/btw Preserve Case") is True
+    assert started == ["Preserve Case"]
+    assert output == []
+
+
+def test_cli_process_routes_language_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_language_command_ports",
+        lambda *, emit: LanguageCommandPorts(
+            current_locale=lambda: "en_US",
+            available_locales=lambda: [],
+            translate=lambda key, **kwargs: key + (str(kwargs) if kwargs else ""),
+            set_locale=lambda locale: events.append(("locale", locale)),
+            rebuild_command_lookups=lambda: events.append(("lookups", "")),
+            persist_locale=lambda locale: events.append(("persist", locale)) or False,
+            emit=emit,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/language -EN") is True
+    assert events == [("locale", "en_US"), ("lookups", ""), ("persist", "en_US")]
+    assert output == [
+        "  language_command.set_to{'locale': 'en_US'}",
+        "  language_command.switched_en",
+    ]
+
+
+def test_cli_process_routes_voice_through_explicit_ports() -> None:
+    output: list[str] = []
+    events: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app._voice_mode = False
+    app._enable_voice_mode = lambda: events.append("enable")
+    app._disable_voice_mode = lambda: events.append("disable")
+    app._toggle_voice_tts = lambda: events.append("tts")
+    app._show_voice_status = lambda: events.append("status")
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/voice status") is True
+    assert events == ["status"]
+    assert output == []
+
+
+def test_cli_process_routes_preset_through_explicit_ports(monkeypatch) -> None:
+    output: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_preset_command_ports",
+        lambda *, emit: PresetCommandPorts(
+            list_presets=lambda: [],
+            load_preset=lambda _name: None,
+            apply_preset=lambda _name: {"success": False, "reason": "preset_not_found"},
+            emit=emit,
+            text=PresetCommandText(dim="", accent="", bold="", reset=""),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/preset apply missing") is True
+    assert output == ["  Preset not found: missing"]
+
+
+def test_autonomous_registry_ports_reuse_existing_gate_operations(monkeypatch) -> None:
+    events: list[tuple[object, ...]] = []
+    host = object()
+    monkeypatch.setattr(
+        "VoidCube_cli.autonomous_gate.handle_auto_command",
+        lambda passed_host, command, **kwargs: events.append(
+            ("activate", passed_host, command, kwargs["cprint"])
+        ),
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.autonomous_gate.handle_auto_q_command",
+        lambda passed_host, **kwargs: events.append(
+            ("deactivate", passed_host, kwargs["cprint"])
+        ),
+    )
+
+    ports = command_handler_registry.autonomous_command_ports_for_host(
+        host,
+        emit=lambda text: events.append(("emit", text)),
+        refresh_gateway_cli_presence=lambda **_kwargs: None,
+        interrupt_current_task=lambda **_kwargs: True,
+        push_cli_agent_scene=lambda *_args, **_kwargs: True,
+        thread_factory=object,
+    )
+    ports.activate("focus words")
+    ports.deactivate()
+
+    assert events[0][:3] == ("activate", host, "/auto focus words")
+    assert events[1] == ("deactivate", host, events[1][2])
 
 
 def test_cli_process_routes_usage_through_information_handler(monkeypatch) -> None:
@@ -830,19 +1116,6 @@ def test_verbose_toggle_applies_logging_levels_without_usage_command(monkeypatch
             logger.setLevel(level)
 
 
-def test_tools_catalog_command_uses_the_shared_host_renderer(monkeypatch) -> None:
-    calls: list[object] = []
-    monkeypatch.setattr(
-        cli_module,
-        "render_tools_for_host",
-        lambda host, *, emit, translate: calls.append((host, emit, translate)),
-    )
-    app = VoidcubeCLI.__new__(VoidcubeCLI)
-
-    app._handle_tools_command("/tools")
-
-    assert calls == [(app, print, cli_module.t)]
-
 
 def test_busy_lifecycle_restores_nested_and_exceptional_state() -> None:
     invalidations: list[float] = []
@@ -868,10 +1141,14 @@ def test_busy_spec_wraps_handler_and_restores_state() -> None:
     observed: list[tuple[bool, str, str]] = []
     host = SimpleNamespace(_command_running=False, _command_status="")
     host._invalidate = lambda **kwargs: None
-    host._handle_skills_command = lambda command: observed.append(
-        (host._command_running, host._command_status, command)
+    initialize_command_execution(
+        host,
+        command_handlers={
+            "skills": lambda request: observed.append(
+                (host._command_running, host._command_status, request.original)
+            )
+        },
     )
-    initialize_command_execution(host)
 
     result = host._builtin_command_executor.execute(
         parse_cli_command("/skills search MixedCase")

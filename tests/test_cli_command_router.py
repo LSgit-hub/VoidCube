@@ -139,11 +139,12 @@ def test_cli_process_uses_router_for_quick_alias(monkeypatch) -> None:
         }
     }
     handled: list[str] = []
-    app._handle_tasks_command = handled.append
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
-    initialize_command_execution(app)
+    initialize_command_execution(
+        app, command_handlers={"tasks": lambda request: handled.append(request.original)}
+    )
     monkeypatch.setattr(cli_module, "_get_skill_commands", lambda: {})
     monkeypatch.setattr(cli_module, "_get_plugin_cmd_handler_names", lambda: set())
 
@@ -155,11 +156,12 @@ def test_cli_process_uses_router_for_unique_prefix(monkeypatch) -> None:
     app = VoidcubeCLI.__new__(VoidcubeCLI)
     app.config = {"quick_commands": {}}
     handled: list[str] = []
-    app._handle_tasks_command = handled.append
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
-    initialize_command_execution(app)
+    initialize_command_execution(
+        app, command_handlers={"tasks": lambda request: handled.append(request.original)}
+    )
     monkeypatch.setattr(cli_module, "_get_skill_commands", lambda: {})
     monkeypatch.setattr(cli_module, "_get_plugin_cmd_handler_names", lambda: set())
 

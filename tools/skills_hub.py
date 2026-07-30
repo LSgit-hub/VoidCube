@@ -33,7 +33,7 @@ import httpx
 import yaml
 
 from tools.skills_guard import (
-    ScanResult, content_hash, TRUSTED_REPOS,
+    ScanResult, content_hash, scan_skill, should_allow_install, TRUSTED_REPOS,
 )
 
 logger = logging.getLogger(__name__)
@@ -2528,6 +2528,41 @@ def uninstall_skill(skill_name: str) -> Tuple[bool, str]:
     append_audit_log("UNINSTALL", skill_name, entry["source"], entry["trust_level"], "n/a", "user_request")
 
     return True, f"Uninstalled '{skill_name}' from {entry['install_path']}"
+
+
+def install_skill_from_sources(
+    skill_name: str,
+    *,
+    sources: Optional[List[SkillSource]] = None,
+) -> Tuple[bool, str, str]:
+    """Fetch, quarantine, scan, and install a skill through project policy."""
+    requested = _validate_skill_name(skill_name)
+    active_sources = sources if sources is not None else create_source_router()
+    bundle: SkillBundle | None = None
+
+    for source in active_sources:
+        try:
+            matches = source.search(requested, limit=1)
+            if not matches:
+                continue
+            candidate = source.fetch(matches[0].identifier)
+            if candidate is not None:
+                bundle = candidate
+                break
+        except Exception as exc:
+            logger.debug("Skill install lookup failed for %s: %s", source.source_id(), exc)
+
+    if bundle is None:
+        return False, f"未找到技能 '{requested}' 或无法下载", ""
+
+    quarantine_path = quarantine_bundle(bundle)
+    scan_result = scan_skill(quarantine_path, source=bundle.source)
+    allowed, reason = should_allow_install(scan_result)
+    if not allowed:
+        return False, reason, bundle.name
+
+    install_from_quarantine(quarantine_path, bundle.name, "", bundle, scan_result)
+    return True, "", bundle.name
 
 
 def bundle_content_hash(bundle: SkillBundle) -> str:

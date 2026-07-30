@@ -98,9 +98,49 @@ from VoidCube_cli.command_handlers.browser import (
     BrowserCommandPorts,
     handle_browser_command,
 )
+from VoidCube_cli.command_handlers.autonomous import (
+    AutonomousCommandPorts,
+    handle_auto_command,
+    handle_auto_q_command,
+)
+from VoidCube_cli.command_handlers.background import (
+    BackgroundCommandPorts,
+    BackgroundCommandText,
+    handle_background_command,
+)
+from VoidCube_cli.command_handlers.btw import (
+    BtwCommandPorts,
+    BtwCommandText,
+    handle_btw_command,
+)
+from VoidCube_cli.command_handlers.language import (
+    LanguageCommandPorts,
+    handle_language_command,
+)
+from VoidCube_cli.command_handlers.voice import (
+    VoiceCommandPorts,
+    handle_voice_command,
+)
+from VoidCube_cli.command_handlers.preset import (
+    PresetCommandPorts,
+    PresetCommandText,
+    handle_preset_command,
+)
+from VoidCube_cli.command_handlers.plan import PlanCommandPorts, handle_plan_command
 from VoidCube_cli.command_handlers.mcp import (
     McpCommandPorts,
     handle_mcp_command,
+)
+from VoidCube_cli.command_handlers.tools import (
+    ToolsCommandPorts,
+    ToolsCommandText,
+    handle_tools_command,
+)
+from VoidCube_cli.command_handlers.skills import (
+    SkillRecord,
+    SkillSearchResult,
+    SkillsCommandPorts,
+    handle_skills_command,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -152,6 +192,357 @@ _ROLLBACK_TEXT = RollbackCommandText(
     chat_undone="chat undone",
     invalid_number=lambda maximum: f"invalid number (max {maximum})",
 )
+
+
+def test_autonomous_handlers_delegate_focus_and_deactivation_without_runtime_host() -> None:
+    events: list[tuple[str, str]] = []
+    ports = AutonomousCommandPorts(
+        activate=lambda focus: events.append(("activate", focus)),
+        deactivate=lambda: events.append(("deactivate", "")),
+    )
+
+    handle_auto_command(parse_cli_command("/auto inspect pending tasks"), ports=ports)
+    handle_auto_q_command(parse_cli_command("/auto-q ignored"), ports=ports)
+
+    assert events == [("activate", "inspect pending tasks"), ("deactivate", "")]
+
+
+def test_background_handler_validates_prompt_and_starts_shared_operation() -> None:
+    output: list[str] = []
+    started: list[str] = []
+    ports = BackgroundCommandPorts(
+        start_background=started.append,
+        emit=output.append,
+        text=BackgroundCommandText("usage", "example", "description"),
+    )
+
+    handle_background_command(parse_cli_command("/background"), ports=ports)
+    handle_background_command(
+        parse_cli_command("/background Keep Mixed Case"), ports=ports
+    )
+
+    assert output == ["usage", "example", "description"]
+    assert started == ["Keep Mixed Case"]
+
+
+def test_btw_handler_validates_question_and_starts_ephemeral_operation() -> None:
+    output: list[str] = []
+    started: list[str] = []
+    ports = BtwCommandPorts(
+        start_btw=started.append,
+        emit=output.append,
+        text=BtwCommandText("usage", "example", "description"),
+    )
+
+    handle_btw_command(parse_cli_command("/btw"), ports=ports)
+    handle_btw_command(
+        parse_cli_command("/btw Keep Mixed Case"), ports=ports
+    )
+
+    assert output == ["usage", "example", "description"]
+    assert started == ["Keep Mixed Case"]
+
+
+def test_language_handler_renders_status_and_preserves_locale_operations() -> None:
+    output: list[str] = []
+    ports = LanguageCommandPorts(
+        current_locale=lambda: "en_US",
+        available_locales=lambda: ["en_US", "zh_CN"],
+        translate=lambda key, **kwargs: key.format(**kwargs) if kwargs else key,
+        set_locale=lambda _locale: pytest.fail("status must not set locale"),
+        rebuild_command_lookups=lambda: pytest.fail("status must not rebuild"),
+        persist_locale=lambda _locale: pytest.fail("status must not persist"),
+        emit=output.append,
+    )
+
+    handle_language_command(parse_cli_command("/language"), ports=ports)
+
+    assert output[0] == "\n  language_command.current"
+    assert output[1] == "  language_command.available"
+    assert output[2:4] == [
+        "    ● en_US - language_command.lang_en_US",
+        "      zh_CN - language_command.lang_zh_CN",
+    ]
+    assert output[-1] == "\n  language_command.tip_env\n"
+
+
+def test_language_handler_updates_locale_and_reports_persistence_status() -> None:
+    output: list[str] = []
+    events: list[tuple[str, str]] = []
+    ports = LanguageCommandPorts(
+        current_locale=lambda: "en_US",
+        available_locales=lambda: [],
+        translate=lambda key, **kwargs: key + (str(kwargs) if kwargs else ""),
+        set_locale=lambda locale: events.append(("locale", locale)),
+        rebuild_command_lookups=lambda: events.append(("lookups", "")),
+        persist_locale=lambda locale: events.append(("persist", locale)) or True,
+        emit=output.append,
+    )
+
+    handle_language_command(parse_cli_command("/language -CN"), ports=ports)
+    handle_language_command(parse_cli_command("/language invalid"), ports=ports)
+
+    assert events == [("locale", "zh_CN"), ("lookups", ""), ("persist", "zh_CN")]
+    assert output == [
+        "  language_command.set_to_saved{'locale': 'zh_CN'}",
+        "  language_command.switched_cn",
+        "  language_command.invalid_param{'param': 'invalid'}",
+        "  language_command.usage",
+    ]
+
+
+def test_voice_handler_dispatches_runtime_operations_and_toggle() -> None:
+    events: list[str] = []
+    enabled = [False]
+    ports = VoiceCommandPorts(
+        enable=lambda: events.append("enable"),
+        disable=lambda: events.append("disable"),
+        toggle_tts=lambda: events.append("tts"),
+        show_status=lambda: events.append("status"),
+        voice_mode_enabled=lambda: enabled[0],
+        emit=events.append,
+    )
+
+    for command in ("/voice on", "/voice off", "/voice tTs", "/voice status"):
+        handle_voice_command(parse_cli_command(command), ports=ports)
+    handle_voice_command(parse_cli_command("/voice"), ports=ports)
+    enabled[0] = True
+    handle_voice_command(parse_cli_command("/voice"), ports=ports)
+
+    assert events == ["enable", "disable", "tts", "status", "enable", "disable"]
+
+
+def test_voice_handler_reports_unknown_subcommand() -> None:
+    output: list[str] = []
+    ports = VoiceCommandPorts(
+        enable=lambda: pytest.fail("invalid command must not enable"),
+        disable=lambda: pytest.fail("invalid command must not disable"),
+        toggle_tts=lambda: pytest.fail("invalid command must not toggle TTS"),
+        show_status=lambda: pytest.fail("invalid command must not show status"),
+        voice_mode_enabled=lambda: False,
+        emit=output.append,
+    )
+
+    handle_voice_command(parse_cli_command("/voice later"), ports=ports)
+
+    assert output == [
+        "Unknown voice subcommand: later",
+        "Usage: /voice [on|off|tts|status]",
+    ]
+
+
+def test_preset_handler_renders_catalog_and_rejects_unavailable_execution() -> None:
+    output: list[str] = []
+    ports = PresetCommandPorts(
+        list_presets=lambda: [
+            {
+                "file": "docker-web",
+                "name": "Docker Web",
+                "description": "web stack",
+                "steps_count": 2,
+            }
+        ],
+        load_preset=lambda name: {
+            "name": "Docker Web",
+            "description": "web stack",
+            "steps": [{"action": "pkg_install", "packages": "docker"}],
+        } if name == "docker-web" else None,
+        apply_preset=lambda _name: {
+            "success": False,
+            "reason": "execution_not_available",
+        },
+        emit=output.append,
+        text=PresetCommandText(dim="<dim>", accent="<accent>", bold="<bold>", reset="<reset>"),
+    )
+
+    handle_preset_command(parse_cli_command("/preset"), ports=ports)
+    handle_preset_command(parse_cli_command("/preset show docker-web"), ports=ports)
+    handle_preset_command(parse_cli_command("/preset apply docker-web"), ports=ports)
+
+    assert output == [
+        "\n  <bold>Available Presets:<reset>",
+        "    <accent>docker-web          <reset> Docker Web",
+        "                         web stack (2 steps)",
+        "\n  <bold>Preset: Docker Web<reset>",
+        "  web stack",
+        "\n  <bold>Steps:<reset>",
+        "    1. pkg_install -> {'action': 'pkg_install', 'packages': 'docker'}",
+        (
+            "  Preset execution is unavailable: deployment actions require an "
+            "approved execution runtime."
+        ),
+    ]
+
+
+def test_plan_handler_uses_shared_skill_message_and_workspace_relative_target() -> None:
+    output: list[str] = []
+    queued: list[str] = []
+    calls: list[tuple[str, str, str]] = []
+    plan_path = Path(".VoidCube/plans/plan.md")
+    ports = PlanCommandPorts(
+        build_plan_path=lambda instruction: plan_path,
+        build_skill_message=lambda command, instruction, runtime_note: calls.append(
+            (command, instruction, runtime_note)
+        ) or "plan skill message",
+        enqueue=queued.append,
+        emit=output.append,
+        render_error=lambda message: pytest.fail(message),
+    )
+
+    handle_plan_command(parse_cli_command("/plan Keep Mixed Case"), ports=ports)
+
+    assert calls == [
+        (
+            "/plan",
+            "Keep Mixed Case",
+            "Save the markdown plan with write_file to this exact relative path "
+            f"inside the active workspace/backend cwd: {plan_path}",
+        )
+    ]
+    assert queued == ["plan skill message"]
+    assert output == [
+        f"  📝 Plan mode queued via skill. Markdown plan target: {plan_path}"
+    ]
+
+
+def test_plan_handler_reports_missing_skill_or_queue_without_enqueuing() -> None:
+    errors: list[str] = []
+    ports = PlanCommandPorts(
+        build_plan_path=lambda _instruction: Path(".VoidCube/plans/plan.md"),
+        build_skill_message=lambda _command, _instruction, _note: None,
+        enqueue=lambda _message: pytest.fail("must not enqueue"),
+        emit=lambda _message: pytest.fail("must not emit success"),
+        render_error=errors.append,
+    )
+
+    handle_plan_command(parse_cli_command("/plan"), ports=ports)
+
+    assert errors == ["Failed to load the bundled /plan skill"]
+
+
+def test_tools_handler_projects_catalog_lists_configuration_and_resets_after_change() -> None:
+    output: list[str] = []
+    events: list[object] = []
+    state: dict[str, object] = {"toolsets": ("terminal",)}
+    ports = ToolsCommandPorts(
+        render_catalog=lambda: events.append("catalog"),
+        list_configuration=lambda: events.append("list"),
+        change_configuration=lambda action, names: events.append((action, names)),
+        load_enabled_toolsets=lambda: ("web", "terminal"),
+        set_enabled_toolsets=lambda value: state.__setitem__("toolsets", value),
+        reset_session=lambda: events.append("reset"),
+        emit=output.append,
+        text=ToolsCommandText(
+            usage=lambda action: f"usage {action}",
+            builtin_example=lambda action: f"builtin {action}",
+            mcp_example=lambda action: f"mcp {action}",
+            changing=lambda action, names: f"{action}: {', '.join(names)}",
+            session_reset="session reset",
+        ),
+    )
+
+    handle_tools_command(parse_cli_command("/tools"), ports=ports)
+    handle_tools_command(parse_cli_command("/tools list"), ports=ports)
+    handle_tools_command(parse_cli_command('/tools enable "web tools" mcp:search'), ports=ports)
+
+    assert events == [
+        "catalog",
+        "list",
+        ("enable", ("web tools", "mcp:search")),
+        "reset",
+    ]
+    assert state["toolsets"] == ("web", "terminal")
+    assert output == [
+        "enable: web tools, mcp:search",
+        "session reset",
+    ]
+
+
+def test_tools_handler_rejects_missing_targets_without_mutation() -> None:
+    output: list[str] = []
+    ports = ToolsCommandPorts(
+        render_catalog=lambda: pytest.fail("must not render catalog"),
+        list_configuration=lambda: pytest.fail("must not list configuration"),
+        change_configuration=lambda _action, _names: pytest.fail("must not change config"),
+        load_enabled_toolsets=lambda: pytest.fail("must not reload toolsets"),
+        set_enabled_toolsets=lambda _value: pytest.fail("must not mutate runtime"),
+        reset_session=lambda: pytest.fail("must not reset session"),
+        emit=output.append,
+        text=ToolsCommandText(
+            usage=lambda action: f"usage {action}",
+            builtin_example=lambda action: f"builtin {action}",
+            mcp_example=lambda action: f"mcp {action}",
+            changing=lambda action, names: f"{action}: {', '.join(names)}",
+            session_reset="session reset",
+        ),
+    )
+
+    handle_tools_command(parse_cli_command("/tools disable"), ports=ports)
+
+    assert output == ["usage disable", "builtin disable", "mcp disable"]
+
+
+def test_skills_handler_projects_catalog_and_refreshes_after_mutations() -> None:
+    output: list[str] = []
+    events: list[object] = []
+    ports = SkillsCommandPorts(
+        builtin_skills=lambda: (("dev", ("lint",)),),
+        installed_skills=lambda: (SkillRecord("hub-skill", "official", "builtin"),),
+        search=lambda query: (
+            SkillSearchResult("match", f"for {query}", "github", "trusted", ("code",)),
+        ),
+        install=lambda name: events.append(("install", name)) or (True, "", "installed"),
+        uninstall=lambda name: events.append(("uninstall", name)) or (True, ""),
+        refresh_cache=lambda: events.append("refresh"),
+        emit=output.append,
+    )
+
+    handle_skills_command(parse_cli_command("/skills list"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills search query text"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills install sample"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills uninstall sample"), ports=ports)
+
+    assert events == [
+        ("install", "sample"),
+        "refresh",
+        ("uninstall", "sample"),
+        "refresh",
+    ]
+    assert "    dev:" in output
+    assert "      - [lint]" in output
+    assert "    [hub-skill]" in output
+    assert "    1. [match]" in output
+    assert "    ✅ 技能 'installed' 安装成功" in output
+    assert "    ✅ 技能 'sample' 卸载成功" in output
+
+
+def test_skills_handler_rejects_missing_names_and_operation_failures() -> None:
+    output: list[str] = []
+    ports = SkillsCommandPorts(
+        builtin_skills=lambda: pytest.fail("must not list"),
+        installed_skills=lambda: pytest.fail("must not list"),
+        search=lambda _query: pytest.fail("must not search"),
+        install=lambda _name: (False, "blocked by policy", ""),
+        uninstall=lambda _name: (False, "not installed"),
+        refresh_cache=lambda: pytest.fail("must not refresh after failure"),
+        emit=output.append,
+    )
+
+    handle_skills_command(parse_cli_command("/skills install"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills uninstall"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills install blocked"), ports=ports)
+    handle_skills_command(parse_cli_command("/skills uninstall missing"), ports=ports)
+
+    assert output == [
+        "\n  ❌ 请指定要安装的技能名称",
+        "    用法: /skills install <name>",
+        "\n  ❌ 请指定要卸载的技能名称",
+        "    用法: /skills uninstall <name>",
+        "\n  正在安装技能: blocked",
+        "    ❌ 安装失败: blocked by policy",
+        "\n  正在卸载技能: missing",
+        "    ❌ 卸载失败: not installed",
+    ]
 
 
 def _rollback_ports(

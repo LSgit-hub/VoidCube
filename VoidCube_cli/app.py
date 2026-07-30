@@ -21,7 +21,6 @@ import json
 import atexit
 import time
 import uuid
-import textwrap
 import warnings
 
 # Suppress firecrawl "Field name 'json' shadows an attribute in parent" warnings
@@ -100,6 +99,54 @@ from VoidCube_cli.turn_queue_adapter import (
     poll_interrupt_input,
     requeue_interrupted_inputs,
 )
+from VoidCube_cli.tui_layout import build_tui_layout_children
+from VoidCube_cli.tui_application import (
+    create_tui_application,
+    install_resize_reflow_cleanup,
+)
+from VoidCube_cli.tui_keybindings import (
+    install_history_navigation_keybindings,
+    install_text_editing_keybindings,
+)
+from VoidCube_cli.tui_modal_navigation import (
+    ModalNavigationPorts,
+    install_modal_navigation_keybindings,
+)
+from VoidCube_cli.tui_modal_widgets import (
+    ModalWidgetPorts,
+    build_modal_widgets,
+)
+from VoidCube_cli.tui_indicator_widgets import (
+    IndicatorWidgetPorts,
+    build_indicator_widgets,
+)
+from VoidCube_cli.tui_input_widgets import (
+    InputWidgetPorts,
+    build_input_area,
+    install_placeholder_processor,
+)
+from VoidCube_cli.scheduled_task_polling import start_scheduled_task_polling
+from VoidCube_cli.tui_refresh_loop import start_tui_refresh_loop
+from VoidCube_cli.input_process_loop import start_input_process_loop
+from VoidCube_cli.tui_teardown import TuiTeardownPorts, run_tui_teardown
+from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
+from VoidCube_cli.voice_recording_runtime import (
+    VoiceRecordingPorts,
+    start_terminal_voice_recording,
+    stop_terminal_voice_recording,
+)
+from VoidCube_cli.embedded_autonomous_loop import (
+    EmbeddedAutonomousLoopPorts,
+    start_embedded_autonomous_component_loop,
+)
+from VoidCube_cli.embedded_autonomous_host import (
+    EmbeddedAutonomousHostPorts,
+    ensure_embedded_autonomous_component_host,
+)
+from VoidCube_cli.embedded_autonomous_stop import (
+    EmbeddedAutonomousStopPorts,
+    stop_embedded_autonomous_component,
+)
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -108,6 +155,9 @@ from VoidCube_cli.command_router import (
     resolve_dynamic_command,
 )
 from VoidCube_cli.command_handlers.registry import (
+    autonomous_command_ports_for_host,
+    exit_autonomous_gate_fast_for_host,
+    force_quit_autonomous_gate_for_host,
     install_cli_command_execution,
     reload_mcp_for_host,
     render_tools_for_host,
@@ -132,12 +182,6 @@ from VoidCube_cli.autonomous_executor import (
 )
 from VoidCube_cli.autonomous_events import (
     append_autonomous_execution_event as _append_autonomous_execution_event_view,
-)
-from VoidCube_cli.autonomous_gate import (
-    exit_autonomous_gate_fast as _exit_autonomous_gate_fast_view,
-    force_quit_autonomous_gate as _force_quit_autonomous_gate_view,
-    handle_auto_command as _handle_auto_command_view,
-    handle_auto_q_command as _handle_auto_q_command_view,
 )
 from VoidCube_cli.autonomous_presence import (
     refresh_gateway_cli_presence as _refresh_gateway_cli_presence_view,
@@ -186,16 +230,10 @@ except Exception:
         return default or key
 
 # prompt_toolkit for fixed input area TUI
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style as PTStyle
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl, ConditionalContainer
-from prompt_toolkit.layout.processors import Processor, Transformation, PasswordProcessor, ConditionalProcessor
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.widgets import TextArea
 from prompt_toolkit.key_binding import KeyBindings
 try:
     from prompt_toolkit.cursor_shapes import CursorShape
@@ -446,7 +484,6 @@ from rich.markup import escape as _escape
 from rich.panel import Panel
 
 from VoidCube_cli.banner import build_welcome_banner
-from VoidCube_cli.commands import SlashCommandCompleter, SlashCommandAutoSuggest
 
 # =============================================================================
 # Lazy import helpers — defer heavy imports (run_agent, tools.*, agent.*) until
@@ -645,10 +682,9 @@ def _get_skill_commands():
         from agent.skill_commands import (
             scan_skill_commands as _sc,
             build_skill_invocation_message as _bi,
-            build_plan_path as _bp,
             build_preloaded_skills_prompt as _bl,
         )
-        _skill_cmd_imports = (_bi, _bp, _bl)
+        _skill_cmd_imports = (_bi, _bl)
         _skill_commands_cache = _sc()
     return _skill_commands_cache
 
@@ -658,14 +694,9 @@ def _get_skill_invocation_message(*args, **kwargs):
     return _skill_cmd_imports[0](*args, **kwargs)
 
 
-def _get_plan_path(*args, **kwargs):
-    _get_skill_commands()
-    return _skill_cmd_imports[1](*args, **kwargs)
-
-
 def _get_preloaded_skills_prompt(*args, **kwargs):
     _get_skill_commands()
-    return _skill_cmd_imports[2](*args, **kwargs)
+    return _skill_cmd_imports[1](*args, **kwargs)
 
 
 def _get_plugin_cmd_handler_names() -> set:
@@ -712,6 +743,86 @@ class VoidcubeCLI:
     Provides a REPL interface with rich formatting, command history,
     and tool execution capabilities.
     """
+
+    def _voice_state(self) -> CliVoiceRuntimeState:
+        """Return this host's voice state, including minimal test hosts."""
+        state = self.__dict__.get("_voice_runtime_state")
+        if state is None:
+            state = CliVoiceRuntimeState()
+            self._voice_runtime_state = state
+        return state
+
+    @property
+    def _voice_lock(self):
+        return self._voice_state().lock
+
+    @property
+    def _voice_mode(self):
+        return self._voice_state().mode
+
+    @_voice_mode.setter
+    def _voice_mode(self, value):
+        self._voice_state().mode = value
+
+    @property
+    def _voice_tts(self):
+        return self._voice_state().tts
+
+    @_voice_tts.setter
+    def _voice_tts(self, value):
+        self._voice_state().tts = value
+
+    @property
+    def _voice_recorder(self):
+        return self._voice_state().recorder
+
+    @_voice_recorder.setter
+    def _voice_recorder(self, value):
+        self._voice_state().recorder = value
+
+    @property
+    def _voice_recording(self):
+        return self._voice_state().recording
+
+    @_voice_recording.setter
+    def _voice_recording(self, value):
+        self._voice_state().recording = value
+
+    @property
+    def _voice_processing(self):
+        return self._voice_state().processing
+
+    @_voice_processing.setter
+    def _voice_processing(self, value):
+        self._voice_state().processing = value
+
+    @property
+    def _voice_continuous(self):
+        return self._voice_state().continuous
+
+    @_voice_continuous.setter
+    def _voice_continuous(self, value):
+        self._voice_state().continuous = value
+
+    @property
+    def _voice_tts_done(self):
+        return self._voice_state().tts_done
+
+    @property
+    def _voice_stop_continuous(self):
+        return self._voice_state().stop_continuous
+
+    @_voice_stop_continuous.setter
+    def _voice_stop_continuous(self, value):
+        self._voice_state().stop_continuous = value
+
+    @property
+    def _no_speech_count(self):
+        return self._voice_state().no_speech_count
+
+    @_no_speech_count.setter
+    def _no_speech_count(self, value):
+        self._voice_state().no_speech_count = value
     
     def __init__(
         self,
@@ -973,22 +1084,29 @@ class VoidcubeCLI:
             chat_console_factory=ChatConsole,
             compact_banner_factory=build_compact_banner,
             skill_commands=_get_skill_commands,
+            autonomous_command_ports=autonomous_command_ports_for_host(
+                self,
+                emit=_cprint,
+                refresh_gateway_cli_presence=lambda *, force=False: _refresh_gateway_cli_presence_view(
+                    self,
+                    force=force,
+                    is_gateway_running=_is_gateway_running,
+                    register_with_gateway=_register_with_gateway,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    monotonic_time=time.monotonic,
+                ),
+                interrupt_current_task=self._interrupt_autonomous_component_task,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                thread_factory=threading.Thread,
+            ),
         )
         self._attached_images: list[Path] = []
         self._image_counter = 0
         self.preloaded_skills: list[str] = []
         self._startup_skills_line_shown = False
 
-        # Voice mode state (also reinitialized inside run() for interactive TUI).
-        self._voice_lock = threading.Lock()
-        self._voice_mode = False
-        self._voice_tts = False
-        self._voice_recorder = None
-        self._voice_recording = False
-        self._voice_processing = False
-        self._voice_continuous = False
-        self._voice_tts_done = threading.Event()
-        self._voice_tts_done.set()
+        # Direct chat() calls need voice state before interactive run() starts.
+        self._voice_runtime_state = CliVoiceRuntimeState()
 
         # Status bar visibility (toggled via /statusbar)
         self._status_bar_visible = True
@@ -1024,27 +1142,38 @@ class VoidcubeCLI:
         return not self._is_embedded_autonomous_component()
 
     def _ensure_autonomous_component_host(self):
-        component_host = getattr(self, "_autonomous_component_host", None)
-        if component_host is not None:
-            return component_host
+        def create_component_host():
+            return type(self)(
+                model=getattr(self, "model", None),
+                toolsets=getattr(self, "enabled_toolsets", None),
+                provider=getattr(self, "requested_provider", None) or getattr(self, "provider", None),
+                api_key=getattr(self, "_explicit_api_key", None),
+                base_url=getattr(self, "_explicit_base_url", None),
+                max_turns=getattr(self, "max_turns", None),
+                verbose=getattr(self, "verbose", False),
+                compact=True,
+                checkpoints=getattr(self, "checkpoints_enabled", False),
+                pass_session_id=True,
+            )
 
-        component_host = type(self)(
-            model=getattr(self, "model", None),
-            toolsets=getattr(self, "enabled_toolsets", None),
-            provider=getattr(self, "requested_provider", None) or getattr(self, "provider", None),
-            api_key=getattr(self, "_explicit_api_key", None),
-            base_url=getattr(self, "_explicit_base_url", None),
-            max_turns=getattr(self, "max_turns", None),
-            verbose=getattr(self, "verbose", False),
-            compact=True,
-            checkpoints=getattr(self, "checkpoints_enabled", False),
-            pass_session_id=True,
+        return ensure_embedded_autonomous_component_host(
+            EmbeddedAutonomousHostPorts(
+                get_component_host=lambda: getattr(self, "_autonomous_component_host", None),
+                create_component_host=create_component_host,
+                set_component_active=lambda host, active: setattr(
+                    host, "_autonomous_gate_active", active
+                ),
+                bind_component_parent=lambda host: setattr(
+                    host, "_autonomous_parent_host", self
+                ),
+                ensure_task_session=lambda host: _ensure_supervisor_task_session_view(
+                    host, logger_debug=logger.debug
+                ),
+                store_component_host=lambda host: setattr(
+                    self, "_autonomous_component_host", host
+                ),
+            )
         )
-        component_host._autonomous_gate_active = True
-        component_host._autonomous_parent_host = self
-        _ensure_supervisor_task_session_view(component_host, logger_debug=logger.debug)
-        self._autonomous_component_host = component_host
-        return component_host
 
     def _autonomous_component_runtime(self):
         component_host = self._ensure_autonomous_component_host()
@@ -1070,110 +1199,94 @@ class VoidcubeCLI:
         if thread is not None and thread.is_alive():
             return True
 
-        def _component_loop() -> None:
-            import contextlib as _contextlib
-            import io as _io
-            import threading as _threading
-            import time as _time
+        runtime = self._autonomous_component_runtime()
 
-            class _ThreadOutputProxy:
-                def __init__(self, original, target_thread_id: int, sink):
-                    self._original = original
-                    self._target_thread_id = target_thread_id
-                    self._sink = sink
+        def refresh_component_statuses() -> None:
+            _refresh_supervisor_status_view(component_host)
+            _refresh_autonomous_gateway_status_view(component_host)
+            _refresh_gateway_autonomous_execute_snapshot_view(component_host)
+            _refresh_gateway_cli_presence_view(
+                component_host,
+                force=False,
+                is_gateway_running=_is_gateway_running,
+                register_with_gateway=_register_with_gateway,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                monotonic_time=time.monotonic,
+            )
 
-                def write(self, data):
-                    if _threading.get_ident() == self._target_thread_id:
-                        return self._sink.write(data)
-                    return self._original.write(data)
-
-                def flush(self):
-                    if _threading.get_ident() != self._target_thread_id:
-                        return self._original.flush()
-                    return None
-
-                def __getattr__(self, name):
-                    return getattr(self._original, name)
-
-            runtime = self._autonomous_component_runtime()
-            while not stop_event.is_set() and getattr(self, "_autonomous_gate_active", False):
-                try:
-                    component_host._autonomous_gate_active = True
-                    _refresh_supervisor_status_view(component_host)
-                    _refresh_autonomous_gateway_status_view(component_host)
-                    _refresh_gateway_autonomous_execute_snapshot_view(component_host)
-                    _refresh_gateway_cli_presence_view(
-                        component_host,
-                        force=False,
-                        is_gateway_running=_is_gateway_running,
-                        register_with_gateway=_register_with_gateway,
-                        push_cli_agent_scene=_push_cli_agent_scene,
-                        monotonic_time=_time.monotonic,
-                    )
-
-                    if (
-                        not getattr(self, "_scheduled_execution_active", False)
-                        and not getattr(component_host, "_agent_running", False)
-                    ):
-                        runtime.poll_workflow()
-                        try:
-                            pending = component_host._pending_input.get_nowait()
-                        except Exception:
-                            pending = None
-                        if pending:
-                            thread_id = _threading.get_ident()
-                            stdout_proxy = _ThreadOutputProxy(sys.stdout, thread_id, _io.StringIO())
-                            stderr_proxy = _ThreadOutputProxy(sys.stderr, thread_id, _io.StringIO())
-                            with _contextlib.redirect_stdout(stdout_proxy), _contextlib.redirect_stderr(stderr_proxy):
-                                component_host._execute_pending_input(pending, app=None)
-                            runtime.poll_workflow()
-                except Exception as exc:
-                    logger.debug("Autonomous execution component loop error: %s", exc)
-                try:
-                    self._invalidate(min_interval=0.5)
-                except Exception:
-                    pass
-                stop_event.wait(0.5)
-
-            component_host._autonomous_gate_active = False
+        def get_component_pending_input() -> object | None:
             try:
-                _push_cli_agent_scene(
+                return component_host._pending_input.get_nowait()
+            except Exception:
+                return None
+
+        self._autonomous_component_thread = start_embedded_autonomous_component_loop(
+            EmbeddedAutonomousLoopPorts(
+                stop_event=stop_event,
+                component_active=lambda: self._autonomous_gate_active,
+                set_component_active=lambda active: setattr(component_host, "_autonomous_gate_active", active),
+                refresh_statuses=refresh_component_statuses,
+                can_poll_workflow=lambda: (
+                    not getattr(self, "_scheduled_execution_active", False)
+                    and not getattr(component_host, "_agent_running", False)
+                ),
+                poll_workflow=runtime.poll_workflow,
+                get_pending_input=get_component_pending_input,
+                execute_pending_input=lambda pending: component_host._execute_pending_input(pending, app=None),
+                invalidate=lambda: self._invalidate(min_interval=0.5),
+                report_error=lambda error: logger.debug(
+                    "Autonomous execution component loop error: %s", error
+                ),
+                publish_idle_scene=lambda: _push_cli_agent_scene(
                     "idle",
                     session_id=getattr(component_host, "session_id", None),
                     agent_role="supervisor_task",
+                ),
+            ),
+            thread_factory=threading.Thread,
+        )
+        return True
+
+    def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
+        def deactivate_component_host() -> bool:
+            component_host = getattr(self, "_autonomous_component_host", None)
+            if component_host is None:
+                return False
+            component_host._autonomous_gate_active = False
+            return True
+
+        def interrupt_running_agent() -> None:
+            component_host = getattr(self, "_autonomous_component_host", None)
+            try:
+                if component_host and component_host.agent and component_host._agent_running:
+                    component_host.agent.interrupt()
+            except Exception:
+                pass
+
+        def interrupt_current_task() -> None:
+            try:
+                self._autonomous_component_runtime().interrupt_current_task(
+                    reason="自主链路已停止；当前链路项被用户中断。",
+                    source="embedded_component_stop",
+                    timeout=5,
                 )
             except Exception:
                 pass
 
-        self._autonomous_component_thread = threading.Thread(
-            target=_component_loop,
-            daemon=True,
-            name="autonomous-execution-component",
-        )
-        self._autonomous_component_thread.start()
-        return True
+        def signal_stop() -> None:
+            stop_event = getattr(self, "_autonomous_component_stop", None)
+            if stop_event is not None:
+                stop_event.set()
 
-    def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
-        component_host = getattr(self, "_autonomous_component_host", None)
-        if component_host is not None:
-            component_host._autonomous_gate_active = False
-            if interrupt:
-                try:
-                    if getattr(component_host, "agent", None) and getattr(component_host, "_agent_running", False):
-                        component_host.agent.interrupt()
-                except Exception:
-                    pass
-                try:
-                    self._autonomous_component_runtime().interrupt_current_task(
-                        reason="自主链路已停止；当前链路项被用户中断。",
-                        source="embedded_component_stop",
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
-        stop_event = getattr(self, "_autonomous_component_stop", None)
-        if stop_event is not None:
-            stop_event.set()
+        stop_embedded_autonomous_component(
+            EmbeddedAutonomousStopPorts(
+                deactivate_component_host=deactivate_component_host,
+                interrupt_running_agent=interrupt_running_agent,
+                interrupt_current_task=interrupt_current_task,
+                signal_stop=signal_stop,
+            ),
+            interrupt=interrupt,
+        )
 
     def _interrupt_autonomous_component_task(
         self,
@@ -2924,58 +3037,6 @@ class VoidcubeCLI:
             return self._fast_command_available()
         return True
 
-    def _handle_tools_command(self, cmd: str):
-        """Handle /tools [list|disable|enable] slash commands.
-
-        /tools (no args) shows the tool list.
-        /tools list shows enabled/disabled status per toolset.
-        /tools disable/enable saves the change to config and resets
-        the session so the new tool set takes effect cleanly (no
-        prompt-cache breakage mid-conversation).
-        """
-        import shlex
-        from argparse import Namespace
-        from VoidCube_cli.tools_config import tools_disable_enable_command
-
-        try:
-            parts = shlex.split(cmd)
-        except ValueError:
-            parts = cmd.split()
-
-        subcommand = parts[1] if len(parts) > 1 else ""
-        if subcommand not in ("list", "disable", "enable"):
-            render_tools_for_host(self, emit=print, translate=t)
-            return
-
-        if subcommand == "list":
-            tools_disable_enable_command(
-                Namespace(tools_action="list", platform="cli"))
-            return
-
-        names = parts[2:]
-        if not names:
-            print(f"{t('prompts.tools_usage', subcommand=subcommand)}")
-            print(f"  {t('prompts.tools_builtin_example', subcommand=subcommand)}")
-            print(f"  {t('prompts.tools_mcp_example', subcommand=subcommand)}")
-            return
-
-        # Apply the change directly — the user typing the command is implicit
-        # consent.  Do NOT use input() here; it hangs inside prompt_toolkit's
-        # TUI event loop (known pitfall).
-        verb = "Disabling" if subcommand == "disable" else "Enabling"
-        label = ", ".join(names)
-        _cprint(f"{_ACCENT}{verb} {label}...{_RST}")
-
-        tools_disable_enable_command(
-            Namespace(tools_action=subcommand, names=names, platform="cli"))
-
-        # Reset session so the new tool config is picked up from a clean state
-        from VoidCube_cli.tools_config import _get_platform_tools
-        from VoidCube_app.config import load_config
-        self.enabled_toolsets = _get_platform_tools(load_config(), "cli")
-        self.process_command("/new")
-        _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
-
     def _list_recent_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
         """Return recent CLI sessions for in-chat browsing/resume affordances."""
         if not self._session_db:
@@ -3255,289 +3316,6 @@ class VoidcubeCLI:
             return False
 
 
-    
-
-    def _handle_skills_command(self, cmd: str):
-        """Handle /skills slash command — skills management."""
-        args = cmd.split()
-        subcommand = args[1] if len(args) > 1 else "help"
-        
-        if subcommand == "list":
-            self._display_skills_list()
-        elif subcommand == "search":
-            query = " ".join(args[2:]) if len(args) > 2 else ""
-            self._search_skills(query)
-        elif subcommand == "install":
-            skill_name = args[2] if len(args) > 2 else ""
-            self._install_skill(skill_name)
-        elif subcommand == "uninstall":
-            skill_name = args[2] if len(args) > 2 else ""
-            self._uninstall_skill(skill_name)
-        else:
-            self._display_skills_help()
-
-    def _display_skills_help(self):
-        """Display skills command help."""
-        print("\n  技能管理命令 (/skills)")
-        print()
-        print("  用法:")
-        print("    /skills                 — 显示此帮助")
-        print("    /skills list            — 列出已安装的技能")
-        print("    /skills search <query>  — 搜索技能")
-        print("    /skills install <name>  — 安装技能")
-        print("    /skills uninstall <name> — 卸载技能")
-        print()
-
-    def _display_skills_list(self):
-        """Display list of installed skills."""
-        try:
-            from tools.skills_hub import HubLockFile, SKILLS_DIR
-            from agent.skill_utils import get_all_skills_dirs
-            import os
-            
-            print("\n  📦 内置技能:")
-            print()
-            
-            scan_dirs = [path for path in get_all_skills_dirs() if path.exists() and path.is_dir()]
-            if scan_dirs:
-                categories = {}
-                excluded_dirs = {'.git', '.github', '.hub', '__pycache__'}
-
-                for base_dir in scan_dirs:
-                    for root, dirs, files in os.walk(base_dir):
-                        dirs[:] = [d for d in dirs if d not in excluded_dirs]
-
-                        if 'SKILL.md' not in files:
-                            continue
-
-                        skill_path = os.path.relpath(root, base_dir)
-                        parts = skill_path.split(os.sep)
-                        
-                        if len(parts) >= 2:
-                            category = parts[0]
-                            skill_name = parts[-1]
-                        elif len(parts) == 1:
-                            category = "其他"
-                            skill_name = parts[0]
-                        else:
-                            continue
-                        
-                        if category not in categories:
-                            categories[category] = set()
-                        categories[category].add(skill_name)
-                
-                if categories:
-                    for category, skills in sorted(categories.items()):
-                        print(f"    {category}:")
-                        for skill in sorted(skills):
-                            print(f"      - [{skill}]")
-                        print()
-                else:
-                    print("    暂无内置技能")
-            else:
-                print("    技能目录不存在")
-            
-            print("\n  🚀 通过技能中心安装的技能:")
-            print()
-            
-            lock = HubLockFile()
-            installed = lock.list_installed()
-            
-            if not installed:
-                print("    暂无通过技能中心安装的技能")
-            else:
-                for skill in installed:
-                    print(f"    [{skill.get('name', 'unknown')}]")
-                    print(f"        来源: {skill.get('source', 'unknown')}")
-                    print(f"        信任级别: {skill.get('trust_level', 'unknown')}")
-                    print()
-            
-            print("  💡 使用 /skills install <name> 安装新技能")
-            print("  💡 使用 /skills search <query> 搜索技能")
-            print()
-        except Exception as e:
-            print(f"\n  ❌ 无法加载技能列表: {e}")
-            print()
-
-    def _search_skills(self, query: str):
-        """Search for skills."""
-        print(f"\n  搜索技能: '{query}'")
-        print()
-        
-        try:
-            from tools.skills_hub import GitHubSource, OptionalSkillSource, ClawHubSource
-            
-            sources = [
-                ("官方可选", OptionalSkillSource()),
-                ("GitHub", GitHubSource()),
-                ("ClawHub", ClawHubSource()),
-            ]
-            
-            all_results = []
-            for source_name, source in sources:
-                try:
-                    results = source.search(query, limit=5)
-                    for result in results:
-                        result.extra['source_name'] = source_name
-                        all_results.append(result)
-                except Exception:
-                    pass
-            
-            all_results = all_results[:10]
-            
-            if not all_results:
-                print("    未找到匹配的技能")
-            else:
-                for i, skill in enumerate(all_results, 1):
-                    print(f"    {i}. [{skill.name}]")
-                    print(f"        {skill.description}")
-                    print(f"        来源: {skill.extra.get('source_name', skill.source)}")
-                    print(f"        信任级别: {skill.trust_level}")
-                    if skill.tags:
-                        print(f"        标签: {', '.join(skill.tags)}")
-                    print()
-        except Exception as e:
-            print(f"    ❌ 搜索失败: {e}")
-        
-        print()
-
-    def _install_skill(self, skill_name: str):
-        """Install a skill."""
-        if not skill_name:
-            print("\n  ❌ 请指定要安装的技能名称")
-            print("    用法: /skills install <name>")
-            print()
-            return
-        
-        print(f"\n  正在安装技能: {skill_name}")
-        print()
-        
-        try:
-            from tools.skills_hub import (
-                GitHubSource, OptionalSkillSource, ClawHubSource,
-                HubLockFile, QUARANTINE_DIR, SKILLS_DIR,
-                install_from_quarantine, content_hash, append_audit_log,
-                SkillBundle
-            )
-            from tools.skills_guard import scan_skill_bundle
-            
-            sources = [
-                OptionalSkillSource(),
-                GitHubSource(),
-                ClawHubSource(),
-            ]
-            
-            bundle = None
-            skill_meta = None
-            
-            for source in sources:
-                try:
-                    results = source.search(skill_name, limit=1)
-                    if results:
-                        skill_meta = results[0]
-                        if hasattr(source, 'download'):
-                            bundle = source.download(skill_meta.identifier)
-                            if bundle:
-                                break
-                except Exception:
-                    pass
-            
-            if not bundle:
-                print(f"    ❌ 未找到技能 '{skill_name}' 或无法下载")
-                print()
-                return
-            
-            print(f"    找到技能: {skill_meta.name}")
-            print(f"    正在扫描安全性...")
-            
-            scan_result = scan_skill_bundle(bundle)
-            
-            if scan_result.verdict != "allow":
-                print(f"    ❌ 技能未通过安全扫描: {scan_result.verdict}")
-                print(f"    原因: {scan_result.summary}")
-                print()
-                return
-            
-            quarantine_path = QUARANTINE_DIR / bundle.name
-            quarantine_path.mkdir(parents=True, exist_ok=True)
-            
-            for rel_path, content in bundle.files.items():
-                file_path = quarantine_path / rel_path
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                if isinstance(content, bytes):
-                    file_path.write_bytes(content)
-                else:
-                    file_path.write_text(content, encoding='utf-8')
-            
-            install_from_quarantine(
-                quarantine_path,
-                bundle.name,
-                "",
-                bundle,
-                scan_result
-            )
-            
-            print(f"    ✅ 技能 '{skill_name}' 安装成功")
-        except Exception as e:
-            print(f"    ❌ 安装失败: {e}")
-        
-        print()
-
-    def _uninstall_skill(self, skill_name: str):
-        """Uninstall a skill."""
-        if not skill_name:
-            print("\n  ❌ 请指定要卸载的技能名称")
-            print("    用法: /skills uninstall <name>")
-            print()
-            return
-        
-        print(f"\n  正在卸载技能: {skill_name}")
-        print()
-        
-        try:
-            from tools.skills_hub import uninstall_skill
-            
-            success, message = uninstall_skill(skill_name)
-            
-            if success:
-                print(f"    ✅ 技能 '{skill_name}' 卸载成功")
-            else:
-                print(f"    ❌ 卸载失败: {message}")
-        except Exception as e:
-            print(f"    ❌ 卸载失败: {e}")
-        
-        print()
-
-    def _handle_auto_command(self, command: str) -> None:
-        _handle_auto_command_view(
-            self,
-            command,
-            cprint=_cprint,
-            refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
-                self,
-                force=force,
-                is_gateway_running=_is_gateway_running,
-                register_with_gateway=_register_with_gateway,
-                push_cli_agent_scene=_push_cli_agent_scene,
-                monotonic_time=time.monotonic,
-            ),
-            thread_factory=threading.Thread,
-        )
-
-    def _handle_auto_q_command(self) -> None:
-        _handle_auto_q_command_view(
-            self,
-            cprint=_cprint,
-            interrupt_current_task_callback=self._interrupt_autonomous_component_task,
-            push_cli_agent_scene_callback=_push_cli_agent_scene,
-            thread_factory=threading.Thread,
-        )
-
-    def _handle_language_command(self, command: str) -> None:
-        from VoidCube_cli.language_command import handle_language_command
-
-        handle_language_command(self, command)
-
     def process_command(self, command: str) -> bool:
         """
         Process a slash command.
@@ -3643,49 +3421,6 @@ class VoidcubeCLI:
             self._record_supervisor_ui_activity(event_type, scene=scene, summary=summary)
         except Exception:
             pass
-
-    def _handle_plan_command(self, cmd: str):
-        """Handle /plan [request] — load the bundled plan skill."""
-        parts = cmd.strip().split(maxsplit=1)
-        user_instruction = parts[1].strip() if len(parts) > 1 else ""
-
-        plan_path = _get_plan_path(user_instruction)
-        msg = _get_skill_invocation_message(
-            "/plan",
-            user_instruction,
-            task_id=self.session_id,
-            runtime_note=(
-                "Save the markdown plan with write_file to this exact relative path "
-                f"inside the active workspace/backend cwd: {plan_path}"
-            ),
-        )
-
-        if not msg:
-            ChatConsole().print("[bold red]Failed to load the bundled /plan skill[/]")
-            return
-
-        _cprint(f"  📝 Plan mode queued via skill. Markdown plan target: {plan_path}")
-        if hasattr(self, '_pending_input'):
-            self._pending_input.put(msg)
-        else:
-            ChatConsole().print("[bold red]Plan mode unavailable: input queue not initialized[/]")
-    
-    def _handle_background_command(self, cmd: str):
-        """Handle /background <prompt> — run a prompt in a separate background session.
-
-        Spawns a new AIAgent in a background thread with its own session.
-        When it completes, prints the result to the CLI without modifying
-        the active session's conversation history.
-        """
-        parts = cmd.strip().split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            _cprint("  Usage: /background <prompt>")
-            _cprint("  Example: /background Summarize the top HN stories today")
-            _cprint("  The task runs in a separate session and results display here when done.")
-            return
-
-        prompt = parts[1].strip()
-        self._start_background_agent_task(prompt)
 
     def _start_background_agent_task(
         self,
@@ -3881,124 +3616,18 @@ class VoidcubeCLI:
         thread.start()
         return True
 
-    def _render_background_tasks_summary(self) -> str:
-        """Return a compact summary of CLI background threads."""
-        lines: list[str] = []
-        running: list[tuple[str, threading.Thread, Dict[str, Any]]] = []
-        for task_id, thread in self._background_tasks.items():
-            if not thread.is_alive():
-                continue
-            info = self._background_task_info.get(task_id, {})
-            running.append((task_id, thread, info))
-
-        if not running:
-            return "No active subagent or background tasks."
-
-        lines.append("CLI Background Tasks")
-        lines.append("")
-        for task_id, thread, info in running:
-            preview = str(info.get("prompt_preview") or task_id)
-            task_num = info.get("task_num")
-            started_at = float(info.get("started_at") or 0.0)
-            elapsed = max(0.0, time.time() - started_at) if started_at else 0.0
-            label = f"#{task_num}" if task_num else task_id
-            lines.append(f"  ● {label} {preview}")
-            lines.append(f"    id={task_id} thread={thread.name} elapsed={elapsed:.1f}s")
-        return "\n".join(lines)
-
-    def _handle_tasks_command(self, cmd: str = "/tasks") -> None:
-        """Show or manage active subagent tasks."""
-        parts = cmd.strip().split()
-        action = parts[1].lower() if len(parts) >= 2 else "show"
-        task_ref = parts[2].strip() if len(parts) >= 3 else ""
-        display_managers = self._get_subagent_display_managers()
-        if action in ("show", "list"):
-            if display_managers:
-                try:
-                    panel = "\n\n".join(
-                        str(manager.render_tasks_command()) for manager in display_managers
-                    )
-                except Exception as exc:
-                    _cprint(f"  Failed to render subagent tasks: {exc}")
-                    return
-                ChatConsole().print(_rich_text_from_ansi(panel))
-                return
-
-            summary = self._render_background_tasks_summary()
-            ChatConsole().print(_rich_text_from_ansi(summary))
-            return
-
-        if action not in ("bg", "background", "fg", "foreground"):
-            _cprint("  Usage: /tasks")
-            _cprint("  API-A manages subagents automatically; bg/fg are advanced debug actions.")
-            _cprint("         /tasks bg <task-id|index>")
-            _cprint("         /tasks fg <task-id|index>")
-            return
-
-        if not display_managers:
-            _cprint("  No active subagent display is available right now.")
-            return
-
-        if not task_ref:
-            _cprint("  API-A manages subagents automatically; specify a task only for advanced debug actions.")
-            _cprint("         /tasks bg <task-id|index>")
-            _cprint("         /tasks fg <task-id|index>")
-            return
-
-        display_manager = None
-        task = None
-        for manager in display_managers:
-            task = manager.resolve_task_ref(task_ref)
-            if task is not None:
-                display_manager = manager
-                break
-        if task is None:
-            _cprint(f"  Unknown subagent task: {task_ref}")
-            return
-
-        if action in ("bg", "background"):
-            try:
-                moved = display_manager.send_to_background(task.task_id)
-            except Exception as exc:
-                _cprint(f"  Failed to send subagent task to background: {exc}")
-                return
-            if not moved:
-                _cprint(f"  Could not background subagent task: {task_ref}")
-                return
-        else:
-            try:
-                moved = display_manager.bring_to_foreground(task.task_id)
-            except Exception as exc:
-                _cprint(f"  Failed to bring subagent task to foreground: {exc}")
-                return
-            if not moved:
-                _cprint(f"  Could not foreground subagent task: {task_ref}")
-                return
-
-        if self._app:
-            self._invalidate(min_interval=0)
-            return
-
-    def _handle_btw_command(self, cmd: str):
-        """Handle /btw <question> — ephemeral side question using session context.
+    def _start_btw_side_question(self, question: str) -> bool:
+        """Run an ephemeral side question against a snapshot of session context.
 
         Snapshots the current conversation history, spawns a no-tools agent in
         a background thread, and prints the answer without persisting anything
         to the main session.
         """
-        parts = cmd.strip().split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            _cprint("  Usage: /btw <question>")
-            _cprint("  Example: /btw what module owns session title sanitization?")
-            _cprint("  Answers using session context. No tools, not persisted.")
-            return
-
-        question = parts[1].strip()
         task_id = f"btw_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
         if not self._ensure_runtime_credentials():
             _cprint("  (>_<) Cannot start /btw: no valid credentials.")
-            return
+            return False
 
         turn_route = self._resolve_turn_agent_config(question)
         history_snapshot = list(self.conversation_history)
@@ -4088,6 +3717,7 @@ class VoidcubeCLI:
 
         thread = threading.Thread(target=run_btw, daemon=True, name=f"btw-{task_id}")
         thread.start()
+        return True
 
     @staticmethod
     def _try_launch_chrome_debug(port: int, system: str) -> bool:
@@ -4281,207 +3911,30 @@ class VoidcubeCLI:
     # Voice mode methods
     # ====================================================================
 
-    def _voice_start_recording(self):
-        """Start capturing audio from the microphone."""
-        if getattr(self, '_should_exit', False):
-            return
-        from tools.voice_mode import create_audio_recorder, check_voice_requirements
+    def _voice_recording_ports(self) -> VoiceRecordingPorts:
+        def invalidate() -> None:
+            app = getattr(self, "_app", None)
+            if app:
+                app.invalidate()
 
-        reqs = check_voice_requirements()
-        if not reqs["audio_available"]:
-            if _is_termux_environment():
-                details = reqs.get("details", "")
-                if "Termux:API Android app is not installed" in details:
-                    raise RuntimeError(
-                        "Termux:API command package detected, but the Android app is missing.\n"
-                        "Install/update the Termux:API Android app, then retry /voice on.\n"
-                        "Fallback: pkg install python-numpy portaudio && python -m pip install sounddevice"
-                    )
-                raise RuntimeError(
-                    "Voice mode requires either Termux:API microphone access or Python audio libraries.\n"
-                    "Option 1: pkg install termux-api and install the Termux:API Android app\n"
-                    "Option 2: pkg install python-numpy portaudio && python -m pip install sounddevice"
-                )
-            raise RuntimeError(
-                "Voice mode requires sounddevice and numpy.\n"
-                "Install with: pip install sounddevice numpy\n"
-                "Or: pip install VoidCube-agent[voice]"
-            )
-        if not reqs.get("stt_available", reqs.get("stt_key_set")):
-            raise RuntimeError(
-                "Voice mode requires an STT provider for transcription.\n"
-                "Option 1: pip install faster-whisper  (free, local)\n"
-                "Option 2: Set GROQ_API_KEY (free tier)\n"
-                "Option 3: Set VOICE_TOOLS_OPENAI_KEY (paid)"
-            )
+        return VoiceRecordingPorts(
+            state=self._voice_state(),
+            should_exit=lambda: self._should_exit,
+            is_termux_environment=_is_termux_environment,
+            invalidate=invalidate,
+            emit=lambda message: _cprint(f"{_DIM}{message}{_RST}"),
+            enqueue_input=self._pending_input.put,
+            clear_attached_images=self._attached_images.clear,
+            start_recording=self._voice_start_recording,
+            thread_factory=threading.Thread,
+            sleep=time.sleep,
+        )
 
-        # Prevent double-start from concurrent threads (atomic check-and-set)
-        with self._voice_lock:
-            if self._voice_recording:
-                return
-            self._voice_recording = True
+    def _voice_start_recording(self) -> None:
+        start_terminal_voice_recording(self._voice_recording_ports())
 
-        # Load silence detection params from config
-        voice_cfg = {}
-        try:
-            from VoidCube_app.config import load_config
-            voice_cfg = load_config().get("voice", {})
-        except Exception:
-            pass
-
-        if self._voice_recorder is None:
-            self._voice_recorder = create_audio_recorder()
-
-        # Apply config-driven silence params
-        self._voice_recorder._silence_threshold = voice_cfg.get("silence_threshold", 200)
-        self._voice_recorder._silence_duration = voice_cfg.get("silence_duration", 3.0)
-
-        def _on_silence():
-            """Called by AudioRecorder when silence is detected after speech."""
-            with self._voice_lock:
-                if not self._voice_recording:
-                    return
-            _cprint(f"\n{_DIM}Silence detected, auto-stopping...{_RST}")
-            if hasattr(self, '_app') and self._app:
-                self._app.invalidate()
-            self._voice_stop_and_transcribe()
-
-        # Audio cue: single beep BEFORE starting stream (avoid CoreAudio conflict)
-        try:
-            from tools.voice_mode import play_beep
-            play_beep(frequency=880, count=1)
-        except Exception:
-            pass
-
-        try:
-            self._voice_recorder.start(on_silence_stop=_on_silence)
-        except Exception:
-            with self._voice_lock:
-                self._voice_recording = False
-            raise
-        if getattr(self._voice_recorder, "supports_silence_autostop", True):
-            _recording_hint = "auto-stops on silence | Ctrl+B to stop & exit continuous"
-        elif _is_termux_environment():
-            _recording_hint = "Termux:API capture | Ctrl+B to stop"
-        else:
-            _recording_hint = "Ctrl+B to stop"
-        _cprint(f"\n{_ACCENT}● Recording...{_RST} {_DIM}({_recording_hint}){_RST}")
-
-        # Periodically refresh prompt to update audio level indicator
-        def _refresh_level():
-            while True:
-                with self._voice_lock:
-                    still_recording = self._voice_recording
-                if not still_recording:
-                    break
-                if hasattr(self, '_app') and self._app:
-                    self._app.invalidate()
-                time.sleep(0.15)
-        threading.Thread(target=_refresh_level, daemon=True).start()
-
-    def _voice_stop_and_transcribe(self):
-        """Stop recording, transcribe via STT, and queue the transcript as input."""
-        # Atomic guard: only one thread can enter stop-and-transcribe.
-        # Set _voice_processing immediately so concurrent Ctrl+B presses
-        # don't race into the START path while recorder.stop() holds its lock.
-        with self._voice_lock:
-            if not self._voice_recording:
-                return
-            self._voice_recording = False
-            self._voice_processing = True
-
-        submitted = False
-        wav_path = None
-        try:
-            if self._voice_recorder is None:
-                return
-
-            wav_path = self._voice_recorder.stop()
-
-            # Audio cue: double beep after stream stopped (no CoreAudio conflict)
-            try:
-                from tools.voice_mode import play_beep
-                play_beep(frequency=660, count=2)
-            except Exception:
-                pass
-
-            if wav_path is None:
-                _cprint(f"{_DIM}No speech detected.{_RST}")
-                return
-
-            # _voice_processing is already True (set atomically above)
-            if hasattr(self, '_app') and self._app:
-                self._app.invalidate()
-            _cprint(f"{_DIM}Transcribing...{_RST}")
-
-            # Get STT model from config
-            stt_model = None
-            try:
-                from VoidCube_app.config import load_config
-                stt_config = load_config().get("stt", {})
-                stt_model = stt_config.get("model")
-            except Exception:
-                pass
-
-            from tools.voice_mode import transcribe_recording
-            result = transcribe_recording(wav_path, model=stt_model)
-
-            if result.get("success") and result.get("transcript", "").strip():
-                transcript = result["transcript"].strip()
-                self._attached_images.clear()
-                if hasattr(self, '_app') and self._app:
-                    self._app.invalidate()
-                self._pending_input.put(transcript)
-                submitted = True
-            elif result.get("success"):
-                _cprint(f"{_DIM}No speech detected.{_RST}")
-            else:
-                error = result.get("error", "Unknown error")
-                _cprint(f"\n{_DIM}Transcription failed: {error}{_RST}")
-
-        except Exception as e:
-            _cprint(f"\n{_DIM}Voice processing error: {e}{_RST}")
-        finally:
-            with self._voice_lock:
-                self._voice_processing = False
-            if hasattr(self, '_app') and self._app:
-                self._app.invalidate()
-            # Clean up temp file
-            try:
-                if wav_path and os.path.isfile(wav_path):
-                    os.unlink(wav_path)
-            except Exception:
-                pass
-
-            # Track consecutive no-speech cycles to avoid infinite restart loops.
-            if not submitted:
-                self._no_speech_count = getattr(self, '_no_speech_count', 0) + 1
-                if self._no_speech_count >= 3:
-                    self._voice_continuous = False
-                    self._no_speech_count = 0
-                    _cprint(f"{_DIM}No speech detected 3 times, continuous mode stopped.{_RST}")
-                    self._voice_stop_continuous = True
-            else:
-                self._no_speech_count = 0
-
-        # Python 3.14+: return outside finally block to avoid SyntaxWarning
-        if getattr(self, '_voice_stop_continuous', False):
-            self._voice_stop_continuous = False
-            return
-
-        # If no transcript was submitted but continuous mode is active,
-        # restart recording so the user can keep talking.
-        # (When transcript IS submitted, process_loop handles restart
-        # after chat() completes.)
-        if not submitted and self._voice_continuous and not self._voice_recording:
-            def _restart_recording():
-                try:
-                    self._voice_start_recording()
-                    if hasattr(self, '_app') and self._app:
-                        self._app.invalidate()
-                except Exception as e:
-                    _cprint(f"{_DIM}Voice auto-restart failed: {e}{_RST}")
-            threading.Thread(target=_restart_recording, daemon=True).start()
+    def _voice_stop_and_transcribe(self) -> None:
+        stop_terminal_voice_recording(self._voice_recording_ports())
 
     def _voice_speak_response(self, text: str):
         """Speak the agent's response aloud using TTS (runs in background thread)."""
@@ -4497,29 +3950,6 @@ class VoidcubeCLI:
             _cprint(f"{_DIM}TTS playback failed: {e}{_RST}")
         finally:
             self._voice_tts_done.set()
-
-    def _handle_voice_command(self, command: str):
-        """Handle /voice [on|off|tts|status] command."""
-        parts = command.strip().split(maxsplit=1)
-        subcommand = parts[1].lower().strip() if len(parts) > 1 else ""
-
-        if subcommand == "on":
-            self._enable_voice_mode()
-        elif subcommand == "off":
-            self._disable_voice_mode()
-        elif subcommand == "tts":
-            self._toggle_voice_tts()
-        elif subcommand == "status":
-            self._show_voice_status()
-        elif subcommand == "":
-            # Toggle
-            if self._voice_mode:
-                self._disable_voice_mode()
-            else:
-                self._enable_voice_mode()
-        else:
-            _cprint(f"Unknown voice subcommand: {subcommand}")
-            _cprint("Usage: /voice [on|off|tts|status]")
 
     def _enable_voice_mode(self):
         """Enable voice mode after checking requirements."""
@@ -4646,158 +4076,6 @@ class VoidcubeCLI:
         _cprint(f"\n  {_BOLD}Requirements:{_RST}")
         for line in reqs["details"].split("\n"):
             _cprint(f"    {line}")
-
-    def _handle_preset_command(self, command: str):
-        """Handle /preset [list|apply|show] [name] command."""
-        parts = command.strip().split(maxsplit=2)
-        subcmd = parts[1].lower().strip() if len(parts) > 1 else "list"
-        from tools.preset_engine import list_presets, load_preset, apply_preset
-
-        if subcmd == "list":
-            presets = list_presets()
-            if not presets:
-                _cprint(f"  {_DIM}No presets available.{_RST}")
-                return
-            _cprint(f"\n  {_BOLD}Available Presets:{_RST}")
-            for p in presets:
-                _cprint(f"    {_ACCENT}{p['file']:<20}{_RST} {p['name']}")
-                _cprint(f"    {'':20} {p['description']} ({p['steps_count']} steps)")
-        elif subcmd == "show":
-            if len(parts) < 3:
-                _cprint("  Usage: /preset show <name>")
-                return
-            name = parts[2].strip()
-            preset = load_preset(name)
-            if not preset:
-                _cprint(f"  Preset not found: {name}")
-                return
-            _cprint(f"\n  {_BOLD}Preset: {preset.get('name', name)}{_RST}")
-            _cprint(f"  {preset.get('description', '')}")
-            _cprint(f"\n  {_BOLD}Steps:{_RST}")
-            for idx, step in enumerate(preset.get("steps", []), 1):
-                _cprint(f"    {idx}. {step.get('action', '?')} → {step}")
-        elif subcmd == "apply":
-            if len(parts) < 3:
-                _cprint("  Usage: /preset apply <name>")
-                return
-            name = parts[2].strip()
-            _cprint(f"  Applying preset: {name}...")
-            result = apply_preset(name)
-            if result.get("success"):
-                _cprint(f"  {_ACCENT}Preset applied successfully!{_RST}")
-            else:
-                _cprint(f"  Preset apply had errors:")
-            for r in result.get("results", []):
-                status = f"{_ACCENT}OK{_RST}" if r.get("success") else f"{_BOLD}FAIL{_RST}"
-                _cprint(f"    [{status}] {r.get('step', '?')} → {r}")
-        else:
-            _cprint(f"  Unknown subcommand: {subcmd}")
-            _cprint("  Usage: /preset [list|apply|show] [name]")
-
-    def _handle_connect_command(self, command: str):
-        """Handle /connect [list|add|use|test|remove|show|clear] [name] command."""
-        parts = command.strip().split(maxsplit=2)
-        subcmd = parts[1].lower().strip() if len(parts) > 1 else "list"
-        from tools.connection_profiles import (
-            list_profiles, save_profile, delete_profile, set_active_profile,
-            clear_active_profile, get_active_profile, get_profile, test_profile,
-            get_ssh_command,
-        )
-
-        if subcmd == "list":
-            profiles = list_profiles()
-            if not profiles:
-                _cprint(f"  {_DIM}No connection profiles saved.{_RST}")
-                _cprint("  Use /connect add <name> to create one.")
-                return
-            _cprint(f"\n  {_BOLD}Connection Profiles:{_RST}")
-            for p in profiles:
-                active_marker = f" {_ACCENT}*{_RST}" if p["active"] else ""
-                _cprint(f"    {p['name']:<15} {p['user']}@{p['host']}:{p['port']} ({p['type']}){active_marker}")
-        elif subcmd == "add":
-            if len(parts) < 3:
-                _cprint("  Usage: /connect add <name>")
-                _cprint("  Then enter host, user, port when prompted.")
-                return
-            name = parts[2].strip()
-            try:
-                host = input("  Host: ").strip()
-                user = input("  User [root]: ").strip() or "root"
-                port_str = input("  Port [22]: ").strip() or "22"
-                port = int(port_str)
-                key_path = input("  SSH key path (empty for default): ").strip() or None
-            except (EOFError, KeyboardInterrupt):
-                _cprint("  Cancelled.")
-                return
-            result = save_profile(name, host, user, port, key_path=key_path)
-            if result.get("success"):
-                _cprint(f"  {_ACCENT}Profile '{name}' saved.{_RST}")
-            else:
-                _cprint(f"  Error: {result.get('error', '')}")
-        elif subcmd == "use":
-            if len(parts) < 3:
-                _cprint("  Usage: /connect use <name>")
-                return
-            name = parts[2].strip()
-            result = set_active_profile(name)
-            if result.get("success"):
-                profile = get_profile(name)
-                _cprint(f"  {_ACCENT}Active profile: {name} ({profile.get('user','')}@{profile.get('host','')}:{profile.get('port',22)}){_RST}")
-            else:
-                _cprint(f"  Error: {result.get('error', '')}")
-        elif subcmd == "test":
-            if len(parts) < 3:
-                _cprint("  Usage: /connect test <name>")
-                return
-            name = parts[2].strip()
-            result = test_profile(name)
-            if result.get("reachable"):
-                _cprint(f"  {_ACCENT}Reachable: {name} ({result.get('host')}:{result.get('port')}){_RST}")
-            else:
-                _cprint(f"  {_BOLD}Unreachable: {name} - {result.get('error', 'connection failed')}{_RST}")
-        elif subcmd == "remove":
-            if len(parts) < 3:
-                _cprint("  Usage: /connect remove <name>")
-                return
-            name = parts[2].strip()
-            result = delete_profile(name)
-            if result.get("success"):
-                _cprint(f"  Profile '{name}' deleted.")
-            else:
-                _cprint(f"  Error: {result.get('error', '')}")
-        elif subcmd == "show":
-            if len(parts) < 3:
-                active = get_active_profile()
-                if active:
-                    name = active.get("name", "unknown")
-                    _cprint(f"  Active: {name} ({active.get('user','')}@{active.get('host','')}:{active.get('port',22)})")
-                    ssh = get_ssh_command(name)
-                    if ssh.get("success"):
-                        _cprint(f"  SSH command: {ssh['command']}")
-                else:
-                    _cprint(t('  No active profile.'))
-            else:
-                name = parts[2].strip()
-                profile = get_profile(name)
-                if not profile:
-                    _cprint(f"  Profile not found: {name}")
-                    return
-                _cprint(f"  Name: {name}")
-                _cprint(f"  Host: {profile.get('host','')}")
-                _cprint(f"  User: {profile.get('user','')}")
-                _cprint(f"  Port: {profile.get('port',22)}")
-                _cprint(f"  Type: {profile.get('type','ssh')}")
-                if profile.get("key_path"):
-                    _cprint(f"  Key:  {profile['key_path']}")
-                ssh = get_ssh_command(name)
-                if ssh.get("success"):
-                    _cprint(f"  SSH:  {ssh['command']}")
-        elif subcmd == "clear":
-            clear_active_profile()
-            _cprint("  Active profile cleared.")
-        else:
-            _cprint(f"  Unknown subcommand: {subcmd}")
-            _cprint("  Usage: /connect [list|add|use|test|remove|show|clear] [name]")
 
     def _clarification_sink(
         self,
@@ -5584,53 +4862,6 @@ class VoidcubeCLI:
             manipulate user input from a keybinding handler.
         """
 
-    def _build_tui_layout_children(
-        self,
-        *,
-        sudo_widget,
-        secret_widget,
-        approval_widget,
-        clarify_widget,
-        model_picker_widget=None,
-        spinner_widget=None,
-        spacer,
-        status_bar,
-        auto_execution_panel=None,
-        input_rule_top,
-        image_bar,
-        input_area,
-        input_rule_bot,
-        voice_status_bar,
-        completions_menu,
-    ) -> list:
-        """Assemble the ordered list of children for the root ``HSplit``.
-
-        Wrapper CLIs typically override ``_get_extra_tui_widgets`` instead of
-        this method.  Override this only when you need full control over widget
-        ordering.
-        """
-        return [
-            item for item in [
-                Window(height=0),
-                sudo_widget,
-                secret_widget,
-                approval_widget,
-                clarify_widget,
-                model_picker_widget,
-                spinner_widget,
-                spacer,
-                *self._get_extra_tui_widgets(),
-                status_bar,
-                input_rule_top,
-                image_bar,
-                input_area,
-                input_rule_bot,
-                voice_status_bar,
-                auto_execution_panel,
-                completions_menu,
-            ] if item is not None
-        ]
-
     def run(self):
         """Run the interactive CLI loop with persistent input at bottom."""
         # Push the entire TUI to the bottom of the terminal so the banner,
@@ -5795,16 +5026,8 @@ class VoidcubeCLI:
         self._attached_images: list[Path] = []
         self._image_counter = 0
 
-        # Voice mode state (protected by _voice_lock for cross-thread access)
-        self._voice_lock = threading.Lock()
-        self._voice_mode = False        # Whether voice mode is enabled
-        self._voice_tts = False         # Whether TTS output is enabled
-        self._voice_recorder = None     # AudioRecorder instance (lazy init)
-        self._voice_recording = False   # Whether currently recording
-        self._voice_processing = False  # Whether STT is in progress
-        self._voice_continuous = False  # Whether to auto-restart after agent responds
-        self._voice_tts_done = threading.Event()  # Signals TTS playback finished
-        self._voice_tts_done.set()  # Initially "done" (no TTS pending)
+        # Each interactive run gets a fresh cross-thread voice session state.
+        self._voice_runtime_state = CliVoiceRuntimeState()
 
         # Register callbacks so terminal_tool prompts route through our UI
         _get_set_sudo_password_callback(self._sudo_password_callback)
@@ -5980,11 +5203,11 @@ class VoidcubeCLI:
                             # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
                             _cprint(f"  🔓 临时停用自主链路...")
-                            _exit_autonomous_gate_fast_view(
+                            exit_autonomous_gate_fast_for_host(
                                 self,
-                                cprint=_cprint,
-                                interrupt_current_task_callback=self._interrupt_autonomous_component_task,
-                                push_cli_agent_scene_callback=_push_cli_agent_scene,
+                                emit=_cprint,
+                                interrupt_current_task=self._interrupt_autonomous_component_task,
+                                push_cli_agent_scene=_push_cli_agent_scene,
                             )
                             event.app.invalidate()
                             return
@@ -6001,118 +5224,31 @@ class VoidcubeCLI:
                     preview = text if text else f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
                     _cprint(f"  Queued for the next turn: {preview[:80]}{'...' if len(preview) > 80 else ''}")
                 event.app.current_buffer.reset(append_to_history=True)
-        @kb.add('escape', 'enter')
-        def handle_alt_enter(event):
-            """Alt+Enter inserts a newline for multi-line input."""
-            event.current_buffer.insert_text('\n')
+        install_text_editing_keybindings(kb)
 
-        @kb.add('c-j')
-        def handle_ctrl_enter(event):
-            """Ctrl+Enter (c-j) inserts a newline. Most terminals send c-j for Ctrl+Enter."""
-            event.current_buffer.insert_text('\n')
-
-        @kb.add('tab', eager=True)
-        def handle_tab(event):
-            """Tab: accept completion, auto-suggestion, or start completions.
-
-            Priority:
-            1. Completion menu open → accept selected completion
-            2. Ghost text suggestion available → accept auto-suggestion
-            3. Otherwise → start completion menu
-
-            After accepting a provider prefix, the completion menu closes and
-            complete_while_typing doesn't fire (no keystroke).
-            This binding re-triggers completions so stage-2 models appear
-            immediately.
-            """
-            buf = event.current_buffer
-            if buf.complete_state:
-                # Completion menu is open — accept the selection
-                completion = buf.complete_state.current_completion
-                if completion is None:
-                    # Menu open but nothing selected — select first then grab it
-                    buf.go_to_completion(0)
-                    completion = buf.complete_state and buf.complete_state.current_completion
-                if completion is None:
-                    return
-                # Accept the selected completion
-                buf.apply_completion(completion)
-            elif buf.suggestion and buf.suggestion.text:
-                # No completion menu, but there's a ghost text auto-suggestion — accept it
-                buf.insert_text(buf.suggestion.text)
-            else:
-                # No menu and no suggestion — start completions from scratch
-                buf.start_completion()
-
-        # --- Clarify tool: arrow-key navigation for multiple-choice questions ---
-
-        @kb.add('up', filter=Condition(lambda: bool(self._clarify_state) and not self._clarify_freetext))
-        def clarify_up(event):
-            """Move selection up in clarify choices."""
-            if self._clarify_state:
-                self._clarify_state["selected"] = max(0, self._clarify_state["selected"] - 1)
-                event.app.invalidate()
-
-        @kb.add('down', filter=Condition(lambda: bool(self._clarify_state) and not self._clarify_freetext))
-        def clarify_down(event):
-            """Move selection down in clarify choices."""
-            if self._clarify_state:
-                choices = self._clarify_state.get("choices") or []
-                max_idx = len(choices)  # last index is the "Other" option
-                self._clarify_state["selected"] = min(max_idx, self._clarify_state["selected"] + 1)
-                event.app.invalidate()
-
-        # --- Dangerous command approval: arrow-key navigation ---
-
-        @kb.add('up', filter=Condition(lambda: bool(self._approval_state)))
-        def approval_up(event):
-            if self._approval_state:
-                self._approval_state["selected"] = max(0, self._approval_state["selected"] - 1)
-                event.app.invalidate()
-
-        @kb.add('down', filter=Condition(lambda: bool(self._approval_state)))
-        def approval_down(event):
-            if self._approval_state:
-                max_idx = len(self._approval_state["choices"]) - 1
-                self._approval_state["selected"] = min(max_idx, self._approval_state["selected"] + 1)
-                event.app.invalidate()
-
-        # --- /model picker: arrow-key navigation ---
-        @kb.add('up', filter=Condition(lambda: bool(self._model_picker_state)))
-        def model_picker_up(event):
-            if self._model_picker_state:
-                self._model_picker_state["selected"] = max(0, self._model_picker_state.get("selected", 0) - 1)
-                event.app.invalidate()
-
-        @kb.add('down', filter=Condition(lambda: bool(self._model_picker_state)))
-        def model_picker_down(event):
-            state = self._model_picker_state
-            if not state:
-                return
-            if state.get("stage") == "provider":
-                max_idx = len(state.get("providers") or [])
-            else:
-                max_idx = len(state.get("model_list") or []) + 1
-            state["selected"] = min(max_idx, state.get("selected", 0) + 1)
-            event.app.invalidate()
+        install_modal_navigation_keybindings(
+            kb,
+            ports=ModalNavigationPorts(
+                clarify_state=lambda: self._clarify_state,
+                clarify_freetext_active=lambda: self._clarify_freetext,
+                approval_state=lambda: self._approval_state,
+                model_picker_state=lambda: self._model_picker_state,
+                invalidate=lambda: self._invalidate(min_interval=0.0),
+            ),
+        )
 
         # --- History navigation: up/down browse history in normal input mode ---
         # The TextArea is multiline, so by default up/down only move the cursor.
         # Buffer.auto_up/auto_down handle both: cursor movement when multi-line,
         # history browsing when on the first/last line (or single-line input).
-        _normal_input = Condition(
-            lambda: not self._clarify_state and not self._approval_state and not self._sudo_state and not self._secret_state and not self._model_picker_state
+        install_history_navigation_keybindings(
+            kb,
+            normal_input_active=lambda: not self._clarify_state
+            and not self._approval_state
+            and not self._sudo_state
+            and not self._secret_state
+            and not self._model_picker_state,
         )
-
-        @kb.add('up', filter=_normal_input)
-        def history_up(event):
-            """Up arrow: browse history when on first line, else move cursor up."""
-            event.app.current_buffer.auto_up(count=event.arg)
-
-        @kb.add('down', filter=_normal_input)
-        def history_down(event):
-            """Down arrow: browse history when on last line, else move cursor down."""
-            event.app.current_buffer.auto_down(count=event.arg)
 
         @kb.add('c-c')
         def handle_ctrl_c(event):
@@ -6198,11 +5334,11 @@ class VoidcubeCLI:
                 # ── Autonomous chain: Ctrl+D = emergency force-quit ──
                 event.app.current_buffer.reset()
                 _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出自主链路...")
-                _force_quit_autonomous_gate_view(
+                force_quit_autonomous_gate_for_host(
                     self,
-                    cprint=_cprint,
-                    interrupt_current_task_callback=self._interrupt_autonomous_component_task,
-                    push_cli_agent_scene_callback=_push_cli_agent_scene,
+                    emit=_cprint,
+                    interrupt_current_task=self._interrupt_autonomous_component_task,
+                    push_cli_agent_scene=_push_cli_agent_scene,
                 )
                 event.app.invalidate()
                 return
@@ -6374,60 +5510,16 @@ class VoidcubeCLI:
         def get_prompt():
             return cli_ref._get_tui_prompt_fragments()
 
-        # Create the input area with multiline (shift+enter), autocomplete, and paste handling
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-
-
-        _completer = SlashCommandCompleter(
-            # 不提供技能命令提供者，这样自动补全只显示真正的 CLI 命令
-            skill_commands_provider=None,
-            command_filter=cli_ref._command_available,
+        input_area = build_input_area(
+            ports=InputWidgetPorts(
+                history_path=str(self._history_file),
+                prompt_fragments=get_prompt,
+                prompt_text=self._get_tui_prompt_text,
+                command_available=cli_ref._command_available,
+                command_running=lambda: bool(cli_ref._command_running),
+                password_mask_active=lambda: bool(cli_ref._sudo_state) or bool(cli_ref._secret_state),
+            )
         )
-        input_area = TextArea(
-            height=Dimension(min=1, max=8, preferred=1),
-            prompt=get_prompt,
-            style='class:input-area',
-            multiline=True,
-            wrap_lines=True,
-            read_only=Condition(lambda: bool(cli_ref._command_running)),
-            history=FileHistory(str(self._history_file)),
-            completer=_completer,
-            complete_while_typing=True,
-            auto_suggest=SlashCommandAutoSuggest(
-                history_suggest=AutoSuggestFromHistory(),
-                completer=_completer,
-            ),
-        )
-
-        # Dynamic height: accounts for both explicit newlines AND visual
-        # wrapping of long lines so the input area always fits its content.
-        def _input_height():
-            try:
-                from prompt_toolkit.application import get_app
-                from prompt_toolkit.utils import get_cwidth
-
-                doc = input_area.buffer.document
-                prompt_width = max(2, get_cwidth(self._get_tui_prompt_text()))
-                try:
-                    available_width = get_app().output.get_size().columns - prompt_width
-                except Exception:
-                    available_width = shutil.get_terminal_size((80, 24)).columns - prompt_width
-                if available_width < 10:
-                    available_width = 40
-                visual_lines = 0
-                for line in doc.lines:
-                    # Each logical line takes at least 1 visual row; long lines wrap.
-                    # Use prompt_toolkit's cell width so CJK wide characters count as 2.
-                    line_width = get_cwidth(line)
-                    if line_width <= 0:
-                        visual_lines += 1
-                    else:
-                        visual_lines += max(1, -(-line_width // available_width))  # ceil division
-                return min(max(visual_lines, 1), 8)
-            except Exception:
-                return 1
-
-        input_area.window.height = _input_height
 
         # Paste collapsing: detect large pastes and save to temp file
         _paste_counter = [0]
@@ -6475,31 +5567,6 @@ class VoidcubeCLI:
 
         input_area.buffer.on_text_changed += _on_text_changed
 
-        # --- Input processors for password masking and inline placeholder ---
-
-        # Mask input with '*' when the sudo password prompt is active
-        input_area.control.input_processors.append(
-            ConditionalProcessor(
-                PasswordProcessor(),
-                filter=Condition(
-                    lambda: bool(cli_ref._sudo_state) or bool(cli_ref._secret_state)
-                ),
-            )
-        )
-
-        class _PlaceholderProcessor(Processor):
-            """Render grayed-out placeholder text inside the input when empty."""
-            def __init__(self, get_text):
-                self._get_text = get_text
-
-            def apply_transformation(self, ti):
-                if not ti.document.text and ti.lineno == 0:
-                    text = self._get_text()
-                    if text:
-                        # Append after existing fragments (preserves the ❯ prompt)
-                        return Transformation(fragments=ti.fragments + [('class:placeholder', text)])
-                return Transformation(fragments=ti.fragments)
-
         def _get_placeholder():
             if cli_ref._voice_recording:
                 return "recording... Ctrl+B to stop, Ctrl+C to cancel"
@@ -6525,7 +5592,7 @@ class VoidcubeCLI:
                 return "type or Ctrl+B to record"
             return ""
 
-        input_area.control.input_processors.append(_PlaceholderProcessor(_get_placeholder))
+        install_placeholder_processor(input_area, placeholder_text=_get_placeholder)
 
         # Hint line above input: shown only for interactive prompts that need
         # extra instructions (sudo countdown, approval navigation, clarify).
@@ -6602,367 +5669,35 @@ class VoidcubeCLI:
         def get_spinner_height():
             return cli_ref._spinner_widget_height()
 
-        spinner_widget = Window(
-            content=FormattedTextControl(get_spinner_text),
-            height=get_spinner_height,
-        )
-
-        spacer = Window(
-            content=FormattedTextControl(get_hint_text),
-            height=get_hint_height,
-        )
-
-        # --- Clarify tool: dynamic display widget for questions + choices ---
-
-        def _panel_box_width(title: str, content_lines: list[str], min_width: int = 46, max_width: int = 76) -> int:
-            """Choose a stable panel width wide enough for the title and content."""
-            term_cols = shutil.get_terminal_size((100, 20)).columns
-            longest = max([len(title)] + [len(line) for line in content_lines] + [min_width - 4])
-            inner = min(max(longest + 4, min_width - 2), max_width - 2, max(24, term_cols - 6))
-            return inner + 2  # account for the single leading/trailing spaces inside borders
-
-        def _wrap_panel_text(text: str, width: int, subsequent_indent: str = "") -> list[str]:
-            wrapped = textwrap.wrap(
-                text,
-                width=max(8, width),
-                break_long_words=False,
-                break_on_hyphens=False,
-                subsequent_indent=subsequent_indent,
-            )
-            return wrapped or [""]
-
-        def _append_panel_line(lines, border_style: str, content_style: str, text: str, box_width: int) -> None:
-            inner_width = max(0, box_width - 2)
-            lines.append((border_style, "│ "))
-            lines.append((content_style, text.ljust(inner_width)))
-            lines.append((border_style, " │\n"))
-
-        def _append_blank_panel_line(lines, border_style: str, box_width: int) -> None:
-            lines.append((border_style, "│" + (" " * box_width) + "│\n"))
-
-        def _get_clarify_display():
-            """Build styled text for the clarify question/choices panel."""
-            state = cli_ref._clarify_state
-            if not state:
-                return []
-
-            question = state["request"].question
-            choices = state.get("choices") or []
-            selected = state.get("selected", 0)
-            preview_lines = _wrap_panel_text(question, 60)
-            for i, choice in enumerate(choices):
-                prefix = "❯ " if i == selected and not cli_ref._clarify_freetext else "  "
-                preview_lines.extend(_wrap_panel_text(f"{prefix}{choice}", 60, subsequent_indent="  "))
-            other_label = (
-                "❯ Other (type below)" if cli_ref._clarify_freetext
-                else "❯ Other (type your answer)" if selected == len(choices)
-                else "  Other (type your answer)"
-            )
-            preview_lines.extend(_wrap_panel_text(other_label, 60, subsequent_indent="  "))
-            box_width = _panel_box_width("Voidcube needs your input", preview_lines)
-            inner_text_width = max(8, box_width - 2)
-
-            lines = []
-            # Box top border
-            lines.append(('class:clarify-border', '╭─ '))
-            lines.append(('class:clarify-title', 'Voidcube needs your input'))
-            lines.append(('class:clarify-border', ' ' + ('─' * max(0, box_width - len("Voidcube needs your input") - 3)) + '╮\n'))
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-
-            # Question text
-            for wrapped in _wrap_panel_text(question, inner_text_width):
-                _append_panel_line(lines, 'class:clarify-border', 'class:clarify-question', wrapped, box_width)
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-
-            if cli_ref._clarify_freetext and not choices:
-                guidance = "Type your answer in the prompt below, then press Enter."
-                for wrapped in _wrap_panel_text(guidance, inner_text_width):
-                    _append_panel_line(lines, 'class:clarify-border', 'class:clarify-choice', wrapped, box_width)
-                _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-
-            if choices:
-                # Multiple-choice mode: show selectable options
-                for i, choice in enumerate(choices):
-                    style = 'class:clarify-selected' if i == selected and not cli_ref._clarify_freetext else 'class:clarify-choice'
-                    prefix = '❯ ' if i == selected and not cli_ref._clarify_freetext else '  '
-                    wrapped_lines = _wrap_panel_text(f"{prefix}{choice}", inner_text_width, subsequent_indent="  ")
-                    for wrapped in wrapped_lines:
-                        _append_panel_line(lines, 'class:clarify-border', style, wrapped, box_width)
-
-                # "Other" option (5th line, only shown when choices exist)
-                other_idx = len(choices)
-                if selected == other_idx and not cli_ref._clarify_freetext:
-                    other_style = 'class:clarify-selected'
-                    other_label = '❯ Other (type your answer)'
-                elif cli_ref._clarify_freetext:
-                    other_style = 'class:clarify-active-other'
-                    other_label = '❯ Other (type below)'
-                else:
-                    other_style = 'class:clarify-choice'
-                    other_label = '  Other (type your answer)'
-                for wrapped in _wrap_panel_text(other_label, inner_text_width, subsequent_indent="  "):
-                    _append_panel_line(lines, 'class:clarify-border', other_style, wrapped, box_width)
-
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-            lines.append(('class:clarify-border', '╰' + ('─' * box_width) + '╯\n'))
-            return lines
-
-        clarify_widget = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_clarify_display),
-                wrap_lines=True,
-            ),
-            filter=Condition(lambda: cli_ref._clarify_state is not None),
-        )
-
-        # --- Sudo password: display widget ---
-
-        def _get_sudo_display():
-            state = cli_ref._sudo_state
-            if not state:
-                return []
-            title = '🔐 Sudo Password Required'
-            body = 'Enter password below (hidden), or press Enter to skip'
-            box_width = _panel_box_width(title, [body])
-            lines = []
-            lines.append(('class:sudo-border', '╭─ '))
-            lines.append(('class:sudo-title', title))
-            lines.append(('class:sudo-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
-            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
-            _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', body, box_width)
-            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
-            lines.append(('class:sudo-border', '╰' + ('─' * box_width) + '╯\n'))
-            return lines
-
-        sudo_widget = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_sudo_display),
-                wrap_lines=True,
-            ),
-            filter=Condition(lambda: cli_ref._sudo_state is not None),
-        )
-
-        def _get_secret_display():
-            state = cli_ref._secret_state
-            if not state:
-                return []
-
-            title = '🔑 Skill Setup Required'
-            prompt = state.get("prompt") or f"Enter value for {state.get('var_name', 'secret')}"
-            metadata = state.get("metadata") or {}
-            help_text = metadata.get("help")
-            body = 'Enter secret below (hidden), or press Enter to skip'
-            content_lines = [prompt, body]
-            if help_text:
-                content_lines.insert(1, str(help_text))
-            box_width = _panel_box_width(title, content_lines)
-            lines = []
-            lines.append(('class:sudo-border', '╭─ '))
-            lines.append(('class:sudo-title', title))
-            lines.append(('class:sudo-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
-            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
-            _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', prompt, box_width)
-            if help_text:
-                _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', str(help_text), box_width)
-            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
-            _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', body, box_width)
-            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
-            lines.append(('class:sudo-border', '╰' + ('─' * box_width) + '╯\n'))
-            return lines
-
-        secret_widget = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_secret_display),
-                wrap_lines=True,
-            ),
-            filter=Condition(lambda: cli_ref._secret_state is not None),
-        )
-
-        # --- Dangerous command approval: display widget ---
-
-        def _get_approval_display():
-            return cli_ref._get_approval_display_fragments()
-
-        approval_widget = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_approval_display),
-                wrap_lines=True,
-            ),
-            filter=Condition(lambda: cli_ref._approval_state is not None),
-        )
-
-        # --- /model picker: display widget ---
-        def _get_model_picker_display():
-            state = cli_ref._model_picker_state
-            if not state:
-                return []
-            stage = state.get("stage", "provider")
-            
-            # Maximum visible items (excluding Cancel/Back)
-            max_visible = 10
-            
-            if stage == "provider":
-                title = "> Model Picker — Select Provider"
-                choices = []
-                for p in state.get("providers") or []:
-                    count = p.get("total_models", len(p.get("models", [])))
-                    label = f"{p['name']} ({count} model{'s' if count != 1 else ''})"
-                    if p.get("is_current"):
-                        label += "  ← current"
-                    choices.append(label)
-                choices.append("Cancel")
-                hint = f"Current: {state.get('current_model', 'unknown')} on {state.get('current_provider', 'unknown')}"
-            else:
-                provider_data = state.get("provider_data") or {}
-                model_list = state.get("model_list") or []
-                title = f"> Model Picker — {provider_data.get('name', provider_data.get('slug', 'Provider'))}"
-                choices = list(model_list) + ["← Back", "Cancel"]
-                total_models = len(model_list)
-                if model_list:
-                    hint = f"Select a model ({total_models} available)"
-                else:
-                    hint = "No models listed for this provider. Use Back or Cancel."
-
-            box_width = _panel_box_width(title, [hint] + choices[:max_visible], min_width=46, max_width=84)
-            inner_text_width = max(8, box_width - 6)
-            lines = []
-            lines.append(('class:clarify-border', '╭─ '))
-            lines.append(('class:clarify-title', title))
-            lines.append(('class:clarify-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-            _append_panel_line(lines, 'class:clarify-border', 'class:clarify-hint', hint, box_width)
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-            
-            selected = state.get("selected", 0)
-            total_choices = len(choices)
-            
-            # Calculate visible window
-            if total_choices > max_visible:
-                # Determine window start based on selected position
-                if selected < max_visible // 2:
-                    window_start = 0
-                elif selected > total_choices - max_visible // 2 - 1:
-                    window_start = max(0, total_choices - max_visible)
-                else:
-                    window_start = selected - max_visible // 2
-                
-                window_end = window_start + max_visible
-                window_end = min(window_end, total_choices)
-                
-                # Add scroll indicator at top if not at beginning
-                if window_start > 0:
-                    lines.append(('class:clarify-border', '│'))
-                    lines.append(('class:clarify-choice', '  ...'))
-                    lines.append(('class:clarify-border', '│\n'))
-                
-                # Show visible items
-                for idx in range(window_start, window_end):
-                    choice = choices[idx]
-                    style = 'class:clarify-selected' if idx == selected else 'class:clarify-choice'
-                    prefix = '❯ ' if idx == selected else '  '
-                    for wrapped in _wrap_panel_text(prefix + choice, inner_text_width, subsequent_indent='  '):
-                        _append_panel_line(lines, 'class:clarify-border', style, wrapped, box_width)
-                
-                # Add scroll indicator at bottom if not at end
-                if window_end < total_choices:
-                    lines.append(('class:clarify-border', '│'))
-                    lines.append(('class:clarify-choice', '  ...'))
-                    lines.append(('class:clarify-border', '│\n'))
-                
-                # Show position indicator
-                position_text = f" {selected + 1}/{total_choices} "
-                lines.append(('class:clarify-border', '│'))
-                lines.append(('class:clarify-hint', position_text.center(inner_text_width + 4)))
-                lines.append(('class:clarify-border', '│\n'))
-            else:
-                # All items fit, show normally
-                for idx, choice in enumerate(choices):
-                    style = 'class:clarify-selected' if idx == selected else 'class:clarify-choice'
-                    prefix = '❯ ' if idx == selected else '  '
-                    for wrapped in _wrap_panel_text(prefix + choice, inner_text_width, subsequent_indent='  '):
-                        _append_panel_line(lines, 'class:clarify-border', style, wrapped, box_width)
-            
-            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
-            lines.append(('class:clarify-border', '╰' + ('─' * box_width) + '╯\n'))
-            return lines
-
-        model_picker_widget = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_model_picker_display),
-                wrap_lines=True,
-            ),
-            filter=Condition(lambda: cli_ref._model_picker_state is not None),
-        )
-
-        # Horizontal rules above and below the input.
-        # On narrow/mobile terminals we keep the top separator for structure but
-        # hide the bottom one to recover a full row for conversation content.
-        input_rule_top = Window(
-            char='─',
-            height=lambda: cli_ref._tui_input_rule_height("top"),
-            style='class:input-rule',
-        )
-        input_rule_bot = Window(
-            char='─',
-            height=lambda: cli_ref._tui_input_rule_height("bottom"),
-            style='class:input-rule',
-        )
-
-        # Image attachment indicator — shows badges like [📎 Image #1] above input
-        cli_ref = self
-
-        def _get_image_bar():
-            if not cli_ref._attached_images:
-                return []
-            badges = _format_image_attachment_badges(
-                cli_ref._attached_images,
-                cli_ref._image_counter,
-            )
-            return [("class:image-badge", f" {badges} ")]
-
-        image_bar = Window(
-            content=FormattedTextControl(_get_image_bar),
-            height=Condition(lambda: bool(cli_ref._attached_images)),
-        )
-
-        # Persistent voice mode status bar (visible only when voice mode is on)
-        def _get_voice_status():
-            return cli_ref._get_voice_status_fragments()
-
-        voice_status_bar = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_voice_status),
-                height=1,
-            ),
-            filter=Condition(lambda: cli_ref._voice_mode),
-        )
-
-        auto_execution_panel = ConditionalContainer(
-            Window(
-                content=FormattedTextControl(
-                    lambda: _get_autonomous_execution_panel_fragments_view(cli_ref)
+        indicator_widgets = build_indicator_widgets(
+            ports=IndicatorWidgetPorts(
+                spinner_fragments=get_spinner_text,
+                spinner_height=get_spinner_height,
+                hint_fragments=get_hint_text,
+                hint_height=get_hint_height,
+                input_rule_height=cli_ref._tui_input_rule_height,
+                image_fragments=lambda: (
+                    [("class:image-badge", f" {_format_image_attachment_badges(cli_ref._attached_images, cli_ref._image_counter)} ")]
+                    if cli_ref._attached_images
+                    else []
                 ),
-                dont_extend_height=True,
-            ),
-            filter=Condition(lambda: _has_visible_autonomous_work_view(cli_ref)),
+                images_visible=lambda: bool(cli_ref._attached_images),
+                voice_fragments=cli_ref._get_voice_status_fragments,
+                voice_visible=lambda: cli_ref._voice_mode,
+                autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(cli_ref),
+                autonomous_visible=lambda: _has_visible_autonomous_work_view(cli_ref),
+                status_fragments=cli_ref._get_status_bar_fragments,
+                status_visible=lambda: cli_ref._status_bar_visible,
+            )
         )
-
-        status_bar = ConditionalContainer(
-            Window(
-                content=FormattedTextControl(lambda: cli_ref._get_status_bar_fragments()),
-                height=1,
-                # Prevent fragments that overflow the terminal width from
-                # wrapping onto a second line, which causes the status bar to
-                # appear duplicated (one full + one partial row) during long
-                # sessions, especially on SSH where shutil.get_terminal_size
-                # may return stale values.  _get_status_bar_fragments now reads
-                # width from prompt_toolkit's own output object, so fragments
-                # will always fit; wrap_lines=False is the belt-and-suspenders
-                # guard against any future width mismatch.
-                wrap_lines=False,
-            ),
-            filter=Condition(lambda: cli_ref._status_bar_visible),
-        )
+        spinner_widget = indicator_widgets.spinner
+        spacer = indicator_widgets.spacer
+        input_rule_top = indicator_widgets.input_rule_top
+        input_rule_bot = indicator_widgets.input_rule_bottom
+        image_bar = indicator_widgets.image_bar
+        voice_status_bar = indicator_widgets.voice_status_bar
+        auto_execution_panel = indicator_widgets.autonomous_execution_panel
+        status_bar = indicator_widgets.status_bar
 
         # Allow wrapper CLIs to register extra keybindings.
         self._register_extra_tui_keybindings(kb, input_area=input_area)
@@ -6974,7 +5709,7 @@ class VoidcubeCLI:
 
         layout = Layout(
             HSplit(
-                self._build_tui_layout_children(
+                build_tui_layout_children(
                     sudo_widget=sudo_widget,
                     secret_widget=secret_widget,
                     approval_widget=approval_widget,
@@ -6982,6 +5717,7 @@ class VoidcubeCLI:
                     model_picker_widget=model_picker_widget,
                     spinner_widget=spinner_widget,
                     spacer=spacer,
+                    extra_widgets=self._get_extra_tui_widgets,
                     status_bar=status_bar,
                     auto_execution_panel=auto_execution_panel,
                     input_rule_top=input_rule_top,
@@ -6994,242 +5730,95 @@ class VoidcubeCLI:
             )
         )
         
-        # Style for the application
-        self._tui_style_base = {
-            'input-area': 'bg:#1a1a2e #E8E8E8',
-            'placeholder': 'bg:#1a1a2e #6B7280 italic',
-            'prompt': 'bg:#1a1a2e #E8E8E8 bold',
-            'prompt-working': 'bg:#1a1a2e #58A6FF italic',
-            'hint': 'bg:#1a1a2e #6B7280 italic',
-            'status-bar': 'bg:#1a1a2e #9CA3AF',
-            'status-bar-strong': 'bg:#1a1a2e #1E40AF bold',
-            'status-bar-dim': 'bg:#1a1a2e #6B7280',
-            'status-bar-good': 'bg:#1a1a2e #34D399 bold',
-            'status-bar-warn': 'bg:#1a1a2e #FBBF24 bold',
-            'status-bar-bad': 'bg:#1a1a2e #FB923C bold',
-            'status-bar-critical': 'bg:#1a1a2e #F87171 bold',
-            # Blue horizontal rules around the input area (matching banner border)
-            'input-rule': '#30363D',
-            # Clipboard image attachment badges
-            'image-badge': '#58A6FF bold',
-            'completion-menu': 'bg:#1a1a2e #E8E8E8',
-            'completion-menu.completion': 'bg:#1a1a2e #E8E8E8',
-            'completion-menu.completion.current': 'bg:#1E40AF #E8E8E8',
-            'completion-menu.meta.completion': 'bg:#1a1a2e #6B7280',
-            'completion-menu.meta.completion.current': 'bg:#1E40AF #58A6FF',
-            'auto-panel-border': '#30363D',
-            'auto-panel-title': '#58A6FF bold',
-            'auto-panel-text': '#E8E8E8',
-            'auto-panel-dim': '#9CA3AF',
-            'auto-panel-info': '#58A6FF',
-            'auto-panel-good': '#34D399 bold',
-            'auto-panel-warn': '#FBBF24 bold',
-            'auto-panel-bad': '#F87171 bold',
-            # Clarify question panel
-            'clarify-border': '#30363D',
-            'clarify-title': '#58A6FF bold',
-            'clarify-question': '#E8E8E8 bold',
-            'clarify-choice': '#9CA3AF',
-            'clarify-selected': '#58A6FF bold',
-            'clarify-active-other': '#58A6FF italic',
-            'clarify-countdown': '#58A6FF',
-            # Sudo password panel
-            'sudo-prompt': '#F87171 bold',
-            'sudo-border': '#30363D',
-            'sudo-title': '#F87171 bold',
-            'sudo-text': '#E8E8E8',
-            # Dangerous command approval panel
-            'approval-border': '#30363D',
-            'approval-title': '#FB923C bold',
-            'approval-desc': '#E8E8E8 bold',
-            'approval-cmd': '#9CA3AF italic',
-            'approval-choice': '#9CA3AF',
-            'approval-selected': '#58A6FF bold',
-            # Voice mode
-            'voice-prompt': '#58A6FF',
-            'voice-recording': '#F87171 bold',
-            'voice-processing': '#FB923C italic',
-            'voice-status': 'bg:#1a1a2e #58A6FF',
-            'voice-status-recording': 'bg:#1a1a2e #F87171 bold',
-        }
-        style = PTStyle.from_dict(dict(self._tui_style_base))
-        
-        # Create the application
-        app = Application(
+        app = create_tui_application(
             layout=layout,
             key_bindings=kb,
-            style=style,
-            full_screen=False,
-            mouse_support=False,
-            **({'cursor': _STEADY_CURSOR} if _STEADY_CURSOR is not None else {}),
+            cursor=_STEADY_CURSOR,
         )
         self._app = app  # Store reference for interactive modal adapters
 
-        # ── Fix ghost status-bar lines on terminal resize ──────────────
-        # When the terminal shrinks (e.g. un-maximize), the emulator reflows
-        # the previously-rendered full-width rows (status bar, input rules)
-        # into multiple narrower rows.  prompt_toolkit's _on_resize handler
-        # only cursor_up()s by the stored layout height, missing the extra
-        # rows created by reflow — leaving ghost duplicates visible.
-        #
-        # Fix: before the standard erase, inflate _cursor_pos.y so the
-        # cursor moves up far enough to cover the reflowed ghost content.
-        _original_on_resize = app._on_resize
+        install_resize_reflow_cleanup(app)
 
-        def _resize_clear_ghosts():
-            from prompt_toolkit.data_structures import Point as _Pt
-            renderer = app.renderer
-            try:
-                old_size = renderer._last_size
-                new_size = renderer.output.get_size()
-                if (
-                    old_size
-                    and new_size.columns < old_size.columns
-                    and new_size.columns > 0
-                ):
-                    reflow_factor = (
-                        (old_size.columns + new_size.columns - 1)
-                        // new_size.columns
-                    )
-                    last_h = (
-                        renderer._last_screen.height
-                        if renderer._last_screen
-                        else 0
-                    )
-                    extra = last_h * (reflow_factor - 1)
-                    if extra > 0:
-                        renderer._cursor_pos = _Pt(
-                            x=renderer._cursor_pos.x,
-                            y=renderer._cursor_pos.y + extra,
-                        )
-            except Exception:
-                pass  # never break resize handling
-            _original_on_resize()
-
-        app._on_resize = _resize_clear_ghosts
-
-        def spinner_loop():
-            import time as _time
-
-            last_idle_refresh = 0.0
-            last_presence_refresh = 0.0
-            while not self._should_exit:
-                if not self._app:
-                    _time.sleep(0.1)
-                    continue
-                now = _time.monotonic()
-                if (
-                    now - last_presence_refresh >= 5.0
-                    and (
-                        self._agent_running
-                        or getattr(self, "_command_running", False)
-                        or self._stream_render_state.started
-                        or self._get_subagent_observability_snapshot().get("active")
-                    )
-                ):
-                    _refresh_gateway_cli_presence_view(
-                        self,
-                        force=True,
-                        is_gateway_running=_is_gateway_running,
-                        register_with_gateway=_register_with_gateway,
-                        push_cli_agent_scene=_push_cli_agent_scene,
-                        monotonic_time=_time.monotonic,
-                    )
-                    last_presence_refresh = now
-                if self._command_running:
-                    self._invalidate(min_interval=0.1)
-                    _time.sleep(0.1)
-                else:
-                    if now - last_idle_refresh >= 1.0:
-                        last_idle_refresh = now
-                        self._invalidate(min_interval=1.0)
-                    _time.sleep(0.2)
-
-        spinner_thread = threading.Thread(target=spinner_loop, daemon=True)
-        spinner_thread.start()
-
-        def scheduled_task_loop():
-            while not self._should_exit:
-                try:
-                    self._scheduled_executor_runtime.poll_workflow()
-                except Exception:
-                    logger.debug("Scheduled task poll failed", exc_info=True)
-                time.sleep(1.0)
-
-        scheduled_task_thread = threading.Thread(
-            target=scheduled_task_loop,
-            daemon=True,
-            name="scheduled-task-executor",
+        spinner_thread = start_tui_refresh_loop(
+            stop_requested=lambda: self._should_exit,
+            application_ready=lambda: bool(self._app),
+            presence_refresh_needed=lambda: (
+                self._agent_running
+                or self._command_running
+                or self._stream_render_state.started
+                or self._get_subagent_observability_snapshot().get("active")
+            ),
+            refresh_presence=lambda: _refresh_gateway_cli_presence_view(
+                self,
+                force=True,
+                is_gateway_running=_is_gateway_running,
+                register_with_gateway=_register_with_gateway,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                monotonic_time=time.monotonic,
+            ),
+            command_running=lambda: self._command_running,
+            invalidate=lambda interval: self._invalidate(min_interval=interval),
+            monotonic_time=time.monotonic,
+            sleep=time.sleep,
+            thread_factory=threading.Thread,
         )
-        scheduled_task_thread.start()
-        
-        # Background thread to process inputs and run agent
-        def process_loop():
-            while not self._should_exit:
-                try:
-                    execution_gate = getattr(self, "_api_a_execution_gate", None)
-                    if execution_gate is not None and execution_gate.locked():
-                        time.sleep(0.1)
-                        continue
-                    # Check for pending input with timeout
-                    try:
-                        user_input = self._pending_input.get(timeout=0.1)
-                    except queue.Empty:
-                        # Periodic background tasks — never block the UI thread
-                        if not self._agent_running:
-                            self._check_config_mcp_changes()
-                            _refresh_autonomous_observation_surfaces_view(
-                                self,
-                                refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
-                                    self,
-                                    force=False,
-                                    is_gateway_running=_is_gateway_running,
-                                    register_with_gateway=_register_with_gateway,
-                                    push_cli_agent_scene=_push_cli_agent_scene,
-                                    monotonic_time=time.monotonic,
-                                ),
-                            )
-                            if getattr(self, "_autonomous_gate_active", False):
-                                self._start_autonomous_execution_component()
-                                try:
-                                    if getattr(self, "_app", None):
-                                        self._invalidate(min_interval=0.5)
-                                except Exception:
-                                    pass
-                            # Check for background process notifications (completions
-                            # and watch pattern matches) while agent is idle.
-                            try:
-                                from tools.process_registry import process_registry
-                                if not process_registry.completion_queue.empty():
-                                    evt = process_registry.completion_queue.get_nowait()
-                                    # Skip if the agent already consumed this via wait/poll/log
-                                    _evt_sid = evt.get("session_id", "")
-                                    if evt.get("type") == "completion" and process_registry.is_completion_consumed(_evt_sid):
-                                        pass  # already delivered via tool result
-                                    else:
-                                        _synth = _format_process_notification(evt)
-                                        if _synth:
-                                            self._pending_input.put(_synth)
-                            except Exception:
-                                pass
-                        continue
-                    
-                    if execution_gate is not None and not execution_gate.acquire(blocking=False):
-                        self._pending_input.put(user_input)
-                        time.sleep(0.1)
-                        continue
-                    try:
-                        self._execute_pending_input(user_input, app=app)
-                    finally:
-                        if execution_gate is not None:
-                            execution_gate.release()
 
-                except Exception as e:
-                    print(f"Error: {e}")
+        scheduled_task_thread = start_scheduled_task_polling(
+            stop_requested=lambda: self._should_exit,
+            poll_workflow=self._scheduled_executor_runtime.poll_workflow,
+            sleep=time.sleep,
+            report_failure=lambda: logger.debug(
+                "Scheduled task poll failed",
+                exc_info=True,
+            ),
+            thread_factory=threading.Thread,
+        )
         
-        # Start processing thread
-        process_thread = threading.Thread(target=process_loop, daemon=True)
-        process_thread.start()
+        def perform_idle_maintenance() -> None:
+            # Periodic background work remains owned by the CLI runtime.
+            if self._agent_running:
+                return
+            self._check_config_mcp_changes()
+            _refresh_autonomous_observation_surfaces_view(
+                self,
+                refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
+                    self,
+                    force=False,
+                    is_gateway_running=_is_gateway_running,
+                    register_with_gateway=_register_with_gateway,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    monotonic_time=time.monotonic,
+                ),
+            )
+            if self._autonomous_gate_active:
+                self._start_autonomous_execution_component()
+                if self._app:
+                    self._invalidate(min_interval=0.5)
+            # Process notification delivery remains a CLI queue concern.
+            try:
+                from tools.process_registry import process_registry
+                if not process_registry.completion_queue.empty():
+                    event = process_registry.completion_queue.get_nowait()
+                    session_id = event.get("session_id", "")
+                    if event.get("type") != "completion" or not process_registry.is_completion_consumed(session_id):
+                        synthesized = _format_process_notification(event)
+                        if synthesized:
+                            self._pending_input.put(synthesized)
+            except Exception:
+                pass
+
+        process_thread = start_input_process_loop(
+            stop_requested=lambda: self._should_exit,
+            execution_gate=self._api_a_execution_gate,
+            get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
+            empty_input=queue.Empty,
+            requeue_input=self._pending_input.put,
+            perform_idle_maintenance=perform_idle_maintenance,
+            execute_input=lambda user_input: self._execute_pending_input(user_input, app=app),
+            sleep=time.sleep,
+            report_error=lambda error: print(f"Error: {error}"),
+            thread_factory=threading.Thread,
+        )
         
         # Register atexit cleanup so resources are freed even on unexpected exit
         atexit.register(_run_cleanup)
@@ -7310,58 +5899,71 @@ class VoidcubeCLI:
                 raise
         finally:
             self._should_exit = True
-            self._stop_autonomous_execution_component(interrupt=True)
-            # Interrupt the agent immediately so its daemon thread stops making
-            # API calls and exits promptly (agent_thread is daemon, so the
-            # process will exit once the main thread finishes, but interrupting
-            # avoids wasted API calls and lets run_conversation clean up).
-            if self.agent and getattr(self, '_agent_running', False):
+            def interrupt_running_agent() -> None:
+                # The agent thread is daemon-backed, but interruption prevents
+                # needless API work and lets its conversation cleanup finish.
+                if self.agent and self._agent_running:
+                    try:
+                        self.agent.interrupt()
+                    except Exception:
+                        pass
+
+            def shutdown_voice_recorder() -> None:
+                if self._voice_recorder:
+                    try:
+                        self._voice_recorder.shutdown()
+                    except Exception:
+                        pass
+                    self._voice_recorder = None
+
+            def cleanup_temp_voice_recordings() -> None:
                 try:
-                    self.agent.interrupt()
+                    from tools.voice_mode import cleanup_temp_recordings
+                    cleanup_temp_recordings()
                 except Exception:
                     pass
-            # Shut down voice recorder (release persistent audio stream)
-            if hasattr(self, '_voice_recorder') and self._voice_recorder:
-                try:
-                    self._voice_recorder.shutdown()
-                except Exception:
-                    pass
-                self._voice_recorder = None
-            # Clean up old temp voice recordings
-            try:
-                from tools.voice_mode import cleanup_temp_recordings
-                cleanup_temp_recordings()
-            except Exception:
-                pass
-            # Unregister callbacks to avoid dangling references
-            _get_set_sudo_password_callback(None)
-            _get_set_approval_sink(None)
-            _get_set_secret_capture_callback()(None)
-            # Close session in SQLite
-            if hasattr(self, '_session_db') and self._session_db and self.agent:
-                try:
-                    self._session_db.end_session(self.agent.session_id, "cli_close")
-                except (Exception, KeyboardInterrupt) as e:
-                    logger.debug("Could not close session in DB: %s", e)
-            # Plugin hook: on_session_end — safety net for interrupted exits.
-            # run_conversation() already fires this per-turn on normal completion,
-            # so only fire here if the agent was mid-turn (_agent_running) when
-            # the exit occurred, meaning run_conversation's hook didn't fire.
-            if self.agent and getattr(self, '_agent_running', False):
-                try:
-                    from VoidCube_cli.plugins import invoke_hook as _invoke_hook
-                    _invoke_hook(
-                        "on_session_end",
-                        session_id=self.agent.session_id,
-                        completed=False,
-                        interrupted=True,
-                        model=getattr(self.agent, 'model', None),
-                        platform=getattr(self.agent, 'platform', None) or "cli",
-                    )
-                except Exception:
-                    pass
-            _run_cleanup()
-            self._print_exit_summary()
+
+            def unregister_tool_callbacks() -> None:
+                _get_set_sudo_password_callback(None)
+                _get_set_approval_sink(None)
+                _get_set_secret_capture_callback()(None)
+
+            def close_session() -> None:
+                if self._session_db and self.agent:
+                    try:
+                        self._session_db.end_session(self.agent.session_id, "cli_close")
+                    except (Exception, KeyboardInterrupt) as error:
+                        logger.debug("Could not close session in DB: %s", error)
+
+            def finish_interrupted_session() -> None:
+                # Normal completed turns already invoke this hook themselves.
+                if self.agent and self._agent_running:
+                    try:
+                        from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+                        _invoke_hook(
+                            "on_session_end",
+                            session_id=self.agent.session_id,
+                            completed=False,
+                            interrupted=True,
+                            model=getattr(self.agent, 'model', None),
+                            platform=getattr(self.agent, 'platform', None) or "cli",
+                        )
+                    except Exception:
+                        pass
+
+            run_tui_teardown(
+                TuiTeardownPorts(
+                    stop_autonomous=lambda: self._stop_autonomous_execution_component(interrupt=True),
+                    interrupt_agent=interrupt_running_agent,
+                    shutdown_voice_recorder=shutdown_voice_recorder,
+                    cleanup_temp_voice_recordings=cleanup_temp_voice_recordings,
+                    unregister_tool_callbacks=unregister_tool_callbacks,
+                    close_session=close_session,
+                    finish_interrupted_session=finish_interrupted_session,
+                    run_global_cleanup=_run_cleanup,
+                    print_exit_summary=self._print_exit_summary,
+                )
+            )
 
 
 # ============================================================================

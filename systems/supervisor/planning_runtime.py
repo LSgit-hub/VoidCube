@@ -30,6 +30,13 @@ from systems.supervisor.autonomous_chain_store import (
     AutonomousChainGitLineage,
     AutonomousChainTask,
 )
+from systems.supervisor.activity_projection import (
+    enforce_auto_drive_input_boundary,
+    idle_seconds_since,
+    parse_activity_timestamp,
+    project_auto_activity_snapshot,
+    project_runtime_observation_input,
+)
 
 logger = logging.getLogger("supervisor")
 
@@ -1464,7 +1471,7 @@ class PlanningRuntimeMixin:
                     gate_active,
                 )
             if include_gate_default and gate_active:
-                drive_input = self._enforce_auto_drive_input_boundary(
+                drive_input = enforce_auto_drive_input_boundary(
                     drive_input,
                     evidence_packet=evidence_packet,
                 )
@@ -5518,25 +5525,6 @@ class PlanningRuntimeMixin:
         logger.warning(f"Failed to fetch gateway activity snapshot: {last_error}")
         raise HTTPException(status_code=503, detail="网关活动快照暂不可用")
 
-    def _parse_activity_timestamp(self, value: Any) -> Optional[datetime]:
-        if not value or not isinstance(value, str):
-            return None
-        try:
-            parsed = datetime.fromisoformat(value)
-            # Gateway activity timestamps are naive UTC; keep comparisons in
-            # that same clock domain to avoid local-time skew.
-            if parsed.tzinfo is not None:
-                from datetime import timezone
-                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-            return parsed
-        except ValueError:
-            return None
-
-    def _idle_seconds_since(self, timestamp: Optional[datetime], *, now: datetime) -> Optional[float]:
-        if timestamp is None:
-            return None
-        return max((now - timestamp).total_seconds(), 0.0)
-
     async def get_runtime_activity(self):
         snapshot = await self._fetch_gateway_activity_snapshot()
         return {
@@ -5545,141 +5533,9 @@ class PlanningRuntimeMixin:
             "activity": snapshot,
         }
 
-    def _project_runtime_observation_input(
-        self,
-        payload: dict | None,
-        *,
-        snapshot_source: str = "live",
-    ) -> dict:
-        raw = dict(payload or {})
-        activity = dict(raw.get("activity") or {})
-        counts = dict(activity.get("counts") or {})
-        recent_metadata = dict(activity.get("recent_metadata") or {})
-        active_sessions_raw = raw.get("active_sessions")
-        if active_sessions_raw is None:
-            active_sessions_raw = activity.get("active_sessions")
-        try:
-            active_sessions = max(0, int(active_sessions_raw or 0))
-        except (TypeError, ValueError):
-            active_sessions = 0
-
-        user_chain_signal = dict(raw.get("user_chain_signal") or {})
-        quiet_after_raw = user_chain_signal.get("quiet_after_seconds")
-        try:
-            quiet_after_seconds = max(0, int(quiet_after_raw or 600))
-        except (TypeError, ValueError):
-            quiet_after_seconds = 600
-
-        user_chain_signal["scope"] = (
-            str(user_chain_signal.get("scope") or "soft_signal_only").strip()
-            or "soft_signal_only"
-        )
-        user_chain_signal["active_sessions"] = active_sessions
-        user_chain_signal["quiet_after_seconds"] = quiet_after_seconds
-        if "is_quiet" not in user_chain_signal:
-            user_chain_signal["is_quiet"] = active_sessions <= 0
-
-        activity["active_sessions"] = active_sessions
-        activity["counts"] = counts
-        activity["recent_metadata"] = recent_metadata
-
-        return {
-            "activity": activity,
-            "user_chain_signal": user_chain_signal,
-            "snapshot_source": str(snapshot_source or "live").strip() or "live",
-        }
-
-    @staticmethod
-    def _project_auto_activity_snapshot(source: Dict[str, Any] | None) -> Dict[str, Any]:
-        """Keep only Supervisor-owned signals for an Auto drive cycle.
-
-        Gateway activity is a shared fact source, so the Auto loop may still
-        use its own memory/governance/execution timestamps for concurrency and
-        recovery. User-chat timestamps, session counts, recent metadata and
-        generic error counters are deliberately excluded from the cognition
-        payload.
-        """
-        source = dict(source or {})
-        allowed_timestamps = (
-            "last_memory_task_at",
-            "last_self_learning_activity_at",
-            "last_autonomous_chain_plan_at",
-            "last_autonomous_chain_execute_at",
-            "last_autonomous_chain_activity_at",
-        )
-        projected = {
-            key: source.get(key)
-            for key in allowed_timestamps
-            if source.get(key) is not None
-        }
-        executor = dict(source.get("active_cli_executor") or {})
-        if str(executor.get("agent_lane") or "").strip().lower() == "supervisor_task":
-            projected["active_cli_executor"] = {
-                key: executor.get(key)
-                for key in (
-                    "agent_lane",
-                    "lease_status",
-                    "idle_seconds",
-                    "is_stale",
-                    "stale_after_seconds",
-                )
-                if key in executor
-            }
-        projected.update(
-            {
-                "active_sessions": 0,
-                "counts": {},
-                "recent_metadata": {},
-                "perception_scope": "autonomous_only",
-            }
-        )
-        return projected
-
-    def _enforce_auto_drive_input_boundary(
-        self,
-        source: Dict[str, Any] | None,
-        *,
-        evidence_packet: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
-        """Remove user-facing signals from a drive input crossing into Auto."""
-        payload = dict(source or {})
-        payload["activity"] = self._project_auto_activity_snapshot(payload.get("activity"))
-        payload["perception_scope"] = "autonomous_only"
-        payload["evidence_packet"] = dict(evidence_packet or {})
-        payload["active_sessions"] = 0
-        payload["correction_signals"] = 0
-        payload["error_count"] = 0
-        payload["uncertainty_high_count"] = 0
-        payload["user_chain_signal"] = {
-            "scope": "excluded_in_auto",
-            "observed": False,
-            "active_sessions": 0,
-            "is_quiet": True,
-            "recent_user_idle_seconds": None,
-            "quiet_after_seconds": payload.get("thresholds", {}).get("user_idle_seconds", 600),
-        }
-        idle_seconds = dict(payload.get("idle_seconds") or {})
-        idle_seconds["user"] = None
-        payload["idle_seconds"] = idle_seconds
-        decisions = dict(payload.get("governance_task_type_decisions") or {})
-        if "user" in decisions:
-            decisions["user"] = {
-                "eligible_for_planning": False,
-                "eligible_for_execution": False,
-            }
-            payload["governance_task_type_decisions"] = decisions
-        task_decisions = dict(payload.get("task_family_decisions") or {})
-        if "user" in task_decisions:
-            task_decisions["user"] = {
-                "eligible_for_planning": False,
-                "eligible_for_execution": False,
-            }
-            payload["task_family_decisions"] = task_decisions
-        return payload
-
     async def get_runtime_observation_input(self):
         payload = await self.evaluate_drive_input({})
-        observation_input = self._project_runtime_observation_input(
+        observation_input = project_runtime_observation_input(
             payload,
             snapshot_source="live",
         )
@@ -5712,7 +5568,7 @@ class PlanningRuntimeMixin:
         )
         snapshot = await self._fetch_gateway_activity_snapshot()
         if perception_scope == "autonomous_only":
-            snapshot = self._project_auto_activity_snapshot(snapshot)
+            snapshot = project_auto_activity_snapshot(snapshot)
 
         now_override = request.get("now")
         if isinstance(now_override, str):
@@ -5749,18 +5605,18 @@ class PlanningRuntimeMixin:
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
 
-        last_user_request_at = self._parse_activity_timestamp(snapshot.get("last_user_request_at"))
-        last_memory_task_at = self._parse_activity_timestamp(snapshot.get("last_memory_task_at"))
-        last_self_learning_activity_at = self._parse_activity_timestamp(
+        last_user_request_at = parse_activity_timestamp(snapshot.get("last_user_request_at"))
+        last_memory_task_at = parse_activity_timestamp(snapshot.get("last_memory_task_at"))
+        last_self_learning_activity_at = parse_activity_timestamp(
             snapshot.get("last_self_learning_activity_at")
         )
-        last_autonomous_chain_plan_at = self._parse_activity_timestamp(
+        last_autonomous_chain_plan_at = parse_activity_timestamp(
             snapshot.get("last_autonomous_chain_plan_at")
         )
-        last_autonomous_chain_execute_at = self._parse_activity_timestamp(
+        last_autonomous_chain_execute_at = parse_activity_timestamp(
             snapshot.get("last_autonomous_chain_execute_at")
         )
-        last_autonomous_chain_activity_at = self._parse_activity_timestamp(
+        last_autonomous_chain_activity_at = parse_activity_timestamp(
             snapshot.get("last_autonomous_chain_activity_at")
         )
         active_cli_executor = dict(snapshot.get("active_cli_executor") or {})
@@ -5782,18 +5638,18 @@ class PlanningRuntimeMixin:
             or active_cli_lease_status == "stale"
         )
 
-        user_idle_seconds = self._idle_seconds_since(last_user_request_at, now=now)
-        memory_idle_seconds = self._idle_seconds_since(last_memory_task_at, now=now)
-        self_learning_idle_seconds = self._idle_seconds_since(last_self_learning_activity_at, now=now)
-        autonomous_chain_plan_idle_seconds = self._idle_seconds_since(
+        user_idle_seconds = idle_seconds_since(last_user_request_at, now=now)
+        memory_idle_seconds = idle_seconds_since(last_memory_task_at, now=now)
+        self_learning_idle_seconds = idle_seconds_since(last_self_learning_activity_at, now=now)
+        autonomous_chain_plan_idle_seconds = idle_seconds_since(
             last_autonomous_chain_plan_at,
             now=now,
         )
-        autonomous_chain_execute_idle_seconds = self._idle_seconds_since(
+        autonomous_chain_execute_idle_seconds = idle_seconds_since(
             last_autonomous_chain_execute_at,
             now=now,
         )
-        autonomous_chain_idle_seconds = self._idle_seconds_since(last_autonomous_chain_activity_at, now=now)
+        autonomous_chain_idle_seconds = idle_seconds_since(last_autonomous_chain_activity_at, now=now)
         autonomous_execution_idle_candidates = [
             value
             for value in (

@@ -101,10 +101,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("language", "显示或更改显示语言", "配置管理",
                cli_only=True, args_hint="[-CN|-EN]",
                subcommands=("-CN", "-EN")),
-    CommandDef("connect", "管理服务器SSH连接",
-               "配置管理", cli_only=True, args_hint="[list|add|use|test|remove] [name]",
-               subcommands=("list", "add", "use", "test", "remove", "show", "clear")),
-
     # Server Management - 服务器管理
     CommandDef("tools", "查看可用工具列表", "服务器管理",
                cli_only=True),

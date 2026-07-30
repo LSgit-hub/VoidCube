@@ -115,6 +115,14 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
     if supervisor_ui.is_file():
         expected.add(SUPERVISOR_UI_RESOURCE.as_posix())
 
+    preset_resources = root / "tools" / "presets"
+    if preset_resources.is_dir():
+        expected.update(
+            path.relative_to(root).as_posix()
+            for path in preset_resources.rglob("*.yaml")
+            if path.is_file()
+        )
+
     return expected
 
 
@@ -133,7 +141,9 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 and Path(name).suffix in {".json", ".md"}
             ) or (
                 name.startswith("VoidCube_cli/locales/") and name.endswith(".json")
-            ) or name == SUPERVISOR_UI_RESOURCE.as_posix()
+            ) or name == SUPERVISOR_UI_RESOURCE.as_posix() or (
+                name.startswith("tools/presets/") and name.endswith(".yaml")
+            )
         }
         retired_files = sorted(
             name

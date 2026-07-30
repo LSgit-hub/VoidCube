@@ -14,6 +14,12 @@ from VoidCube_cli.command_handlers.display import (
     SessionStatusDisplayPorts,
     handle_session_status_command,
 )
+from VoidCube_cli.command_handlers.tasks import (
+    BackgroundTaskSnapshot,
+    TaskMoveResult,
+    TasksCommandPorts,
+    handle_tasks_command,
+)
 from VoidCube_cli.command_router import parse_cli_command
 from agent.subagent_display import SubagentStatus
 
@@ -25,15 +31,6 @@ class _FakeConsole:
     def print(self, value, *args, **kwargs):
         del args, kwargs
         self._sink.append(str(value))
-
-
-class _FakeThread:
-    def __init__(self, name: str, alive: bool = True):
-        self.name = name
-        self._alive = alive
-
-    def is_alive(self) -> bool:
-        return self._alive
 
 
 def test_tasks_command_is_registered():
@@ -53,78 +50,73 @@ def test_tasks_command_help_entry_hides_manual_debug_usage():
     assert "/tasks fg" not in description
 
 
-def test_handle_tasks_command_prefers_active_subagent_display(monkeypatch):
-    rendered: list[str] = []
-    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
-
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app.agent = SimpleNamespace(
-        _subagent_display_manager=SimpleNamespace(
-            render_tasks_command=lambda: "Subagent Panel\n  task-1"
-        )
+def _tasks_ports(
+    *,
+    has_managers=lambda: False,
+    render_subagent_tasks=lambda: "",
+    background_tasks=lambda: (),
+    move_to_background=lambda _ref: TaskMoveResult(False, False),
+    bring_to_foreground=lambda _ref: TaskMoveResult(False, False),
+):
+    output: list[str] = []
+    invalidated: list[bool] = []
+    return (
+        TasksCommandPorts(
+            has_display_managers=has_managers,
+            render_subagent_tasks=render_subagent_tasks,
+            background_tasks=background_tasks,
+            now=lambda: 200.0,
+            move_to_background=move_to_background,
+            bring_to_foreground=bring_to_foreground,
+            render_output=output.append,
+            emit=output.append,
+            invalidate=lambda: invalidated.append(True),
+        ),
+        output,
+        invalidated,
     )
-    app._background_tasks = {}
-    app._background_task_info = {}
-
-    app._handle_tasks_command()
-
-    assert any("Subagent Panel" in line for line in rendered)
 
 
-def test_handle_tasks_command_renders_all_active_subagent_displays(monkeypatch):
-    rendered: list[str] = []
-    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
-
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app.agent = SimpleNamespace(
-        _subagent_display_managers={
-            "a": SimpleNamespace(render_tasks_command=lambda: "Panel A"),
-            "b": SimpleNamespace(render_tasks_command=lambda: "Panel B"),
-        },
-        _subagent_display_manager=None,
+def test_tasks_handler_prefers_active_subagent_display():
+    ports, output, _invalidated = _tasks_ports(
+        has_managers=lambda: True,
+        render_subagent_tasks=lambda: "Panel A\n\nPanel B",
     )
-    app._background_tasks = {}
-    app._background_task_info = {}
 
-    app._handle_tasks_command()
+    handle_tasks_command(parse_cli_command("/tasks"), ports=ports)
 
-    assert any("Panel A" in line and "Panel B" in line for line in rendered)
+    assert output == ["Panel A\n\nPanel B"]
 
 
-def test_handle_tasks_command_falls_back_to_background_summary(monkeypatch):
-    rendered: list[str] = []
-    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
-    monkeypatch.setattr(cli.time, "time", lambda: 200.0)
+def test_tasks_handler_falls_back_to_background_summary():
+    ports, output, _invalidated = _tasks_ports(
+        background_tasks=lambda: (
+            BackgroundTaskSnapshot(
+                task_id="bg_task_1",
+                thread_name="bg-task-bg_task_1",
+                task_num=3,
+                prompt_preview="Summarize the repo",
+                started_at=180.0,
+            ),
+        ),
+    )
 
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app.agent = None
-    app._background_tasks = {
-        "bg_task_1": _FakeThread(name="bg-task-bg_task_1", alive=True),
-    }
-    app._background_task_info = {
-        "bg_task_1": {
-            "task_num": 3,
-            "prompt_preview": "Summarize the repo",
-            "started_at": 180.0,
-        }
-    }
+    handle_tasks_command(parse_cli_command("/tasks"), ports=ports)
 
-    app._handle_tasks_command()
-
-    assert any("CLI Background Tasks" in line for line in rendered)
-    assert any("Summarize the repo" in line for line in rendered)
+    assert "CLI Background Tasks" in output[0]
+    assert "Summarize the repo" in output[0]
 
 
 def test_process_command_routes_tasks(monkeypatch):
+    called = {"tasks": 0}
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
     app._autonomous_gate_active = False
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
-    initialize_command_execution(app)
-
-    called = {"tasks": 0}
-    app._handle_tasks_command = lambda cmd="/tasks": called.__setitem__("tasks", called["tasks"] + 1)
+    initialize_command_execution(
+        app, command_handlers={"tasks": lambda _request: called.__setitem__("tasks", called["tasks"] + 1)}
+    )
 
     keep_running = app.process_command("/tasks")
 
@@ -275,40 +267,28 @@ def _background_test_app():
     return app
 
 
-def test_handle_tasks_command_can_send_subagent_to_background(monkeypatch):
-    printed: list[str] = []
-    monkeypatch.setattr(cli, "_cprint", lambda text: printed.append(str(text)))
-
-    manager = SimpleNamespace(
-        resolve_task_ref=lambda ref: SimpleNamespace(task_id="delegate-1"),
-        send_to_background=lambda task_id: task_id == "delegate-1",
+def test_tasks_handler_can_send_subagent_to_background():
+    ports, output, invalidated = _tasks_ports(
+        has_managers=lambda: True,
+        move_to_background=lambda ref: TaskMoveResult(ref == "1", ref == "1"),
     )
 
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app.agent = SimpleNamespace(_subagent_display_manager=manager)
-    app._app = None
+    handle_tasks_command(parse_cli_command("/tasks bg 1"), ports=ports)
 
-    app._handle_tasks_command("/tasks bg 1")
-
-    assert printed == []
+    assert output == []
+    assert invalidated == [True]
 
 
-def test_handle_tasks_command_can_bring_subagent_to_foreground(monkeypatch):
-    printed: list[str] = []
-    monkeypatch.setattr(cli, "_cprint", lambda text: printed.append(str(text)))
-
-    manager = SimpleNamespace(
-        resolve_task_ref=lambda ref: SimpleNamespace(task_id="delegate-2"),
-        bring_to_foreground=lambda task_id: task_id == "delegate-2",
+def test_tasks_handler_can_bring_subagent_to_foreground():
+    ports, output, invalidated = _tasks_ports(
+        has_managers=lambda: True,
+        bring_to_foreground=lambda ref: TaskMoveResult(ref == "2", ref == "2"),
     )
 
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app.agent = SimpleNamespace(_subagent_display_manager=manager)
-    app._app = None
+    handle_tasks_command(parse_cli_command("/tasks fg 2"), ports=ports)
 
-    app._handle_tasks_command("/tasks fg 2")
-
-    assert printed == []
+    assert output == []
+    assert invalidated == [True]
 
 
 def test_get_subagent_observability_snapshot_summarizes_active_tasks():

@@ -27,6 +27,7 @@ from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_execution import initialize_command_execution
+from VoidCube_cli.tui_layout import build_tui_layout_children
 
 
 class _FakeUrlopenResponse:
@@ -48,8 +49,6 @@ def _autonomous_runtime(cli: VoidcubeCLI):
 
 
 def test_autonomous_execution_panel_is_below_input_without_legacy_gate_bar():
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._get_extra_tui_widgets = lambda: []  # type: ignore[method-assign]
     widgets = {
         name: object()
         for name in (
@@ -71,7 +70,7 @@ def test_autonomous_execution_panel_is_below_input_without_legacy_gate_bar():
         )
     }
 
-    children = cli._build_tui_layout_children(**widgets)
+    children = build_tui_layout_children(extra_widgets=lambda: [], **widgets)
 
     assert children.index(widgets["status_bar"]) < children.index(widgets["input_area"])
     assert children.index(widgets["input_area"]) < children.index(
@@ -80,9 +79,8 @@ def test_autonomous_execution_panel_is_below_input_without_legacy_gate_bar():
     assert children.index(widgets["voice_status_bar"]) < children.index(
         widgets["auto_execution_panel"]
     )
-    assert "autonomous_gate_bar" not in str(
-        __import__("inspect").signature(VoidcubeCLI._build_tui_layout_children)
-    )
+    assert "autonomous_gate_bar" not in str(build_tui_layout_children)
+    assert not hasattr(VoidcubeCLI, "_build_tui_layout_children")
 
 
 def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):

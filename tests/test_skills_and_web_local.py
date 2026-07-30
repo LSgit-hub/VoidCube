@@ -4,6 +4,7 @@ import json
 import pytest
 
 import agent.skill_utils as skill_utils
+import tools.skills_hub as skills_hub
 import tools.skills_tool as skills_tool
 import tools.web_tools as web_tools
 import tools.web_tools_local as web_tools_local
@@ -58,6 +59,64 @@ def test_skill_view_reads_repo_bundled_skill_when_user_skills_dir_missing(monkey
     assert payload["success"] is True
     assert payload["readiness_status"] == "available"
     assert "Bundled content." in payload["content"]
+
+
+@pytest.mark.unit
+def test_install_skill_from_sources_quarantines_scans_and_honors_non_overridable_policy(monkeypatch, tmp_path):
+    bundle = skills_hub.SkillBundle(
+        name="demo",
+        files={"SKILL.md": "---\nname: demo\n---\n"},
+        source="community",
+        identifier="demo-id",
+        trust_level="community",
+    )
+
+    class Source:
+        def source_id(self):
+            return "community"
+
+        def search(self, query, limit):
+            assert (query, limit) == ("demo", 1)
+            return [
+                skills_hub.SkillMeta(
+                    name="demo",
+                    description="demo",
+                    source="community",
+                    identifier="demo-id",
+                    trust_level="community",
+                )
+            ]
+
+        def fetch(self, _identifier):
+            return bundle
+
+    quarantined = tmp_path / "quarantine" / "demo"
+    events: list[object] = []
+    monkeypatch.setattr(skills_hub, "quarantine_bundle", lambda value: events.append(("quarantine", value)) or quarantined)
+    scan = object()
+    monkeypatch.setattr(skills_hub, "scan_skill", lambda path, *, source: events.append(("scan", path, source)) or scan)
+    monkeypatch.setattr(skills_hub, "should_allow_install", lambda value: events.append(("policy", value)) or (True, "allowed"))
+    monkeypatch.setattr(skills_hub, "install_from_quarantine", lambda *args: events.append(("install", args)))
+
+    success, message, installed = skills_hub.install_skill_from_sources("demo", sources=[Source()])
+
+    assert (success, message, installed) == (True, "", "demo")
+    assert events == [
+        ("quarantine", bundle),
+        ("scan", quarantined, "community"),
+        ("policy", scan),
+        ("install", (quarantined, "demo", "", bundle, scan)),
+    ]
+
+    monkeypatch.setattr(skills_hub, "should_allow_install", lambda _value: (False, "Blocked by non-overridable project integration policy"))
+    success, message, installed = skills_hub.install_skill_from_sources("demo", sources=[Source()])
+
+    assert (success, message, installed) == (
+        False,
+        "Blocked by non-overridable project integration policy",
+        "demo",
+    )
+    assert not any(event[0] == "install" for event in events[4:])
 
 
 @pytest.mark.unit
