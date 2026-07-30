@@ -34,7 +34,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "toolsets": BuiltinCommandSpec("show_toolsets"),
         "config": BuiltinCommandSpec("show_config"),
         "clear": BuiltinCommandSpec(handler_key="clear"),
-        "history": BuiltinCommandSpec("show_history"),
+        "history": BuiltinCommandSpec(handler_key="history"),
         "title": BuiltinCommandSpec(handler_key="title"),
         "new": BuiltinCommandSpec(handler_key="new"),
         "resume": BuiltinCommandSpec(handler_key="resume"),
@@ -49,9 +49,9 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "auto-q": BuiltinCommandSpec("_handle_auto_q_command"),
         "plan": BuiltinCommandSpec("_handle_plan_command", pass_original=True),
         "retry": BuiltinCommandSpec(handler_key="retry"),
-        "undo": BuiltinCommandSpec("undo_last"),
+        "undo": BuiltinCommandSpec(handler_key="undo"),
         "branch": BuiltinCommandSpec(handler_key="branch"),
-        "save": BuiltinCommandSpec("save_conversation"),
+        "save": BuiltinCommandSpec(handler_key="save"),
         "skills": BuiltinCommandSpec(
             "_handle_skills_command",
             pass_original=True,
@@ -76,10 +76,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "reload-mcp": BuiltinCommandSpec("_reload_mcp", busy=True),
         "browser": BuiltinCommandSpec("_handle_browser_command", pass_original=True),
         "plugins": BuiltinCommandSpec(handler_key="plugins"),
-        "rollback": BuiltinCommandSpec(
-            "_handle_rollback_command",
-            pass_original=True,
-        ),
+        "rollback": BuiltinCommandSpec(handler_key="rollback"),
         "stop": BuiltinCommandSpec(handler_key="stop"),
         "background": BuiltinCommandSpec(
             "_handle_background_command",

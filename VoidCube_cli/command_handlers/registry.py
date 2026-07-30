@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from VoidCube_app.session_lifecycle import (
     branch_session,
@@ -27,6 +27,7 @@ from VoidCube_cli.attachments import (
     _termux_example_image_path,
 )
 from VoidCube_cli.command_execution import initialize_command_execution
+from VoidCube_cli.command_router import parse_cli_command
 from VoidCube_cli.command_handlers.attachments import (
     ImageCommandPorts,
     ImageCommandText,
@@ -51,9 +52,25 @@ from VoidCube_cli.command_handlers.info import (
     handle_plugins_command,
     handle_profile_command,
 )
+from VoidCube_cli.command_handlers.history import (
+    HistoryCommandPorts,
+    HistoryMutationPorts,
+    SaveConversationPorts,
+    UndoCommandPorts,
+    handle_history_command,
+    handle_save_conversation_command,
+    handle_undo_command,
+    remove_last_user_turn_from_history,
+    write_conversation_export,
+)
 from VoidCube_cli.command_handlers.operations import (
     StopCommandPorts,
     handle_stop_command,
+)
+from VoidCube_cli.command_handlers.rollback import (
+    RollbackCommandPorts,
+    RollbackCommandText,
+    handle_rollback_command,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -151,6 +168,18 @@ def install_cli_command_execution(
                     ),
                 ),
             ),
+            "history": lambda request: handle_history_command(
+                request,
+                ports=HistoryCommandPorts(
+                    conversation_history=lambda: host.conversation_history,
+                    show_recent_sessions=lambda: host._show_recent_sessions(
+                        reason="history"
+                    ),
+                    emit=emit,
+                    no_history_message=translate("no_conversation_history_yet"),
+                    tools_label=translate("tools"),
+                ),
+            ),
             "paste": lambda request: handle_paste_command(
                 request,
                 ports=PasteCommandPorts(
@@ -205,12 +234,26 @@ def install_cli_command_execution(
             "retry": lambda request: handle_retry_command(
                 request,
                 ports=RetryCommandPorts(
-                    remove_last_user_turn=lambda: host._remove_last_user_turn(
-                        empty_message="no_messages_to_retry",
-                        no_user_message="no_user_message_found_to_retry",
+                    remove_last_user_turn=lambda: remove_last_user_turn_from_history(
+                        ports=_history_mutation_ports(host, emit=emit),
+                        empty_message=translate("no_messages_to_retry"),
+                        no_user_message=translate("no_user_message_found_to_retry"),
                     ),
                     enqueue=host._pending_input.put,
                     emit=print,
+                ),
+            ),
+            "save": lambda request: handle_save_conversation_command(
+                request,
+                ports=SaveConversationPorts(
+                    conversation_history=lambda: host.conversation_history,
+                    model=lambda: host.model,
+                    session_start=lambda: host.session_start,
+                    now=datetime.now,
+                    working_directory=Path.cwd,
+                    write_json=write_conversation_export,
+                    emit=emit,
+                    no_conversation_message=translate("no_conversation_to_save"),
                 ),
             ),
             "resume": lambda request: handle_resume_command(
@@ -271,6 +314,10 @@ def install_cli_command_execution(
                     ),
                 ),
             ),
+            "rollback": lambda request: handle_rollback_command(
+                request,
+                ports=_rollback_command_ports(host, emit=emit, translate=translate),
+            ),
             "statusbar": lambda request: handle_statusbar_command(
                 request,
                 ports=StatusBarCommandPorts(
@@ -314,6 +361,17 @@ def install_cli_command_execution(
                     unavailable_message=translate("  Session database not available."),
                 ),
             ),
+            "undo": lambda request: handle_undo_command(
+                request,
+                ports=UndoCommandPorts(
+                    remove_last_user_turn=lambda: remove_last_user_turn_from_history(
+                        ports=_history_mutation_ports(host, emit=emit),
+                        empty_message=translate("no_messages_to_undo"),
+                        no_user_message=translate("no_user_message_found_to_undo"),
+                    ),
+                    emit=emit,
+                ),
+            ),
         },
     )
 
@@ -349,6 +407,92 @@ def _new_session_ports(
         emit=print,
         started_message=translate("new_session_started"),
     )
+
+
+def _history_mutation_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> HistoryMutationPorts:
+    def synchronize_agent_history(history: list[dict[str, Any]]) -> None:
+        if host.agent:
+            host.agent.mark_session_history_persisted(len(history))
+            host.agent.replace_persisted_session_history(history)
+
+    return HistoryMutationPorts(
+        conversation_history=lambda: host.conversation_history,
+        repository=lambda: host._session_db,
+        session_id=lambda: host.session_id,
+        set_conversation_history=lambda history: setattr(
+            host, "conversation_history", history
+        ),
+        synchronize_agent_history=synchronize_agent_history,
+        hydration=lambda: host._session_hydration,
+        set_hydration=lambda hydration: setattr(host, "_session_hydration", hydration),
+        emit=emit,
+    )
+
+
+def _rollback_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> RollbackCommandPorts:
+    return RollbackCommandPorts(
+        checkpoint_manager=lambda: (
+            host.agent._checkpoint_mgr if getattr(host, "agent", None) else None
+        ),
+        manager_enabled=lambda manager: bool(manager.enabled),
+        working_directory=lambda: os.getenv("TERMINAL_CWD", os.getcwd()),
+        list_checkpoints=lambda manager, directory: manager.list_checkpoints(directory),
+        format_checkpoints=_format_checkpoint_list,
+        diff=lambda manager, directory, target_hash: manager.diff(directory, target_hash),
+        restore=lambda manager, directory, target_hash, file_path: manager.restore(
+            directory, target_hash, file_path=file_path
+        ),
+        has_conversation_history=lambda: bool(host.conversation_history),
+        undo_chat_history=lambda: host._builtin_command_executor.execute(
+            parse_cli_command("/undo")
+        ),
+        emit=emit,
+        text=RollbackCommandText(
+            no_active_agent=translate("prompts.no_active_agent_session"),
+            checkpoints_not_enabled=translate("prompts.checkpoints_not_enabled"),
+            checkpoints_enable_command=translate(
+                "prompts.checkpoints_enable_command"
+            ),
+            checkpoints_enable_config=translate("prompts.checkpoints_enable_config"),
+            usage_diff=translate("prompts.rollback_usage_diff"),
+            no_checkpoints=lambda path: translate(
+                "prompts.rollback_no_checkpoints", path=path
+            ),
+            no_changes=translate("prompts.rollback_no_changes"),
+            more_lines=lambda count: translate(
+                "prompts.rollback_more_lines", count=count
+            ),
+            restored=lambda checkpoint, reason: translate(
+                "prompts.rollback_restored", checkpoint=checkpoint, reason=reason
+            ),
+            restored_file=lambda file_path, checkpoint, reason: translate(
+                "prompts.rollback_restored_file",
+                file_path=file_path,
+                checkpoint=checkpoint,
+                reason=reason,
+            ),
+            snapshot_saved=translate("prompts.rollback_snapshot_saved"),
+            chat_undone=translate("prompts.rollback_chat_undone"),
+            invalid_number=lambda maximum: translate(
+                "prompts.rollback_invalid_number", max=maximum
+            ),
+        ),
+    )
+
+
+def _format_checkpoint_list(checkpoints: Sequence[dict[str, Any]], directory: str) -> str:
+    from tools.checkpoint_manager import format_checkpoint_list
+
+    return format_checkpoint_list(checkpoints, directory)
 
 
 def _notify_session_boundary(host: Any, event_type: str) -> None:

@@ -76,14 +76,11 @@ from VoidCube_app.interaction_contract import (
 )
 from VoidCube_app.session_identity import resolve_session_identity
 from VoidCube_app.session_lifecycle import (
-    HistoryMutationResult,
-    HistoryMutationStatus,
     SessionHydration,
     SessionHydrationStatus,
     SessionLifecycleState,
     SessionTitleStatus,
     hydrate_session,
-    remove_last_user_turn,
     set_session_title,
 )
 from VoidCube_app.turn_contract import begin_turn, normalize_turn_outcome
@@ -2882,113 +2879,6 @@ class VoidcubeCLI:
         self._image_counter -= 1
         return False
 
-    def _handle_rollback_command(self, command: str):
-        """Handle /rollback — list, diff, or restore filesystem checkpoints.
-
-        Syntax:
-            /rollback                 — list checkpoints
-            /rollback <N>             — restore checkpoint N (also undoes last chat turn)
-            /rollback diff <N>        — preview changes since checkpoint N
-            /rollback <N> <file>      — restore a single file from checkpoint N
-        """
-        from tools.checkpoint_manager import format_checkpoint_list
-
-        if not hasattr(self, 'agent') or not self.agent:
-            print(f"  {t('prompts.no_active_agent_session')}")
-            return
-
-        mgr = self.agent._checkpoint_mgr
-        if not mgr.enabled:
-            print(f"  {t('prompts.checkpoints_not_enabled')}")
-            print(f"  {t('prompts.checkpoints_enable_command')}")
-            print(f"  {t('prompts.checkpoints_enable_config')}")
-            return
-
-        cwd = os.getenv("TERMINAL_CWD", os.getcwd())
-        parts = command.split()
-        args = parts[1:] if len(parts) > 1 else []
-
-        if not args:
-            # List checkpoints
-            checkpoints = mgr.list_checkpoints(cwd)
-            print(format_checkpoint_list(checkpoints, cwd))
-            return
-
-        # Handle /rollback diff <N>
-        if args[0].lower() == "diff":
-            if len(args) < 2:
-                print(f"  {t('prompts.rollback_usage_diff')}")
-                return
-            checkpoints = mgr.list_checkpoints(cwd)
-            if not checkpoints:
-                print(f"  {t('prompts.rollback_no_checkpoints', path=cwd)}")
-                return
-            target_hash = self._resolve_checkpoint_ref(args[1], checkpoints)
-            if not target_hash:
-                return
-            result = mgr.diff(cwd, target_hash)
-            if result["success"]:
-                stat = result.get("stat", "")
-                diff = result.get("diff", "")
-                if not stat and not diff:
-                    print(f"  {t('prompts.rollback_no_changes')}")
-                else:
-                    if stat:
-                        print(f"\n{stat}")
-                    if diff:
-                        # Limit diff output to avoid terminal flood
-                        diff_lines = diff.splitlines()
-                        if len(diff_lines) > 80:
-                            print("\n".join(diff_lines[:80]))
-                            print(f"\n  {t('prompts.rollback_more_lines', count=len(diff_lines) - 80)}")
-                        else:
-                            print(f"\n{diff}")
-            else:
-                print(f"  ❌ {result['error']}")
-            return
-
-        # Resolve checkpoint reference (number or hash)
-        checkpoints = mgr.list_checkpoints(cwd)
-        if not checkpoints:
-            print(f"  {t('prompts.rollback_no_checkpoints', path=cwd)}")
-            return
-
-        target_hash = self._resolve_checkpoint_ref(args[0], checkpoints)
-        if not target_hash:
-            return
-
-        # Check for file-level restore: /rollback <N> <file>
-        file_path = args[1] if len(args) > 1 else None
-
-        result = mgr.restore(cwd, target_hash, file_path=file_path)
-        if result["success"]:
-            if file_path:
-                print(f"  ✅ {t('prompts.rollback_restored_file', file_path=file_path, checkpoint=result['restored_to'], reason=result['reason'])}")
-            else:
-                print(f"  ✅ {t('prompts.rollback_restored', checkpoint=result['restored_to'], reason=result['reason'])}")
-            print(f"  {t('prompts.rollback_snapshot_saved')}")
-
-            # Also undo the last conversation turn so the agent's context
-            # matches the restored filesystem state
-            if self.conversation_history:
-                self.undo_last()
-                print(f"  {t('prompts.rollback_chat_undone')}")
-        else:
-            print(f"  ❌ {result['error']}")
-
-    def _resolve_checkpoint_ref(self, ref: str, checkpoints: list) -> str | None:
-        """Resolve a checkpoint number or hash to a full commit hash."""
-        try:
-            idx = int(ref) - 1  # 1-indexed for user
-            if 0 <= idx < len(checkpoints):
-                return checkpoints[idx]["hash"]
-            else:
-                print(f"  {t('prompts.rollback_invalid_number', max=len(checkpoints))}")
-                return None
-        except ValueError:
-            # Treat as a git hash
-            return ref
-
     def _preprocess_images_with_vision(self, text: str, images: list, *, announce: bool = True) -> str:
         """Analyze attached images via the vision tool and return enriched text.
 
@@ -3471,73 +3361,6 @@ class VoidcubeCLI:
         print()
         return True
 
-    def show_history(self):
-        """Display conversation history."""
-        if not self.conversation_history:
-            if not self._show_recent_sessions(reason="history"):
-                print(t('no_conversation_history_yet'))
-            return
-
-        preview_limit = 400
-        visible_index = 0
-        hidden_tool_messages = 0
-
-        def flush_tool_summary():
-            nonlocal hidden_tool_messages
-            if not hidden_tool_messages:
-                return
-
-            noun = "message" if hidden_tool_messages == 1 else "messages"
-            print(t('tools'))
-            print(f"    ({hidden_tool_messages} tool {noun} hidden)")
-            hidden_tool_messages = 0
-
-        print()
-        print("+" + "-" * 50 + "+")
-        print("|" + " " * 12 + "(^_^) Conversation History" + " " * 11 + "|")
-        print("+" + "-" * 50 + "+")
-
-        for msg in self.conversation_history:
-            role = msg.get("role", "unknown")
-
-            if role == "tool":
-                hidden_tool_messages += 1
-                continue
-
-            if role not in {"user", "assistant"}:
-                continue
-
-            flush_tool_summary()
-            visible_index += 1
-
-            content = msg.get("content")
-            content_text = "" if content is None else str(content)
-
-            if role == "user":
-                print(f"\n  [You #{visible_index}]")
-                print(
-                    f"    {content_text[:preview_limit]}{'...' if len(content_text) > preview_limit else ''}"
-                )
-                continue
-
-            print(f"\n  [Voidcube #{visible_index}]")
-            tool_calls = msg.get("tool_calls") or []
-            if content_text:
-                preview = content_text[:preview_limit]
-                suffix = "..." if len(content_text) > preview_limit else ""
-            elif tool_calls:
-                tool_count = len(tool_calls)
-                noun = "call" if tool_count == 1 else "calls"
-                preview = f"(requested {tool_count} tool {noun})"
-                suffix = ""
-            else:
-                preview = "(no text response)"
-                suffix = ""
-            print(f"    {preview}{suffix}")
-
-        flush_tool_summary()
-        print()
-    
     def _apply_session_lifecycle_state(self, state: SessionLifecycleState) -> None:
         """Apply shared session state and synchronize the active Agent runtime."""
         self.session_id = state.session_id
@@ -3552,81 +3375,6 @@ class VoidcubeCLI:
                 session_start=state.session_start,
             )
 
-    def save_conversation(self):
-        """Save the current conversation to a file."""
-        if not self.conversation_history:
-            print(t('no_conversation_to_save'))
-            return
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"VoidCube_conversation_{timestamp}.json"
-        
-        try:
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump({
-                    "model": self.model,
-                    "session_start": self.session_start.isoformat(),
-                    "messages": self.conversation_history,
-                }, f, indent=2, ensure_ascii=False)
-            print(f"(^_^)v Conversation saved to: {filename}")
-        except Exception as e:
-            print(f"(x_x) Failed to save: {e}")
-    
-    def undo_last(self):
-        """Remove the last user/assistant exchange from conversation history.
-        
-        Walks backwards and removes all messages from the last user message
-        onward (including assistant responses, tool calls, etc.).
-        """
-        result = self._remove_last_user_turn(
-            empty_message='no_messages_to_undo',
-            no_user_message='no_user_message_found_to_undo',
-        )
-        if result is None:
-            return
-
-        preview = str(result.user_message or "")
-        removed_count = len(result.removed_messages)
-        print(f"(^_^)b Undid {removed_count} message(s). Removed: \"{preview[:60]}{'...' if len(preview) > 60 else ''}\"")
-        remaining = len(self.conversation_history)
-        print(f"  {remaining} message(s) remaining in history.")
-
-    def _remove_last_user_turn(
-        self,
-        *,
-        empty_message: str,
-        no_user_message: str,
-    ) -> HistoryMutationResult | None:
-        result = remove_last_user_turn(
-            self.conversation_history,
-            repository=self._session_db,
-            session_id=self.session_id,
-        )
-        if result.status is HistoryMutationStatus.EMPTY:
-            print(t(empty_message))
-            return None
-        if result.status is HistoryMutationStatus.NO_USER_MESSAGE:
-            print(t(no_user_message))
-            return None
-        if result.status is HistoryMutationStatus.PERSISTENCE_FAILED:
-            print(f"(x_x) Could not update session history: {result.persistence_error}")
-            return None
-
-        self.conversation_history = list(result.conversation_history)
-        if self.agent:
-            self.agent.mark_session_history_persisted(len(self.conversation_history))
-            self.agent.replace_persisted_session_history(self.conversation_history)
-
-        self._session_hydration = result.hydration(
-            session_id=self.session_id,
-            metadata=(
-                self._session_hydration.metadata
-                if self._session_hydration
-                else None
-            ),
-        )
-        return result
-    
     def _run_curses_picker(self, title: str, items: list[str], default_index: int = 0) -> int | None:
         """Run curses_single_select via run_in_terminal so prompt_toolkit handles terminal ownership cleanly."""
         import threading

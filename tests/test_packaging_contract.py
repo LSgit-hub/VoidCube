@@ -377,6 +377,7 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_cli/command_handlers/__init__.py" in expected
     assert "VoidCube_cli/command_handlers/attachments.py" in expected
     assert "VoidCube_cli/command_handlers/display.py" in expected
+    assert "VoidCube_cli/command_handlers/history.py" in expected
     assert "VoidCube_cli/command_handlers/input.py" in expected
     assert "VoidCube_cli/command_handlers/info.py" in expected
     assert "VoidCube_cli/command_handlers/operations.py" in expected

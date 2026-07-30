@@ -668,17 +668,23 @@ def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
         conversation_history=tuple(app.conversation_history),
     )
 
-    result = app._remove_last_user_turn(
-        empty_message="no_messages_to_undo",
-        no_user_message="no_user_message_found_to_undo",
-    )
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    output: list[str] = []
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/undo") is True
 
     assert app.conversation_history == [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "one"},
     ]
-    assert result.user_message == "second"
     assert calls == [2]
     assert json_history == [app.conversation_history]
     assert app._session_hydration.metadata["title"] == "Work"
     assert app._session_hydration.conversation_history == tuple(app.conversation_history)
+    assert output == [
+        '(^_^)b Undid 2 message(s). Removed: "second"',
+        "  2 message(s) remaining in history.",
+    ]

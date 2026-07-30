@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +10,8 @@ from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
     ResumeSessionResult,
     SessionAlreadyActiveError,
+    SessionHydration,
+    SessionHydrationStatus,
     SessionLifecycleState,
     SessionNotFoundError,
     SessionTitleResult,
@@ -22,6 +26,23 @@ from VoidCube_cli.command_handlers.input import (
     RetryCommandPorts,
     handle_queue_command,
     handle_retry_command,
+)
+from VoidCube_cli.command_handlers.history import (
+    HistoryCommandPorts,
+    HistoryMutationPorts,
+    SaveConversationPorts,
+    UndoCommandPorts,
+    handle_history_command,
+    handle_save_conversation_command,
+    handle_undo_command,
+    remove_last_user_turn_from_history,
+    write_conversation_export,
+)
+from VoidCube_cli.command_handlers.rollback import (
+    RollbackCommandPorts,
+    RollbackCommandText,
+    handle_rollback_command,
+    resolve_checkpoint_reference,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -56,6 +77,49 @@ _RESUME_TEXT = ResumeCommandText(
         no_messages_starting_fresh="no messages, starting fresh",
     ),
 )
+_ROLLBACK_TEXT = RollbackCommandText(
+    no_active_agent="no active agent",
+    checkpoints_not_enabled="checkpoints disabled",
+    checkpoints_enable_command="enable command",
+    checkpoints_enable_config="enable config",
+    usage_diff="usage diff",
+    no_checkpoints=lambda path: f"no checkpoints: {path}",
+    no_changes="no changes",
+    more_lines=lambda count: f"more lines: {count}",
+    restored=lambda checkpoint, reason: f"restored {checkpoint}: {reason}",
+    restored_file=lambda file_path, checkpoint, reason: (
+        f"restored {file_path} at {checkpoint}: {reason}"
+    ),
+    snapshot_saved="snapshot saved",
+    chat_undone="chat undone",
+    invalid_number=lambda maximum: f"invalid number (max {maximum})",
+)
+
+
+def _rollback_ports(
+    *,
+    output: list[str],
+    manager: object | None,
+    list_checkpoints=lambda _manager, _directory: (),
+    format_checkpoints=lambda _checkpoints, directory: f"list: {directory}",
+    diff=lambda _manager, _directory, _target: {"success": True},
+    restore=lambda _manager, _directory, _target, _file: {"success": True},
+    has_conversation_history=lambda: False,
+    undo_chat_history=lambda: None,
+) -> RollbackCommandPorts:
+    return RollbackCommandPorts(
+        checkpoint_manager=lambda: manager,
+        manager_enabled=lambda value: bool(value.enabled),
+        working_directory=lambda: "workspace",
+        list_checkpoints=list_checkpoints,
+        format_checkpoints=format_checkpoints,
+        diff=diff,
+        restore=restore,
+        has_conversation_history=has_conversation_history,
+        undo_chat_history=undo_chat_history,
+        emit=output.append,
+        text=_ROLLBACK_TEXT,
+    )
 
 
 def _session_state(
@@ -170,6 +234,406 @@ def test_retry_handler_stops_when_history_mutation_did_not_apply() -> None:
 
     assert queued == []
     assert output == []
+
+
+def test_history_handler_projects_empty_history_to_recent_sessions_then_message() -> None:
+    output: list[str] = []
+
+    handle_history_command(
+        parse_cli_command("/history ignored"),
+        ports=HistoryCommandPorts(
+            conversation_history=lambda: (),
+            show_recent_sessions=lambda: False,
+            emit=output.append,
+            no_history_message="no history",
+            tools_label="tools",
+        ),
+    )
+
+    assert output == ["no history"]
+
+
+def test_history_handler_hides_tool_messages_and_preserves_user_assistant_order() -> None:
+    output: list[str] = []
+
+    handle_history_command(
+        parse_cli_command("/history"),
+        ports=HistoryCommandPorts(
+            conversation_history=lambda: (
+                {"role": "system", "content": "ignored"},
+                {"role": "tool", "content": "hidden"},
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+            ),
+            show_recent_sessions=lambda: pytest.fail("non-empty history must not list sessions"),
+            emit=output.append,
+            no_history_message="no history",
+            tools_label="tools",
+        ),
+    )
+
+    assert output == [
+        "",
+        "+" + "-" * 50 + "+",
+        "|" + " " * 12 + "(^_^) Conversation History" + " " * 11 + "|",
+        "+" + "-" * 50 + "+",
+        "tools",
+        "    (1 tool message hidden)",
+        "\n  [You #1]",
+        "    question",
+        "\n  [Voidcube #2]",
+        "    (requested 1 tool call)",
+        "",
+    ]
+
+
+def test_save_handler_ignores_arguments_and_overwrites_default_timestamped_path(
+    tmp_path: Path,
+) -> None:
+    output: list[str] = []
+    timestamp = datetime(2026, 7, 30, 10, 0, 1)
+    destination = tmp_path / "VoidCube_conversation_20260730_100001.json"
+    destination.write_text("old export", encoding="utf-8")
+
+    handle_save_conversation_command(
+        parse_cli_command("/save another-name.json"),
+        ports=SaveConversationPorts(
+            conversation_history=lambda: ({"role": "user", "content": "hello"},),
+            model=lambda: "active-model",
+            session_start=lambda: timestamp,
+            now=lambda: timestamp,
+            working_directory=lambda: tmp_path,
+            write_json=write_conversation_export,
+            emit=output.append,
+            no_conversation_message="no conversation",
+        ),
+    )
+
+    assert output == [
+        "(^_^)v Conversation saved to: VoidCube_conversation_20260730_100001.json"
+    ]
+    assert destination.read_text(encoding="utf-8") == (
+        '{\n  "model": "active-model",\n'
+        '  "session_start": "2026-07-30T10:00:01",\n'
+        '  "messages": [\n'
+        '    {\n'
+        '      "role": "user",\n'
+        '      "content": "hello"\n'
+        '    }\n'
+        '  ]\n'
+        '}'
+    )
+
+
+def test_save_handler_reports_empty_history_and_write_failure() -> None:
+    empty_output: list[str] = []
+    failure_output: list[str] = []
+    now = datetime(2026, 7, 30, 10, 0, 1)
+
+    empty_ports = SaveConversationPorts(
+        conversation_history=lambda: (),
+        model=lambda: pytest.fail("empty export must not read model"),
+        session_start=lambda: now,
+        now=lambda: now,
+        working_directory=lambda: Path("."),
+        write_json=lambda _path, _payload: pytest.fail("empty export must not write"),
+        emit=empty_output.append,
+        no_conversation_message="no conversation",
+    )
+    handle_save_conversation_command(parse_cli_command("/save"), ports=empty_ports)
+
+    handle_save_conversation_command(
+        parse_cli_command("/save"),
+        ports=SaveConversationPorts(
+            conversation_history=lambda: ({"role": "user", "content": "hello"},),
+            model=lambda: "active-model",
+            session_start=lambda: now,
+            now=lambda: now,
+            working_directory=lambda: Path("."),
+            write_json=lambda _path, _payload: (_ for _ in ()).throw(OSError("disk full")),
+            emit=failure_output.append,
+            no_conversation_message="no conversation",
+        ),
+    )
+
+    assert empty_output == ["no conversation"]
+    assert failure_output == ["(x_x) Failed to save: disk full"]
+
+
+def test_undo_handler_rolls_back_last_user_turn_and_synchronizes_adapter_state() -> None:
+    output: list[str] = []
+    history = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "one"},
+        {"role": "user", "content": "second"},
+        {"role": "tool", "content": "hidden"},
+        {"role": "assistant", "content": "two"},
+    ]
+    repository = type("Repository", (), {"truncate_last_user_turn": lambda _self, _id: 3})()
+    hydrated = SessionHydration(
+        session_id="active",
+        status=SessionHydrationStatus.READY,
+        metadata={"id": "active", "title": "Work"},
+        conversation_history=tuple(history),
+    )
+    synced: list[list[dict[str, object]]] = []
+    state = {"history": history, "hydration": hydrated}
+    mutation_ports = HistoryMutationPorts(
+        conversation_history=lambda: state["history"],
+        repository=lambda: repository,
+        session_id=lambda: "active",
+        set_conversation_history=lambda value: state.__setitem__("history", value),
+        synchronize_agent_history=lambda value: synced.append(value),
+        hydration=lambda: state["hydration"],
+        set_hydration=lambda value: state.__setitem__("hydration", value),
+        emit=output.append,
+    )
+
+    handle_undo_command(
+        parse_cli_command("/undo ignored"),
+        ports=UndoCommandPorts(
+            remove_last_user_turn=lambda: remove_last_user_turn_from_history(
+                ports=mutation_ports,
+                empty_message="empty",
+                no_user_message="no user",
+            ),
+            emit=output.append,
+        ),
+    )
+
+    assert state["history"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "one"},
+    ]
+    assert synced == [state["history"]]
+    assert state["hydration"].metadata == {"id": "active", "title": "Work"}
+    assert state["hydration"].conversation_history == tuple(state["history"])
+    assert output == [
+        '(^_^)b Undid 3 message(s). Removed: "second"',
+        "  2 message(s) remaining in history.",
+    ]
+
+
+def test_undo_handler_keeps_history_when_no_user_turn_exists() -> None:
+    output: list[str] = []
+    history = [{"role": "assistant", "content": "orphan"}]
+    mutation_ports = HistoryMutationPorts(
+        conversation_history=lambda: history,
+        repository=lambda: pytest.fail("no-user history must not write"),
+        session_id=lambda: "active",
+        set_conversation_history=lambda _value: pytest.fail("no-user history must not mutate"),
+        synchronize_agent_history=lambda _value: pytest.fail("no-user history must not sync"),
+        hydration=lambda: None,
+        set_hydration=lambda _value: pytest.fail("no-user history must not hydrate"),
+        emit=output.append,
+    )
+
+    handle_undo_command(
+        parse_cli_command("/undo"),
+        ports=UndoCommandPorts(
+            remove_last_user_turn=lambda: remove_last_user_turn_from_history(
+                ports=mutation_ports,
+                empty_message="empty",
+                no_user_message="no user",
+            ),
+            emit=output.append,
+        ),
+    )
+
+    assert history == [{"role": "assistant", "content": "orphan"}]
+    assert output == ["no user"]
+
+
+def test_rollback_handler_stops_before_checkpoint_operations_without_agent_or_flag() -> None:
+    no_agent_output: list[str] = []
+    disabled_output: list[str] = []
+
+    handle_rollback_command(
+        parse_cli_command("/rollback"),
+        ports=_rollback_ports(output=no_agent_output, manager=None),
+    )
+    handle_rollback_command(
+        parse_cli_command("/rollback"),
+        ports=_rollback_ports(
+            output=disabled_output,
+            manager=SimpleNamespace(enabled=False),
+            list_checkpoints=lambda _manager, _directory: pytest.fail(
+                "disabled checkpoints must not list"
+            ),
+        ),
+    )
+
+    assert no_agent_output == ["no active agent"]
+    assert disabled_output == [
+        "checkpoints disabled",
+        "enable command",
+        "enable config",
+    ]
+
+
+def test_rollback_handler_lists_checkpoints_with_default_arguments() -> None:
+    output: list[str] = []
+    manager = SimpleNamespace(enabled=True)
+    checkpoints = ({"hash": "first"},)
+    observed: list[tuple[object, str]] = []
+
+    handle_rollback_command(
+        parse_cli_command("/rollback ignored"),
+        ports=_rollback_ports(
+            output=output,
+            manager=manager,
+            list_checkpoints=lambda value, directory: observed.append(
+                (value, directory)
+            ) or checkpoints,
+            format_checkpoints=lambda values, directory: (
+                f"formatted {len(values)} for {directory}"
+            ),
+        ),
+    )
+
+    assert observed == [(manager, "workspace")]
+    assert output == ["formatted 1 for workspace"]
+
+
+def test_rollback_handler_handles_diff_usage_empty_invalid_and_truncation() -> None:
+    usage_output: list[str] = []
+    empty_output: list[str] = []
+    invalid_output: list[str] = []
+    diff_output: list[str] = []
+    manager = SimpleNamespace(enabled=True)
+    checkpoints = ({"hash": "one"}, {"hash": "two"})
+
+    handle_rollback_command(
+        parse_cli_command("/rollback diff"),
+        ports=_rollback_ports(output=usage_output, manager=manager),
+    )
+    handle_rollback_command(
+        parse_cli_command("/rollback diff 1"),
+        ports=_rollback_ports(
+            output=empty_output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: (),
+        ),
+    )
+    handle_rollback_command(
+        parse_cli_command("/rollback diff 3"),
+        ports=_rollback_ports(
+            output=invalid_output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: checkpoints,
+            diff=lambda *_args: pytest.fail("invalid reference must not diff"),
+        ),
+    )
+    handle_rollback_command(
+        parse_cli_command("/rollback diff 2"),
+        ports=_rollback_ports(
+            output=diff_output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: checkpoints,
+            diff=lambda _manager, directory, target: (
+                {"success": True, "stat": "stat", "diff": "\n".join(str(i) for i in range(82))}
+                if (directory, target) == ("workspace", "two")
+                else pytest.fail("diff received incorrect target")
+            ),
+        ),
+    )
+
+    assert usage_output == ["usage diff"]
+    assert empty_output == ["no checkpoints: workspace"]
+    assert invalid_output == ["invalid number (max 2)"]
+    assert diff_output == [
+        "\nstat",
+        "\n".join(str(i) for i in range(80)),
+        "\nmore lines: 2",
+    ]
+
+
+def test_rollback_handler_projects_diff_failure_and_no_changes() -> None:
+    failure_output: list[str] = []
+    no_change_output: list[str] = []
+    manager = SimpleNamespace(enabled=True)
+    checkpoints = ({"hash": "one"},)
+
+    handle_rollback_command(
+        parse_cli_command("/rollback diff one"),
+        ports=_rollback_ports(
+            output=failure_output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: checkpoints,
+            diff=lambda *_args: {"success": False, "error": "diff failed"},
+        ),
+    )
+    handle_rollback_command(
+        parse_cli_command("/rollback diff one"),
+        ports=_rollback_ports(
+            output=no_change_output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: checkpoints,
+        ),
+    )
+
+    assert failure_output == ["  ❌ diff failed"]
+    assert no_change_output == ["no changes"]
+
+
+def test_rollback_handler_restores_file_then_reuses_undo_route() -> None:
+    output: list[str] = []
+    manager = SimpleNamespace(enabled=True)
+    calls: list[tuple[object, str, str, str | None]] = []
+    undo_calls: list[str] = []
+
+    handle_rollback_command(
+        parse_cli_command("/rollback 2 src/main.py"),
+        ports=_rollback_ports(
+            output=output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: (
+                {"hash": "one"}, {"hash": "two"}
+            ),
+            restore=lambda value, directory, target, file_path: calls.append(
+                (value, directory, target, file_path)
+            ) or {"success": True, "restored_to": "two", "reason": "before edit"},
+            has_conversation_history=lambda: True,
+            undo_chat_history=lambda: undo_calls.append("undo"),
+        ),
+    )
+
+    assert calls == [(manager, "workspace", "two", "src/main.py")]
+    assert undo_calls == ["undo"]
+    assert output == [
+        "restored src/main.py at two: before edit",
+        "snapshot saved",
+        "chat undone",
+    ]
+
+
+def test_rollback_handler_does_not_sync_chat_when_restore_fails() -> None:
+    output: list[str] = []
+    undo_calls: list[str] = []
+    manager = SimpleNamespace(enabled=True)
+
+    handle_rollback_command(
+        parse_cli_command("/rollback one"),
+        ports=_rollback_ports(
+            output=output,
+            manager=manager,
+            list_checkpoints=lambda _manager, _directory: ({"hash": "one"},),
+            restore=lambda *_args: {"success": False, "error": "restore failed"},
+            has_conversation_history=lambda: True,
+            undo_chat_history=lambda: undo_calls.append("undo"),
+        ),
+    )
+
+    assert output == ["  ❌ restore failed"]
+    assert undo_calls == []
+
+
+def test_checkpoint_reference_resolution_keeps_hashes_and_requires_valid_indices() -> None:
+    checkpoints = ({"hash": "one"}, {"hash": "two"})
+
+    assert resolve_checkpoint_reference("2", checkpoints) == "two"
+    assert resolve_checkpoint_reference("0", checkpoints) is None
+    assert resolve_checkpoint_reference("deadbeef", checkpoints) == "deadbeef"
 
 
 @pytest.mark.parametrize(

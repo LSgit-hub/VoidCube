@@ -814,10 +814,20 @@ systems/supervisor/web/
 5. `VoidCube_cli/app.py` 降至 9,241 行，较本轮 Stage 3 开始前 10,157 行净减少 916 行；P0 总行数基线已同步下调。
 6. attachments/direct command/packaging 回归为 57 passed，受影响回归为 194 passed，阶段治理集为 301 passed，完整 smoke 为 421 passed / 1171 deselected；最新 wheel 构建与源码清单审计通过。358 项归档包含 `command_handlers.attachments`、info/operations/session handlers 与 clear/session adapters，不包含已删除的 `tips.py` 和 `session_state.py`。
 
-## 41. 下一次实施起点
+## 41. CLI-3 history/save/undo command domain 实施记录
 
-下一批评估 **CLI-3 history/save/undo command domain**：
+2026-07-30 已完成：
 
-1. 先补齐 `/history`、`/save` 与 `/undo` 的直接 characterization tests，明确空历史、参数解析、默认输出路径、覆盖/写入失败、rollback 边界和用户提示。
-2. 分别梳理 history 只读投影、filesystem export 与 history mutation 所需 ports；若依赖面过宽，按边界拆成多个 handler 批次，不把文件写入和会话回滚装进同一个无边界 adapter。
-3. 每个命令切换到 execution table 后立即删除旧 `_handle_*` owner、失效 imports 和重复兼容分支，并继续以退役集成扫描、架构测试、wheel 构建与归档审计作为完成门禁。
+1. 新增 `command_handlers.history`，以三个独立 ports 集合隔离 `/history` 只读投影、`/save` filesystem export 与 `/undo` history mutation；handler 不接收 `VoidcubeCLI` host。`/history` 已覆盖空 history 的 recent-session 回退、tool message 折叠和 user/assistant 顺序；`/save` 继续使用当前目录下 `VoidCube_conversation_<timestamp>.json` 的既有默认路径和覆盖语义，命令参数仍不改变该既有导出名称。
+2. `/undo` 继续委托 shared `remove_last_user_turn()` 完成 repository transaction；adapter 仅在 mutation 成功后同步 CLI history、Agent JSON transcript cursor 和 hydration metadata。`/retry` 复用同一 mutation ports，删除 `app.py` 的旧 `_remove_last_user_turn()`，避免两条命令重新分叉状态写入规则。
+3. `/history`、`/save`、`/undo` 均切换为 execution table `handler_key`；`show_history()`、`save_conversation()` 与 `undo_last()` 已从 CLI host 删除。`/rollback` 在文件恢复成功后经统一 `/undo` execution route 对齐聊天上下文，不再引用已删除的 host owner。
+4. 新增 direct characterization tests 覆盖空 history、参数不改变既有导出路径、默认路径、覆盖、写入失败、最后 user turn rollback 边界、Agent/hydration 同步与用户提示；registry integration test 覆盖 `/undo` 真实路由。
+5. `VoidCube_cli/app.py` 降至 9,096 行，较本轮 Stage 3 开始前 10,157 行净减少 1,061 行；P0 增长基线已同步下调。
+
+## 42. 下一次实施起点
+
+下一批评估 **CLI-3 rollback checkpoint command domain**：
+
+1. 先补齐 `/rollback` 的 list、diff、invalid reference、restore success/failure 与 chat-history synchronization characterization tests。
+2. 将 checkpoint manager 的 list/diff/restore 和 terminal projections 按 ports 提取；filesystem restore 继续独立于 history export，聊天同步只复用现有 `/undo` route。
+3. 完成后删除 `VoidcubeCLI._handle_rollback_command()` 与相关 checkpoint parsing helpers，并继续以架构测试、退役集成扫描、wheel 构建和归档审计作为门禁。
