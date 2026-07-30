@@ -67,8 +67,10 @@ from VoidCube_cli.command_handlers.rollback import (
 )
 from VoidCube_cli.command_handlers.operations import (
     ApiCommandPorts,
+    DebugCommandPorts,
     DoctorCommandPorts,
     handle_api_command,
+    handle_debug_command,
     handle_doctor_command,
 )
 from VoidCube_cli.command_handlers.personality import (
@@ -83,6 +85,10 @@ from VoidCube_cli.command_handlers.fast import (
     FastCommandPorts,
     handle_fast_command,
     parse_service_tier_config,
+)
+from VoidCube_cli.command_handlers.compression import (
+    CompressionCommandPorts,
+    handle_compression_command,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -696,6 +702,115 @@ def test_fast_handler_gates_status_and_service_tier_mutations() -> None:
     assert parse_service_tier_config("unknown") is None
 
 
+def test_compression_handler_checks_preconditions_and_syncs_agent_continuation() -> None:
+    output: list[str] = []
+    short_history = [{"role": "user", "content": "one"}]
+    ports = CompressionCommandPorts(
+        conversation_history=lambda: short_history,
+        agent=lambda: pytest.fail("must not read agent for a short history"),
+        compression_enabled=lambda _agent: pytest.fail("must not read config"),
+        estimate_tokens=lambda _history: pytest.fail("must not estimate"),
+        compress=lambda _history, _tokens, _focus: pytest.fail("must not compress"),
+        synchronize_compressed_session=lambda _history, _agent: pytest.fail("must not sync"),
+        summarize=lambda *_args: pytest.fail("must not summarize"),
+        emit=output.append,
+    )
+    handle_compression_command(parse_cli_command("/compress"), ports=ports)
+
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+        {"role": "assistant", "content": "four"},
+    ]
+    agent = SimpleNamespace(compression_enabled=True)
+    synced: list[tuple[list[dict[str, object]], object]] = []
+    compressed = [history[0], {"role": "assistant", "content": "summary"}]
+    ports = CompressionCommandPorts(
+        conversation_history=lambda: history,
+        agent=lambda: agent,
+        compression_enabled=lambda value: bool(value.compression_enabled),
+        estimate_tokens=lambda value: len(value) * 100,
+        compress=lambda value, tokens, focus: (
+            compressed
+            if value == history and tokens == 400 and focus == "schema design"
+            else pytest.fail("unexpected compression inputs")
+        ),
+        synchronize_compressed_session=lambda value, active_agent: synced.append(
+            (value, active_agent)
+        ),
+        summarize=lambda before, after, before_tokens, after_tokens: {
+            "noop": False,
+            "headline": f"Compressed: {len(before)} -> {len(after)} messages",
+            "token_line": f"Tokens: {before_tokens} -> {after_tokens}",
+            "note": "retained focus",
+        },
+        emit=output.append,
+    )
+    handle_compression_command(
+        parse_cli_command("/compress schema design"),
+        ports=ports,
+    )
+
+    assert output == [
+        "(._.) Not enough conversation to compress (need at least 4 messages).",
+        '🗜️  Compressing 4 messages (~400 tokens), focus: "schema design"...',
+        "  ✅ Compressed: 4 -> 2 messages",
+        "     Tokens: 400 -> 200",
+        "     retained focus",
+    ]
+    assert synced == [(compressed, agent)]
+
+
+def test_compression_handler_reports_disabled_agent_and_operation_errors() -> None:
+    output: list[str] = []
+    history = [{"role": "user", "content": str(index)} for index in range(4)]
+    ports = CompressionCommandPorts(
+        conversation_history=lambda: history,
+        agent=lambda: None,
+        compression_enabled=lambda _agent: pytest.fail("must not inspect missing agent"),
+        estimate_tokens=lambda _history: pytest.fail("must not estimate"),
+        compress=lambda _history, _tokens, _focus: pytest.fail("must not compress"),
+        synchronize_compressed_session=lambda _history, _agent: pytest.fail("must not sync"),
+        summarize=lambda *_args: pytest.fail("must not summarize"),
+        emit=output.append,
+    )
+    handle_compression_command(parse_cli_command("/compress"), ports=ports)
+
+    disabled = SimpleNamespace(compression_enabled=False)
+    ports = CompressionCommandPorts(
+        conversation_history=lambda: history,
+        agent=lambda: disabled,
+        compression_enabled=lambda value: bool(value.compression_enabled),
+        estimate_tokens=lambda _history: pytest.fail("must not estimate"),
+        compress=lambda _history, _tokens, _focus: pytest.fail("must not compress"),
+        synchronize_compressed_session=lambda _history, _agent: pytest.fail("must not sync"),
+        summarize=lambda *_args: pytest.fail("must not summarize"),
+        emit=output.append,
+    )
+    handle_compression_command(parse_cli_command("/compress"), ports=ports)
+
+    enabled = SimpleNamespace(compression_enabled=True)
+    ports = CompressionCommandPorts(
+        conversation_history=lambda: history,
+        agent=lambda: enabled,
+        compression_enabled=lambda value: bool(value.compression_enabled),
+        estimate_tokens=lambda _history: 100,
+        compress=lambda _history, _tokens, _focus: (_ for _ in ()).throw(RuntimeError("offline")),
+        synchronize_compressed_session=lambda _history, _agent: pytest.fail("must not sync after failure"),
+        summarize=lambda *_args: pytest.fail("must not summarize after failure"),
+        emit=output.append,
+    )
+    handle_compression_command(parse_cli_command("/compress"), ports=ports)
+
+    assert output == [
+        "(._.) No active agent -- send a message first.",
+        "(._.) Compression is disabled in config.",
+        "🗜️  Compressing 4 messages (~100 tokens)...",
+        "  ❌ Compression failed: offline",
+    ]
+
+
 def test_usage_handler_reports_missing_agent_or_api_calls() -> None:
     output: list[str] = []
     unavailable = UsageCommandPorts(
@@ -743,6 +858,17 @@ def test_api_handler_delegates_the_configuration_wizard_through_a_port() -> None
     )
 
     assert calls == ["run"]
+
+
+def test_debug_handler_delegates_debug_report_sharing_through_a_port() -> None:
+    calls: list[str] = []
+
+    handle_debug_command(
+        parse_cli_command("/debug ignored"),
+        ports=DebugCommandPorts(run_debug_share=lambda: calls.append("share")),
+    )
+
+    assert calls == ["share"]
 
 
 def test_usage_handler_projects_rate_limits_cost_and_session_snapshot() -> None:

@@ -1050,6 +1050,13 @@ class AIAgent:
             conversation_history,
             allow_truncate=True,
         )
+
+    def persist_compressed_session_history(
+        self,
+        conversation_history: List[Dict[str, Any]],
+    ) -> None:
+        """Persist a complete transcript after compression creates a continuation."""
+        self._session_persistence.persist(conversation_history)
     
     def switch_model(self, new_model, new_provider, api_key='', base_url=''):
         """Switch the model/provider in-place for a live agent.

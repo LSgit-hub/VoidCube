@@ -36,6 +36,10 @@ from VoidCube_cli.command_handlers.attachments import (
     handle_image_command,
     handle_paste_command,
 )
+from VoidCube_cli.command_handlers.browser import (
+    BrowserCommandPorts,
+    handle_browser_command,
+)
 from VoidCube_cli.command_handlers.display import (
     ConfigDisplayPorts,
     HelpDisplayPorts,
@@ -59,6 +63,10 @@ from VoidCube_cli.command_handlers.display import (
 from VoidCube_cli.command_handlers.fast import (
     FastCommandPorts,
     handle_fast_command,
+)
+from VoidCube_cli.command_handlers.compression import (
+    CompressionCommandPorts,
+    handle_compression_command,
 )
 from VoidCube_cli.command_handlers.input import (
     QueueCommandPorts,
@@ -101,9 +109,11 @@ from VoidCube_cli.command_handlers.history import (
 )
 from VoidCube_cli.command_handlers.operations import (
     ApiCommandPorts,
+    DebugCommandPorts,
     DoctorCommandPorts,
     StopCommandPorts,
     handle_api_command,
+    handle_debug_command,
     handle_doctor_command,
     handle_stop_command,
 )
@@ -177,6 +187,10 @@ def install_cli_command_execution(
                     ),
                 ),
             ),
+            "browser": lambda request: handle_browser_command(
+                request,
+                ports=_browser_command_ports(host, emit=emit),
+            ),
             "clear": lambda request: handle_clear_command(
                 request,
                 ports=ClearCommandPorts(
@@ -195,6 +209,14 @@ def install_cli_command_execution(
             "config": lambda request: handle_config_display_command(
                 request,
                 ports=_config_display_ports(host, emit=emit, translate=translate),
+            ),
+            "compress": lambda request: handle_compression_command(
+                request,
+                ports=_compression_command_ports(host, emit=emit),
+            ),
+            "debug": lambda request: handle_debug_command(
+                request,
+                ports=_debug_command_ports(),
             ),
             "doctor": lambda request: handle_doctor_command(
                 request,
@@ -532,6 +554,49 @@ def _history_mutation_ports(
     )
 
 
+def _compression_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> CompressionCommandPorts:
+    from agent.manual_compression_feedback import summarize_manual_compression
+    from agent.model_metadata import estimate_messages_tokens_rough
+
+    def compress(
+        history: Sequence[Mapping[str, Any]],
+        approx_tokens: int,
+        focus_topic: str | None,
+    ) -> list[dict[str, Any]]:
+        agent = host.agent
+        compressed, _ = agent._compress_context(
+            list(history),
+            agent._cached_system_prompt or "",
+            approx_tokens=approx_tokens,
+            focus_topic=focus_topic,
+        )
+        return compressed
+
+    def synchronize_compressed_session(
+        history: list[dict[str, Any]],
+        agent: Any,
+    ) -> None:
+        agent.persist_compressed_session_history(history)
+        host.conversation_history = history
+        host.session_id = agent.session_id
+        host._session_hydration = None
+
+    return CompressionCommandPorts(
+        conversation_history=lambda: host.conversation_history,
+        agent=lambda: getattr(host, "agent", None),
+        compression_enabled=lambda agent: bool(agent.compression_enabled),
+        estimate_tokens=estimate_messages_tokens_rough,
+        compress=compress,
+        synchronize_compressed_session=synchronize_compressed_session,
+        summarize=summarize_manual_compression,
+        emit=emit,
+    )
+
+
 def render_toolsets_for_host(
     host: Any,
     *,
@@ -776,6 +841,76 @@ def _doctor_command_ports() -> DoctorCommandPorts:
     from VoidCube_cli.config_validator import print_diagnosis
 
     return DoctorCommandPorts(run_diagnosis=print_diagnosis)
+
+
+def _debug_command_ports() -> DebugCommandPorts:
+    from types import SimpleNamespace
+
+    from VoidCube_cli.debug import run_debug
+
+    return DebugCommandPorts(
+        run_debug_share=lambda: run_debug(
+            SimpleNamespace(debug_command="share", lines=200, expire=7, local=False)
+        )
+    )
+
+
+def _browser_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> BrowserCommandPorts:
+    import platform
+    import socket
+    import time
+
+    def cleanup_browsers() -> None:
+        try:
+            from tools.browser_tool import cleanup_all_browsers
+
+            cleanup_all_browsers()
+        except Exception:
+            pass
+
+    def probe_port(port: int) -> bool:
+        try:
+            connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            connection.settimeout(1)
+            connection.connect(("127.0.0.1", port))
+            connection.close()
+            return True
+        except (OSError, socket.timeout):
+            return False
+
+    def cloud_provider() -> Any | None:
+        try:
+            from tools.browser_tool import _get_cloud_provider
+
+            return _get_cloud_provider()
+        except Exception:
+            return None
+
+    def enqueue_system_note(note: str) -> None:
+        pending_input = getattr(host, "_pending_input", None)
+        if pending_input is not None:
+            pending_input.put(note)
+
+    return BrowserCommandPorts(
+        current_cdp_url=lambda: os.environ.get("BROWSER_CDP_URL", ""),
+        set_cdp_url=lambda value: os.environ.__setitem__("BROWSER_CDP_URL", value),
+        clear_cdp_url=lambda: os.environ.pop("BROWSER_CDP_URL", None),
+        cleanup_browsers=cleanup_browsers,
+        probe_port=probe_port,
+        launch_chrome_debug=lambda port: host._try_launch_chrome_debug(
+            port, platform.system()
+        ),
+        system_name=platform.system,
+        chrome_data_dir=lambda: str(_voidcube_home() / "chrome-debug"),
+        cloud_provider=cloud_provider,
+        enqueue_system_note=enqueue_system_note,
+        sleep=time.sleep,
+        emit=emit,
+    )
 
 
 def _api_command_ports(host: Any) -> ApiCommandPorts:

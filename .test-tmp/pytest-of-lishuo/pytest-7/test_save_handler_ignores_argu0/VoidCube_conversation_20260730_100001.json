@@ -1,0 +1,10 @@
+{
+  "model": "active-model",
+  "session_start": "2026-07-30T10:00:01",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello"
+    }
+  ]
+}

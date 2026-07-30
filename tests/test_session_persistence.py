@@ -270,3 +270,19 @@ def test_agent_replaces_json_history_after_mutation() -> None:
     agent.replace_persisted_session_history(history)
 
     assert calls == [(history, True)]
+
+
+def test_agent_persists_compressed_continuation_history() -> None:
+    calls: list[list[dict]] = []
+    persistence = type(
+        "Persistence",
+        (),
+        {"persist": lambda self, messages: calls.append(messages)},
+    )()
+    agent = AIAgent.__new__(AIAgent)
+    agent._session_persistence = persistence
+    history = [{"role": "assistant", "content": "summary"}]
+
+    agent.persist_compressed_session_history(history)
+
+    assert calls == [history]

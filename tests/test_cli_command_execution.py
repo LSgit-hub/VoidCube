@@ -28,8 +28,13 @@ from VoidCube_cli.command_handlers.display import (
     SessionStatusDisplayPorts,
 )
 from VoidCube_cli.command_handlers.info import UsageCommandPorts, UsageDisplaySnapshot
-from VoidCube_cli.command_handlers.operations import ApiCommandPorts, DoctorCommandPorts
+from VoidCube_cli.command_handlers.operations import (
+    ApiCommandPorts,
+    DebugCommandPorts,
+    DoctorCommandPorts,
+)
 from VoidCube_cli.command_handlers.personality import PersonalityCommandPorts
+from VoidCube_cli.command_handlers.compression import CompressionCommandPorts
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
@@ -322,6 +327,39 @@ def test_cli_process_routes_doctor_through_operation_handler(monkeypatch) -> Non
     assert calls == ["run"]
 
 
+def test_cli_process_routes_debug_through_operation_handler(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_debug_command_ports",
+        lambda: DebugCommandPorts(run_debug_share=lambda: calls.append("share")),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/debug") is True
+    assert calls == ["share"]
+
+
+def test_debug_ports_bind_the_default_share_request(monkeypatch) -> None:
+    observed: list[object] = []
+    monkeypatch.setattr("VoidCube_cli.debug.run_debug", observed.append)
+
+    command_handler_registry._debug_command_ports().run_debug_share()
+
+    assert len(observed) == 1
+    args = observed[0]
+    assert vars(args) == {
+        "debug_command": "share",
+        "lines": 200,
+        "expire": 7,
+        "local": False,
+    }
+
+
 def test_cli_process_routes_api_through_operation_handler(monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
@@ -494,6 +532,68 @@ def test_cli_process_routes_fast_through_runtime_ports(monkeypatch) -> None:
     assert app.agent is None
     assert saved == [("agent.service_tier", "fast")]
     assert "Priority Processing set to FAST" in output[-1]
+
+
+def test_cli_process_routes_compress_through_continuation_sync_ports(monkeypatch) -> None:
+    calls: list[object] = []
+    compressed = [{"role": "assistant", "content": "summary"}]
+    agent = SimpleNamespace(compression_enabled=True, session_id="continuation-id")
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_compression_command_ports",
+        lambda _host, *, emit: CompressionCommandPorts(
+            conversation_history=lambda: [
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "two"},
+                {"role": "user", "content": "three"},
+                {"role": "assistant", "content": "four"},
+            ],
+            agent=lambda: agent,
+            compression_enabled=lambda value: value.compression_enabled,
+            estimate_tokens=lambda history: len(history),
+            compress=lambda _history, _tokens, focus: calls.append(("compress", focus)) or compressed,
+            synchronize_compressed_session=lambda history, active_agent: calls.append(
+                ("sync", history, active_agent)
+            ),
+            summarize=lambda *_args: {"noop": False, "headline": "done", "token_line": "tokens", "note": None},
+            emit=emit,
+        ),
+    )
+    output: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/compress schema") is True
+    assert calls == [("compress", "schema"), ("sync", compressed, agent)]
+    assert output[-2:] == ["  ✅ done", "     tokens"]
+
+
+def test_compression_ports_sync_host_to_the_agent_continuation_session() -> None:
+    persisted: list[list[dict[str, str]]] = []
+    history = [{"role": "assistant", "content": "summary"}]
+    agent = SimpleNamespace(
+        session_id="continuation-id",
+        persist_compressed_session_history=persisted.append,
+    )
+    host = SimpleNamespace(
+        conversation_history=[],
+        session_id="previous-id",
+        _session_hydration=object(),
+    )
+
+    ports = command_handler_registry._compression_command_ports(
+        host,
+        emit=lambda _text: None,
+    )
+    ports.synchronize_compressed_session(history, agent)
+
+    assert persisted == [history]
+    assert host.conversation_history == history
+    assert host.session_id == "continuation-id"
+    assert host._session_hydration is None
 
 
 def test_api_command_ports_bind_only_explicit_runtime_updates(monkeypatch) -> None:

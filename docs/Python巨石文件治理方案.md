@@ -966,10 +966,31 @@ systems/supervisor/web/
 4. direct handler 与真实 registry route tests 覆盖 unavailable gate、status、`on/off` aliases、未知参数、保存失败 session-only 提示、Agent reset、持久化 binding 以及 persisted `priority`/`normal` normalization。
 5. `VoidCube_cli/app.py` 降至 8,247 行，较本轮 Stage 3 开始前 10,157 行净减少 1,910 行；P0 增长基线已按 Python 行数同步下调。
 
-## 56. 下一次实施起点
+## 56. CLI-3 manual compression command domain 实施记录
 
-下一批评估 `/compress` command domain：
+2026-07-30 已完成：
 
-1. 先确认 conversation history、Agent compressor、focus argument、session persistence 和用户投影的状态边界，避免把压缩运行时重新合并到 CLI host。
-2. 仅提取可验证的 command adapter 与显式 ports；保留 compression engine、Agent runtime 和 transcript persistence 的专属 owner。
+1. 审计确认 `/compress` 只发起人工 context compression；Agent `_compress_context()` 独占压缩引擎、focus-aware summarization、Mem pre-compress hook、system prompt refresh、continuation session 建立、SQLite cursor reset 和 file-dedup reset。自动 preflight/recovery compression 不经过 CLI handler，保持原运行时路径。
+2. 新增 `command_handlers.compression` 的 `CompressionCommandPorts` 与 `handle_compression_command()`；handler 只消费 history/Agent getters、压缩 operation、同步 operation、token estimate、summary 和 output ports，不接收 `VoidcubeCLI`。
+3. `/compress` 切换为 execution table `handler_key`，`VoidcubeCLI._manual_compress()` 已删除，不保留委托壳。最少四条消息、无 Agent、disabled、focus argument、noop feedback 和 operation failure 的既有用户语义保持不变。
+4. Agent 新增 `persist_compressed_session_history()`：continuation session 创建后，由 registry 的成功同步 port 将完整压缩 transcript 交给 Agent persistence，然后同步 CLI `conversation_history`、`session_id` 并失效 hydration cache。此举修复旧 host 保留已结束 session id、且 continuation transcript 未立即持久化的状态分叉。
+5. direct handler、Agent persistence 与真实 registry port tests 覆盖所有前置条件、focus、失败、session/history/hydration 对齐和完整 transcript persistence；旧 manual-compress owner 扫描为空。
+6. `VoidCube_cli/app.py` 降至 8,185 行，较本轮 Stage 3 开始前 10,157 行净减少 1,972 行；P0 增长基线已按 Python 行数同步下调。
+
+## 57. CLI-3 debug report operation adapter 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/debug` 的唯一职责是以固定默认值发起 debug report share；报告采集、日志 tail、配置脱敏、网络上传、local fallback 和用户输出均由 `VoidCube_cli.debug.run_debug()` 持有。
+2. `command_handlers.operations` 新增 `DebugCommandPorts` 与 `handle_debug_command()`；handler 只接收 `run_debug_share` operation port，不接收 `VoidcubeCLI`、日志路径或网络 client。
+3. `/debug` 切换为 execution table `handler_key`，registry 显式构造 `debug_command="share"`、`lines=200`、`expire=7`、`local=False` 的 request；`VoidcubeCLI._handle_debug_command()` 已删除。此前旧 host 调用不存在的 `run_debug_share` 符号，现已修复为真实的 `run_debug()` owner。
+4. direct adapter、registry binding 和真实 command route tests 覆盖 operation 调用、默认 request 参数及 execution route；外部上传没有进入单元测试。
+5. `VoidCube_cli/app.py` 降至 8,177 行，较本轮 Stage 3 开始前 10,157 行净减少 1,980 行；P0 增长基线已按 Python 行数同步下调。
+
+## 58. 下一次实施起点
+
+下一批评估 `/browser` command domain：
+
+1. 先确认 browser backend、CDP connection、配置写入和用户投影的状态边界，避免把浏览器 runtime 重新合并到 CLI host。
+2. 仅提取可验证的 command adapter 与显式 ports；保留 browser operation、配置 persistence 和外部 I/O 的专属 owner。
 3. 每项切换执行架构测试、退役集成扫描、wheel 构建和归档审计。

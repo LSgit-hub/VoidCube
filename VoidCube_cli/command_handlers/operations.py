@@ -28,6 +28,11 @@ class ApiCommandPorts:
     run_wizard: Callable[[], None]
 
 
+@dataclass(frozen=True, slots=True)
+class DebugCommandPorts:
+    run_debug_share: Callable[[], None]
+
+
 def handle_api_command(
     request: ParsedCliCommand,
     *,
@@ -46,6 +51,16 @@ def handle_doctor_command(
     """Delegate the diagnostic operation without owning its external probes."""
     del request
     ports.run_diagnosis()
+
+
+def handle_debug_command(
+    request: ParsedCliCommand,
+    *,
+    ports: DebugCommandPorts,
+) -> None:
+    """Delegate debug-report collection and upload to its operation owner."""
+    del request
+    ports.run_debug_share()
 
 
 def handle_stop_command(
