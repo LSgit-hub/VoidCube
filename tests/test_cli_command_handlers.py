@@ -18,8 +18,16 @@ from VoidCube_app.session_lifecycle import (
     SessionTitleStatus,
 )
 from VoidCube_cli.command_handlers.display import (
+    ConfigDisplayPorts,
+    SessionStatusDisplayPorts,
     StatusBarCommandPorts,
+    ToolsCatalogPorts,
+    ToolsetsDisplayPorts,
+    handle_config_display_command,
+    handle_session_status_command,
     handle_statusbar_command,
+    handle_tools_catalog_command,
+    handle_toolsets_display_command,
 )
 from VoidCube_cli.command_handlers.input import (
     QueueCommandPorts,
@@ -206,6 +214,205 @@ def test_statusbar_handler_toggles_only_through_explicit_ports() -> None:
 
     assert state["visible"] is False
     assert output == ["  Status bar hidden"]
+
+
+def test_config_display_handler_projects_runtime_snapshot_without_mutation(
+    tmp_path: Path,
+) -> None:
+    output: list[str] = []
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("runtime: {}\n", encoding="utf-8")
+    started_at = datetime(2026, 7, 30, 9, 15, 0)
+
+    handle_config_display_command(
+        parse_cli_command("/config ignored"),
+        ports=ConfigDisplayPorts(
+            model=lambda: "active-model",
+            base_url=lambda: "https://api.example/v1",
+            api_key=lambda: "secret-1234",
+            terminal_environment=lambda: "ssh",
+            terminal_working_directory=lambda: "/workspace",
+            terminal_timeout=lambda: "75",
+            ssh_target=lambda: ("alice", "host.example", "2200"),
+            max_turns=lambda: 12,
+            enabled_toolsets=lambda: ("web", "terminal"),
+            verbose=lambda: True,
+            session_start=lambda: started_at,
+            config_path=lambda: config_path,
+            translate=lambda key, **_kwargs: key.upper(),
+            emit=output.append,
+        ),
+    )
+
+    assert output == [
+        "",
+        "+" + "-" * 50 + "+",
+        "|" + " " * 15 + "(^_^) Configuration" + " " * 16 + "|",
+        "+" + "-" * 50 + "+",
+        "",
+        "MODEL",
+        "  Model:     active-model",
+        "  Base URL:  https://api.example/v1",
+        "  API Key:   ********1234",
+        "",
+        "TERMINAL",
+        "  Environment:  ssh",
+        "  SSH Target:   alice@host.example:2200",
+        "  Working Dir:  /workspace",
+        "  Timeout:      75s",
+        "",
+        "AGENT",
+        "  Max Turns:  12",
+        "  Toolsets:   web, terminal",
+        "  Verbose:    True",
+        "",
+        "SESSION",
+        "  Started:     2026-07-30 09:15:00",
+        f"  Config File: {config_path} (loaded)",
+        "",
+    ]
+
+
+def test_toolsets_display_handler_marks_enabled_toolsets_and_uses_text_ports() -> None:
+    output: list[str] = []
+    labels = {
+        "prompts.available_toolsets_title": "Toolsets",
+        "prompts.toolsets_unit": "tools",
+        "prompts.toolsets_current_enabled": "Enabled:",
+        "prompts.toolsets_tip_all": "Tip",
+        "prompts.toolsets_example": "Example",
+    }
+
+    handle_toolsets_display_command(
+        parse_cli_command("/toolsets"),
+        ports=ToolsetsDisplayPorts(
+            toolsets=lambda: (("terminal", 2, "Run commands"), ("web", 3, "Fetch pages")),
+            enabled_toolsets=lambda: ("web",),
+            translate=lambda key, default=None, **_kwargs: labels.get(key, default or key),
+            emit=output.append,
+        ),
+    )
+
+    assert output == [
+        "",
+        "+" + "-" * 58 + "+",
+        "|" + " " * 25 + "Toolsets" + " " * 25 + "|",
+        "+" + "-" * 58 + "+",
+        "",
+        "      terminal           [ 2 tools] - Run commands",
+        "  (*) web                [ 3 tools] - Fetch pages",
+        "",
+        "  Enabled: web",
+        "",
+        "  Tip",
+        "  Example",
+        "",
+    ]
+
+
+def test_tools_catalog_handler_groups_sorts_and_shortens_descriptions() -> None:
+    output: list[str] = []
+
+    handle_tools_catalog_command(
+        parse_cli_command("/tools ignored"),
+        ports=ToolsCatalogPorts(
+            tools=lambda: (
+                {"function": {"name": "zebra", "description": "Zebra."}},
+                {
+                    "function": {
+                        "name": "apple",
+                        "description": "First sentence. Second sentence\nIgnored line",
+                    }
+                },
+                {"function": {"name": "beta", "description": "Keep e.g. value"}},
+            ),
+            toolset_for_tool=lambda name: {"zebra": "web", "apple": "file"}.get(name),
+            translate=lambda key, default=None, **kwargs: (
+                f"{kwargs['count']} total" if key == "prompts.total_tools" else default or key
+            ),
+            emit=output.append,
+        ),
+    )
+
+    assert output == [
+        "",
+        "+" + "-" * 78 + "+",
+        "|" + " " * 28 + "(^_^)/ Available Tools" + " " * 28 + "|",
+        "+" + "-" * 78 + "+",
+        "",
+        "  [file]",
+        "    * apple                - First sentence.",
+        "",
+        "  [unknown]",
+        "    * beta                 - Keep e.g.",
+        "",
+        "  [web]",
+        "    * zebra                - Zebra.",
+        "",
+        "  3 total",
+        "",
+    ]
+
+
+def test_tools_catalog_handler_reports_empty_catalog() -> None:
+    output: list[str] = []
+
+    handle_tools_catalog_command(
+        parse_cli_command("/tools"),
+        ports=ToolsCatalogPorts(
+            tools=lambda: (),
+            toolset_for_tool=lambda _name: None,
+            translate=lambda key, **_kwargs: {"prompts.no_tools_available": "None"}[key],
+            emit=output.append,
+        ),
+    )
+
+    assert output == ["None"]
+
+
+def test_session_status_handler_uses_timestamp_fallbacks_and_idle_projection() -> None:
+    output: list[str] = []
+    started_at = datetime(2026, 7, 30, 10, 0, 0)
+
+    handle_session_status_command(
+        parse_cli_command("/status"),
+        ports=SessionStatusDisplayPorts(
+            session_metadata=lambda: {
+                "title": "  Work  ",
+                "started_at": "not-a-timestamp",
+                "updated_at": "1722333900",
+            },
+            session_id=lambda: "session-1",
+            session_start=lambda: started_at,
+            home_path=lambda: "home",
+            model=lambda: None,
+            provider=lambda: None,
+            total_tokens=lambda: 0,
+            agent_running=lambda: False,
+            subagent_snapshot=lambda: {"active": False},
+            autonomous_sections=lambda: ("Autonomous: idle",),
+            emit=output.append,
+        ),
+    )
+
+    assert output == [
+        "\n".join(
+            [
+                "Voidcube CLI Status",
+                "",
+                "Session ID: session-1",
+                "Path: home",
+                "Title: Work",
+                "Model: (unknown) (unknown)",
+                "Created: 2026-07-30 10:00",
+                f"Last Activity: {datetime.fromtimestamp(1722333900).strftime('%Y-%m-%d %H:%M')}",
+                "Tokens: 0",
+                "Agent Running: No",
+                "Subagents: idle",
+                "Autonomous: idle",
+            ]
+        )
+    ]
 
 
 def test_retry_handler_requeues_original_payload_through_ports() -> None:
@@ -478,7 +685,7 @@ def test_rollback_handler_lists_checkpoints_with_default_arguments() -> None:
     observed: list[tuple[object, str]] = []
 
     handle_rollback_command(
-        parse_cli_command("/rollback ignored"),
+        parse_cli_command("/rollback"),
         ports=_rollback_ports(
             output=output,
             manager=manager,

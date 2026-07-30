@@ -10,6 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cli
 from VoidCube_cli.commands import COMMANDS_BY_CATEGORY, resolve_command
 from VoidCube_cli.command_execution import initialize_command_execution
+from VoidCube_cli.command_handlers.display import (
+    SessionStatusDisplayPorts,
+    handle_session_status_command,
+)
+from VoidCube_cli.command_router import parse_cli_command
 from agent.subagent_display import SubagentStatus
 
 
@@ -369,29 +374,29 @@ def test_middle_status_fragments_include_subagent_summary():
     assert "休眠" not in rendered
 
 
-def test_show_session_status_includes_subagent_summary(monkeypatch):
+def test_session_status_handler_includes_subagent_summary():
     rendered: list[str] = []
-    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app._session_db = None
-    app.session_id = "cli-session-1"
-    app.session_start = cli.datetime(2026, 6, 28, 12, 0, 0)
-    app.provider = "agnesai"
-    app.model = "api-a-model"
-    app._agent_running = True
-    app.agent = SimpleNamespace(session_total_tokens=1234)
-    app.console = _FakeConsole(rendered)
-    app._fetch_supervisor_status_snapshot = lambda: {}
-    app._fetch_gateway_autonomous_execute_snapshot = lambda: {}
-    app._get_subagent_observability_snapshot = lambda: {
-        "active": True,
-        "foreground_count": 2,
-        "background_count": 1,
-        "focus_preview": "read_file",
-    }
-
-    monkeypatch.setattr(cli, "display_VoidCube_home", lambda: "F:/My_code/Traecode/VoidCube")
-
-    app._show_session_status()
+    handle_session_status_command(
+        parse_cli_command("/status"),
+        ports=SessionStatusDisplayPorts(
+            session_metadata=lambda: {},
+            session_id=lambda: "cli-session-1",
+            session_start=lambda: cli.datetime(2026, 6, 28, 12, 0, 0),
+            home_path=lambda: "F:/My_code/Traecode/VoidCube",
+            provider=lambda: "agnesai",
+            model=lambda: "api-a-model",
+            total_tokens=lambda: 1234,
+            agent_running=lambda: True,
+            subagent_snapshot=lambda: {
+                "active": True,
+                "foreground_count": 2,
+                "background_count": 1,
+                "focus_preview": "read_file",
+            },
+            autonomous_sections=lambda: (),
+            emit=rendered.append,
+        ),
+    )
 
     output = "\n".join(rendered)
     assert "Subagents: 2 foreground, 1 background" in output

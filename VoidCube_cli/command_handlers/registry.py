@@ -37,8 +37,16 @@ from VoidCube_cli.command_handlers.attachments import (
     handle_paste_command,
 )
 from VoidCube_cli.command_handlers.display import (
+    ConfigDisplayPorts,
+    SessionStatusDisplayPorts,
     StatusBarCommandPorts,
+    ToolsCatalogPorts,
+    ToolsetsDisplayPorts,
+    handle_config_display_command,
+    handle_session_status_command,
     handle_statusbar_command,
+    handle_tools_catalog_command,
+    handle_toolsets_display_command,
 )
 from VoidCube_cli.command_handlers.input import (
     QueueCommandPorts,
@@ -146,6 +154,10 @@ def install_cli_command_execution(
                         )
                     ),
                 ),
+            ),
+            "config": lambda request: handle_config_display_command(
+                request,
+                ports=_config_display_ports(host, emit=emit, translate=translate),
             ),
             "new": lambda request: handle_new_session_command(
                 request,
@@ -326,6 +338,14 @@ def install_cli_command_execution(
                     emit=lambda text: host.console.print(text),
                 ),
             ),
+            "status": lambda request: handle_session_status_command(
+                request,
+                ports=_session_status_display_ports(host),
+            ),
+            "toolsets": lambda request: handle_toolsets_display_command(
+                request,
+                ports=_toolsets_display_ports(host, emit=emit, translate=translate),
+            ),
             "stop": lambda request: handle_stop_command(
                 request,
                 ports=StopCommandPorts(
@@ -433,6 +453,151 @@ def _history_mutation_ports(
     )
 
 
+def render_toolsets_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> None:
+    """Render toolsets for non-slash CLI entry points such as --list-toolsets."""
+    handle_toolsets_display_command(
+        parse_cli_command("/toolsets"),
+        ports=_toolsets_display_ports(host, emit=emit, translate=translate),
+    )
+
+
+def render_tools_for_host(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> None:
+    """Render the read-only tool catalog for slash and flag entry points."""
+    handle_tools_catalog_command(
+        parse_cli_command("/tools"),
+        ports=_tools_catalog_ports(host, emit=emit, translate=translate),
+    )
+
+
+def _config_display_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> ConfigDisplayPorts:
+    from VoidCube_core.constants import get_config_path
+
+    return ConfigDisplayPorts(
+        model=lambda: host.model,
+        base_url=lambda: host.base_url,
+        api_key=lambda: host.api_key,
+        terminal_environment=lambda: os.getenv("TERMINAL_ENV", "local"),
+        terminal_working_directory=lambda: os.getenv("TERMINAL_CWD", os.getcwd()),
+        terminal_timeout=lambda: os.getenv("TERMINAL_TIMEOUT", "60"),
+        ssh_target=lambda: (
+            os.getenv("TERMINAL_SSH_USER", "not set"),
+            os.getenv("TERMINAL_SSH_HOST", "not set"),
+            os.getenv("TERMINAL_SSH_PORT", "22"),
+        ),
+        max_turns=lambda: host.max_turns,
+        enabled_toolsets=lambda: host.enabled_toolsets,
+        verbose=lambda: host.verbose,
+        session_start=lambda: host.session_start,
+        config_path=get_config_path,
+        translate=translate,
+        emit=emit,
+    )
+
+
+def _toolsets_display_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> ToolsetsDisplayPorts:
+    return ToolsetsDisplayPorts(
+        toolsets=_localized_toolsets,
+        enabled_toolsets=lambda: host.enabled_toolsets,
+        translate=translate,
+        emit=emit,
+    )
+
+
+def _tools_catalog_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> ToolsCatalogPorts:
+    from tools.model_tools import get_tool_definitions, get_toolset_for_tool
+
+    return ToolsCatalogPorts(
+        tools=lambda: get_tool_definitions(
+            enabled_toolsets=host.enabled_toolsets,
+            quiet_mode=True,
+        ),
+        toolset_for_tool=get_toolset_for_tool,
+        translate=translate,
+        emit=emit,
+    )
+
+
+def _session_status_display_ports(host: Any) -> SessionStatusDisplayPorts:
+    def session_metadata() -> dict[str, Any]:
+        repository = getattr(host, "_session_db", None)
+        if repository is None:
+            return {}
+        try:
+            return repository.get_session(host.session_id) or {}
+        except Exception:
+            return {}
+
+    def emit(text: str) -> None:
+        host.console.print(text, highlight=False, markup=False)
+
+    return SessionStatusDisplayPorts(
+        session_metadata=session_metadata,
+        session_id=lambda: host.session_id,
+        session_start=lambda: host.session_start,
+        home_path=_display_voidcube_home,
+        model=lambda: getattr(host, "model", None),
+        provider=lambda: getattr(host, "provider", None),
+        total_tokens=lambda: getattr(getattr(host, "agent", None), "session_total_tokens", 0)
+        or 0,
+        agent_running=lambda: bool(getattr(host, "_agent_running", False)),
+        subagent_snapshot=host._get_subagent_observability_snapshot,
+        autonomous_sections=lambda: _autonomous_observation_summary_sections(host),
+        emit=emit,
+    )
+
+
+def _autonomous_observation_summary_sections(host: Any) -> Sequence[str]:
+    from VoidCube_cli.autonomous_status_host import autonomous_observation_summary_sections
+
+    return autonomous_observation_summary_sections(host)
+
+
+def _localized_toolsets() -> tuple[tuple[str, int, str], ...]:
+    from VoidCube_cli.i18n import get_i18n
+    from tools.toolsets import get_all_toolsets, get_toolset_info
+
+    i18n = get_i18n()
+    locale_data = i18n._translations.get(i18n.get_current_locale(), {})
+    translations = locale_data.get("translations", {}).get("toolsets", {})
+    entries = []
+    for name in sorted(get_all_toolsets()):
+        info = get_toolset_info(name)
+        if info:
+            entries.append(
+                (
+                    name,
+                    len(info.get("tools", [])),
+                    str(translations.get(name, info.get("description", ""))),
+                )
+            )
+    return tuple(entries)
+
+
 def _rollback_command_ports(
     host: Any,
     *,
@@ -457,32 +622,34 @@ def _rollback_command_ports(
         ),
         emit=emit,
         text=RollbackCommandText(
-            no_active_agent=translate("prompts.no_active_agent_session"),
-            checkpoints_not_enabled=translate("prompts.checkpoints_not_enabled"),
-            checkpoints_enable_command=translate(
-                "prompts.checkpoints_enable_command"
+            no_active_agent=f"  {translate('prompts.no_active_agent_session')}",
+            checkpoints_not_enabled=f"  {translate('prompts.checkpoints_not_enabled')}",
+            checkpoints_enable_command=(
+                "  " + translate("prompts.checkpoints_enable_command")
             ),
-            checkpoints_enable_config=translate("prompts.checkpoints_enable_config"),
-            usage_diff=translate("prompts.rollback_usage_diff"),
-            no_checkpoints=lambda path: translate(
+            checkpoints_enable_config=(
+                "  " + translate("prompts.checkpoints_enable_config")
+            ),
+            usage_diff=f"  {translate('prompts.rollback_usage_diff')}",
+            no_checkpoints=lambda path: "  " + translate(
                 "prompts.rollback_no_checkpoints", path=path
             ),
-            no_changes=translate("prompts.rollback_no_changes"),
-            more_lines=lambda count: translate(
+            no_changes=f"  {translate('prompts.rollback_no_changes')}",
+            more_lines=lambda count: "  " + translate(
                 "prompts.rollback_more_lines", count=count
             ),
-            restored=lambda checkpoint, reason: translate(
+            restored=lambda checkpoint, reason: "  ✅ " + translate(
                 "prompts.rollback_restored", checkpoint=checkpoint, reason=reason
             ),
-            restored_file=lambda file_path, checkpoint, reason: translate(
+            restored_file=lambda file_path, checkpoint, reason: "  ✅ " + translate(
                 "prompts.rollback_restored_file",
                 file_path=file_path,
                 checkpoint=checkpoint,
                 reason=reason,
             ),
-            snapshot_saved=translate("prompts.rollback_snapshot_saved"),
-            chat_undone=translate("prompts.rollback_chat_undone"),
-            invalid_number=lambda maximum: translate(
+            snapshot_saved=f"  {translate('prompts.rollback_snapshot_saved')}",
+            chat_undone=f"  {translate('prompts.rollback_chat_undone')}",
+            invalid_number=lambda maximum: "  " + translate(
                 "prompts.rollback_invalid_number", max=maximum
             ),
         ),

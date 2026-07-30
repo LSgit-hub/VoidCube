@@ -106,7 +106,11 @@ from VoidCube_cli.command_router import (
     parse_cli_command,
     resolve_dynamic_command,
 )
-from VoidCube_cli.command_handlers.registry import install_cli_command_execution
+from VoidCube_cli.command_handlers.registry import (
+    install_cli_command_execution,
+    render_tools_for_host,
+    render_toolsets_for_host,
+)
 from VoidCube_cli.interaction_adapter import (
     approval_choices as _approval_choices_view,
     approval_display_fragments as _approval_display_fragments_view,
@@ -144,7 +148,6 @@ from VoidCube_cli.autonomous_runtime_host import (
     autonomous_executor_runtime as _autonomous_executor_runtime_view,
 )
 from VoidCube_cli.autonomous_status_host import (
-    autonomous_observation_summary_sections as _autonomous_observation_summary_sections_view,
     initialize_autonomous_status_caches as _initialize_autonomous_status_caches_view,
     refresh_autonomous_observation_surfaces as _refresh_autonomous_observation_surfaces_view,
     refresh_autonomous_gateway_status as _refresh_autonomous_gateway_status_view,
@@ -276,7 +279,7 @@ class ChatConsole(_BaseChatConsole):
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from VoidCube_core.constants import get_VoidCube_home, display_VoidCube_home
+from VoidCube_core.constants import get_VoidCube_home
 from VoidCube_core.constants import is_termux as _is_termux_environment
 from VoidCube_app.environment import load_VoidCube_dotenv
 
@@ -495,9 +498,6 @@ from VoidCube_cli.commands import SlashCommandCompleter, SlashCommandAutoSuggest
 
 _AIAgent_class = None
 _tool_defs_fn = None
-_toolset_for_tool_fn = None
-_all_toolsets_fn = None
-_toolset_info_fn = None
 _validate_toolset_fn = None
 _cleanup_all_terminals_fn = None
 _cleanup_all_browsers_fn = None
@@ -539,30 +539,6 @@ def _get_tool_definitions(*args, **kwargs):
         from tools.model_tools import get_tool_definitions as _fn
         _tool_defs_fn = _fn
     return _tool_defs_fn(*args, **kwargs)
-
-
-def _get_toolset_for_tool(name: str) -> str:
-    global _toolset_for_tool_fn
-    if _toolset_for_tool_fn is None:
-        from tools.model_tools import get_toolset_for_tool as _fn
-        _toolset_for_tool_fn = _fn
-    return _toolset_for_tool_fn(name)
-
-
-def _get_all_toolsets():
-    global _all_toolsets_fn
-    if _all_toolsets_fn is None:
-        from tools.toolsets import get_all_toolsets as _fn
-        _all_toolsets_fn = _fn
-    return _all_toolsets_fn()
-
-
-def _get_toolset_info(name: str):
-    global _toolset_info_fn
-    if _toolset_info_fn is None:
-        from tools.toolsets import get_toolset_info as _fn
-        _toolset_info_fn = _fn
-    return _toolset_info_fn(name)
 
 
 def _get_validate_toolset(name: str) -> bool:
@@ -3000,73 +2976,6 @@ class VoidcubeCLI:
             f"{toolsets_info}{provider_info}"
         )
 
-    def _show_session_status(self):
-        """Show gateway-style status for the current CLI session."""
-        session_meta = {}
-        if self._session_db:
-            try:
-                session_meta = self._session_db.get_session(self.session_id) or {}
-            except Exception:
-                session_meta = {}
-
-        title = (session_meta.get("title") or "").strip()
-
-        created_at = self.session_start
-        started_at = session_meta.get("started_at")
-        if started_at:
-            try:
-                created_at = datetime.fromtimestamp(float(started_at))
-            except Exception:
-                created_at = self.session_start
-
-        updated_at = created_at
-        for field in ("updated_at", "last_updated_at", "last_activity_at"):
-            value = session_meta.get(field)
-            if not value:
-                continue
-            try:
-                updated_at = datetime.fromtimestamp(float(value))
-                break
-            except Exception:
-                pass
-
-        agent = getattr(self, "agent", None)
-        total_tokens = getattr(agent, "session_total_tokens", 0) or 0
-        provider = getattr(self, "provider", None) or "unknown"
-        model = getattr(self, "model", None) or "(unknown)"
-        is_running = bool(getattr(self, "_agent_running", False))
-        subagent = self._get_subagent_observability_snapshot()
-
-        lines = [
-            "Voidcube CLI Status",
-            "",
-            f"Session ID: {self.session_id}",
-            f"Path: {display_VoidCube_home()}",
-        ]
-        if title:
-            lines.append(f"Title: {title}")
-        lines.extend([
-            f"Model: {model} ({provider})",
-            f"Created: {created_at.strftime('%Y-%m-%d %H:%M')}",
-            f"Last Activity: {updated_at.strftime('%Y-%m-%d %H:%M')}",
-            f"Tokens: {total_tokens:,}",
-            f"Agent Running: {'Yes' if is_running else 'No'}",
-        ])
-        if subagent.get("active"):
-            lines.append(
-                "Subagents: "
-                f"{subagent.get('foreground_count', 0)} foreground"
-                f", {subagent.get('background_count', 0)} background"
-            )
-            focus_preview = str(subagent.get("focus_preview") or "").strip()
-            if focus_preview:
-                lines.append(f"Subagent Focus: {focus_preview}")
-        else:
-            lines.append("Subagents: idle")
-
-        lines.extend(_autonomous_observation_summary_sections_view(self))
-        self.console.print("\n".join(lines), highlight=False, markup=False)
-    
     def _fast_command_available(self) -> bool:
         try:
             from VoidCube_app.models import model_supports_fast_mode
@@ -3130,48 +3039,6 @@ class VoidcubeCLI:
         else:
             _cprint(f"  {_DIM}{tip_paste}{_RST}\n")
     
-    def show_tools(self):
-        """Display available tools with kawaii ASCII art."""
-        tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
-        
-        if not tools:
-            print(f"{t('prompts.no_tools_available')}")
-            return
-        
-        # Header
-        print()
-        title = t('prompts.available_tools_title', default="(^_^)/ Available Tools")
-        width = 78
-        pad = width - len(title)
-        print("+" + "-" * width + "+")
-        print("|" + " " * (pad // 2) + title + " " * (pad - pad // 2) + "|")
-        print("+" + "-" * width + "+")
-        print()
-        
-        # Group tools by toolset
-        toolsets = {}
-        for tool in sorted(tools, key=lambda t: t["function"]["name"]):
-            name = tool["function"]["name"]
-            toolset = _get_toolset_for_tool(name) or "unknown"
-            if toolset not in toolsets:
-                toolsets[toolset] = []
-            desc = tool["function"].get("description", "")
-            # First sentence: split on ". " (period+space) to avoid breaking on "e.g." or "v2.0"
-            desc = desc.split("\n")[0]
-            if ". " in desc:
-                desc = desc[:desc.index(". ") + 1]
-            toolsets[toolset].append((name, desc))
-        
-        # Display by toolset
-        for toolset in sorted(toolsets.keys()):
-            print(f"  [{toolset}]")
-            for name, desc in toolsets[toolset]:
-                print(f"    * {name:<20} - {desc}")
-            print()
-        
-        print(f"  {t('prompts.total_tools', count=len(tools))}")
-        print()
-
     def _handle_tools_command(self, cmd: str):
         """Handle /tools [list|disable|enable] slash commands.
 
@@ -3192,7 +3059,7 @@ class VoidcubeCLI:
 
         subcommand = parts[1] if len(parts) > 1 else ""
         if subcommand not in ("list", "disable", "enable"):
-            self.show_tools()
+            render_tools_for_host(self, emit=print, translate=t)
             return
 
         if subcommand == "list":
@@ -3224,98 +3091,6 @@ class VoidcubeCLI:
         self.process_command("/new")
         _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
 
-    def show_toolsets(self):
-        """Display available toolsets with kawaii ASCII art."""
-        from VoidCube_cli.i18n import get_i18n
-        
-        all_toolsets = _get_all_toolsets()
-        i18n = get_i18n()
-        locale_data = i18n._translations.get(i18n.get_current_locale(), {})
-        ts_translations = locale_data.get("translations", {}).get("toolsets", {})
-        
-        # Header
-        print()
-        title = t('prompts.available_toolsets_title', default="(^_^)b Available Toolsets")
-        width = 58
-        pad = width - len(title)
-        print("+" + "-" * width + "+")
-        print("|" + " " * (pad // 2) + title + " " * (pad - pad // 2) + "|")
-        print("+" + "-" * width + "+")
-        print()
-        
-        for name in sorted(all_toolsets):
-            info = _get_toolset_info(name)
-            if info:
-                tool_count = len(info.get("tools", []))
-                # Get translated description, fall back to original
-                desc = ts_translations.get(name, info.get("description", ""))
-                
-                # Mark if currently enabled
-                marker = "(*)" if self.enabled_toolsets and name in self.enabled_toolsets else "   "
-                print(f"  {marker} {name:<18} [{tool_count:>2} {t('prompts.toolsets_unit', default='工具')}] - {desc}")
-        
-        print()
-        current_enabled = ", ".join(self.enabled_toolsets) if self.enabled_toolsets else "none"
-        print(
-            f"  {t('prompts.toolsets_current_enabled', default='Currently enabled toolsets:')} "
-            f"{current_enabled}"
-        )
-        print()
-        print(
-            f"  {t('prompts.toolsets_tip_all', default='Use --toolsets full to enable the full toolset.')}"
-        )
-        print(
-            f"  {t('prompts.toolsets_example', default='Example: python cli.py --toolsets web,terminal,file')}"
-        )
-        print()
-    
-    def show_config(self):
-        """Display current configuration with kawaii ASCII art."""
-        # Terminal settings are resolved from canonical config and environment.
-        terminal_env = os.getenv("TERMINAL_ENV", "local")
-        terminal_cwd = os.getenv("TERMINAL_CWD", os.getcwd())
-        terminal_timeout = os.getenv("TERMINAL_TIMEOUT", "60")
-
-        from VoidCube_core.constants import get_config_path
-
-        config_path = get_config_path()
-        config_status = "(loaded)" if config_path.exists() else "(not found)"
-        
-        api_key_display = '********' + self.api_key[-4:] if self.api_key and len(self.api_key) > 4 else 'Not set!'
-        
-        print()
-        title = "(^_^) Configuration"
-        width = 50
-        pad = width - len(title)
-        print("+" + "-" * width + "+")
-        print("|" + " " * (pad // 2) + title + " " * (pad - pad // 2) + "|")
-        print("+" + "-" * width + "+")
-        print()
-        print(t('model'))
-        print(f"  Model:     {self.model}")
-        print(f"  Base URL:  {self.base_url}")
-        print(f"  API Key:   {api_key_display}")
-        print()
-        print(t('terminal'))
-        print(f"  Environment:  {terminal_env}")
-        if terminal_env == "ssh":
-            ssh_host = os.getenv("TERMINAL_SSH_HOST", "not set")
-            ssh_user = os.getenv("TERMINAL_SSH_USER", "not set")
-            ssh_port = os.getenv("TERMINAL_SSH_PORT", "22")
-            print(f"  SSH Target:   {ssh_user}@{ssh_host}:{ssh_port}")
-        print(f"  Working Dir:  {terminal_cwd}")
-        print(f"  Timeout:      {terminal_timeout}s")
-        print()
-        print(t('agent'))
-        print(f"  Max Turns:  {self.max_turns}")
-        print(f"  Toolsets:   {', '.join(self.enabled_toolsets) if self.enabled_toolsets else 'all'}")
-        print(f"  Verbose:    {self.verbose}")
-        print()
-        print(t('session'))
-        print(f"  Started:     {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"  Config File: {config_path} {config_status}")
-        print()
-    
     def _list_recent_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
         """Return recent CLI sessions for in-chat browsing/resume affordances."""
         if not self._session_db:
@@ -8893,12 +8668,12 @@ def main(
     # Handle list commands (don't init agent for these)
     if list_tools:
         cli.show_banner()
-        cli.show_tools()
+        render_tools_for_host(cli, emit=print, translate=t)
         sys.exit(0)
     
     if list_toolsets:
         cli.show_banner()
-        cli.show_toolsets()
+        render_toolsets_for_host(cli, emit=print, translate=t)
         sys.exit(0)
     
     # Register cleanup for single-query mode (interactive mode registers in run())

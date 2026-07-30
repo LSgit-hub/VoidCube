@@ -17,6 +17,10 @@ from VoidCube_cli.command_execution import (
 )
 from VoidCube_cli.command_router import parse_cli_command
 from VoidCube_cli.command_handlers.registry import install_cli_command_execution
+from VoidCube_cli.command_handlers.display import (
+    ConfigDisplayPorts,
+    SessionStatusDisplayPorts,
+)
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
@@ -190,6 +194,20 @@ def test_executor_passes_original_command_only_when_declared() -> None:
     host._builtin_command_executor.execute(parse_cli_command("/help"))
 
     assert calls == [("tools", "/tools Enable MixedCase"), ("help", None)]
+
+
+def test_tools_catalog_command_uses_the_shared_host_renderer(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        cli_module,
+        "render_tools_for_host",
+        lambda host, *, emit, translate: calls.append((host, emit, translate)),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+
+    app._handle_tools_command("/tools")
+
+    assert calls == [(app, print, cli_module.t)]
 
 
 def test_busy_lifecycle_restores_nested_and_exceptional_state() -> None:
@@ -687,4 +705,157 @@ def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
     assert output == [
         '(^_^)b Undid 2 message(s). Removed: "second"',
         "  2 message(s) remaining in history.",
+    ]
+
+
+def test_cli_process_routes_rollback_through_registry_then_shared_undo(
+    monkeypatch,
+) -> None:
+    output: list[str] = []
+    restores: list[tuple[str, str, str | None]] = []
+    persisted_counts: list[int] = []
+    persisted_history: list[list[dict[str, object]]] = []
+    manager = SimpleNamespace(
+        enabled=True,
+        list_checkpoints=lambda _directory: [{"hash": "checkpoint-one"}],
+        restore=lambda directory, target, *, file_path=None: restores.append(
+            (directory, target, file_path)
+        )
+        or {
+            "success": True,
+            "restored_to": "checkpoi",
+            "reason": "before edit",
+        },
+    )
+    agent = SimpleNamespace(
+        _checkpoint_mgr=manager,
+        mark_session_history_persisted=persisted_counts.append,
+        replace_persisted_session_history=lambda history: persisted_history.append(
+            list(history)
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.agent = agent
+    app._session_db = None
+    app.session_id = "active"
+    app._session_hydration = None
+    app.conversation_history = [
+        {"role": "user", "content": "make change"},
+        {"role": "assistant", "content": "done"},
+    ]
+    monkeypatch.setenv("TERMINAL_CWD", "rollback-workspace")
+    install_cli_command_execution(
+        app,
+        emit=output.append,
+        translate=lambda key, default=None, **_kwargs: default or key,
+    )
+
+    assert app.process_command("/rollback 1") is True
+    assert restores == [("rollback-workspace", "checkpoint-one", None)]
+    assert app.conversation_history == []
+    assert persisted_counts == [0]
+    assert persisted_history == [[]]
+    assert output == [
+        "  ✅ prompts.rollback_restored",
+        "  prompts.rollback_snapshot_saved",
+        '(^_^)b Undid 2 message(s). Removed: "make change"',
+        "  0 message(s) remaining in history.",
+        "  prompts.rollback_chat_undone",
+    ]
+
+
+def test_cli_process_routes_config_through_display_handler(monkeypatch, tmp_path) -> None:
+    output: list[str] = []
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agent: {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_config_display_ports",
+        lambda host, *, emit, translate: ConfigDisplayPorts(
+            model=lambda: host.model,
+            base_url=lambda: host.base_url,
+            api_key=lambda: host.api_key,
+            terminal_environment=lambda: "local",
+            terminal_working_directory=lambda: "workspace",
+            terminal_timeout=lambda: "60",
+            ssh_target=lambda: ("", "", ""),
+            max_turns=lambda: host.max_turns,
+            enabled_toolsets=lambda: host.enabled_toolsets,
+            verbose=lambda: host.verbose,
+            session_start=lambda: host.session_start,
+            config_path=lambda: config_path,
+            translate=translate,
+            emit=emit,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.model = "active-model"
+    app.base_url = "https://api.example/v1"
+    app.api_key = "secret-1234"
+    app.max_turns = 8
+    app.enabled_toolsets = ["web"]
+    app.verbose = False
+    app.session_start = datetime(2026, 7, 30, 10, 0, 0)
+    install_cli_command_execution(
+        app,
+        emit=output.append,
+        translate=lambda key, default=None, **_kwargs: default or key,
+    )
+
+    assert app.process_command("/config ignored") is True
+    assert output[5:9] == [
+        "model",
+        "  Model:     active-model",
+        "  Base URL:  https://api.example/v1",
+        "  API Key:   ********1234",
+    ]
+
+
+def test_cli_process_routes_status_through_display_handler(monkeypatch) -> None:
+    output: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_session_status_display_ports",
+        lambda _host: SessionStatusDisplayPorts(
+            session_metadata=lambda: {},
+            session_id=lambda: "session-1",
+            session_start=lambda: datetime(2026, 7, 30, 10, 0, 0),
+            home_path=lambda: "home",
+            model=lambda: "active-model",
+            provider=lambda: "active-provider",
+            total_tokens=lambda: 5,
+            agent_running=lambda: False,
+            subagent_snapshot=lambda: {"active": False},
+            autonomous_sections=lambda: (),
+            emit=output.append,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/status") is True
+    assert output == [
+        "\n".join(
+            [
+                "Voidcube CLI Status",
+                "",
+                "Session ID: session-1",
+                "Path: home",
+                "Model: active-model (active-provider)",
+                "Created: 2026-07-30 10:00",
+                "Last Activity: 2026-07-30 10:00",
+                "Tokens: 5",
+                "Agent Running: No",
+                "Subagents: idle",
+            ]
+        )
     ]

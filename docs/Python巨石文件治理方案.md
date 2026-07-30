@@ -824,10 +824,50 @@ systems/supervisor/web/
 4. 新增 direct characterization tests 覆盖空 history、参数不改变既有导出路径、默认路径、覆盖、写入失败、最后 user turn rollback 边界、Agent/hydration 同步与用户提示；registry integration test 覆盖 `/undo` 真实路由。
 5. `VoidCube_cli/app.py` 降至 9,096 行，较本轮 Stage 3 开始前 10,157 行净减少 1,061 行；P0 增长基线已同步下调。
 
-## 42. 下一次实施起点
+## 42. CLI-3 rollback checkpoint command domain 实施记录
 
-下一批评估 **CLI-3 rollback checkpoint command domain**：
+2026-07-30 已完成：
 
-1. 先补齐 `/rollback` 的 list、diff、invalid reference、restore success/failure 与 chat-history synchronization characterization tests。
-2. 将 checkpoint manager 的 list/diff/restore 和 terminal projections 按 ports 提取；filesystem restore 继续独立于 history export，聊天同步只复用现有 `/undo` route。
-3. 完成后删除 `VoidcubeCLI._handle_rollback_command()` 与相关 checkpoint parsing helpers，并继续以架构测试、退役集成扫描、wheel 构建和归档审计作为门禁。
+1. 新增 `command_handlers.rollback`，通过 `RollbackCommandPorts` 隔离 Agent checkpoint manager、working directory、list/diff/restore、terminal output 和聊天同步；handler 不持有 `VoidcubeCLI`、JSON export 或 session repository。
+2. 保留 `/rollback` 的无参数 list、`diff <N>`、`<N>` 和 `<N> <file>` 语法，以及 one-based checkpoint index / hash reference 解析、80 行 diff 截断、原有成功/失败提示。checkpoint manager 继续独占 hash/path 校验、restore 前快照和 shadow git 操作。
+3. restore 成功且 history 非空时只经已注册的 `/undo` execution route 对齐聊天上下文；restore 失败、无 history、disabled checkpoint 或无 Agent 均不会触发 history mutation。`VoidcubeCLI._handle_rollback_command()` 和 `_resolve_checkpoint_ref()` 已删除，不保留委托壳。
+4. 直接 characterization tests 覆盖无 Agent、disabled、list、diff usage/empty/invalid/failure/no-change/截断、file restore success、restore failure、chat sync 和 reference resolution；registry integration test 覆盖真实 `/rollback -> restore -> /undo -> Agent transcript` 路由。
+5. `VoidCube_cli/app.py` 降至 8,989 行，较本轮 Stage 3 开始前 10,157 行净减少 1,168 行；P0 增长基线已同步下调。
+
+## 43. CLI-3 configuration/toolsets display command domain 实施记录
+
+2026-07-30 已完成：
+
+1. `command_handlers.display` 新增 `ConfigDisplayPorts` 与 `ToolsetsDisplayPorts`；`/config` 只读取 runtime snapshot、environment 与 config path，`/toolsets` 只读取 catalog、locale description 与当前 selection，不接收 `VoidcubeCLI` host，也不触碰配置写入、鉴权或 model wizard。
+2. `/config` 与 `/toolsets` 均切换为 execution table `handler_key`；`VoidcubeCLI.show_config()`、`show_toolsets()` 和只供旧 toolsets owner 使用的 lazy helper 已删除。`--list-toolsets` 改用同一 display handler，避免 CLI flag 与 slash command 再次分叉输出。
+3. characterization tests 覆盖 API key 脱敏、SSH terminal projection、toolset enabled marker、localized labels 和 `/config` registry route；配置 path 存在性仍按原逻辑显示 loaded/not found。
+4. `/status` 暂不并入本批：它还组合 session metadata、autonomous/subagent observability 和 Rich console projection，应以独立 command domain 迁出，避免 display ports 重新成为无边界聚合器。
+5. `VoidCube_cli/app.py` 降至 8,882 行，较本轮 Stage 3 开始前 10,157 行净减少 1,275 行；P0 增长基线已同步下调。
+
+## 44. CLI-3 session status command domain 实施记录
+
+2026-07-30 已完成：
+
+1. `command_handlers.display` 新增 `SessionStatusDisplayPorts`；handler 只组合 session metadata、runtime counters、subagent snapshot、autonomous sections 和单一 render port，不接收 `VoidcubeCLI` 或 repository。
+2. registry 保留 repository `get_session()` 的异常到空 metadata fallback、home path、subagent/autonomous snapshot 与 Rich `console.print(..., highlight=False, markup=False)` adapter。handler 保留 started/updated/last-activity timestamp fallback、token/running、active/idle subagent 与 focus projection。
+3. `/status` 已切换为 execution table `handler_key`，`VoidcubeCLI._show_session_status()` 和失效 status-only imports 已删除，不保留委托壳。
+4. characterization 与 registry integration tests 覆盖 invalid metadata timestamp fallback、idle/active subagent、focus preview、autonomous sections 与真实 `/status` route。
+5. `VoidCube_cli/app.py` 降至 8,814 行，较本轮 Stage 3 开始前 10,157 行净减少 1,343 行；P0 增长基线已同步下调。
+
+## 45. CLI-3 tools catalog command domain 实施记录
+
+2026-07-30 已完成：
+
+1. `command_handlers.display` 新增 `ToolsCatalogPorts` 与只读 `handle_tools_catalog_command()`；它只接收 tool snapshot、toolset lookup、翻译和输出端口，保留原有 78 列标题、名称/toolset 排序、`unknown` fallback、首行首句 description 截断和总数文案。
+2. `/tools` 无参数目录展示和 `--list-tools` 共用 `render_tools_for_host()`；`VoidcubeCLI.show_tools()` 与仅由它使用的 `_get_toolset_for_tool` lazy helper 已删除。
+3. `/tools list|enable|disable` 继续由 `_handle_tools_command()` 持有，因为其配置写入、toolset reload 与 `/new` session reset 是状态变更，未被错误迁入 information handler。
+4. characterization tests 覆盖空 catalog、toolset/name 排序、description 首句规则、总数及 `/tools` 目录分支使用共享 renderer。
+5. `VoidCube_cli/app.py` 降至 8,764 行，较本轮 Stage 3 开始前 10,157 行净减少 1,393 行；P0 增长基线已同步下调。
+
+## 46. 下一次实施起点
+
+下一批评估 **CLI-3 help information command domain**：
+
+1. 梳理 `/help` 的 command registry、skill discovery、ANSI/Rich renderer 与 Termux 分支，先定义只读 discovery 和终端投影端口。
+2. 保留 command 执行和技能安装/配置的现有 owner；只迁出 help 的 information projection，避免 helper 反向依赖 CLI host。
+3. 切换后删除旧 `show_help()` owner 和冗余 lazy helper，并继续执行架构测试、退役集成扫描、wheel 构建和归档审计。
