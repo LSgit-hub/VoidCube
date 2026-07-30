@@ -13,7 +13,6 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 import aiohttp
 
-from VoidCube_core.utils import atomic_json_write
 from systems.runtime_task_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_family,
@@ -25,6 +24,7 @@ from systems.supervisor.endogenous_drive import (
     CORE_VALUES,
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
 )
+from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainGitLineage,
@@ -264,67 +264,24 @@ class PlanningRuntimeMixin:
             "last_reason": None,
         }
 
-    def _get_endogenous_drive_history_path(self) -> Path:
-        path = getattr(self, "_endogenous_drive_history_path", None)
-        if path is not None:
-            return Path(path).resolve()
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        ).resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        resolved = runtime_root / "endogenous_drive_history.json"
-        self._endogenous_drive_history_path = resolved
-        return resolved
+    @property
+    def _endogenous_state_repository(self) -> EndogenousStateRepository:
+        repository = getattr(self, "__endogenous_state_repository", None)
+        if repository is None:
+            runtime_root = getattr(self, "_runtime_root", None) or self.config.soul_store_path
+            repository = EndogenousStateRepository(runtime_root)
+            self.__endogenous_state_repository = repository
+        return repository
 
-    def _get_endogenous_governance_events_path(self) -> Path:
-        path = getattr(self, "_endogenous_governance_events_path", None)
-        if path is not None:
-            return Path(path).resolve()
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        ).resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        resolved = runtime_root / "endogenous_governance_events.json"
-        self._endogenous_governance_events_path = resolved
-        return resolved
-
-    def _get_endogenous_cognition_state_path(self) -> Path:
-        path = getattr(self, "_endogenous_cognition_state_path", None)
-        if path is not None:
-            return Path(path).resolve()
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        ).resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        resolved = runtime_root / "endogenous_cognition_state.json"
-        self._endogenous_cognition_state_path = resolved
-        return resolved
-
-    def _get_endogenous_self_regulation_path(self) -> Path:
-        path = getattr(self, "_endogenous_self_regulation_path", None)
-        if path is not None:
-            return Path(path).resolve()
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        ).resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        resolved = runtime_root / "endogenous_self_regulation.json"
-        self._endogenous_self_regulation_path = resolved
-        return resolved
+    @_endogenous_state_repository.setter
+    def _endogenous_state_repository(self, repository: EndogenousStateRepository) -> None:
+        self.__endogenous_state_repository = repository
 
     def _load_endogenous_drive_history(self) -> Dict[str, Any]:
-        path = self._get_endogenous_drive_history_path()
-        if not path.exists():
-            return self._endogenous_drive_history_default()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            return self._endogenous_drive_history_default()
-        if not isinstance(raw, dict):
+        raw = self._endogenous_state_repository.read_object(
+            self._endogenous_state_repository.paths.drive_history
+        )
+        if raw is None:
             return self._endogenous_drive_history_default()
         snapshot = self._endogenous_drive_history_default()
         snapshot["updated_at"] = raw.get("updated_at")
@@ -344,14 +301,10 @@ class PlanningRuntimeMixin:
         return self._trim_endogenous_drive_history(snapshot)
 
     def _load_endogenous_governance_events(self) -> Dict[str, Any]:
-        path = self._get_endogenous_governance_events_path()
-        if not path.exists():
-            return self._endogenous_governance_events_default()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            return self._endogenous_governance_events_default()
-        if not isinstance(raw, dict):
+        raw = self._endogenous_state_repository.read_object(
+            self._endogenous_state_repository.paths.governance_events
+        )
+        if raw is None:
             return self._endogenous_governance_events_default()
         snapshot = self._endogenous_governance_events_default()
         snapshot["updated_at"] = raw.get("updated_at")
@@ -363,14 +316,10 @@ class PlanningRuntimeMixin:
         return self._trim_endogenous_governance_events(snapshot)
 
     def _load_endogenous_cognition_state(self) -> Dict[str, Any]:
-        path = self._get_endogenous_cognition_state_path()
-        if not path.exists():
-            return self._endogenous_cognition_state_default()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            return self._endogenous_cognition_state_default()
-        if not isinstance(raw, dict):
+        raw = self._endogenous_state_repository.read_object(
+            self._endogenous_state_repository.paths.cognition_state
+        )
+        if raw is None:
             return self._endogenous_cognition_state_default()
         snapshot = self._endogenous_cognition_state_default()
         snapshot["updated_at"] = raw.get("updated_at")
@@ -378,14 +327,10 @@ class PlanningRuntimeMixin:
         return snapshot
 
     def _load_endogenous_self_regulation(self) -> Dict[str, Any]:
-        path = self._get_endogenous_self_regulation_path()
-        if not path.exists():
-            return self._endogenous_self_regulation_default()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            return self._endogenous_self_regulation_default()
-        if not isinstance(raw, dict):
+        raw = self._endogenous_state_repository.read_object(
+            self._endogenous_state_repository.paths.self_regulation
+        )
+        if raw is None:
             return self._endogenous_self_regulation_default()
         snapshot = self._endogenous_self_regulation_default()
         snapshot["updated_at"] = raw.get("updated_at")

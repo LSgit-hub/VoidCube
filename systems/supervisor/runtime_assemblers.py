@@ -26,6 +26,7 @@ from systems.governor import GovernorDecisionEngine
 from systems.governance_runtime_migration import consolidate_governance_event_logs
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
 from systems.supervisor.runtime_migration import migrate_supervisor_runtime
@@ -120,7 +121,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             else None
         ),
     )
-    supervisor._endogenous_drive_history_path = runtime_root / "endogenous_drive_history.json"
+    supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
     supervisor._probe_runner = ProbeRunner()
