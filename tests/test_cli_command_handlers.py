@@ -19,11 +19,19 @@ from VoidCube_app.session_lifecycle import (
 )
 from VoidCube_cli.command_handlers.display import (
     ConfigDisplayPorts,
+    HelpDisplayPorts,
+    HelpDisplayText,
+    MemoryDisplayPorts,
+    ProviderDisplayPorts,
+    ProviderDisplaySnapshot,
     SessionStatusDisplayPorts,
     StatusBarCommandPorts,
     ToolsCatalogPorts,
     ToolsetsDisplayPorts,
     handle_config_display_command,
+    handle_help_display_command,
+    handle_memory_display_command,
+    handle_provider_display_command,
     handle_session_status_command,
     handle_statusbar_command,
     handle_tools_catalog_command,
@@ -34,6 +42,11 @@ from VoidCube_cli.command_handlers.input import (
     RetryCommandPorts,
     handle_queue_command,
     handle_retry_command,
+)
+from VoidCube_cli.command_handlers.info import (
+    UsageCommandPorts,
+    UsageDisplaySnapshot,
+    handle_usage_command,
 )
 from VoidCube_cli.command_handlers.history import (
     HistoryCommandPorts,
@@ -51,6 +64,25 @@ from VoidCube_cli.command_handlers.rollback import (
     RollbackCommandText,
     handle_rollback_command,
     resolve_checkpoint_reference,
+)
+from VoidCube_cli.command_handlers.operations import (
+    ApiCommandPorts,
+    DoctorCommandPorts,
+    handle_api_command,
+    handle_doctor_command,
+)
+from VoidCube_cli.command_handlers.personality import (
+    PersonalityCommandPorts,
+    handle_personality_command,
+)
+from VoidCube_cli.command_handlers.reasoning import (
+    ReasoningCommandPorts,
+    handle_reasoning_command,
+)
+from VoidCube_cli.command_handlers.fast import (
+    FastCommandPorts,
+    handle_fast_command,
+    parse_service_tier_config,
 )
 from VoidCube_cli.command_handlers.session import (
     BranchCommandPorts,
@@ -370,6 +402,409 @@ def test_tools_catalog_handler_reports_empty_catalog() -> None:
     assert output == ["None"]
 
 
+def test_help_display_handler_filters_commands_and_sorts_skills() -> None:
+    events: list[tuple[object, ...]] = []
+    handle_help_display_command(
+        parse_cli_command("/help ignored"),
+        ports=HelpDisplayPorts(
+            command_categories=lambda: {
+                "Session": {"/fast": "Fast", "/help": "Help"},
+                "Info": {"/status": "Status"},
+            },
+            command_available=lambda command: command != "/fast",
+            skill_commands=lambda: {
+                "/zebra": {"description": "Zebra skill"},
+                "/alpha": {"description": "Alpha skill"},
+            },
+            text=HelpDisplayText("Header", "Skills", "Chat", "Multiline", "Paste"),
+            is_termux=lambda: False,
+            termux_example_path=lambda: "unused.png",
+            render_header=lambda value: events.append(("header", value)),
+            render_category=lambda value: events.append(("category", value)),
+            render_command=lambda command, description: events.append(
+                ("command", command, description)
+            ),
+            render_skill_header=lambda header, count: events.append(
+                ("skills", header, count)
+            ),
+            render_skill=lambda command, description: events.append(
+                ("skill", command, description)
+            ),
+            render_tip=lambda text, final: events.append(("tip", text, final)),
+        ),
+    )
+
+    assert events == [
+        ("header", "Header"),
+        ("category", "Session"),
+        ("command", "/help", "Help"),
+        ("category", "Info"),
+        ("command", "/status", "Status"),
+        ("skills", "Skills", 2),
+        ("skill", "/alpha", "Alpha skill"),
+        ("skill", "/zebra", "Zebra skill"),
+        ("tip", "Chat", False),
+        ("tip", "Multiline", False),
+        ("tip", "Paste", True),
+    ]
+
+
+def test_help_display_handler_uses_the_termux_attachment_tip() -> None:
+    tips: list[tuple[str, bool]] = []
+    handle_help_display_command(
+        parse_cli_command("/help"),
+        ports=HelpDisplayPorts(
+            command_categories=lambda: {},
+            command_available=lambda _command: True,
+            skill_commands=lambda: {},
+            text=HelpDisplayText("Header", "Skills", "Chat", "Multiline", "Paste"),
+            is_termux=lambda: True,
+            termux_example_path=lambda: "~/Pictures/cat.png",
+            render_header=lambda _value: None,
+            render_category=lambda _value: None,
+            render_command=lambda _command, _description: None,
+            render_skill_header=lambda _header, _count: None,
+            render_skill=lambda _command, _description: None,
+            render_tip=lambda text, final: tips.append((text, final)),
+        ),
+    )
+
+    assert tips == [
+        ("Chat", False),
+        ("Multiline", False),
+        (
+            "Attach image: /image ~/Pictures/cat.png or start your prompt with a local image path",
+            True,
+        ),
+    ]
+
+
+def test_provider_display_handler_projects_active_provider_models_and_usage() -> None:
+    output: list[str] = []
+    usage: list[str] = []
+    ports = ProviderDisplayPorts(
+        snapshot=lambda: ProviderDisplaySnapshot(
+            active_provider="primary",
+            configured_providers=(
+                {
+                    "slug": "primary",
+                    "name": "Primary",
+                    "is_current": True,
+                    "api_url": "https://api.example/v1",
+                    "models": ("active-model", "backup-model"),
+                },
+            ),
+        ),
+        current_model=lambda: "active-model",
+        translate=lambda value, **kwargs: kwargs.get("default", value),
+        emit=output.append,
+        emit_usage=usage.append,
+    )
+
+    handle_provider_display_command(parse_cli_command("/provider"), ports=ports)
+    handle_provider_display_command(
+        parse_cli_command("/provider list"),
+        ports=ports,
+    )
+
+    assert output == [
+        "\n  Current: active-model via primary",
+        "",
+        "  Configured providers:",
+        "    [primary] Primary ← active",
+        "      endpoint: https://api.example/v1",
+        "      active-model ← current",
+        "      backup-model",
+        "",
+        "  Use /model to switch providers or models:",
+        "    /model <model-name>               — switch model",
+        "    /model --provider <provider-name> — switch provider",
+        "    /model <name> --provider <provider-name> — switch provider and model",
+    ]
+    assert usage[-1] == "  Run /api to configure provider credentials"
+    assert "None" not in usage
+
+
+def test_memory_display_handler_projects_mem_status_without_setup_operations() -> None:
+    output: list[str] = []
+
+    handle_memory_display_command(
+        parse_cli_command("/memory ignored"),
+        ports=MemoryDisplayPorts(
+            database_path=lambda: "runtime/memory/memory.db",
+            emit=output.append,
+        ),
+    )
+
+    assert output == [
+        "\n  统一记忆系统: Mem（始终启用）",
+        "  数据库: runtime/memory/memory.db",
+        "  工具: mem_search, mem_timeline, mem_remember",
+        "  审计: Memory Service /recall/traces\n",
+    ]
+
+
+def test_personality_handler_applies_structured_prompt_persists_and_resets_agent() -> None:
+    output: list[str] = []
+    saved: list[str] = []
+    prompts: list[str] = []
+    resets: list[str] = []
+    handle_personality_command(
+        parse_cli_command("/personality CALM"),
+        ports=PersonalityCommandPorts(
+            personalities=lambda: {
+                "calm": {
+                    "system_prompt": "Stay calm.",
+                    "tone": "gentle",
+                    "style": "clear",
+                }
+            },
+            set_system_prompt=prompts.append,
+            reset_agent=lambda: resets.append("reset"),
+            save_system_prompt=lambda value: saved.append(value) or True,
+            emit=output.append,
+        ),
+    )
+
+    expected_prompt = "Stay calm.\nTone: gentle\nStyle: clear"
+    assert prompts == [expected_prompt]
+    assert saved == [expected_prompt]
+    assert resets == ["reset"]
+    assert output == [
+        "(^_^)b Personality set to 'calm' (saved to config)",
+        '  "Stay calm.\nTone: gentle\nStyle: clear"',
+    ]
+
+
+def test_personality_handler_clears_lists_and_reports_unknown_without_mutation() -> None:
+    output: list[str] = []
+    prompts: list[str] = []
+    resets: list[str] = []
+    ports = PersonalityCommandPorts(
+        personalities=lambda: {"bright": {"description": "Upbeat"}},
+        set_system_prompt=prompts.append,
+        reset_agent=lambda: resets.append("reset"),
+        save_system_prompt=lambda _value: False,
+        emit=output.append,
+    )
+
+    handle_personality_command(parse_cli_command("/personality neutral"), ports=ports)
+    handle_personality_command(parse_cli_command("/personality unknown"), ports=ports)
+    handle_personality_command(parse_cli_command("/personality"), ports=ports)
+
+    assert prompts == [""]
+    assert resets == ["reset"]
+    assert output[:4] == [
+        "(^_^) Personality cleared (session only)",
+        "  No personality overlay — using base agent behavior.",
+        "(._.) Unknown personality: unknown",
+        "  Available: none, bright",
+    ]
+    assert output[-2:] == ["  Usage: /personality <name>", ""]
+
+
+def test_reasoning_handler_reports_state_and_updates_display_or_effort() -> None:
+    output: list[str] = []
+    state: dict[str, object] = {"config": None, "show": False}
+    refreshes: list[str] = []
+    saved_display: list[bool] = []
+    saved_effort: list[str] = []
+    ports = ReasoningCommandPorts(
+        reasoning_config=lambda: state["config"],
+        show_reasoning=lambda: bool(state["show"]),
+        set_reasoning_config=lambda value: state.__setitem__("config", value),
+        set_show_reasoning=lambda value: state.__setitem__("show", value),
+        refresh_agent_reasoning_callback=lambda: refreshes.append("refresh"),
+        parse_config=lambda value: {"enabled": True, "effort": value}
+        if value == "high"
+        else None,
+        save_display=lambda value: saved_display.append(value) or True,
+        save_effort=lambda value: saved_effort.append(value) or False,
+        emit=output.append,
+        accent="",
+        dim="",
+        reset="",
+    )
+
+    handle_reasoning_command(parse_cli_command("/reasoning"), ports=ports)
+    handle_reasoning_command(parse_cli_command("/reasoning show"), ports=ports)
+    handle_reasoning_command(parse_cli_command("/reasoning high"), ports=ports)
+    handle_reasoning_command(parse_cli_command("/reasoning unknown"), ports=ports)
+
+    assert output == [
+        "  Reasoning effort:  medium (default)",
+        "  Reasoning display: off",
+        "  Usage: /reasoning <none|minimal|low|medium|high|xhigh|show|hide>",
+        "  ✓ Reasoning display: ON (saved)",
+        "    Model thinking will be shown during and after each response.",
+        "  ✓ Reasoning effort set to 'high' (session only)",
+        "  (._.) Unknown argument: unknown",
+        "  Valid levels: none, minimal, low, medium, high, xhigh",
+        "  Display:      show, hide",
+    ]
+    assert state == {"config": {"enabled": True, "effort": "high"}, "show": True}
+    assert refreshes == ["refresh"]
+    assert saved_display == [True]
+    assert saved_effort == ["high"]
+
+
+def test_fast_handler_gates_status_and_service_tier_mutations() -> None:
+    unavailable_output: list[str] = []
+    unavailable = FastCommandPorts(
+        available=lambda: False,
+        service_tier=lambda: pytest.fail("must not read state when unavailable"),
+        set_service_tier=lambda _value: pytest.fail("must not mutate when unavailable"),
+        save_service_tier=lambda _value: pytest.fail("must not save when unavailable"),
+        emit=unavailable_output.append,
+        accent="",
+        dim="",
+        reset="",
+    )
+    handle_fast_command(parse_cli_command("/fast on"), ports=unavailable)
+
+    output: list[str] = []
+    state: dict[str, object] = {"service_tier": None}
+    saved: list[str] = []
+    ports = FastCommandPorts(
+        available=lambda: True,
+        service_tier=lambda: state["service_tier"],
+        set_service_tier=lambda value: state.__setitem__("service_tier", value),
+        save_service_tier=lambda value: saved.append(value) or False,
+        emit=output.append,
+        accent="",
+        dim="",
+        reset="",
+    )
+    handle_fast_command(parse_cli_command("/fast"), ports=ports)
+    handle_fast_command(parse_cli_command("/fast on"), ports=ports)
+    handle_fast_command(parse_cli_command("/fast invalid"), ports=ports)
+
+    assert unavailable_output == [
+        "  (._.) /fast is only available for models that support priority processing."
+    ]
+    assert output == [
+        "  Priority Processing: normal",
+        "  Usage: /fast [normal|fast|status]",
+        "  ✓ Priority Processing set to FAST (session only)",
+        "  (._.) Unknown argument: invalid",
+        "  Usage: /fast [normal|fast|status]",
+    ]
+    assert state == {"service_tier": "priority"}
+    assert saved == ["fast"]
+    assert parse_service_tier_config("priority") == "priority"
+    assert parse_service_tier_config("normal") is None
+    assert parse_service_tier_config("unknown") is None
+
+
+def test_usage_handler_reports_missing_agent_or_api_calls() -> None:
+    output: list[str] = []
+    unavailable = UsageCommandPorts(
+        agent_available=lambda: False,
+        api_calls=lambda: pytest.fail("must not read calls without an agent"),
+        rate_limit_display=lambda: None,
+        snapshot=lambda: pytest.fail("must not build a snapshot without an agent"),
+        emit=output.append,
+        no_agent_message="no agent",
+        no_calls_message="no calls",
+    )
+    handle_usage_command(parse_cli_command("/usage"), ports=unavailable)
+
+    no_calls = UsageCommandPorts(
+        agent_available=lambda: True,
+        api_calls=lambda: 0,
+        rate_limit_display=lambda: pytest.fail("must not read rate limits without calls"),
+        snapshot=lambda: pytest.fail("must not build a snapshot without calls"),
+        emit=output.append,
+        no_agent_message="no agent",
+        no_calls_message="no calls",
+    )
+    handle_usage_command(parse_cli_command("/usage ignored"), ports=no_calls)
+
+    assert output == ["no agent", "no calls"]
+
+
+def test_doctor_handler_delegates_the_diagnostic_operation_through_a_port() -> None:
+    calls: list[str] = []
+
+    handle_doctor_command(
+        parse_cli_command("/doctor ignored"),
+        ports=DoctorCommandPorts(run_diagnosis=lambda: calls.append("run")),
+    )
+
+    assert calls == ["run"]
+
+
+def test_api_handler_delegates_the_configuration_wizard_through_a_port() -> None:
+    calls: list[str] = []
+
+    handle_api_command(
+        parse_cli_command("/api ignored"),
+        ports=ApiCommandPorts(run_wizard=lambda: calls.append("run")),
+    )
+
+    assert calls == ["run"]
+
+
+def test_usage_handler_projects_rate_limits_cost_and_session_snapshot() -> None:
+    output: list[str] = []
+    snapshot = UsageDisplaySnapshot(
+        model="active-model",
+        input_tokens=1_200,
+        output_tokens=34,
+        cache_read_tokens=56,
+        cache_write_tokens=78,
+        prompt_tokens=1_334,
+        completion_tokens=34,
+        total_tokens=1_368,
+        api_calls=2,
+        session_duration="3m",
+        cost_status="estimated",
+        cost_source="official_docs_snapshot",
+        cost_amount_usd=0.0123,
+        context_tokens=987,
+        context_length=2_000,
+        context_percent=49.35,
+        message_count=4,
+        compressions=1,
+    )
+
+    handle_usage_command(
+        parse_cli_command("/usage"),
+        ports=UsageCommandPorts(
+            agent_available=lambda: True,
+            api_calls=lambda: 2,
+            rate_limit_display=lambda: "Rate limits",
+            snapshot=lambda: snapshot,
+            emit=output.append,
+            no_agent_message="no agent",
+            no_calls_message="no calls",
+        ),
+    )
+
+    assert output == [
+        "",
+        "Rate limits",
+        "",
+        "  📊 Session Token Usage",
+        "  " + "─" * 40,
+        "  Model:                     active-model",
+        "  Input tokens:                   1,200",
+        "  Cache read tokens:                 56",
+        "  Cache write tokens:                78",
+        "  Output tokens:                     34",
+        "  Prompt tokens (total):          1,334",
+        "  Completion tokens:                 34",
+        "  Total tokens:                   1,368",
+        "  API calls:                          2",
+        "  Session duration:                  3m",
+        "  Cost status:               estimated",
+        "  Cost source:              official_docs_snapshot",
+        "  Total cost:              ~$    0.0123",
+        "  " + "─" * 40,
+        "  Current context:  987 / 2,000 (49%)",
+        "  Messages:         4",
+        "  Compressions:     1",
+    ]
 def test_session_status_handler_uses_timestamp_fallbacks_and_idle_projection() -> None:
     output: list[str] = []
     started_at = datetime(2026, 7, 30, 10, 0, 0)

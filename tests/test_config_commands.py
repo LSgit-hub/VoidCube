@@ -76,6 +76,19 @@ def test_set_config_value_routes_secret_keys_only_to_env(tmp_path, monkeypatch):
     ).read_text(encoding="utf-8")
 
 
+def test_save_config_value_updates_a_nested_config_value(monkeypatch) -> None:
+    from VoidCube_app import config as config_module
+
+    loaded = {"agent": {"system_prompt": "old"}}
+    saved: list[dict[str, object]] = []
+    monkeypatch.setattr(config_module, "load_config", lambda: loaded)
+    monkeypatch.setattr(config_module, "save_config", saved.append)
+
+    assert config_module.save_config_value("agent.system_prompt", "new") is True
+    assert loaded == {"agent": {"system_prompt": "new"}}
+    assert saved == [loaded]
+
+
 def test_config_command_dispatches_path_without_loading_full_config(tmp_path, monkeypatch, capsys):
     home = tmp_path / ".VoidCube"
     home.mkdir()

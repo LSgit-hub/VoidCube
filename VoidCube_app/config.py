@@ -13,6 +13,7 @@ This module provides:
 """
 
 import copy
+import logging
 import os
 import platform
 import re
@@ -28,6 +29,9 @@ from VoidCube_core.constants import get_VoidCube_home, get_config_path, get_env_
 from VoidCube_app.default_identity import DEFAULT_SOUL_MD
 from VoidCube_app.environment import is_placeholder_secret
 from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
+
+
+logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = platform.system() == "Windows"
 _ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -2381,6 +2385,18 @@ def save_config(config: Dict[str, Any], *, preserve_structure: bool = False):
         extra_content="".join(parts) if parts else None,
     )
     _secure_file(config_path)
+
+
+def save_config_value(key_path: str, value: Any) -> bool:
+    """Persist one dotted configuration value and report whether it succeeded."""
+    try:
+        config = load_config()
+        _set_nested(config, key_path, value)
+        save_config(config)
+        return True
+    except Exception as exc:
+        logger.error("Failed to save config value %s: %s", key_path, exc)
+        return False
 
 
 def load_env() -> Dict[str, str]:

@@ -18,6 +18,36 @@ class StopCommandPorts:
     stopped_message: Callable[[int], str]
 
 
+@dataclass(frozen=True, slots=True)
+class DoctorCommandPorts:
+    run_diagnosis: Callable[[], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ApiCommandPorts:
+    run_wizard: Callable[[], None]
+
+
+def handle_api_command(
+    request: ParsedCliCommand,
+    *,
+    ports: ApiCommandPorts,
+) -> None:
+    """Delegate API configuration without owning credentials or persistence."""
+    del request
+    ports.run_wizard()
+
+
+def handle_doctor_command(
+    request: ParsedCliCommand,
+    *,
+    ports: DoctorCommandPorts,
+) -> None:
+    """Delegate the diagnostic operation without owning its external probes."""
+    del request
+    ports.run_diagnosis()
+
+
 def handle_stop_command(
     request: ParsedCliCommand,
     *,

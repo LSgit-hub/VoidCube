@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import logging
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,8 +20,16 @@ from VoidCube_cli.command_router import parse_cli_command
 from VoidCube_cli.command_handlers.registry import install_cli_command_execution
 from VoidCube_cli.command_handlers.display import (
     ConfigDisplayPorts,
+    HelpDisplayPorts,
+    HelpDisplayText,
+    MemoryDisplayPorts,
+    ProviderDisplayPorts,
+    ProviderDisplaySnapshot,
     SessionStatusDisplayPorts,
 )
+from VoidCube_cli.command_handlers.info import UsageCommandPorts, UsageDisplaySnapshot
+from VoidCube_cli.command_handlers.operations import ApiCommandPorts, DoctorCommandPorts
+from VoidCube_cli.command_handlers.personality import PersonalityCommandPorts
 from VoidCube_cli.commands import COMMAND_REGISTRY
 from VoidCube_app.session_lifecycle import (
     BranchSessionResult,
@@ -185,8 +194,10 @@ def test_executor_passes_original_command_only_when_declared() -> None:
     host = SimpleNamespace(_command_running=False, _command_status="")
     host._invalidate = lambda **kwargs: None
     host._handle_tools_command = lambda command: calls.append(("tools", command))
-    host.show_help = lambda: calls.append(("help", None))
-    initialize_command_execution(host)
+    initialize_command_execution(
+        host,
+        command_handlers={"help": lambda _request: calls.append(("help", None))},
+    )
 
     host._builtin_command_executor.execute(
         parse_cli_command("/tools Enable MixedCase")
@@ -194,6 +205,353 @@ def test_executor_passes_original_command_only_when_declared() -> None:
     host._builtin_command_executor.execute(parse_cli_command("/help"))
 
     assert calls == [("tools", "/tools Enable MixedCase"), ("help", None)]
+
+
+def test_cli_process_routes_help_through_display_handler(monkeypatch) -> None:
+    events: list[tuple[object, ...]] = []
+    observed_skill_catalogs: list[object] = []
+    skill_catalog = lambda: {}
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_help_display_ports",
+        lambda _host, **kwargs: observed_skill_catalogs.append(
+            kwargs["skill_commands"]
+        )
+        or HelpDisplayPorts(
+            command_categories=lambda: {"Info": {"/help": "Show help"}},
+            command_available=lambda _command: True,
+            skill_commands=lambda: {},
+            text=HelpDisplayText("Help", "Skills", "Chat", "Multiline", "Paste"),
+            is_termux=lambda: False,
+            termux_example_path=lambda: "image.png",
+            render_header=lambda value: events.append(("header", value)),
+            render_category=lambda value: events.append(("category", value)),
+            render_command=lambda command, description: events.append(
+                ("command", command, description)
+            ),
+            render_skill_header=lambda header, count: events.append(
+                ("skills", header, count)
+            ),
+            render_skill=lambda command, description: events.append(
+                ("skill", command, description)
+            ),
+            render_tip=lambda text, final: events.append(("tip", text, final)),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(
+        app,
+        emit=lambda _text: None,
+        skill_commands=skill_catalog,
+    )
+
+    assert app.process_command("/help") is True
+    assert events == [
+        ("header", "Help"),
+        ("category", "Info"),
+        ("command", "/help", "Show help"),
+        ("tip", "Chat", False),
+        ("tip", "Multiline", False),
+        ("tip", "Paste", True),
+    ]
+    assert observed_skill_catalogs == [skill_catalog]
+
+
+def test_cli_process_routes_usage_through_information_handler(monkeypatch) -> None:
+    output: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_usage_command_ports",
+        lambda _host, *, emit: UsageCommandPorts(
+            agent_available=lambda: True,
+            api_calls=lambda: 1,
+            rate_limit_display=lambda: None,
+            snapshot=lambda: UsageDisplaySnapshot(
+                model="active-model",
+                input_tokens=0,
+                output_tokens=1,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                prompt_tokens=0,
+                completion_tokens=1,
+                total_tokens=1,
+                api_calls=1,
+                session_duration="1s",
+                cost_status="unknown",
+                cost_source="none",
+                cost_amount_usd=None,
+                context_tokens=1,
+                context_length=10,
+                context_percent=10,
+                message_count=1,
+                compressions=0,
+            ),
+            emit=output.append,
+            no_agent_message="no agent",
+            no_calls_message="no calls",
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/usage") is True
+    assert output[0] == "  📊 Session Token Usage"
+    assert output[-1] == "  Note:             Pricing unknown for active-model"
+
+
+def test_cli_process_routes_doctor_through_operation_handler(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_doctor_command_ports",
+        lambda: DoctorCommandPorts(run_diagnosis=lambda: calls.append("run")),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/doctor") is True
+    assert calls == ["run"]
+
+
+def test_cli_process_routes_api_through_operation_handler(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_api_command_ports",
+        lambda _host: ApiCommandPorts(run_wizard=lambda: calls.append("run")),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/api") is True
+    assert calls == ["run"]
+
+
+def test_cli_process_routes_provider_through_display_handler(monkeypatch) -> None:
+    output: list[str] = []
+    usage: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_provider_display_ports",
+        lambda _host, *, emit, translate: ProviderDisplayPorts(
+            snapshot=lambda: ProviderDisplaySnapshot(
+                active_provider="primary",
+                configured_providers=(),
+            ),
+            current_model=lambda: "active-model",
+            translate=translate,
+            emit=output.append,
+            emit_usage=usage.append,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/provider list") is True
+    assert usage[-1] == "  Run /api to configure provider credentials"
+    assert output == []
+
+
+def test_cli_process_routes_memory_through_display_handler(monkeypatch) -> None:
+    output: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_memory_display_ports",
+        lambda: MemoryDisplayPorts(
+            database_path=lambda: "runtime/memory/memory.db",
+            emit=output.append,
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/memory") is True
+    assert output[1] == "  数据库: runtime/memory/memory.db"
+
+
+def test_cli_process_routes_personality_through_mutation_handler(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_personality_command_ports",
+        lambda _host: PersonalityCommandPorts(
+            personalities=lambda: {},
+            set_system_prompt=lambda value: calls.append(f"prompt:{value}"),
+            reset_agent=lambda: calls.append("reset"),
+            save_system_prompt=lambda value: calls.append(f"save:{value}") or True,
+            emit=lambda value: calls.append(f"emit:{value}"),
+        ),
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/personality default") is True
+    assert calls == [
+        "prompt:",
+        "reset",
+        "save:",
+        "emit:(^_^)b Personality cleared (saved to config)",
+        "emit:  No personality overlay — using base agent behavior.",
+    ]
+
+
+def test_cli_process_personality_uses_shared_config_persistence(monkeypatch) -> None:
+    from VoidCube_app import config as config_module
+
+    saved: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        config_module,
+        "save_config_value",
+        lambda key, value: saved.append((key, value)) or True,
+    )
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.personalities = {"calm": "Stay calm."}
+    app.system_prompt = ""
+    app.agent = object()
+    install_cli_command_execution(app, emit=lambda _text: None)
+
+    assert app.process_command("/personality calm") is True
+    assert app.system_prompt == "Stay calm."
+    assert app.agent is None
+    assert saved == [("agent.system_prompt", "Stay calm.")]
+
+
+def test_cli_process_routes_reasoning_through_runtime_ports(monkeypatch) -> None:
+    from VoidCube_app import config as config_module
+
+    saved: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        config_module,
+        "save_config_value",
+        lambda key, value: saved.append((key, value)) or True,
+    )
+    output: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.reasoning_config = None
+    app.show_reasoning = False
+    app.agent = SimpleNamespace(reasoning_callback=None)
+    app._current_reasoning_callback = lambda: "reasoning-callback"
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/reasoning show") is True
+    assert app.show_reasoning is True
+    assert app.agent.reasoning_callback == "reasoning-callback"
+    assert saved == [("display.show_reasoning", True)]
+    assert output[-2:] == [
+        "  \033[1;38;2;48;54;61m✓ Reasoning display: ON (saved)\033[0m",
+        "  \033[2m  Model thinking will be shown during and after each response.\033[0m",
+    ]
+
+
+def test_cli_process_routes_fast_through_runtime_ports(monkeypatch) -> None:
+    from VoidCube_app import config as config_module
+
+    saved: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        config_module,
+        "save_config_value",
+        lambda key, value: saved.append((key, value)) or True,
+    )
+    output: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.service_tier = None
+    app.agent = object()
+    app._fast_command_available = lambda: True
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/fast fast") is True
+    assert app.service_tier == "priority"
+    assert app.agent is None
+    assert saved == [("agent.service_tier", "fast")]
+    assert "Priority Processing set to FAST" in output[-1]
+
+
+def test_api_command_ports_bind_only_explicit_runtime_updates(monkeypatch) -> None:
+    host = SimpleNamespace(
+        model="old-model",
+        provider="old-provider",
+        requested_provider="old-requested-provider",
+    )
+    observed: list[object] = []
+
+    def fake_wizard(runtime) -> None:
+        observed.append(runtime)
+        assert runtime.set_model is not None
+        assert runtime.set_provider is not None
+        assert runtime.set_requested_provider is not None
+        runtime.set_model("new-model")
+        runtime.set_provider("new-provider")
+        runtime.set_requested_provider("new-requested-provider")
+
+    monkeypatch.setattr("VoidCube_cli.api_config.run_api_config_wizard", fake_wizard)
+
+    command_handler_registry._api_command_ports(host).run_wizard()
+
+    assert len(observed) == 1
+    assert host == SimpleNamespace(
+        model="new-model",
+        provider="new-provider",
+        requested_provider="new-requested-provider",
+    )
+
+
+def test_verbose_toggle_applies_logging_levels_without_usage_command(monkeypatch) -> None:
+    monkeypatch.setattr(cli_module, "_cprint", lambda _text: None)
+    root_logger = logging.getLogger()
+    noisy_names = (
+        "openai", "openai._base_client", "httpx", "httpcore", "asyncio",
+        "hpack", "grpc", "modal",
+    )
+    noisy_loggers = [logging.getLogger(name) for name in noisy_names]
+    original_levels = [root_logger.level, *(logger.level for logger in noisy_loggers)]
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app.tool_progress_mode = "all"
+    app.verbose = False
+    app.agent = None
+
+    try:
+        app._toggle_verbose()
+
+        assert app.tool_progress_mode == "verbose"
+        assert app.verbose is True
+        assert root_logger.level == logging.DEBUG
+        assert [logger.level for logger in noisy_loggers] == [logging.WARNING] * len(
+            noisy_loggers
+        )
+    finally:
+        root_logger.setLevel(original_levels[0])
+        for logger, level in zip(noisy_loggers, original_levels[1:]):
+            logger.setLevel(level)
 
 
 def test_tools_catalog_command_uses_the_shared_host_renderer(monkeypatch) -> None:

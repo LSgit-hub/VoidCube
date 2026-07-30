@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from VoidCube_app.session_lifecycle import (
     branch_session,
@@ -38,15 +38,27 @@ from VoidCube_cli.command_handlers.attachments import (
 )
 from VoidCube_cli.command_handlers.display import (
     ConfigDisplayPorts,
+    HelpDisplayPorts,
+    HelpDisplayText,
+    MemoryDisplayPorts,
+    ProviderDisplayPorts,
+    ProviderDisplaySnapshot,
     SessionStatusDisplayPorts,
     StatusBarCommandPorts,
     ToolsCatalogPorts,
     ToolsetsDisplayPorts,
     handle_config_display_command,
+    handle_help_display_command,
+    handle_memory_display_command,
+    handle_provider_display_command,
     handle_session_status_command,
     handle_statusbar_command,
     handle_tools_catalog_command,
     handle_toolsets_display_command,
+)
+from VoidCube_cli.command_handlers.fast import (
+    FastCommandPorts,
+    handle_fast_command,
 )
 from VoidCube_cli.command_handlers.input import (
     QueueCommandPorts,
@@ -57,8 +69,24 @@ from VoidCube_cli.command_handlers.input import (
 from VoidCube_cli.command_handlers.info import (
     PluginsCommandPorts,
     ProfileCommandPorts,
+    UsageCommandPorts,
+    UsageDisplaySnapshot,
     handle_plugins_command,
     handle_profile_command,
+    handle_usage_command,
+)
+from VoidCube_cli.command_handlers.model import (
+    ModelCommandPorts,
+    handle_model_command,
+)
+from VoidCube_cli.command_handlers.personality import (
+    PersonalityCommandPorts,
+    handle_personality_command,
+)
+from VoidCube_cli.command_handlers.reasoning import (
+    ReasoningCommandPorts,
+    handle_reasoning_command,
+    parse_reasoning_config,
 )
 from VoidCube_cli.command_handlers.history import (
     HistoryCommandPorts,
@@ -72,7 +100,11 @@ from VoidCube_cli.command_handlers.history import (
     write_conversation_export,
 )
 from VoidCube_cli.command_handlers.operations import (
+    ApiCommandPorts,
+    DoctorCommandPorts,
     StopCommandPorts,
+    handle_api_command,
+    handle_doctor_command,
     handle_stop_command,
 )
 from VoidCube_cli.command_handlers.rollback import (
@@ -107,11 +139,16 @@ def install_cli_command_execution(
     translate: Callable[..., str] = _identity_translate,
     chat_console_factory: Callable[[], Any] | None = None,
     compact_banner_factory: Callable[[], str] | None = None,
+    skill_commands: Callable[[], Mapping[str, Mapping[str, str]]] | None = None,
 ) -> None:
     """Register migrated command domains against narrow callable ports."""
     initialize_command_execution(
         host,
         command_handlers={
+            "api": lambda request: handle_api_command(
+                request,
+                ports=_api_command_ports(host),
+            ),
             "branch": lambda request: handle_branch_command(
                 request,
                 ports=BranchCommandPorts(
@@ -159,6 +196,24 @@ def install_cli_command_execution(
                 request,
                 ports=_config_display_ports(host, emit=emit, translate=translate),
             ),
+            "doctor": lambda request: handle_doctor_command(
+                request,
+                ports=_doctor_command_ports(),
+            ),
+            "fast": lambda request: handle_fast_command(
+                request,
+                ports=_fast_command_ports(host, emit=emit),
+            ),
+            "help": lambda request: handle_help_display_command(
+                request,
+                ports=_help_display_ports(
+                    host,
+                    emit=emit,
+                    translate=translate,
+                    chat_console_factory=chat_console_factory,
+                    skill_commands=skill_commands,
+                ),
+            ),
             "new": lambda request: handle_new_session_command(
                 request,
                 ports=_new_session_ports(host, translate=translate),
@@ -179,6 +234,14 @@ def install_cli_command_execution(
                         tip_prefix=translate("tips.tip_prefix", default="Tip:"),
                     ),
                 ),
+            ),
+            "model": lambda request: handle_model_command(
+                request,
+                ports=_model_command_ports(host, emit=emit),
+            ),
+            "memory": lambda request: handle_memory_display_command(
+                request,
+                ports=_memory_display_ports(),
             ),
             "history": lambda request: handle_history_command(
                 request,
@@ -215,6 +278,18 @@ def install_cli_command_execution(
                         ),
                     ),
                 ),
+            ),
+            "personality": lambda request: handle_personality_command(
+                request,
+                ports=_personality_command_ports(host),
+            ),
+            "reasoning": lambda request: handle_reasoning_command(
+                request,
+                ports=_reasoning_command_ports(host, emit=emit),
+            ),
+            "provider": lambda request: handle_provider_display_command(
+                request,
+                ports=_provider_display_ports(host, emit=emit, translate=translate),
             ),
             "plugins": lambda request: handle_plugins_command(
                 request,
@@ -345,6 +420,10 @@ def install_cli_command_execution(
             "toolsets": lambda request: handle_toolsets_display_command(
                 request,
                 ports=_toolsets_display_ports(host, emit=emit, translate=translate),
+            ),
+            "usage": lambda request: handle_usage_command(
+                request,
+                ports=_usage_command_ports(host, emit=print),
             ),
             "stop": lambda request: handle_stop_command(
                 request,
@@ -539,6 +618,327 @@ def _tools_catalog_ports(
         toolset_for_tool=get_toolset_for_tool,
         translate=translate,
         emit=emit,
+    )
+
+
+def _help_display_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+    chat_console_factory: Callable[[], Any] | None,
+    skill_commands: Callable[[], Mapping[str, Mapping[str, str]]] | None,
+) -> HelpDisplayPorts:
+    from agent.skill_commands import get_skill_commands
+    from rich.markup import escape
+    from VoidCube_cli.cli_ui import _BOLD, _DIM, _RST, ChatConsole, _accent_hex
+    from VoidCube_cli.commands import COMMANDS_BY_CATEGORY
+    from VoidCube_core.constants import is_termux
+    from VoidCube_cli.attachments import _termux_example_image_path
+
+    console_factory = chat_console_factory or ChatConsole
+    skill_command_catalog = skill_commands or get_skill_commands
+
+    def label(key: str, default: str) -> str:
+        try:
+            return translate(key, default=default) or default
+        except Exception:
+            return default
+
+    def render_header(header: str) -> None:
+        inner_width = 55
+        normalized = (header or "").strip() or "(^_^)? VoidCube AI Assistant"
+        if len(normalized) > inner_width:
+            normalized = normalized[:inner_width]
+        emit(f"\n{_BOLD}+{'-' * inner_width}+{_RST}")
+        emit(f"{_BOLD}|{normalized:^{inner_width}}|{_RST}")
+        emit(f"{_BOLD}+{'-' * inner_width}+{_RST}")
+
+    def render_category(category: str) -> None:
+        emit(f"\n  {_BOLD}── {category} ──{_RST}")
+
+    def render_command(command: str, description: str) -> None:
+        console_factory().print(
+            f"    [bold {_accent_hex()}]{command:<15}[/] [dim]-[/] {escape(description)}"
+        )
+
+    def render_skill_header(header: str, count: int) -> None:
+        emit(f"\n  {header} {_RST}({count} installed):")
+
+    def render_skill(command: str, description: str) -> None:
+        console_factory().print(
+            f"    [bold {_accent_hex()}]{command:<22}[/] [dim]-[/] {escape(description)}"
+        )
+
+    def render_tip(text: str, final: bool) -> None:
+        emit(f"  {_DIM}{text}{_RST}" + ("\n" if final else ""))
+
+    return HelpDisplayPorts(
+        command_categories=lambda: COMMANDS_BY_CATEGORY,
+        command_available=host._command_available,
+        skill_commands=skill_command_catalog,
+        text=HelpDisplayText(
+            header=label("help.available_commands", "(^_^)? VoidCube AI Assistant"),
+            skill_commands_header=label("help.skill_commands", "🔧 可用技能"),
+            tip_chat=label("help.tip_chat", "提示: 直接输入消息与 AI 对话"),
+            tip_multiline=label("help.tip_multiline", "多行输入: Alt+Enter 换行"),
+            tip_paste=label("help.tip_paste", "粘贴图片: Alt+V (或 /paste)"),
+        ),
+        is_termux=is_termux,
+        termux_example_path=_termux_example_image_path,
+        render_header=render_header,
+        render_category=render_category,
+        render_command=render_command,
+        render_skill_header=render_skill_header,
+        render_skill=render_skill,
+        render_tip=render_tip,
+    )
+
+
+def _usage_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> UsageCommandPorts:
+    from agent.rate_limit_tracker import format_rate_limit_display
+    from agent.usage_pricing import (
+        CanonicalUsage,
+        estimate_usage_cost,
+        format_duration_compact,
+    )
+
+    def agent() -> Any:
+        return host.agent
+
+    def rate_limit_display() -> str | None:
+        state = agent().get_rate_limit_state()
+        return format_rate_limit_display(state) if state and state.has_data else None
+
+    def snapshot() -> UsageDisplaySnapshot:
+        active_agent = agent()
+        input_tokens = getattr(active_agent, "session_input_tokens", 0) or 0
+        output_tokens = getattr(active_agent, "session_output_tokens", 0) or 0
+        cache_read_tokens = getattr(active_agent, "session_cache_read_tokens", 0) or 0
+        cache_write_tokens = getattr(active_agent, "session_cache_write_tokens", 0) or 0
+        compressor = active_agent.context_compressor
+        context_tokens = compressor.last_prompt_tokens
+        context_length = compressor.context_length
+        cost = estimate_usage_cost(
+            active_agent.model,
+            CanonicalUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+            ),
+            provider=getattr(active_agent, "provider", None),
+            base_url=getattr(active_agent, "base_url", None),
+        )
+        return UsageDisplaySnapshot(
+            model=active_agent.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            prompt_tokens=active_agent.session_prompt_tokens,
+            completion_tokens=active_agent.session_completion_tokens,
+            total_tokens=active_agent.session_total_tokens,
+            api_calls=active_agent.session_api_calls,
+            session_duration=format_duration_compact(
+                (datetime.now() - host.session_start).total_seconds()
+            ),
+            cost_status=cost.status,
+            cost_source=cost.source,
+            cost_amount_usd=(float(cost.amount_usd) if cost.amount_usd is not None else None),
+            context_tokens=context_tokens,
+            context_length=context_length,
+            context_percent=(
+                min(100, context_tokens / context_length * 100)
+                if context_length
+                else 0
+            ),
+            message_count=len(host.conversation_history),
+            compressions=compressor.compression_count,
+        )
+
+    return UsageCommandPorts(
+        agent_available=lambda: agent() is not None,
+        api_calls=lambda: agent().session_api_calls,
+        rate_limit_display=rate_limit_display,
+        snapshot=snapshot,
+        emit=emit,
+        no_agent_message="(._.) No active agent -- send a message first.",
+        no_calls_message="(._.) No API calls made yet in this session.",
+    )
+
+
+def _doctor_command_ports() -> DoctorCommandPorts:
+    from VoidCube_cli.config_validator import print_diagnosis
+
+    return DoctorCommandPorts(run_diagnosis=print_diagnosis)
+
+
+def _api_command_ports(host: Any) -> ApiCommandPorts:
+    from VoidCube_cli.api_config import ApiConfigRuntime, run_api_config_wizard
+
+    def runtime_setter(attribute: str) -> Callable[[str], None] | None:
+        if not hasattr(host, attribute):
+            return None
+        return lambda value: setattr(host, attribute, value)
+
+    runtime = ApiConfigRuntime(
+        set_model=runtime_setter("model"),
+        set_provider=runtime_setter("provider"),
+        set_requested_provider=runtime_setter("requested_provider"),
+    )
+    return ApiCommandPorts(run_wizard=lambda: run_api_config_wizard(runtime))
+
+
+def _model_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> ModelCommandPorts:
+    from VoidCube_app.config import load_config
+    from VoidCube_cli.model_switch import (
+        list_configured_providers,
+        parse_model_flags,
+        switch_model,
+    )
+    from VoidCube_cli.providers import get_label
+
+    def user_providers() -> Mapping[str, Any] | None:
+        try:
+            config = load_config()
+        except Exception:
+            return None
+        providers = config.get("providers")
+        return providers if isinstance(providers, Mapping) else None
+
+    return ModelCommandPorts(
+        parse_flags=parse_model_flags,
+        user_providers=user_providers,
+        model=lambda: str(getattr(host, "model", "") or ""),
+        provider=lambda: str(getattr(host, "provider", "") or ""),
+        base_url=lambda: str(getattr(host, "base_url", "") or ""),
+        api_key=lambda: str(getattr(host, "api_key", "") or ""),
+        provider_label=get_label,
+        list_configured_providers=list_configured_providers,
+        switch_model=switch_model,
+        open_picker=host._open_model_picker,
+        apply_result=host._apply_model_switch_result,
+        emit=emit,
+    )
+
+
+def _provider_display_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> ProviderDisplayPorts:
+    from VoidCube_app.config import get_active_provider_key, load_config
+    from VoidCube_cli.model_switch import list_configured_providers
+
+    def snapshot() -> ProviderDisplaySnapshot:
+        config = load_config()
+        active_provider = get_active_provider_key(config)
+        return ProviderDisplaySnapshot(
+            active_provider=active_provider,
+            configured_providers=list_configured_providers(
+                current_provider=active_provider,
+                user_providers=config.get("providers"),
+                max_models=8,
+            ),
+        )
+
+    return ProviderDisplayPorts(
+        snapshot=snapshot,
+        current_model=lambda: str(getattr(host, "model", "") or ""),
+        translate=translate,
+        emit=print,
+        emit_usage=emit,
+    )
+
+
+def _memory_display_ports() -> MemoryDisplayPorts:
+    from VoidCube_core.runtime_paths import get_runtime_layout
+
+    return MemoryDisplayPorts(
+        database_path=lambda: str(get_runtime_layout().memory_db),
+        emit=print,
+    )
+
+
+def _personality_command_ports(host: Any) -> PersonalityCommandPorts:
+    from VoidCube_app.config import save_config_value
+
+    return PersonalityCommandPorts(
+        personalities=lambda: getattr(host, "personalities", {}),
+        set_system_prompt=lambda value: setattr(host, "system_prompt", value),
+        reset_agent=lambda: setattr(host, "agent", None),
+        save_system_prompt=lambda value: save_config_value(
+            "agent.system_prompt",
+            value,
+        ),
+        emit=print,
+    )
+
+
+def _reasoning_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> ReasoningCommandPorts:
+    from VoidCube_app.config import save_config_value
+    from VoidCube_cli.cli_ui import _ACCENT, _DIM, _RST
+
+    def refresh_agent_reasoning_callback() -> None:
+        agent = getattr(host, "agent", None)
+        if agent is not None:
+            agent.reasoning_callback = host._current_reasoning_callback()
+
+    def set_reasoning_config(value: dict | None) -> None:
+        setattr(host, "reasoning_config", value)
+        setattr(host, "agent", None)
+
+    return ReasoningCommandPorts(
+        reasoning_config=lambda: getattr(host, "reasoning_config", None),
+        show_reasoning=lambda: bool(getattr(host, "show_reasoning", False)),
+        set_reasoning_config=set_reasoning_config,
+        set_show_reasoning=lambda value: setattr(host, "show_reasoning", value),
+        refresh_agent_reasoning_callback=refresh_agent_reasoning_callback,
+        parse_config=parse_reasoning_config,
+        save_display=lambda value: save_config_value("display.show_reasoning", value),
+        save_effort=lambda value: save_config_value("agent.reasoning_effort", value),
+        emit=emit,
+        accent=_ACCENT,
+        dim=_DIM,
+        reset=_RST,
+    )
+
+
+def _fast_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> FastCommandPorts:
+    from VoidCube_app.config import save_config_value
+    from VoidCube_cli.cli_ui import _ACCENT, _DIM, _RST
+
+    def set_service_tier(value: str | None) -> None:
+        setattr(host, "service_tier", value)
+        setattr(host, "agent", None)
+
+    return FastCommandPorts(
+        available=host._fast_command_available,
+        service_tier=lambda: getattr(host, "service_tier", None),
+        set_service_tier=set_service_tier,
+        save_service_tier=lambda value: save_config_value("agent.service_tier", value),
+        emit=emit,
+        accent=_ACCENT,
+        dim=_DIM,
+        reset=_RST,
     )
 
 

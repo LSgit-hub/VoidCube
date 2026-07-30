@@ -864,10 +864,112 @@ systems/supervisor/web/
 4. characterization tests 覆盖空 catalog、toolset/name 排序、description 首句规则、总数及 `/tools` 目录分支使用共享 renderer。
 5. `VoidCube_cli/app.py` 降至 8,764 行，较本轮 Stage 3 开始前 10,157 行净减少 1,393 行；P0 增长基线已同步下调。
 
-## 46. 下一次实施起点
+## 46. CLI-3 help information command domain 实施记录
 
-下一批评估 **CLI-3 help information command domain**：
+2026-07-30 已完成：
 
-1. 梳理 `/help` 的 command registry、skill discovery、ANSI/Rich renderer 与 Termux 分支，先定义只读 discovery 和终端投影端口。
-2. 保留 command 执行和技能安装/配置的现有 owner；只迁出 help 的 information projection，避免 helper 反向依赖 CLI host。
-3. 切换后删除旧 `show_help()` owner 和冗余 lazy helper，并继续执行架构测试、退役集成扫描、wheel 构建和归档审计。
+1. `command_handlers.display` 新增 `HelpDisplayPorts`、`HelpDisplayText` 与只读 `handle_help_display_command()`；它只接收 command categories、可用性过滤、技能目录、Termux 判断和语义化 terminal renderer ports。
+2. `/help` 切换为 execution table `handler_key`。`VoidcubeCLI.show_help()` 已删除；ANSI frame、Rich markup escape、command/skill 行渲染和末尾提示由 registry 的 CLI renderer adapter 负责，不再混入 host。
+3. app 现有 `_get_skill_commands()` cache 作为显式 discovery port 注入，仍同时服务动态技能命令执行；帮助 handler 不持有 host，也不触碰技能安装、配置或 command execution。
+4. characterization 与 registry integration tests 覆盖 `/fast` 可用性过滤、命令类别顺序、技能排序、普通/Termux attachment tip、真实 `/help` route 与 autonomous gate 下的 route。
+5. `VoidCube_cli/app.py` 降至 8,716 行，较本轮 Stage 3 开始前 10,157 行净减少 1,441 行；P0 增长基线已同步下调。
+
+## 47. CLI-3 usage diagnostics command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 评估确认 `/usage` 是唯一可在本批按 snapshot 迁出的只读诊断；`/debug` 上传报告，doctor 读取配置诊断，API/browser/MCP 都含外部副作用，继续保留专属 owner。
+2. `command_handlers.info` 新增 `UsageDisplaySnapshot`、`UsageCommandPorts` 和 `handle_usage_command()`；它只投影 Agent availability、API call count、rate limit display、token/context/cost snapshot，不读取或修改 CLI host。
+3. `/usage` 切换为 execution table `handler_key`。registry 负责在命令调用时组装 rate-limit 与 pricing ports；`VoidcubeCLI._show_usage()` 已删除。
+4. 旧 `_show_usage()` 末尾错误归属的 logger-level 更新已迁回 `_toggle_verbose()`，使 `/usage` 不再有隐藏状态变更；只供旧 usage owner 使用的 pricing wrappers 也已删除，startup status 保留单一 duration lazy import。
+5. characterization 与 registry integration tests 覆盖无 Agent、零 API calls、rate-limit display、cost/context projection 和真实 `/usage` route。
+6. `VoidCube_cli/app.py` 降至 8,617 行，较本轮 Stage 3 开始前 10,157 行净减少 1,540 行；P0 增长基线已同步下调。
+
+## 48. CLI-3 doctor diagnostics operation adapter 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/doctor` 不是只读诊断：它会执行 terminal probe，并在隔离临时目录进行 `write_file -> patch -> search_files -> read_file` smoke test；该副作用不能迁入 information handler。
+2. `command_handlers.operations` 新增 `DoctorCommandPorts` 与 `handle_doctor_command()`，只接受一个 `run_diagnosis` operation port；诊断、临时环境、terminal cleanup 和输出仍由 `config_validator.print_diagnosis()` 唯一持有。
+3. `/doctor` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_doctor_command()` 已删除，不保留委托壳。
+4. direct adapter、registry route 及既有主 CLI doctor entry/diagnostic tests 共同覆盖 port 调用和真实诊断入口，确保没有绕开原有 probe/smoke 行为。
+5. `VoidCube_cli/app.py` 降至 8,612 行，较本轮 Stage 3 开始前 10,157 行净减少 1,545 行；P0 增长基线已同步下调。
+
+## 49. CLI-3 API configuration operation adapter 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/api` 是交互式 credential/config 写入操作，不属于只读 display handler；向导继续独占 API Key 验证、Provider/model 选择、配置与环境变量持久化和配置 reload。
+2. `command_handlers.operations` 新增 `ApiCommandPorts` 与 `handle_api_command()`，只接受一个 `run_wizard` operation port。registry 以 `ApiConfigRuntime` 明确传入 model、provider、requested provider 三个可选更新回调，向导不再接收完整 CLI host。
+3. `/api` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_api_command()` 已删除；TUI 的 API 配置入口改复用相同 `/api` command route，避免产生第二条 host-to-wizard 分派。
+4. direct adapter 与 registry route 测试覆盖 wizard port 调用；API 配置单元测试继续覆盖持久化和 credential 行为。
+5. `VoidCube_cli/app.py` 当前为 8,606 行，较本轮 Stage 3 开始前 10,157 行净减少 1,551 行；P0 增长基线已按架构测试的 Python 行数同步下调。
+
+## 50. CLI-3 model switch command adapter 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/model` 的 provider/model 解析、credential resolution、模型规范化和 metadata lookup 已归 `model_switch` 与共享 config/runtime provider owner；CLI host 仅保留 prompt_toolkit picker modal 和运行中 Agent 的切换结果应用。
+2. 新增 `command_handlers.model` 的 `ModelCommandPorts` 与 `handle_model_command()`；handler 只编排 flag 解析、configured-provider 快照、shared `switch_model()` 调用、picker 打开与 result application 回调，不接收 `VoidcubeCLI` host。
+3. `/model` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_model_switch()` 已删除；无参数 picker、带 `--provider` / `--session-only` 的切换参数及 global persistence 语义保持不变。
+4. direct handler、registry route、picker snapshot 与原有 Agent/runtime application tests 覆盖参数保留、result application、provider snapshot、Agent switch、turn note 和 session-only 投影。
+5. `VoidCube_cli/app.py` 降至 8,537 行，较本轮 Stage 3 开始前 10,157 行净减少 1,620 行；P0 增长基线已按 Python 行数同步下调。
+
+## 51. CLI-3 provider status command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `ops.provider.handle_slash_provider()` 仅返回 `None`；旧 `/provider status|list` 分派会把这个空值输出，既不配置 Provider，也不拥有任何 operation。
+2. `command_handlers.display` 新增 `ProviderDisplaySnapshot`、`ProviderDisplayPorts` 与 `handle_provider_display_command()`；无参数路径只投影 active provider、configured provider、endpoint 和 model snapshot，不接收 `VoidcubeCLI` 或写入配置。
+3. `/provider` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_provider_switch()` / `_handle_provider_command()` 和空 `VoidCube_cli/ops/provider.py` 已删除。带参数的旧无效兼容分派统一进入既有 usage 指引，不再输出 `None`；Provider 配置仍明确由 `/api` 持有，切换仍由 `/model` 持有。
+4. direct projection 与 registry route tests 覆盖 active/current marker、endpoint、model list、argument usage 和无 `None` 输出；packaging contract 确认已删除空模块不会重新进入 wheel。
+5. `VoidCube_cli/app.py` 降至 8,454 行，较本轮 Stage 3 开始前 10,157 行净减少 1,703 行；P0 增长基线已按 Python 行数同步下调。
+
+## 52. CLI-3 memory status command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/memory` 不读取 memory provider 配置、不调用 `memory_setup.py`、不触发数据库 setup 或 migration；它只展示统一 Mem 状态与 canonical runtime memory database path。
+2. `command_handlers.display` 新增 `MemoryDisplayPorts` 与 `handle_memory_display_command()`；handler 仅接收数据库路径与输出 port，不接收 `VoidcubeCLI`、Memory Service 或配置对象。
+3. `/memory` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_memory_switch()` 已删除；既有 Mem status、工具和审计文案保持不变。
+4. direct projection 与 registry route tests 覆盖数据库路径和固定状态文案，明确断言没有 setup/migration operation。
+5. `VoidCube_cli/app.py` 降至 8,444 行，较本轮 Stage 3 开始前 10,157 行净减少 1,713 行；P0 增长基线已按 Python 行数同步下调。
+
+## 53. CLI-3 personality command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/personality` 只操作 `agent.system_prompt` overlay：profile catalog 来自启动配置，选择或清除后将 Agent 置空以按新 prompt 初始化，并通过既有 `save_config_value()` 持久化。它不触碰 model/provider runtime。
+2. 新增 `command_handlers.personality` 的 `PersonalityCommandPorts`、`resolve_personality_prompt()` 与 `handle_personality_command()`；handler 仅消费 catalog、prompt setter、Agent reset、persist 和 output ports，不接收 `VoidcubeCLI`。
+3. `/personality` 切换为 execution table `handler_key`，`VoidcubeCLI._resolve_personality_prompt()` / `_handle_personality_command()` 已删除。`none/default/neutral`、structured profile 的 tone/style 拼接、保存失败的 session-only 提示、未知项与列表展示语义保持不变。
+4. direct handler 与 registry route tests 覆盖结构化 prompt、保存与 Agent reset、清除别名、unknown/list 和 session-only fallback。
+5. `VoidCube_cli/app.py` 降至 8,387 行，较本轮 Stage 3 开始前 10,157 行净减少 1,770 行；P0 增长基线已按 Python 行数同步下调。
+
+## 54. CLI-3 reasoning command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/reasoning` 有两条独立状态路径：`show/on` 与 `hide/off` 更新 display flag 并刷新现有 Agent 的 reasoning callback；effort 更新 `reasoning_config` 并丢弃 Agent，以新配置重建。状态展示、未知参数提示及所有原有文案保持不变。
+2. 新增 `command_handlers.reasoning` 的 `ReasoningCommandPorts`、`parse_reasoning_config()` 与 `handle_reasoning_command()`；handler 只消费 state getter/setter、callback refresh、parser、persistence 和 renderer ports，不接收 `VoidcubeCLI`。启动时的 persisted effort 解析复用同一个 parser，避免出现两套有效值规则。
+3. 单值配置持久化收敛为 `VoidCube_app.config.save_config_value()`；删除 `app.py` 的重复实现。`/personality` registry port 同时改为延迟绑定这个公共 owner，修复此前真实路由会引用未定义函数的问题。
+4. `/reasoning` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_reasoning_command()` 与旧 app-local parser 均已删除。registry 还补齐了 `Mapping` runtime import，避免 `/model` 的 configured provider projection 在真实路径上触发 `NameError`。
+5. direct handler、公共 config helper 与真实 registry route tests 覆盖 display/effort mutation、Agent callback refresh/Agent reset、未知项、session-only persistence fallback 和 personality 的实际持久化绑定。
+6. `VoidCube_cli/app.py` 降至 8,294 行，较本轮 Stage 3 开始前 10,157 行净减少 1,863 行；P0 增长基线已按 Python 行数同步下调。
+
+## 55. CLI-3 fast priority-processing command domain 实施记录
+
+2026-07-30 已完成：
+
+1. 审计确认 `/fast` 只管理 OpenAI-compatible priority-processing 的 `service_tier` session state：无参数或 `status` 只读投影，`fast/on` 设为 `priority`，`normal/off` 清空 tier 并使 Agent 失效。模型 capability 判定仍由 host `_fast_command_available()` 持有，request override 与 Agent 初始化仍由现有 runtime 持有。
+2. 新增 `command_handlers.fast` 的 `FastCommandPorts`、`parse_service_tier_config()` 和 `handle_fast_command()`；handler 只消费 capability、state getter/setter、persistence 和 renderer ports，不接收 `VoidcubeCLI`。启动读取 persisted service tier 复用同一个 parser，避免两套 tier normalization。
+3. `/fast` 切换为 execution table `handler_key`，`VoidcubeCLI._handle_fast_command()` 与 app-local service-tier parser 均已删除，不保留委托壳。配置写入继续复用 `VoidCube_app.config.save_config_value()`。
+4. direct handler 与真实 registry route tests 覆盖 unavailable gate、status、`on/off` aliases、未知参数、保存失败 session-only 提示、Agent reset、持久化 binding 以及 persisted `priority`/`normal` normalization。
+5. `VoidCube_cli/app.py` 降至 8,247 行，较本轮 Stage 3 开始前 10,157 行净减少 1,910 行；P0 增长基线已按 Python 行数同步下调。
+
+## 56. 下一次实施起点
+
+下一批评估 `/compress` command domain：
+
+1. 先确认 conversation history、Agent compressor、focus argument、session persistence 和用户投影的状态边界，避免把压缩运行时重新合并到 CLI host。
+2. 仅提取可验证的 command adapter 与显式 ports；保留 compression engine、Agent runtime 和 transcript persistence 的专属 owner。
+3. 每项切换执行架构测试、退役集成扫描、wheel 构建和归档审计。

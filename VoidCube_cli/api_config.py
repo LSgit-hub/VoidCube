@@ -6,7 +6,8 @@ import os
 import subprocess
 import sys
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 
 API_A_ENV_VAR_MAP = {
@@ -20,6 +21,16 @@ API_A_PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
     "ollama": "Ollama",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ApiConfigRuntime:
+    """Optional CLI runtime updates applied after a successful wizard save."""
+
+    set_model: Callable[[str], None] | None = None
+    set_provider: Callable[[str], None] | None = None
+    set_requested_provider: Callable[[str], None] | None = None
+
 
 def load_current_config() -> dict:
     """加载当前配置"""
@@ -1150,7 +1161,7 @@ class Spinner:
 dc = DisplayComponents
 
 
-def run_api_config_wizard(console=None):
+def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     """运行 API 配置向导"""
     
     original_stdout = sys.stdout
@@ -1187,6 +1198,19 @@ def run_api_config_wizard(console=None):
             return user_input if user_input else default
         except (KeyboardInterrupt, EOFError):
             return default
+
+    def apply_runtime_updates(selected_model: str, provider_key: str) -> None:
+        if runtime is None:
+            return
+        if runtime.set_model is not None:
+            runtime.set_model(selected_model)
+            ps("CLI 当前模型已更新")
+        if runtime.set_provider is not None:
+            runtime.set_provider(provider_key)
+            ps("CLI 当前 Provider 已更新")
+        if runtime.set_requested_provider is not None:
+            runtime.set_requested_provider(provider_key)
+            ps("CLI 请求 Provider 已更新")
     
     if os.name == 'nt':
         subprocess.call('cls', shell=True)
@@ -1317,17 +1341,7 @@ def run_api_config_wizard(console=None):
                     ps("Provider 配置保存成功")
                     ps("默认模型保存成功")
                 
-                if console and hasattr(console, 'model'):
-                    console.model = selected_model
-                    ps("CLI 当前模型已更新")
-                
-                if console and hasattr(console, 'provider'):
-                    console.provider = "openrouter"
-                    ps("CLI 当前 Provider 已更新")
-                
-                if console and hasattr(console, 'requested_provider'):
-                    console.requested_provider = "openrouter"
-                    ps("CLI 请求 Provider 已更新")
+                apply_runtime_updates(selected_model, "openrouter")
                 
                 if save_env_value("OPENROUTER_API_KEY", api_key):
                     ps("API Key 保存成功")
@@ -1495,17 +1509,7 @@ def run_api_config_wizard(console=None):
                     ps("Provider 配置保存成功")
                     ps(f"默认模型保存成功: {selected_model}")
                 
-                if console and hasattr(console, 'model'):
-                    console.model = selected_model
-                    ps("CLI 当前模型已更新")
-                
-                if console and hasattr(console, 'provider'):
-                    console.provider = provider_key
-                    ps("CLI 当前 Provider 已更新")
-                
-                if console and hasattr(console, 'requested_provider'):
-                    console.requested_provider = provider_key
-                    ps("CLI 请求 Provider 已更新")
+                apply_runtime_updates(selected_model, provider_key)
                 
                 if env_var and api_key:
                     if save_env_value(env_var, api_key):

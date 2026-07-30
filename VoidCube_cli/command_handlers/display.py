@@ -52,6 +52,31 @@ class ToolsCatalogPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class HelpDisplayText:
+    header: str
+    skill_commands_header: str
+    tip_chat: str
+    tip_multiline: str
+    tip_paste: str
+
+
+@dataclass(frozen=True, slots=True)
+class HelpDisplayPorts:
+    command_categories: Callable[[], Mapping[str, Mapping[str, str]]]
+    command_available: Callable[[str], bool]
+    skill_commands: Callable[[], Mapping[str, Mapping[str, str]]]
+    text: HelpDisplayText
+    is_termux: Callable[[], bool]
+    termux_example_path: Callable[[], str]
+    render_header: Callable[[str], None]
+    render_category: Callable[[str], None]
+    render_command: Callable[[str, str], None]
+    render_skill_header: Callable[[str, int], None]
+    render_skill: Callable[[str, str], None]
+    render_tip: Callable[[str, bool], None]
+
+
+@dataclass(frozen=True, slots=True)
 class SessionStatusDisplayPorts:
     session_metadata: Callable[[], Mapping[str, Any]]
     session_id: Callable[[], str]
@@ -63,6 +88,27 @@ class SessionStatusDisplayPorts:
     agent_running: Callable[[], bool]
     subagent_snapshot: Callable[[], Mapping[str, Any]]
     autonomous_sections: Callable[[], Sequence[str]]
+    emit: Callable[[str], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderDisplaySnapshot:
+    active_provider: str
+    configured_providers: Sequence[Mapping[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderDisplayPorts:
+    snapshot: Callable[[], ProviderDisplaySnapshot]
+    current_model: Callable[[], str]
+    translate: Callable[..., str]
+    emit: Callable[[str], None]
+    emit_usage: Callable[[str], None]
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryDisplayPorts:
+    database_path: Callable[[], str]
     emit: Callable[[str], None]
 
 
@@ -212,6 +258,38 @@ def handle_tools_catalog_command(
     ports.emit("")
 
 
+def handle_help_display_command(
+    request: ParsedCliCommand,
+    *,
+    ports: HelpDisplayPorts,
+) -> None:
+    """Render the CLI help catalog through read-only discovery and display ports."""
+    del request
+    ports.render_header(ports.text.header)
+    for category, commands in ports.command_categories().items():
+        ports.render_category(category)
+        for command, description in commands.items():
+            if ports.command_available(command):
+                ports.render_command(command, description)
+
+    skill_commands = ports.skill_commands()
+    if skill_commands:
+        ports.render_skill_header(ports.text.skill_commands_header, len(skill_commands))
+        for command, info in sorted(skill_commands.items()):
+            ports.render_skill(command, info["description"])
+
+    ports.render_tip(ports.text.tip_chat, False)
+    ports.render_tip(ports.text.tip_multiline, False)
+    if ports.is_termux():
+        ports.render_tip(
+            "Attach image: /image "
+            f"{ports.termux_example_path()} or start your prompt with a local image path",
+            True,
+        )
+    else:
+        ports.render_tip(ports.text.tip_paste, True)
+
+
 def handle_session_status_command(
     request: ParsedCliCommand,
     *,
@@ -263,6 +341,85 @@ def handle_session_status_command(
         lines.append("Subagents: idle")
     lines.extend(ports.autonomous_sections())
     ports.emit("\n".join(lines))
+
+
+def handle_provider_display_command(
+    request: ParsedCliCommand,
+    *,
+    ports: ProviderDisplayPorts,
+) -> None:
+    """Render configured-provider status without mutating configuration."""
+    if request.arguments:
+        for line in (
+            ports.translate("  Usage: /provider"),
+            ports.translate("         /provider list"),
+            "",
+            ports.translate("  Use /model to switch providers or models:"),
+            ports.translate("    /model <model-name>              — switch model"),
+            ports.translate("    /model --provider <provider-name> — switch provider"),
+            ports.translate("    /model <provider>:<model>         — switch provider and model"),
+            "",
+            ports.translate("  Run /api to configure provider credentials"),
+        ):
+            ports.emit_usage(line)
+        return
+
+    snapshot = ports.snapshot()
+    current_model = ports.current_model()
+    current_provider = snapshot.active_provider
+    ports.emit(
+        f"\n  Current: {current_model or 'not set'} via "
+        f"{current_provider or 'not configured'}"
+    )
+    ports.emit("")
+
+    if snapshot.configured_providers:
+        ports.emit("  Configured providers:")
+        for provider in snapshot.configured_providers:
+            slug = str(provider["slug"])
+            marker = " ← active" if provider.get("is_current") else ""
+            ports.emit(f"    [{slug}] {provider['name']}{marker}")
+            api_url = str(provider.get("api_url") or "")
+            if api_url:
+                ports.emit(f"      endpoint: {api_url}")
+            models = provider.get("models") or ()
+            for model in models:
+                current_marker = (
+                    " ← current"
+                    if provider.get("is_current") and model == current_model
+                    else ""
+                )
+                ports.emit(f"      {model}{current_marker}")
+            if not models:
+                ports.emit("      no model selected")
+            ports.emit("")
+    else:
+        ports.emit("  No configured providers.")
+        ports.emit("  Run /api to configure providers.")
+        ports.emit("")
+
+    ports.emit(
+        ports.translate(
+            "prompts.use_model_to_switch_providers_or_models",
+            default="  Use /model to switch providers or models:",
+        )
+    )
+    ports.emit("    /model <model-name>               — switch model")
+    ports.emit("    /model --provider <provider-name> — switch provider")
+    ports.emit("    /model <name> --provider <provider-name> — switch provider and model")
+
+
+def handle_memory_display_command(
+    request: ParsedCliCommand,
+    *,
+    ports: MemoryDisplayPorts,
+) -> None:
+    """Render the unified Mem status without configuring or migrating it."""
+    del request
+    ports.emit("\n  统一记忆系统: Mem（始终启用）")
+    ports.emit(f"  数据库: {ports.database_path()}")
+    ports.emit("  工具: mem_search, mem_timeline, mem_remember")
+    ports.emit("  审计: Memory Service /recall/traces\n")
 
 
 def _timestamp_or_default(value: object, default: datetime) -> datetime:

@@ -6,7 +6,13 @@ import pytest
 
 import cli as cli_module
 from cli import VoidcubeCLI
-from VoidCube_cli.command_execution import initialize_command_execution
+import VoidCube_cli.command_handlers.registry as command_handler_registry
+from VoidCube_cli.command_handlers.model import (
+    ModelCommandPorts,
+    handle_model_command,
+)
+from VoidCube_cli.command_handlers.registry import install_cli_command_execution
+from VoidCube_cli.command_router import parse_cli_command
 from VoidCube_cli.model_switch import ModelSwitchResult
 
 
@@ -62,50 +68,111 @@ def test_load_cli_config_does_not_hide_shared_loader_errors(monkeypatch) -> None
         cli_module.load_cli_config()
 
 
-def test_execution_table_routes_model_command_with_original_arguments() -> None:
+def test_execution_table_routes_model_command_with_preserved_arguments(
+    monkeypatch,
+) -> None:
     app = VoidcubeCLI.__new__(VoidcubeCLI)
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
-    handled: list[str] = []
-    app._handle_model_switch = handled.append
-    initialize_command_execution(app)
+    app.model = "old-model"
+    app.provider = "provider-a"
+    app.base_url = "https://old.example/v1"
+    app.api_key = "old-key"
+    arguments: list[str] = []
+    applied: list[tuple[ModelSwitchResult, bool]] = []
+    result = ModelSwitchResult(success=True, new_model="new-model")
+    monkeypatch.setattr(
+        command_handler_registry,
+        "_model_command_ports",
+        lambda _host, *, emit: ModelCommandPorts(
+            parse_flags=lambda value: arguments.append(value) or ("new-model", "", False),
+            user_providers=lambda: None,
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "https://old.example/v1",
+            api_key=lambda: "old-key",
+            provider_label=lambda value: value,
+            list_configured_providers=lambda **_kwargs: [],
+            switch_model=lambda **_kwargs: result,
+            open_picker=lambda *_args: pytest.fail("must switch when a model is given"),
+            apply_result=lambda value, persist: applied.append((value, persist)),
+            emit=emit,
+        ),
+    )
+    install_cli_command_execution(app, emit=lambda _text: None)
 
     assert app.process_command("/model Keep/MixedCase --session-only") is True
-    assert handled == ["/model Keep/MixedCase --session-only"]
+    assert arguments == ["Keep/MixedCase --session-only"]
+    assert applied == [(result, False)]
 
 
-def test_model_command_delegates_result_to_single_apply_path(monkeypatch) -> None:
+def test_model_handler_delegates_result_to_single_apply_path() -> None:
     result = ModelSwitchResult(
         success=True,
         new_model="next-model",
         target_provider="provider-b",
     )
-    app = VoidcubeCLI.__new__(VoidcubeCLI)
-    app.provider = "provider-a"
-    app.model = "old-model"
-    app.base_url = "https://old.example/v1"
-    app.api_key = "old-key"
     applied: list[tuple[ModelSwitchResult, bool]] = []
-    app._apply_model_switch_result = lambda value, persist: applied.append(
-        (value, persist)
-    )
+    observed: list[dict[str, object]] = []
 
-    monkeypatch.setattr(
-        "VoidCube_cli.model_switch.parse_model_flags",
-        lambda raw: ("next-model", "provider-b", False),
-    )
-    monkeypatch.setattr(
-        "VoidCube_cli.model_switch.switch_model",
-        lambda **kwargs: result,
-    )
-    monkeypatch.setattr("VoidCube_cli.config.load_config", lambda: {"providers": {}})
-
-    app._handle_model_switch(
-        "/model next-model --provider provider-b --session-only"
+    handle_model_command(
+        parse_cli_command("/model next-model --provider provider-b --session-only"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: ("next-model", "provider-b", False),
+            user_providers=lambda: {"provider-b": {}},
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "https://old.example/v1",
+            api_key=lambda: "old-key",
+            provider_label=lambda value: value,
+            list_configured_providers=lambda **_kwargs: [],
+            switch_model=lambda **kwargs: observed.append(kwargs) or result,
+            open_picker=lambda *_args: pytest.fail("must not open picker"),
+            apply_result=lambda value, persist: applied.append((value, persist)),
+            emit=lambda _text: None,
+        ),
     )
 
     assert applied == [(result, False)]
+    assert observed == [
+        {
+            "raw_input": "next-model",
+            "current_provider": "provider-a",
+            "current_model": "old-model",
+            "current_base_url": "https://old.example/v1",
+            "current_api_key": "old-key",
+            "is_global": False,
+            "explicit_provider": "provider-b",
+            "user_providers": {"provider-b": {}},
+        }
+    ]
+
+
+def test_model_handler_opens_picker_from_configured_provider_snapshot() -> None:
+    opened: list[tuple[object, ...]] = []
+    providers = [{"slug": "provider-a", "is_current": True}]
+    user_providers = {"provider-a": {"selected_model": "old-model"}}
+
+    handle_model_command(
+        parse_cli_command("/model"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: ("", "", True),
+            user_providers=lambda: user_providers,
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "",
+            api_key=lambda: "",
+            provider_label=lambda value: f"Label {value}",
+            list_configured_providers=lambda **kwargs: providers,
+            switch_model=lambda **_kwargs: pytest.fail("must not switch without a selection"),
+            open_picker=lambda *args: opened.append(args),
+            apply_result=lambda *_args: pytest.fail("must not apply without a selection"),
+            emit=lambda _text: pytest.fail("must open picker when providers exist"),
+        ),
+    )
+
+    assert opened == [(providers, "old-model", "Label provider-a", user_providers)]
 
 
 def test_apply_model_switch_updates_cli_running_agent_and_turn_note(monkeypatch) -> None:

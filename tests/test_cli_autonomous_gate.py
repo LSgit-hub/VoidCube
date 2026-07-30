@@ -2468,12 +2468,13 @@ def test_process_command_allows_regular_slash_commands_while_autonomous_gate_act
     cli._command_running = False
     cli._command_status = ""
     cli._invalidate = lambda **kwargs: None
-    initialize_command_execution(cli)
-
     called = {"help": 0}
-
-    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
-    cli.show_help = lambda: called.__setitem__("help", called["help"] + 1)
+    initialize_command_execution(
+        cli,
+        command_handlers={
+            "help": lambda _request: called.__setitem__("help", called["help"] + 1)
+        },
+    )
 
     assert cli.process_command("/help") is True
     assert called["help"] == 1

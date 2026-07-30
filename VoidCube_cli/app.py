@@ -62,6 +62,7 @@ from VoidCube_app.configuration import (
     get_application_config,
     reload_application_config,
 )
+from VoidCube_app.config import save_config_value
 from VoidCube_app.gateway import (
     is_gateway_running as _is_gateway_running,
     register_session as _register_gateway_session,
@@ -111,6 +112,8 @@ from VoidCube_cli.command_handlers.registry import (
     render_tools_for_host,
     render_toolsets_for_host,
 )
+from VoidCube_cli.command_handlers.reasoning import parse_reasoning_config
+from VoidCube_cli.command_handlers.fast import parse_service_tier_config
 from VoidCube_cli.interaction_adapter import (
     approval_choices as _approval_choices_view,
     approval_display_fragments as _approval_display_fragments_view,
@@ -202,26 +205,14 @@ import threading
 import queue
 
 # Lazy import for agent.usage_pricing — defers ~180ms (openai + usage_pricing import chain)
-_usage_pricing_imported = False
-_CanonicalUsage = None
-_estimate_usage_cost = None
 _format_duration_compact = None
-_format_token_count_compact = None
 
 def _lazy_import_usage_pricing():
-    global _usage_pricing_imported, _CanonicalUsage, _estimate_usage_cost, _format_duration_compact, _format_token_count_compact
-    if not _usage_pricing_imported:
-        from agent.usage_pricing import (
-            CanonicalUsage as _CU,
-            estimate_usage_cost as _EC,
-            format_duration_compact as _FDC,
-            format_token_count_compact as _FTC,
-        )
-        _CanonicalUsage = _CU
-        _estimate_usage_cost = _EC
+    global _format_duration_compact
+    if _format_duration_compact is None:
+        from agent.usage_pricing import format_duration_compact as _FDC
+
         _format_duration_compact = _FDC
-        _format_token_count_compact = _FTC
-        _usage_pricing_imported = True
 
 
 def _format_duration_compact_lazy(elapsed_seconds):
@@ -229,19 +220,6 @@ def _format_duration_compact_lazy(elapsed_seconds):
     return _format_duration_compact(elapsed_seconds)
 
 
-def _format_token_count_compact_lazy(count):
-    _lazy_import_usage_pricing()
-    return _format_token_count_compact(count)
-
-
-def _estimate_usage_cost_lazy(usage, **kwargs):
-    _lazy_import_usage_pricing()
-    return _estimate_usage_cost(usage, **kwargs)
-
-
-def _CanonicalUsage_lazy(*args, **kwargs):
-    _lazy_import_usage_pricing()
-    return _CanonicalUsage(*args, **kwargs)
 from VoidCube_cli.banner import build_compact_banner
 from VoidCube_cli.cli_ui import (
     ChatConsole as _BaseChatConsole,
@@ -319,27 +297,6 @@ def _load_prefill_messages(file_path: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning("Failed to load prefill messages from %s: %s", path, e)
         return []
-
-
-def _parse_reasoning_config(effort: str) -> dict | None:
-    """Parse a reasoning effort level into an OpenRouter reasoning config dict."""
-    from VoidCube_core.constants import parse_reasoning_effort
-    result = parse_reasoning_effort(effort)
-    if effort and effort.strip() and result is None:
-        logger.warning("Unknown reasoning_effort '%s', using default (medium)", effort)
-    return result
-
-
-def _parse_service_tier_config(raw: str) -> str | None:
-    """Parse a persisted service-tier preference into a Responses API value."""
-    value = str(raw or "").strip().lower()
-    if not value or value in {"normal", "default", "standard", "off", "none"}:
-        return None
-    if value in {"fast", "priority", "on"}:
-        return "priority"
-    logger.warning("Unknown service_tier '%s', ignoring", raw)
-    return None
-
 
 
 def _get_chrome_debug_candidates(system: str) -> list[str]:
@@ -743,31 +700,6 @@ def _parse_skills_argument(skills: str | list[str] | tuple[str, ...] | None) -> 
     return parsed
 
 
-def save_config_value(key_path: str, value: any) -> bool:
-    """
-    Save a value to ``VOIDCUBE_HOME/config.yaml`` at the specified key path.
-    
-    Args:
-        key_path: Dot-separated path like "agent.system_prompt"
-        value: Value to save
-    
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        from VoidCube_app.config import load_config, save_config, _set_nested
-
-        config = load_config()
-        _set_nested(config, key_path, value)
-        save_config(config)
-        return True
-    except Exception as e:
-        logger.error("Failed to save config: %s", e)
-        return False
-
-
-
-
 # ============================================================================
 # VoidcubeCLI Class
 # ============================================================================
@@ -925,10 +857,10 @@ class VoidcubeCLI:
         )
         
         # Reasoning config (OpenRouter reasoning effort level)
-        self.reasoning_config = _parse_reasoning_config(
+        self.reasoning_config = parse_reasoning_config(
             CLI_CONFIG["agent"].get("reasoning_effort", "")
         )
-        self.service_tier = _parse_service_tier_config(
+        self.service_tier = parse_service_tier_config(
             CLI_CONFIG["agent"].get("service_tier", "")
         )
         
@@ -1039,6 +971,7 @@ class VoidcubeCLI:
             translate=t,
             chat_console_factory=ChatConsole,
             compact_banner_factory=build_compact_banner,
+            skill_commands=_get_skill_commands,
         )
         self._attached_images: list[Path] = []
         self._image_counter = 0
@@ -2990,55 +2923,6 @@ class VoidcubeCLI:
             return self._fast_command_available()
         return True
 
-    def show_help(self):
-        """Display help information with categorized commands."""
-        from VoidCube_cli.commands import COMMANDS_BY_CATEGORY
-
-        try:
-            from VoidCube_cli.i18n import t
-            header_default = t('help.available_commands', default="(^_^)? VoidCube AI Assistant")
-            skill_cmd_header = t('help.skill_commands', default="🔧 可用技能")
-            tip_chat = t('help.tip_chat', default="提示: 直接输入消息与 AI 对话")
-            tip_multiline = t('help.tip_multiline', default="多行输入: Alt+Enter 换行")
-            tip_paste = t('help.tip_paste', default="粘贴图片: Alt+V (或 /paste)")
-        except Exception:
-            header_default = "(^_^)? VoidCube AI Assistant"
-            skill_cmd_header = "🔧 可用技能"
-            tip_chat = "提示: 直接输入消息与 AI 对话"
-            tip_multiline = "多行输入: Alt+Enter 换行"
-            tip_paste = "粘贴图片: Alt+V (或 /paste)"
-
-        header = header_default
-        header = (header or "").strip() or header_default
-        inner_width = 55
-        if len(header) > inner_width:
-            header = header[:inner_width]
-        _cprint(f"\n{_BOLD}+{'-' * inner_width}+{_RST}")
-        _cprint(f"{_BOLD}|{header:^{inner_width}}|{_RST}")
-        _cprint(f"{_BOLD}+{'-' * inner_width}+{_RST}")
-
-        for category, commands in COMMANDS_BY_CATEGORY.items():
-            _cprint(f"\n  {_BOLD}── {category} ──{_RST}")
-            for cmd, desc in commands.items():
-                if not self._command_available(cmd):
-                    continue
-                ChatConsole().print(f"    [bold {_accent_hex()}]{cmd:<15}[/] [dim]-[/] {_escape(desc)}")
-
-        _skcmds = _get_skill_commands()
-        if _skcmds:
-            _cprint(f"\n  {skill_cmd_header} {_RST}({len(_skcmds)} installed):")
-            for cmd, info in sorted(_skcmds.items()):
-                ChatConsole().print(
-                    f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
-                )
-
-        _cprint(f"\n  {_DIM}{tip_chat}{_RST}")
-        _cprint(f"  {_DIM}{tip_multiline}{_RST}")
-        if _is_termux_environment():
-            _cprint(f"  {_DIM}Attach image: /image {_termux_example_image_path()} or start your prompt with a local image path{_RST}\n")
-        else:
-            _cprint(f"  {_DIM}{tip_paste}{_RST}\n")
-    
     def _handle_tools_command(self, cmd: str):
         """Handle /tools [list|disable|enable] slash commands.
 
@@ -3357,75 +3241,6 @@ class VoidcubeCLI:
                 return
             self._close_model_picker()
 
-    def _handle_model_switch(self, cmd_original: str):
-        """Handle /model command — switch model and persist by default.
-
-        Supports:
-          /model                              — show current model + usage hints
-          /model <name>                       — switch and persist to config.yaml
-          /model <name> --session-only        — switch for this session only
-          /model <name> --provider <provider> — switch provider + model
-          /model --provider <provider>        — switch to provider, auto-detect model
-        """
-        from VoidCube_cli.model_switch import switch_model, parse_model_flags, list_configured_providers
-        from VoidCube_cli.providers import get_label
-
-        # Parse args from the original command
-        parts = cmd_original.split(None, 1)  # split off '/model'
-        raw_args = parts[1].strip() if len(parts) > 1 else ""
-
-        # Parse --provider and --global flags
-        model_input, explicit_provider, persist_global = parse_model_flags(raw_args)
-
-        user_provs = None
-        try:
-            from VoidCube_app.config import load_config
-            cfg = load_config()
-            user_provs = cfg.get("providers")
-        except Exception:
-            user_provs = None
-
-        # No args at all: open prompt_toolkit-native picker modal
-        if not model_input and not explicit_provider:
-            model_display = self.model or "unknown"
-            provider_display = get_label(self.provider) if self.provider else "unknown"
-
-            try:
-                providers = list_configured_providers(
-                    current_provider=self.provider or "",
-                    user_providers=user_provs,
-                    max_models=30,  # 减少显示的模型数量以避免渲染卡顿
-                )
-            except Exception:
-                providers = []
-
-            if not providers:
-                _cprint("  No configured providers found.")
-                _cprint("")
-                _cprint("  Run /api first to add a provider.")
-                return
-
-            self._open_model_picker(
-                providers,
-                model_display,
-                provider_display,
-                user_provs=user_provs,
-            )
-            return
-
-        # Perform the switch
-        result = switch_model(
-            raw_input=model_input,
-            current_provider=self.provider or "",
-            current_model=self.model or "",
-            current_base_url=self.base_url or "",
-            current_api_key=self.api_key or "",
-            is_global=persist_global,
-            explicit_provider=explicit_provider,
-            user_providers=user_provs,
-        )
-        self._apply_model_switch_result(result, persist_global)
-
     def _should_handle_model_command_inline(self, text: str, has_images: bool = False) -> bool:
         """Return True when /model should be handled immediately on the UI thread."""
         if not text or has_images or not _looks_like_slash_command(text):
@@ -3438,143 +3253,9 @@ class VoidcubeCLI:
         except Exception:
             return False
 
-    def _handle_provider_switch(self, cmd_original: str):
-        """Handle /provider command — view provider status.
-
-        Supports:
-          /provider                        — show current provider + list all providers
-          /provider list                   — show detailed provider info
-
-        Use /model command to switch providers or models.
-        """
-        from VoidCube_app.config import load_config, get_active_provider_key
-        from VoidCube_cli.model_switch import list_configured_providers
-
-        parts = cmd_original.split(None, 1)
-        raw_args = parts[1].strip() if len(parts) > 1 else ""
-
-        # If user provides arguments, show help message
-        if raw_args:
-            _cprint(t('  Usage: /provider'))
-            _cprint(t('         /provider list'))
-            _cprint()
-            _cprint(t('  Use /model to switch providers or models:'))
-            _cprint(t('    /model <model-name>              — switch model'))
-            _cprint(t('    /model --provider <provider-name> — switch provider'))
-            _cprint(t('    /model <provider>:<model>         — switch provider and model'))
-            _cprint()
-            _cprint(t('  Run /api to configure provider credentials'))
-            return
-
-        cfg = load_config()
-        current = get_active_provider_key(cfg)
-        providers = list_configured_providers(
-            current_provider=current,
-            user_providers=cfg.get("providers"),
-            max_models=8,
-        )
-
-        current_model = self.model or ""
-        print(f"\n  Current: {current_model or 'not set'} via {current or 'not configured'}")
-        print()
-
-        if providers:
-            print("  Configured providers:")
-            for p in providers:
-                marker = " ← active" if p.get("is_current") else ""
-                print(f"    [{p['slug']}] {p['name']}{marker}")
-                api_url = p.get("api_url") or ""
-                if api_url:
-                    print(f"      endpoint: {api_url}")
-                for mid in p.get("models") or []:
-                    current_marker = " ← current" if (p.get("is_current") and mid == current_model) else ""
-                    print(f"      {mid}{current_marker}")
-                if not (p.get("models") or []):
-                    print("      no model selected")
-                print()
-        else:
-            print("  No configured providers.")
-            print("  Run /api to configure providers.")
-            print()
-
-        print(t(
-            'prompts.use_model_to_switch_providers_or_models',
-            default='  Use /model to switch providers or models:',
-        ))
-        print("    /model <model-name>               — switch model")
-        print("    /model --provider <provider-name> — switch provider")
-        print("    /model <name> --provider <provider-name> — switch provider and model")
-
-    def _handle_memory_switch(self, cmd_original: str):
-        """显示不可切换的统一 Mem 状态。"""
-        del cmd_original
-        from VoidCube_core.runtime_paths import get_runtime_layout
-
-        print("\n  统一记忆系统: Mem（始终启用）")
-        print(f"  数据库: {get_runtime_layout().memory_db}")
-        print("  工具: mem_search, mem_timeline, mem_remember")
-        print("  审计: Memory Service /recall/traces\n")
-
 
     
 
-    @staticmethod
-    def _resolve_personality_prompt(value) -> str:
-        """Accept string or dict personality value; return system prompt string."""
-        if isinstance(value, dict):
-            parts = [value.get("system_prompt", "")]
-            if value.get("tone"):
-                parts.append(f'Tone: {value["tone"]}' )
-            if value.get("style"):
-                parts.append(f'Style: {value["style"]}' )
-            return "\n".join(p for p in parts if p)
-        return str(value)
-
-    def _handle_personality_command(self, cmd: str):
-        """Handle the /personality command to set predefined personalities."""
-        parts = cmd.split(maxsplit=1)
-        
-        if len(parts) > 1:
-            # Set personality
-            personality_name = parts[1].strip().lower()
-            
-            if personality_name in ("none", "default", "neutral"):
-                self.system_prompt = ""
-                self.agent = None  # Force re-init
-                if save_config_value("agent.system_prompt", ""):
-                    print("(^_^)b Personality cleared (saved to config)")
-                else:
-                    print("(^_^) Personality cleared (session only)")
-                print("  No personality overlay — using base agent behavior.")
-            elif personality_name in self.personalities:
-                self.system_prompt = self._resolve_personality_prompt(self.personalities[personality_name])
-                self.agent = None  # Force re-init
-                if save_config_value("agent.system_prompt", self.system_prompt):
-                    print(f"(^_^)b Personality set to '{personality_name}' (saved to config)")
-                else:
-                    print(f"(^_^) Personality set to '{personality_name}' (session only)")
-                print(f"  \"{self.system_prompt[:60]}{'...' if len(self.system_prompt) > 60 else ''}\"")
-            else:
-                print(f"(._.) Unknown personality: {personality_name}")
-                print(f"  Available: none, {', '.join(self.personalities.keys())}")
-        else:
-            # Show available personalities
-            print()
-            print("+" + "-" * 50 + "+")
-            print("|" + " " * 12 + "(^o^)/ Personalities" + " " * 15 + "|")
-            print("+" + "-" * 50 + "+")
-            print()
-            print(f"  {'none':<12} - (no personality overlay)")
-            for name, prompt in self.personalities.items():
-                if isinstance(prompt, dict):
-                    preview = prompt.get("description") or prompt.get("system_prompt", "")[:50]
-                else:
-                    preview = str(prompt)[:50]
-                print(f"  {name:<12} - {preview}")
-            print()
-            print("  Usage: /personality <name>")
-            print()
-    
     def _handle_skills_command(self, cmd: str):
         """Handle /skills slash command — skills management."""
         args = cmd.split()
@@ -3989,32 +3670,6 @@ class VoidcubeCLI:
             print(f"    ❌ 卸载失败: {e}")
         
         print()
-
-    def _handle_doctor_command(self) -> None:
-        from VoidCube_cli.config_validator import print_diagnosis
-
-        print_diagnosis()
-
-    def _handle_api_command(self) -> None:
-        from VoidCube_cli.api_config import run_api_config_wizard
-
-        run_api_config_wizard(self)
-
-    def _handle_provider_command(self, command: str) -> None:
-        parts = command.split()
-        use_ops_handler = (
-            len(parts) >= 3
-            and not parts[2].startswith("-")
-            and parts[1] != "--global"
-        ) or (len(parts) >= 2 and parts[1] in ("status", "list"))
-        if not use_ops_handler:
-            self._handle_provider_switch(command)
-            return
-
-        from VoidCube_cli.ops.provider import handle_slash_provider
-
-        arguments = command.split(None, 1)[1] if len(parts) > 1 else ""
-        _cprint(handle_slash_provider(arguments))
 
     def _handle_auto_command(self, command: str) -> None:
         _handle_auto_command_view(
@@ -4844,6 +4499,19 @@ class VoidcubeCLI:
             "verbose": f"{_Colors.BOLD}{_Colors.GREEN}Tool progress: VERBOSE{_Colors.RESET} — full args, results, think blocks, and debug logs.",
         }
         _cprint(labels.get(self.tool_progress_mode, ""))
+        if self.verbose:
+            logging.getLogger().setLevel(logging.DEBUG)
+            for noisy in (
+                "openai", "openai._base_client", "httpx", "httpcore", "asyncio",
+                "hpack", "grpc", "modal",
+            ):
+                logging.getLogger(noisy).setLevel(logging.WARNING)
+        else:
+            logging.getLogger().setLevel(logging.INFO)
+            for quiet_logger in (
+                "tools", "run_agent", "trajectory_compressor", "VoidCube_cli",
+            ):
+                logging.getLogger(quiet_logger).setLevel(logging.ERROR)
 
     def _toggle_yolo(self):
         """Toggle YOLO mode — skip all dangerous command approval prompts."""
@@ -4855,103 +4523,6 @@ class VoidcubeCLI:
         else:
             os.environ["VOIDCUBE_YOLO_MODE"] = "1"
             self.console.print("  🔧 YOLO mode [bold green]ON[/] — all commands auto-approved. Use with caution.")
-
-    def _handle_reasoning_command(self, cmd: str):
-        """Handle /reasoning — manage effort level and display toggle.
-
-        Usage:
-            /reasoning              Show current effort level and display state
-            /reasoning <level>      Set reasoning effort (none, minimal, low, medium, high, xhigh)
-            /reasoning show|on      Show model thinking/reasoning in output
-            /reasoning hide|off     Hide model thinking/reasoning from output
-        """
-        parts = cmd.strip().split(maxsplit=1)
-
-        if len(parts) < 2:
-            # Show current state
-            rc = self.reasoning_config
-            if rc is None:
-                level = "medium (default)"
-            elif rc.get("enabled") is False:
-                level = "none (disabled)"
-            else:
-                level = rc.get("effort", "medium")
-            display_state = "on ✓" if self.show_reasoning else "off"
-            _cprint(f"  {_ACCENT}Reasoning effort:  {level}{_RST}")
-            _cprint(f"  {_ACCENT}Reasoning display: {display_state}{_RST}")
-            _cprint(f"  {_DIM}Usage: /reasoning <none|minimal|low|medium|high|xhigh|show|hide>{_RST}")
-            return
-
-        arg = parts[1].strip().lower()
-
-        # Display toggle
-        if arg in ("show", "on"):
-            self.show_reasoning = True
-            if self.agent:
-                self.agent.reasoning_callback = self._current_reasoning_callback()
-            save_config_value("display.show_reasoning", True)
-            _cprint(f"  {_ACCENT}✓ Reasoning display: ON (saved){_RST}")
-            _cprint(f"  {_DIM}  Model thinking will be shown during and after each response.{_RST}")
-            return
-        if arg in ("hide", "off"):
-            self.show_reasoning = False
-            if self.agent:
-                self.agent.reasoning_callback = self._current_reasoning_callback()
-            save_config_value("display.show_reasoning", False)
-            _cprint(f"  {_ACCENT}✓ Reasoning display: OFF (saved){_RST}")
-            return
-
-        # Effort level change
-        parsed = _parse_reasoning_config(arg)
-        if parsed is None:
-            _cprint(f"  {_DIM}(._.) Unknown argument: {arg}{_RST}")
-            _cprint(f"  {_DIM}Valid levels: none, minimal, low, medium, high, xhigh{_RST}")
-            _cprint(f"  {_DIM}Display:      show, hide{_RST}")
-            return
-
-        self.reasoning_config = parsed
-        self.agent = None  # Force agent re-init with new reasoning config
-
-        if save_config_value("agent.reasoning_effort", arg):
-            _cprint(f"  {_ACCENT}✓ Reasoning effort set to '{arg}' (saved to config){_RST}")
-        else:
-            _cprint(f"  {_ACCENT}✓ Reasoning effort set to '{arg}' (session only){_RST}")
-
-    def _handle_fast_command(self, cmd: str):
-        """Handle /fast — toggle OpenAI-compatible priority processing."""
-        if not self._fast_command_available():
-            _cprint("  (._.) /fast is only available for models that support priority processing.")
-            return
-
-        feature_name = "Priority Processing"
-
-        parts = cmd.strip().split(maxsplit=1)
-        if len(parts) < 2 or parts[1].strip().lower() == "status":
-            status = "fast" if self.service_tier == "priority" else "normal"
-            _cprint(f"  {_ACCENT}{feature_name}: {status}{_RST}")
-            _cprint(f"  {_DIM}Usage: /fast [normal|fast|status]{_RST}")
-            return
-
-        arg = parts[1].strip().lower()
-
-        if arg in {"fast", "on"}:
-            self.service_tier = "priority"
-            saved_value = "fast"
-            label = "FAST"
-        elif arg in {"normal", "off"}:
-            self.service_tier = None
-            saved_value = "normal"
-            label = "NORMAL"
-        else:
-            _cprint(f"  {_DIM}(._.) Unknown argument: {arg}{_RST}")
-            _cprint(f"  {_DIM}Usage: /fast [normal|fast|status]{_RST}")
-            return
-
-        self.agent = None  # Force agent re-init with new service-tier config
-        if save_config_value("agent.service_tier", saved_value):
-            _cprint(f"  {_ACCENT}✓ {feature_name} set to {label} (saved to config){_RST}")
-        else:
-            _cprint(f"  {_ACCENT}✓ {feature_name} set to {label} (session only){_RST}")
 
     def _on_reasoning(self, reasoning_text: str):
         """Callback for intermediate reasoning display during tool-call loops."""
@@ -5029,93 +4600,6 @@ class VoidcubeCLI:
 
         args = SimpleNamespace(lines=200, expire=7, local=False)
         run_debug_share(args)
-
-    def _show_usage(self):
-        """Show rate limits (if available) and session token usage."""
-        if not self.agent:
-            print("(._.) No active agent -- send a message first.")
-            return
-
-        agent = self.agent
-        calls = agent.session_api_calls
-
-        if calls == 0:
-            print("(._.) No API calls made yet in this session.")
-            return
-
-        # ── Rate limits (shown first when available) ────────────────
-        rl_state = agent.get_rate_limit_state()
-        if rl_state and rl_state.has_data:
-            from agent.rate_limit_tracker import format_rate_limit_display
-            print()
-            print(format_rate_limit_display(rl_state))
-            print()
-
-        # ── Session token usage ─────────────────────────────────────
-        input_tokens = getattr(agent, "session_input_tokens", 0) or 0
-        output_tokens = getattr(agent, "session_output_tokens", 0) or 0
-        cache_read_tokens = getattr(agent, "session_cache_read_tokens", 0) or 0
-        cache_write_tokens = getattr(agent, "session_cache_write_tokens", 0) or 0
-        prompt = agent.session_prompt_tokens
-        completion = agent.session_completion_tokens
-        total = agent.session_total_tokens
-
-        compressor = agent.context_compressor
-        last_prompt = compressor.last_prompt_tokens
-        ctx_len = compressor.context_length
-        pct = min(100, (last_prompt / ctx_len * 100)) if ctx_len else 0
-        compressions = compressor.compression_count
-
-        msg_count = len(self.conversation_history)
-        cost_result = _estimate_usage_cost_lazy(
-            agent.model,
-            _CanonicalUsage_lazy(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_write_tokens=cache_write_tokens,
-            ),
-            provider=getattr(agent, "provider", None),
-            base_url=getattr(agent, "base_url", None),
-        )
-        elapsed = _format_duration_compact_lazy((datetime.now() - self.session_start).total_seconds())
-
-        print("  📊 Session Token Usage")
-        print(f"  {'─' * 40}")
-        print(f"  Model:                     {agent.model}")
-        print(f"  Input tokens:              {input_tokens:>10,}")
-        print(f"  Cache read tokens:         {cache_read_tokens:>10,}")
-        print(f"  Cache write tokens:        {cache_write_tokens:>10,}")
-        print(f"  Output tokens:             {output_tokens:>10,}")
-        print(f"  Prompt tokens (total):     {prompt:>10,}")
-        print(f"  Completion tokens:         {completion:>10,}")
-        print(f"  Total tokens:              {total:>10,}")
-        print(f"  API calls:                 {calls:>10,}")
-        print(f"  Session duration:          {elapsed:>10}")
-        print(f"  Cost status:              {cost_result.status:>10}")
-        print(f"  Cost source:              {cost_result.source:>10}")
-        if cost_result.amount_usd is not None:
-            prefix = "~" if cost_result.status == "estimated" else ""
-            print(f"  Total cost:              {prefix}${float(cost_result.amount_usd):>10.4f}")
-        elif cost_result.status == "included":
-            print(f"  Total cost:              {'included':>10}")
-        else:
-            print(f"  Total cost:              {'n/a':>10}")
-        print(f"  {'─' * 40}")
-        print(f"  Current context:  {last_prompt:,} / {ctx_len:,} ({pct:.0f}%)")
-        print(f"  Messages:         {msg_count}")
-        print(f"  Compressions:     {compressions}")
-        if cost_result.status == "unknown":
-            print(f"  Note:             Pricing unknown for {agent.model}")
-
-        if self.verbose:
-            logging.getLogger().setLevel(logging.DEBUG)
-            for noisy in ('openai', 'openai._base_client', 'httpx', 'httpcore', 'asyncio', 'hpack', 'grpc', 'modal'):
-                logging.getLogger(noisy).setLevel(logging.WARNING)
-        else:
-            logging.getLogger().setLevel(logging.INFO)
-            for quiet_logger in ('tools', 'run_agent', 'trajectory_compressor', 'VoidCube_cli'):
-                logging.getLogger(quiet_logger).setLevel(logging.ERROR)
 
     def _check_config_mcp_changes(self) -> None:
         """Detect mcp_servers changes in config.yaml and auto-reload MCP connections.
@@ -6895,8 +6379,7 @@ class VoidcubeCLI:
                 event.app.invalidate()
                 
                 def _run_wizard():
-                    from VoidCube_cli.api_config import run_api_config_wizard
-                    run_api_config_wizard(self)
+                    self.process_command("/api")
                 
                 try:
                     run_in_terminal(_run_wizard)
