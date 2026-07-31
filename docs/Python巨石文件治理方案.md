@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime 与 Stage 4 activity projection 当前批次已完成；下一重点为 CLI-5 voice owner 决策及 Stage 4 persistence repository。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、Stage 4 activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为 terminal TTS owner ADR 及 Stage 4 Planning policy/workflow。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -21,8 +21,8 @@
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 6,350 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
-| `systems/supervisor/planning_runtime.py` | 9,316 行 | `PlanningRuntimeMixin` 仍混合持久化、认知、排程、治理和执行交接 | P0 |
-| `systems/supervisor/endogenous_drive.py` | 8,964 行 | `EndogenousDriveEngine` 仍混合感知、候选、LM 上下文、证据和策略记忆 | P0 |
+| `systems/supervisor/planning_runtime.py` | 9,213 行 | JSON persistence 与只读 state projection 已外移；`PlanningRuntimeMixin` 仍混合认知、排程、治理和执行交接 | P0 |
+| `systems/supervisor/endogenous_drive.py` | 9,303 行 | `EndogenousDriveEngine` 仍混合感知、候选、LM 上下文、证据和策略记忆 | P0 |
 | `systems/supervisor/ui_runtime.py` | 1,104 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
 | `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
 
@@ -581,8 +581,10 @@ systems/supervisor/web/
 - CLI-5 voice recording runtime：旧同步 terminal transport 的录音前置检查、silence callback、音量刷新、STT、临时录音清理与连续录音重启已迁至 `VoidCube_cli.voice_recording_runtime`；它只接收 `CliVoiceRuntimeState`、TUI 通知、队列、线程与环境 predicate ports，不接收 CLI host、Agent、Gateway 或 modal state。CLI 仅保留薄端口组装和按键/command 入口，旧内联录制与转写流程已删除。
 - CLI-5 embedded autonomous loop：embedded component 的 daemon polling、thread-local stdout/stderr 隔离、workflow poll、pending-input 执行、idle scene 与重绘节奏已迁至 `VoidCube_cli.embedded_autonomous_loop`；它只接收 stop/gate、刷新、queue、execute、invalidate、error 与 scene ports。CLI 继续拥有 component host/runtime、Gateway refresh 实现、scheduled gate、Agent interrupt 和 stop state，原 `run()` 外的 nested autonomous loop/thread factory 已删除。
 - CLI-5 embedded autonomous lifecycle：child CLI host 的复用/创建、gate 标记、parent binding 与 task session 初始化已迁至 `VoidCube_cli.embedded_autonomous_host`；停止时的 child deactivation、可选 Agent/task interruption 与 loop signal 顺序已迁至 `VoidCube_cli.embedded_autonomous_stop`。两者只编排显式 lifecycle ports，CLI 继续拥有 host 配置、runtime、Agent 和 stop Event；原内联装配/stop sequence 已删除。
-- CLI-5 terminal TTS decision：当前 terminal voice 的 TTS command/state 仍存在，但 CLI 播放分支被明确禁用，而底层 voice transport 仍提供播放实现；这不是可自动删除的冗余。后续必须先以 ADR 统一 terminal voice 与 `systems.voice` 的设备、配置和 playback owner，再决定恢复、替换或移除 `/voice tts`，不得保留“界面显示已启用但实际不播放”的长期主路径。
+- CLI-5 terminal TTS owner ADR：已在 `docs/ADR-terminal-voice-owner.md` 明确 `systems.voice` 是设备、配置、STT/TTS、播放和中断的唯一 canonical owner；CLI 仅是 terminal adapter。没有 async adapter 前，`/voice tts` 不是可用能力，状态不得显示为 enabled；不得以 wrapper 恢复 legacy synchronous recorder/player contract。
 - Stage 4 planning activity projection：gateway timestamp normalize、idle duration、runtime observation input、Auto activity allowlist 与 Auto drive-input boundary 已迁至 `systems.supervisor.activity_projection`；它们仅接收 payload、clock 和 evidence 参数，不持有 Supervisor、Gateway 或 store。`PlanningRuntimeMixin` 的五个同名投影方法和内部 `self` 调用均已删除，Auto 仍由 runtime owner 负责获取 Gateway snapshot 与决定执行。
+- Stage 4 endogenous persistence repository：runtime root 下四类 endogenous JSON snapshot 的显式路径、损坏/非对象 JSON 回退与原子写入已迁至 `systems.supervisor.endogenous_state_repository.EndogenousStateRepository`，由 `assemble_supervisor_runtime_state()` 注入。repository 不接收 Supervisor，也不持有 snapshot default、history trim、strategy-memory normalize、event semantic de-dup 或 regulation decay；这些仍归 `PlanningRuntimeMixin` 的领域策略。四个旧 `_get_endogenous_*_path()` helper 与测试兼容壳均已删除。
+- Stage 4 endogenous state projection：bounded drive-history、governance-event stream 与 corrective-mode read model 已迁至 `systems.supervisor.endogenous_state_projection`。strategy-memory normalization 继续由 Planning domain owner 提供为显式 callback，projector 不读取 `self`、文件、Gateway 或 configuration。三个旧 Mixin helper 和测试调用均已删除。
 
 ### 15.2 当前 CLI 命令边界
 
@@ -612,22 +614,26 @@ CLI-4/CLI-5 当前相关联合回归基线为 `332 passed`；已运行架构检�
 
 Stage 4 activity projection 的 focused 行为回归为 `5 passed`，覆盖 pure projection、runtime observation 与 memory-activity Auto decision；另外 `activity projection + packaging contract + 退役集成扫描` 为 `32 passed`，并已重建和校验 wheel。已运行 compileall、架构检查和 `git diff --check`。聚合 Supervisor 测试文件在产品的 60 秒单命令上限内未能完整结束，因此不将它表述为全量通过。
 
+Stage 4 endogenous persistence repository 的 focused 回归为 `12 passed`，覆盖 repository 的 root/path/read/write/invalid-JSON 边界、真实 Supervisor 装配，以及既有 Supervisor governance/cognition/self-regulation persistence 行为。已运行相关 compileall 和 `git diff --check`；本批的架构、退役集成扫描和 wheel 验证结果继续在下方验证更新后记录。
+
+Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖三项纯 projection 与 13 项相关 Supervisor history/governance/cognition/self-regulation 行为。已运行相关 compileall；本批的架构、退役集成扫描、wheel 和最终 diff 检查将在当前验证完成后记录。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
 | `VoidCube_cli/app.py` | 6,350 |
-| `systems/supervisor/planning_runtime.py` | 9,316 |
-| `systems/supervisor/endogenous_drive.py` | 8,964 |
+| `systems/supervisor/planning_runtime.py` | 9,213 |
+| `systems/supervisor/endogenous_drive.py` | 9,303 |
 | `systems/supervisor/ui_runtime.py` | 1,104 |
 
 ### 15.5 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
 - CLI-5：继续将语音和自主组件的 runtime state 从 CLI facade 收敛到明确组件，不复制设备、线程或后台生命周期。
-- Stage 4 / 5：拆分 `planning_runtime.py` 与 `endogenous_drive.py` 的 repository、policy、workflow、candidate、evidence 和 LM proposal pipeline。
+- Stage 4 / 5：继续拆分 `planning_runtime.py` 的 policy/workflow，以及 `endogenous_drive.py` 的 candidate、evidence 和 LM proposal pipeline。endogenous JSON repository 与只读 state projection 已完成，不得重新把路径、JSON load、atomic write 或 read-model helper 放回 Mixin。
 - Stage 6：继续收口 Supervisor UI route/adapters，并删除已迁移的 Mixin owner。
 
 ## 16. 下一次实施起点
 
-下一批先为 terminal TTS 与 `systems.voice` 的设备、配置、playback owner 写 ADR；随后继续 Stage 4，审计 endogenous persistence repository 的路径、load、trim 与 persist 边界，优先拆出可用显式 root/path/read/write ports 表达的 repository，不复制 Supervisor、Gateway 或 execution owner。
+下一批先将 terminal `/voice tts` 的 status/command 语义与已接受 ADR 对齐，再以 explicit async port 接入 `systems.voice`；随后继续 Stage 4，从 Planning 的领域 policy/workflow 中选择一个只依赖显式 snapshot/port 的责任边界拆出。不要把已完成的 endogenous JSON repository 再次扩张为策略或 Supervisor facade。

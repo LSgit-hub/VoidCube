@@ -25,6 +25,11 @@ from systems.supervisor.endogenous_drive import (
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
 )
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
+from systems.supervisor.endogenous_state_projection import (
+    derive_corrective_mode,
+    project_drive_history,
+    project_governance_event_stream,
+)
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainGitLineage,
@@ -266,16 +271,16 @@ class PlanningRuntimeMixin:
 
     @property
     def _endogenous_state_repository(self) -> EndogenousStateRepository:
-        repository = getattr(self, "__endogenous_state_repository", None)
+        repository = getattr(self, "_endogenous_state_repository_instance", None)
         if repository is None:
             runtime_root = getattr(self, "_runtime_root", None) or self.config.soul_store_path
             repository = EndogenousStateRepository(runtime_root)
-            self.__endogenous_state_repository = repository
+            self._endogenous_state_repository_instance = repository
         return repository
 
     @_endogenous_state_repository.setter
     def _endogenous_state_repository(self, repository: EndogenousStateRepository) -> None:
-        self.__endogenous_state_repository = repository
+        self._endogenous_state_repository_instance = repository
 
     def _load_endogenous_drive_history(self) -> Dict[str, Any]:
         raw = self._endogenous_state_repository.read_object(
@@ -474,88 +479,34 @@ class PlanningRuntimeMixin:
         return "\x1f".join(parts)
 
     def _persist_endogenous_drive_history(self, snapshot: Dict[str, Any]) -> None:
-        path = self._get_endogenous_drive_history_path()
         payload = self._trim_endogenous_drive_history(snapshot)
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_json_write(path, payload)
+        self._endogenous_state_repository.write_object(
+            self._endogenous_state_repository.paths.drive_history, payload
+        )
 
     def _persist_endogenous_governance_events(self, snapshot: Dict[str, Any]) -> None:
-        path = self._get_endogenous_governance_events_path()
         payload = self._trim_endogenous_governance_events(snapshot)
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_json_write(path, payload)
+        self._endogenous_state_repository.write_object(
+            self._endogenous_state_repository.paths.governance_events, payload
+        )
 
     def _persist_endogenous_cognition_state(self, state: Dict[str, Any]) -> None:
-        path = self._get_endogenous_cognition_state_path()
         payload = self._endogenous_cognition_state_default()
         payload["state"] = dict(state or {})
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_json_write(path, payload)
+        self._endogenous_state_repository.write_object(
+            self._endogenous_state_repository.paths.cognition_state, payload
+        )
 
     def _persist_endogenous_self_regulation(self, snapshot: Dict[str, Any]) -> None:
-        path = self._get_endogenous_self_regulation_path()
         payload = dict(snapshot or {})
         payload["version"] = 1
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_json_write(path, payload)
-
-    def _history_for_endogenous_drive(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        judgements = [
-            dict(item)
-            for item in list(snapshot.get("judgements") or [])[:24]
-            if isinstance(item, dict)
-        ]
-        outcomes = [
-            dict(item)
-            for item in list(snapshot.get("outcomes") or [])[:36]
-            if isinstance(item, dict)
-        ]
-        return {
-            "judgements": judgements,
-            "outcomes": outcomes,
-            "strategy_memory": self._normalize_endogenous_strategy_memory(
-                snapshot.get("strategy_memory")
-            ),
-        }
-
-    def _governance_events_for_runtime(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        events = [
-            dict(item)
-            for item in list(snapshot.get("events") or [])[:36]
-            if isinstance(item, dict)
-        ]
-        return {
-            "events": events,
-        }
-
-    def _derive_endogenous_corrective_mode(
-        self,
-        self_regulation: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        throttle = max(0.0, float(self_regulation.get("dynamic_candidate_throttle_boost") or 0.0))
-        observation = max(0.0, float(self_regulation.get("dynamic_observation_bias_boost") or 0.0))
-        truthfulness = max(0.0, float(self_regulation.get("dynamic_truthfulness_bias_boost") or 0.0))
-        learning_suppression = max(
-            0.0,
-            float(self_regulation.get("dynamic_learning_expansion_suppression") or 0.0),
+        self._endogenous_state_repository.write_object(
+            self._endogenous_state_repository.paths.self_regulation, payload
         )
-        active = {
-            "candidate_throttle": round(throttle, 4),
-            "observation_bias": round(observation, 4),
-            "truthfulness_bias": round(truthfulness, 4),
-            "learning_suppression": round(learning_suppression, 4),
-        }
-        mode = "rest"
-        if truthfulness > 0.01 or learning_suppression > 0.01:
-            mode = "corrective"
-        elif throttle > 0.01 or observation > 0.01:
-            mode = "guarded"
-        return {
-            "mode": mode,
-            "active": mode != "rest",
-            "last_reason": self_regulation.get("last_reason"),
-            "active_boosts": active,
-        }
 
     def _lm_reasoning_state_for_current_cycle(self) -> Dict[str, Any]:
         runtime_config = getattr(self.config, "service_runtime", None)
@@ -1463,7 +1414,7 @@ class PlanningRuntimeMixin:
         strategy_memory = self._normalize_endogenous_strategy_memory(
             history_snapshot.get("strategy_memory")
         )
-        corrective_mode = self._derive_endogenous_corrective_mode(self_regulation)
+        corrective_mode = derive_corrective_mode(self_regulation)
         attention_agenda = self._build_endogenous_attention_agenda(
             deliberation=deliberation,
             governance_channels=governance_channels,
@@ -3085,7 +3036,7 @@ class PlanningRuntimeMixin:
         dominant_observation = observation_entries[0] if observation_entries else {}
         current_focus = str(adaptive_policy.get("preferred_focus") or "").strip().lower()
         dominant_constraint = str(reflection.get("dominant_constraint") or "").strip().lower()
-        corrective_mode = self._derive_endogenous_corrective_mode(self_regulation)
+        corrective_mode = derive_corrective_mode(self_regulation)
         normalized_strategy_memory = self._normalize_endogenous_strategy_memory(strategy_memory)
         meta_governance_stats = dict(normalized_strategy_memory.get("meta_governance_stats") or {})
 
@@ -3417,7 +3368,7 @@ class PlanningRuntimeMixin:
         world_model = dict(deliberation.get("world_model") or {})
         reflection = dict(deliberation.get("reflection") or {})
         adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
-        corrective_mode = self._derive_endogenous_corrective_mode(self_regulation)
+        corrective_mode = derive_corrective_mode(self_regulation)
         entries: list[Dict[str, Any]] = []
         autonomy_alignment_requests = len(
             list(governance_channels.get("autonomy_alignment_requests") or [])
@@ -5933,8 +5884,9 @@ class PlanningRuntimeMixin:
                 ) or 5
             ),
         }
-        drive_input["drive_history"] = self._history_for_endogenous_drive(
-            self._load_endogenous_drive_history()
+        drive_input["drive_history"] = project_drive_history(
+            self._load_endogenous_drive_history(),
+            normalize_strategy_memory=self._normalize_endogenous_strategy_memory,
         )
         self_regulation = dict(persisted_self_regulation)
         for key in (
@@ -6073,7 +6025,7 @@ class PlanningRuntimeMixin:
             governance_event_stream = dict(persisted_evaluation["governance_event_stream"])
             cognition_state = dict(persisted_evaluation["cognition_state"])
         else:
-            governance_event_stream = self._governance_events_for_runtime(
+            governance_event_stream = project_governance_event_stream(
                 self._load_endogenous_governance_events()
             )
             cognition_state = self._build_endogenous_cognition_state(
@@ -6123,7 +6075,7 @@ class PlanningRuntimeMixin:
         return {
             "status": "ok",
             "updated_at": snapshot.get("updated_at"),
-            "governance_event_stream": self._governance_events_for_runtime(snapshot),
+            "governance_event_stream": project_governance_event_stream(snapshot),
         }
 
     async def get_endogenous_self_regulation(self) -> Dict[str, Any]:
@@ -6132,7 +6084,7 @@ class PlanningRuntimeMixin:
             "status": "ok",
             "updated_at": regulation.get("updated_at"),
             "self_regulation": regulation,
-            "corrective_mode": self._derive_endogenous_corrective_mode(regulation),
+            "corrective_mode": derive_corrective_mode(regulation),
         }
 
     async def get_endogenous_cognition_state(self) -> Dict[str, Any]:
@@ -6152,9 +6104,9 @@ class PlanningRuntimeMixin:
             "status": "ok",
             "updated_at": cognition_snapshot.get("updated_at"),
             "cognition_state": dict(cognition_snapshot.get("state") or {}),
-            "governance_event_stream": self._governance_events_for_runtime(event_snapshot),
+            "governance_event_stream": project_governance_event_stream(event_snapshot),
             "self_regulation": regulation,
-            "corrective_mode": self._derive_endogenous_corrective_mode(regulation),
+            "corrective_mode": derive_corrective_mode(regulation),
             "strategy_memory": self._normalize_endogenous_strategy_memory(
                 drive_history.get("strategy_memory")
             ),
@@ -6311,10 +6263,10 @@ class PlanningRuntimeMixin:
                     existing_event_keys.add(semantic_key)
                 new_events.append(event)
             if not new_events:
-                return self._governance_events_for_runtime(snapshot)
+                return project_governance_event_stream(snapshot)
             snapshot["events"] = new_events + list(snapshot.get("events") or [])
             self._persist_endogenous_governance_events(snapshot)
-        return self._governance_events_for_runtime(snapshot)
+        return project_governance_event_stream(snapshot)
 
     def _gate_endogenous_candidates_by_posture(
         self,

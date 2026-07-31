@@ -26,6 +26,7 @@ from systems.supervisor.endogenous_drive import (
     DriveReflection,
     DriveWorldModel,
 )
+from systems.supervisor.endogenous_state_projection import project_drive_history
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainStore,
@@ -1383,7 +1384,10 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     assert drive_input["completed_learning_tasks"][0]["conclusion"] == final_response
     assert drive_input["completed_learning_tasks"][0]["task_id"] == task_id
     assert drive_input["completed_learning_tasks"][0]["completed_at"]
-    drive_input["drive_history"] = supervisor._history_for_endogenous_drive(history)
+    drive_input["drive_history"] = project_drive_history(
+        history,
+        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+    )
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
 
     rendered_outcomes = json.dumps(drive_context["drive_history"]["outcomes"], ensure_ascii=False)
@@ -2081,7 +2085,7 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    events_path = supervisor._get_endogenous_governance_events_path()
+    events_path = supervisor._endogenous_state_repository.paths.governance_events
     events_snapshot = supervisor._load_endogenous_governance_events()
 
     assert events_path.exists()
@@ -2178,7 +2182,7 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    path = supervisor._get_endogenous_cognition_state_path()
+    path = supervisor._endogenous_state_repository.paths.cognition_state
     snapshot = supervisor._load_endogenous_cognition_state()
 
     assert path.exists()
@@ -3664,7 +3668,7 @@ def test_loaded_self_regulation_decay_from_peak_releases_all_boosts_toward_rest_
     snapshot["dynamic_truthfulness_bias_boost"] = 0.30
     snapshot["dynamic_learning_expansion_suppression"] = 0.25
     snapshot["last_reason"] = "peak corrective mode"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(snapshot),
         encoding="utf-8",
     )
@@ -3737,7 +3741,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
     snapshot["dynamic_truthfulness_bias_boost"] = 0.30
     snapshot["dynamic_learning_expansion_suppression"] = 0.25
     snapshot["last_reason"] = "peak corrective mode"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(snapshot),
         encoding="utf-8",
     )
@@ -3790,7 +3794,7 @@ def test_endogenous_self_regulation_decays_when_loaded(tmp_path):
     snapshot["dynamic_candidate_throttle_boost"] = 0.2
     snapshot["dynamic_observation_bias_boost"] = 0.12
     snapshot["last_reason"] = "temporary alignment pressure"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(snapshot),
         encoding="utf-8",
     )
@@ -3810,7 +3814,7 @@ def test_endogenous_self_regulation_can_decay_back_to_rest(tmp_path):
     snapshot["dynamic_candidate_throttle_boost"] = 0.05
     snapshot["dynamic_observation_bias_boost"] = 0.04
     snapshot["last_reason"] = "old pressure"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(snapshot),
         encoding="utf-8",
     )
@@ -4911,7 +4915,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
     regulation_snapshot["dynamic_observation_bias_boost"] = 0.18
     regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.14
     regulation_snapshot["last_reason"] = "carryover"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(regulation_snapshot),
         encoding="utf-8",
     )
@@ -5498,7 +5502,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         replay = _make_supervisor(replay_root)
         replay._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
         replay._persist_endogenous_drive_history(json.loads(json.dumps(accumulated_history)))
-        replay._get_endogenous_self_regulation_path().write_text(
+        replay._endogenous_state_repository.paths.self_regulation.write_text(
             json.dumps(accumulated_regulation),
             encoding="utf-8",
         )
@@ -7457,8 +7461,9 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
         }
 
     drive_input = await fake_drive_input()
-    drive_input["drive_history"] = supervisor._history_for_endogenous_drive(
-        supervisor._load_endogenous_drive_history()
+    drive_input["drive_history"] = project_drive_history(
+        supervisor._load_endogenous_drive_history(),
+        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
@@ -7543,8 +7548,9 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
         }
 
     drive_input = await fake_drive_input()
-    drive_input["drive_history"] = supervisor._history_for_endogenous_drive(
-        supervisor._load_endogenous_drive_history()
+    drive_input["drive_history"] = project_drive_history(
+        supervisor._load_endogenous_drive_history(),
+        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
@@ -7639,8 +7645,9 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     supervisor._endogenous_drive_engine.config = supervisor.config
 
     drive_input = await fake_drive_input()
-    drive_input["drive_history"] = supervisor._history_for_endogenous_drive(
-        supervisor._load_endogenous_drive_history()
+    drive_input["drive_history"] = project_drive_history(
+        supervisor._load_endogenous_drive_history(),
+        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
@@ -11275,8 +11282,9 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
         }
 
     drive_input = await fake_drive_input()
-    drive_input["drive_history"] = supervisor._history_for_endogenous_drive(
-        supervisor._load_endogenous_drive_history()
+    drive_input["drive_history"] = project_drive_history(
+        supervisor._load_endogenous_drive_history(),
+        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
@@ -14064,7 +14072,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
     regulation_snapshot["dynamic_observation_bias_boost"] = 0.24
     regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.18
     regulation_snapshot["last_reason"] = "stale_observation_carryover"
-    supervisor._get_endogenous_self_regulation_path().write_text(
+    supervisor._endogenous_state_repository.paths.self_regulation.write_text(
         json.dumps(regulation_snapshot),
         encoding="utf-8",
     )
@@ -14119,7 +14127,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         regulation_snapshot["dynamic_observation_bias_boost"] = 0.22
         regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.16
         regulation_snapshot["last_reason"] = "old alternating-cycle guard"
-        supervisor._get_endogenous_self_regulation_path().write_text(
+        supervisor._endogenous_state_repository.paths.self_regulation.write_text(
             json.dumps(regulation_snapshot),
             encoding="utf-8",
         )
@@ -14302,7 +14310,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         regulation_snapshot["dynamic_observation_bias_boost"] = 0.23
         regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.17
         regulation_snapshot["last_reason"] = "old long-span carryover"
-        supervisor._get_endogenous_self_regulation_path().write_text(
+        supervisor._endogenous_state_repository.paths.self_regulation.write_text(
             json.dumps(regulation_snapshot),
             encoding="utf-8",
         )
@@ -16096,8 +16104,9 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
         assert "\"priority_basis_health\":" in prompt_payload
     else:
         drive_input = await fake_drive_input()
-        drive_input["drive_history"] = supervisor._history_for_endogenous_drive(
-            supervisor._load_endogenous_drive_history()
+        drive_input["drive_history"] = project_drive_history(
+            supervisor._load_endogenous_drive_history(),
+            normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
         )
         drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
         evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(

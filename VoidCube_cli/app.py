@@ -765,14 +765,6 @@ class VoidcubeCLI:
         self._voice_state().mode = value
 
     @property
-    def _voice_tts(self):
-        return self._voice_state().tts
-
-    @_voice_tts.setter
-    def _voice_tts(self, value):
-        self._voice_state().tts = value
-
-    @property
     def _voice_recorder(self):
         return self._voice_state().recorder
 
@@ -803,10 +795,6 @@ class VoidcubeCLI:
     @_voice_continuous.setter
     def _voice_continuous(self, value):
         self._voice_state().continuous = value
-
-    @property
-    def _voice_tts_done(self):
-        return self._voice_state().tts_done
 
     @property
     def _voice_stop_continuous(self):
@@ -1602,9 +1590,8 @@ class VoidcubeCLI:
             return [("class:voice-status", " ◉ Transcribing... ")]
         if compact:
             return [("class:voice-status", " 🎤 Ctrl+B ")]
-        tts = " | TTS on" if self._voice_tts else ""
         cont = " | Continuous" if self._voice_continuous else ""
-        return [("class:voice-status", f" 🎤 Voice mode{tts}{cont}  —  Ctrl+B to record ")]
+        return [("class:voice-status", f" 🎤 Voice mode{cont}  —  Ctrl+B to record ")]
 
     def _build_status_bar_text(self, width: Optional[int] = None) -> str:
         """Return a compact one-line session status string for the TUI footer.
@@ -1752,9 +1739,6 @@ class VoidcubeCLI:
             if self._voice_mode and self._voice_continuous and not self._voice_recording:
                 def _restart_recording():
                     try:
-                        if self._voice_tts:
-                            self._voice_tts_done.wait(timeout=60)
-                            time.sleep(0.3)
                         self._voice_start_recording()
                         if app is not None:
                             app.invalidate()
@@ -3936,21 +3920,6 @@ class VoidcubeCLI:
     def _voice_stop_and_transcribe(self) -> None:
         stop_terminal_voice_recording(self._voice_recording_ports())
 
-    def _voice_speak_response(self, text: str):
-        """Speak the agent's response aloud using TTS (runs in background thread)."""
-        if not self._voice_tts:
-            return
-        self._voice_tts_done.clear()
-        try:
-            # TTS feature has been removed
-            logger.warning("TTS feature is not available in this simplified version")
-            _cprint(f"{_DIM}TTS feature is not available{_RST}")
-        except Exception as e:
-            logger.warning("Voice TTS playback failed: %s", e)
-            _cprint(f"{_DIM}TTS playback failed: {e}{_RST}")
-        finally:
-            self._voice_tts_done.set()
-
     def _enable_voice_mode(self):
         """Enable voice mode after checking requirements."""
         if self._voice_mode:
@@ -3985,21 +3954,10 @@ class VoidcubeCLI:
         with self._voice_lock:
             self._voice_mode = True
 
-        # Check config for auto_tts
-        try:
-            from VoidCube_app.config import load_config
-            voice_config = load_config().get("voice", {})
-            if voice_config.get("auto_tts", False):
-                with self._voice_lock:
-                    self._voice_tts = True
-        except Exception:
-            pass
-
         # Voice mode instruction is injected as a user message prefix (not a
         # system prompt change) to avoid invalidating the prompt cache.  See
         # _voice_message_prefix property and its usage in _process_message().
 
-        tts_status = " (TTS enabled)" if self._voice_tts else ""
         try:
             from VoidCube_app.config import load_config
             _raw_ptt = load_config().get("voice", {}).get("record_key", "ctrl+b")
@@ -4007,9 +3965,9 @@ class VoidcubeCLI:
         except Exception:
             _ptt_key = "c-b"
         _ptt_display = _ptt_key.replace("c-", "Ctrl+").upper()
-        _cprint(f"\n{_ACCENT}Voice mode enabled{tts_status}{_RST}")
+        _cprint(f"\n{_ACCENT}Voice mode enabled{_RST}")
         _cprint(f"  {_DIM}{_ptt_display} to start/stop recording{_RST}")
-        _cprint(f"  {_DIM}/voice tts  to toggle speech output{_RST}")
+        _cprint(f"  {_DIM}/voice tts reports terminal playback availability{_RST}")
         _cprint(f"  {_DIM}/voice off  to disable voice mode{_RST}")
 
     def _disable_voice_mode(self):
@@ -4021,7 +3979,6 @@ class VoidcubeCLI:
                 self._voice_recording = False
             recorder = self._voice_recorder
             self._voice_mode = False
-            self._voice_tts = False
             self._voice_continuous = False
 
         # Shut down the persistent audio stream in background
@@ -4034,30 +3991,13 @@ class VoidcubeCLI:
             threading.Thread(target=_bg_shutdown, daemon=True).start()
             self._voice_recorder = None
 
-        # Stop any active TTS playback
-        try:
-            from tools.voice_mode import stop_playback
-            stop_playback()
-        except Exception:
-            pass
-        self._voice_tts_done.set()
-
         _cprint(f"\n{_DIM}Voice mode disabled.{_RST}")
 
-    def _toggle_voice_tts(self):
-        """Toggle TTS output for voice mode."""
-        if not self._voice_mode:
-            _cprint(f"{_DIM}Enable voice mode first: /voice on{_RST}")
-            return
-
-        with self._voice_lock:
-            self._voice_tts = not self._voice_tts
-        status = "enabled" if self._voice_tts else "disabled"
-
-        if self._voice_tts:
-            _cprint(f"{_DIM}Warning: TTS feature is not available in this simplified version.{_RST}")
-
-        _cprint(f"{_ACCENT}Voice TTS {status}.{_RST}")
+    def _show_voice_tts_unavailable(self):
+        """Report the accepted terminal-TTS boundary without changing voice state."""
+        _cprint(
+            f"{_DIM}Terminal TTS is unavailable until the systems.voice adapter is implemented.{_RST}"
+        )
 
     def _show_voice_status(self):
         """Show current voice mode status."""
@@ -4068,7 +4008,7 @@ class VoidcubeCLI:
 
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
         _cprint(f"  Mode:      {'ON' if self._voice_mode else 'OFF'}")
-        _cprint(f"  TTS:       {'ON' if self._voice_tts else 'OFF'}")
+        _cprint("  TTS:       unavailable (pending systems.voice terminal adapter)")
         _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
         _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
         _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
@@ -4308,48 +4248,7 @@ class VoidcubeCLI:
 
             self._stream_render_state.begin_turn()
 
-            # --- Streaming TTS setup ---
-            # When ElevenLabs is the TTS provider and sounddevice is available,
-            # we stream audio sentence-by-sentence as the agent generates tokens
-            # instead of waiting for the full response.
-            use_streaming_tts = False
-            _streaming_box_opened = False
-            text_queue: queue.Queue | None = None
-            tts_thread = None
             stream_callback = None
-            stop_event = None
-
-            if self._voice_tts:
-                # TTS feature has been removed
-                logger.warning("TTS streaming not available in this simplified version")
-
-            if use_streaming_tts:
-                from tools.voice_mode import stream_tts_to_speaker
-                text_queue = queue.Queue()
-                stop_event = threading.Event()
-
-                def display_callback(sentence: str):
-                    """Called by TTS consumer when a sentence is ready to display + speak."""
-                    nonlocal _streaming_box_opened
-                    if not _streaming_box_opened:
-                        _streaming_box_opened = True
-                        w = self.console.width
-                        label = " > Voidcube "
-                        fill = w - 2 - len(label)
-                        _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-                    _cprint(sentence.rstrip())
-
-                tts_thread = threading.Thread(
-                    target=stream_tts_to_speaker,
-                    args=(text_queue, stop_event, self._voice_tts_done),
-                    kwargs={"display_callback": display_callback},
-                    daemon=True,
-                )
-                tts_thread.start()
-
-                def stream_callback(delta: str):
-                    if text_queue is not None:
-                        text_queue.put(delta)
 
             # When voice mode is active, prepend a brief instruction so the
             # model responds concisely. The prefix is API-call-local only —
@@ -4452,8 +4351,6 @@ class VoidcubeCLI:
                         continue
                     turn_interrupt = poll_result.interrupt
                     print("\n🔧 New message detected, interrupting...")
-                    if stop_event is not None:
-                        stop_event.set()
                     self.agent.interrupt(turn_interrupt.agent_message)
                     break
                 else:
@@ -4474,12 +4371,6 @@ class VoidcubeCLI:
 
             # Flush any remaining streamed text and close the box
             self._flush_stream()
-
-            # Signal end-of-text to TTS consumer and wait for it to finish
-            if use_streaming_tts and text_queue is not None:
-                text_queue.put(None)  # sentinel
-                if tts_thread is not None:
-                    tts_thread.join(timeout=120)
 
             # Drain any remaining agent output still in the StdoutProxy
             # buffer so tool/status lines render ABOVE our response box.
@@ -4609,11 +4500,7 @@ class VoidcubeCLI:
                     and self._stream_render_state.response_box_open
                     and not is_error_response
                 )
-                if use_streaming_tts and _streaming_box_opened and not is_error_response:
-                    # Text was already printed sentence-by-sentence; just close the box
-                    w = shutil.get_terminal_size().columns
-                    _cprint(f"\n{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
-                elif already_streamed:
+                if already_streamed:
                     # Response was already streamed token-by-token with box framing;
                     # _flush_stream() already closed the box. Skip Rich Panel.
                     pass
@@ -4635,16 +4522,6 @@ class VoidcubeCLI:
             if self.bell_on_complete and self._should_emit_scrollback_output():
                 sys.stdout.write("\a")
                 sys.stdout.flush()
-
-            # Speak response aloud if voice TTS is enabled
-            # Skip batch TTS when streaming TTS already handled it
-            if self._voice_tts and response and not use_streaming_tts:
-                threading.Thread(
-                    target=self._voice_speak_response,
-                    args=(response,),
-                    daemon=True,
-                ).start()
-
 
             # Re-queue the interrupt message (and any that arrived while we were
             # processing the first) as the next prompt for process_loop.
@@ -4691,19 +4568,6 @@ class VoidcubeCLI:
             return None
         finally:
             self._active_chat_agent_role = previous_active_role
-            # Ensure streaming TTS resources are cleaned up even on error.
-            # Normal path sends the sentinel at line ~3568; this is a safety
-            # net for exception paths that skip it.  Duplicate sentinels are
-            # harmless — stream_tts_to_speaker exits on the first None.
-            if text_queue is not None:
-                try:
-                    text_queue.put_nowait(None)
-                except Exception:
-                    pass
-            if stop_event is not None:
-                stop_event.set()
-            if tts_thread is not None and tts_thread.is_alive():
-                tts_thread.join(timeout=5)
     
     def _print_exit_summary(self):
         """Print session resume info on exit."""
@@ -5407,16 +5271,6 @@ class VoidcubeCLI:
                 # start() would block the event-loop thread waiting for it.
                 if cli_ref._voice_processing:
                     return
-
-                # Interrupt TTS if playing, so user can start talking.
-                # stop_playback() is fast (just terminates a subprocess).
-                if not cli_ref._voice_tts_done.is_set():
-                    try:
-                        from tools.voice_mode import stop_playback
-                        stop_playback()
-                        cli_ref._voice_tts_done.set()
-                    except Exception:
-                        pass
 
                 with cli_ref._voice_lock:
                     cli_ref._voice_continuous = True

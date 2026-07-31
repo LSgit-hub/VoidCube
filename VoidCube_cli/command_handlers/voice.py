@@ -12,7 +12,7 @@ from VoidCube_cli.command_router import ParsedCliCommand
 class VoiceCommandPorts:
     enable: Callable[[], None]
     disable: Callable[[], None]
-    toggle_tts: Callable[[], None]
+    tts_unavailable: Callable[[], None]
     show_status: Callable[[], None]
     voice_mode_enabled: Callable[[], bool]
     emit: Callable[[str], None]
@@ -26,7 +26,7 @@ def handle_voice_command(request: ParsedCliCommand, *, ports: VoiceCommandPorts)
     elif subcommand == "off":
         ports.disable()
     elif subcommand == "tts":
-        ports.toggle_tts()
+        ports.tts_unavailable()
     elif subcommand == "status":
         ports.show_status()
     elif not subcommand:

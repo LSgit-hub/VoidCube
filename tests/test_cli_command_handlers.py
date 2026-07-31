@@ -291,13 +291,13 @@ def test_language_handler_updates_locale_and_reports_persistence_status() -> Non
     ]
 
 
-def test_voice_handler_dispatches_runtime_operations_and_toggle() -> None:
+def test_voice_handler_dispatches_runtime_operations_and_reports_tts_unavailable() -> None:
     events: list[str] = []
     enabled = [False]
     ports = VoiceCommandPorts(
         enable=lambda: events.append("enable"),
         disable=lambda: events.append("disable"),
-        toggle_tts=lambda: events.append("tts"),
+        tts_unavailable=lambda: events.append("tts_unavailable"),
         show_status=lambda: events.append("status"),
         voice_mode_enabled=lambda: enabled[0],
         emit=events.append,
@@ -309,7 +309,7 @@ def test_voice_handler_dispatches_runtime_operations_and_toggle() -> None:
     enabled[0] = True
     handle_voice_command(parse_cli_command("/voice"), ports=ports)
 
-    assert events == ["enable", "disable", "tts", "status", "enable", "disable"]
+    assert events == ["enable", "disable", "tts_unavailable", "status", "enable", "disable"]
 
 
 def test_voice_handler_reports_unknown_subcommand() -> None:
@@ -317,7 +317,7 @@ def test_voice_handler_reports_unknown_subcommand() -> None:
     ports = VoiceCommandPorts(
         enable=lambda: pytest.fail("invalid command must not enable"),
         disable=lambda: pytest.fail("invalid command must not disable"),
-        toggle_tts=lambda: pytest.fail("invalid command must not toggle TTS"),
+        tts_unavailable=lambda: pytest.fail("invalid command must not report TTS status"),
         show_status=lambda: pytest.fail("invalid command must not show status"),
         voice_mode_enabled=lambda: False,
         emit=output.append,

@@ -493,7 +493,7 @@ def test_cli_process_routes_voice_through_explicit_ports() -> None:
     app._voice_mode = False
     app._enable_voice_mode = lambda: events.append("enable")
     app._disable_voice_mode = lambda: events.append("disable")
-    app._toggle_voice_tts = lambda: events.append("tts")
+    app._show_voice_tts_unavailable = lambda: events.append("tts_unavailable")
     app._show_voice_status = lambda: events.append("status")
     install_cli_command_execution(app, emit=output.append)
 

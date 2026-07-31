@@ -794,7 +794,6 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
     cli._interrupt_queue = queue.Queue()
     cli._pending_input = queue.Queue()
     cli._invalidate = lambda *args, **kwargs: None
-    cli._voice_tts = False
     cli._voice_mode = False
     cli._voice_continuous = False
     cli._clarify_state = None
