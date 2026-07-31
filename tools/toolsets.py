@@ -107,13 +107,13 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
     },
 
     "voidcube-cli": {
         "description": "Core tools for server management (alias)",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
     },
     
     "mini": {
@@ -142,6 +142,12 @@ TOOLSETS = {
             "browser_type", "browser_scroll", "browser_extract",
             "browser_wait", "browser_close", "browser_screenshot",
         ],
+        "includes": [],
+    },
+
+    "media": {
+        "description": "Media generation tools: image generation, image editing, video generation",
+        "tools": ["image_generate", "image_edit", "video_generate"],
         "includes": [],
     },
 }

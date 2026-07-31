@@ -154,6 +154,8 @@ def _discover_tools():
         "tools.sandbox_executor",
         # UI Automation tools for Windows desktop applications
         "tools.uiautomation_tool",
+        # Media generation tools (image/video)
+        "tools.media_generation_tool",
         # Ops: Server operations tools (registered via ops_register)
         "tools.ops_register",
     ]
