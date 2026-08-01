@@ -291,25 +291,26 @@ def test_language_handler_updates_locale_and_reports_persistence_status() -> Non
     ]
 
 
-def test_voice_handler_dispatches_runtime_operations_and_reports_tts_unavailable() -> None:
+def test_voice_handler_dispatches_runtime_operations_and_tts_status_or_speak() -> None:
     events: list[str] = []
     enabled = [False]
     ports = VoiceCommandPorts(
         enable=lambda: events.append("enable"),
         disable=lambda: events.append("disable"),
-        tts_unavailable=lambda: events.append("tts_unavailable"),
+        tts_status=lambda: events.append("tts_status"),
+        tts_speak=lambda text: events.append(f"tts_speak:{text}"),
         show_status=lambda: events.append("status"),
         voice_mode_enabled=lambda: enabled[0],
         emit=events.append,
     )
 
-    for command in ("/voice on", "/voice off", "/voice tTs", "/voice status"):
+    for command in ("/voice on", "/voice off", "/voice tTs", "/voice tts hello", "/voice status"):
         handle_voice_command(parse_cli_command(command), ports=ports)
     handle_voice_command(parse_cli_command("/voice"), ports=ports)
     enabled[0] = True
     handle_voice_command(parse_cli_command("/voice"), ports=ports)
 
-    assert events == ["enable", "disable", "tts_unavailable", "status", "enable", "disable"]
+    assert events == ["enable", "disable", "tts_status", "tts_speak:hello", "status", "enable", "disable"]
 
 
 def test_voice_handler_reports_unknown_subcommand() -> None:
@@ -317,7 +318,8 @@ def test_voice_handler_reports_unknown_subcommand() -> None:
     ports = VoiceCommandPorts(
         enable=lambda: pytest.fail("invalid command must not enable"),
         disable=lambda: pytest.fail("invalid command must not disable"),
-        tts_unavailable=lambda: pytest.fail("invalid command must not report TTS status"),
+        tts_status=lambda: pytest.fail("invalid command must not report TTS status"),
+        tts_speak=lambda _text: pytest.fail("invalid command must not speak"),
         show_status=lambda: pytest.fail("invalid command must not show status"),
         voice_mode_enabled=lambda: False,
         emit=output.append,
@@ -327,7 +329,7 @@ def test_voice_handler_reports_unknown_subcommand() -> None:
 
     assert output == [
         "Unknown voice subcommand: later",
-        "Usage: /voice [on|off|tts|status]",
+        "Usage: /voice [on|off|tts [text]|status]",
     ]
 
 

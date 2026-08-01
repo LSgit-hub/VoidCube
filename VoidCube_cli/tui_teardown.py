@@ -13,6 +13,7 @@ class TuiTeardownPorts:
     stop_autonomous: Callable[[], None]
     interrupt_agent: Callable[[], None]
     shutdown_voice_recorder: Callable[[], None]
+    close_voice_tts: Callable[[], None]
     cleanup_temp_voice_recordings: Callable[[], None]
     unregister_tool_callbacks: Callable[[], None]
     close_session: Callable[[], None]
@@ -26,6 +27,7 @@ def run_tui_teardown(ports: TuiTeardownPorts) -> None:
     ports.stop_autonomous()
     ports.interrupt_agent()
     ports.shutdown_voice_recorder()
+    ports.close_voice_tts()
     ports.cleanup_temp_voice_recordings()
     ports.unregister_tool_callbacks()
     ports.close_session()

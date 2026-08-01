@@ -582,7 +582,8 @@ def install_cli_command_execution(
                 ports=VoiceCommandPorts(
                     enable=host._enable_voice_mode,
                     disable=host._disable_voice_mode,
-                    tts_unavailable=host._show_voice_tts_unavailable,
+                    tts_status=host._show_voice_tts_status,
+                    tts_speak=host._speak_voice_tts,
                     show_status=host._show_voice_status,
                     voice_mode_enabled=lambda: host._voice_mode,
                     emit=emit,

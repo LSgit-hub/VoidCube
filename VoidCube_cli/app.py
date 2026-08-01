@@ -135,6 +135,7 @@ from VoidCube_cli.voice_recording_runtime import (
     start_terminal_voice_recording,
     stop_terminal_voice_recording,
 )
+from VoidCube_cli.voice_tts_adapter import VoiceTtsAdapter
 from VoidCube_cli.embedded_autonomous_loop import (
     EmbeddedAutonomousLoopPorts,
     start_embedded_autonomous_component_loop,
@@ -3967,7 +3968,7 @@ class VoidcubeCLI:
         _ptt_display = _ptt_key.replace("c-", "Ctrl+").upper()
         _cprint(f"\n{_ACCENT}Voice mode enabled{_RST}")
         _cprint(f"  {_DIM}{_ptt_display} to start/stop recording{_RST}")
-        _cprint(f"  {_DIM}/voice tts reports terminal playback availability{_RST}")
+        _cprint(f"  {_DIM}/voice tts checks terminal playback; add text to speak{_RST}")
         _cprint(f"  {_DIM}/voice off  to disable voice mode{_RST}")
 
     def _disable_voice_mode(self):
@@ -3981,6 +3982,10 @@ class VoidcubeCLI:
             self._voice_mode = False
             self._voice_continuous = False
 
+        tts_adapter = self.__dict__.get("_voice_tts_adapter")
+        if tts_adapter is not None:
+            tts_adapter.interrupt()
+
         # Shut down the persistent audio stream in background
         if recorder is not None:
             def _bg_shutdown(rec=recorder):
@@ -3993,11 +3998,37 @@ class VoidcubeCLI:
 
         _cprint(f"\n{_DIM}Voice mode disabled.{_RST}")
 
-    def _show_voice_tts_unavailable(self):
-        """Report the accepted terminal-TTS boundary without changing voice state."""
-        _cprint(
-            f"{_DIM}Terminal TTS is unavailable until the systems.voice adapter is implemented.{_RST}"
-        )
+    def _voice_tts(self) -> VoiceTtsAdapter:
+        adapter = self.__dict__.get("_voice_tts_adapter")
+        if adapter is None:
+            adapter = VoiceTtsAdapter()
+            self._voice_tts_adapter = adapter
+        return adapter
+
+    def _show_voice_tts_status(self):
+        """Project canonical voice transport readiness into terminal text."""
+        result = self._voice_tts().status()
+        status = result.get("status") or "unavailable"
+        reason = result.get("reason") or "unknown"
+        _cprint(f"{_DIM}Terminal TTS: {status} ({reason}).{_RST}")
+
+    def _speak_voice_tts(self, text: str):
+        """Start terminal TTS without blocking the prompt-toolkit thread."""
+        message = str(text or "").strip()
+        if not message:
+            self._show_voice_tts_status()
+            return
+
+        def _speak() -> None:
+            result = self._voice_tts().speak(message)
+            status = str(result.get("status") or "unavailable")
+            if status == "complete":
+                _cprint(f"{_DIM}Terminal TTS complete.{_RST}")
+            else:
+                reason = result.get("reason") or status
+                _cprint(f"{_DIM}Terminal TTS unavailable: {reason}.{_RST}")
+
+        threading.Thread(target=_speak, daemon=True, name="voidcube-terminal-tts").start()
 
     def _show_voice_status(self):
         """Show current voice mode status."""
@@ -4008,7 +4039,11 @@ class VoidcubeCLI:
 
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
         _cprint(f"  Mode:      {'ON' if self._voice_mode else 'OFF'}")
-        _cprint("  TTS:       unavailable (pending systems.voice terminal adapter)")
+        tts_status = self._voice_tts().status()
+        _cprint(
+            f"  TTS:       {tts_status.get('status', 'unavailable')} "
+            f"({tts_status.get('reason', 'unknown')})"
+        )
         _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
         _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
         _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
@@ -5770,6 +5805,11 @@ class VoidcubeCLI:
                         pass
                     self._voice_recorder = None
 
+            def close_voice_tts() -> None:
+                adapter = self.__dict__.get("_voice_tts_adapter")
+                if adapter is not None:
+                    adapter.close()
+
             def cleanup_temp_voice_recordings() -> None:
                 try:
                     from tools.voice_mode import cleanup_temp_recordings
@@ -5810,6 +5850,7 @@ class VoidcubeCLI:
                     stop_autonomous=lambda: self._stop_autonomous_execution_component(interrupt=True),
                     interrupt_agent=interrupt_running_agent,
                     shutdown_voice_recorder=shutdown_voice_recorder,
+                    close_voice_tts=close_voice_tts,
                     cleanup_temp_voice_recordings=cleanup_temp_voice_recordings,
                     unregister_tool_callbacks=unregister_tool_callbacks,
                     close_session=close_session,
