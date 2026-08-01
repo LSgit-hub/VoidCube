@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_learning import extract_learning_topic
 from systems.supervisor.supervisor import (
     Supervisor,
     SupervisorConfig,
@@ -743,8 +744,6 @@ class TestPhase1LearningTopicExtraction:
 
     def test_extract_topic_from_user_request(self):
         """可以从最近 user_request 元数据里提取主题。"""
-        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-        engine = EndogenousDriveEngine()
         activity = {
             "recent_metadata": {
                 "user_request": {
@@ -752,14 +751,12 @@ class TestPhase1LearningTopicExtraction:
                 }
             }
         }
-        topic = engine._extract_learning_topic(activity)
+        topic = extract_learning_topic(activity)
         assert "optimize" in topic.lower()
         assert "agent tool-calling" in topic.lower()
 
     def test_extract_topic_fallback_to_agent_work(self):
         """当没有 user_request 时，会回退到 agent_work 摘要。"""
-        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-        engine = EndogenousDriveEngine()
         activity = {
             "recent_metadata": {
                 "agent_work": {
@@ -767,15 +764,13 @@ class TestPhase1LearningTopicExtraction:
                 }
             }
         }
-        topic = engine._extract_learning_topic(activity)
+        topic = extract_learning_topic(activity)
         assert "websocket" in topic.lower() or "sse" in topic.lower()
 
     def test_extract_topic_empty_when_no_data(self):
         """没有可用元数据时返回空字符串。"""
-        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-        engine = EndogenousDriveEngine()
-        assert engine._extract_learning_topic({}) == ""
-        assert engine._extract_learning_topic({"recent_metadata": {}}) == ""
+        assert extract_learning_topic({}) == ""
+        assert extract_learning_topic({"recent_metadata": {}}) == ""
 
 
 

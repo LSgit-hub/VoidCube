@@ -28,6 +28,16 @@ from systems.supervisor.endogenous_candidate_factories import (
     build_memory_maintenance_candidate,
     build_truthfulness_review_candidate,
 )
+from systems.supervisor.endogenous_learning import (
+    build_cognitive_assessment_review_candidate,
+    build_exploratory_learning_candidate,
+    build_shell_baseline_learning_candidate,
+    extract_learning_topic,
+    filter_learning_topics,
+    idle_learning_urgency,
+    stable_learning_topic_key,
+    topic_signature,
+)
 from systems.supervisor.endogenous_context import (
     build_lm_context_layers,
     reference_alignment_gap_labels,
@@ -63,13 +73,6 @@ from systems.evolution_boundary import (
 )
 
 
-_TOPIC_WORD_RE = re.compile(r"[a-zA-Z0-9_]{3,}")
-_TOPIC_STOPWORDS = {
-    "voidcube", "agent", "system", "task", "tasks", "work", "review", "recent",
-    "learning", "learn", "research", "improve", "improvement", "current", "shell",
-    "body", "code", "codebase", "baseline", "follow", "followup", "thread",
-    "general", "quality", "issue", "issues", "notes", "evidence", "future",
-}
 _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 _REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
@@ -2384,17 +2387,16 @@ class EndogenousDriveEngine:
             cognitive_assessment_memory = self._build_cognitive_assessment_memory(drive_context)
             self_iteration_trend_memory = self._build_self_iteration_trend_memory(drive_context)
 
-            topics: list[dict] = []
-
             autonomous_chain_gate_active = drive_input.get("autonomous_chain_gate_active", False)
-            mechanical_topic = self._extract_learning_topic(activity)
+            mechanical_topic = extract_learning_topic(activity)
+            topics: list[dict] = []
             if mechanical_topic:
                 topics = [{"title": mechanical_topic, "summary": (
                     f"Use autonomous-chain capacity to research '{mechanical_topic}' — the most recent "
                     f"user-discussed topic that may benefit from deeper investigation."
                 )}]
 
-            topics = self._filter_learning_topics(
+            topics = filter_learning_topics(
                 topics,
                 drive_context=drive_context,
                 existing_keys=existing_keys,
@@ -2410,14 +2412,23 @@ class EndogenousDriveEngine:
                 and baseline_key not in existing_keys
             ):
                 candidates.append(
-                    self._build_shell_baseline_learning_candidate(
+                    build_shell_baseline_learning_candidate(
                         stable_key=baseline_key,
                         active_sessions=active_sessions,
                         shell_slot_id=shell_slot_id,
                         shell_worktree=shell_worktree,
                         trigger="bootstrap_shell_baseline",
-                        drive_context=drive_context,
                         bootstrap=True,
+                        urgency=idle_learning_urgency(
+                            active_sessions=active_sessions,
+                            topic_source="shell_baseline_bootstrap",
+                            autonomous_chain_gate=False,
+                        ),
+                        backlog_pressure_penalty=self._backlog_pressure_penalty(
+                            drive_context,
+                            governance_task_type="self_learning",
+                            task_family="self_learning",
+                        ),
                         drive_judgement=self._drive_judgement_metadata(
                             intent=shell_baseline_intent,
                             candidate_kind="shell_baseline_learning",
@@ -2435,76 +2446,36 @@ class EndogenousDriveEngine:
 
             generated_count = 0
             for topic in topics:
-                topic_key = _stable_key_for_topic(topic["title"])
+                topic_key = stable_learning_topic_key(topic["title"])
                 if topic_key in existing_keys:
                     continue  # Skip duplicate topic
                 if "exploratory_learning" in active_candidate_kinds:
                     continue
-                title = f"Research: {topic['title']}"
-                summary = topic.get("summary") or topic["title"]
                 candidates.append(
-                build_scored_candidate(
-                        stable_key=topic_key,  # Dynamic key: "creativity:idle_learning:{hash}"
-                        title=title,
-                        summary=summary,
-                        priority="normal",
-                        governance_task_type="self_learning",
-                        task_family="self_learning",
-                        execution_kind=None,
-                        value_tags=["creativity"],
-                        candidate_kind="exploratory_learning",
-                        score_inputs={
-                            "core_value_strength": 0.64,
-                            "urgency": self._idle_learning_urgency(
-                                active_sessions=active_sessions,
-                                topic_source="activity_metadata",
-                                autonomous_chain_gate=autonomous_chain_gate_active,
-                            ),
-                            "novelty": float(topic.get("novelty_score") or 0.6),
-                            "specificity": float(topic.get("specificity_score") or 0.55),
-                            "execution_readiness": 0.66,
-                            "backlog_pressure_penalty": self._backlog_pressure_penalty(
-                                drive_context,
-                                governance_task_type="self_learning",
-                                task_family="self_learning",
-                            ),
-                            "repetition_penalty": round(
-                                max(0.0, 0.55 - float(topic.get("novelty_score") or 0.6)),
-                                4,
-                            ),
-                        "adaptive_factor": adaptive_factor_for_candidate(
-                                candidate_kind="exploratory_learning",
-                                adaptive_policy=adaptive_policy,
-                            ),
-                        },
-                        metadata={
-                            "learning_branch": "exploratory",
-                            "self_learning_mode": "no_dependency_exploration",
-                            "drive_judgement": self._drive_judgement_metadata(
-                                intent=learning_intent,
-                                candidate_kind="exploratory_learning",
-                                all_intents=intents,
-                                needs=needs,
-                                perception=perception,
-                                world_model=world_model,
-                                reflection=reflection,
-                                adaptive_policy=adaptive_policy,
-                            ),
-                        },
-                        evidence={
-                            "active_sessions": active_sessions,
-                            "trigger": "idle_capacity",
-                            "learning_topic": topic["title"],
-                            "topic_source": "activity_metadata",
-                            "learning_branch": "exploratory",
-                            "llm_generated": False,
-                            "novelty_score": topic.get("novelty_score"),
-                            "specificity_score": topic.get("specificity_score"),
-                        },
-                        constraints={
-                            "execution_policy": "learn_only",
-                            "must_not_modify_active_body": True,
-                        },
+                    build_exploratory_learning_candidate(
+                        topic=topic,
+                        active_sessions=active_sessions,
+                        urgency=idle_learning_urgency(
+                            active_sessions=active_sessions,
+                            topic_source="activity_metadata",
+                            autonomous_chain_gate=autonomous_chain_gate_active,
+                        ),
+                        backlog_pressure_penalty=self._backlog_pressure_penalty(
+                            drive_context,
+                            governance_task_type="self_learning",
+                            task_family="self_learning",
+                        ),
+                        adaptive_policy=adaptive_policy,
+                        drive_judgement=self._drive_judgement_metadata(
+                            intent=learning_intent,
+                            candidate_kind="exploratory_learning",
+                            all_intents=intents,
+                            needs=needs,
+                            perception=perception,
+                            world_model=world_model,
+                            reflection=reflection,
+                            adaptive_policy=adaptive_policy,
+                        ),
                     )
                 )
                 existing_keys.add(topic_key)
@@ -2524,79 +2495,34 @@ class EndogenousDriveEngine:
                     or cognitive_assessment_memory.get("dominant_constraint")
                     or "recent endogenous judgement"
                 ).strip()
-                review_key = f"creativity:self_learning:cognitive_review:{_stable_key_for_topic(target or judgement)}"
+                review_key = (
+                    "creativity:self_learning:cognitive_review:"
+                    f"{stable_learning_topic_key(target or judgement)}"
+                )
                 if review_key not in existing_keys and "exploratory_learning" not in active_candidate_kinds:
-                    review_summary = (
-                        "Review the latest endogenous cognitive-assessment memory, "
-                        "extract what changed, and record evidence-backed learning notes "
-                        "for the next autonomous planning cycle."
-                    )
-                    if judgement:
-                        review_summary += f" Current judgement: {judgement}."
                     candidates.append(
-                build_scored_candidate(
-                            stable_key=review_key,
-                            title=f"Review endogenous cognition: {target or 'current judgement'}",
-                            summary=review_summary,
-                            priority="normal",
-                            governance_task_type="self_learning",
-                            task_family="self_learning",
-                            execution_kind=None,
-                            value_tags=["creativity", "truthfulness"],
-                            candidate_kind="exploratory_learning",
-                            score_inputs={
-                                "core_value_strength": 0.72,
-                                "urgency": self._clamp01(
-                                    0.42
-                                    + float(cognitive_assessment_memory.get("why_not_improvement_now_count") or 0) * 0.08
-                                    + (
-                                        0.08
-                                        if adaptive_policy.preferred_focus in {"truthfulness", "observation"}
-                                        else 0.0
-                                    )
-                                ),
-                                "novelty": 0.52,
-                                "specificity": 0.66,
-                                "execution_readiness": 0.72,
-                                "backlog_pressure_penalty": self._backlog_pressure_penalty(
-                                    drive_context,
-                                    governance_task_type="self_learning",
-                                    task_family="self_learning",
-                                ),
-                        "adaptive_factor": adaptive_factor_for_candidate(
-                                    candidate_kind="exploratory_learning",
-                                    adaptive_policy=adaptive_policy,
-                                ),
-                            },
-                            metadata={
-                                "learning_branch": "cognitive_assessment_review",
-                                "self_learning_mode": "endogenous_cognition_review",
-                                "cognitive_assessment_target": target,
-                                "llm_cognitive_assessment": dict(cognitive_assessment_memory),
-                                "drive_judgement": self._drive_judgement_metadata(
-                                    intent=learning_intent,
-                                    candidate_kind="exploratory_learning",
-                                    all_intents=intents,
-                                    needs=needs,
-                                    perception=perception,
-                                    world_model=world_model,
-                                    reflection=reflection,
-                                    adaptive_policy=adaptive_policy,
-                                ),
-                            },
-                            evidence={
-                                "active_sessions": active_sessions,
-                                "trigger": "canonical_cognitive_assessment_memory",
-                                "learning_topic": target,
-                                "topic_source": "cognitive_assessment_memory",
-                                "learning_branch": "cognitive_assessment_review",
-                                "llm_generated": False,
-                                "cognitive_assessment_memory": dict(cognitive_assessment_memory),
-                            },
-                            constraints={
-                                "execution_policy": "learn_only",
-                                "must_not_modify_active_body": True,
-                            },
+                        build_cognitive_assessment_review_candidate(
+                            target=target,
+                            judgement=judgement,
+                            cognitive_assessment_memory=cognitive_assessment_memory,
+                            active_sessions=active_sessions,
+                            preferred_focus=adaptive_policy.preferred_focus,
+                            backlog_pressure_penalty=self._backlog_pressure_penalty(
+                                drive_context,
+                                governance_task_type="self_learning",
+                                task_family="self_learning",
+                            ),
+                            adaptive_policy=adaptive_policy,
+                            drive_judgement=self._drive_judgement_metadata(
+                                intent=learning_intent,
+                                candidate_kind="exploratory_learning",
+                                all_intents=intents,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
+                            ),
                         )
                     )
                     existing_keys.add(review_key)
@@ -3665,7 +3591,7 @@ class EndogenousDriveEngine:
                 continue
             title = normalized_proposal.title
             summary = normalized_proposal.summary
-            stable_key = f"{mapping['stable_prefix']}:{_stable_key_for_topic(title)}"
+            stable_key = f"{mapping['stable_prefix']}:{stable_learning_topic_key(title)}"
             if candidate_kind == "body_improvement":
                 stable_key = (
                     f"{mapping['stable_prefix']}:"
@@ -5818,7 +5744,7 @@ class EndogenousDriveEngine:
         now = datetime.now(timezone.utc)
 
         for title in recent_learning_titles:
-            signatures.append(self._topic_signature(title))
+            signatures.append(topic_signature(title))
 
         for task in autonomous_chain_live_tasks:
             title = str(task.get("title") or "").strip()
@@ -5830,7 +5756,7 @@ class EndogenousDriveEngine:
             task_family = str(task.get("task_family") or "").strip().lower()
             if task_family == "self_learning" and status not in {"completed", "failed", "cancelled"}:
                 learning_backlog_titles.append(title)
-                signatures.append(self._topic_signature(title))
+                signatures.append(topic_signature(title))
             if execution_kind == "body_improvement":
                 body_improvement_backlog_titles.append(title)
             if status not in _TERMINAL_QUEUE_STATUSES and task in api_b_judgement_tasks:
@@ -6168,22 +6094,6 @@ class EndogenousDriveEngine:
         # Whole-day execution (baseline §6): no time-of-day window bonus anymore.
         return round(self._clamp01(0.72 + avg_idle_coverage * 0.18), 4)
 
-    def _idle_learning_urgency(
-        self,
-        *,
-        active_sessions: int,
-        topic_source: str,
-        autonomous_chain_gate: bool,
-    ) -> float:
-        base = {
-            "activity_metadata": 0.42,
-            "shell_baseline_bootstrap": 0.55,
-            "shell_baseline_fallback": 0.4,
-        }.get(topic_source, 0.4)
-        session_penalty = min(max(active_sessions, 0), 3) * 0.05
-        autonomous_gate_bonus = 0.05 if autonomous_chain_gate else 0.0
-        return round(self._clamp01(base - session_penalty + autonomous_gate_bonus), 4)
-
     def _governance_hygiene_urgency(self, drive_context: Dict[str, Any]) -> float:
         api_b_judgement_count = int(drive_context.get("api_b_judgement_count") or 0)
         stale_backlog_count = int(drive_context.get("stale_backlog_count") or 0)
@@ -6231,100 +6141,6 @@ class EndogenousDriveEngine:
                 cooldown_hours=_STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS,
             ):
                 return True
-        return False
-
-    def _filter_learning_topics(
-        self,
-        topics: List[Dict[str, str]],
-        *,
-        drive_context: Dict[str, Any],
-        existing_keys: set[str],
-        cooldown_hours: int,
-        overlap_threshold: float,
-        max_topics: int,
-    ) -> List[Dict[str, Any]]:
-        filtered: list[Dict[str, Any]] = []
-        seen_signatures: list[set[str]] = []
-        completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
-        api_b_judgement_tasks = list(drive_context.get("autonomous_chain_live_tasks") or [])
-
-        for topic in topics:
-            title = str(topic.get("title") or "").strip()
-            if not title:
-                continue
-            topic_key = _stable_key_for_topic(title)
-            if topic_key in existing_keys:
-                continue
-            signature = self._topic_signature(title)
-            if any(self._topic_overlap(signature, previous) >= overlap_threshold for previous in seen_signatures):
-                continue
-            if self._topic_seen_recently(
-                title,
-                signature,
-                completed_learning_tasks=completed_learning_tasks,
-                api_b_judgement_tasks=api_b_judgement_tasks,
-                cooldown_hours=cooldown_hours,
-                overlap_threshold=overlap_threshold,
-            ):
-                continue
-            novelty_score = self._topic_novelty_score(signature, drive_context=drive_context)
-            specificity_score = self._topic_specificity_score(title, signature)
-            filtered.append(
-                {
-                    "title": title,
-                    "summary": str(topic.get("summary") or title).strip(),
-                    "novelty_score": novelty_score,
-                    "specificity_score": specificity_score,
-                }
-            )
-            seen_signatures.append(signature)
-
-        filtered.sort(
-            key=lambda item: (
-                float(item.get("novelty_score") or 0.0),
-                float(item.get("specificity_score") or 0.0),
-            ),
-            reverse=True,
-        )
-        return filtered[: max(0, max_topics)]
-
-    def _topic_seen_recently(
-        self,
-        title: str,
-        signature: set[str],
-        *,
-        completed_learning_tasks: List[Dict[str, Any]],
-        api_b_judgement_tasks: List[Dict[str, Any]],
-        cooldown_hours: int,
-        overlap_threshold: float,
-    ) -> bool:
-        normalized = self._normalize_topic_text(title)
-        now = datetime.now(timezone.utc)
-
-        for task in completed_learning_tasks:
-            prior_title = str(task.get("title") or "").strip()
-            if not prior_title:
-                continue
-            if normalized == self._normalize_topic_text(prior_title):
-                if self._within_cooldown(task.get("completed_at"), now=now, cooldown_hours=cooldown_hours):
-                    return True
-            if self._topic_overlap(signature, self._topic_signature(prior_title)) >= overlap_threshold:
-                if self._within_cooldown(task.get("completed_at"), now=now, cooldown_hours=cooldown_hours):
-                    return True
-
-        for task in api_b_judgement_tasks:
-            prior_title = str(task.get("title") or "").strip()
-            if not prior_title:
-                continue
-            status = str(task.get("status") or "").strip().lower()
-            if status in {"completed", "failed", "cancelled"}:
-                continue
-            prior_signature = self._topic_signature(prior_title)
-            if normalized == self._normalize_topic_text(prior_title):
-                return True
-            if self._topic_overlap(signature, prior_signature) >= overlap_threshold:
-                return True
-
         return False
 
     def _has_recent_body_improvement(
@@ -6586,7 +6402,7 @@ class EndogenousDriveEngine:
                 "editable_roots": editable_roots,
             }
 
-        mapping_key = _stable_key_for_topic(
+        mapping_key = stable_learning_topic_key(
             "|".join(
                 [shell_slot_id, *target_paths, *[ref["mem_id"] for ref in learning_refs]]
             )
@@ -6606,40 +6422,6 @@ class EndogenousDriveEngine:
             "learning_refs": learning_refs,
             "evidence_summary": evidence_summary[:5],
         }
-
-    def _topic_novelty_score(self, signature: set[str], *, drive_context: Dict[str, Any]) -> float:
-        if not signature:
-            return 0.0
-        recent_signatures = list(drive_context.get("recent_learning_signatures") or [])
-        if not recent_signatures:
-            return 1.0
-        highest_overlap = max((self._topic_overlap(signature, prior) for prior in recent_signatures), default=0.0)
-        return max(0.0, 1.0 - highest_overlap)
-
-    def _topic_specificity_score(self, title: str, signature: set[str]) -> float:
-        word_count = len(str(title or "").split())
-        signature_bonus = min(len(signature), 6) / 6.0
-        word_bonus = min(max(word_count, 1), 12) / 12.0
-        return round(signature_bonus * 0.7 + word_bonus * 0.3, 4)
-
-    def _normalize_topic_text(self, text: str) -> str:
-        return " ".join(_TOPIC_WORD_RE.findall(str(text or "").lower())).strip()
-
-    def _topic_signature(self, text: str) -> set[str]:
-        normalized_words = {
-            word.lower()
-            for word in _TOPIC_WORD_RE.findall(str(text or "").lower())
-            if word.lower() not in _TOPIC_STOPWORDS
-        }
-        return normalized_words
-
-    def _topic_overlap(self, left: set[str], right: set[str]) -> float:
-        if not left or not right:
-            return 0.0
-        union = left | right
-        if not union:
-            return 0.0
-        return len(left & right) / len(union)
 
     def _within_cooldown(
         self,
@@ -6665,123 +6447,6 @@ class EndogenousDriveEngine:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
-
-    def _extract_learning_topic(self, activity: Dict[str, Any]) -> str:
-        """Extract a concise learning topic from recent gateway activity metadata.
-
-        Looks at the most recent user_request and agent_work metadata to find
-        topics that were discussed but may benefit from deeper research.
-        Returns empty string if no meaningful topic can be extracted.
-        """
-        recent = dict(activity.get("recent_metadata") or {})
-        user_req = recent.get("user_request") or {}
-        agent_work = recent.get("agent_work") or {}
-
-        # Try to extract a topic from the user's last request
-        user_text = str(
-            user_req.get("text")
-            or user_req.get("query")
-            or user_req.get("topic")
-            or user_req.get("title")
-            or ""
-        )
-        if not user_text:
-            user_text = str(user_req.get("summary") or "")
-        if user_text and len(user_text) > 10:
-            # Take first sentence or first 80 chars as the topic
-            topic = user_text.split(".")[0].split("\n")[0].strip()
-            if len(topic) > 80:
-                topic = topic[:77] + "..."
-            if len(topic) >= 10:
-                return topic
-
-        # Fall back to agent's last response summary
-        agent_text = str(agent_work.get("summary") or agent_work.get("title") or "")
-        if agent_text and len(agent_text) > 10:
-            topic = agent_text.split(".")[0].strip()
-            if len(topic) > 80:
-                topic = topic[:77] + "..."
-            if len(topic) >= 10:
-                return topic
-
-        return ""
-
-    def _build_shell_baseline_learning_candidate(
-        self,
-        *,
-        stable_key: str,
-        active_sessions: int,
-        shell_slot_id: str,
-        shell_worktree: str,
-        trigger: str,
-        drive_context: Dict[str, Any],
-        bootstrap: bool,
-        drive_judgement: Optional[Dict[str, Any]] = None,
-        adaptive_policy: Optional[DriveAdaptivePolicy] = None,
-    ) -> _EndogenousTaskCandidate:
-        summary = (
-            "Use idle capacity to inspect the current shell-body codebase, "
-            "map its structure, identify current weaknesses, and record evidence-backed "
-            "learning notes that can guide future self-improvement."
-        )
-        if shell_worktree:
-            summary += f" Start from shell slot {shell_slot_id} at {shell_worktree}."
-        return build_scored_candidate(
-            stable_key=stable_key,
-            title="Understand the current shell body codebase",
-            summary=summary,
-            priority="normal",
-            governance_task_type="self_learning",
-            task_family="self_learning",
-            execution_kind=None,
-            value_tags=["creativity"],
-            candidate_kind="shell_baseline_learning",
-            score_inputs={
-                "core_value_strength": 0.79 if bootstrap else 0.66,
-                "urgency": self._idle_learning_urgency(
-                    active_sessions=active_sessions,
-                    topic_source=(
-                        "shell_baseline_bootstrap"
-                        if bootstrap
-                        else "shell_baseline_fallback"
-                    ),
-                    autonomous_chain_gate=False,
-                ),
-                "novelty": 0.88 if bootstrap else 0.45,
-                "specificity": 0.68 if bootstrap else 0.58,
-                "execution_readiness": 0.92 if shell_worktree else 0.78,
-                "backlog_pressure_penalty": self._backlog_pressure_penalty(
-                    drive_context,
-                    governance_task_type="self_learning",
-                    task_family="self_learning",
-                ),
-                        "adaptive_factor": adaptive_factor_for_candidate(
-                    candidate_kind="shell_baseline_learning",
-                    adaptive_policy=adaptive_policy or self._neutral_adaptive_policy(),
-                ),
-            },
-            metadata={
-                "learning_branch": "codebase_baseline",
-                "self_learning_mode": "shell_codebase_baseline",
-                **({"drive_judgement": drive_judgement} if drive_judgement else {}),
-            },
-            evidence={
-                "active_sessions": active_sessions,
-                "trigger": trigger,
-                "learning_topic": "",
-                "topic_source": "shell_codebase_baseline",
-                "learning_branch": "codebase_baseline",
-                "llm_generated": False,
-                "baseline_worktree_path": shell_worktree,
-                "baseline_slot_id": shell_slot_id,
-            },
-            constraints={
-                "execution_policy": "learn_shell_baseline",
-                "must_not_modify_active_body": True,
-                "baseline_worktree_path": shell_worktree,
-                "baseline_slot_id": shell_slot_id,
-            },
-        )
 
     def _decision_for(
         self,
@@ -6842,17 +6507,4 @@ class EndogenousDriveEngine:
         except Exception:
             pass
         return None
-
-def _stable_key_for_topic(topic: str) -> str:
-    """Generate a stable dedup key from a learning topic string.
-
-    Uses a short hash so that genuinely different topics get different keys,
-    allowing multiple creativity candidates to coexist in API-B judgement.
-    """
-    import hashlib
-    normalized = topic.strip().lower()
-    if not normalized:
-        return "creativity:idle_learning:fallback"
-    h = hashlib.md5(normalized.encode()).hexdigest()[:8]
-    return f"creativity:idle_learning:{h}"
 

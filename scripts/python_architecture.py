@@ -23,7 +23,7 @@ FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 P0_LINE_BASELINES = {
     "VoidCube_cli/app.py": 6_245,
     "systems/supervisor/planning_runtime.py": 8_887,
-    "systems/supervisor/endogenous_drive.py": 6_858,
+    "systems/supervisor/endogenous_drive.py": 6_510,
     "systems/supervisor/ui_runtime.py": 1_189,
 }
 P0_LARGE_METHOD_BASELINES = {
@@ -35,7 +35,7 @@ P0_LARGE_METHOD_BASELINES = {
     "systems/supervisor/endogenous_drive.py": {
         "_build_adaptive_policy": 517,
         "_detect_needs": 311,
-        "_candidate_stream": 441,
+        "_candidate_stream": 364,
         "_materialize_lm_task_proposals": 308,
     },
     "systems/supervisor/ui_runtime.py": {},
