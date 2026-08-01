@@ -22,6 +22,7 @@ SCORE_WEIGHTS: Dict[str, float] = {
     "backlog_pressure_penalty": 0.12,
     "repetition_penalty": 0.10,
 }
+TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +384,91 @@ def apply_adaptive_candidate_budget(
             return []
         return ordered[:1]
     return selected
+
+
+def merge_lm_led_candidate_stream(
+    *,
+    lm_candidates: List[CandidateT],
+    heuristic_candidates: List[CandidateT],
+    adaptive_policy: AdaptivePolicyLike,
+) -> List[CandidateT]:
+    canonical_shell_baselines = [
+        candidate
+        for candidate in heuristic_candidates
+        if candidate_kind_of(candidate) == "shell_baseline_learning"
+    ]
+    if canonical_shell_baselines:
+        lm_candidates = [
+            candidate
+            for candidate in lm_candidates
+            if candidate_kind_of(candidate) != "shell_baseline_learning"
+        ]
+    if not lm_candidates:
+        return list(heuristic_candidates or [])
+    if not heuristic_candidates:
+        return list(lm_candidates or [])
+
+    merged: List[CandidateT] = [*canonical_shell_baselines, *lm_candidates]
+    seen_signatures = {candidate_semantic_signature(candidate) for candidate in merged}
+    lm_kinds = {
+        candidate_kind_of(candidate)
+        for candidate in lm_candidates
+        if candidate_kind_of(candidate)
+    }
+    complement_budget = (
+        2
+        if adaptive_policy.preferred_focus
+        in {"memory_continuity", "governance_hygiene", "truthfulness"}
+        else 1
+    )
+
+    for candidate in sorted(
+        heuristic_candidates,
+        key=lambda item: item.utility,
+        reverse=True,
+    ):
+        if complement_budget <= 0:
+            break
+        signature = candidate_semantic_signature(candidate)
+        if signature in seen_signatures:
+            continue
+        candidate_kind = candidate_kind_of(candidate)
+        if candidate_kind == "shell_baseline_learning":
+            continue
+        if candidate_kind and candidate_kind in lm_kinds:
+            continue
+        merged.append(candidate)
+        seen_signatures.add(signature)
+        complement_budget -= 1
+    return merged
+
+
+def active_api_b_judgement_candidate_kinds(
+    tasks: List[Any],
+) -> set[str]:
+    kinds: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("status") or "").strip().lower()
+        if status in TERMINAL_QUEUE_STATUSES:
+            continue
+        metadata = dict(task.get("metadata") or {})
+        evidence = dict(task.get("evidence") or {})
+        score_breakdown = dict(
+            metadata.get("score_breakdown")
+            or evidence.get("score_breakdown")
+            or {}
+        )
+        candidate_kind = str(
+            metadata.get("candidate_kind")
+            or evidence.get("candidate_kind")
+            or score_breakdown.get("candidate_kind")
+            or ""
+        ).strip()
+        if candidate_kind:
+            kinds.add(candidate_kind)
+    return kinds
 
 
 def candidate_semantic_signature(candidate: CandidateLike) -> str:

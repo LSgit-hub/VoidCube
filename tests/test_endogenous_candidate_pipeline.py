@@ -2,10 +2,12 @@ from dataclasses import dataclass, field
 
 from systems.supervisor.endogenous_candidate_pipeline import (
     EndogenousTaskCandidate,
+    active_api_b_judgement_candidate_kinds,
     adaptive_factor_for_candidate,
     apply_adaptive_candidate_budget,
     build_scored_candidate,
     candidate_semantic_signature,
+    merge_lm_led_candidate_stream,
     score_candidate,
 )
 
@@ -42,6 +44,53 @@ def _candidate(kind: str, title: str, utility: float) -> Candidate:
         utility=utility,
         metadata={"score_breakdown": {"candidate_kind": kind}},
     )
+
+
+def test_active_api_b_candidate_kinds_ignore_terminal_and_malformed_tasks():
+    kinds = active_api_b_judgement_candidate_kinds(
+        [
+            {"status": "planned", "metadata": {"candidate_kind": "truthfulness_review"}},
+            {
+                "status": "awaiting_review",
+                "evidence": {
+                    "score_breakdown": {"candidate_kind": "body_improvement"}
+                },
+            },
+            {"status": "completed", "metadata": {"candidate_kind": "ignored"}},
+            "invalid",
+        ],
+    )
+
+    assert kinds == {"truthfulness_review", "body_improvement"}
+
+
+def test_lm_led_merge_preserves_canonical_shell_baseline_and_limits_complement():
+    policy = Policy(preferred_focus="truthfulness")
+    lm_candidates = [
+        _candidate("shell_baseline_learning", "LM baseline", 0.95),
+        _candidate("truthfulness_review", "LM review", 0.9),
+    ]
+    heuristic_candidates = [
+        _candidate("shell_baseline_learning", "Canonical baseline", 0.7),
+        _candidate("truthfulness_review", "Heuristic review", 0.85),
+        _candidate("memory_maintenance", "Memory sweep", 0.8),
+        _candidate("governance_hygiene_review", "Governance review", 0.75),
+        _candidate("body_improvement", "Body change", 0.7),
+    ]
+
+    merged = merge_lm_led_candidate_stream(
+        lm_candidates=lm_candidates,
+        heuristic_candidates=heuristic_candidates,
+        adaptive_policy=policy,
+    )
+
+    assert [candidate.title for candidate in merged[:2]] == [
+        "Canonical baseline",
+        "LM review",
+    ]
+    assert "LM baseline" not in [candidate.title for candidate in merged]
+    assert "Heuristic review" not in [candidate.title for candidate in merged]
+    assert len(merged) == 4
 
 
 def test_score_candidate_preserves_auditable_dimensions_and_penalties():

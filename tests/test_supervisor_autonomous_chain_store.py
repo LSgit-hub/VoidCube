@@ -28,11 +28,15 @@ from systems.supervisor.endogenous_drive import (
 from systems.supervisor.endogenous_candidate_pipeline import (
     EndogenousTaskCandidate,
     apply_adaptive_candidate_budget,
+    merge_lm_led_candidate_stream,
 )
 from systems.supervisor.endogenous_proposals import (
     align_lm_references,
     normalize_lm_execution_mode,
     supervisor_advisory_for_lm_proposal,
+)
+from systems.supervisor.endogenous_generation_snapshot import (
+    build_lm_task_generation_context_snapshot,
 )
 from systems.supervisor.endogenous_state_projection import project_drive_history
 from systems.supervisor.autonomous_chain_store import (
@@ -6895,7 +6899,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
         ),
     ]
 
-    merged = engine._merge_lm_led_candidate_stream(
+    merged = merge_lm_led_candidate_stream(
         lm_candidates=lm_candidates,
         heuristic_candidates=heuristic_candidates,
         adaptive_policy=DriveAdaptivePolicy(
@@ -11365,10 +11369,7 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
 
 @pytest.mark.unit
 def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_lists():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    snapshot = engine._build_lm_task_generation_context_snapshot(
+    snapshot = build_lm_task_generation_context_snapshot(
         evidence_packet={
             "task_type_priors": {
                 "top_priority_task_type": "review",
