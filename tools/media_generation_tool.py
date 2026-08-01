@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Agnes AI API 配置
 AGNES_API_BASE_URL = "https://api.agnes-ai.cn/v1"
-AGNES_IMAGE_MODEL = "Agnes Image 2.1 Flash"
+AGNES_IMAGE_MODEL = "agnes-image-2.1-flash"
 AGNES_VIDEO_MODEL = "agnes-video-v2.0"
 
 
@@ -26,27 +26,30 @@ def _get_api_key() -> str:
     if api_key:
         return api_key
     
-    # 尝试从配置文件读取
+    # 尝试从配置文件读取 agnes 提供商
     try:
         from VoidCube_app.config import load_config
         cfg = load_config()
         providers = cfg.get("providers", {})
         
-        # 查找 agnes 提供商
+        # 查找 agnes 提供商（精确匹配或包含 agnes）
         for provider_name, provider in providers.items():
             if "agnes" in provider_name.lower():
                 key = provider.get("api_key", "")
                 if key:
                     return str(key).strip()
         
-        # 检查 active_provider
+        # 检查 active_provider 是否为 agnes
         active = cfg.get("runtime", {}).get("active_provider", "")
-        if active and active in providers:
+        if active and "agnes" in active.lower() and active in providers:
             key = providers[active].get("api_key", "")
             if key:
                 return str(key).strip()
     except Exception as e:
         logger.debug("Failed to load config for API key: %s", e)
+    
+    # 未找到 agnes 配置，返回空字符串（让调用方处理）
+    return ""
     
     return ""
 
@@ -64,11 +67,11 @@ def image_generate(
 
     Args:
         prompt: 图像描述提示词
-        model: 模型名称 (默认: Agnes Image 2.1 Flash)
+        model: 模型名称 (默认: agnes-image-2.1-flash)
         size: 图像尺寸 (默认: 1024x1024)
         quality: 质量等级 (standard/high)
         n: 生成数量
-        response_format: 返回格式 (url/base64)
+        response_format: 返回格式 (url/base64，仅用于内部处理)
 
     Returns:
         JSON 字符串，包含生成的图像 URL 或 base64 数据
@@ -81,12 +84,12 @@ def image_generate(
             "error": "未配置 Agnes API Key，请在 ~/.VoidCube/config.yaml 中配置 providers"
         }, ensure_ascii=False)
     
+    # Agnes API 不支持 response_format 参数，仅用于内部处理
     payload = {
         "model": model,
         "prompt": prompt,
         "n": n,
         "size": size,
-        "response_format": response_format,
         **kwargs
     }
     
