@@ -19,12 +19,20 @@ from systems.supervisor.supervisor import (
     SupervisorServiceRuntimeConfig,
 )
 from systems.supervisor.endogenous_drive import (
-    EndogenousTaskCandidate,
     EndogenousDriveEngine,
     DriveAdaptivePolicy,
     DrivePerceptionSnapshot,
     DriveReflection,
     DriveWorldModel,
+)
+from systems.supervisor.endogenous_candidate_pipeline import (
+    EndogenousTaskCandidate,
+    apply_adaptive_candidate_budget,
+)
+from systems.supervisor.endogenous_proposals import (
+    align_lm_references,
+    normalize_lm_execution_mode,
+    supervisor_advisory_for_lm_proposal,
 )
 from systems.supervisor.endogenous_state_projection import project_drive_history
 from systems.supervisor.autonomous_chain_store import (
@@ -122,16 +130,11 @@ def _self_learning_outcome(
     return row
 
 
-def test_lm_execution_mode_legacy_backlog_alias_normalizes_to_handoff():
-    engine = EndogenousDriveEngine()
-
+def test_lm_execution_mode_unsupported_value_uses_canonical_kind_default():
     assert (
-        engine._normalize_lm_execution_mode(
+        normalize_lm_execution_mode(
             "review_then_backlog",
             candidate_kind="exploratory_learning",
-            evidence_level="moderate",
-            risk_level="medium",
-            observation_required=False,
         )
         == "review_then_handoff"
     )
@@ -8410,7 +8413,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
 async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_bindings(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     engine = supervisor._endogenous_drive_engine
-    reference_alignment = engine._align_lm_references(
+    reference_alignment = align_lm_references(
         referenced_evidence_nodes=[],
         referenced_agenda_nodes=[],
         evidence_graph={
@@ -8461,7 +8464,7 @@ async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_b
         posture_alignment=["suggests learning could still help"],
         priority_basis=["future upside may exist"],
     )
-    advisory = engine._supervisor_advisory_for_lm_proposal(
+    advisory = supervisor_advisory_for_lm_proposal(
         candidate_kind="exploratory_learning",
         evidence_level="moderate",
         risk_level="medium",
@@ -15631,11 +15634,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_when_truthfulness_and_backlog_review_both_exist(
-    tmp_path,
 ):
-    supervisor = _make_supervisor(tmp_path)
-    engine = supervisor._endogenous_drive_engine
-
     candidate_truthfulness = EndogenousTaskCandidate(
         stable_key="truthfulness:review_correction_signals",
         title="复核 grounding 漂移",
@@ -15673,7 +15672,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
         },
     )
 
-    selected = engine._apply_adaptive_candidate_budget(
+    selected = apply_adaptive_candidate_budget(
         [candidate_backlog_review, candidate_truthfulness],
         adaptive_policy=DriveAdaptivePolicy(
             learning_expansion_bias=0.5,
@@ -15696,10 +15695,6 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
 
 @pytest.mark.unit
 def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulness_and_backlog_review_are_equally_scored():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-
     candidate_truthfulness = EndogenousTaskCandidate(
         stable_key="truthfulness:review_correction_signals",
         title="复核 grounding 漂移",
@@ -15751,11 +15746,11 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
         rationale="test",
     )
 
-    forward = engine._apply_adaptive_candidate_budget(
+    forward = apply_adaptive_candidate_budget(
         [candidate_truthfulness, candidate_backlog_review],
         adaptive_policy=adaptive_policy,
     )
-    reversed_order = engine._apply_adaptive_candidate_budget(
+    reversed_order = apply_adaptive_candidate_budget(
         [candidate_backlog_review, candidate_truthfulness],
         adaptive_policy=adaptive_policy,
     )
@@ -15770,9 +15765,6 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
 
 @pytest.mark.unit
 def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_slightly_stronger():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
     adaptive_policy = DriveAdaptivePolicy(
         learning_expansion_bias=0.5,
         truthfulness_bias=0.5,
@@ -15825,7 +15817,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
         },
     )
 
-    selected = engine._apply_adaptive_candidate_budget(
+    selected = apply_adaptive_candidate_budget(
         [candidate_truthfulness, candidate_backlog_review],
         adaptive_policy=adaptive_policy,
     )
@@ -16304,7 +16296,7 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
         }
     )
 
-    prepared = supervisor._apply_scheduled_for_to_candidate_items(
+    prepared = supervisor._schedule_allocator.apply_to_candidates(
         [
             {
                 "title": "Generated candidate A",
@@ -16316,6 +16308,9 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
                 "metadata": {"endogenous_drive_key": "candidate-b"},
             },
         ],
+        occupied_tokens=supervisor._schedule_allocator.occupied_tokens(
+            supervisor._active_autonomous_chain_tasks()
+        ),
         now=datetime.fromisoformat("2026-06-28T00:00:00"),
     )
 
@@ -17316,13 +17311,16 @@ def test_candidate_schedule_token_reallocates_when_live_backlog_occupies_slot(tm
         metadata={"scheduled_for": "2026-06-28T01:00:00"},
     )
 
-    prepared = supervisor._apply_scheduled_for_to_candidate_items(
+    prepared = supervisor._schedule_allocator.apply_to_candidates(
         [
             {
                 "title": "Generated candidate for same slot",
                 "metadata": {"scheduled_for": "2026-06-28T01:00:00"},
             }
         ],
+        occupied_tokens=supervisor._schedule_allocator.occupied_tokens(
+            supervisor._active_autonomous_chain_tasks()
+        ),
         now=datetime.fromisoformat("2026-06-28T01:00:00"),
     )
 

@@ -8,13 +8,37 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-from systems.supervisor.endogenous_drive_prompts import (
-    build_endogenous_core_mission_prompt,
-    build_endogenous_task_generation_payload,
-)
 from systems.supervisor.config_models import (
     EndogenousDriveCognitionCharterConfig,
     EndogenousDriveCognitiveControlPolicyConfig,
+)
+from systems.supervisor.endogenous_candidate_pipeline import (
+    EndogenousTaskCandidate as _EndogenousTaskCandidate,
+    adaptive_factor_for_candidate,
+    apply_adaptive_candidate_budget,
+    build_scored_candidate,
+    candidate_kind_of,
+    candidate_semantic_signature,
+)
+from systems.supervisor.endogenous_evidence import (
+    build_evidence_channels,
+    channel_confidence_from_body,
+    channel_confidence_from_learning,
+    channel_confidence_from_research,
+    channel_strength_from_learning,
+    channel_strength_from_research,
+    item_evidence_quality,
+    normalize_external_research_entries,
+    normalize_external_research_file_payload,
+    normalize_recent_learning_evidence,
+    research_freshness_hint,
+)
+from systems.supervisor.endogenous_proposals import (
+    constraints_for_lm_candidate_kind,
+    generate_lm_task_proposals,
+    normalize_lm_cognitive_assessment,
+    normalize_lm_proposal,
+    task_type_for_candidate_kind,
 )
 from systems.evolution_boundary import (
     AGENT_EVOLUTION_ALLOWED_FILES,
@@ -24,12 +48,6 @@ from systems.evolution_boundary import (
 )
 
 
-CORE_VALUES: Dict[str, str] = {
-    "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity.",
-    "truthfulness": "Surface uncertainty, correction signals, and evidence gaps before they harden.",
-    "creativity": "Turn idle capacity into bounded learning and improvement proposals.",
-}
-
 _TOPIC_WORD_RE = re.compile(r"[a-zA-Z0-9_]{3,}")
 _TOPIC_STOPWORDS = {
     "voidcube", "agent", "system", "task", "tasks", "work", "review", "recent",
@@ -37,24 +55,10 @@ _TOPIC_STOPWORDS = {
     "body", "code", "codebase", "baseline", "follow", "followup", "thread",
     "general", "quality", "issue", "issues", "notes", "evidence", "future",
 }
-_SCORE_WEIGHTS: Dict[str, float] = {
-    "core_value_strength": 0.38,
-    "urgency": 0.24,
-    "novelty": 0.14,
-    "specificity": 0.10,
-    "execution_readiness": 0.14,
-    "backlog_pressure_penalty": 0.12,
-    "repetition_penalty": 0.10,
-}
 _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 _REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"
-_LM_TASK_TYPES = {"observation", "review", "learning", "maintenance", "improvement"}
-_LM_RISK_LEVELS = {"low", "medium", "high"}
-_LM_EVIDENCE_LEVELS = {"weak", "moderate", "strong"}
-_LM_EXECUTION_MODES = {"observe_only", "review_then_handoff", "guarded_execution"}
-_LEGACY_LM_EXECUTION_MODE_ALIASES = {"review_then_backlog": "review_then_handoff"}
 _STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS = 12
 TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
 
@@ -126,85 +130,6 @@ _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
         ("tools/file_tools.py", "tools/file_operations.py", "tools/path_security.py"),
     ),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class EndogenousTaskCandidate:
-    """Compatibility task projection emitted by the cognition core for API-B review."""
-
-    stable_key: str
-    title: str
-    summary: str
-    priority: str
-    governance_task_type: str
-    task_family: str
-    execution_kind: Optional[str]
-    value_tags: List[str]
-    utility: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    evidence: Dict[str, Any] = field(default_factory=dict)
-    constraints: Dict[str, Any] = field(default_factory=dict)
-
-    def rationale(self) -> str:
-        metadata = dict(self.metadata or {})
-        for key in ("rationale", "llm_task_rationale", "llm_rationale"):
-            text = str(metadata.get(key) or "").strip()
-            if text:
-                return text
-        judgement = dict(metadata.get("drive_judgement") or {})
-        for source_key in ("intent", "adaptive_policy", "reflection"):
-            source = dict(judgement.get(source_key) or {})
-            text = str(source.get("rationale") or "").strip()
-            if text:
-                return text
-        for need in list(judgement.get("needs") or []):
-            if not isinstance(need, dict):
-                continue
-            text = str(need.get("rationale") or "").strip()
-            if text:
-                return text
-        return self.summary
-
-    def to_api_b_judgement_item(self) -> Dict[str, Any]:
-        rationale = self.rationale()
-        metadata: Dict[str, Any] = {
-            "source": "endogenous_drive",
-            "endogenous_drive_key": self.stable_key,
-            "core_values": list(self.value_tags),
-            "utility": self.utility,
-            "governance_task_type": self.governance_task_type,
-            "task_family": self.task_family,
-            "rationale": rationale,
-        }
-        metadata.update(dict(self.metadata))
-        if not str(metadata.get("rationale") or "").strip():
-            metadata["rationale"] = rationale
-        if self.execution_kind is not None:
-            metadata["execution_kind"] = self.execution_kind
-        return {
-            "title": self.title,
-            "summary": self.summary,
-            "rationale": rationale,
-            "source": "endogenous_drive",
-            "priority": self.priority,
-            "governance_task_type": self.governance_task_type,
-            "task_family": self.task_family,
-            "execution_kind": self.execution_kind,
-            "metadata": metadata,
-            "evidence": {
-                "endogenous_drive": {
-                    "stable_key": self.stable_key,
-                    "core_values": list(self.value_tags),
-                    "core_value_definitions": {
-                        key: CORE_VALUES[key] for key in self.value_tags if key in CORE_VALUES
-                    },
-                    "utility": self.utility,
-                    "score_breakdown": dict(self.metadata.get("score_breakdown") or {}),
-                },
-                **dict(self.evidence),
-            },
-            "constraints": dict(self.constraints),
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +410,7 @@ class EndogenousDriveEngine:
         external_research_evidence = self._build_external_research_evidence()
         shell_slot = dict(self._get_shell_slot_meta(drive_input) or {})
         shell_body_profile = self._build_shell_body_profile(shell_slot)
-        evidence_channels = self._build_evidence_channels(
+        evidence_channels = build_evidence_channels(
             recent_learning_evidence=recent_learning_evidence,
             external_research_evidence=external_research_evidence,
             shell_body_profile=shell_body_profile,
@@ -533,7 +458,7 @@ class EndogenousDriveEngine:
         max_candidates: int = 3,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[EndogenousTaskCandidate]:
+    ) -> List[_EndogenousTaskCandidate]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
         )
@@ -2288,132 +2213,6 @@ class EndogenousDriveEngine:
             "needs": linked_needs,
         }
 
-    def _build_scored_candidate(
-        self,
-        *,
-        stable_key: str,
-        title: str,
-        summary: str,
-        priority: str,
-        governance_task_type: str,
-        task_family: str,
-        execution_kind: Optional[str],
-        value_tags: List[str],
-        candidate_kind: str,
-        score_inputs: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None,
-        evidence: Optional[Dict[str, Any]] = None,
-        constraints: Optional[Dict[str, Any]] = None,
-    ) -> EndogenousTaskCandidate:
-        utility, score_breakdown = self._score_candidate(
-            candidate_kind=candidate_kind,
-            **score_inputs,
-        )
-        merged_metadata = dict(metadata or {})
-        merged_metadata["score_breakdown"] = score_breakdown
-        merged_evidence = dict(evidence or {})
-        merged_evidence["score_breakdown"] = score_breakdown
-        return EndogenousTaskCandidate(
-            stable_key=stable_key,
-            title=title,
-            summary=summary,
-            priority=priority,
-            governance_task_type=governance_task_type,
-            task_family=task_family,
-            execution_kind=execution_kind,
-            value_tags=list(value_tags),
-            utility=utility,
-            metadata=merged_metadata,
-            evidence=merged_evidence,
-            constraints=dict(constraints or {}),
-        )
-
-    def _score_candidate(
-        self,
-        *,
-        candidate_kind: str,
-        core_value_strength: float,
-        urgency: float,
-        novelty: float,
-        specificity: float,
-        execution_readiness: float,
-        backlog_pressure_penalty: float = 0.0,
-        repetition_penalty: float = 0.0,
-        adaptive_factor: float = 1.0,
-    ) -> tuple[float, Dict[str, Any]]:
-        dimensions = {
-            "core_value_strength": round(self._clamp01(core_value_strength), 4),
-            "urgency": round(self._clamp01(urgency), 4),
-            "novelty": round(self._clamp01(novelty), 4),
-            "specificity": round(self._clamp01(specificity), 4),
-            "execution_readiness": round(self._clamp01(execution_readiness), 4),
-        }
-        penalties = {
-            "backlog_pressure_penalty": round(self._clamp01(backlog_pressure_penalty), 4),
-            "repetition_penalty": round(self._clamp01(repetition_penalty), 4),
-        }
-        raw_score = (
-            dimensions["core_value_strength"] * _SCORE_WEIGHTS["core_value_strength"]
-            + dimensions["urgency"] * _SCORE_WEIGHTS["urgency"]
-            + dimensions["novelty"] * _SCORE_WEIGHTS["novelty"]
-            + dimensions["specificity"] * _SCORE_WEIGHTS["specificity"]
-            + dimensions["execution_readiness"] * _SCORE_WEIGHTS["execution_readiness"]
-            - penalties["backlog_pressure_penalty"] * _SCORE_WEIGHTS["backlog_pressure_penalty"]
-            - penalties["repetition_penalty"] * _SCORE_WEIGHTS["repetition_penalty"]
-        )
-        normalized_adaptive_factor = round(max(0.7, min(1.25, float(adaptive_factor))), 4)
-        utility = round(self._clamp01(raw_score * normalized_adaptive_factor), 4)
-        return utility, {
-            "score_model": "endogenous_drive_v2",
-            "candidate_kind": candidate_kind,
-            "dimensions": dimensions,
-            "penalties": penalties,
-            "weights": dict(_SCORE_WEIGHTS),
-            "adaptive_factor": normalized_adaptive_factor,
-            "utility": utility,
-        }
-
-    def _adaptive_factor_for_candidate(
-        self,
-        *,
-        candidate_kind: str,
-        adaptive_policy: DriveAdaptivePolicy,
-    ) -> float:
-        if candidate_kind == "memory_maintenance":
-            factor = 0.9 + adaptive_policy.memory_continuity_bias * 0.35
-            if adaptive_policy.preferred_focus == "memory_continuity":
-                factor += 0.08
-            return factor
-        if candidate_kind == "truthfulness_review":
-            factor = 0.9 + adaptive_policy.truthfulness_bias * 0.35
-            if adaptive_policy.preferred_focus == "truthfulness":
-                factor += 0.08
-            return factor
-        if candidate_kind in {"exploratory_learning", "shell_baseline_learning"}:
-            factor = (
-                0.82
-                + adaptive_policy.learning_expansion_bias * 0.3
-                - adaptive_policy.candidate_throttle * 0.2
-            )
-            if adaptive_policy.preferred_focus == "learning_expansion":
-                factor += 0.06
-            return factor
-        if candidate_kind == "governance_hygiene_review":
-            factor = 0.84 + adaptive_policy.governance_hygiene_bias * 0.32
-            if adaptive_policy.preferred_focus == "governance_hygiene":
-                factor += 0.08
-            return factor
-        if candidate_kind == "body_improvement":
-            factor = (
-                0.8
-                + adaptive_policy.body_growth_bias * 0.3
-                - adaptive_policy.candidate_throttle * 0.16
-            )
-            if adaptive_policy.preferred_focus == "body_growth":
-                factor += 0.08
-            return factor
-        return 1.0
-
     def _neutral_adaptive_policy(self) -> DriveAdaptivePolicy:
         return DriveAdaptivePolicy(
             learning_expansion_bias=0.5,
@@ -2429,11 +2228,6 @@ class EndogenousDriveEngine:
             preferred_focus="learning_expansion",
             rationale="fallback adaptive policy.",
         )
-
-    def _candidate_kind_of(self, candidate: EndogenousTaskCandidate) -> str:
-        metadata = dict(candidate.metadata or {})
-        score_breakdown = dict(metadata.get("score_breakdown") or {})
-        return str(score_breakdown.get("candidate_kind") or "").strip()
 
     def _active_api_b_judgement_candidate_kinds(
         self,
@@ -2463,122 +2257,6 @@ class EndogenousDriveEngine:
                 kinds.add(candidate_kind)
         return kinds
 
-    def _adaptive_group_for_candidate(self, candidate: EndogenousTaskCandidate) -> Optional[str]:
-        candidate_kind = self._candidate_kind_of(candidate)
-        if candidate_kind == "exploratory_learning":
-            return "exploratory_learning"
-        if candidate_kind == "body_improvement":
-            return "body_growth"
-        return None
-
-    def _candidate_selection_priority(self, candidate: EndogenousTaskCandidate) -> float:
-        metadata = dict(candidate.metadata or {})
-        drive_judgement = dict(metadata.get("drive_judgement") or {})
-        intent = dict(drive_judgement.get("intent") or {})
-        intent_priority = intent.get("priority")
-        if isinstance(intent_priority, (int, float)):
-            return self._clamp01(float(intent_priority))
-
-        linked_needs = drive_judgement.get("needs")
-        if isinstance(linked_needs, list):
-            samples: List[float] = []
-            for need in linked_needs:
-                if not isinstance(need, dict):
-                    continue
-                for field_name in ("severity", "urgency"):
-                    value = need.get(field_name)
-                    if isinstance(value, (int, float)):
-                        samples.append(float(value))
-            if samples:
-                return self._clamp01(max(samples))
-
-        return float(candidate.utility)
-
-    def _budget_priority_for_candidate(
-        self,
-        candidate: EndogenousTaskCandidate,
-        *,
-        adaptive_policy: DriveAdaptivePolicy,
-    ) -> tuple[int, float, float, str]:
-        candidate_kind = self._candidate_kind_of(candidate)
-        preferred_focus = str(adaptive_policy.preferred_focus or "").strip().lower()
-        aligned_kinds: Dict[str, set[str]] = {
-            "truthfulness": {"truthfulness_review"},
-            "governance_hygiene": {"governance_hygiene_review"},
-            "memory_continuity": {"memory_maintenance"},
-            "observation": {"truthfulness_review", "governance_hygiene_review"},
-        }
-        observation_tie_break = {
-            "truthfulness_review": 0,
-            "governance_hygiene_review": 1,
-        }
-        rank = 1
-        if candidate_kind in aligned_kinds.get(preferred_focus, set()):
-            rank = 0
-        kind_tie_break = candidate_kind
-        if preferred_focus == "observation":
-            kind_tie_break = f"{observation_tie_break.get(candidate_kind, 9)}:{candidate_kind}"
-        return (
-            rank,
-            -self._candidate_selection_priority(candidate),
-            -float(candidate.utility),
-            kind_tie_break,
-        )
-
-    def _apply_adaptive_candidate_budget(
-        self,
-        candidates: List[EndogenousTaskCandidate],
-        *,
-        adaptive_policy: DriveAdaptivePolicy,
-    ) -> List[EndogenousTaskCandidate]:
-        if not candidates:
-            return []
-
-        ordered = sorted(
-            candidates,
-            key=lambda candidate: self._budget_priority_for_candidate(
-                candidate,
-                adaptive_policy=adaptive_policy,
-            ),
-        )
-        selected: List[EndogenousTaskCandidate] = []
-        group_counts: Dict[str, int] = {
-            "exploratory_learning": 0,
-            "body_growth": 0,
-        }
-        group_limits: Dict[str, int] = {
-            "exploratory_learning": max(0, int(adaptive_policy.exploratory_learning_quota)),
-            "body_growth": max(0, int(adaptive_policy.body_growth_quota)),
-        }
-        budget = max(1, int(adaptive_policy.candidate_budget))
-        observation_mode = (
-            adaptive_policy.preferred_focus == "observation"
-            or adaptive_policy.observation_bias >= 0.72
-        )
-
-        for candidate in ordered:
-            candidate_kind = self._candidate_kind_of(candidate)
-            if observation_mode and candidate_kind not in {
-                "truthfulness_review",
-                "governance_hygiene_review",
-                "shell_baseline_learning",
-            }:
-                continue
-            group = self._adaptive_group_for_candidate(candidate)
-            if group is not None and group_counts[group] >= group_limits[group]:
-                continue
-            selected.append(candidate)
-            if group is not None:
-                group_counts[group] += 1
-            if len(selected) >= budget:
-                break
-
-        if not selected:
-            if observation_mode:
-                return []
-            return ordered[:1]
-        return selected
-
     def _candidate_stream(
         self,
         drive_input: Dict[str, Any],
@@ -2586,7 +2264,7 @@ class EndogenousDriveEngine:
         existing_keys: set[str] = None,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[EndogenousTaskCandidate]:
+    ) -> List[_EndogenousTaskCandidate]:
         if existing_keys is None:
             existing_keys = set()
         activity = dict(drive_input.get("activity") or {})
@@ -2637,7 +2315,7 @@ class EndogenousDriveEngine:
             autonomous_improvement_plan=autonomous_improvement_plan,
             proposals_override=lm_proposals_override,
         )
-        candidates: List[EndogenousTaskCandidate] = []
+        candidates: List[_EndogenousTaskCandidate] = []
         if (
             memory_plan.get("eligible_for_planning")
             and "memory_maintenance" not in active_candidate_kinds
@@ -2649,7 +2327,7 @@ class EndogenousDriveEngine:
         ):
             memory_intent = intents_by_kind.get("memory_maintenance")
             candidates.append(
-                self._build_scored_candidate(
+                build_scored_candidate(
                     stable_key="continuity:memory_maintenance_sweep",
                     title="维持长期记忆连续性",
                     summary=(
@@ -2674,7 +2352,7 @@ class EndogenousDriveEngine:
                             task_family="memory_maintenance",
                             execution_kind="memory_maintenance",
                         ),
-                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                             candidate_kind="memory_maintenance",
                             adaptive_policy=adaptive_policy,
                         ),
@@ -2708,7 +2386,7 @@ class EndogenousDriveEngine:
         ):
             truth_intent = intents_by_kind.get("truthfulness_review")
             candidates.append(
-                self._build_scored_candidate(
+                build_scored_candidate(
                     stable_key="truthfulness:review_correction_signals",
                     title="复核近期不确定性与纠偏信号",
                     summary=(
@@ -2736,7 +2414,7 @@ class EndogenousDriveEngine:
                             governance_task_type="self_learning",
                             task_family="self_learning",
                         ),
-                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                             candidate_kind="truthfulness_review",
                             adaptive_policy=adaptive_policy,
                         ),
@@ -2836,7 +2514,7 @@ class EndogenousDriveEngine:
                 title = f"Research: {topic['title']}"
                 summary = topic.get("summary") or topic["title"]
                 candidates.append(
-                    self._build_scored_candidate(
+                build_scored_candidate(
                         stable_key=topic_key,  # Dynamic key: "creativity:idle_learning:{hash}"
                         title=title,
                         summary=summary,
@@ -2865,7 +2543,7 @@ class EndogenousDriveEngine:
                                 max(0.0, 0.55 - float(topic.get("novelty_score") or 0.6)),
                                 4,
                             ),
-                            "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                                 candidate_kind="exploratory_learning",
                                 adaptive_policy=adaptive_policy,
                             ),
@@ -2927,7 +2605,7 @@ class EndogenousDriveEngine:
                     if judgement:
                         review_summary += f" Current judgement: {judgement}."
                     candidates.append(
-                        self._build_scored_candidate(
+                build_scored_candidate(
                             stable_key=review_key,
                             title=f"Review endogenous cognition: {target or 'current judgement'}",
                             summary=review_summary,
@@ -2956,7 +2634,7 @@ class EndogenousDriveEngine:
                                     governance_task_type="self_learning",
                                     task_family="self_learning",
                                 ),
-                                "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                                     candidate_kind="exploratory_learning",
                                     adaptive_policy=adaptive_policy,
                                 ),
@@ -3009,7 +2687,7 @@ class EndogenousDriveEngine:
         ):
             backlog_intent = intents_by_kind.get("governance_hygiene_review")
             candidates.append(
-                self._build_scored_candidate(
+                build_scored_candidate(
                     stable_key="continuity:governance_hygiene_review",
                     title="观察 API-B 判断积压",
                     summary=(
@@ -3030,7 +2708,7 @@ class EndogenousDriveEngine:
                             0.46 + min(int(drive_context.get("api_b_judgement_count") or 0), 4) * 0.05
                         ),
                         "execution_readiness": 0.85,
-                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                             candidate_kind="governance_hygiene_review",
                             adaptive_policy=adaptive_policy,
                         ),
@@ -3079,7 +2757,7 @@ class EndogenousDriveEngine:
             )
             if stable_key not in existing_keys:
                 candidates.append(
-                    self._build_scored_candidate(
+                build_scored_candidate(
                         stable_key=stable_key,
                         title=(
                             "定向改进替身："
@@ -3112,7 +2790,7 @@ class EndogenousDriveEngine:
                                 task_family="body_upgrade",
                                 execution_kind="body_improvement",
                             ),
-                            "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                                 candidate_kind="body_improvement",
                                 adaptive_policy=adaptive_policy,
                             ),
@@ -3167,7 +2845,7 @@ class EndogenousDriveEngine:
                 heuristic_candidates=candidates,
                 adaptive_policy=adaptive_policy,
             )
-        return self._apply_adaptive_candidate_budget(
+        return apply_adaptive_candidate_budget(
             candidates,
             adaptive_policy=adaptive_policy,
         )
@@ -3175,38 +2853,38 @@ class EndogenousDriveEngine:
     def _merge_lm_led_candidate_stream(
         self,
         *,
-        lm_candidates: List[EndogenousTaskCandidate],
-        heuristic_candidates: List[EndogenousTaskCandidate],
+        lm_candidates: List[_EndogenousTaskCandidate],
+        heuristic_candidates: List[_EndogenousTaskCandidate],
         adaptive_policy: DriveAdaptivePolicy,
-    ) -> List[EndogenousTaskCandidate]:
+    ) -> List[_EndogenousTaskCandidate]:
         canonical_shell_baselines = [
             candidate
             for candidate in heuristic_candidates
-            if self._candidate_kind_of(candidate) == "shell_baseline_learning"
+            if candidate_kind_of(candidate) == "shell_baseline_learning"
         ]
         if canonical_shell_baselines:
             lm_candidates = [
                 candidate
                 for candidate in lm_candidates
-                if self._candidate_kind_of(candidate) != "shell_baseline_learning"
+                if candidate_kind_of(candidate) != "shell_baseline_learning"
             ]
         if not lm_candidates:
             return list(heuristic_candidates or [])
         if not heuristic_candidates:
             return list(lm_candidates or [])
 
-        merged: List[EndogenousTaskCandidate] = [
+        merged: List[_EndogenousTaskCandidate] = [
             *canonical_shell_baselines,
             *lm_candidates,
         ]
         seen_signatures = {
-            self._candidate_semantic_signature(candidate)
+            candidate_semantic_signature(candidate)
             for candidate in merged
         }
         lm_kinds = {
-            self._candidate_kind_of(candidate)
+            candidate_kind_of(candidate)
             for candidate in lm_candidates
-            if self._candidate_kind_of(candidate)
+            if candidate_kind_of(candidate)
         }
 
         complement_budget = 1
@@ -3220,10 +2898,10 @@ class EndogenousDriveEngine:
         ):
             if complement_budget <= 0:
                 break
-            signature = self._candidate_semantic_signature(candidate)
+            signature = candidate_semantic_signature(candidate)
             if signature in seen_signatures:
                 continue
-            candidate_kind = self._candidate_kind_of(candidate)
+            candidate_kind = candidate_kind_of(candidate)
             if candidate_kind == "shell_baseline_learning":
                 continue
             if candidate_kind and candidate_kind in lm_kinds:
@@ -3232,33 +2910,6 @@ class EndogenousDriveEngine:
             seen_signatures.add(signature)
             complement_budget -= 1
         return merged
-
-    def _candidate_semantic_signature(
-        self,
-        candidate: EndogenousTaskCandidate,
-    ) -> str:
-        candidate_kind = self._candidate_kind_of(candidate)
-        normalized_title = self._normalize_topic_signature(candidate.title)
-        task_family = str(candidate.task_family or "").strip().lower()
-        governance_task_type = str(candidate.governance_task_type or "").strip().lower()
-        return "|".join(
-            [
-                candidate_kind or "",
-                task_family,
-                governance_task_type,
-                normalized_title,
-            ]
-        )
-
-    def _normalize_topic_signature(self, text: str) -> str:
-        normalized_words = [
-            word.lower()
-            for word in re.findall(r"[a-zA-Z0-9_]+", str(text or ""))
-            if len(word) >= 3
-        ]
-        if not normalized_words:
-            return ""
-        return " ".join(normalized_words[:8])
 
     def _llm_task_proposals(
         self,
@@ -3271,7 +2922,7 @@ class EndogenousDriveEngine:
         self_learning_plan: Dict[str, Any],
         autonomous_improvement_plan: Dict[str, Any],
         proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[EndogenousTaskCandidate]:
+    ) -> List[_EndogenousTaskCandidate]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
         )
@@ -3328,7 +2979,7 @@ class EndogenousDriveEngine:
         recent_learning_evidence = self._build_recent_learning_evidence(drive_context)
         external_research_evidence = self._build_external_research_evidence()
         shell_body_profile = self._build_shell_body_profile(shell_slot)
-        evidence_channels = self._build_evidence_channels(
+        evidence_channels = build_evidence_channels(
             recent_learning_evidence=recent_learning_evidence,
             external_research_evidence=external_research_evidence,
             shell_body_profile=shell_body_profile,
@@ -3948,168 +3599,25 @@ class EndogenousDriveEngine:
             0,
             int(getattr(runtime_config, "endogenous_drive_lm_task_max_candidates", 3) or 3),
         )
-        core_mission = str(cognition_charter.get("core_mission") or "").strip()
-        if not core_mission or max_candidates <= 0:
-            self._latest_lm_task_generation_proposals = []
-            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                evidence_packet=evidence_packet,
-                cognition_charter=cognition_charter,
-                role=role,
-                max_candidates=max_candidates,
-                status="disabled",
-                proposal_count=0,
-                error=(
-                    "missing_core_mission"
-                    if not core_mission
-                    else "max_candidates_disabled"
-                ),
-            )
-            return []
-        try:
-            from memai.model_config import resolve_mem_llm_client
-
-            llm_client, _ = resolve_mem_llm_client(role=role)
-            if llm_client is None:
-                self._latest_lm_task_generation_proposals = []
-                self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                    evidence_packet=evidence_packet,
-                    cognition_charter=cognition_charter,
-                    role=role,
-                    max_candidates=max_candidates,
-                    status="llm_unavailable",
-                    proposal_count=0,
-                    error="llm_client_unavailable",
-                )
-                return []
-        except Exception as exc:
-            self._latest_lm_task_generation_proposals = []
-            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                evidence_packet=evidence_packet,
-                cognition_charter=cognition_charter,
-                role=role,
-                max_candidates=max_candidates,
-                status="llm_unavailable",
-                proposal_count=0,
-                error=str(exc),
-            )
-            return []
-
-        system_prompt = build_endogenous_core_mission_prompt(
-            cognition_charter=cognition_charter,
-            cognitive_posture=evidence_packet.get("cognitive_posture"),
-        )
-        payload = build_endogenous_task_generation_payload(
+        result = generate_lm_task_proposals(
             evidence_packet=evidence_packet,
             cognition_charter=cognition_charter,
+            role=role,
             max_candidates=max_candidates,
         )
-        try:
-            result = llm_client.complete_json(
-                system_prompt=system_prompt,
-                user_payload={"task_generation": payload},
-                task="scholar.revision",
-            )
-        except Exception as exc:
-            self._latest_lm_task_generation_proposals = []
-            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                evidence_packet=evidence_packet,
-                cognition_charter=cognition_charter,
-                role=role,
-                max_candidates=max_candidates,
-                status="generation_error",
-                proposal_count=0,
-                error=str(exc),
-            )
-            return []
-        if not isinstance(result, dict):
-            self._latest_lm_task_generation_proposals = []
-            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                evidence_packet=evidence_packet,
-                cognition_charter=cognition_charter,
-                role=role,
-                max_candidates=max_candidates,
-                status="invalid_response",
-                proposal_count=0,
-                error="non_dict_response",
-            )
-            return []
-        cognitive_assessment = self._normalize_lm_cognitive_assessment(
-            result.get("cognitive_assessment")
-        )
-        proposals = result.get("proposals")
-        if not isinstance(proposals, list):
-            self._latest_lm_task_generation_proposals = []
-            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
-                evidence_packet=evidence_packet,
-                cognition_charter=cognition_charter,
-                role=role,
-                max_candidates=max_candidates,
-                status="invalid_response",
-                proposal_count=0,
-                cognitive_assessment=cognitive_assessment,
-                error="missing_proposals_list",
-            )
-            return []
-        normalized_proposals = [dict(item) for item in proposals if isinstance(item, dict)]
-        self._latest_lm_task_generation_proposals = [dict(item) for item in normalized_proposals]
+        proposals = [dict(item) for item in result.proposals]
+        self._latest_lm_task_generation_proposals = proposals
         self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
             evidence_packet=evidence_packet,
             cognition_charter=cognition_charter,
             role=role,
             max_candidates=max_candidates,
-            status="completed",
-            proposal_count=len(normalized_proposals),
-            cognitive_assessment=cognitive_assessment,
+            status=result.status,
+            proposal_count=len(proposals),
+            cognitive_assessment=result.cognitive_assessment,
+            error=result.error,
         )
-        return normalized_proposals
-
-    def _normalize_lm_cognitive_assessment(
-        self,
-        assessment: Any,
-    ) -> Dict[str, Any]:
-        if not isinstance(assessment, dict):
-            return {}
-        current_judgement = str(assessment.get("current_judgement") or "").strip()
-        dominant_constraint = str(assessment.get("dominant_constraint") or "").strip()
-        primary_grounding_gaps = [
-            str(item).strip()
-            for item in list(assessment.get("primary_grounding_gaps") or [])[:6]
-            if str(item).strip()
-        ]
-        why_this_task_type_now = [
-            str(item).strip()
-            for item in list(assessment.get("why_this_task_type_now") or [])[:6]
-            if str(item).strip()
-        ]
-        why_not_improvement_now = [
-            str(item).strip()
-            for item in list(assessment.get("why_not_improvement_now") or [])[:6]
-            if str(item).strip()
-        ]
-        self_iteration_target = str(assessment.get("self_iteration_target") or "").strip()
-        self_iteration_hypothesis = str(
-            assessment.get("self_iteration_hypothesis") or ""
-        ).strip()
-        stay_or_switch = str(assessment.get("stay_or_switch") or "").strip().lower()
-        if stay_or_switch not in {"stay", "switch"}:
-            stay_or_switch = ""
-        switch_reason = str(assessment.get("switch_reason") or "").strip()
-        normalized = {
-            "current_judgement": current_judgement,
-            "dominant_constraint": dominant_constraint,
-            "primary_grounding_gaps": primary_grounding_gaps,
-            "why_this_task_type_now": why_this_task_type_now,
-            "why_not_improvement_now": why_not_improvement_now,
-            "self_iteration_target": self_iteration_target,
-            "self_iteration_hypothesis": self_iteration_hypothesis,
-            "stay_or_switch": stay_or_switch,
-            "switch_reason": switch_reason,
-        }
-        return {
-            key: value
-            for key, value in normalized.items()
-            if value not in ("", []) and value is not None
-        }
+        return proposals
 
     def _resolve_endogenous_cognition_charter(
         self,
@@ -5115,13 +4623,13 @@ class EndogenousDriveEngine:
         deliberation: DriveDeliberationReport,
         drive_context: Dict[str, Any],
         evidence_packet: Dict[str, Any],
-    ) -> List[EndogenousTaskCandidate]:
-        realized: List[EndogenousTaskCandidate] = []
+    ) -> List[_EndogenousTaskCandidate]:
+        realized: List[_EndogenousTaskCandidate] = []
         perception = deliberation.perception
         adaptive_policy = deliberation.adaptive_policy
         evidence_graph = dict(evidence_packet.get("evidence_graph") or {})
         agenda_graph = dict(evidence_packet.get("agenda_graph") or {})
-        batch_cognitive_assessment = self._normalize_lm_cognitive_assessment(
+        batch_cognitive_assessment = normalize_lm_cognitive_assessment(
             self._latest_lm_task_generation_context.get("cognitive_assessment")
         )
         intent_by_kind = {
@@ -5201,10 +4709,15 @@ class EndogenousDriveEngine:
                 and not self._has_historical_governance_hygiene_review_signal(drive_context)
             ):
                 continue
-            title = str(item.get("title") or "").strip()
-            summary = str(item.get("summary") or "").strip()
-            if not title or not summary:
+            normalized_proposal = normalize_lm_proposal(
+                item,
+                evidence_graph=evidence_graph,
+                agenda_graph=agenda_graph,
+            )
+            if normalized_proposal is None:
                 continue
+            title = normalized_proposal.title
+            summary = normalized_proposal.summary
             stable_key = f"{mapping['stable_prefix']}:{_stable_key_for_topic(title)}"
             if candidate_kind == "body_improvement":
                 stable_key = (
@@ -5213,67 +4726,21 @@ class EndogenousDriveEngine:
                 )
             if stable_key in existing_keys:
                 continue
-            confidence = self._clamp01(item.get("confidence") or 0.5)
-            evidence_summary = [
-                str(row).strip()
-                for row in list(item.get("evidence_summary") or [])
-                if str(row).strip()
-            ][:6]
-            rationale = str(item.get("rationale") or "").strip()
-            task_type = self._normalize_lm_task_type(item.get("task_type"), candidate_kind)
-            risk_level = self._normalize_lm_risk_level(item.get("risk_level"), candidate_kind)
-            evidence_level = self._normalize_lm_evidence_level(
-                item.get("evidence_level"),
-                confidence=confidence,
-            )
-            llm_observation_required = self._normalize_lm_observation_required(
-                item.get("observation_required"),
-                candidate_kind=candidate_kind,
-                evidence_level=evidence_level,
-                risk_level=risk_level,
-            )
-            llm_execution_mode = self._normalize_lm_execution_mode(
-                item.get("execution_mode"),
-                candidate_kind=candidate_kind,
-                evidence_level=evidence_level,
-                risk_level=risk_level,
-                observation_required=llm_observation_required,
-            )
-            blocking_factors = self._normalize_lm_string_list(
-                item.get("blocking_factors"),
-                limit=6,
-            )
-            referenced_evidence_nodes = self._normalize_lm_string_list(
-                item.get("referenced_evidence_nodes"),
-                limit=8,
-            )
-            referenced_agenda_nodes = self._normalize_lm_string_list(
-                item.get("referenced_agenda_nodes"),
-                limit=8,
-            )
-            posture_alignment = self._normalize_lm_string_list(
-                item.get("posture_alignment"),
-                limit=6,
-            )
-            priority_basis = self._normalize_lm_string_list(
-                item.get("priority_basis"),
-                limit=6,
-            )
-            reference_alignment = self._align_lm_references(
-                referenced_evidence_nodes=referenced_evidence_nodes,
-                referenced_agenda_nodes=referenced_agenda_nodes,
-                evidence_graph=evidence_graph,
-                agenda_graph=agenda_graph,
-            )
-            supervisor_advisory = self._supervisor_advisory_for_lm_proposal(
-                candidate_kind=candidate_kind,
-                evidence_level=evidence_level,
-                risk_level=risk_level,
-                observation_required=llm_observation_required,
-                execution_mode=llm_execution_mode,
-                blocking_factors=blocking_factors,
-                reference_alignment=reference_alignment,
-            )
+            confidence = normalized_proposal.confidence
+            evidence_summary = normalized_proposal.evidence_summary
+            rationale = normalized_proposal.rationale
+            task_type = normalized_proposal.task_type
+            risk_level = normalized_proposal.risk_level
+            evidence_level = normalized_proposal.evidence_level
+            llm_observation_required = normalized_proposal.observation_required
+            llm_execution_mode = normalized_proposal.execution_mode
+            blocking_factors = normalized_proposal.blocking_factors
+            referenced_evidence_nodes = normalized_proposal.referenced_evidence_nodes
+            referenced_agenda_nodes = normalized_proposal.referenced_agenda_nodes
+            posture_alignment = normalized_proposal.posture_alignment
+            priority_basis = normalized_proposal.priority_basis
+            reference_alignment = normalized_proposal.reference_alignment
+            supervisor_advisory = normalized_proposal.supervisor_advisory
             cognitive_alignment = self._score_lm_proposal_cognitive_alignment(
                 candidate_kind=candidate_kind,
                 task_type=task_type,
@@ -5288,9 +4755,7 @@ class EndogenousDriveEngine:
                 priority_basis=priority_basis,
             )
             intent = intent_by_kind.get(candidate_kind)
-            constraints = self._constraints_for_lm_candidate_kind(
-                candidate_kind=candidate_kind,
-            )
+            constraints = constraints_for_lm_candidate_kind(candidate_kind)
             body_metadata: Dict[str, Any] = {}
             body_evidence: Dict[str, Any] = {}
             if candidate_kind == "body_improvement":
@@ -5353,7 +4818,7 @@ class EndogenousDriveEngine:
             if supervisor_advisory["advisory_reasons"]:
                 constraints["supervisor_advisory_reasons"] = list(supervisor_advisory["advisory_reasons"])
             realized.append(
-                self._build_scored_candidate(
+                build_scored_candidate(
                     stable_key=stable_key,
                     title=title,
                     summary=summary,
@@ -5397,7 +4862,7 @@ class EndogenousDriveEngine:
                                 else 0.0
                             )
                         ),
-                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                             candidate_kind=candidate_kind,
                             adaptive_policy=adaptive_policy,
                         ),
@@ -5459,339 +4924,6 @@ class EndogenousDriveEngine:
             existing_keys.add(stable_key)
         return realized
 
-    def _constraints_for_lm_candidate_kind(
-        self,
-        *,
-        candidate_kind: str,
-    ) -> Dict[str, Any]:
-        if candidate_kind in {"exploratory_learning", "truthfulness_review", "shell_baseline_learning"}:
-            constraints: Dict[str, Any] = {
-                "execution_policy": "learn_only",
-                "must_not_modify_active_body": True,
-            }
-            if candidate_kind == "shell_baseline_learning":
-                constraints["execution_policy"] = "learn_shell_baseline"
-            return constraints
-        if candidate_kind == "governance_hygiene_review":
-            return {"must_not_execute_without_review": True}
-        return {}
-
-    def _normalize_lm_task_type(self, value: Any, candidate_kind: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized in _LM_TASK_TYPES:
-            return normalized
-        return self._task_type_for_candidate_kind(candidate_kind)
-
-    def _task_type_for_candidate_kind(self, candidate_kind: Any) -> str:
-        normalized_kind = str(candidate_kind or "").strip()
-        defaults = {
-            "memory_maintenance": "maintenance",
-            "truthfulness_review": "review",
-            "exploratory_learning": "learning",
-            "shell_baseline_learning": "learning",
-            "governance_hygiene_review": "review",
-            "body_improvement": "improvement",
-        }
-        return defaults.get(normalized_kind, "observation")
-
-    def _normalize_lm_risk_level(self, value: Any, candidate_kind: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized in _LM_RISK_LEVELS:
-            return normalized
-        defaults = {
-            "memory_maintenance": "medium",
-            "truthfulness_review": "low",
-            "exploratory_learning": "low",
-            "shell_baseline_learning": "low",
-            "governance_hygiene_review": "medium",
-            "body_improvement": "high",
-        }
-        return defaults.get(candidate_kind, "medium")
-
-    def _normalize_lm_evidence_level(self, value: Any, *, confidence: float) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized in _LM_EVIDENCE_LEVELS:
-            return normalized
-        if confidence >= 0.8:
-            return "strong"
-        if confidence >= 0.45:
-            return "moderate"
-        return "weak"
-
-    def _normalize_lm_observation_required(
-        self,
-        value: Any,
-        *,
-        candidate_kind: str,
-        evidence_level: str,
-        risk_level: str,
-    ) -> bool:
-        if isinstance(value, bool):
-            normalized = value
-        else:
-            text = str(value or "").strip().lower()
-            if text in {"true", "1", "yes", "on"}:
-                normalized = True
-            elif text in {"false", "0", "no", "off"}:
-                normalized = False
-            else:
-                normalized = candidate_kind in {"truthfulness_review", "governance_hygiene_review"}
-        return normalized
-
-    def _normalize_lm_execution_mode(
-        self,
-        value: Any,
-        *,
-        candidate_kind: str,
-        evidence_level: str,
-        risk_level: str,
-        observation_required: bool,
-    ) -> str:
-        normalized = str(value or "").strip().lower()
-        normalized = _LEGACY_LM_EXECUTION_MODE_ALIASES.get(normalized, normalized)
-        if normalized not in _LM_EXECUTION_MODES:
-            defaults = {
-                "memory_maintenance": "guarded_execution",
-                "truthfulness_review": "observe_only",
-                "exploratory_learning": "review_then_handoff",
-                "shell_baseline_learning": "review_then_handoff",
-                "governance_hygiene_review": "review_then_handoff",
-                "body_improvement": "guarded_execution",
-            }
-            normalized = defaults.get(candidate_kind, "review_then_handoff")
-        return normalized
-
-    def _normalize_lm_string_list(self, value: Any, *, limit: int = 6) -> List[str]:
-        if isinstance(value, list):
-            items = value
-        elif value is None:
-            items = []
-        else:
-            items = [value]
-        normalized: List[str] = []
-        for item in items:
-            text = str(item or "").strip()
-            if text:
-                normalized.append(text)
-            if len(normalized) >= limit:
-                break
-        return normalized
-
-    def _align_lm_references(
-        self,
-        *,
-        referenced_evidence_nodes: List[str],
-        referenced_agenda_nodes: List[str],
-        evidence_graph: Dict[str, Any],
-        agenda_graph: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        evidence_nodes = {
-            str(node.get("topic") or "").strip(): dict(node)
-            for node in list(evidence_graph.get("nodes") or [])
-            if isinstance(node, dict) and str(node.get("topic") or "").strip()
-        }
-        valid_evidence_nodes = set(evidence_nodes.keys())
-        valid_agenda_nodes = set()
-        agenda_priorities: Dict[str, float] = {}
-        focus = str(agenda_graph.get("focus") or "").strip()
-        if focus:
-            valid_agenda_nodes.add(f"focus:{focus}")
-            agenda_priorities[f"focus:{focus}"] = float(agenda_graph.get("focus_confidence") or 0.0)
-        for item in list(agenda_graph.get("unresolved_gaps") or []):
-            if isinstance(item, dict):
-                gap = str(item.get("gap") or "").strip()
-                if gap:
-                    valid_agenda_nodes.add(gap)
-                    agenda_priorities[gap] = float(item.get("priority") or 0.0)
-        for item in list(agenda_graph.get("recommended_directions") or []):
-            if isinstance(item, dict):
-                direction = str(item.get("direction") or "").strip()
-                if direction:
-                    valid_agenda_nodes.add(direction)
-                    agenda_priorities[direction] = float(item.get("priority") or 0.0)
-        for item in list(agenda_graph.get("active_signals") or []):
-            if isinstance(item, dict):
-                signal = str(item.get("signal") or "").strip()
-                if signal:
-                    valid_agenda_nodes.add(signal)
-                    agenda_priorities[signal] = float(item.get("priority") or 0.0)
-
-        matched_evidence = [node for node in referenced_evidence_nodes if node in valid_evidence_nodes]
-        missing_evidence = [node for node in referenced_evidence_nodes if node not in valid_evidence_nodes]
-        matched_agenda = [node for node in referenced_agenda_nodes if node in valid_agenda_nodes]
-        missing_agenda = [node for node in referenced_agenda_nodes if node not in valid_agenda_nodes]
-
-        weak_evidence = [
-            node
-            for node in matched_evidence
-            if float(evidence_nodes.get(node, {}).get("avg_confidence") or 0.0) < 0.45
-        ]
-        weak_agenda = [
-            node
-            for node in matched_agenda
-            if float(agenda_priorities.get(node) or 0.0) < 0.45
-        ]
-
-        total_requested = len(referenced_evidence_nodes) + len(referenced_agenda_nodes)
-        total_matched = len(matched_evidence) + len(matched_agenda)
-        weak_penalty = (len(weak_evidence) + len(weak_agenda)) * 0.12
-        alignment_score = (
-            round(self._clamp01(total_matched / total_requested - weak_penalty), 4)
-            if total_requested > 0
-            else 1.0
-        )
-        alignment_quality = "strong"
-        if total_requested > 0 and (missing_evidence or missing_agenda):
-            alignment_quality = "partial"
-        if weak_evidence or weak_agenda:
-            alignment_quality = "weak"
-        if total_requested > 0 and total_matched == 0:
-            alignment_quality = "drifted"
-        primary_evidence_nodes = [
-            str(item.get("topic") or "").strip()
-            for item in sorted(
-                [
-                    dict(node)
-                    for node in list(evidence_graph.get("nodes") or [])
-                    if isinstance(node, dict) and str(node.get("topic") or "").strip()
-                ],
-                key=lambda row: (
-                    -float(row.get("priority") or row.get("avg_confidence") or 0.0),
-                    str(row.get("topic") or "").strip(),
-                ),
-            )[:3]
-            if str(item.get("topic") or "").strip()
-        ]
-        primary_agenda_nodes: List[str] = []
-        if focus:
-            primary_agenda_nodes.append(f"focus:{focus}")
-        primary_agenda_nodes.extend(
-            str(item.get("gap") or "").strip()
-            for item in sorted(
-                [
-                    dict(row)
-                    for row in list(agenda_graph.get("unresolved_gaps") or [])
-                    if isinstance(row, dict) and str(row.get("gap") or "").strip()
-                ],
-                key=lambda row: (
-                    -float(row.get("priority") or 0.0),
-                    str(row.get("gap") or "").strip(),
-                ),
-            )[:2]
-            if str(item.get("gap") or "").strip()
-        )
-        if not primary_agenda_nodes:
-            primary_agenda_nodes.extend(
-                str(item.get("direction") or "").strip()
-                for item in sorted(
-                    [
-                        dict(row)
-                        for row in list(agenda_graph.get("recommended_directions") or [])
-                        if isinstance(row, dict) and str(row.get("direction") or "").strip()
-                    ],
-                    key=lambda row: (
-                        -float(row.get("priority") or 0.0),
-                        str(row.get("direction") or "").strip(),
-                    ),
-                )[:2]
-                if str(item.get("direction") or "").strip()
-            )
-        matched_primary_evidence_nodes = [
-            node for node in matched_evidence if node in primary_evidence_nodes
-        ]
-        matched_primary_agenda_nodes = [
-            node for node in matched_agenda if node in primary_agenda_nodes
-        ]
-        missing_primary_evidence_nodes = [
-            node for node in primary_evidence_nodes if node not in matched_evidence
-        ]
-        missing_primary_agenda_nodes = [
-            node for node in primary_agenda_nodes if node not in matched_agenda
-        ]
-        grounding_penalty = 0.0
-        if primary_evidence_nodes and not matched_primary_evidence_nodes:
-            grounding_penalty += 0.16
-        if primary_agenda_nodes and not matched_primary_agenda_nodes:
-            grounding_penalty += 0.16
-        if not referenced_evidence_nodes:
-            grounding_penalty += 0.08
-        if not referenced_agenda_nodes:
-            grounding_penalty += 0.08
-        if grounding_penalty > 0.0:
-            alignment_score = round(self._clamp01(alignment_score - grounding_penalty), 4)
-            if alignment_quality == "strong":
-                alignment_quality = "partial"
-            if alignment_score < 0.45 or (
-                primary_evidence_nodes and not matched_primary_evidence_nodes and primary_agenda_nodes and not matched_primary_agenda_nodes
-            ):
-                alignment_quality = "weak"
-        return {
-            "matched_evidence_nodes": matched_evidence,
-            "weak_evidence_nodes": weak_evidence,
-            "missing_evidence_nodes": missing_evidence,
-            "matched_agenda_nodes": matched_agenda,
-            "weak_agenda_nodes": weak_agenda,
-            "missing_agenda_nodes": missing_agenda,
-            "primary_evidence_nodes": primary_evidence_nodes,
-            "primary_agenda_nodes": primary_agenda_nodes,
-            "matched_primary_evidence_nodes": matched_primary_evidence_nodes,
-            "matched_primary_agenda_nodes": matched_primary_agenda_nodes,
-            "missing_primary_evidence_nodes": missing_primary_evidence_nodes,
-            "missing_primary_agenda_nodes": missing_primary_agenda_nodes,
-            "grounding_penalty": round(self._clamp01(grounding_penalty), 4),
-            "alignment_score": alignment_score,
-            "alignment_quality": alignment_quality,
-        }
-
-    def _supervisor_advisory_for_lm_proposal(
-        self,
-        *,
-        candidate_kind: str,
-        evidence_level: str,
-        risk_level: str,
-        observation_required: bool,
-        execution_mode: str,
-        blocking_factors: List[str],
-        reference_alignment: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        advisory_reasons: List[str] = []
-        recommended_observation_required = observation_required
-        recommended_execution_mode = execution_mode
-        if evidence_level == "weak":
-            advisory_reasons.append("weak_evidence_requires_additional_validation")
-            if recommended_execution_mode == "guarded_execution":
-                recommended_execution_mode = "review_then_handoff"
-        if risk_level == "high":
-            advisory_reasons.append("high_risk_requires_governance_review")
-            recommended_observation_required = True
-            if recommended_execution_mode == "guarded_execution":
-                recommended_execution_mode = "review_then_handoff"
-        if candidate_kind in {"truthfulness_review", "governance_hygiene_review"}:
-            advisory_reasons.append("review_family_prefers_observation_or_review_first")
-            recommended_observation_required = True
-        if blocking_factors:
-            advisory_reasons.append("blocking_factors_present")
-        alignment = dict(reference_alignment or {})
-        alignment_quality = str(alignment.get("alignment_quality") or "").strip().lower()
-        missing_primary_evidence_nodes = list(alignment.get("missing_primary_evidence_nodes") or [])
-        missing_primary_agenda_nodes = list(alignment.get("missing_primary_agenda_nodes") or [])
-        if alignment_quality in {"weak", "drifted"}:
-            advisory_reasons.append("reference_binding_is_not_grounded_enough")
-            recommended_observation_required = True
-            if recommended_execution_mode == "guarded_execution":
-                recommended_execution_mode = "review_then_handoff"
-        if missing_primary_evidence_nodes or missing_primary_agenda_nodes:
-            advisory_reasons.append("primary_evidence_or_agenda_binding_is_missing")
-            recommended_observation_required = True
-            if recommended_execution_mode == "guarded_execution":
-                recommended_execution_mode = "review_then_handoff"
-        if recommended_observation_required and recommended_execution_mode == "guarded_execution":
-            recommended_execution_mode = "review_then_handoff"
-        return {
-            "recommended_execution_mode": recommended_execution_mode,
-            "recommended_observation_required": recommended_observation_required,
-            "advisory_reasons": advisory_reasons,
-        }
 
     def _score_lm_proposal_cognitive_alignment(
         self,
@@ -5984,52 +5116,13 @@ class EndogenousDriveEngine:
         entries = list(
             getattr(service_runtime, "endogenous_drive_external_research_entries", []) or []
         )
-        evidence_rows = self._normalize_external_research_entries(entries)
+        evidence_rows = normalize_external_research_entries(entries)
         evidence_rows.extend(
             self._load_external_research_files(
                 list(getattr(service_runtime, "endogenous_drive_external_research_files", []) or [])
             )
         )
         return evidence_rows[:16]
-
-    def _normalize_external_research_entries(self, entries: List[Any]) -> List[Dict[str, Any]]:
-        evidence_rows: List[Dict[str, Any]] = []
-        for raw in entries[:12]:
-            text = str(raw or "").strip()
-            if not text:
-                continue
-            if "::" in text:
-                title, detail = text.split("::", 1)
-                row = {
-                    "title": title.strip(),
-                    "summary": detail.strip(),
-                    "source": "configured_external_research",
-                }
-                row.update(
-                    self._item_evidence_quality(
-                        item=row,
-                        source_reliability=0.62,
-                        supports=["external_research", "forward_direction"],
-                        contradicts=[],
-                    )
-                )
-                evidence_rows.append(row)
-            else:
-                row = {
-                    "title": text[:80],
-                    "summary": text,
-                    "source": "configured_external_research",
-                }
-                row.update(
-                    self._item_evidence_quality(
-                        item=row,
-                        source_reliability=0.58,
-                        supports=["external_research"],
-                        contradicts=[],
-                    )
-                )
-                evidence_rows.append(row)
-        return evidence_rows
 
     def _load_external_research_files(self, file_entries: List[Any]) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
@@ -6055,115 +5148,13 @@ class EndogenousDriveEngine:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return []
-        rows = self._normalize_external_research_file_payload(data, source_path=str(path))
+        rows = normalize_external_research_file_payload(data, source_path=str(path))
         return rows[:8]
 
-    def _normalize_external_research_file_payload(
-        self,
-        data: Any,
-        *,
-        source_path: str,
-    ) -> List[Dict[str, Any]]:
-        if isinstance(data, dict):
-            items = data.get("entries")
-            if isinstance(items, list):
-                return self._normalize_external_research_items(items, source_path=source_path)
-            return self._normalize_external_research_items([data], source_path=source_path)
-        if isinstance(data, list):
-            return self._normalize_external_research_items(data, source_path=source_path)
-        return []
-
-    def _normalize_external_research_items(
-        self,
-        items: List[Any],
-        *,
-        source_path: str,
-    ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        for item in items[:12]:
-            if isinstance(item, dict):
-                title = str(item.get("title") or item.get("topic") or "").strip()
-                summary = str(item.get("summary") or item.get("note") or item.get("content") or "").strip()
-                if not title and not summary:
-                    continue
-                row: Dict[str, Any] = {
-                    "title": title or summary[:80],
-                    "summary": summary or title,
-                    "source": str(item.get("source") or "external_research_file"),
-                    "source_path": source_path,
-                }
-                if item.get("url"):
-                    row["url"] = str(item.get("url"))
-                if item.get("published_at"):
-                    row["published_at"] = str(item.get("published_at"))
-                if item.get("tags"):
-                    row["tags"] = [
-                        str(tag).strip()
-                        for tag in list(item.get("tags") or [])
-                        if str(tag).strip()
-                    ][:6]
-                row.update(
-                    self._item_evidence_quality(
-                        item=row,
-                        source_reliability=0.74 if row.get("url") else 0.64,
-                        supports=["external_research", "forward_direction"],
-                        contradicts=[],
-                    )
-                )
-                rows.append(row)
-            else:
-                text = str(item or "").strip()
-                if not text:
-                    continue
-                row = {
-                    "title": text[:80],
-                    "summary": text,
-                    "source": "external_research_file",
-                    "source_path": source_path,
-                }
-                row.update(
-                    self._item_evidence_quality(
-                        item=row,
-                        source_reliability=0.56,
-                        supports=["external_research"],
-                        contradicts=[],
-                    )
-                )
-                rows.append(row)
-        return rows
-
     def _build_recent_learning_evidence(self, drive_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
-        evidence_rows: List[Dict[str, Any]] = []
-        for task in completed_learning_tasks[:5]:
-            title = str(task.get("title") or task.get("topic") or "").strip()
-            if not title:
-                continue
-            row: Dict[str, Any] = {
-                "title": title,
-                "summary": str(task.get("summary") or "").strip()[:280],
-                "quality_score": task.get("quality_score"),
-                "completed_at": task.get("completed_at"),
-                "task_family": task.get("task_family"),
-                "execution_kind": task.get("execution_kind"),
-            }
-            evidence = task.get("evidence")
-            if isinstance(evidence, dict):
-                row["evidence_summary"] = [
-                    str(item).strip()
-                    for item in list(evidence.get("evidence_summary") or [])
-                    if str(item).strip()
-                ][:4]
-            row.update(
-                self._item_evidence_quality(
-                    item=row,
-                    source_reliability=0.84,
-                    supports=["self_understanding", "learning_trace"],
-                    contradicts=[],
-                )
-            )
-            evidence_rows.append(row)
-        return evidence_rows
+        return normalize_recent_learning_evidence(
+            list(drive_context.get("completed_learning_tasks") or [])
+        )
 
     def _build_shell_body_profile(self, shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:
         profile: Dict[str, Any] = {
@@ -6226,7 +5217,7 @@ class EndogenousDriveEngine:
             }
         )
         profile.update(
-            self._item_evidence_quality(
+            item_evidence_quality(
                 item=profile,
                 source_reliability=0.9,
                 supports=["self_structure", "body_state"],
@@ -6234,272 +5225,6 @@ class EndogenousDriveEngine:
             )
         )
         return profile
-
-    def _item_evidence_quality(
-        self,
-        *,
-        item: Dict[str, Any],
-        source_reliability: float,
-        supports: List[str],
-        contradicts: List[str],
-    ) -> Dict[str, Any]:
-        confidence_score = self._item_confidence_score(
-            item=item,
-            source_reliability=source_reliability,
-        )
-        novelty_score = self._item_novelty_score(item)
-        return {
-            "confidence_score": confidence_score,
-            "novelty_score": novelty_score,
-            "source_reliability": round(self._clamp01(source_reliability), 4),
-            "supports": list(supports),
-            "contradicts": list(contradicts),
-        }
-
-    def _item_confidence_score(
-        self,
-        *,
-        item: Dict[str, Any],
-        source_reliability: float,
-    ) -> float:
-        quality_component = 0.0
-        try:
-            quality_component = self._clamp01(float(item.get("quality_score") or 0.0))
-        except (TypeError, ValueError):
-            quality_component = 0.0
-        evidence_summary = list(item.get("evidence_summary") or [])
-        evidence_bonus = min(len(evidence_summary), 4) * 0.06
-        freshness_bonus = 0.0
-        published_at = item.get("published_at") or item.get("completed_at")
-        parsed_time = self._parse_timestamp(published_at)
-        if parsed_time is not None:
-            age_days = max(0, (datetime.now(timezone.utc) - parsed_time).days)
-            if age_days <= 14:
-                freshness_bonus = 0.18
-            elif age_days <= 90:
-                freshness_bonus = 0.1
-            else:
-                freshness_bonus = 0.03
-        base = (
-            0.22
-            + self._clamp01(source_reliability) * 0.45
-            + quality_component * 0.18
-            + evidence_bonus
-            + freshness_bonus
-        )
-        return round(self._clamp01(base), 4)
-
-    def _item_novelty_score(self, item: Dict[str, Any]) -> float:
-        text = " ".join(
-            [
-                str(item.get("title") or ""),
-                str(item.get("summary") or ""),
-            ]
-        ).strip()
-        if not text:
-            return 0.2
-        token_count = len({token.lower() for token in _TOPIC_WORD_RE.findall(text)})
-        return round(self._clamp01(0.18 + min(token_count, 12) * 0.055), 4)
-
-    def _build_evidence_channels(
-        self,
-        *,
-        recent_learning_evidence: List[Dict[str, Any]],
-        external_research_evidence: List[Dict[str, Any]],
-        shell_body_profile: Dict[str, Any],
-        deliberation_dict: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        learning_strength = self._channel_strength_from_learning(recent_learning_evidence)
-        learning_confidence = self._channel_confidence_from_learning(recent_learning_evidence)
-        body_confidence = self._channel_confidence_from_body(shell_body_profile)
-        body_strength = "strong" if shell_body_profile.get("profile_status") == "ready" else "weak"
-        research_strength = self._channel_strength_from_research(external_research_evidence)
-        research_confidence = self._channel_confidence_from_research(external_research_evidence)
-        research_freshness = self._research_freshness_hint(external_research_evidence)
-        conflict_flags = self._evidence_conflict_flags(
-            recent_learning_evidence=recent_learning_evidence,
-            external_research_evidence=external_research_evidence,
-            shell_body_profile=shell_body_profile,
-        )
-        evidence_graph = self._build_evidence_graph(
-            recent_learning_evidence=recent_learning_evidence,
-            external_research_evidence=external_research_evidence,
-            shell_body_profile=shell_body_profile,
-        )
-        learning_channel = {
-            "channel": "recent_learning",
-            "kind": "internal_learning_evidence",
-            "item_count": len(recent_learning_evidence),
-            "freshness_hint": "recent",
-            "confidence": learning_confidence,
-            "evidence_strength": learning_strength,
-            "conflict_flags": [
-                flag for flag in conflict_flags if flag.startswith("learning_")
-            ],
-            "items": recent_learning_evidence[:5],
-        }
-        body_channel = {
-            "channel": "shell_body_profile",
-            "kind": "self_structure_evidence",
-            "item_count": 1 if shell_body_profile else 0,
-            "freshness_hint": "current",
-            "confidence": body_confidence,
-            "evidence_strength": body_strength,
-            "conflict_flags": [
-                flag for flag in conflict_flags if flag.startswith("body_")
-            ],
-            "items": [shell_body_profile] if shell_body_profile else [],
-        }
-        research_channel = {
-            "channel": "external_research",
-            "kind": "external_research_evidence",
-            "item_count": len(external_research_evidence),
-            "freshness_hint": research_freshness,
-            "confidence": research_confidence,
-            "evidence_strength": research_strength,
-            "conflict_flags": [
-                flag for flag in conflict_flags if flag.startswith("research_")
-            ],
-            "items": external_research_evidence[:8],
-        }
-        cognition_channel = {
-            "channel": "deliberation_state",
-            "kind": "internal_cognition_state",
-            "item_count": 1,
-            "freshness_hint": "current",
-            "confidence": self._clamp01(
-                0.45
-                + float(deliberation_dict.get("world_model", {}).get("self_confidence") or 0.0) * 0.4
-            ),
-            "evidence_strength": "moderate",
-            "conflict_flags": [],
-            "items": [
-                {
-                    "perception": deliberation_dict.get("perception", {}),
-                    "world_model": deliberation_dict.get("world_model", {}),
-                    "reflection": deliberation_dict.get("reflection", {}),
-                    "adaptive_policy": deliberation_dict.get("adaptive_policy", {}),
-                }
-            ],
-        }
-        return {
-            "channels": [
-                learning_channel,
-                body_channel,
-                research_channel,
-                cognition_channel,
-            ],
-            "research_digest": {
-                "item_count": len(external_research_evidence),
-                "freshness_hint": research_freshness,
-                "confidence": research_confidence,
-                "evidence_strength": research_strength,
-                "conflict_flags": [
-                    flag for flag in conflict_flags if flag.startswith("research_")
-                ],
-                "sources": sorted(
-                    {
-                        str(item.get("source") or "").strip()
-                        for item in external_research_evidence
-                        if str(item.get("source") or "").strip()
-                    }
-                ),
-                "topics": [
-                    str(item.get("title") or "").strip()
-                    for item in external_research_evidence[:6]
-                    if str(item.get("title") or "").strip()
-                ],
-            },
-            "evidence_graph": evidence_graph,
-        }
-
-    def _channel_strength_from_learning(self, items: List[Dict[str, Any]]) -> str:
-        if not items:
-            return "weak"
-        quality_scores: List[float] = []
-        for item in items[:5]:
-            try:
-                quality_scores.append(self._clamp01(float(item.get("quality_score") or 0.0)))
-            except (TypeError, ValueError):
-                continue
-        if not quality_scores:
-            return "moderate"
-        avg = sum(quality_scores) / len(quality_scores)
-        if avg >= 0.75:
-            return "strong"
-        if avg >= 0.4:
-            return "moderate"
-        return "weak"
-
-    def _channel_confidence_from_learning(self, items: List[Dict[str, Any]]) -> float:
-        if not items:
-            return 0.22
-        quality_scores: List[float] = []
-        for item in items[:5]:
-            try:
-                quality_scores.append(self._clamp01(float(item.get("quality_score") or 0.0)))
-            except (TypeError, ValueError):
-                continue
-        if not quality_scores:
-            return 0.45
-        avg = sum(quality_scores) / len(quality_scores)
-        return round(self._clamp01(0.3 + avg * 0.6), 4)
-
-    def _channel_confidence_from_body(self, shell_body_profile: Dict[str, Any]) -> float:
-        status = str(shell_body_profile.get("profile_status") or "").strip().lower()
-        if status == "ready":
-            return 0.86
-        if status in {"missing_worktree", "worktree_missing_on_disk"}:
-            return 0.2
-        return 0.45
-
-    def _channel_strength_from_research(self, items: List[Dict[str, Any]]) -> str:
-        if not items:
-            return "weak"
-        if len(items) >= 3 and self._research_freshness_hint(items) in {"fresh", "recent"}:
-            return "strong"
-        if len(items) >= 1:
-            return "moderate"
-        return "weak"
-
-    def _channel_confidence_from_research(self, items: List[Dict[str, Any]]) -> float:
-        if not items:
-            return 0.18
-        freshness = self._research_freshness_hint(items)
-        freshness_bonus = {
-            "fresh": 0.3,
-            "recent": 0.22,
-            "stale": 0.08,
-            "unknown": 0.14,
-        }.get(freshness, 0.12)
-        source_count = len(
-            {
-                str(item.get("source") or "").strip()
-                for item in items
-                if str(item.get("source") or "").strip()
-            }
-        )
-        return round(self._clamp01(0.24 + min(len(items), 4) * 0.08 + source_count * 0.05 + freshness_bonus), 4)
-
-    def _evidence_conflict_flags(
-        self,
-        *,
-        recent_learning_evidence: List[Dict[str, Any]],
-        external_research_evidence: List[Dict[str, Any]],
-        shell_body_profile: Dict[str, Any],
-    ) -> List[str]:
-        flags: List[str] = []
-        if not recent_learning_evidence:
-            flags.append("learning_missing_recent_history")
-        if recent_learning_evidence and self._channel_strength_from_learning(recent_learning_evidence) == "weak":
-            flags.append("learning_weak_quality_signal")
-        if shell_body_profile.get("profile_status") != "ready":
-            flags.append("body_profile_incomplete")
-        if not external_research_evidence:
-            flags.append("research_missing_external_support")
-        elif self._research_freshness_hint(external_research_evidence) == "stale":
-            flags.append("research_stale_support")
-        return flags
 
     def _build_recent_reference_alignment(self, drive_context: Dict[str, Any]) -> Dict[str, Any]:
         drive_history = dict(drive_context.get("drive_history") or {})
@@ -6593,7 +5318,7 @@ class EndogenousDriveEngine:
                 assessment = metadata.get("llm_cognitive_assessment")
             if not isinstance(assessment, dict):
                 assessment = evidence.get("llm_cognitive_assessment")
-            normalized = self._normalize_lm_cognitive_assessment(assessment)
+            normalized = normalize_lm_cognitive_assessment(assessment)
             if not normalized:
                 continue
             current_judgement = str(normalized.get("current_judgement") or "").strip()
@@ -6708,7 +5433,7 @@ class EndogenousDriveEngine:
                 assessment = metadata.get("llm_cognitive_assessment")
             if not isinstance(assessment, dict):
                 assessment = evidence.get("llm_cognitive_assessment")
-            normalized = self._normalize_lm_cognitive_assessment(assessment)
+            normalized = normalize_lm_cognitive_assessment(assessment)
             if not normalized:
                 continue
             target = str(normalized.get("self_iteration_target") or "").strip()
@@ -6835,7 +5560,7 @@ class EndogenousDriveEngine:
                 assessment = metadata.get("llm_cognitive_assessment")
             if not isinstance(assessment, dict):
                 assessment = evidence.get("llm_cognitive_assessment")
-            normalized = self._normalize_lm_cognitive_assessment(assessment)
+            normalized = normalize_lm_cognitive_assessment(assessment)
             if not normalized:
                 continue
             decision = str(normalized.get("stay_or_switch") or "").strip().lower()
@@ -6969,7 +5694,7 @@ class EndogenousDriveEngine:
                 assessment = metadata.get("llm_cognitive_assessment")
             if not isinstance(assessment, dict):
                 assessment = evidence.get("llm_cognitive_assessment")
-            normalized = self._normalize_lm_cognitive_assessment(assessment)
+            normalized = normalize_lm_cognitive_assessment(assessment)
             quality_score = self._clamp01(float(outcome.get("quality_score") or 0.0))
             cognitive_score = self._clamp01(
                 (cognitive_alignment or {}).get("score") or 0.0
@@ -7492,7 +6217,7 @@ class EndogenousDriveEngine:
             0,
             int(recent_reference_alignment.get("weak_or_partial_count") or 0)
         )
-        research_freshness = self._research_freshness_hint(external_research_evidence)
+        research_freshness = research_freshness_hint(external_research_evidence)
         top_topics = [
             str(item.get("topic") or "").strip()
             for item in list(evidence_graph.get("nodes") or [])[:4]
@@ -7590,20 +6315,20 @@ class EndogenousDriveEngine:
         evidence_channels: Dict[str, Any],
         recent_reference_alignment: Dict[str, Any],
     ) -> Dict[str, Any]:
-        learning_confidence = self._channel_confidence_from_learning(recent_learning_evidence)
-        research_confidence = self._channel_confidence_from_research(external_research_evidence)
-        body_confidence = self._channel_confidence_from_body(shell_body_profile)
+        learning_confidence = channel_confidence_from_learning(recent_learning_evidence)
+        research_confidence = channel_confidence_from_research(external_research_evidence)
+        body_confidence = channel_confidence_from_body(shell_body_profile)
         channel_rows = [
             {
                 "channel": "recent_learning",
                 "confidence": round(self._clamp01(learning_confidence), 4),
-                "evidence_strength": self._channel_strength_from_learning(recent_learning_evidence),
+                "evidence_strength": channel_strength_from_learning(recent_learning_evidence),
                 "item_count": len(recent_learning_evidence),
             },
             {
                 "channel": "external_research",
                 "confidence": round(self._clamp01(research_confidence), 4),
-                "evidence_strength": self._channel_strength_from_research(external_research_evidence),
+                "evidence_strength": channel_strength_from_research(external_research_evidence),
                 "item_count": len(external_research_evidence),
             },
             {
@@ -7877,85 +6602,6 @@ class EndogenousDriveEngine:
             reasons.append("baseline_program_prior")
         return reasons[:4]
 
-    def _build_evidence_graph(
-        self,
-        *,
-        recent_learning_evidence: List[Dict[str, Any]],
-        external_research_evidence: List[Dict[str, Any]],
-        shell_body_profile: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        evidence_items: List[Dict[str, Any]] = []
-        evidence_items.extend(recent_learning_evidence[:5])
-        evidence_items.extend(external_research_evidence[:8])
-        if shell_body_profile:
-            evidence_items.append(shell_body_profile)
-
-        node_scores: Dict[str, Dict[str, Any]] = {}
-        support_edges: List[Dict[str, Any]] = []
-        contradiction_edges: List[Dict[str, Any]] = []
-
-        for item in evidence_items:
-            title = str(item.get("title") or item.get("slot_id") or "evidence_item").strip()
-            confidence = self._clamp01(item.get("confidence_score") or item.get("source_reliability") or 0.4)
-            for topic in list(item.get("supports") or []):
-                topic_name = str(topic or "").strip()
-                if not topic_name:
-                    continue
-                bucket = node_scores.setdefault(
-                    topic_name,
-                    {"support_count": 0, "contradict_count": 0, "confidence_sum": 0.0},
-                )
-                bucket["support_count"] += 1
-                bucket["confidence_sum"] += confidence
-                support_edges.append(
-                    {
-                        "from": title,
-                        "to": topic_name,
-                        "relation": "supports",
-                        "weight": round(confidence, 4),
-                    }
-                )
-            for topic in list(item.get("contradicts") or []):
-                topic_name = str(topic or "").strip()
-                if not topic_name:
-                    continue
-                bucket = node_scores.setdefault(
-                    topic_name,
-                    {"support_count": 0, "contradict_count": 0, "confidence_sum": 0.0},
-                )
-                bucket["contradict_count"] += 1
-                bucket["confidence_sum"] += confidence
-                contradiction_edges.append(
-                    {
-                        "from": title,
-                        "to": topic_name,
-                        "relation": "contradicts",
-                        "weight": round(confidence, 4),
-                    }
-                )
-
-        nodes: List[Dict[str, Any]] = []
-        for topic_name, bucket in sorted(node_scores.items()):
-            total = bucket["support_count"] + bucket["contradict_count"]
-            avg_confidence = bucket["confidence_sum"] / total if total > 0 else 0.0
-            nodes.append(
-                {
-                    "topic": topic_name,
-                    "support_count": bucket["support_count"],
-                    "contradict_count": bucket["contradict_count"],
-                    "net_signal": bucket["support_count"] - bucket["contradict_count"],
-                    "avg_confidence": round(self._clamp01(avg_confidence), 4),
-                }
-            )
-
-        return {
-            "node_count": len(nodes),
-            "edge_count": len(support_edges) + len(contradiction_edges),
-            "nodes": nodes[:16],
-            "support_edges": support_edges[:10],
-            "contradiction_edges": contradiction_edges[:8],
-        }
-
     def _build_agenda_graph(
         self,
         *,
@@ -8032,7 +6678,7 @@ class EndogenousDriveEngine:
                     "direction": intent_type,
                     "priority": round(self._clamp01(float(intent.get("priority") or 0.0)), 4),
                     "candidate_kind": candidate_kind,
-                    "task_type": self._task_type_for_candidate_kind(candidate_kind),
+                    "task_type": task_type_for_candidate_kind(candidate_kind),
                     "target_horizon": intent.get("target_horizon"),
                 }
             )
@@ -8194,28 +6840,6 @@ class EndogenousDriveEngine:
             "relation_edges": relation_edges[:16],
             "direction_task_links": direction_task_links[:12],
         }
-
-    def _research_freshness_hint(self, items: List[Dict[str, Any]]) -> str:
-        published_tokens = [
-            str(item.get("published_at") or "").strip()
-            for item in items
-            if str(item.get("published_at") or "").strip()
-        ]
-        if not published_tokens:
-            return "unknown"
-        latest_seen: Optional[datetime] = None
-        for token in published_tokens:
-            parsed = self._parse_timestamp(token)
-            if parsed is not None and (latest_seen is None or parsed > latest_seen):
-                latest_seen = parsed
-        if latest_seen is None:
-            return "unknown"
-        age_days = max(0, (datetime.now(timezone.utc) - latest_seen).days)
-        if age_days <= 14:
-            return "fresh"
-        if age_days <= 90:
-            return "recent"
-        return "stale"
 
     def _build_drive_context(self, drive_input: Dict[str, Any]) -> Dict[str, Any]:
         policy = dict(drive_input.get("endogenous_drive_policy") or {})
@@ -9163,7 +7787,7 @@ class EndogenousDriveEngine:
         bootstrap: bool,
         drive_judgement: Optional[Dict[str, Any]] = None,
         adaptive_policy: Optional[DriveAdaptivePolicy] = None,
-    ) -> EndogenousTaskCandidate:
+    ) -> _EndogenousTaskCandidate:
         summary = (
             "Use idle capacity to inspect the current shell-body codebase, "
             "map its structure, identify current weaknesses, and record evidence-backed "
@@ -9171,7 +7795,7 @@ class EndogenousDriveEngine:
         )
         if shell_worktree:
             summary += f" Start from shell slot {shell_slot_id} at {shell_worktree}."
-        return self._build_scored_candidate(
+        return build_scored_candidate(
             stable_key=stable_key,
             title="Understand the current shell body codebase",
             summary=summary,
@@ -9200,7 +7824,7 @@ class EndogenousDriveEngine:
                     governance_task_type="self_learning",
                     task_family="self_learning",
                 ),
-                "adaptive_factor": self._adaptive_factor_for_candidate(
+                        "adaptive_factor": adaptive_factor_for_candidate(
                     candidate_kind="shell_baseline_learning",
                     adaptive_policy=adaptive_policy or self._neutral_adaptive_policy(),
                 ),

@@ -29,6 +29,8 @@ from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
+from systems.supervisor.schedule_allocator import ScheduleAllocator
+from systems.supervisor.task_profile_policy import TaskProfilePolicy
 from systems.supervisor.runtime_migration import migrate_supervisor_runtime
 
 
@@ -122,6 +124,12 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         ),
     )
     supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
+    supervisor._task_profile_policy = TaskProfilePolicy()
+    supervisor._schedule_allocator = ScheduleAllocator(
+        slot_interval_seconds=int(
+            supervisor.config.service_runtime.autonomous_chain_review_interval or 300
+        )
+    )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
     supervisor._probe_runner = ProbeRunner()

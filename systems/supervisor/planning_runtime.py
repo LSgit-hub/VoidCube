@@ -13,17 +13,9 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 import aiohttp
 
-from systems.runtime_task_profile import (
-    derive_runtime_task_profile,
-    normalize_runtime_task_family,
-    normalize_runtime_task_type,
-    resolve_broad_task_type,
-)
 from systems.self_learning.models import SupervisorConclusionSubmission
-from systems.supervisor.endogenous_drive import (
-    CORE_VALUES,
-    TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
-)
+from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
+from systems.supervisor.endogenous_drive import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.endogenous_state_projection import (
     derive_corrective_mode,
@@ -1333,11 +1325,11 @@ class PlanningRuntimeMixin:
             )
         default_governance_task_type = None
         if default_task_family is not None:
-            default_governance_task_type = self._normalize_runtime_task_type(
+            default_governance_task_type = self._task_profile_policy.normalize_type(
                 default_task_family
             )
         elif default_execution_kind is not None:
-            default_governance_task_type = self._normalize_runtime_task_type(
+            default_governance_task_type = self._task_profile_policy.normalize_type(
                 default_execution_kind
             )
         runtime = getattr(self, "_service_runtime", None)
@@ -4600,9 +4592,9 @@ class PlanningRuntimeMixin:
             "source": task.source,
             "priority": task.priority,
             "status": status,
-            "governance_task_type": self._task_governance_type(task),
-            "task_family": self._task_runtime_family(task),
-            "execution_kind": self._task_execution_kind(task),
+            "governance_task_type": self._task_profile_policy.governance_type(task),
+            "task_family": self._task_profile_policy.runtime_family(task),
+            "execution_kind": self._task_profile_policy.execution_kind(task),
             "decision_id": decision_id or None,
             "decision_actor": latest_decision.get("actor"),
             "decision_reason": latest_decision.get("reason") or task.decision_reason,
@@ -4803,87 +4795,6 @@ class PlanningRuntimeMixin:
             "switch_reason": "",
         }
 
-    def _normalize_runtime_task_family(self, value: Optional[str]) -> str:
-        return str(
-            normalize_runtime_task_family(value, default="general_self_evolution")
-        )
-
-    def _normalize_runtime_task_type(self, value: Optional[str]) -> str:
-        return str(normalize_runtime_task_type(value, default="self_evolution"))
-
-    def _task_runtime_family(self, task: AutonomousChainTask) -> str:
-        execution = dict(task.metadata.get("execution_request") or {})
-        runtime_task_profile = derive_runtime_task_profile(
-            task_type=task.task_type,
-            governance_task_type=(
-                execution.get("governance_task_type")
-                or task.governance_task_type
-                or task.metadata.get("governance_task_type")
-            ),
-            task_family=(
-                execution.get("task_family")
-                or task.task_family
-                or task.metadata.get("task_family")
-            ),
-            execution_kind=(
-                execution.get("execution_kind")
-                or task.execution_kind
-                or task.metadata.get("execution_kind")
-            ),
-            kind=execution.get("kind"),
-            default_task_family="general_self_evolution",
-        )
-        return str(runtime_task_profile["task_family"] or "general_self_evolution")
-
-    def _task_execution_kind(self, task: AutonomousChainTask) -> Optional[str]:
-        execution = dict(task.metadata.get("execution_request") or {})
-        explicit_execution_kind = (
-            execution.get("execution_kind")
-            or task.metadata.get("execution_kind")
-            or task.execution_kind
-        )
-        normalized_explicit_kind = (
-            self._normalize_runtime_task_family(explicit_execution_kind)
-            if explicit_execution_kind
-            else None
-        )
-        if normalized_explicit_kind == "body_upgrade":
-            explicit_lower = str(explicit_execution_kind or "").strip().lower()
-            if explicit_lower in {"body_improvement", "body_switch", "body_upgrade"}:
-                return explicit_lower
-
-        task_family = self._task_runtime_family(task)
-        if task_family in {
-            "memory_maintenance",
-            "general_self_evolution",
-            "body_upgrade",
-        }:
-            return task_family
-        return normalized_explicit_kind
-
-    def _task_runtime_profile(self, task: AutonomousChainTask) -> Dict[str, Any]:
-        execution = dict(task.metadata.get("execution_request") or {})
-        return derive_runtime_task_profile(
-            task_type=task.task_type,
-            governance_task_type=(
-                execution.get("governance_task_type")
-                or task.governance_task_type
-                or task.metadata.get("governance_task_type")
-            ),
-            task_family=(
-                execution.get("task_family")
-                or task.task_family
-                or task.metadata.get("task_family")
-            ),
-            execution_kind=(
-                execution.get("execution_kind")
-                or task.execution_kind
-                or task.metadata.get("execution_kind")
-            ),
-            kind=execution.get("kind"),
-            default_task_family="general_self_evolution",
-        )
-
     def _request_task_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         metadata = dict(payload.get("metadata") or {})
         for key in ("governance_task_type", "task_family", "execution_kind", "rationale"):
@@ -4902,253 +4813,11 @@ class PlanningRuntimeMixin:
             value = payload.get(key)
             if value is not None and key not in metadata:
                 metadata[key] = value
-        metadata = self._normalize_task_schedule_metadata(metadata)
+        metadata = self._schedule_allocator.normalize_metadata(metadata)
         explicit_execution_kind = str(metadata.get("execution_kind") or "").strip().lower()
         if explicit_execution_kind in {"body_switch", "body_improvement"} and not metadata.get("task_family"):
             metadata["task_family"] = explicit_execution_kind
         return metadata
-
-    def _request_task_type(
-        self,
-        payload: Dict[str, Any],
-        *,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        merged_metadata = dict(metadata or payload.get("metadata") or {})
-        return resolve_broad_task_type(
-            task_type=payload.get("task_type"),
-            governance_task_type=merged_metadata.get("governance_task_type"),
-            task_family=merged_metadata.get("task_family"),
-            execution_kind=merged_metadata.get("execution_kind"),
-            source=payload.get("source"),
-        )
-
-    def _drive_input_request_profile(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return derive_runtime_task_profile(
-            governance_task_type=request.get("governance_task_type"),
-            task_family=request.get("task_family"),
-            execution_kind=request.get("execution_kind"),
-            default_task_family="general_self_evolution",
-        )
-
-    def _task_governance_type(self, task: AutonomousChainTask) -> str:
-        return str(self._task_runtime_profile(task)["governance_task_type"])
-
-    def _task_requires_execution_request(self, task: AutonomousChainTask) -> bool:
-        execution_kind = self._task_execution_kind(task)
-        if execution_kind == "body_improvement":
-            return False
-        return self._task_governance_type(task) in {"self_evolution", "memory_maintenance"}
-
-    def _normalize_scheduled_for_value(self, value: Any) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            return value.isoformat()
-        text = str(value).strip()
-        if not text:
-            return None
-        try:
-            return datetime.fromisoformat(text).isoformat()
-        except ValueError:
-            return text
-
-    def _normalize_task_schedule_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = dict(metadata or {})
-        scheduled_for = None
-        for key in (
-            "scheduled_for",
-            "preset_time",
-            "scheduled_at",
-            "run_at",
-            "execute_after",
-            "time_slot",
-            "window",
-        ):
-            scheduled_for = self._normalize_scheduled_for_value(normalized.get(key))
-            if scheduled_for:
-                break
-        if scheduled_for:
-            normalized["scheduled_for"] = scheduled_for
-        return normalized
-
-    def _task_schedule_token_from_sources(self, *sources: Any) -> Optional[str]:
-        for source in sources:
-            if not isinstance(source, dict):
-                continue
-            for key in (
-                "scheduled_for",
-                "preset_time",
-                "scheduled_at",
-                "run_at",
-                "execute_after",
-                "time_slot",
-                "window",
-            ):
-                scheduled_for = self._normalize_scheduled_for_value(source.get(key))
-                if scheduled_for:
-                    return scheduled_for
-        return None
-
-    def _task_schedule_token(self, task: AutonomousChainTask) -> Optional[str]:
-        execution = dict(task.metadata.get("execution_request") or {})
-        evidence = dict(task.evidence or {})
-        endogenous_drive = dict(evidence.get("endogenous_drive") or {})
-        return self._task_schedule_token_from_sources(
-            task.metadata,
-            task.constraints,
-            evidence,
-            endogenous_drive,
-            execution,
-        )
-
-    def _schedule_slot_interval_seconds(self) -> int:
-        review_interval = int(
-            getattr(self.config.service_runtime, "autonomous_chain_review_interval", 300) or 300
-        )
-        return max(300, review_interval)
-
-    def _align_scheduled_for(self, when: datetime) -> datetime:
-        slot_seconds = self._schedule_slot_interval_seconds()
-        base = when.replace(second=0, microsecond=0)
-        since_midnight = (
-            base.hour * 3600
-            + base.minute * 60
-            + base.second
-        )
-        remainder = since_midnight % slot_seconds
-        if remainder == 0:
-            return base
-        return base + timedelta(seconds=(slot_seconds - remainder))
-
-    def _occupied_scheduled_for_tokens(self) -> set[str]:
-        terminal = {"completed", "failed", "cancelled"}
-        occupied: set[str] = set()
-        for task in self._active_autonomous_chain_tasks():
-            if str(task.status or "").strip().lower() in terminal:
-                continue
-            token = self._task_schedule_token(task)
-            if token:
-                occupied.add(token)
-        return occupied
-
-    def _allocate_scheduled_for_tokens(
-        self,
-        *,
-        count: int,
-        now: Optional[datetime] = None,
-        occupied_tokens: Optional[set[str]] = None,
-    ) -> list[str]:
-        if count <= 0:
-            return []
-
-        current = now or datetime.now()
-        occupied = set(occupied_tokens or set())
-        scheduled: list[str] = []
-        slot_seconds = self._schedule_slot_interval_seconds()
-
-        cursor = self._align_scheduled_for(current)
-        while len(scheduled) < count:
-            cursor = self._align_scheduled_for(cursor)
-            token = cursor.isoformat()
-            if token not in occupied:
-                occupied.add(token)
-                scheduled.append(token)
-            cursor = cursor + timedelta(seconds=slot_seconds)
-        return scheduled
-
-    def _apply_scheduled_for_to_candidate_items(
-        self,
-        candidate_items: list[Dict[str, Any]],
-        *,
-        now: Optional[datetime] = None,
-    ) -> list[Dict[str, Any]]:
-        if not candidate_items:
-            return []
-
-        occupied = self._occupied_scheduled_for_tokens()
-        prepared: list[Dict[str, Any]] = []
-        missing_indexes: list[int] = []
-
-        for item in candidate_items:
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
-            row_metadata = self._normalize_task_schedule_metadata(dict(row.get("metadata") or {}))
-            row["metadata"] = row_metadata
-            existing_token = self._task_schedule_token_from_sources(
-                row,
-                row_metadata,
-                row.get("constraints"),
-                row.get("evidence"),
-            )
-            if existing_token:
-                if existing_token in occupied:
-                    row_metadata["requested_scheduled_for"] = existing_token
-                    row_metadata["schedule_token_reallocated"] = True
-                    row.pop("scheduled_for", None)
-                    row_metadata.pop("scheduled_for", None)
-                    missing_indexes.append(len(prepared))
-                else:
-                    row["scheduled_for"] = existing_token
-                    row_metadata["scheduled_for"] = existing_token
-                    occupied.add(existing_token)
-            else:
-                missing_indexes.append(len(prepared))
-            prepared.append(row)
-
-        allocated = self._allocate_scheduled_for_tokens(
-            count=len(missing_indexes),
-            now=now,
-            occupied_tokens=occupied,
-        )
-        for row_index, token in zip(missing_indexes, allocated):
-            if row_index >= len(prepared):
-                continue
-            prepared[row_index]["scheduled_for"] = token
-            prepared[row_index].setdefault("metadata", {})
-            prepared[row_index]["metadata"]["scheduled_for"] = token
-        return prepared
-
-    def _task_sort_key(self, task: AutonomousChainTask) -> tuple[int, str, str]:
-        status = str(task.status or "").strip().lower()
-        order = {
-            "running": 0,
-            "approved": 1,
-            "planned": 2,
-            "deferred": 3,
-            "paused": 4,
-            "completed": 5,
-            "failed": 6,
-            "cancelled": 7,
-        }
-        created_at = getattr(task, "created_at", None)
-        updated_at = getattr(task, "updated_at", None)
-        created_text = created_at.isoformat() if isinstance(created_at, datetime) else str(created_at or "")
-        updated_text = updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at or "")
-        return (order.get(status, 99), created_text, updated_text)
-
-    def _build_schedule_conflict_index(
-        self,
-        *,
-        exclude_task_ids: Optional[set[str]] = None,
-    ) -> Dict[str, AutonomousChainTask]:
-        terminal = {"completed", "failed", "cancelled"}
-        excluded = exclude_task_ids or set()
-        conflicts: Dict[str, AutonomousChainTask] = {}
-        for task in sorted(
-            self._active_autonomous_chain_tasks(),
-            key=self._task_sort_key,
-        ):
-            if task.task_id in excluded:
-                continue
-            if str(task.status or "").strip().lower() in terminal:
-                continue
-            schedule_token = self._task_schedule_token(task)
-            if not schedule_token:
-                continue
-            conflicts.setdefault(schedule_token, task)
-        return conflicts
 
     def _active_autonomous_chain_tasks(self) -> list[AutonomousChainTask]:
         """Return active autonomous-chain rows across API-B and API-A lanes."""
@@ -5165,7 +4834,7 @@ class PlanningRuntimeMixin:
         return rows
 
     def _task_activity_metadata(self, task: AutonomousChainTask) -> Dict[str, Any]:
-        profile = self._task_runtime_profile(task)
+        profile = self._task_profile_policy.runtime_profile(task)
         metadata: Dict[str, Any] = {
             "task_id": task.task_id,
             "trace_id": task.trace_id,
@@ -5176,7 +4845,7 @@ class PlanningRuntimeMixin:
         execution_kind = profile.get("execution_kind")
         if execution_kind is not None:
             metadata["execution_kind"] = execution_kind
-        scheduled_for = self._task_schedule_token(task)
+        scheduled_for = self._schedule_allocator.task_schedule_token(task)
         if scheduled_for is not None:
             metadata["scheduled_for"] = scheduled_for
         return metadata
@@ -5194,15 +4863,15 @@ class PlanningRuntimeMixin:
             **dict(extra or {}),
         }
         metadata["governance_task_types"] = sorted(
-            {self._task_governance_type(task) for task in tasks}
+            {self._task_profile_policy.governance_type(task) for task in tasks}
         )
         metadata["task_families"] = sorted(
-            {self._task_runtime_family(task) for task in tasks}
+            {self._task_profile_policy.runtime_family(task) for task in tasks}
         )
         execution_kinds = sorted(
             {
                 execution_kind
-                for execution_kind in (self._task_execution_kind(task) for task in tasks)
+                for execution_kind in (self._task_profile_policy.execution_kind(task) for task in tasks)
                 if execution_kind is not None
             }
         )
@@ -5264,7 +4933,7 @@ class PlanningRuntimeMixin:
     def _completed_learning_task_summaries(self, limit: int = 8) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
         for task in self._autonomous_chain_store.list_writeback_history(status="completed"):
-            if self._task_runtime_family(task) != "self_learning":
+            if self._task_profile_policy.runtime_family(task) != "self_learning":
                 continue
             metadata = dict(task.metadata or {})
             evidence = dict(task.evidence or {})
@@ -5325,9 +4994,9 @@ class PlanningRuntimeMixin:
             "task_id": task.task_id,
             "title": task.title,
             "status": str(task.status),
-            "governance_task_type": self._task_governance_type(task),
-            "task_family": self._task_runtime_family(task),
-            "execution_kind": self._task_execution_kind(task),
+            "governance_task_type": self._task_profile_policy.governance_type(task),
+            "task_family": self._task_profile_policy.runtime_family(task),
+            "execution_kind": self._task_profile_policy.execution_kind(task),
             "created_at": (
                 task.created_at.isoformat()
                 if isinstance(getattr(task, "created_at", None), datetime)
@@ -5384,7 +5053,7 @@ class PlanningRuntimeMixin:
         return [payload for _, payload in rows[: max(0, limit)]]
 
     def _planning_activity_kind_for_task(self, task_type: str) -> str:
-        normalized = self._normalize_runtime_task_type(task_type)
+        normalized = self._task_profile_policy.normalize_type(task_type)
         if normalized == "self_learning":
             return "self_learning"
         if normalized in {"self_evolution", "memory_maintenance"}:
@@ -5497,7 +5166,7 @@ class PlanningRuntimeMixin:
                 getattr(service_cfg, "activity_guard_workflow_seconds", 600),
             )
         )
-        requested_task_profile = self._drive_input_request_profile(request)
+        requested_task_profile = self._task_profile_policy.drive_input_profile(request)
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
 
@@ -5906,8 +5575,12 @@ class PlanningRuntimeMixin:
         )
 
         def _candidate_api_b_judgement_items(candidates: list[Any]) -> list[Dict[str, Any]]:
-            return self._apply_scheduled_for_to_candidate_items(
+            return self._schedule_allocator.apply_to_candidates(
                 [candidate.to_api_b_judgement_item() for candidate in candidates],
+                occupied_tokens=self._schedule_allocator.occupied_tokens(
+                    self._active_autonomous_chain_tasks()
+                ),
+                now=datetime.now(),
             )
 
         def _lm_proposals_for_second_candidate_pass() -> Optional[list[Dict[str, Any]]]:
@@ -6487,10 +6160,10 @@ class PlanningRuntimeMixin:
         autonomous_chain_gate_active: bool = False,
     ) -> tuple[str, str]:
         drive_input = dict(drive_input or {})
-        task_type = self._task_governance_type(task)
-        task_family = self._task_runtime_family(task)
+        task_type = self._task_profile_policy.governance_type(task)
+        task_family = self._task_profile_policy.runtime_family(task)
         if self._is_agent_pull_task(task):
-            execution_kind = self._task_execution_kind(task)
+            execution_kind = self._task_profile_policy.execution_kind(task)
             if execution_kind == "body_improvement":
                 if self._has_pending_self_learning_prerequisite(task):
                     return (
@@ -6580,7 +6253,7 @@ class PlanningRuntimeMixin:
     ) -> bool:
         backlog_self_learning_pending = False
         for task in self._active_autonomous_chain_tasks():
-            if self._task_governance_type(task) != "self_learning":
+            if self._task_profile_policy.governance_type(task) != "self_learning":
                 continue
             if task.status not in {"planned", "approved", "running"}:
                 continue
@@ -6600,9 +6273,9 @@ class PlanningRuntimeMixin:
         return prior_self_learning_deferrals == 0
 
     def _is_agent_pull_task(self, task: AutonomousChainTask) -> bool:
-        execution_kind = self._task_execution_kind(task)
+        execution_kind = self._task_profile_policy.execution_kind(task)
         return (
-            self._task_governance_type(task) == "self_learning"
+            self._task_profile_policy.governance_type(task) == "self_learning"
             or execution_kind == "body_improvement"
         )
 
@@ -6799,10 +6472,10 @@ class PlanningRuntimeMixin:
         decision_context: Dict[str, Any],
     ) -> Optional[AutonomousChainExecutionRequest]:
         execution = dict(task.metadata.get("execution_request") or {})
-        raw_kind = self._task_execution_kind(task) or "general_self_evolution"
+        raw_kind = self._task_profile_policy.execution_kind(task) or "general_self_evolution"
         kind = "memory_maintenance" if raw_kind == "memory_maintenance" else "general_self_evolution"
-        task_family = self._task_runtime_family(task)
-        governance_task_type = self._task_governance_type(task)
+        task_family = self._task_profile_policy.runtime_family(task)
+        governance_task_type = self._task_profile_policy.governance_type(task)
 
         git_lineage = {
             **dict(task.evidence.get("git_lineage") or {}),
@@ -6869,7 +6542,7 @@ class PlanningRuntimeMixin:
             payload["execution_request"] = self._normalize_execution_request_evidence_payload(
                 execution_request_payload
             )
-        runtime_profile = self._task_runtime_profile(task)
+        runtime_profile = self._task_profile_policy.runtime_profile(task)
         execution = dict(task.metadata.get("execution_request") or {})
         payload["governance_task_type"] = (
             execution.get("governance_task_type")
@@ -6892,7 +6565,7 @@ class PlanningRuntimeMixin:
             or task.metadata.get("execution_kind")
             or runtime_profile.get("execution_kind")
         )
-        scheduled_for = self._task_schedule_token(task)
+        scheduled_for = self._schedule_allocator.task_schedule_token(task)
         if scheduled_for is not None:
             payload["scheduled_for"] = scheduled_for
         requested_kind = str(execution.get("kind") or "").strip() or None
@@ -7056,10 +6729,10 @@ class PlanningRuntimeMixin:
                     "status": task.status,
                     "priority": task.priority,
                     "source": task.source,
-                    "governance_task_type": self._task_governance_type(task),
-                    "task_family": self._task_runtime_family(task),
-                    "execution_kind": self._task_execution_kind(task),
-                    "scheduled_for": self._task_schedule_token(task),
+                    "governance_task_type": self._task_profile_policy.governance_type(task),
+                    "task_family": self._task_profile_policy.runtime_family(task),
+                    "execution_kind": self._task_profile_policy.execution_kind(task),
+                    "scheduled_for": self._schedule_allocator.task_schedule_token(task),
                     "metadata": {
                         "endogenous_drive_key": metadata.get("endogenous_drive_key"),
                         "utility": metadata.get("utility"),
@@ -7243,13 +6916,13 @@ class PlanningRuntimeMixin:
             include_cancelled=True,
         )
         if task_type:
-            tasks = [t for t in tasks if self._task_governance_type(t) == str(task_type).strip()]
+            tasks = [t for t in tasks if self._task_profile_policy.governance_type(t) == str(task_type).strip()]
         if execution_kind:
-            normalized_execution_kind = self._normalize_runtime_task_family(execution_kind)
+            normalized_execution_kind = self._task_profile_policy.normalize_family(execution_kind)
             explicit_execution_kind = str(execution_kind).strip().lower()
             filtered_tasks = []
             for task in tasks:
-                task_execution_kind = str(self._task_execution_kind(task) or "").strip().lower()
+                task_execution_kind = str(self._task_profile_policy.execution_kind(task) or "").strip().lower()
                 serialized_execution_kind = str(
                     self._serialize_autonomous_chain_task(task).get("execution_kind") or ""
                 ).strip().lower()
@@ -7394,7 +7067,7 @@ class PlanningRuntimeMixin:
                     title=title,
                     summary=str(item.get("summary", "")),
                     trace_id=str(item.get("trace_id") or uuid.uuid4()),
-                    task_type=self._request_task_type(item, metadata=request_metadata),
+                    task_type=self._task_profile_policy.request_type(item, metadata=request_metadata),
                     source=str(item.get("source", "self_learning")),
                     priority=str(item.get("priority", "normal")),
                     metadata=request_metadata,
@@ -7412,7 +7085,7 @@ class PlanningRuntimeMixin:
                     title=title,
                     summary=str(request.get("summary", "")),
                     trace_id=str(request.get("trace_id") or uuid.uuid4()),
-                    task_type=self._request_task_type(request, metadata=request_metadata),
+                    task_type=self._task_profile_policy.request_type(request, metadata=request_metadata),
                     source=str(request.get("source", "self_learning")),
                     priority=str(request.get("priority", "normal")),
                     metadata=request_metadata,
@@ -7451,8 +7124,8 @@ class PlanningRuntimeMixin:
         decision_context: Dict[str, Any] = {}
 
         if normalized is None or normalized == "auto":
-            task_family = self._task_runtime_family(task)
-            task_execution_kind = self._task_execution_kind(task)
+            task_family = self._task_profile_policy.runtime_family(task)
+            task_execution_kind = self._task_profile_policy.execution_kind(task)
             drive_input = await self._resolve_runtime_drive_input_request(
                 request,
                 default_task_family=task_family,
@@ -7498,7 +7171,7 @@ class PlanningRuntimeMixin:
             actor=actor,
         )
         execution_request = None
-        if normalized == "approved" and self._task_requires_execution_request(task):
+        if normalized == "approved" and self._task_profile_policy.requires_execution_request(task):
             try:
                 execution_request = self._build_autonomous_chain_execution_request(
                     task,
@@ -7602,13 +7275,13 @@ class PlanningRuntimeMixin:
             normalized_statuses.append(normalized)
 
         drive_input = await self._resolve_runtime_drive_input_request(request)
-        requested_task_family = self._normalize_runtime_task_family(
+        requested_task_family = self._task_profile_policy.normalize_family(
             request.get("execution_kind")
             or request.get("task_family")
             or drive_input.get("execution_kind")
             or drive_input.get("task_family")
         )
-        requested_governance_task_type = self._normalize_runtime_task_type(requested_task_family)
+        requested_governance_task_type = self._task_profile_policy.normalize_type(requested_task_family)
         review_decision = (
             drive_input.get("task_family_decisions", {}).get(requested_task_family)
             or drive_input.get("governance_task_type_decisions", {}).get(
@@ -7625,13 +7298,14 @@ class PlanningRuntimeMixin:
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
             candidate_tasks.append(task)
-        candidate_tasks.sort(key=self._task_sort_key)
+        candidate_tasks.sort(key=self._schedule_allocator.task_sort_key)
 
         supervisor_review_actions = await self._review_task_governance_with_supervisor(
             candidate_tasks,
             drive_input=drive_input,
         )
-        reserved_schedule_tokens = self._build_schedule_conflict_index(
+        reserved_schedule_tokens = self._schedule_allocator.conflict_index(
+            self._active_autonomous_chain_tasks(),
             exclude_task_ids={task.task_id for task in candidate_tasks}
         )
 
@@ -7639,9 +7313,9 @@ class PlanningRuntimeMixin:
         reviewed_statuses = []
         for task in candidate_tasks:
             task_drive_input = drive_input
-            task_family = self._task_runtime_family(task)
+            task_family = self._task_profile_policy.runtime_family(task)
             if drive_input.get("task_family") != task_family:
-                task_execution_kind = self._task_execution_kind(task)
+                task_execution_kind = self._task_profile_policy.execution_kind(task)
                 task_request = dict(request)
                 task_drive_input = await self._resolve_runtime_drive_input_request(
                     task_request,
@@ -7692,7 +7366,7 @@ class PlanningRuntimeMixin:
                 )
                 if suggested_status is not None:
                     keep_deterministic_body_improvement_gate = (
-                        self._task_execution_kind(task) == "body_improvement"
+                        self._task_profile_policy.execution_kind(task) == "body_improvement"
                         and target_status in {"cancelled", "deferred"}
                     )
                     preserve_agent_pull_approval = (
@@ -7735,7 +7409,7 @@ class PlanningRuntimeMixin:
                         f"Supervisor review reprioritized task to "
                         f"{decision_context['supervisor_priority_adjustment']['priority']}."
                     )
-            schedule_token = self._task_schedule_token(task)
+            schedule_token = self._schedule_allocator.task_schedule_token(task)
             if target_status == "approved" and schedule_token:
                 occupied = reserved_schedule_tokens.get(schedule_token)
                 if occupied is not None:
@@ -7752,7 +7426,7 @@ class PlanningRuntimeMixin:
                     )
             execution_request = None
             if target_status == "approved":
-                if self._task_requires_execution_request(task):
+                if self._task_profile_policy.requires_execution_request(task):
                     decision_id = str(request.get("decision_id") or uuid.uuid4())
                     try:
                         execution_request = self._build_autonomous_chain_execution_request(
@@ -7797,7 +7471,7 @@ class PlanningRuntimeMixin:
                 await self._propose_verified_conclusion_memory_promotion(updated)
             reviewed.append(updated)
             reviewed_statuses.append(updated.status)
-            updated_schedule_token = self._task_schedule_token(updated)
+            updated_schedule_token = self._schedule_allocator.task_schedule_token(updated)
             if target_status == "approved" and updated_schedule_token:
                 reserved_schedule_tokens.setdefault(updated_schedule_token, updated)
 
@@ -7904,7 +7578,7 @@ class PlanningRuntimeMixin:
                 title=proposal.title,
                 summary=proposal.summary,
                 trace_id=str(submission.metadata.get("trace_id") or submission.conclusion_id or uuid.uuid4()),
-                task_type=self._request_task_type(proposal_payload, metadata=proposal_metadata),
+                task_type=self._task_profile_policy.request_type(proposal_payload, metadata=proposal_metadata),
                 source=proposal.source,
                 priority=proposal.priority,
                 metadata=proposal_metadata,
@@ -8209,7 +7883,7 @@ class PlanningRuntimeMixin:
         # upgrade / switch go through the executor body_lifecycle. API-A
         # pull handles autonomous-executor tasks separately, so this
         # success path is the supervisor's own.
-        task_governance_type = self._task_governance_type(task)
+        task_governance_type = self._task_profile_policy.governance_type(task)
         if task_governance_type == "memory_maintenance":
             actor = "supervisor_memory_service"
             completion_reason = (
@@ -8273,7 +7947,7 @@ class PlanningRuntimeMixin:
         failure_count = int(
             dict(current.metadata or {}).get("execution_failure_count") or 0
         ) + 1
-        task_governance_type = self._task_governance_type(current)
+        task_governance_type = self._task_profile_policy.governance_type(current)
         actor = (
             "supervisor_memory_service"
             if task_governance_type == "memory_maintenance"
@@ -8403,8 +8077,8 @@ class PlanningRuntimeMixin:
                 continue
             handoff_considered_ids.add(task.task_id)
 
-            gov_type = self._task_governance_type(task)
-            execution_kind = self._task_execution_kind(task)
+            gov_type = self._task_profile_policy.governance_type(task)
+            execution_kind = self._task_profile_policy.execution_kind(task)
             if gov_type == "self_learning" or execution_kind == "body_improvement":
                 # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
                 continue
@@ -8439,8 +8113,8 @@ class PlanningRuntimeMixin:
             if task.status == "running":
                 continue  # already running or permanently failed
 
-            execution_kind = self._task_execution_kind(task)
-            if self._task_governance_type(task) == "self_learning" or execution_kind == "body_improvement":
+            execution_kind = self._task_profile_policy.execution_kind(task)
+            if self._task_profile_policy.governance_type(task) == "self_learning" or execution_kind == "body_improvement":
                 # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
                 # The supervisor only approves them; execution is API-A initiated.
                 continue
@@ -8571,7 +8245,7 @@ class PlanningRuntimeMixin:
         now = datetime.now(timezone.utc)
 
         for task in self._autonomous_chain_store.list_writeback_history(status="completed"):
-            if self._task_runtime_family(task) != "self_learning":
+            if self._task_profile_policy.runtime_family(task) != "self_learning":
                 continue
             completed_count += 1
 
@@ -8949,7 +8623,7 @@ class PlanningRuntimeMixin:
         governed_task = self._autonomous_chain_store.get_task(task_id)
         if governed_task is None:
             return {"score_delta": 0, "reject_reason": "governed_task_not_found"}
-        if self._task_execution_kind(governed_task) != "body_improvement":
+        if self._task_profile_policy.execution_kind(governed_task) != "body_improvement":
             return {"score_delta": 0, "reject_reason": "governed_task_kind_mismatch"}
         governed_constraints = dict(governed_task.constraints or {})
         governed_evidence = dict(governed_task.evidence or {})

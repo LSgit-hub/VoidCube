@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为 Stage 4 Planning policy/workflow。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为 LM context assembler 与 candidate selection 边界。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -20,10 +20,10 @@
 
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
-| `VoidCube_cli/app.py` | 6,350 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
-| `systems/supervisor/planning_runtime.py` | 9,213 行 | JSON persistence 与只读 state projection 已外移；`PlanningRuntimeMixin` 仍混合认知、排程、治理和执行交接 | P0 |
+| `VoidCube_cli/app.py` | 6,245 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
+| `systems/supervisor/planning_runtime.py` | 8,889 行 | JSON persistence、只读 state projection、task profile policy 与 schedule allocation 已外移；`PlanningRuntimeMixin` 仍混合认知、治理和执行交接 | P0 |
 | `systems/supervisor/endogenous_drive.py` | 9,303 行 | `EndogenousDriveEngine` 仍混合感知、候选、LM 上下文、证据和策略记忆 | P0 |
-| `systems/supervisor/ui_runtime.py` | 1,104 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
+| `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
 | `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
 
 次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与四条 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到阈值时才进入后续批次。
@@ -158,7 +158,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 
 ### 6.1 当前问题
 
-`VoidcubeCLI.__init__` 约 291 行，混合以下状态：
+`VoidcubeCLI.__init__` 约 304 行，混合以下状态：
 
 - Provider、模型、凭证和 Agent；
 - session、conversation、checkpoint 和 resume；
@@ -282,7 +282,7 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 将以下职责放在一个 9,396 行类体内：
+`PlanningRuntimeMixin` 将以下职责放在一个 8,889 行类体内：
 
 - 内生历史、治理事件、认知状态和 self-regulation 的持久化；
 - 认知判断、候选注释、策略记忆和观察议程；
@@ -553,7 +553,7 @@ systems/supervisor/web/
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-## 15. 已完成治理总览（截至 2026-07-30）
+## 15. 已完成治理总览（截至 2026-08-01）
 
 以下内容替代已完成批次的逐条实时记录。它只描述当前仍有效的结构、所有权与验证基线；已删除的迁移过程、阶段性行数和过期“下一步”不再作为后续实现依据。
 
@@ -586,6 +586,10 @@ systems/supervisor/web/
 - Stage 4 planning activity projection：gateway timestamp normalize、idle duration、runtime observation input、Auto activity allowlist 与 Auto drive-input boundary 已迁至 `systems.supervisor.activity_projection`；它们仅接收 payload、clock 和 evidence 参数，不持有 Supervisor、Gateway 或 store。`PlanningRuntimeMixin` 的五个同名投影方法和内部 `self` 调用均已删除，Auto 仍由 runtime owner 负责获取 Gateway snapshot 与决定执行。
 - Stage 4 endogenous persistence repository：runtime root 下四类 endogenous JSON snapshot 的显式路径、损坏/非对象 JSON 回退与原子写入已迁至 `systems.supervisor.endogenous_state_repository.EndogenousStateRepository`，由 `assemble_supervisor_runtime_state()` 注入。repository 不接收 Supervisor，也不持有 snapshot default、history trim、strategy-memory normalize、event semantic de-dup 或 regulation decay；这些仍归 `PlanningRuntimeMixin` 的领域策略。四个旧 `_get_endogenous_*_path()` helper 与测试兼容壳均已删除。
 - Stage 4 endogenous state projection：bounded drive-history、governance-event stream 与 corrective-mode read model 已迁至 `systems.supervisor.endogenous_state_projection`。strategy-memory normalization 继续由 Planning domain owner 提供为显式 callback，projector 不读取 `self`、文件、Gateway 或 configuration。三个旧 Mixin helper 和测试调用均已删除。
+- Stage 4 TaskProfilePolicy：任务 taxonomy 的 normalize、runtime profile、governance type、execution kind、request type 和 execution-request eligibility 已迁至 `systems.supervisor.task_profile_policy.TaskProfilePolicy`；它只接收 task/request 显式输入，由 `runtime_assemblers.py` 注入。`PlanningRuntimeMixin` 的旧 task-profile 方法和调用路径已删除，task serialization、review、handoff、recovery 与 activity projection 全部改走 policy。
+- Stage 4 ScheduleAllocator：schedule value/metadata normalize、task token、occupied token、slot 对齐/分配、candidate reallocation、deterministic task sort 和 conflict index 已迁至 `systems.supervisor.schedule_allocator.ScheduleAllocator`；它只接收显式 task snapshot、occupied set、clock 与 interval，active task 查询和任务写回仍归 Planning owner。旧排程 helper 与测试入口已删除。
+- Stage 5 candidate factory/evidence channel：`EndogenousTaskCandidate`、API-B projection、scored candidate factory、evidence channel/confidence/conflict、evidence graph 与 research freshness 已分别迁至 `systems.supervisor.endogenous_candidate_pipeline` 和 `systems.supervisor.endogenous_evidence`。Planning 的 core-value 调用和 Supervisor 测试已切到新 owner，`EndogenousDriveEngine` 的旧 DTO、factory、channel、graph、freshness helper 与旧导入入口已删除。
+- Stage 5 LM proposal boundary：模型 client resolution、prompt transport、response status、batch cognitive-assessment normalization、proposal task/risk/evidence/execution normalization、candidate-kind defaults/constraints、reference alignment 与 supervisor advisory 已迁至 `systems.supervisor.endogenous_proposals`。`EndogenousDriveEngine` 只保留 runtime 配置解析、generation diagnostics 状态、候选资格/body projection、cognitive scoring 与 candidate materialization；旧 prompt transport、LM normalization constants/helper、私有测试入口和 `review_then_backlog` alias 均已删除，不保留 Engine 代理或双路径。
 
 ### 15.2 当前 CLI 命令边界
 
@@ -621,22 +625,32 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 本批 terminal TTS async adapter 的 focused 回归为 `2 passed`；CLI voice handler、command execution 与 TUI teardown 联合回归为 `147 passed`，并已运行 compileall 与 `git diff --check`。既有 `test_voice_transport.py` 在当前 Python 3.11 环境中因缺少可选语音依赖 `sherpa_onnx`、`truststore` 和 `numpy` 有 9 项环境失败，不能表述为语音 transport 全量通过。
 
+本批 TaskProfilePolicy 的纯 policy 回归为 `3 passed`，既有 runtime task profile 回归为 `3 passed`，Supervisor wiring 相关回归为 `21 passed`，task/profile/schedule/serialization 精确回归为 `9 passed`。`PlanningRuntimeMixin` 从 9,213 行降至 9,094 行；完整 `test_supervisor_autonomous_chain_store.py` 仍超过当前 60 秒单命令上限，未将其表述为全量通过。
+
+本批 ScheduleAllocator 的纯计算回归为 `3 passed`，既有排程集成回归为 `4 passed`；`PlanningRuntimeMixin` 从 9,094 行降至 8,889 行。完整 `test_supervisor_autonomous_chain_store.py` 仍超过当前 60 秒单命令上限，未将其表述为全量通过。
+
+本批 Stage 5 candidate/evidence pure pipeline 的模块回归为 `7 passed`，与 gap coverage 合并为 `43 passed, 1 xfailed`；Supervisor endogenous/learning 精确回归为 `74 passed`；架构/退役策略为 `14 passed`，TaskProfile/Schedule/activity 为 `9 passed`，TTS/CLI/TUI 为 `61 passed`，packaging contract 为 `20 passed`。已完成 production compileall、`git diff --check`、退役集成扫描和 wheel source-to-artifact 校验；`EndogenousDriveEngine` 从 9,303 行降至 8,866 行。聚合 Supervisor wiring 与完整 autonomous-chain 文件仍受当前 60 秒单命令上限限制，不将超时表述为全量通过。
+
+本批 Stage 5 candidate factory/evidence channel 的纯模块与 gap 联合回归为 `47 passed, 1 xfailed`，Supervisor LM evidence/external research/channel 回归为 `6 passed`，candidate budget/selection 回归为 `7 passed`，runtime wiring 精确回归为 `1 passed`；架构/退役策略为 `14 passed`，packaging contract 与纯模块联合为 `31 passed`。`EndogenousDriveEngine` 从 8,866 行降至 8,448 行；四个 P0 增长基线已按当前实际值收紧。已完成 production compileall、`git diff --check`、生产退役扫描和 wheel source-to-artifact 校验。
+
+本批 Stage 5 LM proposal boundary 新增模块回归为 `12 passed`，proposal/candidate/evidence 三块纯模块联合为 `23 passed`，Supervisor LM/认知/引用 focused 回归为 `16 passed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略为 `14 passed`，packaging/documentation contract 为 `28 passed`。已完成 production compileall、`git diff --check`、生产退役扫描和 wheel source-to-artifact 校验；`EndogenousDriveEngine` 从 8,448 行降至 7,927 行，`_materialize_lm_task_proposals()` 从 351 行降至 308 行，P0 行数与大方法增长基线已同步收紧。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 6,350 |
-| `systems/supervisor/planning_runtime.py` | 9,213 |
-| `systems/supervisor/endogenous_drive.py` | 9,303 |
-| `systems/supervisor/ui_runtime.py` | 1,104 |
+| `VoidCube_cli/app.py` | 6,245 |
+| `systems/supervisor/planning_runtime.py` | 8,887 |
+| `systems/supervisor/endogenous_drive.py` | 7,927 |
+| `systems/supervisor/ui_runtime.py` | 1,189 |
 
 ### 15.5 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
 - CLI-5：语音 runtime state 已完成第一批收敛；后续只迁移剩余录音调用者并删除 `tools.voice_mode` 的 transitional facade，不复制设备、线程或后台生命周期。
-- Stage 4 / 5：继续拆分 `planning_runtime.py` 的 policy/workflow，以及 `endogenous_drive.py` 的 candidate、evidence 和 LM proposal pipeline。endogenous JSON repository 与只读 state projection 已完成，不得重新把路径、JSON load、atomic write 或 read-model helper 放回 Mixin。
+- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness，以及 LM proposal transport/normalization/reference advisory 已迁至三个专属模块。`EndogenousDriveEngine` 仍持有 LM evidence/context/snapshot projection、候选资格、body projection、cognitive scoring、materialization 与最终 selection。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
 - Stage 6：继续收口 Supervisor UI route/adapters，并删除已迁移的 Mixin owner。
 
 ## 16. 下一次实施起点
 
-下一批继续 Stage 4，从 Planning 的领域 policy/workflow 中选择一个只依赖显式 snapshot/port 的责任边界拆出，优先评估 `TaskProfilePolicy` 或 `ScheduleAllocator`。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 endogenous JSON repository 再次扩张为策略或 Supervisor facade。
+下一批继续 Stage 5，优先将 `_build_lm_evidence_packet()`、`_build_lm_context_layers()` 和 `_build_lm_task_generation_context_snapshot()` 的纯 projection 收敛为显式 `CognitiveContextAssembler`，Engine 只组装输入并持有 latest-generation 状态；随后再拆 candidate eligibility/selection，保持 candidate kind、评分、冷却、body projection 和 API-B 判断语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
