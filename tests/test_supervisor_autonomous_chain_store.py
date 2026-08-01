@@ -35,6 +35,9 @@ from systems.supervisor.endogenous_proposals import (
     normalize_lm_execution_mode,
     supervisor_advisory_for_lm_proposal,
 )
+from systems.supervisor.endogenous_materialization import (
+    score_lm_proposal_cognitive_alignment,
+)
 from systems.supervisor.endogenous_generation_snapshot import (
     build_lm_task_generation_context_snapshot,
 )
@@ -8416,7 +8419,6 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
 @pytest.mark.unit
 async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_bindings(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    engine = supervisor._endogenous_drive_engine
     reference_alignment = align_lm_references(
         referenced_evidence_nodes=[],
         referenced_agenda_nodes=[],
@@ -8436,7 +8438,7 @@ async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_b
             "active_signals": [],
         },
     )
-    cognitive_alignment = engine._score_lm_proposal_cognitive_alignment(
+    cognitive_alignment = score_lm_proposal_cognitive_alignment(
         candidate_kind="exploratory_learning",
         task_type="learning",
         evidence_level="moderate",

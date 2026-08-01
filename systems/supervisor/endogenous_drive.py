@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import fnmatch
 import json
-import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from systems.supervisor.config_models import (
@@ -17,16 +15,17 @@ from systems.supervisor.endogenous_candidate_pipeline import (
     active_api_b_judgement_candidate_kinds,
     adaptive_factor_for_candidate,
     apply_adaptive_candidate_budget,
-    build_scored_candidate,
     candidate_kind_of,
     merge_lm_led_candidate_stream,
 )
 from systems.supervisor.endogenous_candidate_factories import (
-    body_improvement_constraints,
     build_body_improvement_candidate,
     build_governance_hygiene_review_candidate,
     build_memory_maintenance_candidate,
     build_truthfulness_review_candidate,
+)
+from systems.supervisor.endogenous_body_mapping import (
+    build_body_structure_mapping,
 )
 from systems.supervisor.endogenous_learning import (
     build_cognitive_assessment_review_candidate,
@@ -37,6 +36,12 @@ from systems.supervisor.endogenous_learning import (
     idle_learning_urgency,
     stable_learning_topic_key,
     topic_signature,
+)
+from systems.supervisor.endogenous_materialization import (
+    eligible_lm_candidate_kinds,
+    has_governance_hygiene_review_signal,
+    has_historical_governance_hygiene_review_signal,
+    materialize_lm_proposals,
 )
 from systems.supervisor.endogenous_context import (
     build_lm_context_layers,
@@ -59,95 +64,16 @@ from systems.supervisor.endogenous_evidence import (
     research_freshness_hint,
 )
 from systems.supervisor.endogenous_proposals import (
-    constraints_for_lm_candidate_kind,
     generate_lm_task_proposals,
     normalize_lm_cognitive_assessment,
-    normalize_lm_proposal,
     task_type_for_candidate_kind,
 )
-from systems.evolution_boundary import (
-    AGENT_EVOLUTION_ALLOWED_FILES,
-    AGENT_EVOLUTION_ALLOWED_PATHS,
-    classify_agent_evolution_changes,
-    normalize_repo_path,
-)
-
-
 _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 _REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"
 _STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS = 12
 TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
-
-_BODY_STRUCTURE_PATH_RE = re.compile(
-    r"(?<![\w.-])((?:(?:agent|tools|skills|presets)/"
-    r"[A-Za-z0-9_.\-/]+|run_agent\.py))"
-)
-_BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
-    tuple[str, tuple[str, ...], tuple[str, ...]],
-    ...,
-] = (
-    (
-        "prompt_context",
-        ("prompt", "context", "reasoning", "提示词", "上下文", "推理"),
-        ("agent/prompt_builder.py", "agent/context_engine.py", "agent/context_compressor.py"),
-    ),
-    (
-        "stream_display",
-        ("stream", "display", "render", "输出", "展示", "流式"),
-        ("agent/stream_handler.py", "agent/display.py", "agent/subagent_display.py"),
-    ),
-    (
-        "memory_access",
-        ("memory", "recall", "记忆", "召回"),
-        (
-            "agent/memory_manager.py",
-            "agent/memory_provider.py",
-            "systems/memory/recall.py",
-        ),
-    ),
-    (
-        "model_routing",
-        ("model", "provider", "routing", "模型", "路由", "供应商"),
-        ("agent/smart_model_routing.py", "agent/model_metadata.py", "agent/auxiliary_client.py"),
-    ),
-    (
-        "tool_execution",
-        ("tool", "terminal", "scheduler", "工具", "终端", "调度"),
-        ("agent/tool_scheduler.py", "tools/registry.py", "tools/terminal_tool.py"),
-    ),
-    (
-        "delegation",
-        ("delegate", "subagent", "multi-agent", "委派", "子代理", "多代理"),
-        ("tools/delegate_tool.py", "tools/mixture_of_agents_tool.py", "agent/subagent_display.py"),
-    ),
-    (
-        "skills",
-        ("skill", "skills", "技能"),
-        ("agent/skill_utils.py", "agent/skill_commands.py", "tools/skills_tool.py"),
-    ),
-    (
-        "error_resilience",
-        ("error", "retry", "rate limit", "错误", "重试", "限流"),
-        ("agent/error_classifier.py", "agent/retry_utils.py", "agent/rate_limit_tracker.py"),
-    ),
-    (
-        "security",
-        ("security", "redact", "credential", "安全", "脱敏", "凭证"),
-        ("agent/redact.py", "agent/message_sanitizer.py", "tools/approval.py"),
-    ),
-    (
-        "browser_web",
-        ("browser", "web", "crawl", "浏览器", "网页", "抓取"),
-        ("tools/browser_tool.py", "tools/web_tools.py", "tools/web_tools_local.py"),
-    ),
-    (
-        "file_operations",
-        ("file", "path", "filesystem", "文件", "路径"),
-        ("tools/file_tools.py", "tools/file_operations.py", "tools/path_security.py"),
-    ),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1465,39 +1391,6 @@ class EndogenousDriveEngine:
     ) -> bool:
         return perception.correction_signals >= TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 
-    def _has_governance_hygiene_review_signal(
-        self,
-        perception: DrivePerceptionSnapshot,
-    ) -> bool:
-        return (
-            perception.pending_review_count > 0
-            or perception.stale_backlog_count > 0
-            or perception.api_b_judgement_count > 3
-        )
-
-    def _has_historical_governance_hygiene_review_signal(
-        self,
-        drive_context: Dict[str, Any],
-    ) -> bool:
-        drive_history = dict(drive_context.get("drive_history") or {})
-        dragging = 0
-        for item in list(drive_history.get("outcomes") or [])[:12]:
-            if not isinstance(item, dict):
-                continue
-            family = str(
-                item.get("task_family")
-                or item.get("governance_task_type")
-                or ""
-            ).strip().lower()
-            if family not in {"general_self_evolution", "self_evolution"}:
-                continue
-            status = str(item.get("status") or "").strip().lower()
-            if status in {"approved", "deferred", "paused", "awaiting_review", "awaiting_user_consent", "retry"}:
-                dragging += 1
-            if dragging >= 2:
-                return True
-        return False
-
     def _detect_needs(
         self,
         *,
@@ -1701,7 +1594,7 @@ class EndogenousDriveEngine:
                 )
             )
         if autonomous_improvement_plan.get("eligible_for_planning"):
-            governance_review_active = self._has_governance_hygiene_review_signal(perception)
+            governance_review_active = has_governance_hygiene_review_signal(perception.pending_review_count, perception.stale_backlog_count, perception.api_b_judgement_count)
             backlog_need_score = self._clamp01(
                 0.2
                 + (min(perception.api_b_judgement_count, 5) * 0.08 if governance_review_active else 0.0)
@@ -2535,10 +2428,7 @@ class EndogenousDriveEngine:
                 drive_context,
                 stable_key="continuity:governance_hygiene_review",
             )
-            and (
-                self._has_governance_hygiene_review_signal(perception)
-                or self._has_historical_governance_hygiene_review_signal(drive_context)
-            )
+            and (has_governance_hygiene_review_signal(perception.pending_review_count, perception.stale_backlog_count, perception.api_b_judgement_count) or has_historical_governance_hygiene_review_signal(list(dict(drive_context.get("drive_history") or {}).get("outcomes") or [])))
         ):
             backlog_intent = intents_by_kind.get("governance_hygiene_review")
             candidates.append(
@@ -3497,7 +3387,6 @@ class EndogenousDriveEngine:
         drive_context: Dict[str, Any],
         evidence_packet: Dict[str, Any],
     ) -> List[_EndogenousTaskCandidate]:
-        realized: List[_EndogenousTaskCandidate] = []
         perception = deliberation.perception
         adaptive_policy = deliberation.adaptive_policy
         evidence_graph = dict(evidence_packet.get("evidence_graph") or {})
@@ -3517,468 +3406,55 @@ class EndogenousDriveEngine:
         self_evolution_plan = dict(
             dict(evidence_packet.get("plans") or {}).get("self_evolution") or {}
         )
-        kind_map = {
-            "memory_maintenance": {
-                "stable_prefix": "lm:continuity:memory_maintenance",
-                "governance_task_type": "memory_maintenance",
-                "task_family": "memory_maintenance",
-                "execution_kind": "memory_maintenance",
-                "value_tags": ["continuity"],
-            },
-            "truthfulness_review": {
-                "stable_prefix": "lm:truthfulness:review",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "execution_kind": None,
-                "value_tags": ["truthfulness"],
-            },
-            "exploratory_learning": {
-                "stable_prefix": "lm:creativity:exploratory",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "execution_kind": None,
-                "value_tags": ["creativity"],
-            },
-            "shell_baseline_learning": {
-                "stable_prefix": "lm:creativity:shell_baseline",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "execution_kind": None,
-                "value_tags": ["creativity"],
-            },
-            "governance_hygiene_review": {
-                "stable_prefix": "lm:continuity:governance_hygiene",
-                "governance_task_type": "self_evolution",
-                "task_family": "general_self_evolution",
-                "execution_kind": "general_self_evolution",
-                "value_tags": ["continuity", "truthfulness"],
-            },
-            "body_improvement": {
-                "stable_prefix": "lm:creativity:body_improvement",
-                "governance_task_type": "self_evolution",
-                "task_family": "body_upgrade",
-                "execution_kind": "body_improvement",
-                "value_tags": ["creativity", "continuity"],
-            },
-        }
-        active_candidate_kinds = active_api_b_judgement_candidate_kinds(list(drive_context.get("api_b_judgement_tasks") or []))
+        active_candidate_kinds = active_api_b_judgement_candidate_kinds(
+            list(drive_context.get("api_b_judgement_tasks") or [])
+        )
+        eligible_kinds = eligible_lm_candidate_kinds(
+            active_candidate_kinds=active_candidate_kinds,
+            self_evolution_eligible=bool(self_evolution_plan.get("eligible_for_planning")),
+            body_projection_available=bool(body_projection.get("available")),
+            body_growth_quota=adaptive_policy.body_growth_quota,
+            governance_signal_present=(has_governance_hygiene_review_signal(perception.pending_review_count, perception.stale_backlog_count, perception.api_b_judgement_count) or has_historical_governance_hygiene_review_signal(list(dict(drive_context.get("drive_history") or {}).get("outcomes") or []))),
+        )
 
-        for item in proposals:
-            candidate_kind = str(item.get("candidate_kind") or "").strip()
-            mapping = kind_map.get(candidate_kind)
-            if mapping is None:
-                continue
-            if candidate_kind in active_candidate_kinds:
-                continue
-            if candidate_kind == "body_improvement" and (
-                not self_evolution_plan.get("eligible_for_planning")
-                or not body_projection.get("available")
-                or adaptive_policy.body_growth_quota <= 0
-            ):
-                continue
-            if (
-                candidate_kind == "governance_hygiene_review"
-                and not self._has_governance_hygiene_review_signal(perception)
-                and not self._has_historical_governance_hygiene_review_signal(drive_context)
-            ):
-                continue
-            normalized_proposal = normalize_lm_proposal(
-                item,
-                evidence_graph=evidence_graph,
-                agenda_graph=agenda_graph,
+        def backlog_pressure(
+            governance_task_type: str,
+            task_family: str,
+            execution_kind: Optional[str],
+        ) -> float:
+            return self._backlog_pressure_penalty(
+                drive_context,
+                governance_task_type=governance_task_type,
+                task_family=task_family,
+                execution_kind=execution_kind,
             )
-            if normalized_proposal is None:
-                continue
-            title = normalized_proposal.title
-            summary = normalized_proposal.summary
-            stable_key = f"{mapping['stable_prefix']}:{stable_learning_topic_key(title)}"
-            if candidate_kind == "body_improvement":
-                stable_key = (
-                    f"{mapping['stable_prefix']}:"
-                    f"{body_projection['mapping_key']}"
-                )
-            if stable_key in existing_keys:
-                continue
-            confidence = normalized_proposal.confidence
-            evidence_summary = normalized_proposal.evidence_summary
-            rationale = normalized_proposal.rationale
-            task_type = normalized_proposal.task_type
-            risk_level = normalized_proposal.risk_level
-            evidence_level = normalized_proposal.evidence_level
-            llm_observation_required = normalized_proposal.observation_required
-            llm_execution_mode = normalized_proposal.execution_mode
-            blocking_factors = normalized_proposal.blocking_factors
-            referenced_evidence_nodes = normalized_proposal.referenced_evidence_nodes
-            referenced_agenda_nodes = normalized_proposal.referenced_agenda_nodes
-            posture_alignment = normalized_proposal.posture_alignment
-            priority_basis = normalized_proposal.priority_basis
-            reference_alignment = normalized_proposal.reference_alignment
-            supervisor_advisory = normalized_proposal.supervisor_advisory
-            cognitive_alignment = self._score_lm_proposal_cognitive_alignment(
+
+        def drive_judgement(candidate_kind: str) -> Dict[str, Any]:
+            return self._drive_judgement_metadata(
+                intent=intent_by_kind.get(candidate_kind),
                 candidate_kind=candidate_kind,
-                task_type=task_type,
-                evidence_level=evidence_level,
-                risk_level=risk_level,
-                observation_required=llm_observation_required,
-                execution_mode=llm_execution_mode,
-                blocking_factors=blocking_factors,
-                reference_alignment=reference_alignment,
-                evidence_packet=evidence_packet,
-                posture_alignment=posture_alignment,
-                priority_basis=priority_basis,
+                all_intents=list(deliberation.intents),
+                needs=list(deliberation.needs),
+                perception=perception,
+                world_model=deliberation.world_model,
+                reflection=deliberation.reflection,
+                adaptive_policy=adaptive_policy,
             )
-            intent = intent_by_kind.get(candidate_kind)
-            constraints = constraints_for_lm_candidate_kind(candidate_kind)
-            body_metadata: Dict[str, Any] = {}
-            body_evidence: Dict[str, Any] = {}
-            if candidate_kind == "body_improvement":
-                constraints.update(
-                    body_improvement_constraints(body_projection)
-                )
-                body_metadata = {
-                    "improvement_direction_source": body_projection.get(
-                        "mapping_source"
-                    ),
-                    "target_paths": list(body_projection.get("target_paths") or []),
-                    "structure_domains": list(
-                        body_projection.get("structure_domains") or []
-                    ),
-                    "learning_task_ids": [
-                        ref.get("mem_id")
-                        for ref in list(body_projection.get("learning_refs") or [])
-                    ],
-                    "learning_quality_score": body_projection.get(
-                        "learning_quality_score"
-                    ),
-                }
-                body_evidence = {
-                    "learning_quality_score": body_projection.get(
-                        "learning_quality_score"
-                    ),
-                    "learning_refs": list(
-                        body_projection.get("learning_refs") or []
-                    ),
-                    "structure_mapping": {
-                        "source": body_projection.get("mapping_source"),
-                        "domains": list(
-                            body_projection.get("structure_domains") or []
-                        ),
-                        "target_paths": list(
-                            body_projection.get("target_paths") or []
-                        ),
-                    },
-                }
-            constraints.update(
-                {
-                    "lm_execution_mode": llm_execution_mode,
-                    "lm_observation_required": llm_observation_required,
-                }
-            )
-            if blocking_factors:
-                constraints["lm_blocking_factors"] = list(blocking_factors)
-            if referenced_evidence_nodes:
-                constraints["lm_referenced_evidence_nodes"] = list(referenced_evidence_nodes)
-            if referenced_agenda_nodes:
-                constraints["lm_referenced_agenda_nodes"] = list(referenced_agenda_nodes)
-            if posture_alignment:
-                constraints["lm_posture_alignment"] = list(posture_alignment)
-            if priority_basis:
-                constraints["lm_priority_basis"] = list(priority_basis)
-            constraints["reference_alignment"] = reference_alignment
-            constraints["cognitive_alignment"] = cognitive_alignment
-            constraints["supervisor_recommended_execution_mode"] = supervisor_advisory["recommended_execution_mode"]
-            constraints["supervisor_recommended_observation_required"] = supervisor_advisory["recommended_observation_required"]
-            if supervisor_advisory["advisory_reasons"]:
-                constraints["supervisor_advisory_reasons"] = list(supervisor_advisory["advisory_reasons"])
-            realized.append(
-                build_scored_candidate(
-                    stable_key=stable_key,
-                    title=title,
-                    summary=summary,
-                    priority="high" if confidence >= 0.75 else "normal",
-                    governance_task_type=str(mapping["governance_task_type"]),
-                    task_family=str(mapping["task_family"]),
-                    execution_kind=mapping["execution_kind"],
-                    value_tags=list(mapping["value_tags"]),
-                    candidate_kind=candidate_kind,
-                    score_inputs={
-                        "core_value_strength": 0.72,
-                        "urgency": confidence,
-                        "novelty": 0.66,
-                        "specificity": self._clamp01(0.45 + min(len(summary), 240) / 400.0),
-                        "execution_readiness": self._clamp01(
-                            0.48
-                            + confidence * 0.4
-                            - self._clamp01(reference_alignment.get("grounding_penalty") or 0.0) * 0.28
-                            - (
-                                0.08
-                                if list(reference_alignment.get("missing_primary_evidence_nodes") or [])
-                                else 0.0
-                            )
-                            - (
-                                0.08
-                                if list(reference_alignment.get("missing_primary_agenda_nodes") or [])
-                                else 0.0
-                            )
-                        ),
-                        "backlog_pressure_penalty": self._backlog_pressure_penalty(
-                            drive_context,
-                            governance_task_type=str(mapping["governance_task_type"]),
-                            task_family=str(mapping["task_family"]),
-                            execution_kind=mapping["execution_kind"],
-                        ),
-                        "repetition_penalty": self._clamp01(
-                            float(reference_alignment.get("grounding_penalty") or 0.0) * 0.55
-                            + (
-                                0.12
-                                if not referenced_evidence_nodes or not referenced_agenda_nodes
-                                else 0.0
-                            )
-                        ),
-                        "adaptive_factor": adaptive_factor_for_candidate(
-                            candidate_kind=candidate_kind,
-                            adaptive_policy=adaptive_policy,
-                        ),
-                    },
-                    metadata={
-                        "llm_task_generated": True,
-                        "llm_task_confidence": confidence,
-                        "llm_task_rationale": rationale,
-                        "llm_task_type": task_type,
-                        "llm_task_risk_level": risk_level,
-                        "llm_task_evidence_level": evidence_level,
-                        "llm_task_observation_required": llm_observation_required,
-                        "llm_task_execution_mode": llm_execution_mode,
-                        "llm_task_blocking_factors": list(blocking_factors),
-                        "llm_referenced_evidence_nodes": list(referenced_evidence_nodes),
-                        "llm_referenced_agenda_nodes": list(referenced_agenda_nodes),
-                        "llm_posture_alignment": list(posture_alignment),
-                        "llm_priority_basis": list(priority_basis),
-                        "llm_cognitive_assessment": dict(batch_cognitive_assessment),
-                        "reference_alignment": reference_alignment,
-                        "cognitive_alignment": cognitive_alignment,
-                        "supervisor_advisory": supervisor_advisory,
-                        **body_metadata,
-                        "drive_judgement": self._drive_judgement_metadata(
-                            intent=intent,
-                            candidate_kind=candidate_kind,
-                            all_intents=list(deliberation.intents),
-                            needs=list(deliberation.needs),
-                            perception=deliberation.perception,
-                            world_model=deliberation.world_model,
-                            reflection=deliberation.reflection,
-                            adaptive_policy=deliberation.adaptive_policy,
-                        ),
-                    },
-                    evidence={
-                        "llm_generated": True,
-                        "evidence_summary": evidence_summary,
-                        "llm_rationale": rationale,
-                        "llm_task_type": task_type,
-                        "llm_risk_level": risk_level,
-                        "llm_evidence_level": evidence_level,
-                        "llm_observation_required": llm_observation_required,
-                        "llm_execution_mode": llm_execution_mode,
-                        "llm_blocking_factors": list(blocking_factors),
-                        "llm_referenced_evidence_nodes": list(referenced_evidence_nodes),
-                        "llm_referenced_agenda_nodes": list(referenced_agenda_nodes),
-                        "llm_posture_alignment": list(posture_alignment),
-                        "llm_priority_basis": list(priority_basis),
-                        "llm_cognitive_assessment": dict(batch_cognitive_assessment),
-                        "reference_alignment": reference_alignment,
-                        "cognitive_alignment": cognitive_alignment,
-                        "supervisor_advisory": supervisor_advisory,
-                        "active_sessions": perception.active_sessions,
-                        **body_evidence,
-                    },
-                    constraints=constraints,
-                )
-            )
-            existing_keys.add(stable_key)
-        return realized
 
-
-    def _score_lm_proposal_cognitive_alignment(
-        self,
-        *,
-        candidate_kind: str,
-        task_type: str,
-        evidence_level: str,
-        risk_level: str,
-        observation_required: bool,
-        execution_mode: str,
-        blocking_factors: List[str],
-        reference_alignment: Dict[str, Any],
-        evidence_packet: Dict[str, Any],
-        posture_alignment: List[str],
-        priority_basis: List[str],
-    ) -> Dict[str, Any]:
-        task_type_priors = dict(evidence_packet.get("task_type_priors") or {})
-        priors = [
-            dict(item)
-            for item in list(task_type_priors.get("priors") or [])
-            if isinstance(item, dict)
-        ]
-        prior_map = {
-            str(item.get("task_type") or "").strip(): dict(item)
-            for item in priors
-            if str(item.get("task_type") or "").strip()
-        }
-        prior_row = prior_map.get(task_type, {})
-        prior_score = self._clamp01(prior_row.get("score") or 0.0)
-        top_priority_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
-        top_priority_score = self._clamp01(task_type_priors.get("top_priority_score") or 0.0)
-
-        evidence_credibility_summary = dict(evidence_packet.get("evidence_credibility_summary") or {})
-        weak_channels = [
-            str(item).strip()
-            for item in list(evidence_credibility_summary.get("weak_or_missing_channels") or [])
-            if str(item).strip()
-        ]
-        high_channels = [
-            str(item).strip()
-            for item in list(evidence_credibility_summary.get("high_credibility_channels") or [])
-            if str(item).strip()
-        ]
-        self_model_snapshot = dict(evidence_packet.get("self_model_snapshot") or {})
-        cognitive_posture = dict(evidence_packet.get("cognitive_posture") or {})
-        self_gaps = [
-            str(item).strip()
-            for item in list(self_model_snapshot.get("self_understanding_gaps") or [])
-            if str(item).strip()
-        ]
-        reasons: List[str] = []
-        score = 0.34
-
-        if top_priority_task_type and task_type == top_priority_task_type:
-            score += 0.26
-            reasons.append("matches_program_top_task_type_prior")
-        elif prior_score >= 0.55:
-            score += 0.16
-            reasons.append("matches_high_program_task_type_prior")
-        else:
-            score -= 0.06
-            reasons.append("task_type_is_not_favored_by_current_program_priors")
-
-        alignment_score = self._clamp01(reference_alignment.get("alignment_score") or 0.0)
-        score += alignment_score * 0.18
-        if alignment_score >= 0.75:
-            reasons.append("reference_alignment_is_strong")
-        elif alignment_score < 0.5:
-            score -= 0.08
-            reasons.append("reference_alignment_is_weak")
-        grounding_penalty = self._clamp01(reference_alignment.get("grounding_penalty") or 0.0)
-        if grounding_penalty > 0.0:
-            score -= grounding_penalty * 0.35
-            reasons.append("reference_grounding_penalty_is_active")
-        missing_primary_evidence_nodes = [
-            str(item).strip()
-            for item in list(reference_alignment.get("missing_primary_evidence_nodes") or [])[:4]
-            if str(item).strip()
-        ]
-        missing_primary_agenda_nodes = [
-            str(item).strip()
-            for item in list(reference_alignment.get("missing_primary_agenda_nodes") or [])[:4]
-            if str(item).strip()
-        ]
-        if missing_primary_evidence_nodes:
-            score -= 0.11
-            reasons.append("proposal_does_not_bind_primary_evidence_nodes")
-        if missing_primary_agenda_nodes:
-            score -= 0.11
-            reasons.append("proposal_does_not_bind_primary_agenda_nodes")
-        if not reference_alignment.get("matched_evidence_nodes"):
-            score -= 0.08
-            reasons.append("proposal_does_not_reference_evidence_graph")
-        if not reference_alignment.get("matched_agenda_nodes"):
-            score -= 0.08
-            reasons.append("proposal_does_not_reference_agenda_graph")
-
-        if task_type == "improvement":
-            if self_gaps:
-                score -= 0.1
-                reasons.append("improvement_is_early_while_self_model_gaps_remain")
-            if weak_channels:
-                score -= 0.08
-                reasons.append("improvement_runs_against_weak_or_missing_channels")
-            if evidence_level == "strong" and risk_level != "high" and not weak_channels:
-                score += 0.08
-                reasons.append("improvement_has_strong_enough_evidence")
-
-        if task_type in {"observation", "review"} and weak_channels:
-            score += 0.08
-            reasons.append("conservative_task_type_matches_weak_channel_context")
-        if task_type == "learning" and self_gaps:
-            score += 0.07
-            reasons.append("learning_can_reduce_current_self_model_gaps")
-        if evidence_level == "weak" and task_type in {"observation", "review"}:
-            score += 0.06
-            reasons.append("weak_evidence_is_handled_conservatively")
-        if evidence_level == "weak" and task_type == "improvement":
-            score -= 0.12
-            reasons.append("weak_evidence_conflicts_with_improvement_shape")
-
-        if risk_level == "high" and execution_mode == "guarded_execution":
-            score += 0.05
-            reasons.append("high_risk_is_at_least_guarded")
-        elif risk_level == "high":
-            score -= 0.08
-            reasons.append("high_risk_is_not_guarded_enough")
-
-        if observation_required and task_type in {"observation", "review"}:
-            score += 0.04
-            reasons.append("observation_requirement_matches_task_type")
-        if blocking_factors and task_type in {"observation", "review"}:
-            score += 0.03
-            reasons.append("blocking_factors_are_handled_with_conservative_task_shape")
-        if candidate_kind == "body_improvement" and weak_channels:
-            score -= 0.06
-            reasons.append("body_improvement_should_wait_for_stronger_channels")
-
-        posture_name = str(cognitive_posture.get("name") or "").strip().lower()
-        if posture_alignment:
-            score += 0.05
-            reasons.append("proposal_explicitly_states_posture_alignment")
-        if priority_basis:
-            score += 0.04
-            reasons.append("proposal_explicitly_states_priority_basis")
-        if posture_name == "truthfulness_first" and task_type == "review":
-            score += 0.06
-            reasons.append("task_shape_matches_truthfulness_first_posture")
-        elif posture_name == "evidence_repair_first" and task_type in {"review", "observation"}:
-            score += 0.06
-            reasons.append("task_shape_matches_evidence_repair_first_posture")
-        elif posture_name == "observe_first" and task_type in {"observation", "review"}:
-            score += 0.06
-            reasons.append("task_shape_matches_observe_first_posture")
-        elif posture_name == "conservative" and task_type in {"maintenance", "observation", "review"}:
-            score += 0.05
-            reasons.append("task_shape_matches_conservative_posture")
-        elif posture_name in {"truthfulness_first", "evidence_repair_first", "observe_first"} and task_type == "improvement":
-            score -= 0.08
-            reasons.append("task_shape_conflicts_with_current_cognitive_posture")
-
-        score = self._clamp01(score)
-        quality = "strong"
-        if score < 0.45:
-            quality = "weak"
-        elif score < 0.7:
-            quality = "partial"
-        return {
-            "score": round(score, 4),
-            "quality": quality,
-            "task_type_prior_score": round(prior_score, 4),
-            "top_priority_task_type": top_priority_task_type,
-            "top_priority_score": round(top_priority_score, 4),
-            "weak_or_missing_channels": weak_channels,
-            "high_credibility_channels": high_channels,
-            "self_understanding_gaps": self_gaps,
-            "reasons": reasons[:8],
-            "summary": (
-                f"Proposal cognitive alignment is {quality} "
-                f"(score={score:.2f}) against current program-side priors and evidence posture."
-            ),
-        }
+        return materialize_lm_proposals(
+            proposals=proposals,
+            existing_keys=existing_keys,
+            evidence_graph=evidence_graph,
+            agenda_graph=agenda_graph,
+            evidence_packet=evidence_packet,
+            batch_cognitive_assessment=batch_cognitive_assessment,
+            adaptive_policy=adaptive_policy,
+            body_projection=body_projection,
+            eligible_candidate_kinds=eligible_kinds,
+            active_sessions=perception.active_sessions,
+            backlog_pressure=backlog_pressure,
+            drive_judgement=drive_judgement,
+        )
 
     def _build_external_research_evidence(self) -> List[Dict[str, Any]]:
         service_runtime = getattr(self.config, "service_runtime", None)
@@ -6183,81 +5659,6 @@ class EndogenousDriveEngine:
 
         return False
 
-    @staticmethod
-    def _learning_evidence_freshness(completed_at: Any) -> float:
-        text = str(completed_at or "").strip()
-        if not text:
-            return 0.0
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            age_days = max(
-                0.0,
-                (datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0,
-            )
-            return max(0.0, 1.0 - age_days / 90.0)
-        except (TypeError, ValueError, OverflowError):
-            return 0.0
-
-    @staticmethod
-    def _canonical_body_editable_roots(policy: Dict[str, Any]) -> List[str]:
-        configured = policy.get("body_improvement_editable_dirs")
-        raw_roots = list(configured or AGENT_EVOLUTION_ALLOWED_PATHS)
-        canonical_roots = [normalize_repo_path(path) for path in AGENT_EVOLUTION_ALLOWED_PATHS]
-        canonical_files = {normalize_repo_path(path) for path in AGENT_EVOLUTION_ALLOWED_FILES}
-        roots: List[str] = []
-        for raw_root in raw_roots:
-            root = normalize_repo_path(str(raw_root))
-            if not root:
-                continue
-            if root in canonical_files:
-                normalized = root
-            else:
-                normalized = root.rstrip("/") + "/"
-                if not any(
-                    normalized == canonical
-                    or normalized.startswith(canonical)
-                    for canonical in canonical_roots
-                ):
-                    continue
-            if normalized not in roots:
-                roots.append(normalized)
-        return roots
-
-    @staticmethod
-    def _path_within_body_editable_roots(
-        path: str,
-        editable_roots: List[str],
-        forbidden_patterns: List[str],
-    ) -> bool:
-        normalized = normalize_repo_path(path)
-        if not normalized or not classify_agent_evolution_changes([normalized]).ok:
-            return False
-        if any(
-            fnmatch.fnmatch(normalized, str(pattern).replace("\\", "/"))
-            for pattern in forbidden_patterns
-            if str(pattern).strip()
-        ):
-            return False
-        return any(
-            normalized == root.rstrip("/")
-            if not root.endswith("/")
-            else normalized.startswith(root)
-            for root in editable_roots
-        )
-
-    @staticmethod
-    def _body_structure_keyword_matches(text: str, keyword: str) -> bool:
-        if keyword.isascii():
-            return bool(
-                re.search(
-                    rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])",
-                    text,
-                )
-            )
-        return keyword in text
-
     def _build_body_improvement_projection(
         self,
         *,
@@ -6294,135 +5695,13 @@ class EndogenousDriveEngine:
             cooldown_hours=int(policy.get("body_improvement_cooldown_hours") or 12),
         ):
             return {"available": False, "reason": "body_improvement_cooldown"}
-
-        editable_roots = self._canonical_body_editable_roots(policy)
-        if not editable_roots:
-            return {"available": False, "reason": "no_canonical_editable_roots"}
-        max_files = max(1, min(5, int(policy.get("body_improvement_max_files") or 5)))
-        forbidden_patterns = [
-            str(pattern).strip()
-            for pattern in list(policy.get("body_improvement_forbidden_patterns") or [])
-            if str(pattern).strip()
-        ]
-
-        ranked_learning: List[tuple[float, Dict[str, Any]]] = []
-        for task in completed_learning_tasks:
-            freshness = self._learning_evidence_freshness(task.get("completed_at"))
-            if freshness <= 0.0:
-                continue
-            try:
-                quality = float(task.get("quality_score"))
-            except (TypeError, ValueError):
-                quality = 0.5
-            if quality > 1.0:
-                quality /= 100.0
-            quality = self._clamp01(quality)
-            relevance = self._clamp01(quality * 0.65 + freshness * 0.35)
-            ranked_learning.append((relevance, task))
-        ranked_learning.sort(key=lambda item: item[0], reverse=True)
-
-        target_paths: List[str] = []
-        structure_domains: List[str] = []
-        learning_refs: List[Dict[str, Any]] = []
-        evidence_summary: List[str] = []
-
-        for relevance, task in ranked_learning[:5]:
-            learning_task_id = str(task.get("task_id") or "").strip()
-            if not learning_task_id:
-                continue
-            text_parts = [
-                str(task.get("title") or ""),
-                str(task.get("summary") or ""),
-                str(task.get("conclusion") or ""),
-                *[
-                    str(item)
-                    for item in list(task.get("evidence_summary") or [])
-                ],
-            ]
-            learning_text = "\n".join(part for part in text_parts if part.strip())
-            normalized_text = learning_text.replace("\\", "/")
-            task_targets: List[str] = []
-            for match in _BODY_STRUCTURE_PATH_RE.findall(normalized_text):
-                path = normalize_repo_path(match).rstrip(".,:;)]}")
-                if self._path_within_body_editable_roots(
-                    path,
-                    editable_roots,
-                    forbidden_patterns,
-                ):
-                    task_targets.append(path)
-                    if "explicit_code_reference" not in structure_domains:
-                        structure_domains.append("explicit_code_reference")
-
-            if not task_targets:
-                lowered = learning_text.lower()
-                for domain, keywords, domain_targets in _BODY_STRUCTURE_DOMAIN_TARGETS:
-                    if not any(
-                        self._body_structure_keyword_matches(lowered, keyword)
-                        for keyword in keywords
-                    ):
-                        continue
-                    added_for_domain = False
-                    for path in domain_targets:
-                        if self._path_within_body_editable_roots(
-                            path,
-                            editable_roots,
-                            forbidden_patterns,
-                        ):
-                            task_targets.append(path)
-                            added_for_domain = True
-                    if added_for_domain and domain not in structure_domains:
-                        structure_domains.append(domain)
-
-            task_targets = list(dict.fromkeys(task_targets))
-            if not task_targets:
-                continue
-            for path in task_targets:
-                if path not in target_paths and len(target_paths) < max_files:
-                    target_paths.append(path)
-            learning_refs.append(
-                {
-                    "mem_id": learning_task_id,
-                    "timestamp": str(task.get("completed_at") or ""),
-                    "relevance": round(relevance, 4),
-                    "title": str(task.get("title") or "")[:200],
-                    "target_paths": task_targets[:max_files],
-                }
-            )
-            conclusion = str(task.get("conclusion") or task.get("summary") or "").strip()
-            if conclusion:
-                evidence_summary.append(conclusion[:400])
-            if len(target_paths) >= max_files:
-                break
-
-        if not target_paths or not learning_refs:
-            return {
-                "available": False,
-                "reason": "learning_evidence_has_no_safe_structure_mapping",
-                "learning_quality_score": round(learning_quality_score, 4),
-                "editable_roots": editable_roots,
-            }
-
-        mapping_key = stable_learning_topic_key(
-            "|".join(
-                [shell_slot_id, *target_paths, *[ref["mem_id"] for ref in learning_refs]]
-            )
-        ).rsplit(":", 1)[-1]
-        return {
-            "available": True,
-            "mapping_key": mapping_key,
-            "mapping_source": "learning_evidence_structure_projection_v1",
-            "target_slot_id": shell_slot_id,
-            "worktree_path": shell_worktree,
-            "target_paths": target_paths,
-            "structure_domains": structure_domains[:6],
-            "editable_dirs": editable_roots,
-            "forbidden_patterns": forbidden_patterns,
-            "max_files_changed": max_files,
-            "learning_quality_score": round(learning_quality_score, 4),
-            "learning_refs": learning_refs,
-            "evidence_summary": evidence_summary[:5],
-        }
-
+        return build_body_structure_mapping(
+            completed_learning_tasks=completed_learning_tasks,
+            shell_slot_id=shell_slot_id,
+            shell_worktree=shell_worktree,
+            policy=policy,
+            learning_quality_score=learning_quality_score,
+        )
     def _within_cooldown(
         self,
         raw_timestamp: Any,

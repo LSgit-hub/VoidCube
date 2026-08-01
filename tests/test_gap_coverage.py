@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_body_mapping import build_body_structure_mapping
 from systems.supervisor.supervisor import SupervisorConfig
 
 
@@ -1278,9 +1279,12 @@ class TestEndogenousDriveErrorBridge:
                 "agent/credential_pool.py."
             )
         )
-        projection = engine._build_body_improvement_projection(
-            drive_context=engine._build_drive_context(drive_input),
-            shell_slot_meta=drive_input["shell_slot"],
+        projection = build_body_structure_mapping(
+            completed_learning_tasks=drive_input["completed_learning_tasks"],
+            shell_slot_id=drive_input["shell_slot"]["slot_id"],
+            shell_worktree=drive_input["shell_slot"]["worktree_path"],
+            policy=drive_input["endogenous_drive_policy"],
+            learning_quality_score=100.0,
         )
 
         assert projection["available"] is True

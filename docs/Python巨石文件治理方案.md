@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal/context/snapshot/selection/factory/learning pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为 candidate materialization 与剩余 Supervisor policy boundary。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal/context/snapshot/selection/factory/learning/materialization/body-mapping pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为剩余 Supervisor policy projection 与 orchestration boundary。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -22,7 +22,7 @@
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 6,245 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
 | `systems/supervisor/planning_runtime.py` | 8,889 行 | JSON persistence、只读 state projection、task profile policy 与 schedule allocation 已外移；`PlanningRuntimeMixin` 仍混合认知、治理和执行交接 | P0 |
-| `systems/supervisor/endogenous_drive.py` | 6,510 行 | `EndogenousDriveEngine` 仍混合感知、候选资格、LM materialization、策略记忆和运行时编排 | P0 |
+| `systems/supervisor/endogenous_drive.py` | 5,789 行 | `EndogenousDriveEngine` 仍混合感知、候选资格、策略记忆和运行时编排 | P0 |
 | `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
 | `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
 
@@ -322,7 +322,7 @@ VoidCube_windows/                未来才创建
 
 ### 8.1 当前问题
 
-`EndogenousDriveEngine` 同时负责感知、world model、reflection、adaptive policy、need/intent/signal、候选资格、LM materialization、外部研究、策略记忆和 body candidate；候选流已收敛到约 364 行，LM materialization 仍约 308 行，策略构建仍约 517 行。
+`EndogenousDriveEngine` 同时负责感知、world model、reflection、adaptive policy、need/intent/signal、候选资格、materialization orchestration、外部研究、策略记忆和 body candidate；候选流约 364 行，materialization orchestration 已降至约 80 行，策略构建仍约 517 行。
 
 ### 8.2 目标流水线
 
@@ -592,6 +592,9 @@ systems/supervisor/web/
 - Stage 5 LM proposal boundary：模型 client resolution、prompt transport、response status、batch cognitive-assessment normalization、proposal task/risk/evidence/execution normalization、candidate-kind defaults/constraints、reference alignment 与 supervisor advisory 已迁至 `systems.supervisor.endogenous_proposals`。`EndogenousDriveEngine` 只保留 runtime 配置解析、generation diagnostics 状态、候选资格/body projection、cognitive scoring 与 candidate materialization；旧 prompt transport、LM normalization constants/helper、私有测试入口和 `review_then_backlog` alias 均已删除，不保留 Engine 代理或双路径。
 - Stage 5 LM context/snapshot/selection boundary：LM evidence channel/context layering、generation snapshot projection、LM/heuristic candidate merge 与 API-B active-kind projection 已分别迁至 `systems.supervisor.endogenous_evidence`、`systems.supervisor.endogenous_context`、`systems.supervisor.endogenous_generation_snapshot` 和 `systems.supervisor.endogenous_candidate_pipeline`。`EndogenousDriveEngine` 只组装显式输入、持有 latest-generation 状态并执行最终 candidate materialization；旧 context/snapshot/selection helper、私有测试入口和伪参数路径已删除。
 - Stage 5 stable family/learning boundary：memory maintenance、truthfulness、governance hygiene、body improvement、shell baseline、exploratory learning 与 cognitive-assessment review 的 candidate factory，以及 learning topic 提取、去重、冷却、novelty/specificity policy 已迁至 `systems.supervisor.endogenous_candidate_factories` 与 `systems.supervisor.endogenous_learning`。Engine 继续负责 eligibility、backlog pressure、body projection、drive judgement 和 candidate stream 编排；旧 learning factory、topic policy、stable-key 和测试入口已删除，不保留 Engine 代理或双路径。
+- Stage 5 materialization boundary：candidate-kind spec/eligibility、LM cognitive-alignment scoring、constraints/metadata/evidence projection 与 scored candidate materialization 已迁至 `systems.supervisor.endogenous_materialization`。Engine 只准备 body projection、治理信号、backlog pressure 和 drive-judgement ports；旧 308 行 materialization、旧 cognitive-alignment helper 与测试入口已删除，不保留 Engine 双路径。
+- Stage 5 body mapping boundary：canonical editable roots、evolution boundary/path safety、forbidden-pattern filtering、learning evidence freshness/ranking、显式路径与关键词到 body structure domain 的映射已迁至 `systems.supervisor.endogenous_body_mapping`。Engine 继续持有 body quality threshold、shell-slot 检查、cooldown 与运行时编排；旧 mapping helper、重复常量和直接 Engine 测试入口已删除，不保留双路径。
+- Stage 5 candidate eligibility signal boundary：当前计数治理卫生信号与历史拖滞信号已迁至 `systems.supervisor.endogenous_materialization` 的纯函数；Engine 只组装最小 perception/history 输入，不保留旧私有 signal helper 或兼容调用路径。
 
 ### 15.2 当前 CLI 命令边界
 
@@ -639,22 +642,28 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 本批 Stage 5 learning boundary 新增纯模块回归为 `4 passed`，learning topic/候选相关 Phase 1 回归为 `4 passed`，candidate/gap 联合回归为 `45 passed, 1 xfailed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略、packaging/documentation contract 与 production compileall 已通过，`git diff --check` 已通过。`EndogenousDriveEngine` 从 7,927 行降至 6,510 行，`_candidate_stream()` 从 441 行降至 364 行；learning topic policy、shell baseline、exploratory learning 与 cognitive-review factory 已完成直接 owner 测试。
 
+本批 Stage 5 materialization boundary 新增纯模块回归为 `3 passed`，proposal/pipeline/factory/materialization 联合回归为 `24 passed`，Supervisor LM/引用/body focused 回归为 `56 passed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略、packaging/documentation contract 与 production compileall 已通过，`git diff --check` 已通过。wheel 已重建并完成 source-to-artifact parity 与退役 marker 零入口审计。`EndogenousDriveEngine` 从 6,510 行降至 6,099 行，`_materialize_lm_task_proposals()` 从 308 行降至 80 行，旧大方法增长例外已从架构护栏删除。
+
+本批 Stage 5 body mapping boundary 新增纯模块与 gap body 回归为 `8 passed`，Supervisor body-improvement/structure-mapping focused 回归为 `7 passed`；完整 Supervisor 文件在当前 122 秒单命令上限内未完成，不将超时表述为全量通过。`EndogenousDriveEngine` 从 6,099 行降至 5,826 行；`_candidate_stream()` 保持 364 行，`_materialize_lm_task_proposals()` 保持 80 行。body mapping 已完成直接 owner 测试，架构基线和文档状态同步收紧。
+
+本批 Stage 5 candidate eligibility signal boundary 的 materialization pure 回归为 `4 passed`，governance/body/LM focused Supervisor 回归为 `14 passed`。`EndogenousDriveEngine` 从 5,826 行降至 5,789 行；治理卫生当前/历史 signal 已完成直接 owner 测试，旧 Engine 私有 signal helper 已删除。架构/退役/打包/文档契约与 production compileall 已完成最终验证并保持同步。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
 | `VoidCube_cli/app.py` | 6,245 |
 | `systems/supervisor/planning_runtime.py` | 8,887 |
-| `systems/supervisor/endogenous_drive.py` | 6,510 |
+| `systems/supervisor/endogenous_drive.py` | 5,789 |
 | `systems/supervisor/ui_runtime.py` | 1,189 |
 
 ### 15.5 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
 - CLI-5：语音 runtime state 已完成第一批收敛；后续只迁移剩余录音调用者并删除 `tools.voice_mode` 的 transitional facade，不复制设备、线程或后台生命周期。
-- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot、selection merge、stable candidate families 与 learning topic policy 已迁至专属模块。`EndogenousDriveEngine` 仍持有候选资格、body projection、cognitive scoring、LM proposal materialization、remaining policy projection 与最终 stream orchestration。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
+- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot、selection merge、stable candidate families、learning topic policy、materialization 与 body structure mapping 已迁至专属模块。`EndogenousDriveEngine` 仍持有候选资格输入组装、body quality/cooldown gate、remaining policy projection 与最终 stream orchestration。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
 - Stage 6：继续收口 Supervisor UI route/adapters，并删除已迁移的 Mixin owner。
 
 ## 16. 下一次实施起点
 
-下一批继续 Stage 5，优先拆 `_materialize_lm_task_proposals()` 的 kind-specific materialization 与 candidate eligibility policy，随后收口 remaining cognitive-learning/body mapping policy；保持 candidate kind、评分、冷却、body projection 和 API-B 判断语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
+下一批继续 Stage 5，优先收口 remaining candidate eligibility input policy，随后评估 `_build_adaptive_policy()`、`_detect_needs()` 的领域边界；保持 candidate kind、评分、冷却、body projection 和 API-B 判断语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
