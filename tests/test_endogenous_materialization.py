@@ -5,6 +5,8 @@ from systems.supervisor.endogenous_materialization import (
     has_governance_hygiene_review_signal,
     has_historical_governance_hygiene_review_signal,
     materialize_lm_proposals,
+    resolve_candidate_eligibility_plan,
+    resolve_lm_candidate_eligibility,
     score_lm_proposal_cognitive_alignment,
 )
 
@@ -42,6 +44,26 @@ def test_governance_hygiene_signals_are_pure_and_use_explicit_inputs():
     ) is False
 
 
+def test_candidate_eligibility_plan_prefers_family_and_maps_governance_defaults():
+    by_family = {
+        "general_self_evolution": {"eligible_for_planning": False},
+    }
+    by_governance = {
+        "self_evolution": {"eligible_for_planning": True},
+        "self_learning": {"eligible_for_planning": True},
+    }
+
+    assert resolve_candidate_eligibility_plan(
+        "general_self_evolution", by_family, by_governance
+    ) == {"eligible_for_planning": False}
+    assert resolve_candidate_eligibility_plan(
+        "body_upgrade", {}, by_governance
+    ) == {"eligible_for_planning": True}
+    assert resolve_candidate_eligibility_plan(
+        "self_learning", {}, by_governance
+    ) == {"eligible_for_planning": True}
+
+
 def test_eligibility_keeps_active_and_unsafe_kinds_outside_materialization():
     eligible = eligible_lm_candidate_kinds(
         active_candidate_kinds={"truthfulness_review"},
@@ -55,6 +77,31 @@ def test_eligibility_keeps_active_and_unsafe_kinds_outside_materialization():
     assert "body_improvement" not in eligible
     assert "governance_hygiene_review" not in eligible
     assert "memory_maintenance" in eligible
+
+
+def test_resolve_lm_candidate_eligibility_projects_all_explicit_signals():
+    eligible = resolve_lm_candidate_eligibility(
+        api_b_judgement_tasks=[
+            {
+                "status": "awaiting_review",
+                "metadata": {"candidate_kind": "memory_maintenance"},
+            }
+        ],
+        self_evolution_eligible=True,
+        body_projection_available=True,
+        body_growth_quota=1,
+        pending_review_count=0,
+        stale_backlog_count=0,
+        api_b_judgement_count=0,
+        historical_outcomes=[
+            {"task_family": "self_evolution", "status": "deferred"},
+            {"task_family": "self_evolution", "status": "retry"},
+        ],
+    )
+
+    assert "memory_maintenance" not in eligible
+    assert "body_improvement" in eligible
+    assert "governance_hygiene_review" in eligible
 
 
 def test_cognitive_alignment_is_pure_and_preserves_grounding_reasons():

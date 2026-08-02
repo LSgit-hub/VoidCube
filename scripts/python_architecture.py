@@ -23,7 +23,7 @@ FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 P0_LINE_BASELINES = {
     "VoidCube_cli/app.py": 6_245,
     "systems/supervisor/planning_runtime.py": 8_887,
-    "systems/supervisor/endogenous_drive.py": 5_789,
+    "systems/supervisor/endogenous_drive.py": 1_240,
     "systems/supervisor/ui_runtime.py": 1_189,
 }
 P0_LARGE_METHOD_BASELINES = {
@@ -32,11 +32,7 @@ P0_LARGE_METHOD_BASELINES = {
         "_derive_cognitive_self_regulation": 301,
         "evaluate_drive_input": 328,
     },
-    "systems/supervisor/endogenous_drive.py": {
-        "_build_adaptive_policy": 517,
-        "_detect_needs": 311,
-        "_candidate_stream": 364,
-    },
+    "systems/supervisor/endogenous_drive.py": {},
     "systems/supervisor/ui_runtime.py": {},
 }
 

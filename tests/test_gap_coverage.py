@@ -14,7 +14,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_drive_context import build_drive_context
 from systems.supervisor.endogenous_body_mapping import build_body_structure_mapping
+from systems.supervisor.endogenous_pressure import memory_maintenance_urgency
 from systems.supervisor.supervisor import SupervisorConfig
 
 
@@ -53,8 +55,6 @@ class TestEndogenousDriveWithGatewayData:
         assert "activity_guard_checks" not in mem.evidence
 
     def test_memory_maintenance_urgency_ignores_generic_agent_idle(self):
-        engine = EndogenousDriveEngine()
-
         formal = {
             "idle_seconds": {
                 "user": 900,
@@ -86,9 +86,9 @@ class TestEndogenousDriveWithGatewayData:
             }
         }
 
-        assert engine._memory_maintenance_urgency(missing_api_a_execution) == engine._memory_maintenance_urgency(no_agent)
-        assert engine._memory_maintenance_urgency(formal) == engine._memory_maintenance_urgency(no_agent)
-        assert engine._memory_maintenance_urgency(formal_idle) > engine._memory_maintenance_urgency(missing_api_a_execution)
+        assert memory_maintenance_urgency(missing_api_a_execution) == memory_maintenance_urgency(no_agent)
+        assert memory_maintenance_urgency(formal) == memory_maintenance_urgency(no_agent)
+        assert memory_maintenance_urgency(formal_idle) > memory_maintenance_urgency(missing_api_a_execution)
 
     def test_drive_generates_truthfulness_when_errors_exist(self):
         engine = EndogenousDriveEngine()
@@ -1344,7 +1344,7 @@ class TestEndogenousDriveErrorBridge:
         drive_input = self._body_improvement_drive_input(
             conclusion="Improve agent/stream_handler.py using the verified stream finding."
         )
-        drive_context = engine._build_drive_context(drive_input)
+        drive_context = build_drive_context(drive_input)
         deliberation = engine.build_deliberation_report(drive_input=drive_input)
 
         candidates = engine._materialize_lm_task_proposals(

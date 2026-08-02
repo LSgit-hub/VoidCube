@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal/context/snapshot/selection/factory/learning/materialization/body-mapping pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为剩余 Supervisor policy projection 与 orchestration boundary。
+> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal/context/snapshot/selection/factory/learning/materialization/body-mapping/eligibility/adaptive-policy/drive-context/drive-state/history/candidate-stream/agenda/self-iteration/task-priors/LM-evidence-assembly/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B snapshot/research/shell-body-profile/body-projection/pressure pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；下一重点为剩余 Supervisor orchestration boundary。
 > 编制日期：2026-07-29。  
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -21,8 +21,8 @@
 | 文件 | 当前规模 | 主要问题 | 优先级 |
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 6,245 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
-| `systems/supervisor/planning_runtime.py` | 8,889 行 | JSON persistence、只读 state projection、task profile policy 与 schedule allocation 已外移；`PlanningRuntimeMixin` 仍混合认知、治理和执行交接 | P0 |
-| `systems/supervisor/endogenous_drive.py` | 5,789 行 | `EndogenousDriveEngine` 仍混合感知、候选资格、策略记忆和运行时编排 | P0 |
+| `systems/supervisor/planning_runtime.py` | 8,887 行 | JSON persistence、只读 state projection、task profile policy 与 schedule allocation 已外移；`PlanningRuntimeMixin` 仍混合认知、治理和执行交接 | P0 |
+| `systems/supervisor/endogenous_drive.py` | 1,240 行 | `EndogenousDriveEngine` 仍混合最终候选准备和运行时编排 | P0 |
 | `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
 | `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
 
@@ -322,7 +322,7 @@ VoidCube_windows/                未来才创建
 
 ### 8.1 当前问题
 
-`EndogenousDriveEngine` 同时负责感知、world model、reflection、adaptive policy、need/intent/signal、候选资格、materialization orchestration、外部研究、策略记忆和 body candidate；候选流约 364 行，materialization orchestration 已降至约 80 行，策略构建仍约 517 行。
+`EndogenousDriveEngine` 当前主要负责 DTO 装配、reflection/needs 的 pipeline 交接、最终 candidate stream 与 LM proposal orchestration；drive-state、adaptive policy、intent/signal、body projection、pressure/urgency、外部 research 与 evidence/cognition projection 均已迁出为纯 owner。候选流与 materialization 仍是下一阶段的主要 orchestration 边界。
 
 ### 8.2 目标流水线
 
@@ -553,7 +553,7 @@ systems/supervisor/web/
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-## 15. 已完成治理总览（截至 2026-08-01）
+## 15. 已完成治理总览（截至 2026-08-02）
 
 以下内容替代已完成批次的逐条实时记录。它只描述当前仍有效的结构、所有权与验证基线；已删除的迁移过程、阶段性行数和过期“下一步”不再作为后续实现依据。
 
@@ -589,12 +589,29 @@ systems/supervisor/web/
 - Stage 4 TaskProfilePolicy：任务 taxonomy 的 normalize、runtime profile、governance type、execution kind、request type 和 execution-request eligibility 已迁至 `systems.supervisor.task_profile_policy.TaskProfilePolicy`；它只接收 task/request 显式输入，由 `runtime_assemblers.py` 注入。`PlanningRuntimeMixin` 的旧 task-profile 方法和调用路径已删除，task serialization、review、handoff、recovery 与 activity projection 全部改走 policy。
 - Stage 4 ScheduleAllocator：schedule value/metadata normalize、task token、occupied token、slot 对齐/分配、candidate reallocation、deterministic task sort 和 conflict index 已迁至 `systems.supervisor.schedule_allocator.ScheduleAllocator`；它只接收显式 task snapshot、occupied set、clock 与 interval，active task 查询和任务写回仍归 Planning owner。旧排程 helper 与测试入口已删除。
 - Stage 5 candidate factory/evidence channel：`EndogenousTaskCandidate`、API-B projection、scored candidate factory、evidence channel/confidence/conflict、evidence graph 与 research freshness 已分别迁至 `systems.supervisor.endogenous_candidate_pipeline` 和 `systems.supervisor.endogenous_evidence`。Planning 的 core-value 调用和 Supervisor 测试已切到新 owner，`EndogenousDriveEngine` 的旧 DTO、factory、channel、graph、freshness helper 与旧导入入口已删除。
-- Stage 5 LM proposal boundary：模型 client resolution、prompt transport、response status、batch cognitive-assessment normalization、proposal task/risk/evidence/execution normalization、candidate-kind defaults/constraints、reference alignment 与 supervisor advisory 已迁至 `systems.supervisor.endogenous_proposals`。`EndogenousDriveEngine` 只保留 runtime 配置解析、generation diagnostics 状态、候选资格/body projection、cognitive scoring 与 candidate materialization；旧 prompt transport、LM normalization constants/helper、私有测试入口和 `review_then_backlog` alias 均已删除，不保留 Engine 代理或双路径。
+- Stage 5 LM proposal boundary：模型 client resolution、prompt transport、response status、batch cognitive-assessment normalization、proposal task/risk/evidence/execution normalization、candidate-kind defaults/constraints、reference alignment 与 supervisor advisory 已迁至 `systems.supervisor.endogenous_proposals`。`EndogenousDriveEngine` 只保留 runtime 配置解析、generation diagnostics 状态、候选资格 orchestration、cognitive scoring 与 candidate materialization；旧 prompt transport、LM normalization constants/helper、私有测试入口和 `review_then_backlog` alias 均已删除，不保留 Engine 代理或双路径。
 - Stage 5 LM context/snapshot/selection boundary：LM evidence channel/context layering、generation snapshot projection、LM/heuristic candidate merge 与 API-B active-kind projection 已分别迁至 `systems.supervisor.endogenous_evidence`、`systems.supervisor.endogenous_context`、`systems.supervisor.endogenous_generation_snapshot` 和 `systems.supervisor.endogenous_candidate_pipeline`。`EndogenousDriveEngine` 只组装显式输入、持有 latest-generation 状态并执行最终 candidate materialization；旧 context/snapshot/selection helper、私有测试入口和伪参数路径已删除。
 - Stage 5 stable family/learning boundary：memory maintenance、truthfulness、governance hygiene、body improvement、shell baseline、exploratory learning 与 cognitive-assessment review 的 candidate factory，以及 learning topic 提取、去重、冷却、novelty/specificity policy 已迁至 `systems.supervisor.endogenous_candidate_factories` 与 `systems.supervisor.endogenous_learning`。Engine 继续负责 eligibility、backlog pressure、body projection、drive judgement 和 candidate stream 编排；旧 learning factory、topic policy、stable-key 和测试入口已删除，不保留 Engine 代理或双路径。
 - Stage 5 materialization boundary：candidate-kind spec/eligibility、LM cognitive-alignment scoring、constraints/metadata/evidence projection 与 scored candidate materialization 已迁至 `systems.supervisor.endogenous_materialization`。Engine 只准备 body projection、治理信号、backlog pressure 和 drive-judgement ports；旧 308 行 materialization、旧 cognitive-alignment helper 与测试入口已删除，不保留 Engine 双路径。
-- Stage 5 body mapping boundary：canonical editable roots、evolution boundary/path safety、forbidden-pattern filtering、learning evidence freshness/ranking、显式路径与关键词到 body structure domain 的映射已迁至 `systems.supervisor.endogenous_body_mapping`。Engine 继续持有 body quality threshold、shell-slot 检查、cooldown 与运行时编排；旧 mapping helper、重复常量和直接 Engine 测试入口已删除，不保留双路径。
+- Stage 5 body mapping boundary：canonical editable roots、evolution boundary/path safety、forbidden-pattern filtering、learning evidence freshness/ranking、显式路径与关键词到 body structure domain 的映射已迁至 `systems.supervisor.endogenous_body_mapping`。Engine 继续持有 body projection orchestration；旧 mapping helper、重复常量和直接 Engine 测试入口已删除，不保留双路径。
 - Stage 5 candidate eligibility signal boundary：当前计数治理卫生信号与历史拖滞信号已迁至 `systems.supervisor.endogenous_materialization` 的纯函数；Engine 只组装最小 perception/history 输入，不保留旧私有 signal helper 或兼容调用路径。
+- Stage 5 candidate eligibility plan boundary：family-first decision resolution 与 governance-type fallback 已迁至 `systems.supervisor.endogenous_materialization.resolve_candidate_eligibility_plan`。Engine 只提供显式 decision maps，不再保留 `_decision_for()` 私有 policy helper 或兼容调用路径。
+- Stage 5 needs policy gate boundary：truthfulness threshold、truthfulness signal 与 memory backlog recovery window 已迁至 `systems.supervisor.endogenous_policy`，PlanningRuntime 与 Engine 共用同一 canonical owner；旧 Engine 常量和 gate helper 已删除。
+- Stage 5 needs calculation boundary：`DriveNeed` DTO 与 memory/truthfulness/learning/body/governance/observation need 计算已迁至 `systems.supervisor.endogenous_needs.detect_needs`，通过显式 Protocol 输入返回排序后的纯 need projections。Engine 只负责 deliberation 编排与后续 intent/signal 生成；旧 `_detect_needs()` 与 Engine-owned DTO 已删除。
+- Stage 5 LM eligibility input boundary：active API-B candidate-kind extraction、self-evolution/body projection/quota 和当前/历史 governance signal 的组合已迁至 `systems.supervisor.endogenous_materialization.resolve_lm_candidate_eligibility`。Engine 只准备显式标量、history/task 列表与 body projection；candidate stream 的静态 active-kind gate 仍由 Engine 编排。
+- Stage 5 candidate stream eligibility boundary：memory/truthfulness/shell baseline/exploratory/governance/body 的 active-kind、existing-key、signal、quota 与静态完成冷却 gate 已迁至 `systems.supervisor.endogenous_candidate_eligibility`。Engine 只准备 plans、perception、reflection、body projection 与治理信号，候选 factory 和 topic 去重仍由各自 owner 负责；旧 `_has_recent_static_governance_completion()` 已删除，不保留 Engine 双路径。
+- Stage 5 adaptive policy boundary：历史 family success、strategy-memory effectiveness、observation/agenda pressure、bias、focus、candidate budget 与 learning/body quota projection 已迁至 `systems.supervisor.endogenous_adaptive_policy`。Engine 只负责历史输入归一化、pressure/context 准备和 `DriveAdaptivePolicy` DTO 装配；旧 517 行策略实现与 `_strategy_context_key()` 已删除，不保留 Engine 双路径。
+- Stage 5 body eligibility boundary：learning quality/freshness score、canonical shell-slot readiness、body improvement in-flight matching 与 completion cooldown 已迁至 `systems.supervisor.endogenous_body_eligibility`。Engine 只保留 body mapping orchestration 与通用 timestamp normalization；旧 body quality/cooldown helper、旧 quality score helper 已删除，不保留双路径。
+- Stage 5 proposal drift/meta-cognition boundary：recent cognitive alignment、proposal drift memory 与统一 meta-cognition profile 已迁至 `systems.supervisor.endogenous_meta_cognition`。Engine 只装配显式 cognition inputs；旧 `_build_proposal_drift_memory()`、`_build_recent_cognitive_alignment_summary()`、`_build_meta_cognition_profile()` 与直接 Engine 测试入口已删除，不保留双路径。
+- Stage 5 cognitive memory boundary：LM cognitive assessment、self-iteration trend、stay/switch regulation 与 post-task effect memory 已迁至 `systems.supervisor.endogenous_cognitive_memory`，共享显式 history/assessment/alignment normalization。Engine 只装配 memory inputs；旧四个 memory helper 与直接 Engine 测试入口已删除，不保留双路径。
+- Stage 5 cognition charter boundary：charter model serialization、core mission/task-generation fallback 与 context layering/prompt attention defaults 已迁至 `systems.supervisor.endogenous_cognition_charter.resolve_cognition_charter`。Engine 只传入显式配置值；旧 `_resolve_endogenous_cognition_charter()` 已删除，不保留 runtime-config wrapper 或双路径。
+- Stage 5 self-model boundary：recent reference alignment、self-model snapshot 与 evidence credibility summary 已迁至 `systems.supervisor.endogenous_self_model`。Engine 只装配 perception/world/reflection/evidence inputs；旧 self-model/reference/evidence helper 与测试入口已删除，不保留双路径。
+- Stage 5 API-B snapshot boundary：active API-B judgement backlog 的 bounded projection 已迁至 `systems.supervisor.endogenous_api_b_snapshot`。Engine 只传入显式 task/status 输入，不保留 backlog snapshot 旧实现或兼容入口。
+- Stage 5 research boundary：configured/file external research evidence 的开关、路径解析、JSON normalization 与 bounded output 已迁至 `systems.supervisor.endogenous_research`。Engine 只读取 runtime/execution 配置并传入 owner，不保留旧 research loader。
+- Stage 5 shell body profile boundary：shell slot/worktree、origin manifest、present roots、body flags 与 evidence quality projection 已迁至 `systems.supervisor.endogenous_shell_profile`。所有生产调用已切换，旧 `_build_shell_body_profile()` 与专用导入已删除，不保留 Engine wrapper 或双路径。
+- Stage 5 body projection boundary：body improvement eligibility 与 learning-evidence structure mapping 的组合已迁至 `systems.supervisor.endogenous_body_projection`。Engine 只传入 drive context 与 shell slot，不保留 body projection wrapper 或双路径。
+- Stage 5 pressure boundary：backlog pressure penalty、memory-maintenance urgency、governance-hygiene urgency 与 lane penalty assembly 已迁至 `systems.supervisor.endogenous_pressure`。Engine 只传入显式 context/input，不保留 pressure/urgency 私有 helper 或旧测试入口。
+- Stage 5 drive-state boundary：perception snapshot 输入归一化、user/system posture 与 world-model pressure/readiness projection 已迁至 `systems.supervisor.endogenous_drive_state`。Engine 只装配既有 `DrivePerceptionSnapshot`/`DriveWorldModel` DTO，不保留旧 perception/world-model helper。
 
 ### 15.2 当前 CLI 命令边界
 
@@ -648,22 +665,68 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 本批 Stage 5 candidate eligibility signal boundary 的 materialization pure 回归为 `4 passed`，governance/body/LM focused Supervisor 回归为 `14 passed`。`EndogenousDriveEngine` 从 5,826 行降至 5,789 行；治理卫生当前/历史 signal 已完成直接 owner 测试，旧 Engine 私有 signal helper 已删除。架构/退役/打包/文档契约与 production compileall 已完成最终验证并保持同步。
 
+本批 Stage 5 candidate eligibility plan boundary 的 materialization owner 回归为 `5 passed`，candidate/deliberation focused Supervisor 回归为 `39 passed`；`test_supervisor_runtime_wiring.py` 全量为 `96 passed`，gap coverage 全量为 `36 passed, 1 xfailed`。`EndogenousDriveEngine` 从 5,789 行降至 5,777 行；family-first decision resolution 已完成直接 owner 测试，旧 `_decision_for()` 已删除。架构/退役/打包/文档契约、production compileall 与 `git diff --check` 已通过。
+
+本批 Stage 5 needs policy gate boundary 的纯 policy 回归为 `2 passed`，与 materialization/gap 联合回归为 `43 passed, 1 xfailed`；`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,777 行降至 5,759 行；truthfulness threshold、memory recovery gate 与 PlanningRuntime 的共享 import 已完成直接 owner 测试，旧 Engine policy gate 定义已删除。架构/退役/打包/文档契约与 production compileall 已通过。
+
+本批 Stage 5 needs calculation boundary 的直接 owner characterization 回归为 `8 passed`；gap coverage 全量为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,759 行降至 5,440 行；`DriveNeed` 与 `_detect_needs()` 已迁至 `systems.supervisor.endogenous_needs`，保留排序、历史欠交边界、观察 gate 和 API-A 未结算时 body growth gate 语义。架构/退役/打包/文档契约与 production compileall 已通过。
+
+本批 Stage 5 LM eligibility input boundary 的 materialization owner 回归为 `6 passed`，LM/body focused Supervisor 回归为 `17 passed`；gap coverage 全量为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,440 行降至 5,438 行；LM eligibility 组合已完成直接 owner 测试，Engine 不再直接调用底层 LM-kind eligibility rule。
+
+本批 Stage 5 candidate stream eligibility boundary 新增 owner 回归为 `4 passed`，candidate/materialization/policy/learning/factory 联合回归为 `25 passed`；gap coverage 为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 为 `96 passed`，静态完成冷却 focused 回归为 `2 passed`。`EndogenousDriveEngine` 从 5,438 行降至 5,410 行；`_candidate_stream()` 当前为 370 行，active-kind/body gate 与静态完成冷却已迁出 Engine，架构基线已同步收紧。此前大型 autonomous-chain 文件在当前命令上限内未完成的事实仍不改写为全量通过。
+
+本批 Stage 5 adaptive policy boundary 新增 owner 回归为 `4 passed`，adaptive/gap focused 回归为 `5 passed`，autonomous-chain adaptive subset 为 `20 passed`。`EndogenousDriveEngine` 从 5,410 行降至 4,933 行，`_build_adaptive_policy()` 从 517 行降至 50 行；架构基线已删除失效的大方法例外。完整 autonomous-chain 文件仍不改写为全量通过。
+
+本批 Stage 5 body eligibility boundary 新增 owner 回归为 `4 passed`，body/mapping/adaptive/candidate focused 回归为 `15 passed`，gap body/adaptive subset 为 `9 passed`，body improvement Supervisor subset 为 `8 passed`。`EndogenousDriveEngine` 从 4,933 行降至 4,837 行；body quality、slot readiness 和 cooldown gate 已完成直接 owner 测试，架构基线已同步收紧。
+
+本批 Stage 5 intent/signal projection boundary 新增纯 owner 回归为 `5 passed`，全部 endogenous 纯模块回归为 `71 passed`，精选 Supervisor autonomous-chain intent/signal 回归为 `30 passed`，完整 autonomous-chain 回归为 `265 passed, 4 skipped`；`EndogenousDriveEngine` 从 4,837 行降至 4,550 行，intent priority、candidate-kind mapping、governance/truthfulness/observation/posture signal projection 已迁至 `systems.supervisor.endogenous_intent_signal`，Engine 只保留 DTO 装配 wrapper。架构、gap coverage（`36 passed, 1 xfailed`）、runtime wiring（`96 passed`）、退役扫描和 wheel 验证均已完成。
+
+本批 Stage 5 drive-context boundary 新增 owner 回归为 `3 passed`，与 intent/signal、adaptive policy 联合回归为 `10 passed`；`build_drive_context()`、strategy-memory normalization 与 timestamp parsing 已迁至 `systems.supervisor.endogenous_drive_context`，Engine 删除旧私有入口并降至 4,355 行。backlog/stale/API-A lane 计数语义保持不变，架构基线已同步收紧。
+
+本批 Stage 5 history boundary 新增 owner 回归为 `3 passed`，与 gap/context 联合回归为 `39 passed, 1 xfailed`；historical outcome ordering、scope、drag/relapse pressure 与 underdelivery detection 已迁至 `systems.supervisor.endogenous_history`，Engine 删除旧历史 helper 并降至 4,221 行。adaptive policy 与 reflection 的历史输入契约保持不变，架构基线已同步收紧。
+
+本批 Stage 5 candidate stream assembler boundary 新增 owner 回归为 `2 passed`，candidate/gap/learning/factory/eligibility 联合回归为 `49 passed, 1 xfailed`；memory、truthfulness、learning、governance、body candidate 组装、LM merge 与最终 budget 已迁至 `systems.supervisor.endogenous_candidate_stream`。`_candidate_stream()` 从 370 行降至 141 行，`EndogenousDriveEngine` 从 4,221 行降至 3,972 行，Engine 只保留显式准备和调用编排。
+
+本批 Stage 5 agenda graph boundary 新增 owner 回归为 `2 passed`，并与 candidate stream owner 回归合并为 `4 passed`；need、intent、signal、evidence topic 及其关系边的 agenda projection 已迁至 `systems.supervisor.endogenous_agenda`。旧 `_build_agenda_graph()` 已删除，`EndogenousDriveEngine` 从 3,972 行降至 3,733 行，Engine 不保留旧代理或双路径。
+
+本批 Stage 5 self-iteration hypothesis boundary 新增 owner 回归为 `2 passed`，self-iteration/grounding/LM focused 回归为 `6 passed`，context/snapshot/proposal/evidence 联合回归为 `25 passed`；readiness、grounding、research、proposal drift、trend、switch regulation 与 post-task effect 的 hypothesis projection 已迁至 `systems.supervisor.endogenous_self_iteration`。旧 `_build_self_iteration_hypotheses()` 和 Engine 私有测试入口已删除，`EndogenousDriveEngine` 从 3,733 行降至 3,466 行，Engine 不保留代理或双路径。
+
+本批 Stage 5 task-type prior boundary 新增 owner 回归为 `2 passed`，proposal-drift focused 回归为 `3 passed`；observation、review、learning、maintenance、improvement 的 program prior、drift adjustment 与 reason projection 已迁至 `systems.supervisor.endogenous_task_priors`。旧 `_build_task_type_priors()`、`_task_type_prior_reasons()` 已删除，`EndogenousDriveEngine` 从 3,466 行降至 3,238 行，Engine 不保留代理或双路径。
+
+本批 Stage 5 LM evidence assembly boundary 新增 owner 回归为 `2 passed`，LM/autonomous focused 回归为 `11 passed`，context/snapshot/proposal/evidence 联合回归为 `25 passed`，gap focused 回归为 `11 passed`；grounding focus projection、context-layer assembly、packet plans/diagnostics/evidence/backlog 截断已迁至 `systems.supervisor.endogenous_lm_evidence`。`EndogenousDriveEngine._build_lm_evidence_packet()` 从 231 行降至 145 行，只保留显式字段准备与 cognition orchestration，`EndogenousDriveEngine` 从 3,238 行降至 3,152 行。
+
+本批 Stage 5 reflection projection boundary 新增 owner 回归为 `2 passed`，gap reflection/deliberation 回归为 `8 passed`，Supervisor reflection/history focused 回归为 `20 passed`，adaptive/intent/materialization 联合回归为 `13 passed`；learning yield、API-B blockage、body cooldown、historical pressure、autonomy readiness 与 dominant constraint projection 已迁至 `systems.supervisor.endogenous_reflection`。旧 `_build_reflection()` 已删除，Engine 仅装配 `DriveReflection` DTO，`EndogenousDriveEngine` 从 3,152 行降至 2,976 行。
+
+本批 Stage 5 cognitive posture boundary 新增 owner 回归为 `8 passed`，Supervisor cognitive-posture/proposal-drift/explanation focused 回归为 `14 passed`，gap cognition/posture focused 回归为 `2 passed`；manual profile、service pressure、truthfulness correction、drift/readiness、evidence repair 与 explanation pressure 的 posture selection 已迁至 `systems.supervisor.endogenous_cognitive_posture`。旧 `_resolve_cognitive_posture_from_policy()` 已删除，Engine 只准备显式 posture inputs 并调用纯 projection，`EndogenousDriveEngine` 从 2,976 行降至 2,807 行。
+
+本批 Stage 5 proposal drift/meta-cognition boundary 新增 owner 回归为 `4 passed`，endogenous owner 联合回归为 `101 passed`，Supervisor proposal-drift/meta-cognition/posture focused 回归为 `21 passed`，gap cognition/posture focused 回归为 `2 passed`；recent cognitive alignment、proposal drift memory 与统一 meta-cognition profile 已迁至 `systems.supervisor.endogenous_meta_cognition`，`EndogenousDriveEngine` 从 2,807 行降至 2,458 行。`test_supervisor_runtime_wiring.py` 在当前 60 秒单命令上限内未完成，不将其表述为全量通过。
+
+本批 Stage 5 cognitive memory boundary 新增 owner 回归为 `4 passed`，Supervisor auxiliary/post-task/meta focused 回归为 `27 passed`；LM cognitive assessment、self-iteration trend、stay/switch regulation 与 post-task effect memory 已迁至 `systems.supervisor.endogenous_cognitive_memory`，`EndogenousDriveEngine` 从 2,458 行降至 1,986 行。架构、退役、打包合同、production compileall 与 `git diff --check` 已完成最终验证。
+
+本批 Stage 5 cognition charter boundary 新增 owner 回归为 `3 passed`，Supervisor cognition-charter/cognition focused 回归为 `16 passed`，runtime cognition/endogenous wiring 回归为 `3 passed`；charter fallback、context layering defaults 与 prompt attention defaults 已迁至 `systems.supervisor.endogenous_cognition_charter`，`EndogenousDriveEngine` 从 1,986 行降至 1,870 行。完整 runtime wiring 文件仍受当前 60 秒单命令上限限制，不将其表述为全量通过。
+
+本批 Stage 5 self-model/API-B/research/shell input boundary 新增 owner 回归为 `3 + 2 + 2 + 4 passed`，shell/body/cognition focused Supervisor 回归为 `25 passed`；recent reference alignment、self-model/evidence credibility、API-B snapshot、configured/file research evidence 与 shell body profile 已迁至专属模块。`EndogenousDriveEngine` 从 1,870 行降至 1,486 行，旧 shell profile helper 与专用导入已删除；架构基线、production compileall 与 focused runtime wiring 已通过。完整 `test_supervisor_runtime_wiring.py` 仍受当前 60 秒单命令上限限制，不将其表述为全量通过。
+
+本批 Stage 5 body projection/pressure boundary 新增 owner 回归为 `5 passed`，gap/body/pressure focused 回归为 `7 passed`；body improvement projection、backlog pressure penalty、memory-maintenance urgency、governance-hygiene urgency 与 lane assembly 已迁至专属模块。`EndogenousDriveEngine` 从 1,486 行降至 1,382 行，旧 body/pressure/urgency helper 与 gap 测试私有入口已删除；架构基线、production compileall 与 focused runtime wiring 已通过。
+
+本批 Stage 5 drive-state boundary 新增 owner 回归为 `3 passed`，drive-state/body/pressure focused 回归为 `15 passed`，gap focused 回归为 `7 passed`，autonomous-chain focused 回归为 `29 passed`；perception snapshot 与 world-model projection 已迁至 `systems.supervisor.endogenous_drive_state`，Engine 仅保留 DTO 装配。`EndogenousDriveEngine` 从 1,382 行降至 1,240 行，架构基线、production compileall 与 focused runtime wiring 已通过。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
 | `VoidCube_cli/app.py` | 6,245 |
 | `systems/supervisor/planning_runtime.py` | 8,887 |
-| `systems/supervisor/endogenous_drive.py` | 5,789 |
+| `systems/supervisor/endogenous_drive.py` | 1,240 |
 | `systems/supervisor/ui_runtime.py` | 1,189 |
 
 ### 15.5 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
 - CLI-5：语音 runtime state 已完成第一批收敛；后续只迁移剩余录音调用者并删除 `tools.voice_mode` 的 transitional facade，不复制设备、线程或后台生命周期。
-- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot、selection merge、stable candidate families、learning topic policy、materialization 与 body structure mapping 已迁至专属模块。`EndogenousDriveEngine` 仍持有候选资格输入组装、body quality/cooldown gate、remaining policy projection 与最终 stream orchestration。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
+- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot、selection merge、stable candidate families、learning topic policy、materialization、body structure mapping/eligibility、body projection、candidate eligibility、adaptive policy、pressure/urgency、drive-state、needs policy gates、needs calculation、LM eligibility input projection、intent/signal projection、drive-context normalization、history normalization、candidate stream assembler、agenda graph projection、self-iteration hypothesis projection、task-type prior projection、LM evidence assembly、reflection projection、cognitive posture projection、proposal drift/meta-cognition projection、cognitive memory projection、cognition charter、self-model、API-B snapshot、research 与 shell body profile projection 已迁至专属模块。`EndogenousDriveEngine` 仍持有最终 stream preparation 与剩余 runtime orchestration。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
 - Stage 6：继续收口 Supervisor UI route/adapters，并删除已迁移的 Mixin owner。
 
 ## 16. 下一次实施起点
 
-下一批继续 Stage 5，优先收口 remaining candidate eligibility input policy，随后评估 `_build_adaptive_policy()`、`_detect_needs()` 的领域边界；保持 candidate kind、评分、冷却、body projection 和 API-B 判断语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
+下一批继续 Stage 5，优先评估最终 stream preparation、backlog pressure/urgency 与 body projection 的剩余 orchestration 边界；保持 candidate kind、评分、冷却、body projection、intent/signal payload 和 API-B 判断语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping/body-eligibility/eligibility/adaptive-policy/policy/needs/intent-signal/agenda/self-iteration/task-priors/LM-evidence-assembly/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B-snapshot/research/shell-body-profile 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。

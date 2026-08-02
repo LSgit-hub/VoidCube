@@ -9,6 +9,7 @@ from systems.supervisor.endogenous_candidate_factories import body_improvement_c
 from systems.supervisor.endogenous_candidate_pipeline import (
     AdaptivePolicyLike,
     EndogenousTaskCandidate,
+    active_api_b_judgement_candidate_kinds,
     adaptive_factor_for_candidate,
     build_scored_candidate,
     clamp01,
@@ -76,6 +77,21 @@ LM_CANDIDATE_KIND_SPECS: Dict[str, LmCandidateKindSpec] = {
 }
 
 
+def resolve_candidate_eligibility_plan(
+    family: str,
+    decisions_by_family: Dict[str, Any],
+    decisions_by_governance: Dict[str, Any],
+) -> Dict[str, Any]:
+    if family in decisions_by_family:
+        return dict(decisions_by_family[family] or {})
+    governance = (
+        family
+        if family in {"memory_maintenance", "self_learning", "user"}
+        else "self_evolution"
+    )
+    return dict(decisions_by_governance.get(governance) or {})
+
+
 def has_governance_hygiene_review_signal(
     pending_review_count: int,
     stale_backlog_count: int,
@@ -135,6 +151,34 @@ def eligible_lm_candidate_kinds(
     if not governance_signal_present:
         eligible.discard("governance_hygiene_review")
     return eligible
+
+
+def resolve_lm_candidate_eligibility(
+    *,
+    api_b_judgement_tasks: List[Dict[str, Any]],
+    self_evolution_eligible: bool,
+    body_projection_available: bool,
+    body_growth_quota: int,
+    pending_review_count: int,
+    stale_backlog_count: int,
+    api_b_judgement_count: int,
+    historical_outcomes: List[Dict[str, Any]],
+) -> set[str]:
+    active_candidate_kinds = active_api_b_judgement_candidate_kinds(
+        api_b_judgement_tasks
+    )
+    governance_signal_present = has_governance_hygiene_review_signal(
+        pending_review_count,
+        stale_backlog_count,
+        api_b_judgement_count,
+    ) or has_historical_governance_hygiene_review_signal(historical_outcomes)
+    return eligible_lm_candidate_kinds(
+        active_candidate_kinds=active_candidate_kinds,
+        self_evolution_eligible=self_evolution_eligible,
+        body_projection_available=body_projection_available,
+        body_growth_quota=body_growth_quota,
+        governance_signal_present=governance_signal_present,
+    )
 
 
 def score_lm_proposal_cognitive_alignment(

@@ -18,8 +18,8 @@ from systems.supervisor.supervisor import (
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
-from systems.supervisor.endogenous_drive import (
-    EndogenousDriveEngine,
+from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_drive_models import (
     DriveAdaptivePolicy,
     DrivePerceptionSnapshot,
     DriveReflection,
@@ -38,10 +38,25 @@ from systems.supervisor.endogenous_proposals import (
 from systems.supervisor.endogenous_materialization import (
     score_lm_proposal_cognitive_alignment,
 )
+from systems.supervisor.endogenous_needs import detect_needs
 from systems.supervisor.endogenous_generation_snapshot import (
     build_lm_task_generation_context_snapshot,
 )
+from systems.supervisor.endogenous_meta_cognition import (
+    build_meta_cognition_profile,
+    build_proposal_drift_memory,
+)
+from systems.supervisor.endogenous_cognitive_memory import (
+    build_cognitive_assessment_memory,
+    build_post_task_effect_memory,
+    build_self_iteration_trend_memory,
+)
+from systems.supervisor.endogenous_self_model import build_recent_reference_alignment
 from systems.supervisor.endogenous_state_projection import project_drive_history
+from systems.supervisor.endogenous_drive_context import build_drive_context
+from systems.supervisor.endogenous_self_iteration import (
+    build_self_iteration_hypotheses,
+)
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainStore,
@@ -1398,7 +1413,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         history,
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+    drive_context = build_drive_context(drive_input)
 
     rendered_outcomes = json.dumps(drive_context["drive_history"]["outcomes"], ensure_ascii=False)
     assert final_response in rendered_outcomes
@@ -7475,7 +7490,7 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
         supervisor._load_endogenous_drive_history(),
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+    drive_context = build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
@@ -7562,7 +7577,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
         supervisor._load_endogenous_drive_history(),
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+    drive_context = build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
@@ -7659,7 +7674,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
         supervisor._load_endogenous_drive_history(),
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+    drive_context = build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
@@ -8922,9 +8937,7 @@ def test_engine_recent_reference_alignment_summary_stays_thin(tmp_path):
     ]
     drive_context = {"drive_history": history}
 
-    summary = supervisor._endogenous_drive_engine._build_recent_reference_alignment(
-        drive_context
-    )
+    summary = build_recent_reference_alignment(drive_context)
 
     assert summary["available"] is True
     assert summary["entry_count"] == 1
@@ -8966,9 +8979,7 @@ def test_engine_proposal_drift_memory_source_stays_thin(tmp_path):
         },
     ]
 
-    summary = supervisor._endogenous_drive_engine._build_proposal_drift_memory(
-        {"drive_history": history}
-    )
+    summary = build_proposal_drift_memory({"drive_history": history})
 
     assert summary["available"] is True
     assert summary["average_score"] == 0.53
@@ -9059,12 +9070,8 @@ def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
     ]
     drive_context = {"drive_history": history}
 
-    assessment = supervisor._endogenous_drive_engine._build_cognitive_assessment_memory(
-        drive_context
-    )
-    trend = supervisor._endogenous_drive_engine._build_self_iteration_trend_memory(
-        drive_context
-    )
+    assessment = build_cognitive_assessment_memory(drive_context)
+    trend = build_self_iteration_trend_memory(drive_context)
 
     assert assessment["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert assessment["current_judgement_count"] == 1
@@ -9156,9 +9163,7 @@ def test_engine_post_task_effect_memory_source_stays_thin_and_ignores_planned(tm
         },
     ]
 
-    effect = supervisor._endogenous_drive_engine._build_post_task_effect_memory(
-        {"drive_history": history}
-    )
+    effect = build_post_task_effect_memory({"drive_history": history})
 
     assert effect["available"] is True
     assert effect["effect_direction"] == "improving"
@@ -9173,7 +9178,7 @@ def test_engine_post_task_effect_memory_source_stays_thin_and_ignores_planned(tm
 @pytest.mark.unit
 def test_engine_self_iteration_hypotheses_use_thin_why_not_improvement_field(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    hypotheses = supervisor._endogenous_drive_engine._build_self_iteration_hypotheses(
+    hypotheses = build_self_iteration_hypotheses(
         self_model_snapshot={
             "readiness": {"self_iteration_readiness_score": 0.76},
             "self_understanding_gaps": [],
@@ -11295,7 +11300,7 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
         supervisor._load_endogenous_drive_history(),
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+    drive_context = build_drive_context(drive_input)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
@@ -11317,10 +11322,7 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
 
 @pytest.mark.unit
 def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgement():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    profile = engine._build_meta_cognition_profile(
+    profile = build_meta_cognition_profile(
         grounding_focus={
             "grounding_gaps": [],
             "contradictory_topics": [],
@@ -11471,10 +11473,7 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
 
 @pytest.mark.unit
 def test_meta_cognition_profile_is_unavailable_without_real_signals():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    profile = engine._build_meta_cognition_profile(
+    profile = build_meta_cognition_profile(
         grounding_focus={
             "grounding_gaps": [],
             "contradictory_topics": [],
@@ -11500,10 +11499,7 @@ def test_meta_cognition_profile_is_unavailable_without_real_signals():
 
 @pytest.mark.unit
 def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    profile = engine._build_meta_cognition_profile(
+    profile = build_meta_cognition_profile(
         grounding_focus={"grounding_gaps": [], "contradictory_topics": []},
         self_iteration_hypotheses={},
         cognitive_assessment_memory={
@@ -11616,10 +11612,7 @@ def test_judgement_core_keeps_primary_intent_aligned_with_primary_need(tmp_path)
 
 @pytest.mark.unit
 def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -11690,10 +11683,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
 
 @pytest.mark.unit
 def test_detect_needs_prefers_observe_before_learning_when_historical_underdelivery_dominates():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -11763,10 +11753,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
 
 @pytest.mark.unit
 def test_detect_needs_does_not_let_memory_continuity_override_observation_under_historical_underdelivery():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -11836,10 +11823,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
 
 @pytest.mark.unit
 def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_triggers():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -11909,10 +11893,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
 
 @pytest.mark.unit
 def test_detect_needs_enters_observation_when_historical_underdelivery_and_observation_bias_are_already_high():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -11982,12 +11963,8 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
 
 @pytest.mark.unit
 def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_same_inputs():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-
     def _run_once():
-        return engine._detect_needs(
+        return detect_needs(
             perception=DrivePerceptionSnapshot(
                 user_mode="user_chain_quiet",
                 autonomous_chain_gate_active=False,
@@ -12061,12 +12038,8 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
 
 @pytest.mark.unit
 def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_historical_underdelivery_boundary():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-
     def _top_needs(observation_bias: float):
-        needs = engine._detect_needs(
+        needs = detect_needs(
             perception=DrivePerceptionSnapshot(
                 user_mode="user_chain_quiet",
                 autonomous_chain_gate_active=False,
@@ -12147,10 +12120,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
 
 @pytest.mark.unit
 def test_detect_needs_does_not_prepare_body_growth_while_api_a_lane_is_unsettled():
-    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-
-    engine = EndogenousDriveEngine()
-    needs = engine._detect_needs(
+    needs = detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
@@ -16103,7 +16073,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             supervisor._load_endogenous_drive_history(),
             normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
         )
-        drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
+        drive_context = build_drive_context(drive_input)
         evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
             drive_input=drive_input,
             deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(drive_input=drive_input),

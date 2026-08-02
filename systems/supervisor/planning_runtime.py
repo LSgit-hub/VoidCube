@@ -15,7 +15,7 @@ import aiohttp
 
 from systems.self_learning.models import SupervisorConclusionSubmission
 from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
-from systems.supervisor.endogenous_drive import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.endogenous_state_projection import (
     derive_corrective_mode,
