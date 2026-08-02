@@ -12,6 +12,10 @@ _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 _REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
 
 
+def normalize_drive_input(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _clamp01(value: Any) -> float:
     try:
         return max(0.0, min(1.0, float(value)))
@@ -29,6 +33,13 @@ def parse_timestamp(raw_timestamp: Any) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def get_shell_slot_meta(drive_input: Dict[str, Any]) -> Dict[str, Any]:
+    raw_shell_slot = drive_input.get("shell_slot")
+    if isinstance(raw_shell_slot, dict):
+        return dict(raw_shell_slot)
+    return {}
 
 
 def normalize_strategy_memory(raw: Any) -> Dict[str, Any]:

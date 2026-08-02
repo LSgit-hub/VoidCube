@@ -15,11 +15,29 @@ import aiohttp
 
 from systems.self_learning.models import SupervisorConclusionSubmission
 from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
+from systems.supervisor.endogenous_proposal_port import (
+    LmGenerationApplicationState,
+    project_lm_generation_application_state,
+)
+from systems.supervisor.endogenous_cognition_state import (
+    build_cognition_state_projection,
+)
+from systems.supervisor.endogenous_proposal_cognition import (
+    compact_proposal_memory,
+    build_proposal_cognition_projection,
+)
+from systems.supervisor.endogenous_drive_orchestration import (
+    EndogenousDriveEvaluationContext,
+    evaluate_endogenous_drive as run_endogenous_drive_evaluation,
+)
+from systems.supervisor.endogenous_drive_cycle import (
+    EndogenousDriveCycleContext,
+    run_endogenous_drive_cycle,
+)
 from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.endogenous_state_projection import (
     derive_corrective_mode,
-    project_drive_history,
     project_governance_event_stream,
 )
 from systems.supervisor.autonomous_chain_store import (
@@ -62,8 +80,6 @@ logger = logging.getLogger("supervisor")
 SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
     {"idle", "planning", "memory", "drive", "handoff", "maintenance"}
 )
-
-
 
 class PlanningRuntimeMixin:
     """Supervisor planning, activity-guard evaluation, and autonomous-chain orchestration."""
@@ -500,20 +516,12 @@ class PlanningRuntimeMixin:
             self._endogenous_state_repository.paths.self_regulation, payload
         )
 
-    def _lm_reasoning_state_for_current_cycle(self) -> Dict[str, Any]:
-        runtime_config = getattr(self.config, "service_runtime", None)
-        if not bool(getattr(runtime_config, "endogenous_drive_lm_task_generation_enabled", False)):
-            return {}
+    def _lm_generation_application_state(self) -> LmGenerationApplicationState:
         engine = getattr(self, "_endogenous_drive_engine", None)
-        if engine is None or not hasattr(engine, "get_latest_lm_task_generation_context"):
-            return {}
-        try:
-            state = dict(engine.get_latest_lm_task_generation_context() or {})
-        except Exception:
-            return {}
-        if str(state.get("status") or "").strip().lower() != "completed":
-            return {}
-        return state
+        return project_lm_generation_application_state(
+            runtime_config=getattr(self.config, "service_runtime", None),
+            state_loader=getattr(engine, "get_latest_lm_task_generation_state", None),
+        )
 
     def _derive_cognitive_self_regulation(
         self,
@@ -1458,98 +1466,23 @@ class PlanningRuntimeMixin:
             deliberation=deliberation,
             lm_reasoning_state=lm_reasoning_state,
         )
-        strategy_memory = self._normalize_endogenous_strategy_memory(
-            history_snapshot.get("strategy_memory")
+        return build_cognition_state_projection(
+            enabled=bool(self.config.service_runtime.endogenous_drive_enabled),
+            deliberation=deliberation,
+            governance_channels=governance_channels,
+            governance_event_stream=governance_event_stream,
+            self_regulation=self_regulation,
+            drive_posture=drive_posture,
+            context_key=context_key,
+            strategy_memory=strategy_memory,
+            corrective_mode=corrective_mode,
+            attention_agenda=attention_agenda,
+            uncertainty_ledger=uncertainty_ledger,
+            observation_program=observation_program,
+            meta_governance=meta_governance,
+            judgement_core=judgement_core,
+            proposal_cognition=proposal_cognition,
         )
-        recent_events = [
-            dict(item)
-            for item in list(governance_event_stream.get("events") or [])[:12]
-            if isinstance(item, dict)
-        ]
-        channel_counts = {
-            "task_candidates": len(list(governance_channels.get("task_candidates") or [])),
-            "observation_requests": len(list(governance_channels.get("observation_requests") or [])),
-            "governance_review_requests": len(
-                list(governance_channels.get("governance_review_requests") or [])
-            ),
-            "truthfulness_alerts": len(list(governance_channels.get("truthfulness_alerts") or [])),
-            "autonomy_alignment_requests": len(
-                list(governance_channels.get("autonomy_alignment_requests") or [])
-            ),
-        }
-
-        return {
-            "status": "evaluated",
-            "enabled": bool(self.config.service_runtime.endogenous_drive_enabled),
-            "identity": {
-                "role": "endogenous_supervisory_core",
-                "responsibility": (
-                    "Perceive user, system, and self state; then govern autonomous "
-                    "direction before execution."
-                ),
-                "execution_scope": "governance_only",
-                "execution_chain_coupled": False,
-            },
-            "perception": perception,
-            "world_model": world_model,
-            "self_model": {
-                "reflection": reflection,
-                "adaptive_policy": adaptive_policy,
-                "self_regulation": dict(self_regulation),
-                "corrective_mode": corrective_mode,
-            },
-            "judgement_core": judgement_core,
-            "governance": {
-                "posture": drive_posture,
-                "preferred_focus": adaptive_policy.get("preferred_focus"),
-                "dominant_constraint": reflection.get("dominant_constraint"),
-                "channel_counts": channel_counts,
-                "channels": dict(governance_channels),
-            },
-            "proposal_cognition": proposal_cognition,
-            "attention_agenda": attention_agenda,
-            "uncertainty_ledger": uncertainty_ledger,
-            "observation_program": observation_program,
-            "meta_governance": meta_governance,
-            "strategy_memory": {
-                "focus_stats": dict(strategy_memory.get("focus_stats") or {}),
-                "agenda_topic_stats": dict(strategy_memory.get("agenda_topic_stats") or {}),
-                "observation_target_stats": dict(strategy_memory.get("observation_target_stats") or {}),
-                "meta_governance_stats": dict(strategy_memory.get("meta_governance_stats") or {}),
-                "context_key": context_key,
-                "current_context_focus_stats": dict(
-                    (strategy_memory.get("contextual_focus_stats") or {}).get(context_key) or {}
-                ),
-                "current_agenda_topic_stats": {
-                    str(entry.get("topic") or "").strip().lower(): dict(
-                        dict(strategy_memory.get("agenda_topic_stats") or {}).get(
-                            str(entry.get("topic") or "").strip().lower()
-                        ) or {}
-                    )
-                    for entry in list(attention_agenda.get("entries") or [])
-                    if isinstance(entry, dict) and str(entry.get("topic") or "").strip()
-                },
-                "current_observation_target_stats": {
-                    str(entry.get("target") or "").strip().lower(): dict(
-                        dict(strategy_memory.get("observation_target_stats") or {}).get(
-                            str(entry.get("target") or "").strip().lower()
-                        ) or {}
-                    )
-                    for entry in list(observation_program.get("entries") or [])
-                    if isinstance(entry, dict) and str(entry.get("target") or "").strip()
-                },
-                "current_meta_governance_stats": {
-                    str(meta_governance.get("mode") or "").strip().lower(): dict(
-                        dict(strategy_memory.get("meta_governance_stats") or {}).get(
-                            str(meta_governance.get("mode") or "").strip().lower()
-                        ) or {}
-                    )
-                    if str(meta_governance.get("mode") or "").strip()
-                    else {}
-                },
-            },
-            "recent_events": recent_events,
-        }
 
     def _build_endogenous_judgement_core(
         self,
@@ -1657,7 +1590,7 @@ class PlanningRuntimeMixin:
         # This block is an auxiliary observation/tracking layer.  The main drive
         # judgement stays in judgement_core, attention_agenda, and meta_governance.
         if lm_reasoning_state is None:
-            lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
+            lm_reasoning_state = self._lm_generation_application_state().reasoning_state
         else:
             lm_reasoning_state = dict(lm_reasoning_state)
 
@@ -1754,7 +1687,7 @@ class PlanningRuntimeMixin:
             history_snapshot=history_snapshot,
             deliberation=deliberation,
         )
-        compact_memory = self._compact_endogenous_proposal_memory(
+        compact_memory = compact_proposal_memory(
             recent_reference_alignment=recent_reference_alignment,
             proposal_drift_memory=proposal_drift_memory,
             recent_cognitive_alignment=recent_cognitive_alignment,
@@ -1765,380 +1698,16 @@ class PlanningRuntimeMixin:
             post_task_effect_memory=post_task_effect_memory,
         )
 
-        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip() or "unknown"
-        posture_name = str(active_cognitive_posture_profile.get("name") or "").strip() or "unknown"
-        summary = (
-            f"posture={posture_name}; "
-            f"drift={drift_state}."
-        )
-        current_judgement = str(
-            cognitive_assessment_memory.get("current_judgement") or ""
-        ).strip()
-        why_not_improvement_now_count = max(
-            0,
-            int(cognitive_assessment_memory.get("why_not_improvement_now_count") or 0),
+        return build_proposal_cognition_projection(
+            lm_reasoning_state=lm_reasoning_state,
+            cognitive_control_policy=self._current_cognitive_control_policy(),
+            active_cognitive_posture_profile=active_cognitive_posture_profile,
+            meta_cognition_profile=meta_cognition_profile,
+            cognitive_assessment_memory=cognitive_assessment_memory,
+            compact_memory=compact_memory,
+            current_candidates=current_candidates,
         )
 
-        return {
-            "summary": summary,
-            "lm_trace": {
-                "available": bool(lm_reasoning_state),
-                "status": str(lm_reasoning_state.get("status") or "").strip() or None,
-                "model_role": str(lm_reasoning_state.get("model_role") or "").strip() or None,
-                "charter_core_mission": str(
-                    dict(lm_reasoning_state.get("charter") or {}).get("core_mission") or ""
-                ).strip()
-                or None,
-                "proposal_count": max(0, int(lm_reasoning_state.get("proposal_count") or 0)),
-            },
-            "cognitive_control_policy": self._current_cognitive_control_policy(),
-            "active_cognitive_posture_profile": active_cognitive_posture_profile,
-            "meta_cognition_profile": {
-                "available": bool(meta_cognition_profile.get("available")),
-                "current_judgement": str(
-                    meta_cognition_profile.get("current_judgement") or ""
-                ).strip(),
-                "dominant_constraint": str(
-                    meta_cognition_profile.get("dominant_constraint") or ""
-                ).strip(),
-                "grounding_pressure": str(
-                    meta_cognition_profile.get("grounding_pressure") or ""
-                ).strip(),
-                "dominant_failure_mode": str(
-                    meta_cognition_profile.get("dominant_failure_mode") or ""
-                ).strip(),
-                "governance_posture": str(
-                    meta_cognition_profile.get("governance_posture")
-                    or meta_cognition_profile.get("recommended_task_posture")
-                    or ""
-                ).strip(),
-                "priority_signals": [
-                    str(item).strip()
-                    for item in list(meta_cognition_profile.get("priority_signals") or [])[:4]
-                    if str(item).strip()
-                ],
-                "self_iteration_focus": {
-                    "domain": str(
-                        meta_cognition_profile.get("top_self_iteration_domain") or ""
-                    ).strip()
-                    or None,
-                    "hypothesis": str(
-                        meta_cognition_profile.get("top_self_iteration_hypothesis") or ""
-                    ).strip()
-                    or None,
-                },
-            },
-            "assessment_trace": {
-                "available": bool(cognitive_assessment_memory.get("available")),
-                "dominant_constraint": str(
-                    cognitive_assessment_memory.get("dominant_constraint") or ""
-                ).strip()
-                or None,
-                "current_judgement": current_judgement or None,
-                "why_not_improvement_now": str(
-                    cognitive_assessment_memory.get("why_not_improvement_now") or ""
-                ).strip()
-                or None,
-                "why_not_improvement_now_count": why_not_improvement_now_count,
-                "self_iteration_target": str(
-                    cognitive_assessment_memory.get("self_iteration_target") or ""
-                ).strip()
-                or None,
-                "self_iteration_hypothesis": str(
-                    cognitive_assessment_memory.get("self_iteration_hypothesis") or ""
-                ).strip()
-                or None,
-            },
-            "auxiliary_memory": compact_memory,
-            "current_candidates": current_candidates,
-        }
-
-    def _compact_endogenous_proposal_memory(
-        self,
-        *,
-        recent_reference_alignment: Dict[str, Any],
-        proposal_drift_memory: Dict[str, Any],
-        recent_cognitive_alignment: Dict[str, Any],
-        cognitive_assessment_memory: Dict[str, Any],
-        self_iteration_hypotheses: Dict[str, Any],
-        self_iteration_trend_memory: Dict[str, Any],
-        switch_self_regulation_memory: Dict[str, Any],
-        post_task_effect_memory: Dict[str, Any],
-    ) -> Dict[str, Dict[str, Any]]:
-        def _stored_count(item: Dict[str, Any], key: str) -> int:
-            return max(0, int(item.get(key) or 0))
-
-        def _signal_count(item: Dict[str, Any], keys: tuple[str, ...]) -> int:
-            return max([0, *(_stored_count(item, key) for key in keys)])
-
-        return {
-            "recent_reference_alignment": {
-                "available": bool(recent_reference_alignment.get("available")),
-                "average_alignment_score": round(
-                    self._clamp_endogenous_ratio(
-                        recent_reference_alignment.get("average_alignment_score") or 0.0
-                    ),
-                    4,
-                ),
-                "weak_or_partial_count": _stored_count(
-                    recent_reference_alignment,
-                    "weak_or_partial_count",
-                ),
-                "entry_count": _stored_count(
-                    recent_reference_alignment,
-                    "entry_count",
-                ),
-                "primary_missing_evidence_node": str(
-                    recent_reference_alignment.get("primary_missing_evidence_node") or ""
-                ).strip()
-                or None,
-                "primary_missing_agenda_node": str(
-                    recent_reference_alignment.get("primary_missing_agenda_node") or ""
-                ).strip()
-                or None,
-                "missing_evidence_node_count": _stored_count(
-                    recent_reference_alignment,
-                    "missing_evidence_node_count",
-                ),
-                "missing_agenda_node_count": _stored_count(
-                    recent_reference_alignment,
-                    "missing_agenda_node_count",
-                ),
-            },
-            "proposal_drift_memory": {
-                "available": bool(proposal_drift_memory.get("available")),
-                "average_score": round(
-                    self._clamp_endogenous_ratio(
-                        proposal_drift_memory.get("average_score") or 0.0
-                    ),
-                    4,
-                ),
-                "drift_state": str(
-                    proposal_drift_memory.get("drift_state") or ""
-                ).strip(),
-                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
-                "posture_alignment_signal_count": _stored_count(
-                    proposal_drift_memory,
-                    "posture_alignment_signal_count",
-                ),
-                "priority_basis_signal_count": _stored_count(
-                    proposal_drift_memory,
-                    "priority_basis_signal_count",
-                ),
-                "missing_posture_alignment_count": _stored_count(
-                    proposal_drift_memory,
-                    "missing_posture_alignment_count",
-                ),
-                "missing_priority_basis_count": _stored_count(
-                    proposal_drift_memory,
-                    "missing_priority_basis_count",
-                ),
-                "posture_alignment_health": str(
-                    proposal_drift_memory.get("posture_alignment_health") or ""
-                ).strip(),
-                "priority_basis_health": str(
-                    proposal_drift_memory.get("priority_basis_health") or ""
-                ).strip(),
-                "dominant_posture_conflict_reason": str(
-                    proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
-                ).strip()
-                or None,
-            },
-            "recent_cognitive_alignment": {
-                "available": bool(recent_cognitive_alignment.get("available")),
-                "average_score": round(
-                    self._clamp_endogenous_ratio(
-                        recent_cognitive_alignment.get("average_score") or 0.0
-                    ),
-                    4,
-                ),
-                "quality_counts": dict(recent_cognitive_alignment.get("quality_counts") or {}),
-                "dominant_task_shape": str(
-                    recent_cognitive_alignment.get("dominant_task_shape") or ""
-                ).strip()
-                or None,
-                "reason_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "reason_count",
-                ),
-                "posture_alignment_signal_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "posture_alignment_signal_count",
-                ),
-                "priority_basis_signal_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "priority_basis_signal_count",
-                ),
-                "missing_posture_alignment_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "missing_posture_alignment_count",
-                ),
-                "missing_priority_basis_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "missing_priority_basis_count",
-                ),
-                "entry_count": _stored_count(
-                    recent_cognitive_alignment,
-                    "entry_count",
-                ),
-            },
-            "cognitive_assessment_memory": {
-                "available": bool(cognitive_assessment_memory.get("available")),
-                "dominant_constraint": str(
-                    cognitive_assessment_memory.get("dominant_constraint") or ""
-                ).strip(),
-                "current_judgement_count": max(
-                    _signal_count(
-                        cognitive_assessment_memory,
-                        ("current_judgement_count",),
-                    ),
-                    1 if str(cognitive_assessment_memory.get("current_judgement") or "").strip() else 0,
-                ),
-                "self_iteration_target_count": max(
-                    _signal_count(
-                        cognitive_assessment_memory,
-                        ("self_iteration_target_count", "target_count"),
-                    ),
-                    1
-                    if str(cognitive_assessment_memory.get("self_iteration_target") or "").strip()
-                    else 0,
-                ),
-                "self_iteration_hypothesis_count": max(
-                    _signal_count(
-                        cognitive_assessment_memory,
-                        ("self_iteration_hypothesis_count", "hypothesis_count"),
-                    ),
-                    1
-                    if str(
-                        cognitive_assessment_memory.get("self_iteration_hypothesis") or ""
-                    ).strip()
-                    else 0,
-                ),
-            },
-            "self_iteration_hypotheses": {
-                "available": bool(self_iteration_hypotheses.get("available")),
-                "dominant_hypothesis": str(
-                    self_iteration_hypotheses.get("dominant_hypothesis") or ""
-                ).strip(),
-                "top_target_domain": str(
-                    self_iteration_hypotheses.get("top_target_domain") or ""
-                ).strip(),
-                "hypothesis_count": max(
-                    _stored_count(self_iteration_hypotheses, "hypothesis_count"),
-                    1
-                    if str(self_iteration_hypotheses.get("dominant_hypothesis") or "").strip()
-                    else 0,
-                ),
-            },
-            "self_iteration_trend_memory": {
-                "available": bool(self_iteration_trend_memory.get("available")),
-                "dominant_target": str(
-                    self_iteration_trend_memory.get("dominant_target") or ""
-                ).strip(),
-                "trend_state": str(
-                    self_iteration_trend_memory.get("trend_state") or ""
-                ).strip(),
-                "target_stability": str(
-                    self_iteration_trend_memory.get("target_stability") or ""
-                ).strip(),
-                "target_count": max(
-                    _signal_count(
-                        self_iteration_trend_memory,
-                        ("target_count", "target_signal_count"),
-                    ),
-                    1 if str(self_iteration_trend_memory.get("dominant_target") or "").strip() else 0,
-                ),
-                "hypothesis_count": max(
-                    _signal_count(
-                        self_iteration_trend_memory,
-                        ("hypothesis_count", "hypothesis_signal_count"),
-                    ),
-                    1
-                    if str(self_iteration_trend_memory.get("dominant_hypothesis") or "").strip()
-                    else 0,
-                ),
-                "stay_or_switch_count": max(
-                    _signal_count(
-                        self_iteration_trend_memory,
-                        ("stay_or_switch_count", "stay_or_switch_signal_count"),
-                    ),
-                    1
-                    if str(
-                        self_iteration_trend_memory.get("dominant_stay_or_switch") or ""
-                    ).strip()
-                    else 0,
-                ),
-                "switch_reason_count": max(
-                    _signal_count(
-                        self_iteration_trend_memory,
-                        ("switch_reason_count", "switch_reason_signal_count"),
-                    ),
-                    1
-                    if str(
-                        self_iteration_trend_memory.get("dominant_switch_reason") or ""
-                    ).strip()
-                    else 0,
-                ),
-            },
-            "switch_self_regulation_memory": {
-                "available": bool(switch_self_regulation_memory.get("available")),
-                "preferred_switch_bias": str(
-                    switch_self_regulation_memory.get("preferred_switch_bias") or ""
-                ).strip(),
-                "switch_effectiveness": str(
-                    switch_self_regulation_memory.get("switch_effectiveness") or ""
-                ).strip(),
-                "stay_effectiveness": str(
-                    switch_self_regulation_memory.get("stay_effectiveness") or ""
-                ).strip(),
-                "average_switch_quality": round(
-                    self._clamp_endogenous_ratio(
-                        switch_self_regulation_memory.get("average_switch_quality") or 0.0
-                    ),
-                    4,
-                ),
-                "average_stay_quality": round(
-                    self._clamp_endogenous_ratio(
-                        switch_self_regulation_memory.get("average_stay_quality") or 0.0
-                    ),
-                    4,
-                ),
-                "stay_or_switch_count": _signal_count(
-                    switch_self_regulation_memory,
-                    ("stay_or_switch_count", "stay_or_switch_signal_count"),
-                ),
-            },
-            "post_task_effect_memory": {
-                "available": bool(post_task_effect_memory.get("available")),
-                "effect_direction": str(
-                    post_task_effect_memory.get("effect_direction") or ""
-                ).strip(),
-                "average_quality_score": round(
-                    self._clamp_endogenous_ratio(
-                        post_task_effect_memory.get("average_quality_score") or 0.0
-                    ),
-                    4,
-                ),
-                "average_cognitive_alignment_score": round(
-                    self._clamp_endogenous_ratio(
-                        post_task_effect_memory.get("average_cognitive_alignment_score")
-                        or 0.0
-                    ),
-                    4,
-                ),
-                "average_reference_alignment_score": round(
-                    self._clamp_endogenous_ratio(
-                        post_task_effect_memory.get("average_reference_alignment_score")
-                        or 0.0
-                    ),
-                    4,
-                ),
-                "dominant_target_effect": str(
-                    post_task_effect_memory.get("dominant_target_effect") or ""
-                ).strip()
-                or None,
-            },
-        }
 
     def _build_recent_reference_alignment_summary(
         self,
@@ -5486,95 +5055,7 @@ class PlanningRuntimeMixin:
     async def evaluate_endogenous_drive(self, request: dict | None = None):
         """Evaluate endogenous cognition state and API-B judgement projections."""
 
-        request = request or {}
-        record_activity = bool(request.get("record_activity", True))
-        persist_evaluation = bool(request.get("persist_evaluation", True))
-        drive_input = await self._resolve_runtime_drive_input_request(
-            request,
-            include_gate_default=True,
-        )
-        persisted_self_regulation = self._load_endogenous_self_regulation()
-        api_b_judgement_tasks = self._api_b_judgement_task_summaries(limit=24)
-        api_a_execution_lane_tasks = self._api_a_execution_lane_task_summaries(limit=24)
-        drive_input["api_b_judgement_tasks"] = api_b_judgement_tasks
-        drive_input["api_a_execution_lane_tasks"] = api_a_execution_lane_tasks
-        drive_input["autonomous_chain_live_tasks"] = [
-            *api_b_judgement_tasks,
-            *api_a_execution_lane_tasks,
-        ]
-        drive_input["endogenous_drive_policy"] = {
-            "learning_topic_cooldown_hours": int(
-                getattr(
-                    self.config.service_runtime,
-                    "endogenous_drive_learning_topic_cooldown_hours",
-                    24,
-                ) or 24
-            ),
-            "body_improvement_cooldown_hours": int(
-                getattr(
-                    self.config.service_runtime,
-                    "endogenous_drive_body_improvement_cooldown_hours",
-                    12,
-                ) or 12
-            ),
-            "topic_overlap_threshold": float(
-                getattr(
-                    self.config.service_runtime,
-                    "endogenous_drive_topic_overlap_threshold",
-                    0.6,
-                ) or 0.6
-            ),
-            "body_improvement_min_quality": float(
-                getattr(
-                    self.config.service_runtime,
-                    "body_improvement_min_quality",
-                    60.0,
-                ) or 60.0
-            ),
-            "body_improvement_editable_dirs": list(
-                getattr(
-                    self.config.service_runtime,
-                    "body_improvement_editable_dirs",
-                    ["skills/", "tools/", "agent/", "prompts/"],
-                ) or ["skills/", "tools/", "agent/", "prompts/"]
-            ),
-            "body_improvement_forbidden_patterns": list(
-                getattr(
-                    self.config.service_runtime,
-                    "body_improvement_forbidden_patterns",
-                    ["**/credential*", "**/.env*", "systems/**"],
-                ) or ["**/credential*", "**/.env*", "systems/**"]
-            ),
-            "body_improvement_max_files": int(
-                getattr(
-                    self.config.service_runtime,
-                    "body_improvement_max_files",
-                    5,
-                ) or 5
-            ),
-        }
-        drive_input["drive_history"] = project_drive_history(
-            self._load_endogenous_drive_history(),
-            normalize_strategy_memory=self._normalize_endogenous_strategy_memory,
-        )
-        self_regulation = dict(persisted_self_regulation)
-        for key in (
-            "dynamic_candidate_throttle_boost",
-            "dynamic_observation_bias_boost",
-            "dynamic_truthfulness_bias_boost",
-            "dynamic_learning_expansion_suppression",
-        ):
-            drive_input["endogenous_drive_policy"][key] = float(
-                self_regulation.get(key) or 0.0
-            )
-        max_candidates = int(
-            request.get(
-                "max_candidates",
-                self.config.service_runtime.endogenous_drive_max_candidates,
-            )
-        )
-
-        def _candidate_api_b_judgement_items(candidates: list[Any]) -> list[Dict[str, Any]]:
+        def schedule_candidate_items(candidates: list[Any]) -> list[Dict[str, Any]]:
             return self._schedule_allocator.apply_to_candidates(
                 [candidate.to_api_b_judgement_item() for candidate in candidates],
                 occupied_tokens=self._schedule_allocator.occupied_tokens(
@@ -5583,165 +5064,39 @@ class PlanningRuntimeMixin:
                 now=datetime.now(),
             )
 
-        def _lm_proposals_for_second_candidate_pass() -> Optional[list[Dict[str, Any]]]:
-            runtime_config = getattr(self.config, "service_runtime", None)
-            if not bool(getattr(runtime_config, "endogenous_drive_lm_task_generation_enabled", False)):
-                return None
-            engine = getattr(self, "_endogenous_drive_engine", None)
-            if engine is None or not hasattr(engine, "get_latest_lm_task_generation_context"):
-                return None
-            try:
-                state = dict(engine.get_latest_lm_task_generation_context() or {})
-            except Exception:
-                return None
-            if not str(state.get("status") or "").strip():
-                return None
-            if not hasattr(engine, "get_latest_lm_task_generation_proposals"):
-                return []
-            try:
-                return [
-                    dict(item)
-                    for item in list(engine.get_latest_lm_task_generation_proposals() or [])
-                    if isinstance(item, dict)
-                ]
-            except Exception:
-                return []
-
-        deliberation = self._endogenous_drive_engine.build_deliberation_report(
-            drive_input=drive_input,
-        )
-        deliberation_dict = deliberation.to_dict()
-        candidates = self._endogenous_drive_engine.generate_candidates(
-            drive_input=drive_input,
-            existing_drive_keys=self._existing_endogenous_drive_keys(),
-            max_candidates=max_candidates,
-            deliberation_report=deliberation,
-        )
-        candidate_items = _candidate_api_b_judgement_items(candidates)
-        lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
-        cognitive_self_regulation = self._derive_cognitive_self_regulation(
-            drive_history=drive_input["drive_history"],
-            lm_reasoning_state=lm_reasoning_state,
-            deliberation=deliberation_dict,
-        )
-        cognitive_self_regulation = self._release_cleared_historical_observation_carryover(
-            persisted_self_regulation=self_regulation,
-            cognitive_self_regulation=cognitive_self_regulation,
-            deliberation=deliberation_dict,
-            lm_reasoning_state=lm_reasoning_state,
-            drive_history=drive_input["drive_history"],
-        )
-        combined_self_regulation = dict(self_regulation)
-        for key in (
-            "dynamic_candidate_throttle_boost",
-            "dynamic_observation_bias_boost",
-            "dynamic_truthfulness_bias_boost",
-            "dynamic_learning_expansion_suppression",
-        ):
-            combined_self_regulation[key] = round(
-                min(
-                    1.0,
-                    float(self_regulation.get(key) or 0.0)
-                    + float(cognitive_self_regulation.get(key) or 0.0),
-                ),
-                4,
-            )
-        combined_reason_parts = [
-            str(self_regulation.get("last_reason") or "").strip(),
-            str(cognitive_self_regulation.get("last_reason") or "").strip(),
-        ]
-        combined_self_regulation["last_reason"] = "; ".join(
-            [item for item in combined_reason_parts if item]
-        ) or None
-
-        for key in (
-            "dynamic_candidate_throttle_boost",
-            "dynamic_observation_bias_boost",
-            "dynamic_truthfulness_bias_boost",
-            "dynamic_learning_expansion_suppression",
-        ):
-            drive_input["endogenous_drive_policy"][key] = float(
-                combined_self_regulation.get(key) or 0.0
-            )
-        if any(float(cognitive_self_regulation.get(key) or 0.0) > 0.0 for key in (
-            "dynamic_candidate_throttle_boost",
-            "dynamic_observation_bias_boost",
-            "dynamic_truthfulness_bias_boost",
-            "dynamic_learning_expansion_suppression",
-        )):
-            deliberation = self._endogenous_drive_engine.build_deliberation_report(
-                drive_input=drive_input,
-            )
-            deliberation_dict = deliberation.to_dict()
-            candidates = self._endogenous_drive_engine.generate_candidates(
-                drive_input=drive_input,
-                existing_drive_keys=self._existing_endogenous_drive_keys(),
-                max_candidates=max_candidates,
-                deliberation_report=deliberation,
-                lm_proposals_override=_lm_proposals_for_second_candidate_pass(),
-            )
-            candidate_items = _candidate_api_b_judgement_items(candidates)
-
-        governance_channels = self._governance_channels_from_deliberation(
-            deliberation_dict
-        )
-        if persist_evaluation:
-            persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
-                deliberation=deliberation_dict,
-                drive_input=drive_input,
-                governance_channels=governance_channels,
-                self_regulation=combined_self_regulation,
-                candidate_items=candidate_items,
-                lm_reasoning_state=lm_reasoning_state,
-            )
-            candidate_items = list(persisted_evaluation["candidate_items"])
-            governance_event_stream = dict(persisted_evaluation["governance_event_stream"])
-            cognition_state = dict(persisted_evaluation["cognition_state"])
-        else:
-            governance_event_stream = project_governance_event_stream(
-                self._load_endogenous_governance_events()
-            )
-            cognition_state = self._build_endogenous_cognition_state(
-                deliberation=deliberation_dict,
-                governance_channels=governance_channels,
-                governance_event_stream=governance_event_stream,
-                self_regulation=combined_self_regulation,
-                candidate_items=candidate_items,
-                lm_reasoning_state=lm_reasoning_state,
-            )
-        if record_activity:
-            self._record_supervisor_ui_activity(
-                "endogenous_drive_evaluated",
-                scene="planning",
-                summary=f"内生驱动已完成一轮认知评估，并形成了 {len(candidates)} 个候选判断投影。",
-                metadata={
-                    "count": len(candidates),
-                    "candidate_keys": [candidate.stable_key for candidate in candidates],
-                    "candidates": [dict(item) for item in candidate_items],
-                    "deliberation": deliberation_dict,
-                "cognition_state": cognition_state,
-                },
-            )
-        response_fields = self._build_drive_input_response_fields(
-            drive_input=drive_input,
-        )
-        return {
-            "status": "evaluated",
-            "enabled": self.config.service_runtime.endogenous_drive_enabled,
-            "core_values": CORE_VALUES,
-            **response_fields,
-            "deliberation": deliberation_dict,
-            "candidates": candidate_items,
-            "count": len(candidates),
-            "drive_posture": self._drive_posture_signal_from_deliberation(
-                deliberation_dict
+        context = EndogenousDriveEvaluationContext(
+            runtime_config=self.config.service_runtime,
+            resolve_drive_input_request=lambda payload: self._resolve_runtime_drive_input_request(
+                payload,
+                include_gate_default=True,
             ),
-            "governance_channels": governance_channels,
-            "governance_event_stream": governance_event_stream,
-            "self_regulation": combined_self_regulation,
-            "cognitive_self_regulation": cognitive_self_regulation,
-            "cognition_state": cognition_state,
-        }
+            load_self_regulation=self._load_endogenous_self_regulation,
+            load_drive_history=self._load_endogenous_drive_history,
+            normalize_strategy_memory=self._normalize_endogenous_strategy_memory,
+            api_b_judgement_task_summaries=self._api_b_judgement_task_summaries,
+            api_a_execution_lane_task_summaries=self._api_a_execution_lane_task_summaries,
+            build_deliberation_report=self._endogenous_drive_engine.build_deliberation_report,
+            generate_candidates=self._endogenous_drive_engine.generate_candidates,
+            existing_drive_keys=self._existing_endogenous_drive_keys,
+            schedule_candidate_items=schedule_candidate_items,
+            lm_generation_application_state=self._lm_generation_application_state,
+            derive_cognitive_self_regulation=self._derive_cognitive_self_regulation,
+            release_cleared_observation_carryover=(
+                self._release_cleared_historical_observation_carryover
+            ),
+            governance_channels_from_deliberation=self._governance_channels_from_deliberation,
+            persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
+            load_governance_events=self._load_endogenous_governance_events,
+            build_cognition_state=self._build_endogenous_cognition_state,
+            record_ui_activity=self._record_supervisor_ui_activity,
+            build_response_fields=self._build_drive_input_response_fields,
+            drive_posture_from_deliberation=self._drive_posture_signal_from_deliberation,
+            core_values=CORE_VALUES,
+        )
+        return await run_endogenous_drive_evaluation(
+            request=request,
+            context=context,
+        )
 
     async def get_endogenous_governance_events(self) -> Dict[str, Any]:
         snapshot = self._load_endogenous_governance_events()
@@ -5941,192 +5296,22 @@ class PlanningRuntimeMixin:
             self._persist_endogenous_governance_events(snapshot)
         return project_governance_event_stream(snapshot)
 
-    def _gate_endogenous_candidates_by_posture(
-        self,
-        *,
-        candidate_items: list[Dict[str, Any]],
-        drive_posture: Dict[str, Any],
-    ) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
-        if not candidate_items:
-            return [], []
-
-        posture_payload = dict(drive_posture.get("payload") or {})
-        preferred_focus = str(posture_payload.get("preferred_focus") or "").strip().lower()
-        candidate_budget = int(posture_payload.get("candidate_budget") or 0)
-        observation_mode = preferred_focus == "observation"
-
-        if not observation_mode:
-            return list(candidate_items), []
-
-        allowed_candidate_kinds = {
-            "truthfulness_review",
-            "governance_hygiene_review",
-        }
-        kept: list[Dict[str, Any]] = []
-        deferred: list[Dict[str, Any]] = []
-
-        for item in candidate_items:
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
-            metadata = dict(row.get("metadata") or {})
-            score_breakdown = dict(metadata.get("score_breakdown") or {})
-            candidate_kind = str(score_breakdown.get("candidate_kind") or "").strip().lower()
-            if candidate_kind in allowed_candidate_kinds:
-                kept.append(row)
-                continue
-
-            row_metadata = dict(metadata)
-            row_metadata["deferred_by_drive_posture"] = True
-            row_metadata["deferred_drive_posture_focus"] = preferred_focus
-            row["metadata"] = row_metadata
-            deferred.append(
-                {
-                    "title": row.get("title"),
-                    "stable_key": row.get("stable_key"),
-                    "candidate_kind": candidate_kind,
-                    "reason": (
-                        "Deferred before API-B judgement insertion because the endogenous drive "
-                        "selected observation posture and this candidate is not a "
-                        "stability-oriented governance action."
-                    ),
-                }
-            )
-
-        if candidate_budget > 0 and len(kept) > candidate_budget:
-            trimmed = kept[candidate_budget:]
-            kept = kept[:candidate_budget]
-            for row in trimmed:
-                metadata = dict(row.get("metadata") or {})
-                score_breakdown = dict(metadata.get("score_breakdown") or {})
-                deferred.append(
-                    {
-                        "title": row.get("title"),
-                        "stable_key": row.get("stable_key"),
-                        "candidate_kind": str(score_breakdown.get("candidate_kind") or "").strip().lower(),
-                        "reason": (
-                            "Deferred before API-B judgement insertion because observation posture "
-                            f"limits endogenous backlog growth to budget {candidate_budget}."
-                        ),
-                    }
-                )
-
-        return kept, deferred
-
     async def _run_endogenous_drive_cycle(self) -> Dict[str, Any]:
-        if not self.config.service_runtime.endogenous_drive_enabled:
-            return {"status": "disabled", "planned": 0, "tasks": []}
-
-        evaluation = await self.evaluate_endogenous_drive(
-            {"record_activity": False, "persist_evaluation": False}
+        context = EndogenousDriveCycleContext(
+            runtime_config=self.config.service_runtime,
+            evaluate_drive=self.evaluate_endogenous_drive,
+            drive_input_fields_from_evaluation=self._drive_input_fields_from_evaluation,
+            load_drive_history=self._load_endogenous_drive_history,
+            load_governance_events=self._load_endogenous_governance_events,
+            load_cognition_state=self._load_endogenous_cognition_state,
+            persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
+            restore_evaluation_snapshots=self._restore_endogenous_evaluation_snapshots,
+            lm_generation_application_state=self._lm_generation_application_state,
+            plan_autonomous_chain_task=self.plan_autonomous_chain_task,
+            record_ui_activity=self._record_supervisor_ui_activity,
+            touch_gateway_activity=self._touch_gateway_activity,
         )
-        drive_posture = dict(evaluation.get("drive_posture") or {})
-        governance_channels = dict(evaluation.get("governance_channels") or {})
-        governance_event_stream = dict(evaluation.get("governance_event_stream") or {})
-        raw_candidate_items = [
-            candidate
-            for candidate in evaluation.get("candidates", [])
-            if isinstance(candidate, dict)
-        ]
-        candidate_items, deferred_candidates = self._gate_endogenous_candidates_by_posture(
-            candidate_items=raw_candidate_items,
-            drive_posture=drive_posture,
-        )
-        if not candidate_items:
-            self._record_supervisor_ui_activity(
-                "endogenous_drive_idle",
-                scene="idle",
-                summary="内生驱动本轮未形成新的 API-B 判断在途投影。",
-                metadata={
-                    "drive_posture": drive_posture,
-                    "governance_channels": governance_channels,
-                    "governance_event_stream": governance_event_stream,
-                    "deferred_candidates": deferred_candidates,
-                } if drive_posture else None,
-            )
-            response_fields = self._drive_input_fields_from_evaluation(evaluation)
-            return {
-                "status": "idle",
-                "planned": 0,
-                "tasks": [],
-                **response_fields,
-                "drive_posture": drive_posture,
-                "governance_channels": governance_channels,
-                "governance_event_stream": governance_event_stream,
-                "deferred_candidates": deferred_candidates,
-            }
-
-        evaluation_fields = self._drive_input_fields_from_evaluation(evaluation)
-        persistence_history_snapshot = self._load_endogenous_drive_history()
-        persistence_governance_snapshot = self._load_endogenous_governance_events()
-        persistence_cognition_snapshot = self._load_endogenous_cognition_state()
-        persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
-            deliberation=dict(evaluation.get("deliberation") or {}),
-            drive_input=dict(evaluation_fields.get("drive_input") or {}),
-            governance_channels=governance_channels,
-            self_regulation=dict(evaluation.get("self_regulation") or {}),
-            candidate_items=candidate_items,
-            lm_reasoning_state=self._lm_reasoning_state_for_current_cycle(),
-        )
-        candidate_items = list(persisted_evaluation["candidate_items"])
-        governance_event_stream = dict(persisted_evaluation["governance_event_stream"])
-
-        try:
-            plan_result = await self.plan_autonomous_chain_task({"items": candidate_items})
-        except Exception:
-            self._restore_endogenous_evaluation_snapshots(
-                drive_history=persistence_history_snapshot,
-                governance_events=persistence_governance_snapshot,
-                cognition_state=persistence_cognition_snapshot,
-            )
-            raise
-        created_tasks = plan_result.get("tasks", [])
-        if not created_tasks:
-            self._restore_endogenous_evaluation_snapshots(
-                drive_history=persistence_history_snapshot,
-                governance_events=persistence_governance_snapshot,
-                cognition_state=persistence_cognition_snapshot,
-            )
-        if created_tasks:
-            self._record_supervisor_ui_activity(
-                "endogenous_drive_planned",
-                scene="planning",
-                summary=f"内生驱动新增了 {len(created_tasks)} 个 API-B 判断在途链路项投影。",
-                metadata={
-                    "drive_posture": drive_posture,
-                    "governance_channels": governance_channels,
-                    "governance_event_stream": governance_event_stream,
-                    "deferred_candidates": deferred_candidates,
-                    "task_ids": [task.get("task_id") for task in created_tasks],
-                    "tasks": [dict(task) for task in created_tasks if isinstance(task, dict)],
-                    "endogenous_drive_keys": [
-                        task.get("metadata", {}).get("endogenous_drive_key")
-                        for task in created_tasks
-                    ],
-                },
-            )
-            await self._touch_gateway_activity(
-                "autonomous_chain_plan",
-                metadata={
-                    "action": "endogenous_drive",
-                    "count": len(created_tasks),
-                    "endogenous_drive_keys": [
-                        task.get("metadata", {}).get("endogenous_drive_key")
-                        for task in created_tasks
-                    ],
-                },
-            )
-
-        return {
-            "status": "planned",
-            "planned": len(created_tasks),
-            "tasks": created_tasks,
-            **evaluation_fields,
-            "drive_posture": drive_posture,
-            "governance_channels": governance_channels,
-            "governance_event_stream": governance_event_stream,
-            "deferred_candidates": deferred_candidates,
-        }
+        return await run_endogenous_drive_cycle(context=context)
 
     def _normalize_autonomous_chain_decision(self, decision: Optional[str]) -> Optional[str]:
         if decision is None:

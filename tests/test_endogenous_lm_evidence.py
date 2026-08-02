@@ -1,7 +1,68 @@
 from systems.supervisor.endogenous_lm_evidence import (
     assemble_lm_evidence_packet,
+    build_lm_evidence_packet,
     build_grounding_focus,
+    build_lm_evidence_context,
 )
+
+
+def test_lm_evidence_packet_owner_composes_explicit_runtime_evidence_inputs():
+    result = build_lm_evidence_packet(
+        cognition_charter={},
+        policy={"posture_profiles": {"balanced": {}}},
+        deliberation_dict={
+            "perception": {"active_sessions": 0},
+            "world_model": {},
+            "reflection": {},
+            "adaptive_policy": {},
+            "needs": [],
+            "intents": [],
+            "signals": [],
+        },
+        drive_input={"checks": {"memory": True}, "idle_seconds": {"memory": 4}},
+        drive_context={"drive_history": {}, "completed_learning_tasks": []},
+        memory_plan={"eligible_for_planning": True},
+        self_learning_plan={},
+        autonomous_improvement_plan={},
+        shell_slot={},
+        external_research_enabled=False,
+        external_research_entries=[],
+        external_research_files=[],
+        repo_root=".",
+    )
+
+    assert result["plans"]["memory_maintenance"]["eligible_for_planning"] is True
+    assert result["checks"] == {"memory": True}
+    assert result["shell_body_profile"]["profile_status"] == "missing_worktree"
+
+
+def test_lm_evidence_context_owner_composes_posture_and_cognition_layers():
+    result = build_lm_evidence_context(
+        policy={
+            "posture_selection_mode": "manual",
+            "active_posture_profile": "balanced",
+            "posture_profiles": {"balanced": {"summary": "balanced"}},
+        },
+        deliberation_dict={
+            "perception": {"user_mode": "quiet", "system_posture": "stable"},
+            "world_model": {"self_confidence": 0.8},
+            "reflection": {"dominant_constraint": "none"},
+            "adaptive_policy": {"preferred_focus": "observation"},
+            "needs": [],
+            "intents": [],
+            "signals": [],
+        },
+        drive_history={},
+        recent_learning_evidence=[],
+        external_research_evidence=[],
+        shell_body_profile={},
+        recent_reference_alignment={"available": False},
+    )
+
+    assert result["cognitive_posture"]["name"] == "balanced"
+    assert result["grounding_focus"]["primary_evidence_nodes"] == []
+    assert "current_judgement" in result["meta_cognition_profile"]
+    assert result["api_b_judgement_snapshot"] == {}
 
 
 def test_grounding_focus_projects_ranked_evidence_agenda_and_conflicts():

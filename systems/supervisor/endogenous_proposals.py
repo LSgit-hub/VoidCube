@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol
 
+from systems.supervisor.endogenous_cognition_charter import resolve_cognition_charter
 from systems.supervisor.endogenous_drive_prompts import (
     build_endogenous_core_mission_prompt,
     build_endogenous_task_generation_payload,
+)
+from systems.supervisor.endogenous_generation_snapshot import (
+    build_lm_task_generation_context_snapshot,
 )
 
 
@@ -36,6 +40,113 @@ class LmProposalGenerationResult:
     proposals: List[Dict[str, Any]]
     cognitive_assessment: Dict[str, Any]
     error: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
+class LmTaskGenerationRequest:
+    cognition_charter: Dict[str, Any]
+    role: str
+    max_candidates: int
+
+
+@dataclass(frozen=True, slots=True)
+class LmTaskGenerationExecution:
+    proposals: List[Dict[str, Any]]
+    context_snapshot: Dict[str, Any]
+
+
+def is_lm_task_generation_enabled(runtime_config: Any) -> bool:
+    return bool(
+        getattr(runtime_config, "endogenous_drive_lm_task_generation_enabled", False)
+    )
+
+
+def build_lm_task_generation_request(
+    *,
+    charter_model: Any,
+    core_mission: Any,
+    task_generation_principles: Iterable[Any] | None,
+    model_role: Any,
+    max_candidates: Any,
+) -> LmTaskGenerationRequest:
+    return LmTaskGenerationRequest(
+        cognition_charter=resolve_cognition_charter(
+            charter_model=charter_model,
+            core_mission=core_mission,
+            task_generation_principles=task_generation_principles,
+        ),
+        role=str(model_role or "governance_reasoner").strip()
+        or "governance_reasoner",
+        max_candidates=max(
+            0,
+            int(max_candidates or 3),
+        ),
+    )
+
+
+def execute_lm_task_generation(
+    *,
+    evidence_packet: Dict[str, Any],
+    request: LmTaskGenerationRequest,
+    client_resolver: Optional[ClientResolver] = None,
+) -> LmTaskGenerationExecution:
+    result = generate_lm_task_proposals(
+        evidence_packet=evidence_packet,
+        cognition_charter=request.cognition_charter,
+        role=request.role,
+        max_candidates=request.max_candidates,
+        client_resolver=client_resolver,
+    )
+    proposals = [dict(item) for item in result.proposals]
+    return LmTaskGenerationExecution(
+        proposals=proposals,
+        context_snapshot=build_lm_task_generation_context_snapshot(
+            evidence_packet=evidence_packet,
+            cognition_charter=request.cognition_charter,
+            role=request.role,
+            max_candidates=request.max_candidates,
+            status=result.status,
+            proposal_count=len(proposals),
+            cognitive_assessment=result.cognitive_assessment,
+            error=result.error,
+        ),
+    )
+
+
+def execute_lm_task_generation_from_runtime_config(
+    *,
+    evidence_packet: Dict[str, Any],
+    runtime_config: Any,
+    client_resolver: Optional[ClientResolver] = None,
+) -> LmTaskGenerationExecution:
+    request = build_lm_task_generation_request(
+        charter_model=getattr(
+            runtime_config, "endogenous_drive_cognition_charter", None
+        ),
+        core_mission=getattr(
+            runtime_config, "endogenous_drive_core_mission_prompt", ""
+        ),
+        task_generation_principles=getattr(
+            runtime_config,
+            "endogenous_drive_task_generation_principles",
+            [],
+        ),
+        model_role=getattr(
+            runtime_config,
+            "endogenous_drive_lm_task_model_role",
+            "governance_reasoner",
+        ),
+        max_candidates=getattr(
+            runtime_config,
+            "endogenous_drive_lm_task_max_candidates",
+            3,
+        ),
+    )
+    return execute_lm_task_generation(
+        evidence_packet=evidence_packet,
+        request=request,
+        client_resolver=client_resolver,
+    )
 
 
 @dataclass(frozen=True, slots=True)

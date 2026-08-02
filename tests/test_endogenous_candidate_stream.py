@@ -3,7 +3,11 @@ from types import SimpleNamespace
 from systems.supervisor.endogenous_candidate_eligibility import (
     CandidateStreamEligibility,
 )
-from systems.supervisor.endogenous_candidate_stream import build_candidate_stream
+from systems.supervisor.endogenous_candidate_stream import (
+    assemble_prepared_candidate_stream,
+    build_candidate_stream,
+    prepare_candidate_stream,
+)
 
 
 def _policy():
@@ -88,3 +92,48 @@ def test_candidate_stream_owner_builds_memory_candidate_from_explicit_inputs():
     assert len(result) == 1
     assert result[0].stable_key == "continuity:memory_maintenance_sweep"
     assert result[0].evidence["observation_checks"] == {"memory": True}
+
+
+def test_prepared_candidate_stream_assembly_delegates_explicit_preparation():
+    preparation = _kwargs(
+        drive_input={"checks": {"memory": True}, "idle_seconds": {"memory": 300}},
+        drive_context={"api_b_judgement_count": 0},
+        eligibility=_eligibility(memory_maintenance=True),
+    )
+
+    result = assemble_prepared_candidate_stream(
+        preparation=preparation,
+        lm_candidates=[],
+    )
+
+    assert len(result) == 1
+    assert result[0].stable_key == "continuity:memory_maintenance_sweep"
+
+
+def test_candidate_stream_preparation_owner_returns_explicit_runtime_inputs():
+    result = prepare_candidate_stream(
+        drive_input={
+            "activity": {
+                "mode": "user_chain_quiet",
+                "system_posture": "stable",
+                "counts": {},
+            },
+            "shell_slot": {},
+            "drive_history": {"outcomes": []},
+            "endogenous_drive_policy": {},
+            "task_family_decisions": {},
+            "governance_task_type_decisions": {},
+        },
+        existing_keys=set(),
+    )
+
+    assert result["deliberation"].perception.system_posture == "stable"
+    assert result["eligibility"].active_candidate_kinds == frozenset()
+    assert set(result["drive_judgements"]) == {
+        "memory_maintenance",
+        "truthfulness_review",
+        "shell_baseline_learning",
+        "exploratory_learning",
+        "governance_hygiene_review",
+        "body_improvement",
+    }

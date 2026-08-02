@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from systems.supervisor.endogenous_adaptive_policy import (
+    build_adaptive_policy,
     build_adaptive_policy_projection,
     strategy_context_key,
 )
@@ -97,3 +98,39 @@ def test_adaptive_policy_projection_throttles_historical_underdelivery():
     assert projection["preferred_focus"] == "observation"
     assert projection["candidate_budget"] == 1
     assert projection["exploratory_learning_quota"] == 0
+
+
+def test_adaptive_policy_owner_normalizes_drive_context_before_projection():
+    result = build_adaptive_policy(
+        perception=SimpleNamespace(
+            user_mode="user_chain_quiet",
+            system_posture="stable",
+            correction_signals=0,
+            api_a_handoff_count=0,
+            api_a_running_count=0,
+            pending_review_count=0,
+            stale_backlog_count=0,
+            api_b_judgement_count=0,
+        ),
+        world_model=SimpleNamespace(
+            truthfulness_pressure=0.15,
+            memory_pressure=0.25,
+            body_upgrade_readiness=0.1,
+        ),
+        reflection=SimpleNamespace(
+            learning_yield_state="mixed",
+            api_b_judgement_blockage_pressure=0.0,
+            repeated_drive_pressure=0.0,
+            body_growth_blocked=False,
+            autonomy_readiness=0.7,
+            recent_learning_quality=0.5,
+            dominant_constraint="none",
+        ),
+        drive_context={
+            "policy": {},
+            "drive_history": {"outcomes": []},
+        },
+    )
+
+    assert result["preferred_focus"] == "memory_continuity"
+    assert result["candidate_budget"] == 4

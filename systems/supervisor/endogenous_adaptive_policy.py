@@ -9,12 +9,19 @@ from systems.supervisor.endogenous_policy import (
     has_memory_backlog_recovery_window,
     has_truthfulness_review_signal,
 )
+from systems.supervisor.endogenous_drive_context import normalize_strategy_memory
+from systems.supervisor.endogenous_history import (
+    normalize_historical_outcomes,
+    summarize_historical_pressure,
+)
 
 
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
 
 
 class PerceptionPolicyInput(Protocol):
+    user_mode: str
+    system_posture: str
     correction_signals: int
     pending_review_count: int
     stale_backlog_count: int
@@ -53,6 +60,53 @@ def strategy_context_key(*, user_mode: str, system_posture: str, dominant_constr
         str(dominant_constraint or "none").strip().lower() or "none"
     )
     return f"{normalized_user_mode}|{normalized_posture}|{normalized_constraint}"
+
+
+def build_adaptive_policy(
+    *,
+    perception: PerceptionPolicyInput,
+    world_model: WorldModelPolicyInput,
+    reflection: ReflectionPolicyInput,
+    drive_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    drive_history = dict(drive_context.get("drive_history") or {})
+    policy = dict(drive_context.get("policy") or {})
+    strategy_memory = normalize_strategy_memory(drive_history.get("strategy_memory"))
+    historical_outcomes = normalize_historical_outcomes(
+        [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+    )
+    recent_historical_outcomes = historical_outcomes[:12]
+    recent_self_learning_outcomes = [
+        item
+        for item in historical_outcomes
+        if str(item.get("task_family") or item.get("governance_task_type") or "")
+        .strip()
+        .lower()
+        == "self_learning"
+    ][:12]
+    historical_pressure = summarize_historical_pressure(
+        recent_historical_outcomes=recent_historical_outcomes,
+        recent_self_learning_outcomes=recent_self_learning_outcomes,
+    )
+    context_key = strategy_context_key(
+        user_mode=perception.user_mode,
+        system_posture=perception.system_posture,
+        dominant_constraint=reflection.dominant_constraint,
+    )
+    return build_adaptive_policy_projection(
+        perception=perception,
+        world_model=world_model,
+        reflection=reflection,
+        policy=policy,
+        strategy_memory=strategy_memory,
+        historical_outcomes=historical_outcomes,
+        historical_pressure=historical_pressure,
+        context_key=context_key,
+    )
 
 
 def build_adaptive_policy_projection(

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from systems.supervisor.endogenous_materialization import (
+    build_lm_materialization_context,
     eligible_lm_candidate_kinds,
     has_governance_hygiene_review_signal,
     has_historical_governance_hygiene_review_signal,
@@ -20,6 +21,7 @@ class Policy:
     body_growth_bias: float = 0.65
     candidate_throttle: float = 0.1
     preferred_focus: str = "truthfulness"
+    body_growth_quota: int = 1
 
 
 def test_governance_hygiene_signals_are_pure_and_use_explicit_inputs():
@@ -188,3 +190,30 @@ def test_materialize_lm_proposals_builds_a_scored_candidate_without_engine_state
         "exploratory_learning"
     )
     assert candidate.evidence["active_sessions"] == 0
+
+
+def test_lm_materialization_context_projects_body_and_eligibility_inputs():
+    result = build_lm_materialization_context(
+        drive_context={
+            "api_b_judgement_tasks": [],
+            "drive_history": {"outcomes": []},
+            "completed_learning_tasks": [],
+            "endogenous_drive_policy": {},
+        },
+        evidence_packet={
+            "plans": {"self_evolution": {"eligible_for_planning": False}},
+            "evidence_graph": {"nodes": []},
+            "agenda_graph": {"focus": "observation"},
+            "shell_slot": {},
+        },
+        cognitive_assessment={"available": True, "current_judgement": "observe"},
+        adaptive_policy=Policy(),
+        pending_review_count=0,
+        stale_backlog_count=0,
+        api_b_judgement_count=0,
+    )
+
+    assert result["evidence_graph"] == {"nodes": []}
+    assert result["agenda_graph"]["focus"] == "observation"
+    assert result["batch_cognitive_assessment"]["current_judgement"] == "observe"
+    assert "body_improvement" not in result["eligible_candidate_kinds"]

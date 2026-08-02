@@ -19,6 +19,9 @@ from systems.supervisor.supervisor import (
     SupervisorServiceRuntimeConfig,
 )
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_drive_cycle import (
+    gate_endogenous_candidates_by_posture,
+)
 from systems.supervisor.endogenous_drive_models import (
     DriveAdaptivePolicy,
     DrivePerceptionSnapshot,
@@ -37,6 +40,9 @@ from systems.supervisor.endogenous_proposals import (
 )
 from systems.supervisor.endogenous_materialization import (
     score_lm_proposal_cognitive_alignment,
+)
+from systems.supervisor.endogenous_lm_evidence import (
+    build_lm_evidence_packet_from_runtime_config,
 )
 from systems.supervisor.endogenous_needs import detect_needs
 from systems.supervisor.endogenous_generation_snapshot import (
@@ -7491,7 +7497,9 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
-    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+    evidence_packet = build_lm_evidence_packet_from_runtime_config(
+        runtime_config=supervisor.config.service_runtime,
+        execution_config=supervisor.config.execution,
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
             drive_input=drive_input
@@ -7578,7 +7586,9 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
-    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+    evidence_packet = build_lm_evidence_packet_from_runtime_config(
+        runtime_config=supervisor.config.service_runtime,
+        execution_config=supervisor.config.execution,
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
             drive_input=drive_input
@@ -7675,7 +7685,9 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
-    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+    evidence_packet = build_lm_evidence_packet_from_runtime_config(
+        runtime_config=supervisor.config.service_runtime,
+        execution_config=supervisor.config.execution,
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
             drive_input=drive_input
@@ -10421,7 +10433,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_state()["context"]
     assert state["cognitive_posture"]["name"] == "observe_first"
     assert state["cognitive_posture"]["selection_mode"] == "manual"
     assert "task_type_priors" not in state
@@ -10523,7 +10535,7 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_state()["context"]
     assessment = state["cognitive_assessment"]
     assert assessment["current_judgement"] == "当前证据仍不完整，因此应先保持复核主导"
     assert assessment["dominant_constraint"] == "self structure 周边 grounding 偏弱"
@@ -10598,7 +10610,7 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_state()["context"]
     assessment = state["cognitive_assessment"]
     assert assessment["self_iteration_target"] == "grounding"
     assert assessment["self_iteration_hypothesis"] == (
@@ -10701,7 +10713,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     assert "generic_learning_fallback" not in program_candidate_kinds
     assert "exploratory_learning" not in program_candidate_kinds
     assert program_candidate_kinds <= {"truthfulness_review", "governance_hygiene_review", ""}
-    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_state()["context"]
     assert state["status"] == "completed"
     assert state["proposal_count"] == 0
     assert "raw_candidate_kinds" not in state
@@ -11301,7 +11313,9 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
         normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
-    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+    evidence_packet = build_lm_evidence_packet_from_runtime_config(
+        runtime_config=supervisor.config.service_runtime,
+        execution_config=supervisor.config.execution,
         drive_input=drive_input,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
             drive_input=drive_input
@@ -15802,7 +15816,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
 def test_runtime_observation_gate_does_not_reopen_memory_maintenance_fallback(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    kept, deferred = supervisor._gate_endogenous_candidates_by_posture(
+    kept, deferred = gate_endogenous_candidates_by_posture(
         candidate_items=[
             {
                 "title": "Maintain memory",
@@ -16074,7 +16088,9 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
         )
         drive_context = build_drive_context(drive_input)
-        evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+        evidence_packet = build_lm_evidence_packet_from_runtime_config(
+            runtime_config=supervisor.config.service_runtime,
+            execution_config=supervisor.config.execution,
             drive_input=drive_input,
             deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(drive_input=drive_input),
             drive_context=drive_context,

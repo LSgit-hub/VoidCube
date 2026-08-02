@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from systems.supervisor.endogenous_body_projection import (
+    build_body_improvement_projection,
+)
 from systems.supervisor.endogenous_candidate_factories import body_improvement_constraints
 from systems.supervisor.endogenous_candidate_pipeline import (
     AdaptivePolicyLike,
@@ -15,10 +18,12 @@ from systems.supervisor.endogenous_candidate_pipeline import (
     clamp01,
 )
 from systems.supervisor.endogenous_learning import stable_learning_topic_key
+from systems.supervisor.endogenous_pressure import backlog_pressure_penalty
 from systems.supervisor.endogenous_proposals import (
     NormalizedLmProposal,
     constraints_for_lm_candidate_kind,
     normalize_lm_proposal,
+    normalize_lm_cognitive_assessment,
 )
 
 
@@ -178,6 +183,118 @@ def resolve_lm_candidate_eligibility(
         body_projection_available=body_projection_available,
         body_growth_quota=body_growth_quota,
         governance_signal_present=governance_signal_present,
+    )
+
+
+def build_lm_materialization_context(
+    *,
+    drive_context: Dict[str, Any],
+    evidence_packet: Dict[str, Any],
+    cognitive_assessment: Any,
+    adaptive_policy: AdaptivePolicyLike,
+    pending_review_count: int,
+    stale_backlog_count: int,
+    api_b_judgement_count: int,
+) -> Dict[str, Any]:
+    body_projection = build_body_improvement_projection(
+        drive_context=drive_context,
+        shell_slot_meta=dict(evidence_packet.get("shell_slot") or {}),
+    )
+    self_evolution_plan = dict(
+        dict(evidence_packet.get("plans") or {}).get("self_evolution") or {}
+    )
+    eligible_kinds = resolve_lm_candidate_eligibility(
+        api_b_judgement_tasks=list(drive_context.get("api_b_judgement_tasks") or []),
+        self_evolution_eligible=bool(
+            self_evolution_plan.get("eligible_for_planning")
+        ),
+        body_projection_available=bool(body_projection.get("available")),
+        body_growth_quota=adaptive_policy.body_growth_quota,
+        pending_review_count=pending_review_count,
+        stale_backlog_count=stale_backlog_count,
+        api_b_judgement_count=api_b_judgement_count,
+        historical_outcomes=list(
+            dict(drive_context.get("drive_history") or {}).get("outcomes") or []
+        ),
+    )
+    return {
+        "evidence_graph": dict(evidence_packet.get("evidence_graph") or {}),
+        "agenda_graph": dict(evidence_packet.get("agenda_graph") or {}),
+        "batch_cognitive_assessment": normalize_lm_cognitive_assessment(
+            cognitive_assessment
+        ),
+        "body_projection": body_projection,
+        "eligible_candidate_kinds": eligible_kinds,
+    }
+
+
+def materialize_lm_proposals_for_deliberation(
+    *,
+    proposals: List[Dict[str, Any]],
+    existing_keys: set[str],
+    deliberation: Any,
+    drive_context: Dict[str, Any],
+    evidence_packet: Dict[str, Any],
+    cognitive_assessment: Any = None,
+) -> List[EndogenousTaskCandidate]:
+    from systems.supervisor.endogenous_drive_judgement import (
+        build_drive_judgement_metadata,
+    )
+
+    perception = deliberation.perception
+    adaptive_policy = deliberation.adaptive_policy
+    intent_by_kind = {
+        str(intent.candidate_kind or "").strip(): intent
+        for intent in deliberation.intents
+        if intent.candidate_kind
+    }
+    context = build_lm_materialization_context(
+        drive_context=drive_context,
+        evidence_packet=evidence_packet,
+        cognitive_assessment=cognitive_assessment,
+        adaptive_policy=adaptive_policy,
+        pending_review_count=perception.pending_review_count,
+        stale_backlog_count=perception.stale_backlog_count,
+        api_b_judgement_count=perception.api_b_judgement_count,
+    )
+
+    def backlog_pressure(
+        governance_task_type: str,
+        task_family: str,
+        execution_kind: Optional[str],
+    ) -> float:
+        return backlog_pressure_penalty(
+            drive_context,
+            governance_task_type=governance_task_type,
+            task_family=task_family,
+            execution_kind=execution_kind,
+        )
+
+    def drive_judgement(candidate_kind: str) -> Dict[str, Any]:
+        return build_drive_judgement_metadata(
+            intent=intent_by_kind.get(candidate_kind),
+            candidate_kind=candidate_kind,
+            all_intents=list(deliberation.intents),
+            needs=list(deliberation.needs),
+            perception=perception,
+            world_model=deliberation.world_model,
+            reflection=deliberation.reflection,
+            adaptive_policy=adaptive_policy,
+        )
+
+    return materialize_lm_proposals(
+        proposals=proposals,
+        existing_keys=existing_keys,
+        evidence_graph=context["evidence_graph"],
+        agenda_graph=context["agenda_graph"],
+        evidence_packet=evidence_packet,
+        batch_cognitive_assessment=context["batch_cognitive_assessment"],
+        adaptive_policy=adaptive_policy,
+        body_projection=context["body_projection"],
+        eligible_candidate_kinds=context["eligible_candidate_kinds"],
+        active_sessions=perception.active_sessions,
+        backlog_pressure=backlog_pressure,
+        drive_judgement=drive_judgement,
     )
 
 

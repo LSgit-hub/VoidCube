@@ -3130,7 +3130,7 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
 async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     with patch(
-        "systems.supervisor.ui_runtime.project_supervisor_scene",
+        "systems.supervisor.ui_state_orchestration.project_supervisor_scene",
         return_value=("planning", "Auto judgement", "Auto work is active."),
     ):
         daily = await supervisor.get_supervisor_ui_state()

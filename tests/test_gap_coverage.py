@@ -16,6 +16,9 @@ import pytest
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.endogenous_drive_context import build_drive_context
 from systems.supervisor.endogenous_body_mapping import build_body_structure_mapping
+from systems.supervisor.endogenous_materialization import (
+    materialize_lm_proposals_for_deliberation,
+)
 from systems.supervisor.endogenous_pressure import memory_maintenance_urgency
 from systems.supervisor.supervisor import SupervisorConfig
 
@@ -1347,7 +1350,7 @@ class TestEndogenousDriveErrorBridge:
         drive_context = build_drive_context(drive_input)
         deliberation = engine.build_deliberation_report(drive_input=drive_input)
 
-        candidates = engine._materialize_lm_task_proposals(
+        candidates = materialize_lm_proposals_for_deliberation(
             proposals=[
                 {
                     "title": "Improve stream reliability",

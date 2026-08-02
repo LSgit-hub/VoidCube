@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from systems.supervisor.endogenous_drive_context import (
     build_drive_context,
+    normalize_drive_input,
     normalize_strategy_memory,
     parse_timestamp,
 )
@@ -96,3 +97,13 @@ def test_parse_timestamp_normalizes_naive_values_and_rejects_invalid_values():
     assert parsed.tzinfo == timezone.utc
     assert parse_timestamp("not-a-timestamp") is None
     assert parse_timestamp(None) is None
+
+
+def test_normalize_drive_input_returns_a_copy_for_mapping_values():
+    source = {"checks": {"ready": True}}
+
+    result = normalize_drive_input(source)
+
+    assert result == source
+    assert result is not source
+    assert normalize_drive_input(None) == {}
