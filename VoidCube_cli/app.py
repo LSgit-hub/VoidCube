@@ -137,6 +137,10 @@ from VoidCube_cli.background_task_runtime import (
 )
 from VoidCube_cli.tui_refresh_loop import start_tui_refresh_loop
 from VoidCube_cli.input_process_loop import start_input_process_loop
+from VoidCube_cli.pending_input_runtime import (
+    PendingInputExecutionPorts,
+    PendingInputRuntime,
+)
 from VoidCube_cli.tui_teardown import TuiTeardownPorts, run_tui_teardown
 from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
 from VoidCube_cli.voice_recording_runtime import (
@@ -284,7 +288,6 @@ from VoidCube_cli.cli_handlers import (
 )
 from VoidCube_cli.attachments import (
     _collect_query_images,
-    _detect_file_drop,
     _format_image_attachment_badges,
     _should_auto_attach_clipboard_image_on_paste,
     _termux_example_image_path,
@@ -1662,150 +1665,56 @@ class VoidcubeCLI:
     _last_agent_turn_result: Dict[str, Any] | None = None
     _current_autonomous_task_run_id: str = ""
 
-    def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
-        """Execute one queued prompt/command using the same path as the interactive loop."""
-        if not user_input:
-            return False
+    def _pending_input_runtime(self) -> PendingInputRuntime:
+        runtime = self.__dict__.get("_pending_input_runtime_instance")
+        if runtime is not None:
+            return runtime
 
-        should_emit_scrollback = self._should_emit_scrollback_output()
-        submit_images = []
-        if isinstance(user_input, tuple):
-            user_input, submit_images = user_input
-
-        _file_drop = _detect_file_drop(user_input) if isinstance(user_input, str) else None
-        if _file_drop:
-            _drop_path = _file_drop["path"]
-            _remainder = _file_drop["remainder"]
-            if _file_drop["is_image"]:
-                submit_images.append(_drop_path)
-                user_input = _remainder or f"[User attached image: {_drop_path.name}]"
-                if should_emit_scrollback:
-                    _cprint(f"  📎 Auto-attached image: {_drop_path.name}")
-            else:
-                if should_emit_scrollback:
-                    _cprint(f"  📄 Detected file: {_drop_path.name}")
-                user_input = f"[User attached file: {_drop_path}]"
-                if _remainder:
-                    user_input += f"\n{_remainder}"
-
-        if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
-            if should_emit_scrollback:
-                _cprint(f"\n>️  {user_input}")
-            logger.info("CLI command executed: %s", user_input)
-            if not self.process_command(user_input):
-                self._should_exit = True
-                try:
-                    if app and getattr(app, "is_running", False):
-                        app.exit()
-                except Exception:
-                    pass
-            return False
-
-        import re as _re
-
-        _paste_ref_re = _re.compile(r'\[Pasted text #\d+: \d+ lines \u2192 (.+?)\]')
-        paste_refs = list(_paste_ref_re.finditer(user_input)) if isinstance(user_input, str) else []
-        if paste_refs:
-            def _expand_ref(match):
-                path = Path(match.group(1))
-                return path.read_text(encoding="utf-8") if path.exists() else match.group(0)
-
-            expanded = _paste_ref_re.sub(_expand_ref, user_input)
-            total_lines = expanded.count('\n') + 1
-            n_pastes = len(paste_refs)
-            if should_emit_scrollback:
-                _user_bar = f"[#34D399]{'~' * 40}[/]"
-                print()
-                ChatConsole().print(_user_bar)
-                split_parts = _paste_ref_re.split(user_input)
-                visible_user_text = " ".join(
-                    split_parts[i].strip() for i in range(0, len(split_parts), 2) if split_parts[i].strip()
-                )
-                if visible_user_text:
-                    ChatConsole().print(
-                        f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(visible_user_text)}[/] "
-                        f"[dim]({n_pastes} pasted block{'s' if n_pastes > 1 else ''}, {total_lines} lines total)[/]"
-                    )
-                else:
-                    ChatConsole().print(
-                        f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(f'[Pasted text: {total_lines} lines]')}[/]"
-                    )
-            user_input = expanded
-        else:
-            if should_emit_scrollback:
-                _user_bar = f"[#34D399]{'~' * 40}[/]"
-                if isinstance(user_input, str) and '\n' in user_input:
-                    first_line = user_input.split('\n')[0]
-                    line_count = user_input.count('\n') + 1
-                    print()
-                    ChatConsole().print(_user_bar)
-                    ChatConsole().print(
-                        f"[bold {_accent_hex()}]●[/] [bold]{_escape(first_line)}[/] "
-                        f"[dim](+{line_count - 1} lines)[/]"
-                    )
-                else:
-                    print()
-                    ChatConsole().print(_user_bar)
-                    ChatConsole().print(f"[bold {_accent_hex()}]●[/] [bold]{_escape(str(user_input))}[/]")
-
-        if submit_images and should_emit_scrollback:
-            n = len(submit_images)
-            _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
-
-        self._agent_running = True
-        if app is not None:
+        def invalidate_app(app: Any | None) -> None:
+            if app is None:
+                return
             try:
                 app.invalidate()
             except Exception:
                 pass
 
-        _sanitized = str(user_input).encode('ascii', errors='replace').decode('ascii')
-        logger.info(
-            "User input received: %s (images: %d)",
-            _sanitized[:100] + "..." if len(_sanitized) > 100 else _sanitized,
-            len(submit_images) if submit_images else 0,
-        )
+        def exit_app(app: Any | None) -> None:
+            if app is not None and getattr(app, "is_running", False):
+                app.exit()
 
-        try:
-            self.chat(user_input, images=submit_images or None)
-        finally:
-            self._agent_running = False
+        def reset_turn_state() -> None:
             self._spinner_text = ""
             self._tool_start_time = 0.0
             self._current_tool_name = ""
             self._last_scrollback_tool = ""
 
-            if app is not None:
-                try:
-                    app.invalidate()
-                except Exception:
-                    pass
+        runtime = PendingInputRuntime(
+            PendingInputExecutionPorts(
+                should_emit_scrollback=self._should_emit_scrollback_output,
+                process_command=self.process_command,
+                set_should_exit=lambda value: setattr(self, "_should_exit", bool(value)),
+                set_agent_running=lambda value: setattr(self, "_agent_running", bool(value)),
+                reset_turn_state=reset_turn_state,
+                chat=lambda message, images: self.chat(message, images=images),
+                invalidate_app=invalidate_app,
+                exit_app=exit_app,
+                voice_restart_ready=lambda: bool(
+                    self._voice_mode
+                    and self._voice_continuous
+                    and not self._voice_recording
+                ),
+                restart_voice_recording=self._voice_start_recording,
+                enqueue_pending_input=self._pending_input.put,
+                render_markup=lambda text: ChatConsole().print(text),
+                emit=_cprint,
+            )
+        )
+        self._pending_input_runtime_instance = runtime
+        return runtime
 
-            if self._voice_mode and self._voice_continuous and not self._voice_recording:
-                def _restart_recording():
-                    try:
-                        self._voice_start_recording()
-                        if app is not None:
-                            app.invalidate()
-                    except Exception as exc:
-                        _cprint(f"{_DIM}Voice auto-restart failed: {exc}{_RST}")
-
-                threading.Thread(target=_restart_recording, daemon=True).start()
-
-            try:
-                from tools.process_registry import process_registry
-                while not process_registry.completion_queue.empty():
-                    evt = process_registry.completion_queue.get_nowait()
-                    _evt_sid = evt.get("session_id", "")
-                    if evt.get("type") == "completion" and process_registry.is_completion_consumed(_evt_sid):
-                        continue
-                    _synth = _format_process_notification(evt)
-                    if _synth:
-                        self._pending_input.put(_synth)
-            except Exception:
-                pass
-
-        return True
+    def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
+        """Execute one queued prompt/command through the pending-input runtime."""
+        return self._pending_input_runtime().execute(user_input, app=app)
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
