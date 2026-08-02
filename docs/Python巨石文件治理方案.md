@@ -775,6 +775,24 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 本批 Stage 6 Supervisor UI identity/proxy adapter boundary 新增 owner characterization 回归为 `4 passed`，完整 runtime wiring 保持 `96 passed`；identity archive/turns、evolution promotion audit/candidates、owner consent、identity experience verification 与 Gateway memory-service discovery 已迁至 `systems.supervisor.ui_identity_proxy_adapters`，`SupervisorUIMixin` 仅保留 route callback 与 gateway/header context wiring，当前 `ui_runtime.py` 降至 601 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
 
+本批 Stage 6 Supervisor UI memory-status/trace adapter boundary 新增 owner characterization 回归为 `4 passed`，UI adapter/state focused 回归为 `8 passed`，完整 runtime wiring 为 `96 passed`；Tier 1/rules health HTTP loading 已迁至 `systems.supervisor.ui_memory_status_adapters`，trace record collection、observation timeline、trace detail loading 与 observation enrichment 已迁至 `systems.supervisor.ui_trace_adapters`，`SupervisorUIMixin` 仅保留 runtime callback/context wiring，当前 `ui_runtime.py` 降至 517 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
+
+本批 Stage 6 Supervisor UI body/snapshot adapter boundary 新增 owner characterization 回归为 `3 passed`，UI owner focused 回归为 `11 passed`；body registry status/card loading 已迁至 `systems.supervisor.ui_body_status_adapters`，observation input 与 memory stats 的 timeout/cache/default normalization 已迁至 `systems.supervisor.ui_snapshot_adapters`，缓存与 body registry 仍由 Supervisor runtime 持有，当前 `ui_runtime.py` 降至 471 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
+
+本批 Stage 6 Supervisor UI activity persistence boundary 新增 owner characterization 回归为 `2 passed`，UI owner focused 回归为 `13 passed`，完整 runtime wiring 保持 `96 passed`；activity load/persist/clear、合法 scene guard、recent projection 与 latest drive candidate snapshot 已迁至 `systems.supervisor.ui_activity_adapters`，`SupervisorUIMixin` 仅保留 deque/path/history callback wiring，当前 `ui_runtime.py` 降至 420 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
+
+本批 Stage 6 Supervisor UI media/lifecycle adapter boundary 新增 owner characterization 回归为 `5 passed`，UI owner focused 回归为 `18 passed`，完整 runtime wiring 保持 `96 passed`；media revision/current payload mutation 与 auto-open timer/browser scheduling 已迁至 `systems.supervisor.ui_media_state_adapters`、`systems.supervisor.ui_open_lifecycle_adapters`，`SupervisorUIMixin` 保留 media state callback 与 config route wiring，当前 `ui_runtime.py` 保持 420 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
+
+本批 CLI-5 terminal voice recording caller boundary 新增 `VoiceSessionManager.transcribe_once()` canonical operation 与 terminal adapter wiring；`voice_recording_runtime` 仅保留 CLI 状态投影、按键中断和输入队列映射，TTS/录音/转写共用一个 `VoiceTtsAdapter` 持有的 canonical manager，移除 beep、同步 recorder contract、临时录音清理 facade 与全部 `tools.voice_mode` 生产入口；voice recording/CLI focused 回归为 `155 passed`，新增 canonical transcribe characterization 通过。完整可选 voice transport 回归仍受本机缺少 `numpy`、`sherpa_onnx`、`truststore` 等依赖影响，未将这些环境缺失误记为本批逻辑失败。
+
+本批 CLI-5 scheduled execution boundary 将 `ScheduledTaskExecutorRuntime` 从完整 `VoidcubeCLI` host 迁移到显式 `ScheduledTaskExecutorPorts`；scheduled executor 仅通过 busy-state、execution gate、session id、active flag 与 background-start callback 端口协调，不再反射读取或写入 CLI host 属性。scheduled task/polling 回归为 `25 passed`，CLI/架构 focused 回归为 `150 passed`，P0 `__init__` 增长护栏恢复通过。
+
+本批 CLI-5 manual background task runtime boundary 将 `_start_background_agent_task` 的 tracking、agent 创建、timeout/interruption、completion callback 与 worker cleanup 迁至 `VoidCube_cli.background_task_runtime`；`BackgroundTaskState` 成为 tracking owner，`VoidcubeCLI` 仅组装显式 ports 与终端显示 callback，删除原 200 行内嵌 worker 实现。background/CLI/scheduled 联合回归为 `94 passed`，architecture growth guard 与 compileall 通过。
+
+本批 CLI-5 embedded autonomous component lifecycle boundary 新增 `EmbeddedAutonomousComponentRuntime` 与 `EmbeddedAutonomousRuntimePorts`；child host ensure、loop start、pending input、status refresh、idle scene、stop sequencing 与 interrupt callback 已从 `app.py` 内联实现迁至 coordinator，CLI 仅提供显式生命周期 callback。embedded host/loop/stop/autonomous gate 回归为 `76 passed`，architecture focused 回归保持通过。
+
+本批 CLI-5 `AutonomousExecutorRuntime` host-state boundary 新增 `AutonomousExecutorPorts`；session identity、running task/current task state、pending input、agent-running gate、last-turn result、timeout writeback 与 autonomous execution event callback 已通过显式 ports 注入，executor 不再持有或读取 CLI host，`app.py` 的 autonomous turn integration 改用 runtime state API。autonomous executor/embedded/CLI 回归为 `134 passed`，architecture/integration/documentation/packaging/scheduled 联合回归为 `65 passed`，production compileall、退役扫描、wheel contract 与 diff check 已通过。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
@@ -782,15 +800,15 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 | `VoidCube_cli/app.py` | 6,245 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
-| `systems/supervisor/ui_runtime.py` | 601 |
+| `systems/supervisor/ui_runtime.py` | 420 |
 
 ### 15.5 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
-- CLI-5：语音 runtime state 已完成第一批收敛；后续只迁移剩余录音调用者并删除 `tools.voice_mode` 的 transitional facade，不复制设备、线程或后台生命周期。
+- CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle 与 `AutonomousExecutorRuntime` host-state boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
 - Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot/LM evidence context/packet、LM generation request/execution、runtime config adapters/runtime gate、deliberation、materialization context/runtime、candidate stream preparation/assembly、selection merge、stable candidate families、learning topic policy、materialization、body structure mapping/eligibility、body projection、candidate eligibility、adaptive policy/input normalization、pressure/urgency、drive-state/models、needs policy gates、needs calculation、LM eligibility input projection、intent/signal projection、drive-context normalization、history normalization、candidate stream assembler、agenda graph projection、self-iteration hypothesis projection、task-type prior projection、LM evidence assembly、reflection projection、cognitive posture/context projection、proposal drift/meta-cognition projection、cognitive memory projection、cognition charter、self-model、API-B snapshot、research、shell body profile、drive-judgement projection、latest-generation state application projection、LM application state port、cognition state projection、proposal cognition projection 与 proposal memory compaction 已迁至专属模块或明确 application port。`EndogenousDriveEngine` 仍持有 proposal 调用交接与 latest-generation state 写回，是 runtime state 的唯一 owner。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
-- Stage 6：继续收口 Supervisor UI 剩余数据加载与 runtime callback 边界，并删除已迁移的 Mixin owner。
+- Stage 6：Supervisor UI 的 state、stream、identity/proxy、memory status、trace、body status、snapshot、activity persistence、media state 与 auto-open lifecycle 边界已收口；剩余 route registration 和 Supervisor 生命周期注册仍保留在 `supervisor.py` owner 内。
 
 ## 16. 下一次实施起点
 
-下一批继续 Stage 6，评估 Supervisor UI 剩余数据加载与 runtime callback 边界；identity/proxy、state orchestration、stream transport 已完成，保持 identity/promotion 的 limit、白名单、方向过滤、鉴权 actor 和异常映射语义不变。同时为剩余 terminal 录音调用者建立迁移清单；不得把已完成的 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping/body-eligibility/eligibility/adaptive-policy/policy/needs/intent-signal/agenda/self-iteration/task-priors/LM-evidence-assembly/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B-snapshot/research/shell-body-profile/identity-proxy 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
+下一批继续盘点 CLI-5 `VoidCube_cli/app.py` 的剩余命令/turn integration 巨石边界，优先识别仍直接编排 autonomous、scheduled、background 与 TUI runtime 的跨域 callback，建立独立 command/turn orchestration owner；同时维护已完成 UI adapter、voice、background、embedded lifecycle、executor ports 与 `tools.voice_mode` 的零旧入口约束，不得把 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping/body-eligibility/eligibility/adaptive-policy/policy/needs/intent-signal/agenda/self-iteration/task-priors/LM-evidence-assembly/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B-snapshot/research/shell-body-profile/identity-proxy/memory-status/trace-adapter/body-status/snapshot-adapter/activity-adapter/media-state/open-lifecycle 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。

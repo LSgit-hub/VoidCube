@@ -12,9 +12,8 @@ class TuiTeardownPorts:
 
     stop_autonomous: Callable[[], None]
     interrupt_agent: Callable[[], None]
-    shutdown_voice_recorder: Callable[[], None]
+    interrupt_voice: Callable[[], None]
     close_voice_tts: Callable[[], None]
-    cleanup_temp_voice_recordings: Callable[[], None]
     unregister_tool_callbacks: Callable[[], None]
     close_session: Callable[[], None]
     finish_interrupted_session: Callable[[], None]
@@ -26,9 +25,8 @@ def run_tui_teardown(ports: TuiTeardownPorts) -> None:
     """Run the CLI's established shutdown order without owning its state."""
     ports.stop_autonomous()
     ports.interrupt_agent()
-    ports.shutdown_voice_recorder()
+    ports.interrupt_voice()
     ports.close_voice_tts()
-    ports.cleanup_temp_voice_recordings()
     ports.unregister_tool_callbacks()
     ports.close_session()
     ports.finish_interrupted_session()

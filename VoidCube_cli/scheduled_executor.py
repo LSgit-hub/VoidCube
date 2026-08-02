@@ -8,7 +8,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,6 +19,21 @@ from VoidCube_core.runtime_paths import get_runtime_layout
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledTaskExecutorPorts:
+    """Explicit CLI operations required by scheduled execution."""
+
+    is_embedded_component: Callable[[], bool]
+    auto_task_running: Callable[[], bool]
+    manual_background_task_running: Callable[[], bool]
+    agent_running: Callable[[], bool]
+    command_running: Callable[[], bool]
+    execution_gate: Any | None
+    get_session_id: Callable[[], str]
+    set_execution_active: Callable[[bool], None]
+    start_background_task: Callable[..., bool]
 
 
 def _scheduled_timeout_seconds(
@@ -130,7 +147,7 @@ class ScheduledTaskExecutorRuntime:
 
     def __init__(
         self,
-        host: Any,
+        ports: ScheduledTaskExecutorPorts,
         *,
         poll_interval_seconds: float = 2.0,
         lease_seconds: int = 300,
@@ -139,7 +156,7 @@ class ScheduledTaskExecutorRuntime:
         execution_timeout_seconds: float | None = None,
         outbox_path: str | Path | None = None,
     ):
-        self.host = host
+        self.ports = ports
         self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
         self.lease_seconds = max(60, min(int(lease_seconds), 3600))
         self.lease_renew_interval_seconds = max(
@@ -181,28 +198,21 @@ class ScheduledTaskExecutorRuntime:
             return dict(decoded) if isinstance(decoded, dict) else {}
 
     def _auto_task_is_running(self) -> bool:
-        component = getattr(self.host, "_autonomous_component_host", None)
-        return bool(component is not None and getattr(component, "_agent_running", False))
+        return bool(self.ports.auto_task_running())
 
     def _manual_background_task_is_running(self) -> bool:
-        tasks = getattr(self.host, "_background_tasks", {})
-        if not isinstance(tasks, dict):
-            return False
-        return any(
-            callable(getattr(thread, "is_alive", None)) and thread.is_alive()
-            for thread in list(tasks.values())
-        )
+        return bool(self.ports.manual_background_task_running())
 
     def _api_a_is_busy(self) -> bool:
         return bool(
             self._auto_task_is_running()
-            or getattr(self.host, "_agent_running", False)
-            or getattr(self.host, "_command_running", False)
+            or self.ports.agent_running()
+            or self.ports.command_running()
             or self._manual_background_task_is_running()
         )
 
     def _acquire_execution_gate(self) -> bool:
-        gate = getattr(self.host, "_api_a_execution_gate", None)
+        gate = self.ports.execution_gate
         if gate is None:
             return True
         acquired = bool(gate.acquire(blocking=False))
@@ -211,9 +221,9 @@ class ScheduledTaskExecutorRuntime:
 
     def _release_execution_slot(self) -> None:
         with self._state_lock:
-            self.host._scheduled_execution_active = False
+            self.ports.set_execution_active(False)
             if self._execution_gate_acquired:
-                gate = getattr(self.host, "_api_a_execution_gate", None)
+                gate = self.ports.execution_gate
                 self._execution_gate_acquired = False
                 if gate is not None:
                     try:
@@ -276,12 +286,12 @@ class ScheduledTaskExecutorRuntime:
         ).start()
 
     def poll_workflow(self) -> None:
-        if getattr(self.host, "_is_embedded_autonomous_component", lambda: False)():
+        if self.ports.is_embedded_component():
             return
         self._flush_writebacks()
         if self._outbox.pending_count():
             return
-        if self._active_run_id or getattr(self.host, "_scheduled_execution_active", False):
+        if self._active_run_id:
             return
         now = time.monotonic()
         if now - self._last_poll_at < self.poll_interval_seconds:
@@ -295,11 +305,11 @@ class ScheduledTaskExecutorRuntime:
         try:
             if not self._acquire_execution_gate():
                 return
-            self.host._scheduled_execution_active = True
+            self.ports.set_execution_active(True)
             if self._api_a_is_busy():
                 self._release_execution_slot()
                 return
-            owner_session_id = str(getattr(self.host, "session_id", "") or "").strip()
+            owner_session_id = str(self.ports.get_session_id() or "").strip()
             if not owner_session_id:
                 self._release_execution_slot()
                 return
@@ -372,7 +382,7 @@ class ScheduledTaskExecutorRuntime:
                 self._flush_writebacks()
                 self._release_execution_slot()
 
-            started = self.host._start_background_agent_task(
+            started = self.ports.start_background_task(
                 prompt,
                 task_id=f"scheduled_{run_id}",
                 task_label=task_label,

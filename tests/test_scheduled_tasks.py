@@ -17,7 +17,38 @@ from systems.supervisor.config_models import (
 )
 from systems.supervisor.supervisor import Supervisor
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
-from VoidCube_cli.scheduled_executor import ScheduledTaskExecutorRuntime, ScheduledWritebackOutbox
+from VoidCube_cli.scheduled_executor import (
+    ScheduledTaskExecutorPorts,
+    ScheduledTaskExecutorRuntime,
+    ScheduledWritebackOutbox,
+)
+
+
+def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
+    def auto_task_running() -> bool:
+        component = getattr(host, "_autonomous_component_host", None)
+        return bool(component is not None and getattr(component, "_agent_running", False))
+
+    def manual_background_task_running() -> bool:
+        tasks = getattr(host, "_background_tasks", {})
+        return any(
+            callable(getattr(thread, "is_alive", None)) and thread.is_alive()
+            for thread in tasks.values()
+        )
+
+    return ScheduledTaskExecutorPorts(
+        is_embedded_component=host._is_embedded_autonomous_component,
+        auto_task_running=auto_task_running,
+        manual_background_task_running=manual_background_task_running,
+        agent_running=lambda: bool(getattr(host, "_agent_running", False)),
+        command_running=lambda: bool(getattr(host, "_command_running", False)),
+        execution_gate=getattr(host, "_api_a_execution_gate", None),
+        get_session_id=lambda: str(getattr(host, "session_id", "") or ""),
+        set_execution_active=lambda active: setattr(
+            host, "_scheduled_execution_active", bool(active)
+        ),
+        start_background_task=host._start_background_agent_task,
+    )
 
 
 def test_once_schedule_claim_and_api_a_writeback(tmp_path) -> None:
@@ -272,7 +303,7 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
 
     host._start_background_agent_task = start_background
     runtime = ScheduledTaskExecutorRuntime(
-        host,
+        _executor_ports(host),
         poll_interval_seconds=0.5,
         outbox_path=tmp_path / "writebacks.db",
     )
@@ -369,7 +400,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
 
     host._start_background_agent_task = start_background
     runtime = ScheduledTaskExecutorRuntime(
-        host,
+        _executor_ports(host),
         poll_interval_seconds=0.5,
         outbox_path=tmp_path / "media-writebacks.db",
     )
@@ -405,7 +436,7 @@ def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> No
         _start_background_agent_task=Mock(),
     )
     runtime = ScheduledTaskExecutorRuntime(
-        host,
+        _executor_ports(host),
         poll_interval_seconds=0.5,
         outbox_path=tmp_path / "writebacks.db",
     )
@@ -583,7 +614,7 @@ def test_scheduled_executor_waits_for_foreground_api_a_and_execution_gate(tmp_pa
         _is_embedded_autonomous_component=lambda: False,
         _start_background_agent_task=Mock(),
     )
-    runtime = ScheduledTaskExecutorRuntime(host, outbox_path=tmp_path / "writebacks.db")
+    runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
     runtime._post = Mock()  # type: ignore[method-assign]
 
     runtime.poll_workflow()
@@ -606,7 +637,7 @@ def test_scheduled_executor_waits_for_manual_background_api_a(tmp_path) -> None:
         _is_embedded_autonomous_component=lambda: False,
         _start_background_agent_task=Mock(),
     )
-    runtime = ScheduledTaskExecutorRuntime(host, outbox_path=tmp_path / "writebacks.db")
+    runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
     runtime._post = Mock()  # type: ignore[method-assign]
 
     runtime.poll_workflow()
@@ -634,7 +665,7 @@ def test_scheduled_executor_holds_api_a_gate_until_writeback(tmp_path) -> None:
         return True
 
     host._start_background_agent_task = start_background
-    runtime = ScheduledTaskExecutorRuntime(host, outbox_path=tmp_path / "writebacks.db")
+    runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
     runtime._post = Mock(
         side_effect=[
             {"claim": {"task": {"title": "计划", "instruction": "执行"}, "run": {"run_id": "run-1"}}},
@@ -680,7 +711,7 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
 
     host._start_background_agent_task = start_background
     runtime = ScheduledTaskExecutorRuntime(
-        host,
+        _executor_ports(host),
         request_timeout_seconds=15,
         execution_timeout_seconds=45,
         outbox_path=tmp_path / "writebacks.db",

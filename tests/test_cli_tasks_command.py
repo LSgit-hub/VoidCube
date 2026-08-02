@@ -21,6 +21,7 @@ from VoidCube_cli.command_handlers.tasks import (
     handle_tasks_command,
 )
 from VoidCube_cli.command_router import parse_cli_command
+from VoidCube_cli.background_task_runtime import BackgroundTaskState
 from agent.subagent_display import SubagentStatus
 
 
@@ -232,9 +233,9 @@ def _capture_agent(agent, kwargs):
 
 def _background_test_app():
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app._background_task_counter = 0
-    app._background_tasks = {}
-    app._background_task_info = {}
+    app._background_task_state = BackgroundTaskState()
+    app._background_tasks = app._background_task_state.tasks
+    app._background_task_info = app._background_task_state.info
     app._ensure_runtime_credentials = lambda: True
     app._resolve_turn_agent_config = lambda _prompt: {
         "model": "safe-model",

@@ -24,7 +24,7 @@ P0_LINE_BASELINES = {
     "VoidCube_cli/app.py": 6_245,
     "systems/supervisor/planning_runtime.py": 8_072,
     "systems/supervisor/endogenous_drive.py": 231,
-    "systems/supervisor/ui_runtime.py": 601,
+    "systems/supervisor/ui_runtime.py": 420,
 }
 P0_LARGE_METHOD_BASELINES = {
     "VoidCube_cli/app.py": {"__init__": 304, "chat": 505, "run": 1_732},

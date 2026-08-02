@@ -513,6 +513,31 @@ async def test_disabled_fingerprint_filter_skips_verification_and_accepts_speake
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_transcribe_once_returns_text_without_companion_or_tts(tmp_path):
+    manager = VoiceSessionManager(
+        VoiceConfig(
+            enabled=True,
+            fingerprint_enabled=False,
+            fingerprint_path=tmp_path / "fingerprint.json",
+        ),
+        companion_callback=companion,
+    )
+    _install_single_utterance_stream(manager)
+    manager.recorder.write_float_waveform = Mock()  # type: ignore[method-assign]
+    manager.stt.transcribe = fake_transcribe  # type: ignore[method-assign]
+    manager._temporary_audio_path = (  # type: ignore[method-assign]
+        lambda prefix, suffix=".wav": tmp_path / f"{prefix}{suffix}"
+    )
+
+    result = await manager.transcribe_once(session_id="voice-terminal")
+
+    assert result["status"] == "complete"
+    assert result["transcript"] == "当前任务是什么"
+    assert manager.status()["last_status"] == "complete"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_fingerprint_rejection_exposes_similarity_and_threshold(tmp_path):
     manager = VoiceSessionManager(
         VoiceConfig(

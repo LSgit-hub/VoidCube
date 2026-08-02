@@ -15,7 +15,7 @@ VoiceManagerFactory = Callable[[], Any]
 
 
 class VoiceTtsAdapter:
-    """Bridge synchronous terminal commands to one voice manager event loop."""
+    """Bridge terminal operations to one canonical voice manager event loop."""
 
     def __init__(
         self,
@@ -56,6 +56,22 @@ class VoiceTtsAdapter:
             state = "unavailable"
             reason = "playback_unavailable"
         return {"status": state, "reason": reason, "voice": payload}
+
+    def realtime_status(self) -> dict[str, Any]:
+        """Return the manager's non-blocking view state for terminal rendering."""
+        return self._call(lambda manager: manager.realtime_status())
+
+    def enable(self) -> dict[str, Any]:
+        return self._call(lambda manager: manager.set_enabled(True))
+
+    def disable(self) -> dict[str, Any]:
+        return self._call(lambda manager: manager.set_enabled(False))
+
+    def transcribe_once(self, *, session_id: str = "") -> dict[str, Any]:
+        async def operation(manager: Any) -> dict[str, Any]:
+            return await manager.transcribe_once(session_id=session_id)
+
+        return self._call(operation)
 
     def speak(self, text: str, *, reason: str = "terminal_command") -> dict[str, Any]:
         message = str(text or "").strip()

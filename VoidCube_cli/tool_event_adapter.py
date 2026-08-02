@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from typing import Any, Callable
 
@@ -148,16 +147,3 @@ def _project_started(
                 stage="tool_started",
             )
         host._invalidate()
-
-    if not getattr(host, "_voice_mode", False) or not event.name:
-        return
-    try:
-        from tools.voice_mode import play_beep
-
-        threading.Thread(
-            target=play_beep,
-            kwargs={"frequency": 1200, "duration": 0.06, "count": 1},
-            daemon=True,
-        ).start()
-    except Exception:
-        logger.debug("Tool audio cue failed", exc_info=True)

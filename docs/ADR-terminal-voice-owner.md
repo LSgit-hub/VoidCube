@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted on 2026-07-31. Terminal TTS remains unavailable until its adapter is implemented.
+Accepted on 2026-07-31. Terminal recording and TTS now use the explicit async adapter;
+the CLI reports them unavailable until the canonical voice requirements are met.
 
 ## Context
 
@@ -32,22 +33,18 @@ real `VoiceSessionManager`.
 - `/voice tts` is not a supported enabled feature until the CLI has an explicit
   asynchronous adapter to the canonical voice session. The UI and status output
   must describe it as unavailable rather than enabled.
-- `tools.voice_mode` is not a canonical transport owner. It must not be extended
-  with legacy synchronous recorder methods or an additional persistent player.
-  Its remaining recording facade functions are transitional only and should be
-  removed as each caller migrates.
+- `tools.voice_mode` was not a canonical transport owner and has been removed
+  after its terminal callers migrated. No replacement synchronous recorder
+  facade may be added.
 - The future adapter must use explicit operations for speak, interrupt, status,
   and continuous-session control. It must not pass `VoidcubeCLI` or a complete
   `VoiceSessionManager` through a generic host object.
 
 ## Consequences
 
-The current CLI's terminal recorder remains a known incompatible legacy path and
-is not a model for new code. The next implementation batch first changes terminal
-TTS status/command semantics so that no disabled playback path reports success,
-then introduces a small async bridge to `systems.voice` with focused cancellation
-and configuration tests. Only after all callers have migrated may the legacy
-facade, unused TTS state, and stale streaming branches be deleted.
+The CLI terminal adapter owns only display state and input mapping. The canonical
+manager owns capture, transcription, playback, interruption, and temporary audio
+cleanup; the adapter does not expose a recorder-shaped compatibility API.
 
 No model provider, authentication flow, request protocol, skill, or packaging
 contract changes are authorized by this ADR.

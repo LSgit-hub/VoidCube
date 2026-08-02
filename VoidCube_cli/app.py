@@ -126,6 +126,15 @@ from VoidCube_cli.tui_input_widgets import (
     install_placeholder_processor,
 )
 from VoidCube_cli.scheduled_task_polling import start_scheduled_task_polling
+from VoidCube_cli.scheduled_executor import (
+    ScheduledTaskExecutorPorts,
+    ScheduledTaskExecutorRuntime,
+)
+from VoidCube_cli.background_task_runtime import (
+    BackgroundTaskPorts,
+    BackgroundTaskRuntime,
+    BackgroundTaskState,
+)
 from VoidCube_cli.tui_refresh_loop import start_tui_refresh_loop
 from VoidCube_cli.input_process_loop import start_input_process_loop
 from VoidCube_cli.tui_teardown import TuiTeardownPorts, run_tui_teardown
@@ -136,17 +145,13 @@ from VoidCube_cli.voice_recording_runtime import (
     stop_terminal_voice_recording,
 )
 from VoidCube_cli.voice_tts_adapter import VoiceTtsAdapter
-from VoidCube_cli.embedded_autonomous_loop import (
-    EmbeddedAutonomousLoopPorts,
-    start_embedded_autonomous_component_loop,
-)
 from VoidCube_cli.embedded_autonomous_host import (
     EmbeddedAutonomousHostPorts,
     ensure_embedded_autonomous_component_host,
 )
-from VoidCube_cli.embedded_autonomous_stop import (
-    EmbeddedAutonomousStopPorts,
-    stop_embedded_autonomous_component,
+from VoidCube_cli.embedded_autonomous_runtime import (
+    EmbeddedAutonomousComponentRuntime,
+    EmbeddedAutonomousRuntimePorts,
 )
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
@@ -298,7 +303,6 @@ class ChatConsole(_BaseChatConsole):
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from VoidCube_core.constants import get_VoidCube_home
-from VoidCube_core.constants import is_termux as _is_termux_environment
 from VoidCube_app.environment import load_VoidCube_dotenv
 
 _VoidCube_home = get_VoidCube_home()
@@ -766,14 +770,6 @@ class VoidcubeCLI:
         self._voice_state().mode = value
 
     @property
-    def _voice_recorder(self):
-        return self._voice_state().recorder
-
-    @_voice_recorder.setter
-    def _voice_recorder(self, value):
-        self._voice_state().recorder = value
-
-    @property
     def _voice_recording(self):
         return self._voice_state().recording
 
@@ -1100,10 +1096,10 @@ class VoidcubeCLI:
         # Status bar visibility (toggled via /statusbar)
         self._status_bar_visible = True
 
-        # Background task tracking: {task_id: threading.Thread}
-        self._background_tasks: Dict[str, threading.Thread] = {}
-        self._background_task_info: Dict[str, Dict[str, Any]] = {}
-        self._background_task_counter = 0
+        # Background task tracking is owned by the explicit runtime state.
+        self._background_task_state = BackgroundTaskState()
+        self._background_tasks = self._background_task_state.tasks
+        self._background_task_info = self._background_task_state.info
         self._last_gateway_presence_refresh_at: float = 0.0
         self._gateway_presence_refresh_interval_seconds: float = 30.0
         self._autonomous_execution_events: List[Dict[str, str]] = []
@@ -1114,8 +1110,7 @@ class VoidcubeCLI:
         self._autonomous_component_stop = threading.Event()
         self._api_a_execution_gate = threading.Lock()
         self._scheduled_execution_active = False
-        from VoidCube_cli.scheduled_executor import ScheduledTaskExecutorRuntime
-        self._scheduled_executor_runtime = ScheduledTaskExecutorRuntime(self)
+        self._scheduled_executor_runtime = self._create_scheduled_executor_runtime()
         _initialize_autonomous_status_caches_view(self)
 
     def _quiet_autonomous_component_cprint(self, *args: Any, **kwargs: Any) -> None:
@@ -1125,6 +1120,34 @@ class VoidcubeCLI:
     def _is_embedded_autonomous_component(self) -> bool:
         """Return True when this host only exists for the embedded mini CLI."""
         return getattr(self, "_autonomous_parent_host", None) is not None
+
+    def _create_scheduled_executor_runtime(self) -> ScheduledTaskExecutorRuntime:
+        """Assemble scheduled execution from explicit CLI-owned state ports."""
+        return ScheduledTaskExecutorRuntime(
+            ScheduledTaskExecutorPorts(
+                is_embedded_component=self._is_embedded_autonomous_component,
+                auto_task_running=lambda: bool(
+                    getattr(
+                        getattr(self, "_autonomous_component_host", None),
+                        "_agent_running",
+                        False,
+                    )
+                ),
+                manual_background_task_running=lambda: any(
+                    thread.is_alive()
+                    for thread in self._background_tasks.values()
+                    if callable(getattr(thread, "is_alive", None))
+                ),
+                agent_running=lambda: bool(self._agent_running),
+                command_running=lambda: bool(self._command_running),
+                execution_gate=self._api_a_execution_gate,
+                get_session_id=lambda: str(self.session_id or ""),
+                set_execution_active=lambda active: setattr(
+                    self, "_scheduled_execution_active", bool(active)
+                ),
+                start_background_task=self._start_background_agent_task,
+            )
+        )
 
     def _should_emit_scrollback_output(self) -> bool:
         """Return whether this host may write into the user's main CLI transcript."""
@@ -1174,23 +1197,19 @@ class VoidcubeCLI:
             cprint=self._quiet_autonomous_component_cprint,
         )
 
-    def _start_autonomous_execution_component(self) -> bool:
-        """Start the embedded API-A autonomous execution component."""
-        stop_event = getattr(self, "_autonomous_component_stop", None)
-        if stop_event is None:
-            stop_event = threading.Event()
-            self._autonomous_component_stop = stop_event
-        stop_event.clear()
-        component_host = self._ensure_autonomous_component_host()
-        component_host._autonomous_gate_active = True
+    def _embedded_autonomous_runtime(self) -> EmbeddedAutonomousComponentRuntime:
+        runtime = self.__dict__.get("_embedded_autonomous_runtime_instance")
+        if runtime is not None:
+            return runtime
 
-        thread = getattr(self, "_autonomous_component_thread", None)
-        if thread is not None and thread.is_alive():
-            return True
+        def ensure_stop_event() -> threading.Event:
+            event = getattr(self, "_autonomous_component_stop", None)
+            if event is None:
+                event = threading.Event()
+                self._autonomous_component_stop = event
+            return event
 
-        runtime = self._autonomous_component_runtime()
-
-        def refresh_component_statuses() -> None:
+        def refresh_statuses(component_host: Any) -> None:
             _refresh_supervisor_status_view(component_host)
             _refresh_autonomous_gateway_status_view(component_host)
             _refresh_gateway_autonomous_execute_snapshot_view(component_host)
@@ -1203,49 +1222,26 @@ class VoidcubeCLI:
                 monotonic_time=time.monotonic,
             )
 
-        def get_component_pending_input() -> object | None:
+        def get_pending_input(component_host: Any) -> object | None:
             try:
                 return component_host._pending_input.get_nowait()
             except Exception:
                 return None
 
-        self._autonomous_component_thread = start_embedded_autonomous_component_loop(
-            EmbeddedAutonomousLoopPorts(
-                stop_event=stop_event,
-                component_active=lambda: self._autonomous_gate_active,
-                set_component_active=lambda active: setattr(component_host, "_autonomous_gate_active", active),
-                refresh_statuses=refresh_component_statuses,
-                can_poll_workflow=lambda: (
-                    not getattr(self, "_scheduled_execution_active", False)
-                    and not getattr(component_host, "_agent_running", False)
-                ),
-                poll_workflow=runtime.poll_workflow,
-                get_pending_input=get_component_pending_input,
-                execute_pending_input=lambda pending: component_host._execute_pending_input(pending, app=None),
-                invalidate=lambda: self._invalidate(min_interval=0.5),
-                report_error=lambda error: logger.debug(
-                    "Autonomous execution component loop error: %s", error
-                ),
-                publish_idle_scene=lambda: _push_cli_agent_scene(
-                    "idle",
-                    session_id=getattr(component_host, "session_id", None),
-                    agent_role="supervisor_task",
-                ),
-            ),
-            thread_factory=threading.Thread,
-        )
-        return True
+        def can_poll_workflow(component_host: Any) -> bool:
+            return not getattr(self, "_scheduled_execution_active", False) and not getattr(
+                component_host,
+                "_agent_running",
+                False,
+            )
 
-    def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
-        def deactivate_component_host() -> bool:
-            component_host = getattr(self, "_autonomous_component_host", None)
+        def deactivate_component_host(component_host: Any | None) -> bool:
             if component_host is None:
                 return False
             component_host._autonomous_gate_active = False
             return True
 
-        def interrupt_running_agent() -> None:
-            component_host = getattr(self, "_autonomous_component_host", None)
+        def interrupt_running_agent(component_host: Any | None) -> None:
             try:
                 if component_host and component_host.agent and component_host._agent_running:
                     component_host.agent.interrupt()
@@ -1263,19 +1259,67 @@ class VoidcubeCLI:
                 pass
 
         def signal_stop() -> None:
-            stop_event = getattr(self, "_autonomous_component_stop", None)
-            if stop_event is not None:
-                stop_event.set()
+            ensure_stop_event().set()
 
-        stop_embedded_autonomous_component(
-            EmbeddedAutonomousStopPorts(
+        runtime = EmbeddedAutonomousComponentRuntime(
+            EmbeddedAutonomousRuntimePorts(
+                get_component_host=lambda: getattr(
+                    self,
+                    "_autonomous_component_host",
+                    None,
+                ),
+                ensure_component_host=self._ensure_autonomous_component_host,
+                get_component_thread=lambda: getattr(
+                    self,
+                    "_autonomous_component_thread",
+                    None,
+                ),
+                store_component_thread=lambda thread: setattr(
+                    self,
+                    "_autonomous_component_thread",
+                    thread,
+                ),
+                ensure_stop_event=ensure_stop_event,
+                parent_component_active=lambda: bool(self._autonomous_gate_active),
+                set_component_active=lambda host, active: setattr(
+                    host,
+                    "_autonomous_gate_active",
+                    active,
+                ),
+                build_executor_runtime=lambda _host: self._autonomous_component_runtime(),
+                refresh_statuses=refresh_statuses,
+                can_poll_workflow=can_poll_workflow,
+                get_pending_input=get_pending_input,
+                execute_pending_input=lambda host, pending: host._execute_pending_input(
+                    pending,
+                    app=None,
+                ),
+                invalidate=lambda: self._invalidate(min_interval=0.5),
+                report_error=lambda error: logger.debug(
+                    "Autonomous execution component loop error: %s",
+                    error,
+                ),
+                publish_idle_scene=lambda host: _push_cli_agent_scene(
+                    "idle",
+                    session_id=getattr(host, "session_id", None),
+                    agent_role="supervisor_task",
+                ),
                 deactivate_component_host=deactivate_component_host,
                 interrupt_running_agent=interrupt_running_agent,
                 interrupt_current_task=interrupt_current_task,
                 signal_stop=signal_stop,
-            ),
-            interrupt=interrupt,
+                thread_factory=threading.Thread,
+            )
         )
+        self._embedded_autonomous_runtime_instance = runtime
+        return runtime
+
+    def _start_autonomous_execution_component(self) -> bool:
+        """Start the embedded API-A autonomous execution component."""
+        return self._embedded_autonomous_runtime().start()
+
+    def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
+        self._embedded_autonomous_runtime().stop(interrupt=interrupt)
 
     def _interrupt_autonomous_component_task(
         self,
@@ -3407,6 +3451,131 @@ class VoidcubeCLI:
         except Exception:
             pass
 
+    def _background_task_runtime(self) -> BackgroundTaskRuntime:
+        runtime = self.__dict__.get("_background_task_runtime_instance")
+        if runtime is not None:
+            return runtime
+        state = self.__dict__.get("_background_task_state")
+        if state is None:
+            state = BackgroundTaskState()
+            self._background_task_state = state
+            self._background_tasks = state.tasks
+            self._background_task_info = state.info
+        runtime = BackgroundTaskRuntime(
+            BackgroundTaskPorts(
+                state=state,
+                ensure_credentials=self._ensure_runtime_credentials,
+                resolve_agent_route=self._resolve_turn_agent_config,
+                create_agent=self._create_background_agent,
+                announce_start=self._announce_background_start,
+                render_completion=self._render_background_completion,
+                set_thinking=self._set_background_thinking,
+                invalidate=lambda: self._invalidate(min_interval=0),
+                bell_on_complete=self._bell_background_completion,
+                completion_outcome=_background_completion_outcome,
+            )
+        )
+        self._background_task_runtime_instance = runtime
+        return runtime
+
+    def _create_background_agent(
+        self,
+        turn_route: dict[str, Any],
+        task_id: str,
+        request_overrides: dict[str, Any],
+        persist_session: bool,
+    ) -> Any:
+        runtime = turn_route["runtime"]
+        return _get_AIAgent()(
+            model=turn_route["model"],
+            api_key=runtime.get("api_key"),
+            base_url=runtime.get("base_url"),
+            provider=runtime.get("provider"),
+            acp_command=runtime.get("command"),
+            acp_args=runtime.get("args"),
+            max_iterations=self.max_turns,
+            enabled_toolsets=self.enabled_toolsets,
+            quiet_mode=True,
+            verbose_logging=False,
+            session_id=task_id,
+            platform="cli",
+            session_db=self._session_db,
+            reasoning_config=self.reasoning_config,
+            service_tier=self.service_tier,
+            request_overrides=request_overrides or None,
+            providers_allowed=self._providers_only,
+            providers_ignored=self._providers_ignore,
+            providers_order=self._providers_order,
+            provider_sort=self._provider_sort,
+            provider_require_parameters=self._provider_require_params,
+            provider_data_collection=self._provider_data_collection,
+            fallback_model=self._fallback_model,
+            persist_session=persist_session,
+        )
+
+    @staticmethod
+    def _announce_background_start(
+        task_num: int,
+        task_id: str,
+        prompt: str,
+        task_label: str,
+    ) -> None:
+        _cprint(
+            f"  🔄 {task_label} #{task_num} started: \"{prompt[:60]}"
+            f"{'...' if len(prompt) > 60 else ''}\""
+        )
+        _cprint(f"  Task ID: {task_id}")
+        _cprint("  You can continue chatting — results will appear when done.\n")
+
+    def _set_background_thinking(self, text: str) -> None:
+        if not self._agent_running:
+            self._spinner_text = text
+            if self._app:
+                self._app.invalidate()
+
+    def _render_background_completion(
+        self,
+        success: bool,
+        response: str,
+        error: str,
+        task_num: int,
+        task_label: str,
+        response_title: str | None,
+        prompt: str,
+    ) -> None:
+        if self._app:
+            self._app.invalidate()
+            time.sleep(0.05)
+        print()
+        ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
+        if success:
+            _cprint(f"  ✅ {task_label} #{task_num} complete")
+        else:
+            _cprint(f"  ❌ {task_label} #{task_num} failed: {error}")
+        _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
+        ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
+        if response:
+            label = "> Voidcube"
+            response_color = "#CD7F32"
+            ChatConsole().print(
+                Panel(
+                    _rich_text_from_ansi(response),
+                    title=f"[{response_color} bold]{response_title or (label + f' (background #{task_num})')}[/]",
+                    title_align="left",
+                    border_style=response_color,
+                    style="#FFF8DC",
+                    box=rich_box.HORIZONTALS,
+                    padding=(1, 2),
+                )
+            )
+        else:
+            _cprint("  (No response generated)")
+
+    def _bell_background_completion(self) -> None:
+        if self.bell_on_complete:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+
     def _start_background_agent_task(
         self,
         prompt: str,
@@ -3419,187 +3588,16 @@ class VoidcubeCLI:
         persist_session: bool = True,
         on_complete: Optional[Callable[[bool, str, str], None]] = None,
     ) -> bool:
-        """Run one isolated API-A session and project its result to the main CLI."""
-        self._background_task_counter += 1
-        task_num = self._background_task_counter
-        task_id = task_id or f"bg_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
-
-        # Make sure we have valid credentials
-        if not self._ensure_runtime_credentials():
-            _cprint("  (>_<) Cannot start background task: no valid credentials.")
-            return False
-
-        _cprint(f"  🔄 {task_label} #{task_num} started: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
-        _cprint(f"  Task ID: {task_id}")
-        _cprint("  You can continue chatting — results will appear when done.\n")
-        self._background_task_info[task_id] = {
-            "task_num": task_num,
-            "prompt_preview": (
-                task_label
-                if task_label != "Background task"
-                else prompt[:60] + ("..." if len(prompt) > 60 else "")
-            ),
-            "started_at": time.time(),
-        }
-
-        turn_route = self._resolve_turn_agent_config(prompt)
-        request_overrides = dict(turn_route.get("request_overrides") or {})
-        if request_timeout_seconds is not None:
-            request_overrides["timeout"] = max(0.1, float(request_timeout_seconds))
-
-        def run_background():
-            timeout_timer: Optional[threading.Timer] = None
-            timed_out = threading.Event()
-            finished = threading.Event()
-            timeout_error = ""
-            active_agent: Dict[str, Any] = {}
-            if timeout_seconds is not None:
-                effective_timeout = max(0.1, float(timeout_seconds))
-                timeout_error = (
-                    f"API-A background execution timed out after "
-                    f"{effective_timeout:g} seconds"
-                )
-
-                def interrupt_on_timeout() -> None:
-                    if finished.is_set():
-                        return
-                    timed_out.set()
-                    agent = active_agent.get("value")
-                    if agent is not None:
-                        agent.interrupt(timeout_error)
-
-                timeout_timer = threading.Timer(effective_timeout, interrupt_on_timeout)
-                timeout_timer.daemon = True
-                timeout_timer.start()
-            try:
-                bg_agent = _get_AIAgent()(
-                    model=turn_route["model"],
-                    api_key=turn_route["runtime"].get("api_key"),
-                    base_url=turn_route["runtime"].get("base_url"),
-                    provider=turn_route["runtime"].get("provider"),
-                    acp_command=turn_route["runtime"].get("command"),
-                    acp_args=turn_route["runtime"].get("args"),
-                    max_iterations=self.max_turns,
-                    enabled_toolsets=self.enabled_toolsets,
-                    quiet_mode=True,
-                    verbose_logging=False,
-                    session_id=task_id,
-                    platform="cli",
-                    session_db=self._session_db,
-                    reasoning_config=self.reasoning_config,
-                    service_tier=self.service_tier,
-                    request_overrides=request_overrides or None,
-                    providers_allowed=self._providers_only,
-                    providers_ignored=self._providers_ignore,
-                    providers_order=self._providers_order,
-                    provider_sort=self._provider_sort,
-                    provider_require_parameters=self._provider_require_params,
-                    provider_data_collection=self._provider_data_collection,
-                    fallback_model=self._fallback_model,
-                    persist_session=persist_session,
-                )
-                active_agent["value"] = bg_agent
-                if timed_out.is_set():
-                    raise TimeoutError(timeout_error)
-                # Silence raw spinner; route thinking through TUI widget when no foreground agent is active.
-                bg_agent._print_fn = lambda *_a, **_kw: None
-
-                def _bg_thinking(text: str) -> None:
-                    # Concurrent bg tasks may race on _spinner_text; acceptable for best-effort UI.
-                    if not self._agent_running:
-                        self._spinner_text = text
-                        if self._app:
-                            self._app.invalidate()
-
-                bg_agent.thinking_callback = _bg_thinking
-
-                result = bg_agent.run_conversation(
-                    user_message=prompt,
-                    task_id=task_id,
-                )
-                finished.set()
-
-                completion_success, response, completion_error = _background_completion_outcome(result)
-                if timed_out.is_set():
-                    completion_success = False
-                    response = ""
-                    completion_error = timeout_error
-
-                # Display result in the CLI (thread-safe via patch_stdout).
-                # Force a TUI refresh first so spinner/status bar don't overlap
-                # with the output (fixes #2718).
-                if self._app:
-                    self._app.invalidate()
-                    import time as _tmod
-                    _tmod.sleep(0.05)  # brief pause for refresh
-                print()
-                ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-                if completion_success:
-                    _cprint(f"  ✅ {task_label} #{task_num} complete")
-                else:
-                    _cprint(f"  ❌ {task_label} #{task_num} failed: {completion_error}")
-                _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
-                ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-                if response:
-                    label = "> Voidcube"
-                    _resp_color = "#CD7F32"
-                    _resp_text = "#FFF8DC"
-
-                    _chat_console = ChatConsole()
-                    _chat_console.print(Panel(
-                        _rich_text_from_ansi(response),
-                        title=f"[{_resp_color} bold]{response_title or (label + f' (background #{task_num})')}[/]",
-                        title_align="left",
-                        border_style=_resp_color,
-                        style=_resp_text,
-                        box=rich_box.HORIZONTALS,
-                        padding=(1, 2),
-                    ))
-                else:
-                    _cprint("  (No response generated)")
-
-                # Play bell if enabled
-                if self.bell_on_complete:
-                    sys.stdout.write("\a")
-                    sys.stdout.flush()
-                if on_complete is not None:
-                    try:
-                        on_complete(completion_success, response, completion_error)
-                    except Exception:
-                        logger.debug("Background completion callback failed", exc_info=True)
-
-            except Exception as e:
-                finished.set()
-                # Same TUI refresh pattern as success path (#2718)
-                if self._app:
-                    self._app.invalidate()
-                    import time as _tmod
-                    _tmod.sleep(0.05)
-                print()
-                completion_error = timeout_error if timed_out.is_set() else str(e)
-                _cprint(f"  ❌ {task_label} #{task_num} failed: {completion_error}")
-                if on_complete is not None:
-                    try:
-                        on_complete(False, "", completion_error)
-                    except Exception:
-                        logger.debug("Background completion callback failed", exc_info=True)
-            finally:
-                finished.set()
-                active_agent.clear()
-                if timeout_timer is not None:
-                    timeout_timer.cancel()
-                self._background_tasks.pop(task_id, None)
-                self._background_task_info.pop(task_id, None)
-                # Clear spinner only if no foreground agent owns it
-                if not self._agent_running:
-                    self._spinner_text = ""
-                if self._app:
-                    self._invalidate(min_interval=0)
-
-        thread = threading.Thread(target=run_background, daemon=True, name=f"bg-task-{task_id}")
-        self._background_tasks[task_id] = thread
-        thread.start()
-        return True
+        return self._background_task_runtime().start(
+            prompt,
+            task_id=task_id,
+            task_label=task_label,
+            response_title=response_title,
+            request_timeout_seconds=request_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            persist_session=persist_session,
+            on_complete=on_complete,
+        )
 
     def _start_btw_side_question(self, question: str) -> bool:
         """Run an ephemeral side question against a snapshot of session context.
@@ -3905,14 +3903,11 @@ class VoidcubeCLI:
         return VoiceRecordingPorts(
             state=self._voice_state(),
             should_exit=lambda: self._should_exit,
-            is_termux_environment=_is_termux_environment,
             invalidate=invalidate,
             emit=lambda message: _cprint(f"{_DIM}{message}{_RST}"),
             enqueue_input=self._pending_input.put,
             clear_attached_images=self._attached_images.clear,
-            start_recording=self._voice_start_recording,
-            thread_factory=threading.Thread,
-            sleep=time.sleep,
+            voice=self._voice_tts(),
         )
 
     def _voice_start_recording(self) -> None:
@@ -3927,29 +3922,15 @@ class VoidcubeCLI:
             _cprint(f"{_DIM}Voice mode is already enabled.{_RST}")
             return
 
-        from tools.voice_mode import check_voice_requirements, detect_audio_environment
-
-        # Environment detection -- warn and block in incompatible environments
-        env_check = detect_audio_environment()
-        if not env_check["available"]:
-            _cprint(f"\n{_ACCENT}Voice mode unavailable in this environment:{_RST}")
-            for warning in env_check["warnings"]:
-                _cprint(f"  {_DIM}{warning}{_RST}")
-            return
-
-        reqs = check_voice_requirements()
-        if not reqs["available"]:
+        voice = self._voice_tts()
+        reqs = voice.enable()
+        if not reqs.get("capture_available") or not reqs.get("stt_configured"):
+            voice.disable()
             _cprint(f"\n{_ACCENT}Voice mode requirements not met:{_RST}")
-            for line in reqs["details"].split("\n"):
-                _cprint(f"  {_DIM}{line}{_RST}")
-            if reqs["missing_packages"]:
-                if _is_termux_environment():
-                    _cprint(f"\n  {_BOLD}Option 1: pkg install termux-api{_RST}")
-                    _cprint(f"  {_DIM}Then install/update the Termux:API Android app for microphone capture{_RST}")
-                    _cprint(f"  {_BOLD}Option 2: pkg install python-numpy portaudio && python -m pip install sounddevice{_RST}")
-                else:
-                    _cprint(f"\n  {_BOLD}Install: pip install {' '.join(reqs['missing_packages'])}{_RST}")
-                    _cprint(f"  {_DIM}Or: pip install VoidCube-agent[voice]{_RST}")
+            if not reqs.get("capture_available"):
+                _cprint(f"  {_DIM}Install sounddevice and numpy with an available input device.{_RST}")
+            if not reqs.get("stt_configured"):
+                _cprint(f"  {_DIM}Configure the canonical STT provider before enabling voice mode.{_RST}")
             return
 
         with self._voice_lock:
@@ -3973,28 +3954,14 @@ class VoidcubeCLI:
 
     def _disable_voice_mode(self):
         """Disable voice mode, cancel any active recording, and stop TTS."""
-        recorder = None
         with self._voice_lock:
-            if self._voice_recording and self._voice_recorder:
-                self._voice_recorder.cancel()
-                self._voice_recording = False
-            recorder = self._voice_recorder
+            recording = self._voice_recording
+            self._voice_recording = False
             self._voice_mode = False
             self._voice_continuous = False
-
-        tts_adapter = self.__dict__.get("_voice_tts_adapter")
-        if tts_adapter is not None:
-            tts_adapter.interrupt()
-
-        # Shut down the persistent audio stream in background
-        if recorder is not None:
-            def _bg_shutdown(rec=recorder):
-                try:
-                    rec.shutdown()
-                except Exception:
-                    pass
-            threading.Thread(target=_bg_shutdown, daemon=True).start()
-            self._voice_recorder = None
+        if recording:
+            self._voice_tts().interrupt()
+        self._voice_tts().disable()
 
         _cprint(f"\n{_DIM}Voice mode disabled.{_RST}")
 
@@ -4033,9 +4000,8 @@ class VoidcubeCLI:
     def _show_voice_status(self):
         """Show current voice mode status."""
         from VoidCube_app.config import load_config
-        from tools.voice_mode import check_voice_requirements
 
-        reqs = check_voice_requirements()
+        reqs = self._voice_tts().status().get("voice", {})
 
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
         _cprint(f"  Mode:      {'ON' if self._voice_mode else 'OFF'}")
@@ -4049,8 +4015,8 @@ class VoidcubeCLI:
         _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
         _cprint(f"  Record key: {_display_key}")
         _cprint(f"\n  {_BOLD}Requirements:{_RST}")
-        for line in reqs["details"].split("\n"):
-            _cprint(f"    {line}")
+        _cprint(f"    Capture: {'available' if reqs.get('capture_available') else 'unavailable'}")
+        _cprint(f"    STT:     {'configured' if reqs.get('stt_configured') else 'unconfigured'}")
 
     def _clarification_sink(
         self,
@@ -4205,12 +4171,20 @@ class VoidcubeCLI:
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
             return None
+        autonomous_runtime = _autonomous_executor_runtime_view(
+            self,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            git_head_commit=_git_head_commit,
+            git_improvement_diff=_git_improvement_diff,
+            cprint=_cprint,
+        )
+        current_autonomous_task = autonomous_runtime.current_task()
         autonomous_task_run_id = autonomous_task_run_id_for_message(
-            getattr(self, "_current_autonomous_task", None),
+            current_autonomous_task,
             message,
         )
-        if autonomous_task_run_id or not getattr(self, "_current_autonomous_task", None):
-            self._last_agent_turn_result = None
+        if autonomous_task_run_id or current_autonomous_task is None:
+            autonomous_runtime.set_last_agent_turn_result(None)
 
         turn_route = self._resolve_turn_agent_config(message)
         if turn_route["signature"] != self._active_agent_route_signature:
@@ -4341,25 +4315,19 @@ class VoidcubeCLI:
             turn_interrupt = None
             while agent_thread.is_alive():
                 if autonomous_task_run_id and not autonomous_timeout_reported:
-                    timed_out_task = getattr(self, "_current_autonomous_task", None)
+                    timed_out_task = autonomous_runtime.current_task()
                     timed_out_run_id = (
                         str((timed_out_task or {}).get("_autonomous_task_run_id") or "").strip()
                         if isinstance(timed_out_task, dict)
                         else ""
                     )
                     if timed_out_run_id == autonomous_task_run_id:
-                        autonomous_timeout_reported = _autonomous_executor_runtime_view(
-                            self,
-                            push_cli_agent_scene=_push_cli_agent_scene,
-                            git_head_commit=_git_head_commit,
-                            git_improvement_diff=_git_improvement_diff,
-                            cprint=_cprint,
-                        ).report_current_task_timeout_if_needed(
+                        autonomous_timeout_reported = autonomous_runtime.report_current_task_timeout_if_needed(
                             timeout=15,
                         )
                         autonomous_timeout_writeback_succeeded = (
                             autonomous_timeout_reported
-                            and getattr(self, "_current_autonomous_task", None) is None
+                            and autonomous_runtime.current_task() is None
                         )
                         if autonomous_timeout_reported:
                             turn_interrupt = cancel_turn(TurnInterruptReason.TIMEOUT)
@@ -4432,13 +4400,13 @@ class VoidcubeCLI:
                 )
             if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
                 turn_result["autonomous_task_run_id"] = autonomous_task_run_id
-                self._last_agent_turn_result = turn_result
-            elif not getattr(self, "_current_autonomous_task", None):
-                self._last_agent_turn_result = turn_result
+                autonomous_runtime.set_last_agent_turn_result(turn_result)
+            elif autonomous_runtime.current_task() is None:
+                autonomous_runtime.set_last_agent_turn_result(turn_result)
 
             if (
                 getattr(self, "_autonomous_gate_active", False)
-                and getattr(self, "_current_autonomous_task", None)
+                and autonomous_runtime.current_task()
                 and autonomous_task_run_id
                 and not autonomous_timeout_writeback_succeeded
             ):
@@ -4595,9 +4563,9 @@ class VoidcubeCLI:
                 )
             if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
                 error_result["autonomous_task_run_id"] = autonomous_task_run_id
-                self._last_agent_turn_result = error_result
-            elif not getattr(self, "_current_autonomous_task", None):
-                self._last_agent_turn_result = error_result
+                autonomous_runtime.set_last_agent_turn_result(error_result)
+            elif autonomous_runtime.current_task() is None:
+                autonomous_runtime.set_last_agent_turn_result(error_result)
             if self._should_emit_scrollback_output():
                 print(f"Error: {e}")
             return None
@@ -4680,13 +4648,11 @@ class VoidcubeCLI:
     def _audio_level_bar(self) -> str:
         """Return a visual audio level indicator based on current RMS."""
         _LEVEL_BARS = " ▁▂▃▄▅▆▇"
-        rec = getattr(self, "_voice_recorder", None)
-        if rec is None:
+        try:
+            rms = float(self._voice_tts().realtime_status().get("audio_rms", 0.0))
+        except Exception:
             return ""
-        rms = rec.current_rms
-        # Normalize RMS (0-32767) to 0-7 index, with log-ish scaling
-        # Typical speech RMS is 500-5000, we cap display at ~8000
-        level = min(rms, 8000) * 7 // 8000
+        level = max(0, min(7, int(rms * 7)))
         return _LEVEL_BARS[level]
 
     def _get_tui_prompt_fragments(self):
@@ -5160,17 +5126,16 @@ class VoidcubeCLI:
 
             # Cancel active voice recording.
             _should_cancel_voice = False
-            _recorder_ref = None
             with cli_ref._voice_lock:
-                if cli_ref._voice_recording and cli_ref._voice_recorder:
-                    _recorder_ref = cli_ref._voice_recorder
+                if cli_ref._voice_recording:
                     cli_ref._voice_recording = False
                     cli_ref._voice_continuous = False
                     _should_cancel_voice = True
             if _should_cancel_voice:
                 _cprint(f"\n{_DIM}Recording cancelled.{_RST}")
                 threading.Thread(
-                    target=_recorder_ref.cancel, daemon=True
+                    target=cli_ref._voice_tts().interrupt,
+                    daemon=True,
                 ).start()
                 event.app.invalidate()
                 return
@@ -5310,9 +5275,8 @@ class VoidcubeCLI:
                 with cli_ref._voice_lock:
                     cli_ref._voice_continuous = True
 
-                # Dispatch to a daemon thread so play_beep(sd.wait),
-                # AudioRecorder.start(lock acquire), and config I/O
-                # never block the prompt_toolkit event loop.
+                # Keep capture and the canonical voice event loop off the
+                # prompt_toolkit event-loop thread.
                 def _start_recording():
                     try:
                         cli_ref._voice_start_recording()
@@ -5797,25 +5761,13 @@ class VoidcubeCLI:
                     except Exception:
                         pass
 
-            def shutdown_voice_recorder() -> None:
-                if self._voice_recorder:
-                    try:
-                        self._voice_recorder.shutdown()
-                    except Exception:
-                        pass
-                    self._voice_recorder = None
+            def interrupt_voice() -> None:
+                self._voice_tts().interrupt()
 
             def close_voice_tts() -> None:
                 adapter = self.__dict__.get("_voice_tts_adapter")
                 if adapter is not None:
                     adapter.close()
-
-            def cleanup_temp_voice_recordings() -> None:
-                try:
-                    from tools.voice_mode import cleanup_temp_recordings
-                    cleanup_temp_recordings()
-                except Exception:
-                    pass
 
             def unregister_tool_callbacks() -> None:
                 _get_set_sudo_password_callback(None)
@@ -5849,9 +5801,8 @@ class VoidcubeCLI:
                 TuiTeardownPorts(
                     stop_autonomous=lambda: self._stop_autonomous_execution_component(interrupt=True),
                     interrupt_agent=interrupt_running_agent,
-                    shutdown_voice_recorder=shutdown_voice_recorder,
+                    interrupt_voice=interrupt_voice,
                     close_voice_tts=close_voice_tts,
-                    cleanup_temp_voice_recordings=cleanup_temp_voice_recordings,
                     unregister_tool_callbacks=unregister_tool_callbacks,
                     close_session=close_session,
                     finish_interrupted_session=finish_interrupted_session,

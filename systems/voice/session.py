@@ -375,6 +375,67 @@ class VoiceSessionManager:
                 self.state.audio_peak = 0.0
                 self.state.audio_rms = 0.0
 
+    async def transcribe_once(
+        self,
+        *,
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        """Capture one utterance and return its transcript without side effects."""
+        if not self.state.enabled:
+            return {"status": "disabled", "reason": "voice_disabled"}
+        if self.state.continuous_active:
+            return {"status": "busy", "reason": "continuous_listening_active"}
+        async with self._lock:
+            self._prepare_session(session_id)
+            try:
+                await asyncio.to_thread(self.endpoint_detector.ensure_model)
+                self.endpoint_detector.reset()
+                self.input_stream.start(asyncio.get_running_loop())
+                speech_deadline = self._begin_utterance_capture()
+
+                while self.state.enabled and not self._stop_event.is_set():
+                    try:
+                        frame = await asyncio.wait_for(
+                            self.input_stream.read(),
+                            timeout=0.25,
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+                    utterance = self._accept_utterance_frame(frame)
+                    if utterance:
+                        self.input_stream.stop()
+                        return await self._transcribe_captured_utterance(
+                            utterance,
+                            stop_event=self._stop_event,
+                        )
+
+                    if (
+                        not self.state.speech_detected
+                        and time.monotonic() >= speech_deadline
+                    ):
+                        self.state.last_status = "speech_start_timeout"
+                        return {
+                            "status": "empty",
+                            "reason": "speech_start_timeout",
+                        }
+
+                self.state.last_status = "interrupted"
+                return {"status": "interrupted", "reason": "recording_interrupted"}
+            except asyncio.CancelledError:
+                self.interrupt()
+                raise
+            except Exception as exc:
+                return self._record_error(exc)
+            finally:
+                self.input_stream.stop()
+                self.state.active = False
+                self.state.wake_state = "idle"
+                self.state.meter_active = False
+                self.state.speech_detected = False
+                self.state.audio_level = 0.0
+                self.state.audio_peak = 0.0
+                self.state.audio_rms = 0.0
+
     async def speak_text(self, text: str, *, reason: str = "proactive") -> dict[str, Any]:
         """Play already-authorized text without opening the microphone."""
         message = str(text or "").strip()
@@ -629,22 +690,11 @@ class VoiceSessionManager:
             )
             if stop_event.is_set():
                 return {"status": "interrupted", "reason": "recording_interrupted"}
-            voice_match = await self._verify_utterance_speaker(audio_path)
-            if self.state.fingerprint_enabled and not voice_match.get(
-                "owner_voice_matched"
-            ):
-                self.state.last_status = "rejected"
-                return {"status": "rejected", "voice_match": voice_match}
-            if stop_event.is_set():
-                return {"status": "interrupted", "reason": "verification_interrupted"}
-
-            self.state.last_status = "transcribing"
-            transcript = str(await self.stt.transcribe(audio_path)).strip()
-            if stop_event.is_set():
-                return {"status": "interrupted", "reason": "transcription_interrupted"}
-            if not transcript:
-                self.state.last_status = "empty_transcript"
-                return {"status": "empty", "reason": "empty_transcript"}
+            result = await self._transcribe_audio_path(audio_path, stop_event=stop_event)
+            if result.get("status") != "complete":
+                return result
+            transcript = str(result["transcript"])
+            voice_match = dict(result["voice_match"])
             query = transcript
             if strip_wake_word:
                 wake_query = _extract_wake_query(transcript, self.config.wake_word)
@@ -664,6 +714,55 @@ class VoiceSessionManager:
             )
         finally:
             self._cleanup(audio_path)
+
+    async def _transcribe_captured_utterance(
+        self,
+        samples: list[float],
+        *,
+        stop_event: asyncio.Event,
+    ) -> dict[str, Any]:
+        audio_path = self._temporary_audio_path("terminal-utterance")
+        try:
+            await asyncio.to_thread(
+                self.recorder.write_float_waveform,
+                audio_path,
+                samples,
+                sample_rate=self.config.sample_rate,
+            )
+            if stop_event.is_set():
+                return {"status": "interrupted", "reason": "recording_interrupted"}
+            return await self._transcribe_audio_path(audio_path, stop_event=stop_event)
+        finally:
+            self._cleanup(audio_path)
+
+    async def _transcribe_audio_path(
+        self,
+        audio_path: Path,
+        *,
+        stop_event: asyncio.Event,
+    ) -> dict[str, Any]:
+        voice_match = await self._verify_utterance_speaker(audio_path)
+        if self.state.fingerprint_enabled and not voice_match.get("owner_voice_matched"):
+            self.state.last_status = "rejected"
+            return {"status": "rejected", "voice_match": voice_match}
+        if stop_event.is_set():
+            return {"status": "interrupted", "reason": "verification_interrupted"}
+
+        self.state.last_status = "transcribing"
+        transcript = str(await self.stt.transcribe(audio_path)).strip()
+        if stop_event.is_set():
+            return {"status": "interrupted", "reason": "transcription_interrupted"}
+        if not transcript:
+            self.state.last_status = "empty_transcript"
+            return {"status": "empty", "reason": "empty_transcript"}
+        self.state.last_transcript = transcript
+        self.state.last_listen_transcript = transcript[:500]
+        self.state.last_status = "complete"
+        return {
+            "status": "complete",
+            "transcript": transcript,
+            "voice_match": voice_match,
+        }
 
     async def _verify_utterance_speaker(self, audio_path: Path) -> dict[str, Any]:
         if not self.state.fingerprint_enabled:

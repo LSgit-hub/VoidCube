@@ -7,6 +7,7 @@ class FakeVoiceManager:
     def __init__(self) -> None:
         self.interrupted = False
         self.spoken: list[tuple[str, str]] = []
+        self.transcribed = False
 
     def status(self) -> dict[str, object]:
         return {
@@ -23,6 +24,22 @@ class FakeVoiceManager:
     def interrupt(self) -> dict[str, str]:
         self.interrupted = True
         return {"status": "interrupted"}
+
+    def set_enabled(self, enabled: bool) -> dict[str, object]:
+        return {
+            "enabled": enabled,
+            "tts_configured": True,
+            "playback_available": True,
+            "capture_available": True,
+            "stt_configured": True,
+        }
+
+    async def transcribe_once(self, *, session_id: str) -> dict[str, str]:
+        self.transcribed = True
+        return {"status": "complete", "transcript": f"{session_id}: transcript"}
+
+    def realtime_status(self) -> dict[str, float]:
+        return {"audio_rms": 0.25}
 
 
 def test_voice_tts_adapter_keeps_async_manager_on_one_loop() -> None:
@@ -68,5 +85,24 @@ def test_voice_tts_adapter_reports_disabled_output_without_success() -> None:
             },
         }
         assert adapter.speak("不会播放")["status"] == "disabled"
+    finally:
+        adapter.close()
+
+
+def test_voice_tts_adapter_maps_terminal_recording_to_same_manager() -> None:
+    manager = FakeVoiceManager()
+    adapter = VoiceTtsAdapter(manager_factory=lambda: manager)
+    try:
+        enabled = adapter.enable()
+        result = adapter.transcribe_once(session_id="terminal")
+
+        assert enabled["stt_configured"] is True
+        assert result == {
+            "status": "complete",
+            "transcript": "terminal: transcript",
+        }
+        assert adapter.realtime_status() == {"audio_rms": 0.25}
+        assert manager.transcribed is True
+        adapter.disable()
     finally:
         adapter.close()

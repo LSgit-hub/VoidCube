@@ -4,15 +4,32 @@ import json
 import time
 import uuid
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from VoidCube_cli.autonomous_events import append_autonomous_execution_event
 from VoidCube_cli.ops.executor import default_gateway_url
 
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"
 AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX = "[Autonomous Body Improvement Task]"
+
+
+@dataclass(frozen=True, slots=True)
+class AutonomousExecutorPorts:
+    """State and side effects supplied by the hosting CLI runtime."""
+
+    get_session_id: Callable[[], str]
+    get_current_task: Callable[[], Dict[str, Any] | None]
+    set_current_task: Callable[[Dict[str, Any] | None], None]
+    get_current_task_started_at: Callable[[], float]
+    set_current_task_started_at: Callable[[float], None]
+    set_current_task_run_id: Callable[[str], None]
+    get_last_agent_turn_result: Callable[[], Dict[str, Any] | None]
+    set_last_agent_turn_result: Callable[[Dict[str, Any] | None], None]
+    enqueue_pending_input: Callable[[str], None]
+    agent_running: Callable[[], bool]
+    append_execution_event: Callable[..., None]
 
 
 def autonomous_task_execution_kind(task: Dict[str, Any]) -> str:
@@ -156,14 +173,14 @@ class AutonomousExecutorRuntime:
 
     def __init__(
         self,
-        host: Any,
+        ports: AutonomousExecutorPorts,
         *,
         push_cli_agent_scene: Callable[..., Any],
         git_head_commit: Callable[[str], str],
         git_improvement_diff: Callable[[str, str], Optional[Dict[str, Any]]],
         cprint: Callable[[str], None],
     ) -> None:
-        self.host = host
+        self.ports = ports
         self._push_cli_agent_scene = push_cli_agent_scene
         self._git_head_commit = git_head_commit
         self._git_improvement_diff = git_improvement_diff
@@ -171,7 +188,7 @@ class AutonomousExecutorRuntime:
 
     def find_owned_running_task(self) -> Dict[str, Any] | None:
         """Recover the running autonomous task owned by this CLI session, if any."""
-        session_id = str(getattr(self.host, "session_id", "") or "").strip()
+        session_id = str(self.ports.get_session_id() or "").strip()
         if not session_id:
             return None
 
@@ -213,10 +230,9 @@ class AutonomousExecutorRuntime:
                 git_head_commit=self._git_head_commit,
             )
             run_id = bind_autonomous_execution_start(task, prompt)
-            self.host._current_autonomous_task_run_id = run_id
-            self.host._pending_input.put(prompt)
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.set_current_task_run_id(run_id)
+            self.ports.enqueue_pending_input(prompt)
+            self.ports.append_execution_event(
                 "恢复链路项的自主执行已重新起跑，等待模型响应" if recovered else "自主执行已起跑，等待模型响应",
                 tone="warn" if recovered else "info",
                 stage="autonomous_execution_started",
@@ -226,10 +242,18 @@ class AutonomousExecutorRuntime:
             return False
 
     def clear_current_task_state(self) -> None:
-        self.host._current_autonomous_task = None
-        self.host._current_autonomous_task_started_at = 0
-        self.host._current_autonomous_task_run_id = ""
-        self.host._last_agent_turn_result = None
+        self.ports.set_current_task(None)
+        self.ports.set_current_task_started_at(0)
+        self.ports.set_current_task_run_id("")
+        self.ports.set_last_agent_turn_result(None)
+
+    def current_task(self) -> Dict[str, Any] | None:
+        """Expose the current task snapshot without leaking host state."""
+        return self.ports.get_current_task()
+
+    def set_last_agent_turn_result(self, result: Dict[str, Any] | None) -> None:
+        """Store the latest model-turn result for autonomous writeback."""
+        self.ports.set_last_agent_turn_result(result)
 
     def report_current_task_timeout_if_needed(
         self,
@@ -238,10 +262,10 @@ class AutonomousExecutorRuntime:
         timeout: float = 15,
         now: float | None = None,
     ) -> bool:
-        current = getattr(self.host, "_current_autonomous_task", None)
+        current = self.ports.get_current_task()
         if not isinstance(current, dict):
             return False
-        started_at = float(getattr(self.host, "_current_autonomous_task_started_at", 0.0) or 0.0)
+        started_at = float(self.ports.get_current_task_started_at() or 0.0)
         if not started_at:
             return False
         current_time = time.time() if now is None else float(now)
@@ -269,15 +293,14 @@ class AutonomousExecutorRuntime:
         )
         if writeback_ok:
             self._cprint(f"  ⏰  Autonomous {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 超时，已回写 failed",
                 tone="error",
                 stage="writeback",
             )
             self._push_cli_agent_scene(
                 "idle",
-                session_id=getattr(self.host, "session_id", None),
+                session_id=self.ports.get_session_id() or None,
                 agent_role="supervisor_task",
             )
             self.clear_current_task_state()
@@ -298,7 +321,7 @@ class AutonomousExecutorRuntime:
         payload: Dict[str, Any] = {
             "decision": decision,
             "reason": reason,
-            "session_id": str(getattr(self.host, "session_id", "") or ""),
+            "session_id": str(self.ports.get_session_id() or ""),
             "context": {
                 "source": "cli_agent_pull",
                 **dict(context or {}),
@@ -316,8 +339,7 @@ class AutonomousExecutorRuntime:
             urllib.request.urlopen(request, timeout=timeout)
             return True
         except Exception as exc:
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 回写 {decision} 失败，保留本地状态待重试",
                 tone="error",
                 stage="writeback_failed",
@@ -336,7 +358,7 @@ class AutonomousExecutorRuntime:
         timeout: float = 5,
         gateway_base: str | None = None,
     ) -> bool:
-        current = getattr(self.host, "_current_autonomous_task", None)
+        current = self.ports.get_current_task()
         if current is None:
             return True
         task_id = str(current.get("task_id") or "").strip()
@@ -356,8 +378,7 @@ class AutonomousExecutorRuntime:
             gateway_base=gateway_base,
         )
         if ok:
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 已按中断回写 failed",
                 tone="warn",
                 stage="writeback",
@@ -368,12 +389,11 @@ class AutonomousExecutorRuntime:
     def poll_workflow(self) -> None:
         gateway_base = default_gateway_url()
 
-        if getattr(self.host, "_current_autonomous_task", None) is None:
+        if self.ports.get_current_task() is None:
             recovered_task = self.find_owned_running_task()
             if recovered_task is not None:
-                self.host._current_autonomous_task = recovered_task
-                append_autonomous_execution_event(
-                    self.host,
+                self.ports.set_current_task(recovered_task)
+                self.ports.append_execution_event(
                     f"认回运行中任务 {str(recovered_task.get('task_id') or '')[:8]}",
                     tone="warn",
                     stage="claim",
@@ -383,13 +403,13 @@ class AutonomousExecutorRuntime:
                 if started_at_raw:
                     try:
                         started_dt = datetime.fromisoformat(started_at_raw)
-                        self.host._current_autonomous_task_started_at = started_dt.timestamp()
+                        self.ports.set_current_task_started_at(started_dt.timestamp())
                     except ValueError:
-                        self.host._current_autonomous_task_started_at = 0.0
+                        self.ports.set_current_task_started_at(0.0)
                 recovered_execution_kind = autonomous_task_execution_kind(recovered_task)
-                if not getattr(self.host, "_agent_running", False) and getattr(self.host, "_last_agent_turn_result", None) is None:
+                if not self.ports.agent_running() and self.ports.get_last_agent_turn_result() is None:
                     if not self.inject_execution_prompt(
-                        self.host._current_autonomous_task,
+                        recovered_task,
                         recovered_execution_kind,
                         recovered=True,
                     ):
@@ -407,25 +427,25 @@ class AutonomousExecutorRuntime:
                         if writeback_ok:
                             self._push_cli_agent_scene(
                                 "idle",
-                                session_id=getattr(self.host, "session_id", None),
+                                session_id=self.ports.get_session_id() or None,
                                 agent_role="supervisor_task",
                             )
                             self.clear_current_task_state()
                         return
                     return
 
-        current = getattr(self.host, "_current_autonomous_task", None)
+        current = self.ports.get_current_task()
         if current is not None:
             task_id = current.get("task_id", "")
             execution_kind = autonomous_task_execution_kind(current)
             task_label = autonomous_task_label(execution_kind)
-            started_at = getattr(self.host, "_current_autonomous_task_started_at", 0)
+            started_at = self.ports.get_current_task_started_at()
             elapsed = time.time() - started_at if started_at else -1
-            turn_result = getattr(self.host, "_last_agent_turn_result", None)
+            turn_result = self.ports.get_last_agent_turn_result()
             expected_run_id = str(current.get("_autonomous_task_run_id") or "").strip()
             observed_run_id = str((turn_result or {}).get("autonomous_task_run_id") or "").strip()
             if (
-                not self.host._agent_running
+                not self.ports.agent_running()
                 and turn_result is not None
                 and (not expected_run_id or observed_run_id == expected_run_id)
             ):
@@ -471,15 +491,14 @@ class AutonomousExecutorRuntime:
                     gateway_base=gateway_base,
                 )
                 if writeback_ok:
-                    append_autonomous_execution_event(
-                        self.host,
+                    self.ports.append_execution_event(
                         f"任务 {task_id[:8]} 已回写 {decision}",
                         tone="error" if decision == "failed" else "success",
                         stage="writeback",
                     )
                     self._push_cli_agent_scene(
                         "idle",
-                        session_id=getattr(self.host, "session_id", None),
+                        session_id=self.ports.get_session_id() or None,
                         agent_role="supervisor_task",
                     )
                     self.clear_current_task_state()
@@ -524,12 +543,12 @@ class AutonomousExecutorRuntime:
                 "actor": "cli_agent",
                 "reason": "API-A 自主执行面已认领链路项并开始执行。",
                 "context": {
-                    "session_id": getattr(self.host, "session_id", None),
+                    "session_id": self.ports.get_session_id() or None,
                     "source": "cli_agent_pull",
                     "execution_kind": execution_kind,
                 },
                 "metadata": {
-                    "owner_session_id": getattr(self.host, "session_id", None),
+                    "owner_session_id": self.ports.get_session_id() or None,
                     "execution_started_at": datetime.now().astimezone().isoformat(),
                     "execution_source": "cli_agent_pull",
                 },
@@ -544,19 +563,18 @@ class AutonomousExecutorRuntime:
         except Exception:
             return
 
-        self.host._current_autonomous_task = task
-        self.host._current_autonomous_task_started_at = time.time()
-        self.host._current_autonomous_task_run_id = ""
-        self.host._last_agent_turn_result = None
-        append_autonomous_execution_event(
-            self.host,
+        self.ports.set_current_task(task)
+        self.ports.set_current_task_started_at(time.time())
+        self.ports.set_current_task_run_id("")
+        self.ports.set_last_agent_turn_result(None)
+        self.ports.append_execution_event(
             f"已接管任务 {task_id[:8]} · {title}",
             tone="success",
             stage="claim",
         )
         self._push_cli_agent_scene(
             "code_editing" if execution_kind == "body_improvement" else "learning",
-            session_id=getattr(self.host, "session_id", None),
+            session_id=self.ports.get_session_id() or None,
             task_id=task_id,
             execution_kind=execution_kind,
             agent_role="supervisor_task",
@@ -583,11 +601,10 @@ class AutonomousExecutorRuntime:
         except Exception:
             pass
 
-        if not self.inject_execution_prompt(self.host._current_autonomous_task, execution_kind):
+        if not self.inject_execution_prompt(task, execution_kind):
             task_label = autonomous_task_label(execution_kind)
             self._cprint(f"  ⚠️  Autonomous {task_label} execution failed to start {task_id[:8]}...")
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 自主执行启动失败",
                 tone="error",
                 stage="autonomous_execution_start_failed",
@@ -603,7 +620,7 @@ class AutonomousExecutorRuntime:
             if writeback_ok:
                 self._push_cli_agent_scene(
                     "idle",
-                    session_id=getattr(self.host, "session_id", None),
+                    session_id=self.ports.get_session_id() or None,
                     agent_role="supervisor_task",
                 )
                 self.clear_current_task_state()
@@ -623,8 +640,7 @@ class AutonomousExecutorRuntime:
             return False
         diff = self._git_improvement_diff(worktree_path, baseline_head)
         if not diff or not diff.get("changed_files"):
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 未检测到替身提交，跳过改进报告",
                 tone="warn",
                 stage="improvement_report_skipped",
@@ -652,16 +668,14 @@ class AutonomousExecutorRuntime:
                 method="POST",
             )
             urllib.request.urlopen(request, timeout=15)
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 改进报告已提交（{len(diff['changed_files'])} 文件）",
                 tone="success",
                 stage="improvement_report",
             )
             return True
         except Exception:
-            append_autonomous_execution_event(
-                self.host,
+            self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 改进报告提交失败",
                 tone="error",
                 stage="improvement_report_failed",

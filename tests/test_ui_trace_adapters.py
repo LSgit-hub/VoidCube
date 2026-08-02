@@ -30,7 +30,7 @@ def _context():
         build_trace_timeline=build_timeline,
         summarize_single_trace=lambda trace_id, items: {
             "trace_id": trace_id,
-            "count": len(items),
+            "record_count": len(items),
         },
     )
 
@@ -57,9 +57,20 @@ async def test_trace_owner_projects_detail_and_attaches_observation_refs():
     )
     observation = await attach_recent_trace_details_to_observation(
         context=context,
-        observation={"trace_ids": ["trace-1"]},
+        observation={
+            "chain": {
+                "segments": [
+                    {
+                        "latest_trace_id": "trace-1",
+                        "recent_traces": [{"trace_id": "trace-1"}],
+                    }
+                ]
+            }
+        },
     )
 
     assert list(details) == ["trace-1"]
     assert details["trace-1"]["trace_id"] == "trace-1"
-    assert observation["trace_details"]["trace-1"]["count"] == 3
+    assert observation["chain"]["segments"][0]["latest_trace_detail"][
+        "record_count"
+    ] == 3
