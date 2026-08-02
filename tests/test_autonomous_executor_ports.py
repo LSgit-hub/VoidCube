@@ -35,6 +35,7 @@ def test_executor_runtime_uses_explicit_state_ports_without_host_object():
             ),
             enqueue_pending_input=pending_input.put,
             agent_running=lambda: False,
+            autonomous_gate_active=lambda: False,
             append_execution_event=lambda message, **kwargs: events.append(
                 (message, kwargs)
             ),

@@ -40,6 +40,9 @@ def autonomous_executor_runtime(
             ),
             enqueue_pending_input=lambda prompt: host._pending_input.put(prompt),
             agent_running=lambda: bool(getattr(host, "_agent_running", False)),
+            autonomous_gate_active=lambda: bool(
+                getattr(host, "_autonomous_gate_active", False)
+            ),
             append_execution_event=lambda message, *, tone="info", stage="": append_autonomous_execution_event(
                 host,
                 message,

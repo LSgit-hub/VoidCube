@@ -795,22 +795,32 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 本批 CLI-5 pending-input command/turn boundary 新增 `PendingInputRuntime` 与 `PendingInputExecutionPorts`；文件拖入、粘贴展开、slash command 分流、agent turn busy lifecycle、连续语音重启与 process completion notification 已从 `app.py` 内联实现迁至 runtime，CLI 仅提供命令、turn、UI 和队列 ports。pending-input/CLI/autonomous 回归为 `132 passed`，`app.py` 从 6,245 行降至 6,105 行，production compileall 已通过。
 
+本批 CLI-5 threaded turn execution boundary 新增 `TurnExecutionRuntime` 与 `TurnExecutionPorts`；agent worker thread、interactive interrupt polling、clarification defer、autonomous timeout interruption、async-client cleanup 与 stream/output flush 已从 `chat()` 内联实现迁至 runtime，`chat()` 保留模型输入准备、outcome/session 状态和 response rendering owner。turn runtime/CLI/autonomous 回归为 `148 passed`，`app.py` 当前为 6,076 行，production compileall 已通过。
+
+进度记录：conversation-history/result application、run-loop lifecycle 与 Enter keybinding routing 已迁移到对应 runtime；相关回归 `191 passed`，`app.py` 当前为 5,930 行。
+
+进度记录：Ctrl+C/D 控制键、push-to-talk、bracketed/快捷键图片粘贴与大文本折叠已迁移到显式 ports runtime；既有 `TuiTeardownPorts` 继续作为退出收尾边界，本批 focused 回归 `27 passed`，`app.py` 当前为 5,829 行。
+
+进度记录：Ctrl+Z 与 placeholder、modal hint、spinner 动态文本已迁移到显式 ports runtime，并补齐 `run()` 的 modal widget 组合 wiring；相关回归 `17 passed`，`app.py` 当前为 5,795 行。
+
+进度记录：startup 展示、resume/recent session、tool/skill registry 计数与 application/layout 组合已迁移到显式 ports runtime；相关回归 `16 passed`，`app.py` 当前为 5,774 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 6,245 |
+| `VoidCube_cli/app.py` | 5,774 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
 
 ### 15.5 仍未完成的治理主线
 
-- CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
-- CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle、`AutonomousExecutorRuntime` host-state boundary 与 pending-input command/turn boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
+- CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、动态提示/状态文本、startup 展示、status bar、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
+- CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle、`AutonomousExecutorRuntime` host-state boundary、pending-input command/turn boundary、threaded turn execution、response rendering、turn postprocessing、interrupted-input queue、result application、run-loop lifecycle、Enter/control keybinding、push-to-talk 与 paste boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
 - Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot/LM evidence context/packet、LM generation request/execution、runtime config adapters/runtime gate、deliberation、materialization context/runtime、candidate stream preparation/assembly、selection merge、stable candidate families、learning topic policy、materialization、body structure mapping/eligibility、body projection、candidate eligibility、adaptive policy/input normalization、pressure/urgency、drive-state/models、needs policy gates、needs calculation、LM eligibility input projection、intent/signal projection、drive-context normalization、history normalization、candidate stream assembler、agenda graph projection、self-iteration hypothesis projection、task-type prior projection、LM evidence assembly、reflection projection、cognitive posture/context projection、proposal drift/meta-cognition projection、cognitive memory projection、cognition charter、self-model、API-B snapshot、research、shell body profile、drive-judgement projection、latest-generation state application projection、LM application state port、cognition state projection、proposal cognition projection 与 proposal memory compaction 已迁至专属模块或明确 application port。`EndogenousDriveEngine` 仍持有 proposal 调用交接与 latest-generation state 写回，是 runtime state 的唯一 owner。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
 - Stage 6：Supervisor UI 的 state、stream、identity/proxy、memory status、trace、body status、snapshot、activity persistence、media state 与 auto-open lifecycle 边界已收口；剩余 route registration 和 Supervisor 生命周期注册仍保留在 `supervisor.py` owner 内。
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 CLI-5 `VoidCube_cli/app.py` 的剩余 `chat()`/TUI lifecycle orchestration 巨石边界，优先识别模型回合线程、interrupt monitoring、response rendering 与 session writeback 的跨域 callback，建立独立 turn runtime owner；同时维护已完成 UI adapter、voice、background、embedded lifecycle、executor ports、pending-input runtime 与 `tools.voice_mode` 的零旧入口约束，不得把 repository、projection、ScheduleAllocator、candidate/evidence/proposal/context/snapshot/learning/materialization/body-mapping/body-eligibility/eligibility/adaptive-policy/policy/needs/intent-signal/agenda/self-iteration/task-priors/LM-evidence-assembly/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B-snapshot/research/shell-body-profile/identity-proxy/memory-status/trace-adapter/body-status/snapshot-adapter/activity-adapter/media-state/open-lifecycle 模块扩张为 Supervisor facade 或恢复旧 transport/helper 入口。
+下一批继续盘点 `run()` 剩余的 signal/asyncio/stdin 防护与 cleanup wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。

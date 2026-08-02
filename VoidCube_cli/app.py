@@ -83,27 +83,24 @@ from VoidCube_app.session_lifecycle import (
     hydrate_session,
     set_session_title,
 )
-from VoidCube_app.turn_contract import begin_turn, normalize_turn_outcome
+from VoidCube_app.turn_contract import begin_turn
 from VoidCube_app.tool_events import ToolEvent
 from VoidCube_app.turn_queue import (
     TurnInterruptReason,
-    TurnInputRoute,
     cancel_turn,
-    interrupt_text,
     normalize_busy_input_mode,
-    resolve_interrupted_followup,
 )
 from VoidCube_cli.turn_queue_adapter import (
-    InterruptPollStatus,
     enqueue_turn_input,
     poll_interrupt_input,
     requeue_interrupted_inputs,
 )
-from VoidCube_cli.tui_layout import build_tui_layout_children
-from VoidCube_cli.tui_application import (
-    create_tui_application,
-    install_resize_reflow_cleanup,
+from VoidCube_cli.tui_composition_runtime import (
+    TuiCompositionPorts,
+    TuiCompositionRuntime,
+    TuiCompositionWidgets,
 )
+from VoidCube_cli.tui_application import install_resize_reflow_cleanup
 from VoidCube_cli.tui_keybindings import (
     install_history_navigation_keybindings,
     install_text_editing_keybindings,
@@ -125,7 +122,6 @@ from VoidCube_cli.tui_input_widgets import (
     build_input_area,
     install_placeholder_processor,
 )
-from VoidCube_cli.scheduled_task_polling import start_scheduled_task_polling
 from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorPorts,
     ScheduledTaskExecutorRuntime,
@@ -135,11 +131,53 @@ from VoidCube_cli.background_task_runtime import (
     BackgroundTaskRuntime,
     BackgroundTaskState,
 )
-from VoidCube_cli.tui_refresh_loop import start_tui_refresh_loop
-from VoidCube_cli.input_process_loop import start_input_process_loop
+from VoidCube_cli.cli_run_runtime import CliRunRuntime, CliRunRuntimePorts
+from VoidCube_cli.cli_startup_runtime import CliStartupPorts, CliStartupRuntime
+from VoidCube_cli.cli_lifecycle_guards import (
+    CliLifecycleGuardPorts,
+    CliLifecycleGuardRuntime,
+)
+from VoidCube_cli.enter_keybinding_runtime import (
+    EnterKeybindingPorts,
+    EnterKeybindingRuntime,
+)
+from VoidCube_cli.control_keybinding_runtime import (
+    ControlKeybindingPorts,
+    ControlKeybindingRuntime,
+)
+from VoidCube_cli.voice_keybinding_runtime import (
+    VoiceKeybindingPorts,
+    VoiceKeybindingRuntime,
+)
+from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts, TuiPasteRuntime
+from VoidCube_cli.suspend_keybinding_runtime import (
+    SuspendKeybindingPorts,
+    SuspendKeybindingRuntime,
+)
+from VoidCube_cli.tui_dynamic_text_runtime import (
+    TuiDynamicTextPorts,
+    TuiDynamicTextRuntime,
+)
 from VoidCube_cli.pending_input_runtime import (
     PendingInputExecutionPorts,
     PendingInputRuntime,
+)
+from VoidCube_cli.chat_response_runtime import ChatResponsePorts, ChatResponseRuntime
+from VoidCube_cli.turn_postprocessing_runtime import (
+    TurnPostprocessingPorts,
+    TurnPostprocessingRuntime,
+)
+from VoidCube_cli.interrupted_followup_runtime import (
+    InterruptedFollowupPorts,
+    InterruptedFollowupRuntime,
+)
+from VoidCube_cli.turn_result_application_runtime import (
+    TurnResultApplicationPorts,
+    TurnResultApplicationRuntime,
+)
+from VoidCube_cli.turn_execution_runtime import (
+    TurnExecutionPorts,
+    TurnExecutionRuntime,
 )
 from VoidCube_cli.tui_teardown import TuiTeardownPorts, run_tui_teardown
 from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
@@ -241,9 +279,6 @@ except Exception:
 
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl, ConditionalContainer
-from prompt_toolkit.filters import Condition
-from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.key_binding import KeyBindings
 try:
     from prompt_toolkit.cursor_shapes import CursorShape
@@ -4161,9 +4196,6 @@ class VoidcubeCLI:
         previous_active_role = str(getattr(self, "_active_chat_agent_role", "") or "")
         self._active_chat_agent_role = "supervisor_task" if autonomous_task_run_id else "user_chat"
         try:
-            # Run the conversation with interrupt monitoring
-            result = None
-
             self._stream_render_state.begin_turn()
 
             stream_callback = None
@@ -4179,7 +4211,6 @@ class VoidcubeCLI:
                 )
 
             def run_agent():
-                nonlocal result
                 agent_message = _voice_prefix + message if _voice_prefix else message
                 # Prepend pending model switch note so the model knows about the switch
                 _msn = getattr(self, '_pending_model_switch_note', None)
@@ -4189,7 +4220,7 @@ class VoidcubeCLI:
                 try:
                     # Generate per-interaction trace_id for observability (C-03)
                     self._current_trace_id = str(uuid.uuid4())
-                    result = self.agent.run_conversation(
+                    return self.agent.run_conversation(
                         user_message=agent_message,
                         conversation_history=list(turn_input.prior_history),
                         stream_callback=stream_callback,
@@ -4200,7 +4231,7 @@ class VoidcubeCLI:
                 except Exception as exc:
                     logging.error("run_conversation raised: %s", exc, exc_info=True)
                     _summary = summarize_api_error(exc)
-                    result = {
+                    return {
                         "final_response": f"Error: {_summary}",
                         "messages": [],
                         "api_calls": 0,
@@ -4209,249 +4240,142 @@ class VoidcubeCLI:
                         "error": _summary,
                     }
 
-            # Start agent in background thread (daemon so it cannot keep the
-            # process alive when the user closes the terminal tab — SIGHUP
-            # exits the main thread and daemon threads are reaped automatically).
-            agent_thread = threading.Thread(target=run_agent, daemon=True)
-            agent_thread.start()
-
-            # Monitor the dedicated interrupt queue while the agent runs.
-            # _interrupt_queue is separate from _pending_input, so process_loop
-            # and chat() never compete for the same queue.
-            # When a clarify question is active, user input is handled entirely
-            # by the Enter key binding (routed to the clarify response queue),
-            # so we skip interrupt processing to avoid stealing that input.
-            turn_interrupt = None
-            while agent_thread.is_alive():
-                if autonomous_task_run_id and not autonomous_timeout_reported:
-                    timed_out_task = autonomous_runtime.current_task()
-                    timed_out_run_id = (
-                        str((timed_out_task or {}).get("_autonomous_task_run_id") or "").strip()
-                        if isinstance(timed_out_task, dict)
-                        else ""
-                    )
-                    if timed_out_run_id == autonomous_task_run_id:
-                        autonomous_timeout_reported = autonomous_runtime.report_current_task_timeout_if_needed(
-                            timeout=15,
-                        )
-                        autonomous_timeout_writeback_succeeded = (
-                            autonomous_timeout_reported
-                            and autonomous_runtime.current_task() is None
-                        )
-                        if autonomous_timeout_reported:
-                            turn_interrupt = cancel_turn(TurnInterruptReason.TIMEOUT)
-                            try:
-                                self.agent.interrupt(turn_interrupt.agent_message)
-                            except Exception:
-                                pass
-                if hasattr(self, '_interrupt_queue'):
-                    poll_result = poll_interrupt_input(
-                        self._pending_input,
-                        self._interrupt_queue,
-                        timeout=0.1,
-                        defer=bool(self._clarify_state or self._clarify_freetext),
-                    )
-                    if poll_result.status is InterruptPollStatus.DEFERRED:
-                        continue
-                    if poll_result.interrupt is None:
-                        # Force prompt_toolkit to flush any pending stdout
-                        # output from the agent thread.  Without this, the
-                        # StdoutProxy buffer only flushes on renderer passes
-                        # triggered by input events — on macOS this causes
-                        # the CLI to appear frozen until the user types. (#1624)
-                        self._invalidate(min_interval=0.15)
-                        continue
-                    turn_interrupt = poll_result.interrupt
-                    print("\n🔧 New message detected, interrupting...")
-                    self.agent.interrupt(turn_interrupt.agent_message)
-                    break
-                else:
-                    # Fallback for non-interactive mode (e.g., single-query)
-                    agent_thread.join(0.1)
-
-            agent_thread.join()  # Ensure agent thread completes
-
-            # Proactively clean up async clients whose event loop is dead.
-            # The agent thread may have created AsyncOpenAI clients bound
-            # to a per-thread event loop; if that loop is now closed, those
-            # clients' __del__ would crash prompt_toolkit's loop on GC.
-            try:
-                from agent.auxiliary_client import cleanup_stale_async_clients
-                cleanup_stale_async_clients()
-            except Exception:
-                pass
-
-            # Flush any remaining streamed text and close the box
-            self._flush_stream()
-
-            # Drain any remaining agent output still in the StdoutProxy
-            # buffer so tool/status lines render ABOVE our response box.
-            # The flush pushes data into the renderer queue; the short
-            # sleep lets the renderer actually paint it before we draw.
-            import time as _time
-            sys.stdout.flush()
-            _time.sleep(0.15)
-
-            outcome = normalize_turn_outcome(
-                result,
-                fallback_history=self.conversation_history,
-            )
-            self.conversation_history = list(outcome.conversation_history)
-            response = outcome.response
-            turn_result = outcome.observation()
-            if autonomous_timeout_reported:
-                turn_result.update(
-                    {
-                        "failed": True,
-                        "interrupted": True,
-                        "error": "Autonomous task timed out after 30 minutes.",
-                    }
+            def check_autonomous_timeout() -> tuple[bool, bool]:
+                timed_out_task = autonomous_runtime.current_task()
+                timed_out_run_id = (
+                    str((timed_out_task or {}).get("_autonomous_task_run_id") or "").strip()
+                    if isinstance(timed_out_task, dict)
+                    else ""
                 )
-            if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
-                turn_result["autonomous_task_run_id"] = autonomous_task_run_id
-                autonomous_runtime.set_last_agent_turn_result(turn_result)
-            elif autonomous_runtime.current_task() is None:
-                autonomous_runtime.set_last_agent_turn_result(turn_result)
+                if timed_out_run_id != autonomous_task_run_id:
+                    return False, False
+                reported = autonomous_runtime.report_current_task_timeout_if_needed(
+                    timeout=15,
+                )
+                return reported, reported and autonomous_runtime.current_task() is None
 
-            if (
-                getattr(self, "_autonomous_gate_active", False)
-                and autonomous_runtime.current_task()
-                and autonomous_task_run_id
-                and not autonomous_timeout_writeback_succeeded
-            ):
-                if turn_result["failed"] or turn_result["partial"]:
-                    _append_autonomous_execution_event_view(
-                        self,
-                        f"模型回合结束，但结果异常: {turn_result['error'] or 'unknown error'}",
-                        tone="error",
-                        stage="model_turn_finished",
-                    )
-                elif turn_result["interrupted"]:
-                    _append_autonomous_execution_event_view(
-                        self,
-                        "模型回合被中断，等待下一条指令",
-                        tone="warn",
-                        stage="model_turn_finished",
-                    )
-                else:
-                    _append_autonomous_execution_event_view(
-                        self,
-                        "模型回合完成，等待任务回写",
-                        tone="success",
-                        stage="model_turn_finished",
-                    )
-
-            # Auto-generate session title after first exchange (non-blocking)
-            if outcome.usable:
+            def cleanup_async_clients() -> None:
                 try:
-                    from agent.title_generator import maybe_auto_title
-                    maybe_auto_title(
-                        self._session_db,
-                        self.session_id,
-                        message,
-                        response,
-                        self.conversation_history,
-                    )
+                    from agent.auxiliary_client import cleanup_stale_async_clients
+
+                    cleanup_stale_async_clients()
                 except Exception:
                     pass
 
-            # Handle failed or partial results (e.g., non-retryable errors, rate limits,
-            # truncated output, invalid tool calls). Both "failed" and "partial" with
-            # an empty final_response mean the agent couldn't produce a usable answer.
-            if (outcome.failed or outcome.partial) and not response:
-                response = outcome.response_or_error()
-                turn_result["response"] = response
-                # Stop continuous voice mode on persistent errors (e.g. 429 rate limit)
-                # to avoid an infinite error → record → error loop
-                if self._voice_continuous:
-                    self._voice_continuous = False
-                    _cprint(f"\n{_DIM}Continuous voice mode stopped due to error.{_RST}")
-
-            # Handle interrupt - check if we were interrupted
-            pending_message = None
-            if outcome.interrupted:
-                pending_message = resolve_interrupted_followup(
-                    turn_interrupt, outcome.interrupt_message
+            execution = TurnExecutionRuntime(
+                TurnExecutionPorts(
+                    has_interrupt_queue=lambda: hasattr(self, "_interrupt_queue"),
+                    poll_interrupt=lambda defer: poll_interrupt_input(
+                        self._pending_input,
+                        self._interrupt_queue,
+                        timeout=0.1,
+                        defer=defer,
+                    ),
+                    should_defer_interrupt=lambda: bool(
+                        self._clarify_state or self._clarify_freetext
+                    ),
+                    invalidate=lambda: self._invalidate(min_interval=0.15),
+                    interrupt_agent=lambda agent_message: self.agent.interrupt(agent_message),
+                    emit_interrupt_notice=lambda: print(
+                        "\n🔧 New message detected, interrupting..."
+                    ),
+                    check_autonomous_timeout=check_autonomous_timeout,
+                    cleanup_async_clients=cleanup_async_clients,
+                    flush_stream=self._flush_stream,
+                    flush_output=sys.stdout.flush,
                 )
-                # Add indicator that we were interrupted
-                if response and pending_message:
-                    response = response + "\n\n---\n_[Interrupted - processing new message]_"
+            ).execute(
+                run_agent,
+                autonomous_task_run_id=autonomous_task_run_id,
+            )
+            result = execution.result
+            turn_interrupt = execution.turn_interrupt
+            autonomous_timeout_reported = execution.autonomous_timeout_reported
+            autonomous_timeout_writeback_succeeded = (
+                execution.autonomous_timeout_writeback_succeeded
+            )
+
+            applied = TurnResultApplicationRuntime(
+                TurnResultApplicationPorts(
+                    conversation_history=lambda: self.conversation_history,
+                    set_conversation_history=lambda history: setattr(
+                        self, "conversation_history", history
+                    ),
+                    record_autonomous_result=autonomous_runtime.record_turn_result,
+                    record_autonomous_finished=autonomous_runtime.record_model_turn_finished,
+                )
+            ).apply(
+                result,
+                autonomous_task_run_id=autonomous_task_run_id,
+                autonomous_timeout_reported=autonomous_timeout_reported,
+                autonomous_timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
+            )
+            outcome = applied.outcome
+            response = outcome.response
+            turn_result = applied.turn_result
+
+            postprocessed = TurnPostprocessingRuntime(
+                TurnPostprocessingPorts(
+                    session_db=lambda: self._session_db,
+                    session_id=lambda: str(self.session_id or ""),
+                    voice_continuous=lambda: bool(self._voice_continuous),
+                    stop_voice_continuous=lambda: setattr(
+                        self, "_voice_continuous", False
+                    ),
+                    emit=_cprint,
+                )
+            ).process(
+                outcome=outcome,
+                message=message,
+                conversation_history=self.conversation_history,
+                turn_result=turn_result,
+                turn_interrupt=turn_interrupt,
+            )
+            response = postprocessed.response
+            turn_result = postprocessed.turn_result
+            pending_message = postprocessed.pending_message
 
             response_previewed = outcome.response_previewed
 
-            # Display reasoning (thinking) box if enabled and available.
-            # Intermediate tool turns reset stream framing but preserve this
-            # user-turn-level flag so reasoning is not rendered twice.
-            _reasoning_already_shown = self._stream_render_state.reasoning_shown_this_turn
-            if self.show_reasoning and not _reasoning_already_shown:
-                reasoning = outcome.last_reasoning
-                if reasoning:
-                    w = shutil.get_terminal_size().columns
-                    r_label = " Reasoning "
-                    r_fill = w - 2 - len(r_label)
-                    r_top = f"{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}"
-                    r_bot = f"{_DIM}└{'─' * (w - 2)}┘{_RST}"
-                    # Collapse long reasoning: show first 10 lines
-                    lines = reasoning.strip().splitlines()
-                    if len(lines) > 10:
-                        display_reasoning = "\n".join(lines[:10])
-                        display_reasoning += f"\n{_DIM}  ... ({len(lines) - 10} more lines){_RST}"
-                    else:
-                        display_reasoning = reasoning.strip()
-                    if self._should_emit_scrollback_output():
-                        _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
-
-            if response and not response_previewed and self._should_emit_scrollback_output():
-                label = "> Voidcube"
-                _resp_color = "#CD7F32"
-                _resp_text = "#FFF8DC"
-
-                is_error_response = outcome.failed or outcome.partial
-                already_streamed = (
-                    self._stream_render_state.started
-                    and self._stream_render_state.response_box_open
-                    and not is_error_response
-                )
-                if already_streamed:
-                    # Response was already streamed token-by-token with box framing;
-                    # _flush_stream() already closed the box. Skip Rich Panel.
-                    pass
-                else:
-                    _chat_console = ChatConsole()
-                    _chat_console.print(Panel(
-                        _rich_text_from_ansi(response),
-                        title=f"[{_resp_color} bold]{label}[/]",
-                        title_align="left",
-                        border_style=_resp_color,
-                        style=_resp_text,
-                        box=rich_box.HORIZONTALS,
-                        padding=(1, 2),
-                    ))
-
-
-            # Play terminal bell when agent finishes (if enabled).
-            # Works over SSH — the bell propagates to the user's terminal.
-            if self.bell_on_complete and self._should_emit_scrollback_output():
+            def bell() -> None:
                 sys.stdout.write("\a")
                 sys.stdout.flush()
 
-            # Re-queue the interrupt message (and any that arrived while we were
-            # processing the first) as the next prompt for process_loop.
-            # Only reached when busy_input_mode == "interrupt" (the default).
-            # In "queue" mode Enter routes directly to _pending_input so this
-            # block is never hit.
-            if pending_message and hasattr(self, '_pending_input'):
-                batch = requeue_interrupted_inputs(
-                    self._pending_input,
-                    self._interrupt_queue,
-                    pending_message,
+            ChatResponseRuntime(
+                ChatResponsePorts(
+                    should_emit_scrollback=self._should_emit_scrollback_output,
+                    show_reasoning=lambda: bool(self.show_reasoning),
+                    reasoning_already_shown=lambda: bool(
+                        self._stream_render_state.reasoning_shown_this_turn
+                    ),
+                    terminal_width=lambda: shutil.get_terminal_size().columns,
+                    emit=_cprint,
+                    create_console=ChatConsole,
+                    rich_text_from_ansi=_rich_text_from_ansi,
+                    bell_on_complete=lambda: bool(self.bell_on_complete),
+                    bell=bell,
                 )
-                preview_text = interrupt_text(batch.payloads[0])
-                preview = preview_text[:50] + ("..." if len(preview_text) > 50 else "")
-                if len(batch.payloads) > 1:
-                    print(f"\n🔧 Sending {len(batch.payloads)} messages after interrupt: '{preview}'")
-                else:
-                    print(f"\n🔧 Sending after interrupt: '{preview}'")
+            ).render(
+                response=response,
+                response_previewed=response_previewed,
+                failed=outcome.failed,
+                partial=outcome.partial,
+                stream_started=self._stream_render_state.started,
+                response_box_open=self._stream_render_state.response_box_open,
+                reasoning=outcome.last_reasoning,
+            )
+
+            InterruptedFollowupRuntime(
+                InterruptedFollowupPorts(
+                    has_queue=lambda: hasattr(self, "_pending_input"),
+                    requeue=lambda payload: requeue_interrupted_inputs(
+                        self._pending_input,
+                        self._interrupt_queue,
+                        payload,
+                    ),
+                    emit=print,
+                )
+            ).requeue(pending_message)
             
             return response
             
@@ -4636,123 +4560,460 @@ class VoidcubeCLI:
             manipulate user input from a keybinding handler.
         """
 
-    def run(self):
-        """Run the interactive CLI loop with persistent input at bottom."""
-        # Push the entire TUI to the bottom of the terminal so the banner,
-        # responses, and prompt all appear pinned to the bottom — empty
-        # space stays above, not below.  This prints enough blank lines to
-        # scroll the cursor to the last row before any content is rendered.
-        try:
-            _term_lines = shutil.get_terminal_size().lines
-            if _term_lines > 2:
-                print("\n" * (_term_lines - 1), end="", flush=True)
-        except Exception:
-            pass
+    def _enter_keybinding_runtime(self) -> EnterKeybindingRuntime:
+        def invalidate(event: Any) -> None:
+            event.app.invalidate()
 
-        self.show_banner()
+        def reset_buffer(event: Any, append_to_history: bool) -> None:
+            event.app.current_buffer.reset(append_to_history=append_to_history)
 
-        # If resuming a session, load history and display it immediately
-        # so the user has context before typing their first message.
-        if self._resumed:
-            if self._preload_resumed_session():
-                self._display_resumed_history()
+        def exit_application(event: Any) -> None:
+            if event.app.is_running:
+                event.app.exit()
 
-        memory_model_display = None
-        try:
-            from VoidCube_app.config import load_config
-            config = load_config()
-            memory_config = config.get("memory", {})
-            mem_llm = memory_config.get("llm", {})
-            memory_model = mem_llm.get("model", None) or memory_config.get("model", None)
-            if memory_model:
-                memory_model_display = memory_model.split("/")[-1] if "/" in memory_model else memory_model
-                if memory_model_display.endswith(".gguf"):
-                    memory_model_display = memory_model_display[:-5]
-                if len(memory_model_display) > 25:
-                    memory_model_display = memory_model_display[:22] + "..."
-        except Exception:
-            pass
-        
-        if memory_model_display:
-            _welcome_text = f"记忆模型: {memory_model_display}"
-        else:
+        def clear_modal_states() -> None:
+            self._model_picker_state = None
+            self._clarify_state = None
+            self._clarify_freetext = False
+            self._approval_state = None
+            self._sudo_state = None
+            self._secret_state = None
+
+        def run_api_command(event: Any) -> None:
+            from prompt_toolkit.application import run_in_terminal
+
+            was_visible = self._status_bar_visible
+            self._status_bar_visible = False
+            event.app.invalidate()
+            try:
+                run_in_terminal(lambda: self.process_command("/api"))
+            finally:
+                self._status_bar_visible = was_visible
+                event.app.invalidate()
+
+        def stop_daemons(keep_daemons: bool) -> None:
+            global _daemons_auto_started
+
+            if not _daemons_auto_started or keep_daemons:
+                return
+            try:
+                from VoidCube_cli.ops.serve import stop_all
+
+                stop_all(force=True)
+                _daemons_auto_started = False
+            except Exception:
+                pass
+
+        def exit_autonomous_gate_fast() -> None:
+            exit_autonomous_gate_fast_for_host(
+                self,
+                emit=_cprint,
+                interrupt_current_task=self._interrupt_autonomous_component_task,
+                push_cli_agent_scene=_push_cli_agent_scene,
+            )
+
+        return EnterKeybindingRuntime(
+            EnterKeybindingPorts(
+                read_text=lambda event: event.app.current_buffer.text,
+                has_images=lambda: bool(self._attached_images),
+                snapshot_images=lambda: list(self._attached_images),
+                clear_images=self._attached_images.clear,
+                reset_buffer=reset_buffer,
+                invalidate=invalidate,
+                sudo_state=lambda: self._sudo_state,
+                set_sudo_state=lambda state: setattr(self, "_sudo_state", state),
+                submit_sudo=lambda text: self._sudo_state["response_queue"].put(text),
+                secret_state=lambda: self._secret_state,
+                submit_secret=self._submit_secret_response,
+                clear_secret_input=lambda event: event.app.current_buffer.reset(),
+                approval_state=lambda: self._approval_state,
+                submit_approval=self._handle_approval_selection,
+                model_picker_state=lambda: self._model_picker_state,
+                submit_model_picker=self._handle_model_picker_selection,
+                clarify_state=lambda: self._clarify_state,
+                set_clarify_state=lambda state: setattr(self, "_clarify_state", state),
+                clarify_freetext=lambda: bool(self._clarify_freetext),
+                set_clarify_freetext=lambda value: setattr(
+                    self, "_clarify_freetext", bool(value)
+                ),
+                submit_clarification=lambda value: self._clarify_state["response_queue"].put(
+                    value
+                ),
+                restore_modal_input=self._restore_modal_input_snapshot,
+                clear_modal_states=clear_modal_states,
+                status_bar_visible=lambda: bool(self._status_bar_visible),
+                set_status_bar_visible=lambda value: setattr(
+                    self, "_status_bar_visible", bool(value)
+                ),
+                process_command=self.process_command,
+                should_handle_model_inline=self._should_handle_model_command_inline,
+                set_should_exit=lambda value: setattr(self, "_should_exit", bool(value)),
+                exit_application=exit_application,
+                stop_daemons=stop_daemons,
+                run_api_command=run_api_command,
+                autonomous_gate_active=lambda: bool(self._autonomous_gate_active),
+                exit_autonomous_gate_fast=exit_autonomous_gate_fast,
+                enqueue_input=lambda payload, is_command: enqueue_turn_input(
+                    self._pending_input,
+                    self._interrupt_queue,
+                    payload,
+                    agent_running=self._agent_running,
+                    is_command=is_command,
+                    busy_input_mode=self.busy_input_mode,
+                ),
+                agent_running=lambda: bool(self._agent_running),
+                busy_input_mode=lambda: self.busy_input_mode,
+                emit=_cprint,
+            )
+        )
+
+    def _control_keybinding_runtime(self) -> ControlKeybindingRuntime:
+        def run_background(operation: Callable[[], None]) -> None:
+            threading.Thread(target=operation, daemon=True).start()
+
+        def cancel_voice_recording() -> None:
+            with self._voice_lock:
+                self._voice_recording = False
+                self._voice_continuous = False
+
+        def clear_input(event: Any) -> None:
+            event.app.current_buffer.reset()
+            self._attached_images.clear()
+
+        def force_quit_autonomous() -> None:
+            force_quit_autonomous_gate_for_host(
+                self,
+                emit=_cprint,
+                interrupt_current_task=self._interrupt_autonomous_component_task,
+                push_cli_agent_scene=_push_cli_agent_scene,
+            )
+
+        return ControlKeybindingRuntime(
+            ControlKeybindingPorts(
+                now=time.time,
+                voice_recording=lambda: bool(self._voice_recording),
+                cancel_voice_recording=cancel_voice_recording,
+                interrupt_voice=lambda: self._voice_tts().interrupt(),
+                run_background=run_background,
+                sudo_active=lambda: bool(self._sudo_state),
+                submit_sudo_cancel=lambda: self._sudo_state["response_queue"].put(""),
+                clear_sudo_state=lambda: setattr(self, "_sudo_state", None),
+                secret_active=lambda: bool(self._secret_state),
+                cancel_secret=self._cancel_secret_capture,
+                clear_secret_input=lambda event: event.app.current_buffer.reset(),
+                approval_active=lambda: bool(self._approval_state),
+                deny_approval=lambda: self._approval_state["response_queue"].put(
+                    ApprovalStatus.DENIED.value
+                ),
+                clear_approval_state=lambda: setattr(self, "_approval_state", None),
+                model_picker_active=lambda: bool(self._model_picker_state),
+                close_model_picker=self._close_model_picker,
+                clear_model_picker_input=lambda event: event.app.current_buffer.reset(),
+                clarification_active=lambda: bool(self._clarify_state),
+                cancel_clarification=lambda: self._clarify_state["response_queue"].put(
+                    ClarificationDecision(ClarificationStatus.CANCELLED)
+                ),
+                clear_clarification_state=lambda: setattr(self, "_clarify_state", None),
+                set_clarify_freetext=lambda value: setattr(
+                    self, "_clarify_freetext", bool(value)
+                ),
+                clear_clarification_input=lambda event: event.app.current_buffer.reset(),
+                agent_running=lambda: bool(self._agent_running and self.agent),
+                interrupt_agent=lambda: self.agent.interrupt(
+                    cancel_turn(TurnInterruptReason.USER_CANCELLED).agent_message
+                ),
+                set_last_ctrl_c_time=lambda value: setattr(
+                    self, "_last_ctrl_c_time", value
+                ),
+                has_input=lambda event: bool(
+                    event.app.current_buffer.text or self._attached_images
+                ),
+                clear_input=clear_input,
+                autonomous_gate_active=lambda: bool(self._autonomous_gate_active),
+                force_quit_autonomous=force_quit_autonomous,
+                emit=_cprint,
+                invalidate=lambda event: event.app.invalidate(),
+            )
+        )
+
+    def _voice_keybinding_runtime(self) -> VoiceKeybindingRuntime:
+        def run_background(operation: Callable[[], None]) -> None:
+            threading.Thread(target=operation, daemon=True).start()
+
+        def set_continuous(value: bool) -> None:
+            with self._voice_lock:
+                self._voice_continuous = bool(value)
+
+        def invalidate_app() -> None:
+            app = getattr(self, "_app", None)
+            if app:
+                app.invalidate()
+
+        return VoiceKeybindingRuntime(
+            VoiceKeybindingPorts(
+                voice_mode=lambda: bool(self._voice_mode),
+                recording=lambda: bool(self._voice_recording),
+                set_continuous=set_continuous,
+                agent_running=lambda: bool(self._agent_running),
+                modal_active=lambda: bool(
+                    self._clarify_state or self._sudo_state or self._approval_state
+                ),
+                processing=lambda: bool(self._voice_processing),
+                start_recording=self._voice_start_recording,
+                stop_recording=self._voice_stop_and_transcribe,
+                run_background=run_background,
+                invalidate=lambda event: event.app.invalidate(),
+                invalidate_app=invalidate_app,
+                report_error=lambda error: _cprint(
+                    f"\n{_DIM}Voice recording failed: {error}{_RST}"
+                ),
+            )
+        )
+
+    def _suspend_keybinding_runtime(self) -> SuspendKeybindingRuntime:
+        import os
+        import signal
+        import sys
+        from prompt_toolkit.application import run_in_terminal
+
+        agent_name = "Voidcube Agent"
+        message = f"\n{agent_name} has been suspended. Run `fg` to bring {agent_name} back."
+
+        def suspend_process() -> None:
+            os.write(1, message.encode())
+            os.kill(0, signal.SIGTSTP)
+
+        return SuspendKeybindingRuntime(
+            SuspendKeybindingPorts(
+                platform=lambda: sys.platform,
+                emit=lambda value: _cprint(f"{_DIM}{value}{_RST}"),
+                invalidate=lambda event: event.app.invalidate(),
+                run_in_terminal=run_in_terminal,
+                suspend_process=suspend_process,
+            )
+        )
+
+    def _tui_dynamic_text_runtime(self) -> TuiDynamicTextRuntime:
+        return TuiDynamicTextRuntime(
+            TuiDynamicTextPorts(
+                voice_recording=lambda: bool(self._voice_recording),
+                voice_processing=lambda: bool(self._voice_processing),
+                sudo_active=lambda: bool(self._sudo_state),
+                secret_active=lambda: bool(self._secret_state),
+                approval_active=lambda: bool(self._approval_state),
+                clarify_freetext=lambda: bool(self._clarify_freetext),
+                clarify_active=lambda: bool(self._clarify_state),
+                command_running=lambda: bool(self._command_running),
+                command_spinner_frame=self._command_spinner_frame,
+                command_status=lambda: self._command_status or "",
+                agent_running=lambda: bool(self._agent_running),
+                voice_mode=lambda: bool(self._voice_mode),
+                spinner_text=lambda: self._spinner_text,
+                tool_start_time=lambda: self._tool_start_time,
+                now=time.monotonic,
+                agent_spacer_height=self._agent_spacer_height,
+                spinner_height=self._spinner_widget_height,
+                sudo_deadline=lambda: self._sudo_deadline,
+                secret_deadline=lambda: self._secret_deadline,
+                approval_deadline=lambda: self._approval_deadline,
+                clarify_deadline=lambda: self._clarify_deadline,
+            )
+        )
+
+    def _cli_startup_runtime(self) -> CliStartupRuntime:
+        def memory_model_display() -> str | None:
+            try:
+                from VoidCube_app.config import load_config
+
+                memory = load_config().get("memory", {})
+                memory_llm = memory.get("llm", {})
+                model = memory_llm.get("model") or memory.get("model")
+                if not model:
+                    return None
+                display = str(model).split("/")[-1]
+                if display.endswith(".gguf"):
+                    display = display[:-5]
+                return display if len(display) <= 25 else display[:22] + "..."
+            except Exception:
+                return None
+
+        def welcome_text() -> str:
             try:
                 from VoidCube_cli.i18n import t
-                _welcome_text = t('cli.welcome', default="VoidCube 就绪")
+
+                return t("cli.welcome", default="VoidCube 就绪")
             except Exception:
-                _welcome_text = "VoidCube 就绪"
-        
-        recent_sessions = []
-        try:
-            from VoidCube_core.state import SessionDB
-            db = SessionDB()
-            sessions = db.list_sessions_rich(
-                source="cli",
-                exclude_sources=["tool"],
-                limit=5,
-                exclude_id_prefixes=["scheduled_"],
-            )
-            current_session_id = getattr(self, 'session_id', None)
-            for sess in sessions:
-                if sess.get("id") != current_session_id:
-                    recent_sessions.append(sess)
-                    if len(recent_sessions) >= 4:
-                        break
-        except Exception:
-            pass
-        
-        if recent_sessions:
-            history_lines = []
-            history_lines.append(f"[bold {_accent_hex()}]历史会话列表[/]")
-            history_lines.append("")
-            term_width = shutil.get_terminal_size((80, 24)).columns
-            for i, sess in enumerate(recent_sessions, 1):
-                sess_id = sess.get("id", "")
-                preview = sess.get("preview", "")
-                title = sess.get("title", "")
-                display_text = title if title else preview
-                id_part = f"{i}.ID: {sess_id}"
-                separator = " | "
-                max_preview_length = term_width - len(id_part) - len(separator) - 4
-                if len(display_text) > max_preview_length:
-                    display_text = display_text[:max_preview_length - 3] + "..."
-                history_lines.append(f"  {id_part}{separator}{display_text}")
-            
+                return "VoidCube 就绪"
+
+        def recent_sessions() -> list[dict[str, Any]]:
+            try:
+                from VoidCube_core.state import SessionDB
+
+                return SessionDB().list_sessions_rich(
+                    source="cli",
+                    exclude_sources=["tool"],
+                    limit=5,
+                    exclude_id_prefixes=["scheduled_"],
+                )
+            except Exception:
+                return []
+
+        def render_history_panel(lines: list[str]) -> None:
             from rich.panel import Panel
-            history_panel = Panel(
-                "\n".join(history_lines),
-                border_style="dim",
-                padding=(0, 1),
-                height=12,
-            )
-            self.console.print(history_panel)
-        else:
-            self.console.print("[dim]暂无对话历史[/]")
-        
-        # Get tool count by calling get_tool_definitions
-        try:
-            tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
-            tools_count = len(tools) if tools else 0
-        except Exception:
-            tools_count = 0
-        
-        skills_count = 0
-        try:
-            from tools.skills_tool import _find_all_skills
-            all_skills = _find_all_skills()
-            skills_count = len(all_skills) if all_skills else 0
-        except Exception:
-            pass
-        
-        session_info = f"当前会话: {self.session_id}" if hasattr(self, 'session_id') and self.session_id else "当前会话: 新会话"
-        self.console.print(f"[#FFF8DC]{_welcome_text} · {tools_count} 个工具 · {skills_count} 技能 · {session_info}[/]")
-        if self.preloaded_skills and not self._startup_skills_line_shown:
-            skills_label = ", ".join(self.preloaded_skills)
+
             self.console.print(
-                f"[bold {_accent_hex()}]Activated skills:[/] {skills_label}"
+                Panel(
+                    "\n".join(lines),
+                    border_style="dim",
+                    padding=(0, 1),
+                    height=12,
+                )
             )
-            self._startup_skills_line_shown = True
-        self.console.print()
+
+        def tools_count() -> int:
+            try:
+                tools = _get_tool_definitions(
+                    enabled_toolsets=self.enabled_toolsets,
+                    quiet_mode=True,
+                )
+                return len(tools) if tools else 0
+            except Exception:
+                return 0
+
+        def skills_count() -> int:
+            try:
+                from tools.skills_tool import _find_all_skills
+
+                skills = _find_all_skills()
+                return len(skills) if skills else 0
+            except Exception:
+                return 0
+
+        return CliStartupRuntime(
+            CliStartupPorts(
+                terminal_lines=lambda: shutil.get_terminal_size().lines,
+                write_blank_lines=lambda count: print(
+                    "\n" * count,
+                    end="",
+                    flush=True,
+                ),
+                show_banner=self.show_banner,
+                resumed=lambda: bool(self._resumed),
+                preload_resumed_session=self._preload_resumed_session,
+                display_resumed_history=self._display_resumed_history,
+                memory_model_display=memory_model_display,
+                welcome_text=welcome_text,
+                recent_sessions=recent_sessions,
+                terminal_width=lambda: shutil.get_terminal_size((80, 24)).columns,
+                render_history_panel=render_history_panel,
+                tools_count=tools_count,
+                skills_count=skills_count,
+                session_id=lambda: self.session_id,
+                preloaded_skills=lambda: self.preloaded_skills,
+                startup_skills_line_shown=lambda: bool(
+                    self._startup_skills_line_shown
+                ),
+                set_startup_skills_line_shown=lambda value: setattr(
+                    self, "_startup_skills_line_shown", bool(value)
+                ),
+                accent_hex=_accent_hex,
+                emit=self.console.print,
+            )
+        )
+
+    def _cli_lifecycle_guards(self) -> CliLifecycleGuardRuntime:
+        import asyncio
+        import os
+        import signal
+
+        def report_stdin_unavailable() -> None:
+            print(
+                "Error: stdin (fd 0) is not available.\n"
+                "This can happen with certain Python installations "
+                "(e.g. uv-managed cPython on macOS).\n"
+                "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
+            )
+
+        return CliLifecycleGuardRuntime(
+            CliLifecycleGuardPorts(
+                install_signal=signal.signal,
+                sigterm=signal.SIGTERM,
+                sighup=getattr(signal, "SIGHUP", None),
+                get_running_loop=asyncio.get_running_loop,
+                new_event_loop=asyncio.new_event_loop,
+                set_event_loop=asyncio.set_event_loop,
+                fstat_stdin=lambda: os.fstat(0),
+                report_stdin_unavailable=report_stdin_unavailable,
+                cleanup_after_stdin_failure=_run_cleanup,
+                print_exit_summary=self._print_exit_summary,
+                log_signal=lambda signum: logger.debug(
+                    "Received signal %s, triggering graceful shutdown",
+                    signum,
+                ),
+            )
+        )
+
+    def _tui_teardown_ports(self) -> TuiTeardownPorts:
+        def interrupt_running_agent() -> None:
+            # The agent thread is daemon-backed, but interruption prevents
+            # needless API work and lets its conversation cleanup finish.
+            if self.agent and self._agent_running:
+                try:
+                    self.agent.interrupt()
+                except Exception:
+                    pass
+
+        def close_voice_tts() -> None:
+            adapter = self.__dict__.get("_voice_tts_adapter")
+            if adapter is not None:
+                adapter.close()
+
+        def unregister_tool_callbacks() -> None:
+            _get_set_sudo_password_callback(None)
+            _get_set_approval_sink(None)
+            _get_set_secret_capture_callback()(None)
+
+        def close_session() -> None:
+            if self._session_db and self.agent:
+                try:
+                    self._session_db.end_session(self.agent.session_id, "cli_close")
+                except (Exception, KeyboardInterrupt) as error:
+                    logger.debug("Could not close session in DB: %s", error)
+
+        def finish_interrupted_session() -> None:
+            # Normal completed turns already invoke this hook themselves.
+            if self.agent and self._agent_running:
+                try:
+                    from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+
+                    _invoke_hook(
+                        "on_session_end",
+                        session_id=self.agent.session_id,
+                        completed=False,
+                        interrupted=True,
+                        model=getattr(self.agent, "model", None),
+                        platform=getattr(self.agent, "platform", None) or "cli",
+                    )
+                except Exception:
+                    pass
+
+        return TuiTeardownPorts(
+            stop_autonomous=lambda: self._stop_autonomous_execution_component(
+                interrupt=True
+            ),
+            interrupt_agent=interrupt_running_agent,
+            interrupt_voice=lambda: self._voice_tts().interrupt(),
+            close_voice_tts=close_voice_tts,
+            unregister_tool_callbacks=unregister_tool_callbacks,
+            close_session=close_session,
+            finish_interrupted_session=finish_interrupted_session,
+            run_global_cleanup=_run_cleanup,
+            print_exit_summary=self._print_exit_summary,
+        )
+
+    def run(self):
+        """Run the interactive CLI loop with persistent input at bottom."""
+        self._cli_startup_runtime().run()
         
         # State for async operation
         self._agent_running = False
@@ -4821,183 +5082,33 @@ class VoidcubeCLI:
         # Key bindings for the input area
         kb = KeyBindings()
         
+        enter_runtime = self._enter_keybinding_runtime()
+        control_runtime = self._control_keybinding_runtime()
+        voice_runtime = self._voice_keybinding_runtime()
+        suspend_runtime = self._suspend_keybinding_runtime()
+        dynamic_text_runtime = self._tui_dynamic_text_runtime()
+
+        def write_paste_file(text: str, number: int) -> Path:
+            paste_dir = _VoidCube_home / "pastes"
+            paste_dir.mkdir(parents=True, exist_ok=True)
+            paste_file = paste_dir / (
+                f"paste_{number}_{datetime.now().strftime('%H%M%S')}.txt"
+            )
+            paste_file.write_text(text, encoding="utf-8")
+            return paste_file
+
+        paste_runtime = TuiPasteRuntime(
+            PasteRuntimePorts(
+                should_attach_clipboard_image=_should_auto_attach_clipboard_image_on_paste,
+                attach_clipboard_image=self._try_attach_clipboard_image,
+                write_paste_file=write_paste_file,
+                invalidate=lambda event: event.app.invalidate(),
+            )
+        )
+
         @kb.add('enter')
         def handle_enter(event):
-            """Handle Enter key - submit input.
-            
-            Routes to the correct queue based on active UI state:
-            - Sudo password prompt: password goes to sudo response queue
-            - Approval selection: selected choice goes to approval response queue
-            - Clarify freetext mode: answer goes to the clarify response queue
-            - Clarify choice mode: selected choice goes to the clarify response queue
-            - Agent running: goes to _interrupt_queue (chat() monitors this)
-            - Agent idle: goes to _pending_input (process_loop monitors this)
-            Commands (starting with /) always go to _pending_input so they're
-            handled as commands, not sent as interrupt text to the agent.
-            """
-            # --- Sudo password prompt: submit the typed password ---
-            if self._sudo_state:
-                text = event.app.current_buffer.text
-                self._sudo_state["response_queue"].put(text)
-                self._sudo_state = None
-                event.app.invalidate()
-                return
-
-            # --- Secret prompt: submit the typed secret ---
-            if self._secret_state:
-                text = event.app.current_buffer.text
-                self._submit_secret_response(text)
-                event.app.current_buffer.reset()
-                event.app.invalidate()
-                return
-
-            # --- Approval selection: confirm the highlighted choice ---
-            if self._approval_state:
-                self._handle_approval_selection()
-                event.app.invalidate()
-                return
-
-            # --- Check for /api command first, before any modal handling ---
-            text = event.app.current_buffer.text.strip()
-            has_images = bool(self._attached_images)
-            if text and text.startswith("/api"):
-                # Clear all modal states before running API config wizard
-                self._model_picker_state = None
-                self._clarify_state = None
-                self._clarify_freetext = False
-                self._approval_state = None
-                self._sudo_state = None
-                self._secret_state = None
-                self._restore_modal_input_snapshot()
-                
-                # Run API config wizard in terminal mode
-                from prompt_toolkit.application import run_in_terminal
-                was_visible = self._status_bar_visible
-                self._status_bar_visible = False
-                event.app.invalidate()
-                
-                def _run_wizard():
-                    self.process_command("/api")
-                
-                try:
-                    run_in_terminal(_run_wizard)
-                finally:
-                    self._status_bar_visible = was_visible
-                    event.app.invalidate()
-                
-                event.app.current_buffer.reset(append_to_history=True)
-                return
-
-            # --- /model picker modal ---
-            if self._model_picker_state:
-                self._handle_model_picker_selection()
-                event.app.invalidate()
-                return
-
-            # --- Clarify freetext mode: user typed their own answer ---
-            if self._clarify_freetext and self._clarify_state:
-                text = event.app.current_buffer.text.strip()
-                if text:
-                    self._clarify_state["response_queue"].put(text)
-                    self._clarify_state = None
-                    self._clarify_freetext = False
-                    event.app.current_buffer.reset()
-                    event.app.invalidate()
-                return
-
-            # --- Clarify choice mode: confirm the highlighted selection ---
-            if self._clarify_state and not self._clarify_freetext:
-                state = self._clarify_state
-                selected = state["selected"]
-                choices = state.get("choices") or []
-                if selected < len(choices):
-                    state["response_queue"].put(choices[selected])
-                    self._clarify_state = None
-                    event.app.invalidate()
-                else:
-                    # "Other" selected → switch to freetext
-                    self._clarify_freetext = True
-                    event.app.invalidate()
-                return
-
-            # --- Normal input routing ---
-            if text or has_images:
-                # Handle /model directly on the UI thread so interactive pickers
-                # can safely use prompt_toolkit terminal handoff helpers.
-                if self._should_handle_model_command_inline(text, has_images=has_images):
-                    if not self.process_command(text):
-                        self._should_exit = True
-                        try:
-                            if event.app.is_running:
-                                event.app.exit()
-                        except Exception:
-                            pass
-                    event.app.current_buffer.reset(append_to_history=True)
-                    return
-                
-                # Handle /quit directly on the UI thread for immediate exit.
-                # Force-stop auto-started daemons so the full VoidCube stack
-                # shuts down cleanly instead of leaving orphaned processes.
-                # Use /quit --keep-daemons to exit while leaving daemons running.
-                if text.startswith("/quit"):
-                    if not self.process_command(text):
-                        self._should_exit = True
-                        # ── Force-stop daemons (unless --keep-daemons) ──
-                        keep_daemons = "--keep-daemons" in text
-                        global _daemons_auto_started
-                        if _daemons_auto_started and not keep_daemons:
-                            try:
-                                from VoidCube_cli.ops.serve import stop_all
-                                stop_all(force=True)
-                                _daemons_auto_started = False
-                            except Exception:
-                                pass  # leave flag True so atexit handler retries
-                        # ───────────────────────────────────────────────
-                        try:
-                            if event.app.is_running:
-                                event.app.exit()
-                        except Exception:
-                            pass  # already exiting — graceful no-op
-                    event.app.current_buffer.reset(append_to_history=True)
-                    return
-
-                # Snapshot and clear attached images
-                images = list(self._attached_images)
-                self._attached_images.clear()
-                event.app.invalidate()
-                # Bundle text + images as a tuple when images are present
-                payload = (text, images) if images else text
-
-                # Keep /auto-q as a fast-path exit while allowing the main CLI
-                # to remain usable during autonomous-chain execution.
-                if self._autonomous_gate_active:
-                    if text and _looks_like_slash_command(text):
-                        _base = text.strip().lstrip("/").split()[0].lower()
-                        if _base in ("auto-q", "auto-quit", "auto-stop"):
-                            # ── FAST PATH: exit immediately, bypass queue ──
-                            event.app.current_buffer.reset(append_to_history=True)
-                            _cprint(f"  🔓 临时停用自主链路...")
-                            exit_autonomous_gate_fast_for_host(
-                                self,
-                                emit=_cprint,
-                                interrupt_current_task=self._interrupt_autonomous_component_task,
-                                push_cli_agent_scene=_push_cli_agent_scene,
-                            )
-                            event.app.invalidate()
-                            return
-                is_command = bool(text and _looks_like_slash_command(text))
-                input_route = enqueue_turn_input(
-                    self._pending_input,
-                    self._interrupt_queue,
-                    payload,
-                    agent_running=self._agent_running,
-                    is_command=is_command,
-                    busy_input_mode=self.busy_input_mode,
-                )
-                if input_route is TurnInputRoute.NEXT_TURN and self._agent_running and not is_command:
-                    preview = text if text else f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
-                    _cprint(f"  Queued for the next turn: {preview[:80]}{'...' if len(preview) > 80 else ''}")
-                event.app.current_buffer.reset(append_to_history=True)
+            enter_runtime.handle(event)
         install_text_editing_keybindings(kb)
 
         install_modal_navigation_keybindings(
@@ -5026,117 +5137,15 @@ class VoidcubeCLI:
 
         @kb.add('c-c')
         def handle_ctrl_c(event):
-            """Handle Ctrl+C - cancel interactive prompts, interrupt agent.
-
-            Does NOT force-exit — use /quit to exit.
-            """
-            import time as _time
-            now = _time.time()
-
-            # Cancel active voice recording.
-            _should_cancel_voice = False
-            with cli_ref._voice_lock:
-                if cli_ref._voice_recording:
-                    cli_ref._voice_recording = False
-                    cli_ref._voice_continuous = False
-                    _should_cancel_voice = True
-            if _should_cancel_voice:
-                _cprint(f"\n{_DIM}Recording cancelled.{_RST}")
-                threading.Thread(
-                    target=cli_ref._voice_tts().interrupt,
-                    daemon=True,
-                ).start()
-                event.app.invalidate()
-                return
-
-            # Cancel sudo prompt
-            if self._sudo_state:
-                self._sudo_state["response_queue"].put("")
-                self._sudo_state = None
-                event.app.invalidate()
-                return
-
-            # Cancel secret prompt
-            if self._secret_state:
-                self._cancel_secret_capture()
-                event.app.current_buffer.reset()
-                event.app.invalidate()
-                return
-
-            # Cancel approval prompt (deny)
-            if self._approval_state:
-                self._approval_state["response_queue"].put(ApprovalStatus.DENIED.value)
-                self._approval_state = None
-                event.app.invalidate()
-                return
-
-            # Cancel /model picker
-            if self._model_picker_state:
-                self._close_model_picker()
-                event.app.current_buffer.reset()
-                event.app.invalidate()
-                return
-
-            # Cancel clarify prompt
-            if self._clarify_state:
-                self._clarify_state["response_queue"].put(
-                    ClarificationDecision(ClarificationStatus.CANCELLED)
-                )
-                self._clarify_state = None
-                self._clarify_freetext = False
-                event.app.current_buffer.reset()
-                event.app.invalidate()
-                return
-
-            # Interrupt running agent
-            if self._agent_running and self.agent:
-                self._last_ctrl_c_time = now
-                self.agent.interrupt(cancel_turn(TurnInterruptReason.USER_CANCELLED).agent_message)
-                return
-
-            # Idle: clear input if there's text, otherwise no-op
-            if event.app.current_buffer.text or self._attached_images:
-                event.app.current_buffer.reset()
-                self._attached_images.clear()
-                event.app.invalidate()
+            control_runtime.handle_ctrl_c(event)
 
         @kb.add('c-d')
         def handle_ctrl_d(event):
-            """Handle Ctrl+D — force-quit the autonomous chain, or clear input otherwise."""
-            if self._autonomous_gate_active:
-                # ── Autonomous chain: Ctrl+D = emergency force-quit ──
-                event.app.current_buffer.reset()
-                _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出自主链路...")
-                force_quit_autonomous_gate_for_host(
-                    self,
-                    emit=_cprint,
-                    interrupt_current_task=self._interrupt_autonomous_component_task,
-                    push_cli_agent_scene=_push_cli_agent_scene,
-                )
-                event.app.invalidate()
-                return
-            # Normal mode: clear input (no exit, use /quit instead)
-            if event.app.current_buffer.text or self._attached_images:
-                event.app.current_buffer.reset()
-                self._attached_images.clear()
-                event.app.invalidate()
+            control_runtime.handle_ctrl_d(event)
 
         @kb.add('c-z')
         def handle_ctrl_z(event):
-            """Handle Ctrl+Z - suspend process to background (Unix only)."""
-            import sys
-            if sys.platform == 'win32':
-                _cprint(f"\n{_DIM}Suspend (Ctrl+Z) is not supported on Windows.{_RST}")
-                event.app.invalidate()
-                return
-            import os, signal as _sig
-            from prompt_toolkit.application import run_in_terminal
-            agent_name = "Voidcube Agent"
-            msg = f"\n{agent_name} has been suspended. Run `fg` to bring {agent_name} back."
-            def _suspend():
-                os.write(1, msg.encode())
-                os.kill(0, _sig.SIGTSTP)
-            run_in_terminal(_suspend)
+            suspend_runtime.handle(event)
 
         # Voice push-to-talk key: configurable via config.yaml (voice.record_key)
         # Default: Ctrl+B (avoids conflict with Ctrl+R readline reverse-search)
@@ -5150,120 +5159,20 @@ class VoidcubeCLI:
 
         @kb.add(_voice_key)
         def handle_voice_record(event):
-            """Toggle voice recording when voice mode is active.
-
-            IMPORTANT: This handler runs in prompt_toolkit's event-loop thread.
-            Any blocking call here (locks, sd.wait, disk I/O) freezes the
-            entire UI.  All heavy work is dispatched to daemon threads.
-            """
-            if not cli_ref._voice_mode:
-                return
-            # Always allow STOPPING a recording (even when agent is running)
-            if cli_ref._voice_recording:
-                # Manual stop via push-to-talk key: stop continuous mode
-                with cli_ref._voice_lock:
-                    cli_ref._voice_continuous = False
-                # Flag clearing is handled atomically inside _voice_stop_and_transcribe
-                event.app.invalidate()
-                threading.Thread(
-                    target=cli_ref._voice_stop_and_transcribe,
-                    daemon=True,
-                ).start()
-            else:
-                # Guard: don't START recording during agent run or interactive prompts
-                if cli_ref._agent_running:
-                    return
-                if cli_ref._clarify_state or cli_ref._sudo_state or cli_ref._approval_state:
-                    return
-                # Guard: don't start while a previous stop/transcribe cycle is
-                # still running — recorder.stop() holds AudioRecorder._lock and
-                # start() would block the event-loop thread waiting for it.
-                if cli_ref._voice_processing:
-                    return
-
-                with cli_ref._voice_lock:
-                    cli_ref._voice_continuous = True
-
-                # Keep capture and the canonical voice event loop off the
-                # prompt_toolkit event-loop thread.
-                def _start_recording():
-                    try:
-                        cli_ref._voice_start_recording()
-                        if hasattr(cli_ref, '_app') and cli_ref._app:
-                            cli_ref._app.invalidate()
-                    except Exception as e:
-                        _cprint(f"\n{_DIM}Voice recording failed: {e}{_RST}")
-
-                threading.Thread(target=_start_recording, daemon=True).start()
-                event.app.invalidate()
+            voice_runtime.handle(event)
         from prompt_toolkit.keys import Keys
 
         @kb.add(Keys.BracketedPaste, eager=True)
         def handle_paste(event):
-            """Handle terminal paste — detect clipboard images.
-
-            When the terminal supports bracketed paste, Ctrl+V / Cmd+V
-            triggers this with the pasted text. We only auto-attach a
-            clipboard image for image-only/empty paste gestures so text
-            pastes and dictation do not accidentally attach stale images.
-
-            Large pastes (5+ lines) are collapsed to a file reference
-            placeholder while preserving any existing user text in the
-            buffer.
-            """
-            pasted_text = event.data or ""
-            # Normalise line endings — Windows \r\n and old Mac \r both become \n
-            # so the 5-line collapse threshold and display are consistent.
-            pasted_text = pasted_text.replace('\r\n', '\n').replace('\r', '\n')
-            if _should_auto_attach_clipboard_image_on_paste(pasted_text) and self._try_attach_clipboard_image():
-                event.app.invalidate()
-            if pasted_text:
-                line_count = pasted_text.count('\n')
-                buf = event.current_buffer
-                if line_count >= 5 and not buf.text.strip().startswith('/'):
-                    _paste_counter[0] += 1
-                    paste_dir = _VoidCube_home / "pastes"
-                    paste_dir.mkdir(parents=True, exist_ok=True)
-                    paste_file = paste_dir / f"paste_{_paste_counter[0]}_{datetime.now().strftime('%H%M%S')}.txt"
-                    paste_file.write_text(pasted_text, encoding="utf-8")
-                    placeholder = f"[Pasted text #{_paste_counter[0]}: {line_count + 1} lines \u2192 {paste_file}]"
-                    prefix = ""
-                    if buf.cursor_position > 0 and buf.text[buf.cursor_position - 1] != '\n':
-                        prefix = "\n"
-                    _paste_just_collapsed[0] = True
-                    buf.insert_text(prefix + placeholder)
-                else:
-                    buf.insert_text(pasted_text)
+            paste_runtime.handle_bracketed_paste(event)
 
         @kb.add('c-v')
         def handle_ctrl_v(event):
-            """Fallback image paste for terminals without bracketed paste.
-
-            On Linux terminals (GNOME Terminal, Konsole, etc.), Ctrl+V
-            sends raw byte 0x16 instead of triggering a paste.  This
-            binding catches that and checks the clipboard for images.
-            On terminals that DO intercept Ctrl+V for paste (macOS
-            Terminal, iTerm2, VSCode, Windows Terminal), the bracketed
-            paste handler fires instead and this binding never triggers.
-            """
-            if self._try_attach_clipboard_image():
-                event.app.invalidate()
+            paste_runtime.handle_image_paste(event)
 
         @kb.add('escape', 'v')
         def handle_alt_v(event):
-            """Alt+V — paste image from clipboard.
-
-            Alt key combos pass through all terminal emulators (sent as
-            ESC + key), unlike Ctrl+V which terminals intercept for text
-            paste.  This is the reliable way to attach clipboard images
-            on WSL2, VSCode, and any terminal over SSH where Ctrl+V
-            can't reach the application for image-only clipboard.
-            """
-            if self._try_attach_clipboard_image():
-                event.app.invalidate()
-            else:
-                # No image found — show a hint
-                pass  # silent when no image (avoid noise on accidental press)
+            paste_runtime.handle_image_paste(event)
 
         # Dynamic prompt: shows Voidcube symbol when agent is working,
         # or answer prompt when clarify freetext mode is active.
@@ -5283,160 +5192,36 @@ class VoidcubeCLI:
             )
         )
 
-        # Paste collapsing: detect large pastes and save to temp file
-        _paste_counter = [0]
-        _prev_text_len = [0]
-        _prev_newline_count = [0]
-        _paste_just_collapsed = [False]
+        input_area.buffer.on_text_changed += paste_runtime.handle_text_changed
 
-        def _on_text_changed(buf):
-            """Detect large pastes and collapse them to a file reference.
+        install_placeholder_processor(
+            input_area,
+            placeholder_text=dynamic_text_runtime.placeholder,
+        )
 
-            When bracketed paste is available, handle_paste collapses
-            large pastes directly.  This handler is a fallback for
-            terminals without bracketed paste support.
-
-            Two heuristics (either triggers collapse):
-            1. Many characters added at once (chars_added > 1) — works
-               when the terminal delivers the paste in one event-loop tick.
-            2. Newline count jumped by 4+ in a single text-change event —
-               catches terminals that feed characters individually but
-               still batch newlines.  Alt+Enter only adds 1 newline per
-               event so it never triggers this.
-            """
-            text = buf.text
-            chars_added = len(text) - _prev_text_len[0]
-            _prev_text_len[0] = len(text)
-            if _paste_just_collapsed[0]:
-                _paste_just_collapsed[0] = False
-                _prev_newline_count[0] = text.count('\n')
-                return
-            line_count = text.count('\n')
-            newlines_added = line_count - _prev_newline_count[0]
-            _prev_newline_count[0] = line_count
-            is_paste = chars_added > 1 or newlines_added >= 4
-            if line_count >= 5 and is_paste and not text.startswith('/'):
-                _paste_counter[0] += 1
-                # Save to temp file
-                paste_dir = _VoidCube_home / "pastes"
-                paste_dir.mkdir(parents=True, exist_ok=True)
-                paste_file = paste_dir / f"paste_{_paste_counter[0]}_{datetime.now().strftime('%H%M%S')}.txt"
-                paste_file.write_text(text, encoding="utf-8")
-                # Replace buffer with compact reference
-                _paste_just_collapsed[0] = True
-                buf.text = f"[Pasted text #{_paste_counter[0]}: {line_count + 1} lines \u2192 {paste_file}]"
-                buf.cursor_position = len(buf.text)
-
-        input_area.buffer.on_text_changed += _on_text_changed
-
-        def _get_placeholder():
-            if cli_ref._voice_recording:
-                return "recording... Ctrl+B to stop, Ctrl+C to cancel"
-            if cli_ref._voice_processing:
-                return "transcribing..."
-            if cli_ref._sudo_state:
-                return "type password (hidden), Enter to skip"
-            if cli_ref._secret_state:
-                return "type secret (hidden), Enter to skip"
-            if cli_ref._approval_state:
-                return ""
-            if cli_ref._clarify_freetext:
-                return "type your answer here and press Enter"
-            if cli_ref._clarify_state:
-                return ""
-            if cli_ref._command_running:
-                frame = cli_ref._command_spinner_frame()
-                status = cli_ref._command_status or "Processing command..."
-                return f"{frame} {status}"
-            if cli_ref._agent_running:
-                return "type a message + Enter to interrupt, Ctrl+C to cancel"
-            if cli_ref._voice_mode:
-                return "type or Ctrl+B to record"
-            return ""
-
-        install_placeholder_processor(input_area, placeholder_text=_get_placeholder)
-
-        # Hint line above input: shown only for interactive prompts that need
-        # extra instructions (sudo countdown, approval navigation, clarify).
-        # The agent-running interrupt hint is now an inline placeholder above.
-        def get_hint_text():
-            import time as _time
-
-            if cli_ref._sudo_state:
-                remaining = max(0, int(cli_ref._sudo_deadline - _time.monotonic()))
-                return [
-                    ('class:hint', '  password hidden · Enter to skip'),
-                    ('class:clarify-countdown', f'  ({remaining}s)'),
-                ]
-
-            if cli_ref._secret_state:
-                remaining = max(0, int(cli_ref._secret_deadline - _time.monotonic()))
-                return [
-                    ('class:hint', '  secret hidden · Enter to skip'),
-                    ('class:clarify-countdown', f'  ({remaining}s)'),
-                ]
-
-            if cli_ref._approval_state:
-                remaining = max(0, int(cli_ref._approval_deadline - _time.monotonic()))
-                return [
-                    ('class:hint', '  ↑/↓ to select, Enter to confirm'),
-                    ('class:clarify-countdown', f'  ({remaining}s)'),
-                ]
-
-            if cli_ref._clarify_state:
-                remaining = max(0, int(cli_ref._clarify_deadline - _time.monotonic()))
-                countdown = f'  ({remaining}s)' if cli_ref._clarify_deadline else ''
-                if cli_ref._clarify_freetext:
-                    return [
-                        ('class:hint', '  type your answer and press Enter'),
-                        ('class:clarify-countdown', countdown),
-                    ]
-                return [
-                    ('class:hint', '  ↑/↓ to select, Enter to confirm'),
-                    ('class:clarify-countdown', countdown),
-                ]
-
-            if cli_ref._command_running:
-                frame = cli_ref._command_spinner_frame()
-                return [
-                    ('class:hint', f'  {frame} command in progress · input temporarily disabled'),
-                ]
-
-            return []
-
-        def get_hint_height():
-            if cli_ref._sudo_state or cli_ref._secret_state or cli_ref._approval_state or cli_ref._clarify_state or cli_ref._command_running:
-                return 1
-            # Keep a spacer while the agent runs on roomy terminals, but reclaim
-            # the row on narrow/mobile screens where every line matters.
-            return cli_ref._agent_spacer_height()
-
-        def get_spinner_text():
-            txt = cli_ref._spinner_text
-            if not txt:
-                return []
-            # Append live elapsed timer when a tool is running
-            t0 = cli_ref._tool_start_time
-            if t0 > 0:
-                import time as _time
-                elapsed = _time.monotonic() - t0
-                if elapsed >= 60:
-                    _m, _s = int(elapsed // 60), int(elapsed % 60)
-                    elapsed_str = f"{_m}m {_s}s"
-                else:
-                    elapsed_str = f"{elapsed:.1f}s"
-                return [('class:hint', f'  {txt}  ({elapsed_str})')]
-            return [('class:hint', f'  {txt}')]
-
-        def get_spinner_height():
-            return cli_ref._spinner_widget_height()
+        modal_widgets = build_modal_widgets(
+            ports=ModalWidgetPorts(
+                clarify_state=lambda: self._clarify_state,
+                clarify_freetext_active=lambda: bool(self._clarify_freetext),
+                sudo_state=lambda: self._sudo_state,
+                secret_state=lambda: self._secret_state,
+                approval_state=lambda: self._approval_state,
+                approval_fragments=self._get_approval_display_fragments,
+                model_picker_state=lambda: self._model_picker_state,
+            )
+        )
+        sudo_widget = modal_widgets.sudo
+        secret_widget = modal_widgets.secret
+        approval_widget = modal_widgets.approval
+        clarify_widget = modal_widgets.clarify
+        model_picker_widget = modal_widgets.model_picker
 
         indicator_widgets = build_indicator_widgets(
             ports=IndicatorWidgetPorts(
-                spinner_fragments=get_spinner_text,
-                spinner_height=get_spinner_height,
-                hint_fragments=get_hint_text,
-                hint_height=get_hint_height,
+                spinner_fragments=dynamic_text_runtime.spinner_fragments,
+                spinner_height=dynamic_text_runtime.spinner_widget_height,
+                hint_fragments=dynamic_text_runtime.hint_fragments,
+                hint_height=dynamic_text_runtime.hint_height,
                 input_rule_height=cli_ref._tui_input_rule_height,
                 image_fragments=lambda: (
                     [("class:image-badge", f" {_format_image_attachment_badges(cli_ref._attached_images, cli_ref._image_counter)} ")]
@@ -5464,78 +5249,35 @@ class VoidcubeCLI:
         # Allow wrapper CLIs to register extra keybindings.
         self._register_extra_tui_keybindings(kb, input_area=input_area)
 
-        # Layout: interactive prompt widgets + ruled input at bottom.
-        # The sudo, approval, and clarify widgets appear above the input when
-        # the corresponding interactive prompt is active.
-        completions_menu = CompletionsMenu(max_height=12, scroll_offset=1)
-
-        layout = Layout(
-            HSplit(
-                build_tui_layout_children(
-                    sudo_widget=sudo_widget,
-                    secret_widget=secret_widget,
-                    approval_widget=approval_widget,
-                    clarify_widget=clarify_widget,
-                    model_picker_widget=model_picker_widget,
-                    spinner_widget=spinner_widget,
-                    spacer=spacer,
-                    extra_widgets=self._get_extra_tui_widgets,
-                    status_bar=status_bar,
-                    auto_execution_panel=auto_execution_panel,
-                    input_rule_top=input_rule_top,
-                    image_bar=image_bar,
-                    input_area=input_area,
-                    input_rule_bot=input_rule_bot,
-                    voice_status_bar=voice_status_bar,
-                    completions_menu=completions_menu,
-                )
+        app = TuiCompositionRuntime(
+            TuiCompositionPorts(
+                cursor=_STEADY_CURSOR,
+                store_application=lambda application: setattr(
+                    self, "_app", application
+                ),
+                install_resize_cleanup=install_resize_reflow_cleanup,
             )
-        )
-        
-        app = create_tui_application(
-            layout=layout,
+        ).compose(
             key_bindings=kb,
-            cursor=_STEADY_CURSOR,
-        )
-        self._app = app  # Store reference for interactive modal adapters
-
-        install_resize_reflow_cleanup(app)
-
-        spinner_thread = start_tui_refresh_loop(
-            stop_requested=lambda: self._should_exit,
-            application_ready=lambda: bool(self._app),
-            presence_refresh_needed=lambda: (
-                self._agent_running
-                or self._command_running
-                or self._stream_render_state.started
-                or self._get_subagent_observability_snapshot().get("active")
+            widgets=TuiCompositionWidgets(
+                sudo_widget=sudo_widget,
+                secret_widget=secret_widget,
+                approval_widget=approval_widget,
+                clarify_widget=clarify_widget,
+                model_picker_widget=model_picker_widget,
+                spinner_widget=spinner_widget,
+                spacer=spacer,
+                status_bar=status_bar,
+                auto_execution_panel=auto_execution_panel,
+                input_rule_top=input_rule_top,
+                image_bar=image_bar,
+                input_area=input_area,
+                input_rule_bot=input_rule_bot,
+                voice_status_bar=voice_status_bar,
             ),
-            refresh_presence=lambda: _refresh_gateway_cli_presence_view(
-                self,
-                force=True,
-                is_gateway_running=_is_gateway_running,
-                register_with_gateway=_register_with_gateway,
-                push_cli_agent_scene=_push_cli_agent_scene,
-                monotonic_time=time.monotonic,
-            ),
-            command_running=lambda: self._command_running,
-            invalidate=lambda interval: self._invalidate(min_interval=interval),
-            monotonic_time=time.monotonic,
-            sleep=time.sleep,
-            thread_factory=threading.Thread,
+            extra_widgets=self._get_extra_tui_widgets,
         )
 
-        scheduled_task_thread = start_scheduled_task_polling(
-            stop_requested=lambda: self._should_exit,
-            poll_workflow=self._scheduled_executor_runtime.poll_workflow,
-            sleep=time.sleep,
-            report_failure=lambda: logger.debug(
-                "Scheduled task poll failed",
-                exc_info=True,
-            ),
-            thread_factory=threading.Thread,
-        )
-        
         def perform_idle_maintenance() -> None:
             # Periodic background work remains owned by the CLI runtime.
             if self._agent_running:
@@ -5569,89 +5311,62 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-        process_thread = start_input_process_loop(
-            stop_requested=lambda: self._should_exit,
-            execution_gate=self._api_a_execution_gate,
-            get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
-            empty_input=queue.Empty,
-            requeue_input=self._pending_input.put,
-            perform_idle_maintenance=perform_idle_maintenance,
-            execute_input=lambda user_input: self._execute_pending_input(user_input, app=app),
-            sleep=time.sleep,
-            report_error=lambda error: print(f"Error: {error}"),
-            thread_factory=threading.Thread,
-        )
+        lifecycle_guards = self._cli_lifecycle_guards()
+
+        CliRunRuntime(
+            CliRunRuntimePorts(
+                stop_requested=lambda: self._should_exit,
+                application_ready=lambda: bool(self._app),
+                presence_refresh_needed=lambda: (
+                    self._agent_running
+                    or self._command_running
+                    or self._stream_render_state.started
+                    or self._get_subagent_observability_snapshot().get("active")
+                ),
+                refresh_presence=lambda: _refresh_gateway_cli_presence_view(
+                    self,
+                    force=True,
+                    is_gateway_running=_is_gateway_running,
+                    register_with_gateway=_register_with_gateway,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    monotonic_time=time.monotonic,
+                ),
+                command_running=lambda: self._command_running,
+                invalidate=lambda interval: self._invalidate(min_interval=interval),
+                poll_scheduled_workflow=self._scheduled_executor_runtime.poll_workflow,
+                perform_idle_maintenance=perform_idle_maintenance,
+                execution_gate=self._api_a_execution_gate,
+                get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
+                empty_input=queue.Empty,
+                requeue_input=self._pending_input.put,
+                execute_input=lambda user_input: self._execute_pending_input(user_input, app=app),
+                report_input_error=lambda error: print(f"Error: {error}"),
+                sleep=time.sleep,
+                monotonic_time=time.monotonic,
+                thread_factory=threading.Thread,
+            )
+        ).start()
         
         # Register atexit cleanup so resources are freed even on unexpected exit
         atexit.register(_run_cleanup)
         
-        # Register signal handlers for graceful shutdown on SSH disconnect / SIGTERM
-        def _signal_handler(signum, frame):
-            """Handle SIGHUP/SIGTERM by triggering graceful cleanup."""
-            logger.debug("Received signal %s, triggering graceful shutdown", signum)
-            raise KeyboardInterrupt()
-        
-        try:
-            import signal as _signal
-            _signal.signal(_signal.SIGTERM, _signal_handler)
-            if hasattr(_signal, 'SIGHUP'):
-                _signal.signal(_signal.SIGHUP, _signal_handler)
-        except Exception:
-            pass  # Signal handlers may fail in restricted environments
-        
-        # Install a custom asyncio exception handler that suppresses the
-        # "Event loop is closed" RuntimeError from httpx transport cleanup
-        # and the "0 is not registered" KeyError from broken stdin (#6393).
-        # The RuntimeError fix is defense-in-depth — the primary fix is
-        # neuter_async_httpx_del which disables __del__ entirely.  The
-        # KeyError fix handles macOS + uv-managed Python environments where
-        # fd 0 is not reliably available to the asyncio selector.
-        def _suppress_closed_loop_errors(loop, context):
-            exc = context.get("exception")
-            if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
-                return  # silently suppress
-            if isinstance(exc, KeyError) and "is not registered" in str(exc):
-                return  # suppress selector registration failures (#6393)
-            # Fall back to default handler for everything else
-            loop.default_exception_handler(context)
+        lifecycle_guards.install_signal_handlers()
 
-        # Validate stdin before launching prompt_toolkit — on macOS with
-        # uv-managed Python, fd 0 can be invalid or unregisterable with the
-        # asyncio selector, causing "KeyError: '0 is not registered'" (#6393).
-        try:
-            import os as _os
-            _os.fstat(0)
-        except OSError:
-            print(
-                "Error: stdin (fd 0) is not available.\n"
-                "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
-                "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
-            )
-            _run_cleanup()
-            self._print_exit_summary()
+        # Validate stdin before launching prompt_toolkit.
+        if not lifecycle_guards.validate_stdin():
             return
 
         # Run the application with patch_stdout for proper output handling
         try:
             with patch_stdout():
-                # Set the custom handler on prompt_toolkit's event loop
-                try:
-                    import asyncio as _aio
-                    try:
-                        _loop = _aio.get_running_loop()
-                    except RuntimeError:
-                        _loop = _aio.new_event_loop()
-                        _aio.set_event_loop(_loop)
-                    _loop.set_exception_handler(_suppress_closed_loop_errors)
-                except Exception:
-                    pass
+                lifecycle_guards.install_asyncio_exception_handler()
                 app.run()
         except (EOFError, KeyboardInterrupt, BrokenPipeError):
             pass  # Normal exit via Ctrl+C or EOF
         except (KeyError, OSError) as _stdin_err:
             # Catch selector registration failures from broken stdin (#6393).
             # This is the fallback for cases that slip past the fstat() guard.
-            if "is not registered" in str(_stdin_err) or "Bad file descriptor" in str(_stdin_err):
+            if lifecycle_guards.is_unusable_stdin_error(_stdin_err):
                 print(
                     f"\nError: stdin is not usable ({_stdin_err}).\n"
                     "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
@@ -5661,64 +5376,7 @@ class VoidcubeCLI:
                 raise
         finally:
             self._should_exit = True
-            def interrupt_running_agent() -> None:
-                # The agent thread is daemon-backed, but interruption prevents
-                # needless API work and lets its conversation cleanup finish.
-                if self.agent and self._agent_running:
-                    try:
-                        self.agent.interrupt()
-                    except Exception:
-                        pass
-
-            def interrupt_voice() -> None:
-                self._voice_tts().interrupt()
-
-            def close_voice_tts() -> None:
-                adapter = self.__dict__.get("_voice_tts_adapter")
-                if adapter is not None:
-                    adapter.close()
-
-            def unregister_tool_callbacks() -> None:
-                _get_set_sudo_password_callback(None)
-                _get_set_approval_sink(None)
-                _get_set_secret_capture_callback()(None)
-
-            def close_session() -> None:
-                if self._session_db and self.agent:
-                    try:
-                        self._session_db.end_session(self.agent.session_id, "cli_close")
-                    except (Exception, KeyboardInterrupt) as error:
-                        logger.debug("Could not close session in DB: %s", error)
-
-            def finish_interrupted_session() -> None:
-                # Normal completed turns already invoke this hook themselves.
-                if self.agent and self._agent_running:
-                    try:
-                        from VoidCube_cli.plugins import invoke_hook as _invoke_hook
-                        _invoke_hook(
-                            "on_session_end",
-                            session_id=self.agent.session_id,
-                            completed=False,
-                            interrupted=True,
-                            model=getattr(self.agent, 'model', None),
-                            platform=getattr(self.agent, 'platform', None) or "cli",
-                        )
-                    except Exception:
-                        pass
-
-            run_tui_teardown(
-                TuiTeardownPorts(
-                    stop_autonomous=lambda: self._stop_autonomous_execution_component(interrupt=True),
-                    interrupt_agent=interrupt_running_agent,
-                    interrupt_voice=interrupt_voice,
-                    close_voice_tts=close_voice_tts,
-                    unregister_tool_callbacks=unregister_tool_callbacks,
-                    close_session=close_session,
-                    finish_interrupted_session=finish_interrupted_session,
-                    run_global_cleanup=_run_cleanup,
-                    print_exit_summary=self._print_exit_summary,
-                )
-            )
+            run_tui_teardown(self._tui_teardown_ports())
 
 
 # ============================================================================

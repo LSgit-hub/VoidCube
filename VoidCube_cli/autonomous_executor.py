@@ -29,6 +29,7 @@ class AutonomousExecutorPorts:
     set_last_agent_turn_result: Callable[[Dict[str, Any] | None], None]
     enqueue_pending_input: Callable[[str], None]
     agent_running: Callable[[], bool]
+    autonomous_gate_active: Callable[[], bool]
     append_execution_event: Callable[..., None]
 
 
@@ -254,6 +255,50 @@ class AutonomousExecutorRuntime:
     def set_last_agent_turn_result(self, result: Dict[str, Any] | None) -> None:
         """Store the latest model-turn result for autonomous writeback."""
         self.ports.set_last_agent_turn_result(result)
+
+    def record_turn_result(
+        self,
+        result: Dict[str, Any],
+        *,
+        autonomous_task_run_id: str,
+        timeout_writeback_succeeded: bool,
+    ) -> None:
+        """Publish the model result to the autonomous task state owner."""
+        if autonomous_task_run_id and not timeout_writeback_succeeded:
+            result["autonomous_task_run_id"] = autonomous_task_run_id
+            self.ports.set_last_agent_turn_result(result)
+        elif self.ports.get_current_task() is None:
+            self.ports.set_last_agent_turn_result(result)
+
+    def record_model_turn_finished(
+        self,
+        result: Dict[str, Any],
+        *,
+        autonomous_task_run_id: str,
+        timeout_writeback_succeeded: bool,
+    ) -> None:
+        """Publish the autonomous model-turn status event when applicable."""
+        if (
+            not self.ports.autonomous_gate_active()
+            or self.ports.get_current_task() is None
+            or not autonomous_task_run_id
+            or timeout_writeback_succeeded
+        ):
+            return
+        if result["failed"] or result["partial"]:
+            message = f"模型回合结束，但结果异常: {result['error'] or 'unknown error'}"
+            tone = "error"
+        elif result["interrupted"]:
+            message = "模型回合被中断，等待下一条指令"
+            tone = "warn"
+        else:
+            message = "模型回合完成，等待任务回写"
+            tone = "success"
+        self.ports.append_execution_event(
+            message,
+            tone=tone,
+            stage="model_turn_finished",
+        )
 
     def report_current_task_timeout_if_needed(
         self,
