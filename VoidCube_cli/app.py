@@ -97,14 +97,8 @@ from VoidCube_cli.turn_queue_adapter import (
 )
 from VoidCube_cli.tui_composition_runtime import (
     TuiCompositionPorts,
-    TuiCompositionRuntime,
-    TuiCompositionWidgets,
 )
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
-from VoidCube_cli.tui_keybinding_assembly import (
-    TuiKeybindingAssemblyPorts,
-    TuiKeybindingAssemblyRuntime,
-)
 from VoidCube_cli.tui_modal_navigation import (
     ModalNavigationPorts,
 )
@@ -116,10 +110,6 @@ from VoidCube_cli.tui_indicator_widgets import (
 )
 from VoidCube_cli.tui_input_widgets import (
     InputWidgetPorts,
-)
-from VoidCube_cli.tui_widget_graph_runtime import (
-    TuiWidgetGraphPorts,
-    TuiWidgetGraphRuntime,
 )
 from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorPorts,
@@ -164,7 +154,11 @@ from VoidCube_cli.voice_keybinding_runtime import (
     VoiceKeybindingPorts,
     VoiceKeybindingRuntime,
 )
-from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts, TuiPasteRuntime
+from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts
+from VoidCube_cli.tui_runtime_factory import (
+    TuiRuntimeFactory,
+    TuiRuntimeFactoryPorts,
+)
 from VoidCube_cli.suspend_keybinding_runtime import (
     SuspendKeybindingPorts,
     SuspendKeybindingRuntime,
@@ -294,7 +288,6 @@ except Exception:
 
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.key_binding import KeyBindings
 try:
     from prompt_toolkit.cursor_shapes import CursorShape
     _STEADY_CURSOR = CursorShape.BLOCK  # Non-blinking block cursor
@@ -5077,32 +5070,11 @@ class VoidcubeCLI:
             )
         ).prepare()
 
-        # Key bindings for the input area
-        kb = KeyBindings()
-        
         enter_runtime = self._enter_keybinding_runtime()
         control_runtime = self._control_keybinding_runtime()
         voice_runtime = self._voice_keybinding_runtime()
         suspend_runtime = self._suspend_keybinding_runtime()
         dynamic_text_runtime = self._tui_dynamic_text_runtime()
-
-        def write_paste_file(text: str, number: int) -> Path:
-            paste_dir = _VoidCube_home / "pastes"
-            paste_dir.mkdir(parents=True, exist_ok=True)
-            paste_file = paste_dir / (
-                f"paste_{number}_{datetime.now().strftime('%H%M%S')}.txt"
-            )
-            paste_file.write_text(text, encoding="utf-8")
-            return paste_file
-
-        paste_runtime = TuiPasteRuntime(
-            PasteRuntimePorts(
-                should_attach_clipboard_image=_should_auto_attach_clipboard_image_on_paste,
-                attach_clipboard_image=self._try_attach_clipboard_image,
-                write_paste_file=write_paste_file,
-                invalidate=lambda event: event.app.invalidate(),
-            )
-        )
 
         # Voice push-to-talk key: configurable via config.yaml (voice.record_key)
         # Default: Ctrl+B (avoids conflict with Ctrl+R readline reverse-search)
@@ -5114,16 +5086,21 @@ class VoidcubeCLI:
         except Exception:
             _voice_key = "c-b"
 
-        TuiKeybindingAssemblyRuntime(
-            TuiKeybindingAssemblyPorts(
-                key_bindings=kb,
+        app = TuiRuntimeFactory(
+            TuiRuntimeFactoryPorts(
                 enter=enter_runtime.handle,
                 ctrl_c=control_runtime.handle_ctrl_c,
                 ctrl_d=control_runtime.handle_ctrl_d,
                 ctrl_z=suspend_runtime.handle,
                 voice_key=_voice_key,
                 voice=voice_runtime.handle,
-                paste=paste_runtime,
+                paste=PasteRuntimePorts(
+                    should_attach_clipboard_image=_should_auto_attach_clipboard_image_on_paste,
+                    attach_clipboard_image=self._try_attach_clipboard_image,
+                    paste_directory=_VoidCube_home / "pastes",
+                    timestamp=lambda: datetime.now().strftime("%H%M%S"),
+                    invalidate=lambda event: event.app.invalidate(),
+                ),
                 modal_navigation=ModalNavigationPorts(
                     clarify_state=lambda: self._clarify_state,
                     clarify_freetext_active=lambda: self._clarify_freetext,
@@ -5136,13 +5113,6 @@ class VoidcubeCLI:
                 and not self._sudo_state
                 and not self._secret_state
                 and not self._model_picker_state,
-            )
-        ).install()
-
-        # Dynamic prompt: shows Voidcube symbol when agent is working,
-        # or answer prompt when clarify freetext mode is active.
-        widget_graph = TuiWidgetGraphRuntime(
-            TuiWidgetGraphPorts(
                 input=InputWidgetPorts(
                     history_path=str(self._history_file),
                     prompt_fragments=self._get_tui_prompt_fragments,
@@ -5152,7 +5122,6 @@ class VoidcubeCLI:
                     password_mask_active=lambda: bool(self._sudo_state) or bool(self._secret_state),
                 ),
                 placeholder_text=dynamic_text_runtime.placeholder,
-                on_text_changed=paste_runtime.handle_text_changed,
                 modal=ModalWidgetPorts(
                     clarify_state=lambda: self._clarify_state,
                     clarify_freetext_active=lambda: bool(self._clarify_freetext),
@@ -5186,57 +5155,17 @@ class VoidcubeCLI:
                     status_fragments=self._get_status_bar_fragments,
                     status_visible=lambda: self._status_bar_visible,
                 ),
+                register_extra_keybindings=self._register_extra_tui_keybindings,
+                composition=TuiCompositionPorts(
+                    cursor=_STEADY_CURSOR,
+                    store_application=lambda application: setattr(
+                        self, "_app", application
+                    ),
+                    install_resize_cleanup=install_resize_reflow_cleanup,
+                ),
+                extra_widgets=self._get_extra_tui_widgets,
             )
         ).build()
-
-        input_area = widget_graph.input_area
-        modal_widgets = widget_graph.modal_widgets
-        sudo_widget = modal_widgets.sudo
-        secret_widget = modal_widgets.secret
-        approval_widget = modal_widgets.approval
-        clarify_widget = modal_widgets.clarify
-        model_picker_widget = modal_widgets.model_picker
-        indicator_widgets = widget_graph.indicator_widgets
-        spinner_widget = indicator_widgets.spinner
-        spacer = indicator_widgets.spacer
-        input_rule_top = indicator_widgets.input_rule_top
-        input_rule_bot = indicator_widgets.input_rule_bottom
-        image_bar = indicator_widgets.image_bar
-        voice_status_bar = indicator_widgets.voice_status_bar
-        auto_execution_panel = indicator_widgets.autonomous_execution_panel
-        status_bar = indicator_widgets.status_bar
-
-        # Allow wrapper CLIs to register extra keybindings.
-        self._register_extra_tui_keybindings(kb, input_area=input_area)
-
-        app = TuiCompositionRuntime(
-            TuiCompositionPorts(
-                cursor=_STEADY_CURSOR,
-                store_application=lambda application: setattr(
-                    self, "_app", application
-                ),
-                install_resize_cleanup=install_resize_reflow_cleanup,
-            )
-        ).compose(
-            key_bindings=kb,
-            widgets=TuiCompositionWidgets(
-                sudo_widget=sudo_widget,
-                secret_widget=secret_widget,
-                approval_widget=approval_widget,
-                clarify_widget=clarify_widget,
-                model_picker_widget=model_picker_widget,
-                spinner_widget=spinner_widget,
-                spacer=spacer,
-                status_bar=status_bar,
-                auto_execution_panel=auto_execution_panel,
-                input_rule_top=input_rule_top,
-                image_bar=image_bar,
-                input_area=input_area,
-                input_rule_bot=input_rule_bot,
-                voice_status_bar=voice_status_bar,
-            ),
-            extra_widgets=self._get_extra_tui_widgets,
-        )
 
         idle_runtime = CliIdleMaintenanceRuntime(
             CliIdleMaintenancePorts(

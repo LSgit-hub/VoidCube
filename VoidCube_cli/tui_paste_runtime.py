@@ -14,7 +14,8 @@ class PasteRuntimePorts:
 
     should_attach_clipboard_image: Callable[[str], bool]
     attach_clipboard_image: Callable[[], bool]
-    write_paste_file: Callable[[str, int], Path]
+    paste_directory: Path
+    timestamp: Callable[[], str]
     invalidate: Callable[[Any], None]
 
 
@@ -77,9 +78,18 @@ class TuiPasteRuntime:
 
     def _compact(self, text: str) -> str:
         self._paste_counter += 1
-        path = self.ports.write_paste_file(text, self._paste_counter)
+        path = self._write_paste_file(text)
         line_count = text.count("\n")
         return f"[Pasted text #{self._paste_counter}: {line_count + 1} lines \u2192 {path}]"
+
+    def _write_paste_file(self, text: str) -> Path:
+        directory = self.ports.paste_directory
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / (
+            f"paste_{self._paste_counter}_{self.ports.timestamp()}.txt"
+        )
+        path.write_text(text, encoding="utf-8")
+        return path
 
     @staticmethod
     def _normalize(text: str) -> str:

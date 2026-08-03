@@ -557,105 +557,15 @@ systems/supervisor/web/
 
 以下内容替代已完成批次的逐条实时记录。它只描述当前仍有效的结构、所有权与验证基线；已删除的迁移过程、阶段性行数和过期“下一步”不再作为后续实现依据。
 
-### 15.1 已完成范围
 
-- Stage 0 / CLI-0：已建立 AST 依赖护栏、P0 增长基线、最小 `VoidCube_app` 配置/Gateway/model-normalization 边界，并消除生产包对根 `cli.py` 的反向导入。
-- Stage 2：Supervisor 静态 UI 资源与纯投影器已外移；wheel 资源与 DOM 契约受测试覆盖。
-- Stage 3 shared contract：session identity、approval/clarify、tool event、cancel/queue 均已有共享 contract 与 CLI adapter；queue 的生产、消费、interrupt 和 requeue 继续由 turn queue/runtime owner 持有。
-- CLI-3 command domain：`process_command()` 通过 execution table 和 registry 组合显式 ports。已完成的 session、history、display、model、tools、skills、tasks、auto、plan、background、btw、language、voice、preset 等 domain 均不再保留同名 host command wrapper。
-- 失效 `/connect` slash command 已删除：它唯一依赖的 `tools.connection_profiles` 是禁用空壳且接口已与旧调用漂移；受支持的配置 profile 继续由 `VoidCube_cli.profiles` 与 `VoidCube profile` 子命令唯一持有，不保留 SSH profile、网络探测或环境投影的伪兼容入口。
-- CLI-4 TUI layout：根 `HSplit` 的固定 widget 顺序已迁至 `VoidCube_cli.tui_layout.build_tui_layout_children()`；它只接收显式 widgets 与 display-only extension callback，不接收 `VoidcubeCLI` 或修改 session、turn、queue、model、Gateway 状态。旧 host layout 方法已删除。
-- CLI-4 TUI application：固定 theme 与 `prompt_toolkit.Application` 创建已迁至 `VoidCube_cli.tui_application.create_tui_application()`；它只接收 layout、keybindings、cursor 参数，线程与 event loop lifecycle 仍由 `run()` 持有。旧 host-local style dictionary 已删除。
-- CLI-4 resize/reflow：终端缩窄后的残留行清理由 `VoidCube_cli.tui_application.install_resize_reflow_cleanup()` 持有；它只修补 prompt-toolkit renderer 的重绘位置，不读取或改写 CLI 的业务状态。旧 `run()` nested resize handler 已删除。
-- CLI-4 text keybindings：Alt/Ctrl+Enter 的多行输入与 Tab 的 completion/suggestion 行为已迁至 `VoidCube_cli.tui_keybindings`；该 adapter 只接收 `KeyBindings` 与 prompt-toolkit buffer，不访问 CLI host、会话、turn 或 modal state。原 `run()` nested handlers 已删除。
-- CLI-4 history keybindings：普通输入模式的 Up/Down 历史浏览也迁至 `VoidCube_cli.tui_keybindings`；`run()` 仅以 explicit modal-state predicate 作为 port 传入，adapter 不直接检查或改写 CLI state。
-- CLI-4 modal navigation：clarify、approval、model picker 的箭头选择已迁至 `VoidCube_cli.tui_modal_navigation`；它通过显式 state getter 和 invalidate ports 完成边界计算，CLI 继续是 modal state 的唯一所有者。原 `run()` nested handlers 已删除。
-- CLI-4 modal widgets：clarify、sudo、secret、approval 与 model picker 的只读 prompt-toolkit widget 工厂已迁至 `VoidCube_cli.tui_modal_widgets.build_modal_widgets()`；它只接收各 modal state getter、clarify freetext predicate 与 approval fragments callback，不接收 CLI host，也不处理选择、提交或状态转移。原 `run()` panel helpers 与五个 nested widget factory 已删除。
-- CLI-4 indicator widgets：spinner、hint、input rule、image bar、voice status、autonomous panel 与 status bar 的 prompt-toolkit 构造已迁至 `VoidCube_cli.tui_indicator_widgets.build_indicator_widgets()`；它只接收 fragments、height 与 visible callbacks，不读取或改写 CLI state。原 `run()` 的八个 nested indicator widget factory 已删除，fragment 计算、输入处理、语音/autonomous runtime 与线程 lifecycle 继续留在既有 owner。
-- CLI-4 input widgets：multiline `TextArea`、slash completer/history/suggestion、动态行高、password mask 与 placeholder processor 已迁至 `VoidCube_cli.tui_input_widgets`；它只接收 prompt、可用命令、read-only/password predicates 与 history path 等显式 ports。粘贴落盘、buffer business fallback、submit routing、turn/queue 与 modal/voice state 仍由 CLI 持有。原 `run()` 的 input factory、height closure 和 nested processor 已删除。
-- CLI-4 scheduled task polling：scheduled executor 的 daemon poll loop 已迁至 `VoidCube_cli.scheduled_task_polling`；它只接收 stop predicate、poll operation、sleep 与 failure-report callbacks。CLI 继续创建并拥有 scheduled executor 与 shutdown state，原 `run()` nested loop/thread factory 已删除。
-- CLI-4 TUI refresh lifecycle：spinner/presence refresh 的 daemon loop 已迁至 `VoidCube_cli.tui_refresh_loop`；它只编排既有 5 秒 presence、command-active 与 idle invalidate cadence，并通过显式 activity、refresh、invalidate、clock 与 sleep ports 调用 CLI owner。原 nested spinner loop/thread factory 已删除。
-- CLI-4 input process loop：pending-input queue、execution gate、idle callback 与 execution callback 的循环机制已迁至 `VoidCube_cli.input_process_loop`；它只接收显式 queue/gate/stop/sleep/error ports，不持有 turn、Gateway、modal、voice 或 autonomous state。CLI 继续持有 queue、gate、`_execute_pending_input()` 及 MCP/autonomous/process-notification idle maintenance；原 nested process loop/thread factory 已删除。
-- CLI-4 TUI teardown：退出时的 autonomous stop、agent interrupt、voice recorder、temporary recording、callback unregister、session close、interrupted-session plugin hook、global cleanup 与 exit summary 的既有顺序已迁至 `VoidCube_cli.tui_teardown.run_tui_teardown()`；它只编排显式 cleanup ports，不持有 shutdown、turn、Gateway、modal、voice 或 autonomous state。每个资源检查、异常处理和实际副作用继续留在 CLI owner，原 `run()` 内联收尾序列已删除。
-- CLI-5 voice runtime state：CLI 旧同步 terminal voice transport 的跨线程 lock、Event、recorder、mode、recording、processing、continuous 与无语音计数已收敛到 `VoidCube_cli.voice_runtime_state.CliVoiceRuntimeState`；构造期和 interactive run() 都通过同一 state factory 初始化，`app.py` 的既有属性访问只作显式代理。没有接入不兼容的 `systems.voice.VoiceSessionManager`，避免形成两套设备/线程 lifecycle 的兼容主路径。
-- CLI-5 voice recording runtime：旧同步 terminal transport 的录音前置检查、silence callback、音量刷新、STT、临时录音清理与连续录音重启已迁至 `VoidCube_cli.voice_recording_runtime`；它只接收 `CliVoiceRuntimeState`、TUI 通知、队列、线程与环境 predicate ports，不接收 CLI host、Agent、Gateway 或 modal state。CLI 仅保留薄端口组装和按键/command 入口，旧内联录制与转写流程已删除。
-- CLI-5 embedded autonomous loop：embedded component 的 daemon polling、thread-local stdout/stderr 隔离、workflow poll、pending-input 执行、idle scene 与重绘节奏已迁至 `VoidCube_cli.embedded_autonomous_loop`；它只接收 stop/gate、刷新、queue、execute、invalidate、error 与 scene ports。CLI 继续拥有 component host/runtime、Gateway refresh 实现、scheduled gate、Agent interrupt 和 stop state，原 `run()` 外的 nested autonomous loop/thread factory 已删除。
-- CLI-5 embedded autonomous lifecycle：child CLI host 的复用/创建、gate 标记、parent binding 与 task session 初始化已迁至 `VoidCube_cli.embedded_autonomous_host`；停止时的 child deactivation、可选 Agent/task interruption 与 loop signal 顺序已迁至 `VoidCube_cli.embedded_autonomous_stop`。两者只编排显式 lifecycle ports，CLI 继续拥有 host 配置、runtime、Agent 和 stop Event；原内联装配/stop sequence 已删除。
-- CLI-5 terminal TTS owner ADR：已在 `docs/ADR-terminal-voice-owner.md` 明确 `systems.voice` 是设备、配置、STT/TTS、播放和中断的唯一 canonical owner；CLI 仅是 terminal adapter。没有 async adapter 前，`/voice tts` 不是可用能力，状态不得显示为 enabled；不得以 wrapper 恢复 legacy synchronous recorder/player contract。
-- CLI-5 terminal TTS async adapter：`VoidCube_cli.voice_tts_adapter.VoiceTtsAdapter` 通过独立 asyncio loop 持有一个 canonical `VoiceSessionManager`，只暴露 `status`、`speak`、`interrupt`、`close` 四个窄操作；`/voice tts` 无文本时只查询状态，`/voice tts <text>` 异步播报，`/voice off` 与 TUI teardown 会中断并关闭桥接器。旧 `tts_unavailable` command port、状态文案和双路径 TTS 入口已删除；CLI 不接收或包装旧录音器 contract。
-- Stage 4 planning activity projection：gateway timestamp normalize、idle duration、runtime observation input、Auto activity allowlist 与 Auto drive-input boundary 已迁至 `systems.supervisor.activity_projection`；它们仅接收 payload、clock 和 evidence 参数，不持有 Supervisor、Gateway 或 store。`PlanningRuntimeMixin` 的五个同名投影方法和内部 `self` 调用均已删除，Auto 仍由 runtime owner 负责获取 Gateway snapshot 与决定执行。
-- Stage 4 endogenous persistence repository：runtime root 下四类 endogenous JSON snapshot 的显式路径、损坏/非对象 JSON 回退与原子写入已迁至 `systems.supervisor.endogenous_state_repository.EndogenousStateRepository`，由 `assemble_supervisor_runtime_state()` 注入。repository 不接收 Supervisor，也不持有 snapshot default、history trim、strategy-memory normalize、event semantic de-dup 或 regulation decay；这些仍归 `PlanningRuntimeMixin` 的领域策略。四个旧 `_get_endogenous_*_path()` helper 与测试兼容壳均已删除。
-- Stage 4 endogenous state projection：bounded drive-history、governance-event stream 与 corrective-mode read model 已迁至 `systems.supervisor.endogenous_state_projection`。strategy-memory normalization 继续由 Planning domain owner 提供为显式 callback，projector 不读取 `self`、文件、Gateway 或 configuration。三个旧 Mixin helper 和测试调用均已删除。
-- Stage 4 TaskProfilePolicy：任务 taxonomy 的 normalize、runtime profile、governance type、execution kind、request type 和 execution-request eligibility 已迁至 `systems.supervisor.task_profile_policy.TaskProfilePolicy`；它只接收 task/request 显式输入，由 `runtime_assemblers.py` 注入。`PlanningRuntimeMixin` 的旧 task-profile 方法和调用路径已删除，task serialization、review、handoff、recovery 与 activity projection 全部改走 policy。
-- Stage 4 ScheduleAllocator：schedule value/metadata normalize、task token、occupied token、slot 对齐/分配、candidate reallocation、deterministic task sort 和 conflict index 已迁至 `systems.supervisor.schedule_allocator.ScheduleAllocator`；它只接收显式 task snapshot、occupied set、clock 与 interval，active task 查询和任务写回仍归 Planning owner。旧排程 helper 与测试入口已删除。
-- Stage 5 candidate factory/evidence channel：`EndogenousTaskCandidate`、API-B projection、scored candidate factory、evidence channel/confidence/conflict、evidence graph 与 research freshness 已分别迁至 `systems.supervisor.endogenous_candidate_pipeline` 和 `systems.supervisor.endogenous_evidence`。Planning 的 core-value 调用和 Supervisor 测试已切到新 owner，`EndogenousDriveEngine` 的旧 DTO、factory、channel、graph、freshness helper 与旧导入入口已删除。
-- Stage 5 LM proposal boundary：模型 client resolution、prompt transport、response status、batch cognitive-assessment normalization、proposal task/risk/evidence/execution normalization、candidate-kind defaults/constraints、reference alignment 与 supervisor advisory 已迁至 `systems.supervisor.endogenous_proposals`。`EndogenousDriveEngine` 只保留 runtime 配置解析、generation diagnostics 状态、候选资格 orchestration、cognitive scoring 与 candidate materialization；旧 prompt transport、LM normalization constants/helper、私有测试入口和 `review_then_backlog` alias 均已删除，不保留 Engine 代理或双路径。
-- Stage 5 LM context/snapshot/selection boundary：LM evidence channel/context layering、generation snapshot projection、LM/heuristic candidate merge 与 API-B active-kind projection 已分别迁至 `systems.supervisor.endogenous_evidence`、`systems.supervisor.endogenous_context`、`systems.supervisor.endogenous_generation_snapshot` 和 `systems.supervisor.endogenous_candidate_pipeline`。`EndogenousDriveEngine` 只组装显式输入、持有 latest-generation 状态并执行最终 candidate materialization；旧 context/snapshot/selection helper、私有测试入口和伪参数路径已删除。
-- Stage 5 stable family/learning boundary：memory maintenance、truthfulness、governance hygiene、body improvement、shell baseline、exploratory learning 与 cognitive-assessment review 的 candidate factory，以及 learning topic 提取、去重、冷却、novelty/specificity policy 已迁至 `systems.supervisor.endogenous_candidate_factories` 与 `systems.supervisor.endogenous_learning`。Engine 继续负责 eligibility、backlog pressure、body projection、drive judgement 和 candidate stream 编排；旧 learning factory、topic policy、stable-key 和测试入口已删除，不保留 Engine 代理或双路径。
-- Stage 5 materialization boundary：candidate-kind spec/eligibility、LM cognitive-alignment scoring、constraints/metadata/evidence projection 与 scored candidate materialization 已迁至 `systems.supervisor.endogenous_materialization`。Engine 只准备 body projection、治理信号、backlog pressure 和 drive-judgement ports；旧 308 行 materialization、旧 cognitive-alignment helper 与测试入口已删除，不保留 Engine 双路径。
-- Stage 5 body mapping boundary：canonical editable roots、evolution boundary/path safety、forbidden-pattern filtering、learning evidence freshness/ranking、显式路径与关键词到 body structure domain 的映射已迁至 `systems.supervisor.endogenous_body_mapping`。Engine 继续持有 body projection orchestration；旧 mapping helper、重复常量和直接 Engine 测试入口已删除，不保留双路径。
-- Stage 5 candidate eligibility signal boundary：当前计数治理卫生信号与历史拖滞信号已迁至 `systems.supervisor.endogenous_materialization` 的纯函数；Engine 只组装最小 perception/history 输入，不保留旧私有 signal helper 或兼容调用路径。
-- Stage 5 candidate eligibility plan boundary：family-first decision resolution 与 governance-type fallback 已迁至 `systems.supervisor.endogenous_materialization.resolve_candidate_eligibility_plan`。Engine 只提供显式 decision maps，不再保留 `_decision_for()` 私有 policy helper 或兼容调用路径。
-- Stage 5 needs policy gate boundary：truthfulness threshold、truthfulness signal 与 memory backlog recovery window 已迁至 `systems.supervisor.endogenous_policy`，PlanningRuntime 与 Engine 共用同一 canonical owner；旧 Engine 常量和 gate helper 已删除。
-- Stage 5 needs calculation boundary：`DriveNeed` DTO 与 memory/truthfulness/learning/body/governance/observation need 计算已迁至 `systems.supervisor.endogenous_needs.detect_needs`，通过显式 Protocol 输入返回排序后的纯 need projections。Engine 只负责 deliberation 编排与后续 intent/signal 生成；旧 `_detect_needs()` 与 Engine-owned DTO 已删除。
-- Stage 5 LM eligibility input boundary：active API-B candidate-kind extraction、self-evolution/body projection/quota 和当前/历史 governance signal 的组合已迁至 `systems.supervisor.endogenous_materialization.resolve_lm_candidate_eligibility`。Engine 只准备显式标量、history/task 列表与 body projection；candidate stream 的静态 active-kind gate 仍由 Engine 编排。
-- Stage 5 candidate stream eligibility boundary：memory/truthfulness/shell baseline/exploratory/governance/body 的 active-kind、existing-key、signal、quota 与静态完成冷却 gate 已迁至 `systems.supervisor.endogenous_candidate_eligibility`。Engine 只准备 plans、perception、reflection、body projection 与治理信号，候选 factory 和 topic 去重仍由各自 owner 负责；旧 `_has_recent_static_governance_completion()` 已删除，不保留 Engine 双路径。
-- Stage 5 adaptive policy boundary：历史 family success、strategy-memory effectiveness、observation/agenda pressure、bias、focus、candidate budget 与 learning/body quota projection 已迁至 `systems.supervisor.endogenous_adaptive_policy`。Engine 只负责历史输入归一化、pressure/context 准备和 `DriveAdaptivePolicy` DTO 装配；旧 517 行策略实现与 `_strategy_context_key()` 已删除，不保留 Engine 双路径。
-- Stage 5 body eligibility boundary：learning quality/freshness score、canonical shell-slot readiness、body improvement in-flight matching 与 completion cooldown 已迁至 `systems.supervisor.endogenous_body_eligibility`。Engine 只保留 body mapping orchestration 与通用 timestamp normalization；旧 body quality/cooldown helper、旧 quality score helper 已删除，不保留双路径。
-- Stage 5 proposal drift/meta-cognition boundary：recent cognitive alignment、proposal drift memory 与统一 meta-cognition profile 已迁至 `systems.supervisor.endogenous_meta_cognition`。Engine 只装配显式 cognition inputs；旧 `_build_proposal_drift_memory()`、`_build_recent_cognitive_alignment_summary()`、`_build_meta_cognition_profile()` 与直接 Engine 测试入口已删除，不保留双路径。
-- Stage 5 cognitive memory boundary：LM cognitive assessment、self-iteration trend、stay/switch regulation 与 post-task effect memory 已迁至 `systems.supervisor.endogenous_cognitive_memory`，共享显式 history/assessment/alignment normalization。Engine 只装配 memory inputs；旧四个 memory helper 与直接 Engine 测试入口已删除，不保留双路径。
-- Stage 5 cognition charter boundary：charter model serialization、core mission/task-generation fallback 与 context layering/prompt attention defaults 已迁至 `systems.supervisor.endogenous_cognition_charter.resolve_cognition_charter`。Engine 只传入显式配置值；旧 `_resolve_endogenous_cognition_charter()` 已删除，不保留 runtime-config wrapper 或双路径。
-- Stage 5 self-model boundary：recent reference alignment、self-model snapshot 与 evidence credibility summary 已迁至 `systems.supervisor.endogenous_self_model`。Engine 只装配 perception/world/reflection/evidence inputs；旧 self-model/reference/evidence helper 与测试入口已删除，不保留双路径。
-- Stage 5 API-B snapshot boundary：active API-B judgement backlog 的 bounded projection 已迁至 `systems.supervisor.endogenous_api_b_snapshot`。Engine 只传入显式 task/status 输入，不保留 backlog snapshot 旧实现或兼容入口。
-- Stage 5 research boundary：configured/file external research evidence 的开关、路径解析、JSON normalization 与 bounded output 已迁至 `systems.supervisor.endogenous_research`。Engine 只读取 runtime/execution 配置并传入 owner，不保留旧 research loader。
-- Stage 5 shell body profile boundary：shell slot/worktree、origin manifest、present roots、body flags 与 evidence quality projection 已迁至 `systems.supervisor.endogenous_shell_profile`。所有生产调用已切换，旧 `_build_shell_body_profile()` 与专用导入已删除，不保留 Engine wrapper 或双路径。
-- Stage 5 body projection boundary：body improvement eligibility 与 learning-evidence structure mapping 的组合已迁至 `systems.supervisor.endogenous_body_projection`。Engine 只传入 drive context 与 shell slot，不保留 body projection wrapper 或双路径。
-- Stage 5 pressure boundary：backlog pressure penalty、memory-maintenance urgency、governance-hygiene urgency 与 lane penalty assembly 已迁至 `systems.supervisor.endogenous_pressure`。Engine 只传入显式 context/input，不保留 pressure/urgency 私有 helper 或旧测试入口。
-- Stage 5 drive-state boundary：perception snapshot 输入归一化、user/system posture 与 world-model pressure/readiness projection 已迁至 `systems.supervisor.endogenous_drive_state`。Engine 只装配既有 `DrivePerceptionSnapshot`/`DriveWorldModel` DTO，不保留旧 perception/world-model helper。
-- Stage 5 drive-model boundary：`DrivePerceptionSnapshot`、`DriveWorldModel`、`DriveReflection`、`DriveAdaptivePolicy`、`DriveIntent`、`DriveSignal` 与 `DriveDeliberationReport` 及其 serialization 已迁至 `systems.supervisor.endogenous_drive_models`。Engine 只导入并装配模型，不保留 DTO 定义或隐式 re-export。
-- Stage 5 adaptive-policy input boundary：strategy memory、historical outcome normalization、historical pressure 与 context-key assembly 已并入 `systems.supervisor.endogenous_adaptive_policy.build_adaptive_policy`。Engine 只装配 `DriveAdaptivePolicy` DTO，不保留 normalization wrapper 或双路径。
-- Stage 5 drive-judgement boundary：intent/need 与 perception/world-model/reflection/adaptive-policy serialization 的 candidate judgement metadata 已迁至 `systems.supervisor.endogenous_drive_judgement`。Engine 只准备 deliberation 对象并调用 owner，不保留旧 `_intent_metadata()`、`_drive_judgement_metadata()` 或代理入口。
-- Stage 5 LM evidence context boundary：posture context、evidence/agenda graph、self-model/credibility、task priors、grounding、cognitive memory、self-iteration hypotheses、meta-cognition 与 API-B snapshot 的纯组合已迁至 `systems.supervisor.endogenous_lm_evidence.build_lm_evidence_context`。Engine 只读取 runtime 配置和外部 evidence 输入，再调用 owner 完成 packet assembly；不保留重复 projection 路径。
-- Stage 5 deliberation boundary：activity/count normalization、candidate eligibility plans、correction signal normalization、perception/world-model/reflection/adaptive policy DTO、needs、intent 与 signal projection 已迁至 `systems.supervisor.endogenous_deliberation.build_deliberation_report`；shell slot mapping 已归入 `systems.supervisor.endogenous_drive_context.get_shell_slot_meta`。Engine 只保留稳定 public facade，不保留旧 deliberation wrapper、neutral fallback 或 shell-slot 兼容入口。
-- Stage 5 materialization context boundary：LM body projection、self-evolution plan、cognitive assessment normalization、evidence/agenda graph forwarding 与 active candidate-kind eligibility 已迁至 `systems.supervisor.endogenous_materialization.build_lm_materialization_context`。Engine 只传入 latest cognitive assessment 与显式 deliberation/context 输入。
-- Stage 5 candidate stream preparation boundary：drive context、eligibility plans/signals、body projection、backlog pressure/urgency、drive judgement 与 cognitive memory inputs 已迁至 `systems.supervisor.endogenous_candidate_stream.prepare_candidate_stream`。Engine 只调用 LM runtime 并将 proposals 交给 owner 装配。
-- Stage 5 candidate stream assembly boundary：preparation DTO 到 deterministic/LM merged candidate stream 的显式字段转发已迁至 `systems.supervisor.endogenous_candidate_stream.assemble_prepared_candidate_stream`。Engine 不再展开 candidate assembler 参数或保留重复装配路径。
-- Stage 5 LM materialization runtime boundary：deliberation intent/need metadata、backlog-pressure 与 drive-judgement callback binding，以及最终 LM proposal materialization 交接已迁至 `systems.supervisor.endogenous_materialization.materialize_lm_proposals_for_deliberation`。Engine 不再保留 `_materialize_lm_task_proposals` 私有入口或 callback 双路径。
-- Stage 5 LM evidence packet boundary：recent learning normalization、configured/file research loading、shell profile、reference alignment、LM context projection 与 final packet field assembly 已迁至 `systems.supervisor.endogenous_lm_evidence.build_lm_evidence_packet`。Engine 只读取 runtime charter/policy/evidence configuration；latest generation diagnostics state 仍由 Engine 持有。
-- Stage 5 LM generation request/execution boundary：charter fallback、model role normalization、max-candidate limit normalization、LM generation result filtering 与 generation diagnostics snapshot assembly 已迁至 `systems.supervisor.endogenous_proposals`。Engine 只组装 runtime request、写入 latest proposals/diagnostics，并保留 runtime state 唯一 owner。
-- Stage 5 LM evidence runtime-config adapter boundary：runtime charter、cognitive policy、external research 与 repository root 的 schema 读取已迁至 `systems.supervisor.endogenous_lm_evidence.build_lm_evidence_packet_from_runtime_config`。Engine 只传入 runtime/execution config 和显式 evidence inputs。
-- Stage 5 LM generation runtime-config adapter boundary：runtime charter、role、generation principles 与 candidate limit 的 schema 读取已迁至 `systems.supervisor.endogenous_proposals.execute_lm_task_generation_from_runtime_config`。Engine 只写回 latest proposals/diagnostics，保留 runtime state 唯一 owner。
-- Stage 5 LM runtime gate boundary：LM generation enabled flag 的归一化已迁至 `systems.supervisor.endogenous_proposals.is_lm_task_generation_enabled`，Engine 与 PlanningRuntime 共用同一 gate owner，不再重复读取配置字段。
-- Stage 5 latest-generation state application port boundary：`get_latest_lm_task_generation_state()` 是 context/proposals 的唯一只读 application projection，使用深复制隔离嵌套调用方修改；Engine 继续是 latest-generation runtime state 的唯一写入 owner，不保留旧双 getter 或写入 facade。
-- Stage 5 LM application state port boundary：同一 evaluate cycle 的 reasoning context 与 candidate-repass proposals 已迁至 `systems.supervisor.endogenous_proposal_port.project_lm_generation_application_state`；PlanningRuntime 只通过薄 adapter 读取一次 Engine snapshot，不再维护重复状态解释或第二次 getter 路径。
-- Stage 5 cognition state projection boundary：cognition read-model 的 identity、self-model、governance/channel counts、agenda/uncertainty/observation、meta-governance、strategy-memory indexes 与 recent events assembly 已迁至 `systems.supervisor.endogenous_cognition_state.build_cognition_state_projection`。PlanningRuntime 继续负责 history/state loading、领域计算与 persistence，不保留重复 read-model assembly。
-- Stage 5 proposal cognition projection boundary：proposal cognition 的 summary、LM trace、cognitive-control policy、active posture、meta-cognition/assessment trace、compact auxiliary memory 与 current candidate projection 已迁至 `systems.supervisor.endogenous_proposal_cognition.build_proposal_cognition_projection`。PlanningRuntime 继续负责 history fallback、memory summaries、posture 计算与 compact input preparation，不保留最终 read-model assembly。
-- Stage 5 proposal memory compaction boundary：reference alignment、proposal drift、cognitive alignment、assessment、self-iteration、switch regulation 与 post-task effect snapshots 的 bounded field projection 已迁至 `systems.supervisor.endogenous_proposal_cognition.compact_proposal_memory`。PlanningRuntime 不再保留 `_compact_endogenous_proposal_memory` 私有实现或兼容入口。
-- Stage 5 drive-input normalization boundary：mapping/empty-input normalization 已迁至 `systems.supervisor.endogenous_drive_context.normalize_drive_input`。Engine 不再保留 `_resolve_drive_input` 兼容 facade，所有入口使用同一 normalization owner。
-
-### 15.2 当前 CLI 命令边界
-
-| 范畴 | 当前 owner / 边界 |
-| --- | --- |
-| session、history、retry、undo、queue | `VoidCube_app` session/turn contract、`turn_queue_adapter` 与窄 command ports；handler 只映射 slash 输入。 |
-| model、provider、reasoning、fast、compression、API、doctor/debug | 各专属 operation/config owner；registry 只绑定 ports。 |
-| tools、skills、MCP、browser | catalog/config/probe/lifecycle operation 各自持有副作用；handler 不接收 CLI host 或 backend。 |
-| background、tasks、scheduled task | `_start_background_agent_task()` 是共享后台 operation；`/tasks` 仅投影视图，不能与 scheduled outbox 或 subagent lane 合并。 |
-| btw | `_start_btw_side_question()` 冻结 history 与 route snapshot，使用无工具、无持久化的独立 Agent；不进入 background registry、scheduler 或主 session。 |
-| auto、auto-q | `autonomous_gate.py` 与 autonomous runtime 持有 daemon、gateway、scene 与 recovery；handler 只请求 activate/deactivate。 |
-| language、voice | i18n/config 与 CLI voice runtime 分别持有 locale cache、设备、录音、线程、按键、TUI 状态；handler 仅解析参数并调用 operation。 |
-| preset | `tools.preset_engine` 是只读 catalog owner，预设 YAML 以 `tools/presets/*.yaml` package data 发行；`apply` 在缺少 approved execution runtime 时结构化拒绝，不执行系统动作。 |
-
-固定规则：已迁移 command handler 不接收完整 `VoidcubeCLI`、Agent、Supervisor、Queue、线程或配置对象；旧 `_handle_*` 委托壳和双路径兼容入口必须删除。
-
-### 15.3 当前安全与发行约束
+### 15.1 当前安全与发行约束
 
 - 三类已退役的模型集成保持零入口：活跃代码、可加载技能和 wheel 均不得保留入口；涉及模型、鉴权、请求协议、技能或打包的改动必须运行退役集成扫描与相关测试。
 - skill 安装先进入 quarantine，经 scan 和 integration policy 允许后才安装；不能通过 force 类参数绕过退役集成拒绝。
 - deployment preset 仅描述潜在破坏性运维步骤。实际执行必须先单独建立 approved execution runtime、环境目标和审批契约，不能从 slash handler 直接调用系统命令。
 - wheel 合同覆盖 Python 源、CLI locale、Supervisor UI、skills 相关资源、command handler 和 `tools/presets/*.yaml`，已删除模块不得重新进入发行物。
 
-### 15.4 验证基线
+### 15.2 验证基线
 
 CLI-4/CLI-5 当前相关联合回归基线为 `332 passed`；已运行架构检查、compileall、`git diff --check`、退役集成扫描和 wheel source-to-artifact 验证。
 
@@ -815,16 +725,18 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 进度记录：interactive run 的队列、配置 watcher、modal、附件与 voice state snapshot 已迁移到 `CliInteractiveStateRuntime`，CLI 继续接管并持有状态；同步清理失效 voice state 测试断言，相关回归 `77 passed`，`app.py` 当前为 5,706 行。
 
+进度记录：plugin manager 引用、command busy reset、terminal prompt callbacks 与 tirith security preflight 已迁移到 `CliInteractivePreflightRuntime` 显式 ports；CLI/TUI/autonomous 回归 `78 passed`，`app.py` 当前为 5,705 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 5,706 |
+| `VoidCube_cli/app.py` | 5,705 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
 
-### 15.5 仍未完成的治理主线
+### 15.3 仍未完成的治理主线
 
 - CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、动态提示/状态文本、startup 展示、status bar、idle maintenance、process notification、application wait、atexit、signal/asyncio/stdin guards、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
 - CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle、`AutonomousExecutorRuntime` host-state boundary、pending-input command/turn boundary、threaded turn execution、response rendering、turn postprocessing、interrupted-input queue、result application、run-loop lifecycle、Enter/control keybinding、push-to-talk 与 paste boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
@@ -833,4 +745,4 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 `run()` 剩余的 host callback registration 与 security preflight wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续盘点 `run()` 剩余的 paste-file、runtime factory 与 TUI composition host wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
