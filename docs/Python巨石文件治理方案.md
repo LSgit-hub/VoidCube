@@ -789,11 +789,17 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 进度记录：autonomous panel 事件追加与 Supervisor 事件同步已收口到 `AutonomousPanelEventPorts`，删除无调用的 panel height 旧入口；focused 回归 `126 passed`，完整 CLI/TUI 回归 `450 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,806 行。
 
+进度记录：CLI/TUI wrapper 的额外 keybindings、application composition 与 extra widgets 已收拢为 `CliTuiExtensionPorts`，core TUI state ports 与扩展 hook wiring 分界明确；CLI/TUI 回归 `450 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,809 行。
+
+进度记录：clarify/approval/sudo/secret/model-picker 的 modal callback 投影与 normal-input/password-mask policy 已迁移到 `CliTuiModalStateRuntime`；CLI/TUI 回归 `451 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,807 行。
+
+进度记录：`/fast` 模型能力判断与 TUI/help/command availability 投影已迁移到 `CliCommandAvailabilityRuntime`，app 仅保留显式模型与 capability callback adapter；CLI/TUI 回归 `453 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,826 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 4,806 |
+| `VoidCube_cli/app.py` | 4,826 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
@@ -807,4 +813,4 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 CLI/TUI extension wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续盘点 `run()` 中剩余的 indicator display assembly；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。

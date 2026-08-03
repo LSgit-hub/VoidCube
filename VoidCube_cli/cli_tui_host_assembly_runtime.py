@@ -63,6 +63,70 @@ class CliTuiModalPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class CliTuiModalStatePorts:
+    """CLI-owned modal state getters used by the TUI assembly."""
+
+    clarify_state: Callable[[], object | None]
+    clarify_freetext_active: Callable[[], bool]
+    sudo_state: Callable[[], object | None]
+    secret_state: Callable[[], object | None]
+    approval_state: Callable[[], object | None]
+    model_picker_state: Callable[[], object | None]
+
+
+class CliTuiModalStateRuntime:
+    """Build the modal callback projections and input-state policy."""
+
+    def __init__(self, ports: CliTuiModalStatePorts) -> None:
+        self.ports = ports
+
+    def modal_navigation_ports(
+        self,
+        *,
+        invalidate: Callable[[], None],
+    ) -> CliTuiModalNavigationPorts:
+        ports = self.ports
+        return CliTuiModalNavigationPorts(
+            clarify_state=ports.clarify_state,
+            clarify_freetext_active=ports.clarify_freetext_active,
+            approval_state=ports.approval_state,
+            model_picker_state=ports.model_picker_state,
+            invalidate=invalidate,
+        )
+
+    def modal_widget_ports(
+        self,
+        *,
+        approval_fragments: Callable[[], AnyFormattedText],
+    ) -> CliTuiModalPorts:
+        ports = self.ports
+        return CliTuiModalPorts(
+            clarify_state=ports.clarify_state,
+            clarify_freetext_active=ports.clarify_freetext_active,
+            sudo_state=ports.sudo_state,
+            secret_state=ports.secret_state,
+            approval_state=ports.approval_state,
+            approval_fragments=approval_fragments,
+            model_picker_state=ports.model_picker_state,
+        )
+
+    def normal_input_active(self) -> bool:
+        ports = self.ports
+        return not any(
+            (
+                ports.clarify_state(),
+                ports.approval_state(),
+                ports.sudo_state(),
+                ports.secret_state(),
+                ports.model_picker_state(),
+            )
+        )
+
+    def password_mask_active(self) -> bool:
+        return bool(self.ports.sudo_state() or self.ports.secret_state())
+
+
+@dataclass(frozen=True, slots=True)
 class CliTuiIndicatorPorts:
     spinner_fragments: Callable[[], AnyFormattedText]
     spinner_height: Callable[[], int]
@@ -87,6 +151,15 @@ class CliTuiCompositionPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class CliTuiExtensionPorts:
+    """Wrapper extension hooks kept outside the core TUI state ports."""
+
+    register_extra_keybindings: Callable[..., None]
+    composition: CliTuiCompositionPorts
+    extra_widgets: Callable[[], list[object]]
+
+
+@dataclass(frozen=True, slots=True)
 class CliTuiHostAssemblyPorts:
     """CLI state projections and callbacks needed by the TUI composition root."""
 
@@ -98,9 +171,7 @@ class CliTuiHostAssemblyPorts:
     placeholder_text: Callable[[], str]
     modal: CliTuiModalPorts
     indicators: CliTuiIndicatorPorts
-    register_extra_keybindings: Callable[..., None]
-    composition: CliTuiCompositionPorts
-    extra_widgets: Callable[[], list[object]]
+    extensions: CliTuiExtensionPorts
 
 
 class CliTuiHostAssemblyRuntime:
@@ -168,12 +239,12 @@ class CliTuiHostAssemblyRuntime:
                     status_fragments=ports.indicators.status_fragments,
                     status_visible=ports.indicators.status_visible,
                 ),
-                register_extra_keybindings=ports.register_extra_keybindings,
+                register_extra_keybindings=ports.extensions.register_extra_keybindings,
                 composition=TuiCompositionPorts(
-                    cursor=ports.composition.cursor,
-                    store_application=ports.composition.store_application,
-                    install_resize_cleanup=ports.composition.install_resize_cleanup,
+                    cursor=ports.extensions.composition.cursor,
+                    store_application=ports.extensions.composition.store_application,
+                    install_resize_cleanup=ports.extensions.composition.install_resize_cleanup,
                 ),
-                extra_widgets=ports.extra_widgets,
+                extra_widgets=ports.extensions.extra_widgets,
             )
         ).build()

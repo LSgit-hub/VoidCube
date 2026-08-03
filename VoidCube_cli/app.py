@@ -96,12 +96,15 @@ from VoidCube_cli.turn_queue_adapter import (
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
 from VoidCube_cli.cli_tui_host_assembly_runtime import (
     CliTuiCompositionPorts,
+    CliTuiExtensionPorts,
     CliTuiHostAssemblyPorts,
     CliTuiHostAssemblyRuntime,
     CliTuiIndicatorPorts,
     CliTuiInputPorts,
     CliTuiModalNavigationPorts,
     CliTuiModalPorts,
+    CliTuiModalStatePorts,
+    CliTuiModalStateRuntime,
     CliTuiPastePorts,
 )
 from VoidCube_cli.scheduled_executor import (
@@ -152,6 +155,10 @@ from VoidCube_cli.cli_git_status_runtime import (
 from VoidCube_cli.cli_background_response_runtime import (
     CliBackgroundResponsePorts,
     CliBackgroundResponseRuntime,
+)
+from VoidCube_cli.cli_command_availability_runtime import (
+    CliCommandAvailabilityPorts,
+    CliCommandAvailabilityRuntime,
 )
 from VoidCube_cli.cli_voice_status_runtime import (
     CliVoiceStatusPorts,
@@ -2404,19 +2411,34 @@ class VoidcubeCLI:
             f"{toolsets_info}{provider_info}"
         )
 
-    def _fast_command_available(self) -> bool:
+    def _command_availability_runtime(
+        self,
+    ) -> Optional[CliCommandAvailabilityRuntime]:
         try:
             from VoidCube_app.models import model_supports_fast_mode
         except Exception:
-            return False
-        agent = getattr(self, "agent", None)
-        model = getattr(agent, "model", None) or getattr(self, "model", None)
-        return model_supports_fast_mode(model)
+            return None
+        return CliCommandAvailabilityRuntime(
+            CliCommandAvailabilityPorts(
+                model=lambda: getattr(
+                    getattr(self, "agent", None),
+                    "model",
+                    None,
+                )
+                or getattr(self, "model", None),
+                supports_fast_mode=model_supports_fast_mode,
+            )
+        )
+
+    def _fast_command_available(self) -> bool:
+        runtime = self._command_availability_runtime()
+        return runtime.fast_available() if runtime is not None else False
 
     def _command_available(self, slash_command: str) -> bool:
-        if slash_command == "/fast":
-            return self._fast_command_available()
-        return True
+        runtime = self._command_availability_runtime()
+        if runtime is None:
+            return slash_command != "/fast"
+        return runtime.available(slash_command)
 
     def _session_browser_runtime(self) -> CliSessionBrowserRuntime:
         runtime = self.__dict__.get("_session_browser_runtime_instance")
@@ -4272,6 +4294,16 @@ class VoidcubeCLI:
         dynamic_text_runtime = registrations.dynamic_text
         prompt_runtime = self._tui_prompt_runtime()
         layout_metrics = self._tui_layout_metrics_runtime()
+        modal_state_runtime = CliTuiModalStateRuntime(
+            CliTuiModalStatePorts(
+                clarify_state=lambda: self._clarify_state,
+                clarify_freetext_active=lambda: bool(self._clarify_freetext),
+                sudo_state=lambda: self._sudo_state,
+                secret_state=lambda: self._secret_state,
+                approval_state=lambda: self._approval_state,
+                model_picker_state=lambda: self._model_picker_state,
+            )
+        )
 
         app = CliTuiHostAssemblyRuntime(
             CliTuiHostAssemblyPorts(
@@ -4283,35 +4315,21 @@ class VoidcubeCLI:
                     timestamp=lambda: datetime.now().strftime("%H%M%S"),
                     invalidate=lambda event: event.app.invalidate(),
                 ),
-                modal_navigation=CliTuiModalNavigationPorts(
-                    clarify_state=lambda: self._clarify_state,
-                    clarify_freetext_active=lambda: self._clarify_freetext,
-                    approval_state=lambda: self._approval_state,
-                    model_picker_state=lambda: self._model_picker_state,
+                modal_navigation=modal_state_runtime.modal_navigation_ports(
                     invalidate=lambda: self._invalidate(min_interval=0.0),
                 ),
-                normal_input_active=lambda: not self._clarify_state
-                and not self._approval_state
-                and not self._sudo_state
-                and not self._secret_state
-                and not self._model_picker_state,
+                normal_input_active=modal_state_runtime.normal_input_active,
                 input=CliTuiInputPorts(
                     history_path=str(self._history_file),
                     prompt_fragments=prompt_runtime.fragments,
                     prompt_text=prompt_runtime.text,
                     command_available=self._command_available,
                     command_running=lambda: bool(self._command_running),
-                    password_mask_active=lambda: bool(self._sudo_state) or bool(self._secret_state),
+                    password_mask_active=modal_state_runtime.password_mask_active,
                 ),
                 placeholder_text=dynamic_text_runtime.placeholder,
-                modal=CliTuiModalPorts(
-                    clarify_state=lambda: self._clarify_state,
-                    clarify_freetext_active=lambda: bool(self._clarify_freetext),
-                    sudo_state=lambda: self._sudo_state,
-                    secret_state=lambda: self._secret_state,
-                    approval_state=lambda: self._approval_state,
+                modal=modal_state_runtime.modal_widget_ports(
                     approval_fragments=self._get_approval_display_fragments,
-                    model_picker_state=lambda: self._model_picker_state,
                 ),
                 indicators=CliTuiIndicatorPorts(
                     spinner_fragments=dynamic_text_runtime.spinner_fragments,
@@ -4344,15 +4362,17 @@ class VoidcubeCLI:
                     status_fragments=self._get_status_bar_fragments,
                     status_visible=lambda: self._status_bar_visible,
                 ),
-                register_extra_keybindings=self._register_extra_tui_keybindings,
-                composition=CliTuiCompositionPorts(
-                    cursor=_STEADY_CURSOR,
-                    store_application=lambda application: setattr(
-                        self, "_app", application
+                extensions=CliTuiExtensionPorts(
+                    register_extra_keybindings=self._register_extra_tui_keybindings,
+                    composition=CliTuiCompositionPorts(
+                        cursor=_STEADY_CURSOR,
+                        store_application=lambda application: setattr(
+                            self, "_app", application
+                        ),
+                        install_resize_cleanup=install_resize_reflow_cleanup,
                     ),
-                    install_resize_cleanup=install_resize_reflow_cleanup,
+                    extra_widgets=self._get_extra_tui_widgets,
                 ),
-                extra_widgets=self._get_extra_tui_widgets,
             )
         ).build()
 

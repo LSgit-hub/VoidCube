@@ -5,12 +5,15 @@ import VoidCube_cli.cli_tui_host_assembly_runtime as assembly_module
 from VoidCube_cli.cli_interactive_registration_runtime import CliInteractiveRegistrations
 from VoidCube_cli.cli_tui_host_assembly_runtime import (
     CliTuiCompositionPorts,
+    CliTuiExtensionPorts,
     CliTuiHostAssemblyPorts,
     CliTuiHostAssemblyRuntime,
     CliTuiIndicatorPorts,
     CliTuiInputPorts,
     CliTuiModalNavigationPorts,
     CliTuiModalPorts,
+    CliTuiModalStatePorts,
+    CliTuiModalStateRuntime,
     CliTuiPastePorts,
 )
 
@@ -35,6 +38,8 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
         voice_key="c-b",
     )
     callback = lambda: None
+    register_extra_keybindings = lambda *_args, **_kwargs: None
+    extra_widgets = lambda: []
     assembly = CliTuiHostAssemblyRuntime(
         CliTuiHostAssemblyPorts(
             registrations=registrations,
@@ -86,13 +91,15 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
                 status_fragments=lambda: [],
                 status_visible=lambda: False,
             ),
-            register_extra_keybindings=lambda *_args, **_kwargs: None,
-            composition=CliTuiCompositionPorts(
-                cursor=None,
-                store_application=lambda _application: None,
-                install_resize_cleanup=lambda _application: None,
+            extensions=CliTuiExtensionPorts(
+                register_extra_keybindings=register_extra_keybindings,
+                composition=CliTuiCompositionPorts(
+                    cursor=None,
+                    store_application=lambda _application: None,
+                    install_resize_cleanup=lambda _application: None,
+                ),
+                extra_widgets=extra_widgets,
             ),
-            extra_widgets=lambda: [],
         )
     )
 
@@ -102,4 +109,35 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
     assert factory_ports.ctrl_c == "ctrl-c"
     assert factory_ports.voice_key == "c-b"
     assert factory_ports.input.history_path == "history"
+    assert factory_ports.register_extra_keybindings is register_extra_keybindings
+    assert factory_ports.extra_widgets is extra_widgets
     assert factory_ports.composition.cursor is None
+
+
+def test_modal_state_runtime_builds_policy_and_widget_ports():
+    state = {
+        "clarify": None,
+        "clarify_freetext": False,
+        "sudo": None,
+        "secret": {"active": True},
+        "approval": None,
+        "picker": None,
+    }
+    runtime = CliTuiModalStateRuntime(
+        CliTuiModalStatePorts(
+            clarify_state=lambda: state["clarify"],
+            clarify_freetext_active=lambda: state["clarify_freetext"],
+            sudo_state=lambda: state["sudo"],
+            secret_state=lambda: state["secret"],
+            approval_state=lambda: state["approval"],
+            model_picker_state=lambda: state["picker"],
+        )
+    )
+
+    assert runtime.normal_input_active() is False
+    assert runtime.password_mask_active() is True
+    navigation = runtime.modal_navigation_ports(invalidate=lambda: None)
+    modal = runtime.modal_widget_ports(approval_fragments=lambda: [])
+    assert navigation.clarify_state() is None
+    assert navigation.model_picker_state() is None
+    assert modal.secret_state() == {"active": True}
