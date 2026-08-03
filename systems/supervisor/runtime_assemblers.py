@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from systems.supervisor.autonomous_task_review import build_autonomous_chain_auto_decision
+from systems.supervisor.autonomous_task_review_service import AutonomousTaskReviewService
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
 from systems.supervisor.schedule_allocator import ScheduleAllocator
@@ -142,6 +145,55 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         slot_interval_seconds=int(
             supervisor.config.service_runtime.autonomous_chain_review_interval or 300
         )
+    )
+
+    def autonomous_task_auto_decision(
+        task: Any,
+        drive_input: dict[str, Any],
+    ) -> tuple[str, str]:
+        return build_autonomous_chain_auto_decision(
+            task=task,
+            drive_input=drive_input,
+            autonomous_chain_gate_active=bool(
+                getattr(
+                    supervisor._service_runtime,
+                    "autonomous_chain_gate_active",
+                    False,
+                )
+            ),
+            task_profile_policy=supervisor._task_profile_policy,
+            active_tasks=supervisor._active_autonomous_chain_tasks(),
+            learning_history=supervisor._autonomous_chain_store.list_writeback_history(
+                status="completed"
+            ),
+            now=datetime.now(timezone.utc),
+            body_improvement_min_quality=float(
+                getattr(
+                    supervisor.config.service_runtime,
+                    "body_improvement_min_quality",
+                    60.0,
+                )
+                or 60.0
+            ),
+        )
+
+    supervisor._autonomous_task_review_service = AutonomousTaskReviewService(
+        store=supervisor._autonomous_chain_store,
+        task_profile_policy=supervisor._task_profile_policy,
+        schedule_allocator=supervisor._schedule_allocator,
+        task_state=supervisor._autonomous_task_state,
+        resolve_drive_input=supervisor._resolve_runtime_drive_input_request,
+        auto_decision=autonomous_task_auto_decision,
+        normalize_context=supervisor._normalize_runtime_decision_context,
+        build_execution_request=supervisor._build_autonomous_chain_execution_request,
+        propose_memory_promotion=supervisor._propose_verified_conclusion_memory_promotion,
+        build_response_fields=supervisor._build_drive_input_response_fields,
+        serialize_task=supervisor._serialize_autonomous_chain_task,
+        build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
+        record_activity=supervisor._record_supervisor_ui_activity,
+        touch_activity=supervisor._touch_gateway_activity,
+        get_active_tasks=supervisor._active_autonomous_chain_tasks,
+        get_review_statuses=lambda: ["planned", "deferred", "paused"],
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
