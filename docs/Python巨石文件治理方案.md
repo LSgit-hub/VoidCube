@@ -813,11 +813,13 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 进度记录：input、modal、indicator widget graph 的构造、placeholder 安装与 buffer text-change wiring 已迁移到 `TuiWidgetGraphRuntime` 显式 ports；TUI/CLI 联合回归 `86 passed`，`app.py` 当前为 5,713 行。
 
+进度记录：interactive run 的队列、配置 watcher、modal、附件与 voice state snapshot 已迁移到 `CliInteractiveStateRuntime`，CLI 继续接管并持有状态；同步清理失效 voice state 测试断言，相关回归 `77 passed`，`app.py` 当前为 5,706 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 5,713 |
+| `VoidCube_cli/app.py` | 5,706 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
@@ -831,4 +833,4 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 `run()` 剩余的 interactive state initialization 与 host callback wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续盘点 `run()` 剩余的 host callback registration 与 security preflight wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。

@@ -139,6 +139,14 @@ from VoidCube_cli.cli_application_runtime import (
     CliApplicationPorts,
     CliApplicationRuntime,
 )
+from VoidCube_cli.cli_interactive_state_runtime import (
+    CliInteractiveStatePorts,
+    CliInteractiveStateRuntime,
+)
+from VoidCube_cli.cli_interactive_preflight_runtime import (
+    CliInteractivePreflightPorts,
+    CliInteractivePreflightRuntime,
+)
 from VoidCube_cli.cli_startup_runtime import CliStartupPorts, CliStartupRuntime
 from VoidCube_cli.cli_lifecycle_guards import (
     CliLifecycleGuardPorts,
@@ -5021,70 +5029,54 @@ class VoidcubeCLI:
         """Run the interactive CLI loop with persistent input at bottom."""
         self._cli_startup_runtime().run()
         
-        # State for async operation
-        self._agent_running = False
-        self._pending_input = queue.Queue()     # For normal input (commands + new queries)
-        self._interrupt_queue = queue.Queue()   # For messages typed while agent is running
-        self._should_exit = False
-        self._last_ctrl_c_time = 0  # Track double Ctrl+C for force exit
-
-        # Give plugin manager a CLI reference so plugins can inject messages
-        from VoidCube_cli.plugins import get_plugin_manager
-        get_plugin_manager()._cli_ref = self
-
-        # Config file watcher — detect mcp_servers changes and auto-reload
         from VoidCube_core.constants import get_config_path as _get_config_path
         _cfg_path = _get_config_path()
-        self._config_mtime: float = _cfg_path.stat().st_mtime if _cfg_path.exists() else 0.0
-        self._config_mcp_servers: dict = self.config.get("mcp_servers") or {}
-        self._last_config_check: float = 0.0  # monotonic time of last check
+        run_state = CliInteractiveStateRuntime(
+            CliInteractiveStatePorts(
+                config_path=_cfg_path,
+                config_mcp_servers=self.config.get("mcp_servers") or {},
+            )
+        ).initialize()
+        self._agent_running = run_state.agent_running
+        self._pending_input = run_state.pending_input
+        self._interrupt_queue = run_state.interrupt_queue
+        self._should_exit = run_state.should_exit
+        self._last_ctrl_c_time = run_state.last_ctrl_c_time
+        self._config_mtime = run_state.config_mtime
+        self._config_mcp_servers = run_state.config_mcp_servers
+        self._last_config_check = run_state.last_config_check
+        self._clarify_state = run_state.clarify_state
+        self._clarify_freetext = run_state.clarify_freetext
+        self._clarify_deadline = run_state.clarify_deadline
+        self._sudo_state = run_state.sudo_state
+        self._sudo_deadline = run_state.sudo_deadline
+        self._modal_input_snapshot = run_state.modal_input_snapshot
+        self._approval_state = run_state.approval_state
+        self._approval_deadline = run_state.approval_deadline
+        self._approval_lock = run_state.approval_lock
+        self._secret_state = run_state.secret_state
+        self._secret_deadline = run_state.secret_deadline
+        self._attached_images = run_state.attached_images
+        self._image_counter = run_state.image_counter
+        self._voice_runtime_state = run_state.voice_runtime_state
 
-        # Clarify tool state: interactive question/answer with the user.
-        # When the agent calls the clarify tool, _clarify_state is set and
-        # the prompt_toolkit UI switches to a selection mode.
-        self._clarify_state = None      # dict with question, choices, selected, response_queue
-        self._clarify_freetext = False  # True when user chose "Other" and is typing
-        self._clarify_deadline = 0      # monotonic timestamp when the clarify times out
+        from VoidCube_cli.plugins import get_plugin_manager
 
-        # Sudo password prompt state (similar mechanism to clarify)
-        self._sudo_state = None         # dict with response_queue when active
-        self._sudo_deadline = 0
-        self._modal_input_snapshot = None
+        CliInteractivePreflightRuntime(
+            CliInteractivePreflightPorts(
+                register_plugin_cli=lambda: setattr(
+                    get_plugin_manager(), "_cli_ref", self
+                ),
+                reset_command_lifecycle=self._command_busy_lifecycle.reset,
+                register_sudo_password_callback=_get_set_sudo_password_callback,
+                register_approval_sink=_get_set_approval_sink,
+                register_secret_capture_callback=_get_set_secret_capture_callback(),
+                sudo_password_callback=self._sudo_password_callback,
+                approval_sink=self._approval_sink,
+                secret_capture_callback=self._secret_capture_callback,
+            )
+        ).prepare()
 
-        # Dangerous command approval state (similar mechanism to clarify)
-        self._approval_state = None     # dict with command, description, choices, selected, response_queue
-        self._approval_deadline = 0
-        self._approval_lock = threading.Lock()  # serialize concurrent approval prompts (delegation race fix)
-
-        # Slash command loading state
-        self._command_busy_lifecycle.reset()
-
-        # Secure secret capture state for skill setup
-        self._secret_state = None       # dict with var_name, prompt, metadata, response_queue
-        self._secret_deadline = 0
-
-        # Clipboard image attachments (paste images into the CLI)
-        self._attached_images: list[Path] = []
-        self._image_counter = 0
-
-        # Each interactive run gets a fresh cross-thread voice session state.
-        self._voice_runtime_state = CliVoiceRuntimeState()
-
-        # Register callbacks so terminal_tool prompts route through our UI
-        _get_set_sudo_password_callback(self._sudo_password_callback)
-        _get_set_approval_sink(self._approval_sink)
-        _get_set_secret_capture_callback()(self._secret_capture_callback)
-
-        # Ensure tirith security scanner is available (downloads if needed).
-        # Warn the user if tirith is enabled in config but not available,
-        # so they know command security scanning is degraded.
-        try:
-            from tools.tirith_security import ensure_installed
-            tirith_path = ensure_installed(log_failures=False)
-            pass
-        except Exception:
-            pass  # Non-fatal — fail-open at scan time if unavailable
-        
         # Key bindings for the input area
         kb = KeyBindings()
         
