@@ -99,13 +99,16 @@ from VoidCube_cli.cli_tui_host_assembly_runtime import (
     CliTuiExtensionPorts,
     CliTuiHostAssemblyPorts,
     CliTuiHostAssemblyRuntime,
-    CliTuiIndicatorPorts,
     CliTuiInputPorts,
     CliTuiModalNavigationPorts,
     CliTuiModalPorts,
     CliTuiModalStatePorts,
     CliTuiModalStateRuntime,
     CliTuiPastePorts,
+)
+from VoidCube_cli.cli_tui_indicator_assembly_runtime import (
+    CliTuiIndicatorAssemblyPorts,
+    CliTuiIndicatorAssemblyRuntime,
 )
 from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorPorts,
@@ -162,7 +165,6 @@ from VoidCube_cli.cli_command_availability_runtime import (
 )
 from VoidCube_cli.cli_tui_image_indicator_runtime import (
     CliTuiImageIndicatorPorts,
-    CliTuiImageIndicatorRuntime,
 )
 from VoidCube_cli.cli_voice_status_runtime import (
     CliVoiceStatusPorts,
@@ -4298,13 +4300,6 @@ class VoidcubeCLI:
         dynamic_text_runtime = registrations.dynamic_text
         prompt_runtime = self._tui_prompt_runtime()
         layout_metrics = self._tui_layout_metrics_runtime()
-        image_indicator_runtime = CliTuiImageIndicatorRuntime(
-            CliTuiImageIndicatorPorts(
-                attached_images=lambda: list(self._attached_images),
-                image_counter=lambda: self._image_counter,
-                format_badges=_format_image_attachment_badges,
-            )
-        )
         modal_state_runtime = CliTuiModalStateRuntime(
             CliTuiModalStatePorts(
                 clarify_state=lambda: self._clarify_state,
@@ -4315,6 +4310,31 @@ class VoidcubeCLI:
                 model_picker_state=lambda: self._model_picker_state,
             )
         )
+
+        indicator_ports = CliTuiIndicatorAssemblyRuntime(
+            CliTuiIndicatorAssemblyPorts(
+                dynamic_text=dynamic_text_runtime,
+                layout_input_rule_height=layout_metrics.input_rule_height,
+                image=CliTuiImageIndicatorPorts(
+                    attached_images=lambda: list(self._attached_images),
+                    image_counter=lambda: self._image_counter,
+                    format_badges=_format_image_attachment_badges,
+                ),
+                voice_fragments=self._get_voice_status_fragments,
+                voice_visible=lambda: self._voice_mode,
+                autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(
+                    self,
+                    state_ports=self._autonomous_panel_state_ports(),
+                    render_ports=self._autonomous_panel_render_ports(),
+                ),
+                autonomous_visible=lambda: _has_visible_autonomous_work_view(
+                    self,
+                    state_ports=self._autonomous_panel_state_ports(),
+                ),
+                status_fragments=self._get_status_bar_fragments,
+                status_visible=lambda: self._status_bar_visible,
+            )
+        ).build()
 
         app = CliTuiHostAssemblyRuntime(
             CliTuiHostAssemblyPorts(
@@ -4342,28 +4362,7 @@ class VoidcubeCLI:
                 modal=modal_state_runtime.modal_widget_ports(
                     approval_fragments=self._get_approval_display_fragments,
                 ),
-                indicators=CliTuiIndicatorPorts(
-                    spinner_fragments=dynamic_text_runtime.spinner_fragments,
-                    spinner_height=dynamic_text_runtime.spinner_widget_height,
-                    hint_fragments=dynamic_text_runtime.hint_fragments,
-                    hint_height=dynamic_text_runtime.hint_height,
-                    input_rule_height=layout_metrics.input_rule_height,
-                    image_fragments=image_indicator_runtime.fragments,
-                    images_visible=image_indicator_runtime.visible,
-                    voice_fragments=self._get_voice_status_fragments,
-                    voice_visible=lambda: self._voice_mode,
-                    autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(
-                        self,
-                        state_ports=self._autonomous_panel_state_ports(),
-                        render_ports=self._autonomous_panel_render_ports(),
-                    ),
-                    autonomous_visible=lambda: _has_visible_autonomous_work_view(
-                        self,
-                        state_ports=self._autonomous_panel_state_ports(),
-                    ),
-                    status_fragments=self._get_status_bar_fragments,
-                    status_visible=lambda: self._status_bar_visible,
-                ),
+                indicators=indicator_ports,
                 extensions=CliTuiExtensionPorts(
                     register_extra_keybindings=self._register_extra_tui_keybindings,
                     composition=CliTuiCompositionPorts(

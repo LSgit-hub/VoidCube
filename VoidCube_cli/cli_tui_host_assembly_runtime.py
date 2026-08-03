@@ -11,6 +11,7 @@ from prompt_toolkit.formatted_text import AnyFormattedText
 from VoidCube_cli.cli_interactive_registration_runtime import (
     CliInteractiveRegistrations,
 )
+from VoidCube_cli.cli_tui_indicator_assembly_runtime import CliTuiIndicatorPorts
 from VoidCube_cli.tui_composition_runtime import TuiCompositionPorts
 from VoidCube_cli.tui_indicator_widgets import IndicatorWidgetPorts
 from VoidCube_cli.tui_input_widgets import InputWidgetPorts
@@ -124,23 +125,6 @@ class CliTuiModalStateRuntime:
 
     def password_mask_active(self) -> bool:
         return bool(self.ports.sudo_state() or self.ports.secret_state())
-
-
-@dataclass(frozen=True, slots=True)
-class CliTuiIndicatorPorts:
-    spinner_fragments: Callable[[], AnyFormattedText]
-    spinner_height: Callable[[], int]
-    hint_fragments: Callable[[], AnyFormattedText]
-    hint_height: Callable[[], int]
-    input_rule_height: Callable[[str], int]
-    image_fragments: Callable[[], AnyFormattedText]
-    images_visible: Callable[[], bool]
-    voice_fragments: Callable[[], AnyFormattedText]
-    voice_visible: Callable[[], bool]
-    autonomous_fragments: Callable[[], AnyFormattedText]
-    autonomous_visible: Callable[[], bool]
-    status_fragments: Callable[[], AnyFormattedText]
-    status_visible: Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)

@@ -799,7 +799,7 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 4,826 |
+| `VoidCube_cli/app.py` | 4,827 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
@@ -810,7 +810,8 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 - CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle、`AutonomousExecutorRuntime` host-state boundary、pending-input command/turn boundary、threaded turn execution、response rendering、turn postprocessing、interrupted-input queue、result application、run-loop lifecycle、Enter/control keybinding、push-to-talk 与 paste boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
 - Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot/LM evidence context/packet、LM generation request/execution、runtime config adapters/runtime gate、deliberation、materialization context/runtime、candidate stream preparation/assembly、selection merge、stable candidate families、learning topic policy、materialization、body structure mapping/eligibility、body projection、candidate eligibility、adaptive policy/input normalization、pressure/urgency、drive-state/models、needs policy gates、needs calculation、LM eligibility input projection、intent/signal projection、drive-context normalization、history normalization、candidate stream assembler、agenda graph projection、self-iteration hypothesis projection、task-type prior projection、LM evidence assembly、reflection projection、cognitive posture/context projection、proposal drift/meta-cognition projection、cognitive memory projection、cognition charter、self-model、API-B snapshot、research、shell body profile、drive-judgement projection、latest-generation state application projection、LM application state port、cognition state projection、proposal cognition projection 与 proposal memory compaction 已迁至专属模块或明确 application port。`EndogenousDriveEngine` 仍持有 proposal 调用交接与 latest-generation state 写回，是 runtime state 的唯一 owner。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
 - Stage 6：Supervisor UI 的 state、stream、identity/proxy、memory status、trace、body status、snapshot、activity persistence、media state 与 auto-open lifecycle 边界已收口；剩余 route registration 和 Supervisor 生命周期注册仍保留在 `supervisor.py` owner 内。
+- 进度记录：CLI indicator display assembly 已迁移到 `CliTuiIndicatorAssemblyRuntime`，`app.py` 仅提供显式显示 ports；相关 CLI/TUI 回归通过，当前 `app.py` 为 4,827 行。
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 `run()` 中剩余的 indicator display assembly；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续盘点 `run()` 中剩余的生命周期/宿主 wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。

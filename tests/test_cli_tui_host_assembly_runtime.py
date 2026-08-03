@@ -3,12 +3,12 @@ from types import SimpleNamespace
 
 import VoidCube_cli.cli_tui_host_assembly_runtime as assembly_module
 from VoidCube_cli.cli_interactive_registration_runtime import CliInteractiveRegistrations
+from VoidCube_cli.cli_tui_indicator_assembly_runtime import CliTuiIndicatorPorts
 from VoidCube_cli.cli_tui_host_assembly_runtime import (
     CliTuiCompositionPorts,
     CliTuiExtensionPorts,
     CliTuiHostAssemblyPorts,
     CliTuiHostAssemblyRuntime,
-    CliTuiIndicatorPorts,
     CliTuiInputPorts,
     CliTuiModalNavigationPorts,
     CliTuiModalPorts,
