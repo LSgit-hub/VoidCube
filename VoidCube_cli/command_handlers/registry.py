@@ -41,6 +41,7 @@ from VoidCube_cli.command_handlers.autonomous import (
     handle_auto_command,
     handle_auto_q_command,
 )
+from VoidCube_cli.autonomous_events import AutonomousPanelEventPorts
 from VoidCube_cli.command_handlers.background import (
     BackgroundCommandPorts,
     BackgroundCommandText,
@@ -700,6 +701,7 @@ def _preset_command_ports(*, emit: Callable[[str], None]) -> PresetCommandPorts:
 def autonomous_command_ports_for_host(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     emit: Callable[[str], None],
     refresh_gateway_cli_presence: Callable[..., None],
     interrupt_current_task: Callable[..., bool],
@@ -717,6 +719,7 @@ def autonomous_command_ports_for_host(
         activate_gate(
             host,
             command,
+            event_ports=event_ports,
             cprint=emit,
             refresh_gateway_cli_presence_callback=refresh_gateway_cli_presence,
             thread_factory=thread_factory,
@@ -726,6 +729,7 @@ def autonomous_command_ports_for_host(
         activate=activate,
         deactivate=lambda: deactivate_gate(
             host,
+            event_ports=event_ports,
             cprint=emit,
             interrupt_current_task_callback=interrupt_current_task,
             push_cli_agent_scene_callback=push_cli_agent_scene,
@@ -737,6 +741,7 @@ def autonomous_command_ports_for_host(
 def exit_autonomous_gate_fast_for_host(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     emit: Callable[[str], None],
     interrupt_current_task: Callable[..., bool],
     push_cli_agent_scene: Callable[..., bool],
@@ -746,6 +751,7 @@ def exit_autonomous_gate_fast_for_host(
 
     return exit_autonomous_gate_fast(
         host,
+        event_ports=event_ports,
         cprint=emit,
         interrupt_current_task_callback=interrupt_current_task,
         push_cli_agent_scene_callback=push_cli_agent_scene,
@@ -755,6 +761,7 @@ def exit_autonomous_gate_fast_for_host(
 def force_quit_autonomous_gate_for_host(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     emit: Callable[[str], None],
     interrupt_current_task: Callable[..., bool],
     push_cli_agent_scene: Callable[..., bool],
@@ -764,6 +771,7 @@ def force_quit_autonomous_gate_for_host(
 
     return force_quit_autonomous_gate(
         host,
+        event_ports=event_ports,
         cprint=emit,
         interrupt_current_task_callback=interrupt_current_task,
         push_cli_agent_scene_callback=push_cli_agent_scene,

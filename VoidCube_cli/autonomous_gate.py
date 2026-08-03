@@ -6,7 +6,10 @@ import urllib.request
 from typing import Any, Dict, Tuple
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
-from VoidCube_cli.autonomous_events import append_autonomous_execution_event
+from VoidCube_cli.autonomous_events import (
+    AutonomousPanelEventPorts,
+    append_autonomous_execution_event,
+)
 from VoidCube_cli.autonomous_executor import (
     autonomous_task_execution_kind,
     autonomous_task_label,
@@ -23,12 +26,13 @@ logger = logging.getLogger(__name__)
 def _enter_autonomous_gate_locally(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     refresh_gateway_cli_presence_callback: Any,
 ) -> None:
     host._autonomous_gate_active = True
     append_autonomous_execution_event(
-        host,
-        "自主链路已激活，API-A 自主执行面等待任务",
+        event_ports=event_ports,
+        message="自主链路已激活，API-A 自主执行面等待任务",
         tone="success",
         stage="autonomous_gate",
     )
@@ -38,6 +42,7 @@ def _enter_autonomous_gate_locally(
 def _exit_autonomous_gate_locally(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     push_cli_agent_scene_callback: Any,
     interrupt_current_task_callback: Any,
     interrupt_reason: str = "",
@@ -60,7 +65,11 @@ def _exit_autonomous_gate_locally(
         agent_role="supervisor_task",
     )
     if event_message:
-        append_autonomous_execution_event(host, event_message, tone=event_tone)
+        append_autonomous_execution_event(
+            event_ports=event_ports,
+            message=event_message,
+            tone=event_tone,
+        )
     stopper = getattr(host, "_stop_autonomous_execution_component", None)
     if callable(stopper):
         stopper(interrupt=False)
@@ -109,6 +118,7 @@ def handle_auto_command(
     host: Any,
     cmd: str,
     *,
+    event_ports: AutonomousPanelEventPorts,
     cprint: Any,
     refresh_gateway_cli_presence_callback: Any,
     thread_factory: Any,
@@ -166,6 +176,7 @@ def handle_auto_command(
             if active:
                 _enter_autonomous_gate_locally(
                     host,
+                    event_ports=event_ports,
                     refresh_gateway_cli_presence_callback=refresh_gateway_cli_presence_callback,
                 )
                 cycle_result = None
@@ -213,6 +224,7 @@ def handle_auto_command(
 def handle_auto_q_command(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     cprint: Any,
     interrupt_current_task_callback: Any,
     push_cli_agent_scene_callback: Any,
@@ -238,6 +250,7 @@ def handle_auto_q_command(
         if not active:
             _exit_autonomous_gate_locally(
                 host,
+                event_ports=event_ports,
                 push_cli_agent_scene_callback=push_cli_agent_scene_callback,
                 interrupt_current_task_callback=interrupt_current_task_callback,
                 interrupt_reason="自主链路已由 /auto-q 退出；当前链路项被用户中断。",
@@ -262,6 +275,7 @@ def handle_auto_q_command(
 def exit_autonomous_gate_fast(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     cprint: Any,
     interrupt_current_task_callback: Any,
     push_cli_agent_scene_callback: Any,
@@ -283,6 +297,7 @@ def exit_autonomous_gate_fast(
         if not resp.get("autonomous_chain_gate_active", True):
             _exit_autonomous_gate_locally(
                 host,
+                event_ports=event_ports,
                 push_cli_agent_scene_callback=push_cli_agent_scene_callback,
                 interrupt_current_task_callback=interrupt_current_task_callback,
                 interrupt_reason="自主链路已通过 fast-path /auto-q 退出；当前链路项被用户中断。",
@@ -308,6 +323,7 @@ def exit_autonomous_gate_fast(
     except Exception as exc:
         _exit_autonomous_gate_locally(
             host,
+            event_ports=event_ports,
             push_cli_agent_scene_callback=push_cli_agent_scene_callback,
             interrupt_current_task_callback=interrupt_current_task_callback,
             interrupt_reason="自主链路已在本地退出；supervisor 不可达，当前链路项被用户中断。",
@@ -325,6 +341,7 @@ def exit_autonomous_gate_fast(
 def force_quit_autonomous_gate(
     host: Any,
     *,
+    event_ports: AutonomousPanelEventPorts,
     cprint: Any,
     interrupt_current_task_callback: Any,
     push_cli_agent_scene_callback: Any,
@@ -375,6 +392,7 @@ def force_quit_autonomous_gate(
 
     _exit_autonomous_gate_locally(
         host,
+        event_ports=event_ports,
         push_cli_agent_scene_callback=push_cli_agent_scene_callback,
         interrupt_current_task_callback=interrupt_current_task_callback,
         event_message="",

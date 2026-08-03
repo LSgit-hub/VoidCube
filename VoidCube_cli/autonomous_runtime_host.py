@@ -44,8 +44,8 @@ def autonomous_executor_runtime(
                 getattr(host, "_autonomous_gate_active", False)
             ),
             append_execution_event=lambda message, *, tone="info", stage="": append_autonomous_execution_event(
-                host,
-                message,
+                event_ports=host._autonomous_panel_event_ports(),
+                message=message,
                 tone=tone,
                 stage=stage,
             ),

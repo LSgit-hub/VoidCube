@@ -320,6 +320,7 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_run_id_for_message,
 )
 from VoidCube_cli.autonomous_events import (
+    AutonomousPanelEventPorts,
     append_autonomous_execution_event as _append_autonomous_execution_event_view,
 )
 from VoidCube_cli.autonomous_presence import (
@@ -1197,6 +1198,7 @@ class VoidcubeCLI:
             skill_commands=_get_skill_commands,
             autonomous_command_ports=autonomous_command_ports_for_host(
                 self,
+                event_ports=self._autonomous_panel_event_ports(),
                 emit=_cprint,
                 refresh_gateway_cli_presence=lambda *, force=False: _refresh_gateway_cli_presence_view(
                     self,
@@ -1642,6 +1644,29 @@ class VoidcubeCLI:
                 getattr(state_host, "_autonomous_execution_events", []) or []
             ),
             spinner_text=lambda: str(getattr(state_host, "_spinner_text", "") or ""),
+        )
+
+    def _autonomous_panel_event_ports(self) -> AutonomousPanelEventPorts:
+        state_host = getattr(self, "_autonomous_component_host", None) or self
+        return AutonomousPanelEventPorts(
+            gate_active=lambda: bool(self._autonomous_gate_active),
+            execution_events=lambda: list(
+                getattr(state_host, "_autonomous_execution_events", []) or []
+            ),
+            set_execution_events=lambda events: setattr(
+                state_host,
+                "_autonomous_execution_events",
+                list(events),
+            ),
+            trim_status_bar_text=self._trim_status_bar_text,
+            last_supervisor_event_key=lambda: str(
+                getattr(state_host, "_autonomous_last_supervisor_event_key", "") or ""
+            ),
+            set_last_supervisor_event_key=lambda value: setattr(
+                state_host,
+                "_autonomous_last_supervisor_event_key",
+                str(value or ""),
+            ),
         )
 
     @staticmethod
@@ -3100,10 +3125,24 @@ class VoidcubeCLI:
     # ====================================================================
 
     def _on_tool_event(self, event: ToolEvent) -> None:
+        def append_autonomous_event(
+            _host: Any,
+            message: str,
+            *,
+            tone: str = "info",
+            stage: str = "",
+        ) -> None:
+            _append_autonomous_execution_event_view(
+                event_ports=self._autonomous_panel_event_ports(),
+                message=message,
+                tone=tone,
+                stage=stage,
+            )
+
         _project_tool_event_view(
             self,
             event,
-            append_autonomous_event=_append_autonomous_execution_event_view,
+            append_autonomous_event=append_autonomous_event,
             emit_line=_cprint,
         )
 
@@ -3766,6 +3805,7 @@ class VoidcubeCLI:
         def exit_autonomous_gate_fast() -> None:
             exit_autonomous_gate_fast_for_host(
                 self,
+                event_ports=self._autonomous_panel_event_ports(),
                 emit=_cprint,
                 interrupt_current_task=self._interrupt_autonomous_component_task,
                 push_cli_agent_scene=_push_cli_agent_scene,
@@ -3842,6 +3882,7 @@ class VoidcubeCLI:
         def force_quit_autonomous() -> None:
             force_quit_autonomous_gate_for_host(
                 self,
+                event_ports=self._autonomous_panel_event_ports(),
                 emit=_cprint,
                 interrupt_current_task=self._interrupt_autonomous_component_task,
                 push_cli_agent_scene=_push_cli_agent_scene,

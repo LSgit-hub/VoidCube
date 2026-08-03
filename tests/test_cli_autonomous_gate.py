@@ -18,6 +18,7 @@ from VoidCube_cli import autonomous_panel as autonomous_panel_module
 from VoidCube_cli import autonomous_presence as autonomous_presence_module
 from VoidCube_cli import autonomous_runtime_host as autonomous_runtime_host_module
 from VoidCube_cli import autonomous_status_host as autonomous_status_host_module
+from VoidCube_cli.autonomous_events import AutonomousPanelEventPorts
 from VoidCube_cli.autonomous_panel import (
     AutonomousPanelRenderPorts,
     AutonomousPanelStatePorts,
@@ -82,6 +83,30 @@ def _panel_render_ports(host) -> AutonomousPanelRenderPorts:
         terminal_width=host._get_tui_terminal_width,
         trim_status_bar_text=host._trim_status_bar_text,
         pad_status_bar_text=host._pad_status_bar_text,
+    )
+
+
+def _panel_event_ports(host) -> AutonomousPanelEventPorts:
+    state_host = getattr(host, "_autonomous_component_host", None) or host
+    return AutonomousPanelEventPorts(
+        gate_active=lambda: bool(getattr(host, "_autonomous_gate_active", False)),
+        execution_events=lambda: list(
+            getattr(state_host, "_autonomous_execution_events", []) or []
+        ),
+        set_execution_events=lambda events: setattr(
+            state_host,
+            "_autonomous_execution_events",
+            list(events),
+        ),
+        trim_status_bar_text=host._trim_status_bar_text,
+        last_supervisor_event_key=lambda: str(
+            getattr(state_host, "_autonomous_last_supervisor_event_key", "") or ""
+        ),
+        set_last_supervisor_event_key=lambda value: setattr(
+            state_host,
+            "_autonomous_last_supervisor_event_key",
+            str(value or ""),
+        ),
     )
 
 
@@ -927,6 +952,7 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
 
     assert autonomous_gate_module.exit_autonomous_gate_fast(
         cli,
+        event_ports=_panel_event_ports(cli),
         cprint=lambda *args, **kwargs: None,
         interrupt_current_task_callback=_autonomous_runtime(cli).interrupt_current_task,
         push_cli_agent_scene_callback=autonomous_presence_module.push_cli_agent_scene,
@@ -966,6 +992,7 @@ def test_auto_q_fast_path_deactivates_supervisor_without_status_probe(monkeypatc
 
     assert autonomous_gate_module.exit_autonomous_gate_fast(
         cli,
+        event_ports=_panel_event_ports(cli),
         cprint=lambda *args, **kwargs: printed.append(" ".join(str(arg) for arg in args)),
         interrupt_current_task_callback=lambda **kwargs: True,
         push_cli_agent_scene_callback=lambda *args, **kwargs: pushed.append((args, kwargs)) or True,
@@ -1165,13 +1192,13 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
     cli._autonomous_execution_events = []
     cli._autonomous_last_supervisor_event_key = ""
     autonomous_events_module.append_autonomous_execution_event(
-        cli,
-        "已接管任务 learn-panel-1",
+        event_ports=_panel_event_ports(cli),
+        message="已接管任务 learn-panel-1",
         tone="success",
     )
     autonomous_events_module.append_autonomous_execution_event(
-        cli,
-        "工具启动: web_search",
+        event_ports=_panel_event_ports(cli),
+        message="工具启动: web_search",
         tone="info",
     )
 
@@ -1935,8 +1962,14 @@ def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
         ]
     }
 
-    autonomous_events_module.sync_autonomous_supervisor_event(cli, state)
-    autonomous_events_module.sync_autonomous_supervisor_event(cli, state)
+    autonomous_events_module.sync_autonomous_supervisor_event(
+        state,
+        event_ports=_panel_event_ports(cli),
+    )
+    autonomous_events_module.sync_autonomous_supervisor_event(
+        state,
+        event_ports=_panel_event_ports(cli),
+    )
 
     assert len(cli._autonomous_execution_events) == 1
     assert "监督者链路裁决: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
@@ -1974,6 +2007,7 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
 
     result = autonomous_gate_module.force_quit_autonomous_gate(
         cli,
+        event_ports=_panel_event_ports(cli),
         cprint=fake_cprint,
         interrupt_current_task_callback=_autonomous_runtime(cli).interrupt_current_task,
         push_cli_agent_scene_callback=autonomous_presence_module.push_cli_agent_scene,
@@ -2175,6 +2209,7 @@ def test_auto_command_activates_gate_and_embedded_component(monkeypatch):
     autonomous_gate_module.handle_auto_command(
         cli,
         "/auto",
+        event_ports=_panel_event_ports(cli),
         cprint=fake_cprint,
         refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
         thread_factory=_ImmediateThread,
@@ -2270,6 +2305,7 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     autonomous_gate_module.handle_auto_command(
         cli,
         "/auto",
+        event_ports=_panel_event_ports(cli),
         cprint=fake_cprint,
         refresh_gateway_cli_presence_callback=lambda *, force=False: None,
         thread_factory=_ImmediateThread,
@@ -2682,6 +2718,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     autonomous_gate_module.handle_auto_command(
         cli,
         "/auto",
+        event_ports=_panel_event_ports(cli),
         cprint=fake_cprint,
         refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
         thread_factory=_ImmediateThread,

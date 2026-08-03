@@ -97,7 +97,10 @@ def refresh_supervisor_status(host: Any) -> None:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 host._supervisor_state_cache = data
-                sync_autonomous_supervisor_event(host, data)
+                sync_autonomous_supervisor_event(
+                    data,
+                    event_ports=host._autonomous_panel_event_ports(),
+                )
         except Exception:
             pass
         finally:

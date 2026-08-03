@@ -1,13 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from dataclasses import dataclass
 from typing import Any, Dict
 
 
+@dataclass(frozen=True, slots=True)
+class AutonomousPanelEventPorts:
+    """State and formatting callbacks for autonomous panel events."""
+
+    gate_active: Callable[[], bool]
+    execution_events: Callable[[], list[dict[str, object]]]
+    set_execution_events: Callable[[list[dict[str, object]]], None]
+    trim_status_bar_text: Callable[[str, int], str]
+    last_supervisor_event_key: Callable[[], str]
+    set_last_supervisor_event_key: Callable[[str], None]
+
+
 def append_autonomous_execution_event(
-    host: Any,
-    message: str,
     *,
+    event_ports: AutonomousPanelEventPorts,
+    message: str,
     tone: str = "info",
     stage: str = "",
 ) -> None:
@@ -15,21 +29,25 @@ def append_autonomous_execution_event(
     compact = " ".join(str(message or "").split()).strip()
     if not compact:
         return
-    events = list(getattr(host, "_autonomous_execution_events", []) or [])
+    events = list(event_ports.execution_events() or [])
     events.append(
         {
             "at": datetime.now().strftime("%H:%M:%S"),
-            "message": host._trim_status_bar_text(compact, 96),
+            "message": event_ports.trim_status_bar_text(compact, 96),
             "tone": str(tone or "info"),
             "stage": str(stage or "").strip().lower(),
         }
     )
-    host._autonomous_execution_events = events[-6:]
+    event_ports.set_execution_events(events[-6:])
 
 
-def sync_autonomous_supervisor_event(host: Any, state: Dict[str, Any]) -> None:
+def sync_autonomous_supervisor_event(
+    state: Dict[str, Any],
+    *,
+    event_ports: AutonomousPanelEventPorts,
+) -> None:
     """Mirror the supervisor's latest visible autonomous-chain activity into the panel."""
-    if not getattr(host, "_autonomous_gate_active", False):
+    if not event_ports.gate_active():
         return
     timeline = list(state.get("timeline") or [])
     if not timeline:
@@ -42,9 +60,12 @@ def sync_autonomous_supervisor_event(host: Any, state: Dict[str, Any]) -> None:
             str(latest.get("summary") or latest.get("title") or ""),
         ]
     )
-    if not event_key or event_key == getattr(host, "_autonomous_last_supervisor_event_key", ""):
+    if (
+        not event_key
+        or event_key == event_ports.last_supervisor_event_key()
+    ):
         return
-    host._autonomous_last_supervisor_event_key = event_key
+    event_ports.set_last_supervisor_event_key(event_key)
     raw_label = str(latest.get("event_type") or latest.get("source") or "supervisor").strip()
     label_map = {
         "task_decided": "链路裁决",
@@ -56,22 +77,8 @@ def sync_autonomous_supervisor_event(host: Any, state: Dict[str, Any]) -> None:
     summary = str(latest.get("summary") or latest.get("title") or "").strip()
     if summary:
         append_autonomous_execution_event(
-            host,
-            f"监督者{label}: {summary}",
+            event_ports=event_ports,
+            message=f"监督者{label}: {summary}",
             tone="info",
             stage="supervisor",
         )
-
-
-def autonomous_execution_panel_height(host: Any) -> int:
-    if not getattr(host, "_autonomous_gate_active", False):
-        return 0
-    from VoidCube_cli.autonomous_panel import build_autonomous_execution_panel_rows
-
-    return len(
-        build_autonomous_execution_panel_rows(
-            host,
-            state_ports=host._autonomous_panel_state_ports(),
-            render_ports=host._autonomous_panel_render_ports(),
-        )
-    )

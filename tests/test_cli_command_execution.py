@@ -12,6 +12,7 @@ import pytest
 import cli as cli_module
 from cli import VoidcubeCLI
 import VoidCube_cli.command_handlers.registry as command_handler_registry
+from VoidCube_cli.autonomous_events import AutonomousPanelEventPorts
 from VoidCube_cli.command_execution import (
     BUILTIN_COMMAND_SPECS,
     CommandBusyLifecycle,
@@ -544,6 +545,14 @@ def test_autonomous_registry_ports_reuse_existing_gate_operations(monkeypatch) -
 
     ports = command_handler_registry.autonomous_command_ports_for_host(
         host,
+        event_ports=AutonomousPanelEventPorts(
+            gate_active=lambda: False,
+            execution_events=lambda: [],
+            set_execution_events=lambda _events: None,
+            trim_status_bar_text=lambda text, _width: text,
+            last_supervisor_event_key=lambda: "",
+            set_last_supervisor_event_key=lambda _value: None,
+        ),
         emit=lambda text: events.append(("emit", text)),
         refresh_gateway_cli_presence=lambda **_kwargs: None,
         interrupt_current_task=lambda **_kwargs: True,

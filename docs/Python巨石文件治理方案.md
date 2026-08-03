@@ -787,11 +787,13 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 进度记录：autonomous panel 的 gate、session、current task、agent/turn、pending input、spinner 与 execution events 已收口到 `AutonomousPanelStatePorts`，CLI 主渲染路径不再读取 `state_host`；autonomous/panel/TUI 回归 `74 passed`，`app.py` 当前为 4,765 行。
 
+进度记录：autonomous panel 事件追加与 Supervisor 事件同步已收口到 `AutonomousPanelEventPorts`，删除无调用的 panel height 旧入口；focused 回归 `126 passed`，完整 CLI/TUI 回归 `450 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,806 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 4,765 |
+| `VoidCube_cli/app.py` | 4,806 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
@@ -805,4 +807,4 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 ## 16. 下一次实施起点
 
-下一批继续清理 autonomous panel 诊断 fallback 的 host 读取，并盘点 CLI/TUI extension wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续盘点 CLI/TUI extension wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
