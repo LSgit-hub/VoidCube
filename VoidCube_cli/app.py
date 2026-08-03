@@ -160,6 +160,10 @@ from VoidCube_cli.cli_command_availability_runtime import (
     CliCommandAvailabilityPorts,
     CliCommandAvailabilityRuntime,
 )
+from VoidCube_cli.cli_tui_image_indicator_runtime import (
+    CliTuiImageIndicatorPorts,
+    CliTuiImageIndicatorRuntime,
+)
 from VoidCube_cli.cli_voice_status_runtime import (
     CliVoiceStatusPorts,
     CliVoiceStatusRuntime,
@@ -4294,6 +4298,13 @@ class VoidcubeCLI:
         dynamic_text_runtime = registrations.dynamic_text
         prompt_runtime = self._tui_prompt_runtime()
         layout_metrics = self._tui_layout_metrics_runtime()
+        image_indicator_runtime = CliTuiImageIndicatorRuntime(
+            CliTuiImageIndicatorPorts(
+                attached_images=lambda: list(self._attached_images),
+                image_counter=lambda: self._image_counter,
+                format_badges=_format_image_attachment_badges,
+            )
+        )
         modal_state_runtime = CliTuiModalStateRuntime(
             CliTuiModalStatePorts(
                 clarify_state=lambda: self._clarify_state,
@@ -4337,17 +4348,8 @@ class VoidcubeCLI:
                     hint_fragments=dynamic_text_runtime.hint_fragments,
                     hint_height=dynamic_text_runtime.hint_height,
                     input_rule_height=layout_metrics.input_rule_height,
-                    image_fragments=lambda: (
-                        [
-                            (
-                                "class:image-badge",
-                                f" {_format_image_attachment_badges(self._attached_images, self._image_counter)} ",
-                            )
-                        ]
-                        if self._attached_images
-                        else []
-                    ),
-                    images_visible=lambda: bool(self._attached_images),
+                    image_fragments=image_indicator_runtime.fragments,
+                    images_visible=image_indicator_runtime.visible,
                     voice_fragments=self._get_voice_status_fragments,
                     voice_visible=lambda: self._voice_mode,
                     autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(
