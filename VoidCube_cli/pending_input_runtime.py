@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from VoidCube_cli.attachments import _detect_file_drop
-from VoidCube_cli.cli_handlers import _format_process_notification
 from VoidCube_cli.cli_ui import _DIM, _RST, _accent_hex, _cprint
 from VoidCube_cli.command_router import looks_like_slash_command
+from VoidCube_cli.cli_idle_maintenance_runtime import drain_process_notifications
 
 
 logger = logging.getLogger(__name__)
@@ -174,22 +174,7 @@ class PendingInputRuntime:
         threading.Thread(target=restart, daemon=True).start()
 
     def _enqueue_process_notifications(self) -> None:
-        try:
-            from tools.process_registry import process_registry
-
-            while not process_registry.completion_queue.empty():
-                event = process_registry.completion_queue.get_nowait()
-                session_id = event.get("session_id", "")
-                if (
-                    event.get("type") == "completion"
-                    and process_registry.is_completion_consumed(session_id)
-                ):
-                    continue
-                synthesized = _format_process_notification(event)
-                if synthesized:
-                    self.ports.enqueue_pending_input(synthesized)
-        except Exception:
-            pass
+        drain_process_notifications(self.ports.enqueue_pending_input)
 
 
 def _escape(text: str) -> str:

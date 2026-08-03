@@ -101,26 +101,25 @@ from VoidCube_cli.tui_composition_runtime import (
     TuiCompositionWidgets,
 )
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
-from VoidCube_cli.tui_keybindings import (
-    install_history_navigation_keybindings,
-    install_text_editing_keybindings,
+from VoidCube_cli.tui_keybinding_assembly import (
+    TuiKeybindingAssemblyPorts,
+    TuiKeybindingAssemblyRuntime,
 )
 from VoidCube_cli.tui_modal_navigation import (
     ModalNavigationPorts,
-    install_modal_navigation_keybindings,
 )
 from VoidCube_cli.tui_modal_widgets import (
     ModalWidgetPorts,
-    build_modal_widgets,
 )
 from VoidCube_cli.tui_indicator_widgets import (
     IndicatorWidgetPorts,
-    build_indicator_widgets,
 )
 from VoidCube_cli.tui_input_widgets import (
     InputWidgetPorts,
-    build_input_area,
-    install_placeholder_processor,
+)
+from VoidCube_cli.tui_widget_graph_runtime import (
+    TuiWidgetGraphPorts,
+    TuiWidgetGraphRuntime,
 )
 from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorPorts,
@@ -132,6 +131,14 @@ from VoidCube_cli.background_task_runtime import (
     BackgroundTaskState,
 )
 from VoidCube_cli.cli_run_runtime import CliRunRuntime, CliRunRuntimePorts
+from VoidCube_cli.cli_idle_maintenance_runtime import (
+    CliIdleMaintenancePorts,
+    CliIdleMaintenanceRuntime,
+)
+from VoidCube_cli.cli_application_runtime import (
+    CliApplicationPorts,
+    CliApplicationRuntime,
+)
 from VoidCube_cli.cli_startup_runtime import CliStartupPorts, CliStartupRuntime
 from VoidCube_cli.cli_lifecycle_guards import (
     CliLifecycleGuardPorts,
@@ -313,7 +320,6 @@ from VoidCube_cli.cli_ui import (
     _ACCENT,
 )
 from VoidCube_cli.cli_handlers import (
-    _format_process_notification,
     _setup_worktree,
     _cleanup_worktree,
     _prune_stale_worktrees,
@@ -5106,47 +5112,6 @@ class VoidcubeCLI:
             )
         )
 
-        @kb.add('enter')
-        def handle_enter(event):
-            enter_runtime.handle(event)
-        install_text_editing_keybindings(kb)
-
-        install_modal_navigation_keybindings(
-            kb,
-            ports=ModalNavigationPorts(
-                clarify_state=lambda: self._clarify_state,
-                clarify_freetext_active=lambda: self._clarify_freetext,
-                approval_state=lambda: self._approval_state,
-                model_picker_state=lambda: self._model_picker_state,
-                invalidate=lambda: self._invalidate(min_interval=0.0),
-            ),
-        )
-
-        # --- History navigation: up/down browse history in normal input mode ---
-        # The TextArea is multiline, so by default up/down only move the cursor.
-        # Buffer.auto_up/auto_down handle both: cursor movement when multi-line,
-        # history browsing when on the first/last line (or single-line input).
-        install_history_navigation_keybindings(
-            kb,
-            normal_input_active=lambda: not self._clarify_state
-            and not self._approval_state
-            and not self._sudo_state
-            and not self._secret_state
-            and not self._model_picker_state,
-        )
-
-        @kb.add('c-c')
-        def handle_ctrl_c(event):
-            control_runtime.handle_ctrl_c(event)
-
-        @kb.add('c-d')
-        def handle_ctrl_d(event):
-            control_runtime.handle_ctrl_d(event)
-
-        @kb.add('c-z')
-        def handle_ctrl_z(event):
-            suspend_runtime.handle(event)
-
         # Voice push-to-talk key: configurable via config.yaml (voice.record_key)
         # Default: Ctrl+B (avoids conflict with Ctrl+R readline reverse-search)
         # Config uses "ctrl+b" format; prompt_toolkit expects "c-b" format.
@@ -5157,86 +5122,89 @@ class VoidcubeCLI:
         except Exception:
             _voice_key = "c-b"
 
-        @kb.add(_voice_key)
-        def handle_voice_record(event):
-            voice_runtime.handle(event)
-        from prompt_toolkit.keys import Keys
-
-        @kb.add(Keys.BracketedPaste, eager=True)
-        def handle_paste(event):
-            paste_runtime.handle_bracketed_paste(event)
-
-        @kb.add('c-v')
-        def handle_ctrl_v(event):
-            paste_runtime.handle_image_paste(event)
-
-        @kb.add('escape', 'v')
-        def handle_alt_v(event):
-            paste_runtime.handle_image_paste(event)
+        TuiKeybindingAssemblyRuntime(
+            TuiKeybindingAssemblyPorts(
+                key_bindings=kb,
+                enter=enter_runtime.handle,
+                ctrl_c=control_runtime.handle_ctrl_c,
+                ctrl_d=control_runtime.handle_ctrl_d,
+                ctrl_z=suspend_runtime.handle,
+                voice_key=_voice_key,
+                voice=voice_runtime.handle,
+                paste=paste_runtime,
+                modal_navigation=ModalNavigationPorts(
+                    clarify_state=lambda: self._clarify_state,
+                    clarify_freetext_active=lambda: self._clarify_freetext,
+                    approval_state=lambda: self._approval_state,
+                    model_picker_state=lambda: self._model_picker_state,
+                    invalidate=lambda: self._invalidate(min_interval=0.0),
+                ),
+                normal_input_active=lambda: not self._clarify_state
+                and not self._approval_state
+                and not self._sudo_state
+                and not self._secret_state
+                and not self._model_picker_state,
+            )
+        ).install()
 
         # Dynamic prompt: shows Voidcube symbol when agent is working,
         # or answer prompt when clarify freetext mode is active.
-        cli_ref = self
-
-        def get_prompt():
-            return cli_ref._get_tui_prompt_fragments()
-
-        input_area = build_input_area(
-            ports=InputWidgetPorts(
-                history_path=str(self._history_file),
-                prompt_fragments=get_prompt,
-                prompt_text=self._get_tui_prompt_text,
-                command_available=cli_ref._command_available,
-                command_running=lambda: bool(cli_ref._command_running),
-                password_mask_active=lambda: bool(cli_ref._sudo_state) or bool(cli_ref._secret_state),
+        widget_graph = TuiWidgetGraphRuntime(
+            TuiWidgetGraphPorts(
+                input=InputWidgetPorts(
+                    history_path=str(self._history_file),
+                    prompt_fragments=self._get_tui_prompt_fragments,
+                    prompt_text=self._get_tui_prompt_text,
+                    command_available=self._command_available,
+                    command_running=lambda: bool(self._command_running),
+                    password_mask_active=lambda: bool(self._sudo_state) or bool(self._secret_state),
+                ),
+                placeholder_text=dynamic_text_runtime.placeholder,
+                on_text_changed=paste_runtime.handle_text_changed,
+                modal=ModalWidgetPorts(
+                    clarify_state=lambda: self._clarify_state,
+                    clarify_freetext_active=lambda: bool(self._clarify_freetext),
+                    sudo_state=lambda: self._sudo_state,
+                    secret_state=lambda: self._secret_state,
+                    approval_state=lambda: self._approval_state,
+                    approval_fragments=self._get_approval_display_fragments,
+                    model_picker_state=lambda: self._model_picker_state,
+                ),
+                indicators=IndicatorWidgetPorts(
+                    spinner_fragments=dynamic_text_runtime.spinner_fragments,
+                    spinner_height=dynamic_text_runtime.spinner_widget_height,
+                    hint_fragments=dynamic_text_runtime.hint_fragments,
+                    hint_height=dynamic_text_runtime.hint_height,
+                    input_rule_height=self._tui_input_rule_height,
+                    image_fragments=lambda: (
+                        [
+                            (
+                                "class:image-badge",
+                                f" {_format_image_attachment_badges(self._attached_images, self._image_counter)} ",
+                            )
+                        ]
+                        if self._attached_images
+                        else []
+                    ),
+                    images_visible=lambda: bool(self._attached_images),
+                    voice_fragments=self._get_voice_status_fragments,
+                    voice_visible=lambda: self._voice_mode,
+                    autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(self),
+                    autonomous_visible=lambda: _has_visible_autonomous_work_view(self),
+                    status_fragments=self._get_status_bar_fragments,
+                    status_visible=lambda: self._status_bar_visible,
+                ),
             )
-        )
+        ).build()
 
-        input_area.buffer.on_text_changed += paste_runtime.handle_text_changed
-
-        install_placeholder_processor(
-            input_area,
-            placeholder_text=dynamic_text_runtime.placeholder,
-        )
-
-        modal_widgets = build_modal_widgets(
-            ports=ModalWidgetPorts(
-                clarify_state=lambda: self._clarify_state,
-                clarify_freetext_active=lambda: bool(self._clarify_freetext),
-                sudo_state=lambda: self._sudo_state,
-                secret_state=lambda: self._secret_state,
-                approval_state=lambda: self._approval_state,
-                approval_fragments=self._get_approval_display_fragments,
-                model_picker_state=lambda: self._model_picker_state,
-            )
-        )
+        input_area = widget_graph.input_area
+        modal_widgets = widget_graph.modal_widgets
         sudo_widget = modal_widgets.sudo
         secret_widget = modal_widgets.secret
         approval_widget = modal_widgets.approval
         clarify_widget = modal_widgets.clarify
         model_picker_widget = modal_widgets.model_picker
-
-        indicator_widgets = build_indicator_widgets(
-            ports=IndicatorWidgetPorts(
-                spinner_fragments=dynamic_text_runtime.spinner_fragments,
-                spinner_height=dynamic_text_runtime.spinner_widget_height,
-                hint_fragments=dynamic_text_runtime.hint_fragments,
-                hint_height=dynamic_text_runtime.hint_height,
-                input_rule_height=cli_ref._tui_input_rule_height,
-                image_fragments=lambda: (
-                    [("class:image-badge", f" {_format_image_attachment_badges(cli_ref._attached_images, cli_ref._image_counter)} ")]
-                    if cli_ref._attached_images
-                    else []
-                ),
-                images_visible=lambda: bool(cli_ref._attached_images),
-                voice_fragments=cli_ref._get_voice_status_fragments,
-                voice_visible=lambda: cli_ref._voice_mode,
-                autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(cli_ref),
-                autonomous_visible=lambda: _has_visible_autonomous_work_view(cli_ref),
-                status_fragments=cli_ref._get_status_bar_fragments,
-                status_visible=lambda: cli_ref._status_bar_visible,
-            )
-        )
+        indicator_widgets = widget_graph.indicator_widgets
         spinner_widget = indicator_widgets.spinner
         spacer = indicator_widgets.spacer
         input_rule_top = indicator_widgets.input_rule_top
@@ -5278,38 +5246,28 @@ class VoidcubeCLI:
             extra_widgets=self._get_extra_tui_widgets,
         )
 
-        def perform_idle_maintenance() -> None:
-            # Periodic background work remains owned by the CLI runtime.
-            if self._agent_running:
-                return
-            self._check_config_mcp_changes()
-            _refresh_autonomous_observation_surfaces_view(
-                self,
-                refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
+        idle_runtime = CliIdleMaintenanceRuntime(
+            CliIdleMaintenancePorts(
+                agent_running=lambda: self._agent_running,
+                check_config_changes=self._check_config_mcp_changes,
+                refresh_observation_surfaces=lambda: _refresh_autonomous_observation_surfaces_view(
                     self,
-                    force=False,
-                    is_gateway_running=_is_gateway_running,
-                    register_with_gateway=_register_with_gateway,
-                    push_cli_agent_scene=_push_cli_agent_scene,
-                    monotonic_time=time.monotonic,
+                    refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
+                        self,
+                        force=False,
+                        is_gateway_running=_is_gateway_running,
+                        register_with_gateway=_register_with_gateway,
+                        push_cli_agent_scene=_push_cli_agent_scene,
+                        monotonic_time=time.monotonic,
+                    ),
                 ),
+                autonomous_gate_active=lambda: self._autonomous_gate_active,
+                start_autonomous_component=lambda: self._start_autonomous_execution_component(),
+                application_ready=lambda: bool(self._app),
+                invalidate=lambda interval: self._invalidate(min_interval=interval),
+                enqueue_pending_input=self._pending_input.put,
             )
-            if self._autonomous_gate_active:
-                self._start_autonomous_execution_component()
-                if self._app:
-                    self._invalidate(min_interval=0.5)
-            # Process notification delivery remains a CLI queue concern.
-            try:
-                from tools.process_registry import process_registry
-                if not process_registry.completion_queue.empty():
-                    event = process_registry.completion_queue.get_nowait()
-                    session_id = event.get("session_id", "")
-                    if event.get("type") != "completion" or not process_registry.is_completion_consumed(session_id):
-                        synthesized = _format_process_notification(event)
-                        if synthesized:
-                            self._pending_input.put(synthesized)
-            except Exception:
-                pass
+        )
 
         lifecycle_guards = self._cli_lifecycle_guards()
 
@@ -5334,7 +5292,7 @@ class VoidcubeCLI:
                 command_running=lambda: self._command_running,
                 invalidate=lambda interval: self._invalidate(min_interval=interval),
                 poll_scheduled_workflow=self._scheduled_executor_runtime.poll_workflow,
-                perform_idle_maintenance=perform_idle_maintenance,
+                perform_idle_maintenance=idle_runtime.run_once,
                 execution_gate=self._api_a_execution_gate,
                 get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
                 empty_input=queue.Empty,
@@ -5347,36 +5305,28 @@ class VoidcubeCLI:
             )
         ).start()
         
-        # Register atexit cleanup so resources are freed even on unexpected exit
-        atexit.register(_run_cleanup)
-        
-        lifecycle_guards.install_signal_handlers()
+        def report_unusable_stdin(error: BaseException) -> None:
+            print(
+                f"\nError: stdin is not usable ({error}).\n"
+                "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
+                "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
+            )
 
-        # Validate stdin before launching prompt_toolkit.
-        if not lifecycle_guards.validate_stdin():
-            return
-
-        # Run the application with patch_stdout for proper output handling
-        try:
-            with patch_stdout():
-                lifecycle_guards.install_asyncio_exception_handler()
-                app.run()
-        except (EOFError, KeyboardInterrupt, BrokenPipeError):
-            pass  # Normal exit via Ctrl+C or EOF
-        except (KeyError, OSError) as _stdin_err:
-            # Catch selector registration failures from broken stdin (#6393).
-            # This is the fallback for cases that slip past the fstat() guard.
-            if lifecycle_guards.is_unusable_stdin_error(_stdin_err):
-                print(
-                    f"\nError: stdin is not usable ({_stdin_err}).\n"
-                    "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
-                    "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
-                )
-            else:
-                raise
-        finally:
-            self._should_exit = True
-            run_tui_teardown(self._tui_teardown_ports())
+        CliApplicationRuntime(
+            CliApplicationPorts(
+                register_exit_cleanup=atexit.register,
+                cleanup=_run_cleanup,
+                install_signal_handlers=lifecycle_guards.install_signal_handlers,
+                validate_stdin=lifecycle_guards.validate_stdin,
+                install_asyncio_exception_handler=lifecycle_guards.install_asyncio_exception_handler,
+                stdout_context=patch_stdout,
+                run_application=app.run,
+                is_unusable_stdin_error=lifecycle_guards.is_unusable_stdin_error,
+                report_unusable_stdin=report_unusable_stdin,
+                request_stop=lambda: setattr(self, "_should_exit", True),
+                teardown=lambda: run_tui_teardown(self._tui_teardown_ports()),
+            )
+        ).run()
 
 
 # ============================================================================
