@@ -1,50 +1,17 @@
-# ADR: Terminal Voice Owner
-
-## Status
-
-Accepted on 2026-07-31. Terminal recording and TTS now use the explicit async adapter;
-the CLI reports them unavailable until the canonical voice requirements are met.
-
-## Context
-
-The terminal CLI contains a legacy synchronous voice flow with recorder state, TTS
-flags, playback interruption hooks, and a `/voice tts` command. Its actual TTS
-methods are deliberately disabled, while `tools.voice_mode` retained an
-independent facade with its own module-global `AudioPlayer` and event-loop bridge.
-
-`systems.voice` already owns the current asynchronous device and transport model:
-`VoiceConfig`, `AudioRecorder`, `AudioPlayer`, `SpeechToText`, `TextToSpeech`,
-and `VoiceSessionManager`. Its recorder and playback lifecycle do not implement
-the legacy CLI recorder contract, so wrapping it to mimic `start`, `stop`,
-`cancel`, or `shutdown` would make an obsolete API a new main path.
-
-This produced contradictory product state: the CLI could show TTS as enabled even
-though it did not speak, and cancellation could target a player unrelated to a
-real `VoiceSessionManager`.
-
-## Decision
-
-- `systems.voice` is the sole canonical owner of microphone capture, device
-  playback, STT/TTS configuration, temporary audio lifecycle, and interruption.
-- `VoidCube_cli` is a terminal adapter. It may own slash-command parsing,
-  prompt-toolkit display, terminal status projection, and mapping a user response
-  to a future `systems.voice` call; it must not own a second audio player or a
-  transport compatibility contract.
-- `/voice tts` is not a supported enabled feature until the CLI has an explicit
-  asynchronous adapter to the canonical voice session. The UI and status output
-  must describe it as unavailable rather than enabled.
-- `tools.voice_mode` was not a canonical transport owner and has been removed
-  after its terminal callers migrated. No replacement synchronous recorder
-  facade may be added.
-- The future adapter must use explicit operations for speak, interrupt, status,
-  and continuous-session control. It must not pass `VoidcubeCLI` or a complete
-  `VoiceSessionManager` through a generic host object.
-
-## Consequences
-
-The CLI terminal adapter owns only display state and input mapping. The canonical
-manager owns capture, transcription, playback, interruption, and temporary audio
-cleanup; the adapter does not expose a recorder-shaped compatibility API.
-
-No model provider, authentication flow, request protocol, skill, or packaging
-contract changes are authorized by this ADR.
+ADR：终端语音所有者
+## 状态
+2026年7月31日已接受。终端录音和TTS现在使用显式的异步适配器；  
+CLI在满足标准语音要求之前，会报告它们不可用。
+## 上下文
+终端命令行界面包含一个遗留的同步语音流，支持录音状态、TTS标志、播放中断钩子以及 `/voice tts` 命令。其实际的TTS方法被有意禁用，而 `tools.voice_mode` 保留了独立的接口，拥有自己的模块级 `AudioPlayer` 和事件循环桥接器。
+`systems.voice` 已经拥有当前的异步设备和传输模型：`VoiceConfig`、`AudioRecorder`、`AudioPlayer`、`SpeechToText`、`TextToSpeech` 和 `VoiceSessionManager`。其录音和播放的生命周期并未实现传统的 CLI 录音接口，因此将它们包装成模拟 `start`、`stop`、`cancel` 或 `shutdown` 的方式，会使过时的 API 变为新的主要路径。
+这导致了矛盾的产品状态：CLI 可能显示 TTS 已启用，尽管实际上并未发声；而取消操作可能针对与实际 `VoiceSessionManager` 无关的播放器。
+## 决定
+- `systems.voice` 是麦克风采集、设备播放、语音识别/文本转语音配置、临时音频生命周期以及中断操作的唯一规范所有者。
+- `VoidCube_cli` 是一个终端适配器。它可能负责解析命令行参数、显示提示工具、投影终端状态，以及将用户响应映射到未来的 `systems.voice` 调用；但不得拥有第二个音频播放器或传输兼容性契约。
+- `/voice tts` 在 CLI 没有明确的异步适配器连接到规范语音会话之前，不会被支持为启用功能。UI 和状态输出必须将其描述为不可用，而非启用。
+- `tools.voice_mode` 原非规范传输所有者，已在终端调用方迁移后移除。不得添加任何替代的同步录音接口。
+- 未来的适配器必须通过显式操作来执行说话、中断、状态控制和连续会话管理。不得通过通用主机对象传递 `VoidcubeCLI` 或完整的 `VoiceSessionManager`。
+## 后果
+CLI终端适配器仅负责显示状态和输入映射。标准管理器负责录音、转录、播放、中断以及临时音频清理；适配器不提供类似录音机的兼容性API。
+在模型提供方、认证流程、请求协议、技能或包装合同方面，任何变更均需经本ADR授权。

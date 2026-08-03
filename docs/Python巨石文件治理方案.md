@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：治理未完成。Stage 1、Stage 2 已完成；Stage 0、Stage 3、Stage 4、Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未执行。当前先补齐可重复性能基线，再收口 Supervisor Planning orchestration、共享应用层 contract、CLI host state 和 Supervisor route/lifecycle。
+> 状态：治理未完成。Stage 0、Stage 1、Stage 2 已完成；Stage 3、Stage 4、Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未执行。当前优先收口 Supervisor Planning orchestration，随后处理共享应用层 contract、CLI host state 和 Supervisor route/lifecycle。
 > 基线日期：2026-08-03。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -21,7 +21,7 @@
 | 文件/边界 | 当前规模 | 当前判断 | 优先级 |
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 4,827 行 | `run()`、`chat()` 和 command domain 已明显缩小；类仍持有共享业务状态、Agent/session 生命周期和大量 host wiring | P0 |
-| `systems/supervisor/planning_runtime.py` | 8,072 行 | repository、state projection、task profile 和 schedule 已外移；`PlanningRuntimeMixin` 仍是认知、治理、任务流和执行交接的实现中心 | P0，当前第一优先级 |
+| `systems/supervisor/planning_runtime.py` | 6,681 行 / 135 个方法 | repository、state projection、task profile、schedule、drive-input evaluation、judgement core、strategy memory、observation、meta-governance projection、autonomous task review policy 和 task state mutation 已外移；`PlanningRuntimeMixin` 仍是认知、治理持久化、review 编排、任务流和执行交接的实现中心 | P0，当前第一优先级 |
 | `systems/supervisor/endogenous_drive.py` | 231 行 | 主流水线已组件化；Engine 仅保留 facade、LM proposal 交接和 latest-generation state 写回 | P0，接近收口 |
 | `systems/supervisor/ui_runtime.py` | 420 行 | 静态资源和主要投影已外移；`SupervisorUIMixin` 仍保留 HTTP/SSE、缓存和生命周期 owner | P0 |
 | `systems/supervisor/supervisor.py` | 600 行 | 组合根仍内联注册全部路由，`_setup_routes()` 尚未成为薄 route adapter | P0 边界 |
@@ -292,27 +292,29 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 当前 8,072 行，包含 161 个方法，其中仍有多项超过 100 行。以下职责仍集中在同一隐式 `self` 边界：
+`PlanningRuntimeMixin` 当前 6,681 行，包含 135 个方法，其中仍有多项超过 100 行。以下职责仍集中在同一隐式 `self` 边界：
 
 - 内生历史、治理事件、认知状态和 self-regulation 的持久化；
-- 认知判断、候选注释、策略记忆和观察议程；
+- 认知调节、候选注释、策略记忆和观察议程的运行时组合；
 - task profile、schedule、排序和冲突；
 - Gateway 活动投影和 drive 输入；
-- 自主任务创建、决策、review、恢复和执行交接；
+- 自主任务规划、review、恢复和执行交接编排；
 - body improvement 质量评分和审查。
 
-`EndogenousStateRepository`、只读 state projection、`TaskProfilePolicy` 和 `ScheduleAllocator` 已有明确 owner，但 drive input evaluation、认知/self-regulation、autonomous task review、body improvement review 和 execution handoff 仍在 Mixin 内。继续增加 Mixin 或只留下大量委托壳都不算完成。
+`EndogenousStateRepository`、只读 state projection、`TaskProfilePolicy`、`ScheduleAllocator`、judgement core、strategy memory normalization、attention agenda、uncertainty ledger、observation program、meta-governance mode selection 和 autonomous task review policy 已有明确 owner；task mutation 与治理事件写回也已由独立 state service 承接。认知/self-regulation 的运行时组合、strategy/meta-governance memory 的持久化编排、autonomous task review 的状态编排、body improvement review 和 execution handoff 仍在 Mixin 内。继续增加 Mixin 或只留下大量委托壳都不算完成。
 
 ### 7.2 目标组件
 
 目标组件和当前缺口：
 
 - `EndogenousStateRepository`：已建立，继续保持历史、事件、认知和 regulation 的唯一持久化 owner。
-- `CognitionProjector`：已有部分纯 projection，仍需从 Mixin 收口剩余认知和 self-regulation 组合。
-- `StrategyMemoryService`：未形成完整 service，需承接 agenda、observation 和 meta-governance 记忆规则。
+- `CognitionProjector`：已有 cognition state 和 judgement core 纯 projection，仍需从 Mixin 收口认知与 self-regulation 的运行时组合。
+- `StrategyMemoryService`：作为目标副作用 owner，需承接 strategy、observation 和 meta-governance memory 的持久化规则；相关 normalization、agenda、observation program 和 meta-governance mode 的纯 projection 已独立。
 - `TaskProfilePolicy`：已建立，task family/type/profile 和 execution kind 不得回流 Mixin。
 - `ScheduleAllocator`：已建立，时间槽、冲突、排序和 active task 查询不得回流 Mixin。
-- `AutonomousTaskService`：未完成，需承接 plan/decide/review/clear/recover 状态转换。
+- `systems/supervisor/autonomous_task_review.py`：已建立纯决策 policy，承接状态标准化、agent-pull 判定、学习前置条件和 body-improvement 质量门槛；不得读写 store 或调用执行端口。
+- `systems/supervisor/autonomous_task_state.py`：已建立 task mutation、治理 transition/clear event 和 status observer 的唯一 owner；不得承接 review 规则或 Gateway/Execution 调用。
+- `AutonomousTaskService`：未完成，需承接 plan/decide/review/clear/recover 的运行时编排，并通过 task state service 写回。
 - `ExecutionHandoffService`：执行请求、Gateway owner 和失败回写。
 - `BodyImprovementReviewer`：diff、probe、质量和稳定性审查。
 - `PlanningRuntime`：协调上述服务并提供 Supervisor 路由所需端口。
@@ -568,11 +570,11 @@ DrivePerceptionBuilder
 
 | 阶段 | 状态 | 当前有效结果 | 退出前仍需完成 |
 | --- | --- | --- | --- |
-| Stage 0 | 部分完成 | 反向导入、前端边界、P0 增长、打包和退役集成护栏已建立 | 补齐可重复的 smoke 与性能基线；迁移结束后把临时行数护栏改为长期边界合同 |
+| Stage 0 | 已完成 | 反向导入、前端边界、P0 增长、打包、退役集成和可重复性能基线护栏已建立 | 迁移结束后把临时行数护栏改为长期边界合同 |
 | Stage 1 | 已完成 | 根 `cli.py` 已成为薄兼容入口；共享配置、Provider 和 Gateway 基础能力已进入 `VoidCube_app` | 持续禁止根模块反向导入和共享层依赖前端 |
 | Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 不恢复内嵌 HTML fallback |
 | Stage 3 | 部分完成 | 已有共享 session lifecycle、turn input/outcome、queue/cancel、tool event、approval/clarify contract；CLI command domain 已分组 | 建立共享应用组合根、ApplicationState、稳定事件集合和真正通过公共端口运行的 adapter contract tests |
-| Stage 4 | 部分完成 | repository、state projection、task profile、schedule allocation 已有独立 owner | 完成 cognition/strategy、autonomous task service、body review、execution handoff，并删除对应 Mixin 实现 |
+| Stage 4 | 部分完成 | repository、state projection、task profile、schedule allocation、drive-input activity evaluation、judgement core、strategy memory、uncertainty ledger、observation program、meta-governance mode selection、autonomous task review policy 和 task state mutation 已有独立 owner | 完成 cognition/self-regulation 组合、strategy/meta-governance 持久化编排、autonomous task review service、body review、execution handoff，并删除对应 Mixin 实现 |
 | Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 在 Planning orchestration 收口后完成等价全链路验收，确认无旧 helper 和双写入口 |
 | Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成大量显式 runtime/ports | 收口 CLI 共享业务状态；删除 `PlanningRuntimeMixin`、`SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
 | Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
@@ -584,16 +586,23 @@ DrivePerceptionBuilder
 - Supervisor UI 资源通过包资源加载，源码与 wheel 使用同一 canonical 文件。
 - session lifecycle、turn 输入/结果、取消/队列、工具事件、审批和 clarify 已有无界面基础 contract。
 - endogenous repository、task profile、schedule allocation 和主要 candidate/evidence/LM/deliberation pipeline 已有直接 owner。
+- drive-input activity evaluation 通过显式 context 接收 Gateway 快照、任务 profile、运行阈值和 Auto 边界；Supervisor 只负责取数、配置和装配。
+- cognition state、judgement core 和 meta-governance mode 通过显式快照输入生成纯 projection；Supervisor Planning 不再持有这些纯计算规则的实现方法。
+- attention agenda projection 通过显式 deliberation、治理通道和规范化 strategy memory 生成；persistence 分类不再依赖 Supervisor。
+- strategy memory normalization、uncertainty ledger、observation program 和 meta-governance mode 的纯计算均通过显式函数输入输出；Supervisor 仅保留历史写入、清理和事件编排副作用。
+- autonomous task review policy 通过显式 task profile、active task snapshot、learning history、drive input 和质量阈值生成决策；Supervisor 仅保留状态写回、治理事件、Gateway/Execution 编排。
+- `systems/supervisor/autonomous_task_state.py` 通过显式 store、governance repository 和 status observer 负责 task mutation 及治理事件写回；review policy 不直接触碰这些副作用。
+- `scripts/performance_baseline.py` 提供版本化 `voidcube.performance-baseline.v1` 基线，覆盖 import graph、CLI help、turn contract、Supervisor 初始化和 UI projection；测量使用冷进程，必要时同时记录无外部副作用的 operation timing。
 - 语音设备实现归 `systems.voice` 与 adapter，退役的 `tools.voice_mode` 不得恢复。
 - 已退役模型集成在活跃代码、可加载技能和 wheel 中保持零入口。
 
 ### 15.3 当前缺口
 
 - `VoidCube_app` 尚无共享应用组合根，也未形成完整的 `SessionEvent`、`TurnEvent`、`MessageDelta`、usage 和 artifact 事件体系。
-- `PlanningRuntimeMixin` 仍是 8,072 行实现中心，drive evaluation、认知调节、autonomous review、body review 和 execution handoff 尚未形成完整 service 边界。
+- `PlanningRuntimeMixin` 仍是 6,681 行、135 个方法的实现中心；认知/self-regulation 组合、strategy/meta-governance memory 持久化编排、autonomous review 运行时编排、body review 和 execution handoff 尚未形成完整 service 边界。
 - `VoidcubeCLI` 仍持有跨前端可复用的状态和生命周期，不能仅因 `run()` 已缩短就判定 CLI-1/CLI-2/CLI-5 完成。
 - `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
-- 尚无当前最终结构上的全量测试与性能对比证据，因此不能进入 Windows adapter 实施。
+- 当前性能基线只用于迁移前后和阶段收口对比，不等同于 Stage 7 全量验收；全量测试、发行物验证和最终性能复测仍未完成，因此不能进入 Windows adapter 实施。
 
 ### 15.4 验证基线
 
@@ -603,7 +612,7 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **基线与 Planning orchestration**：先建立导入、首次 CLI、首次 turn、服务启动和 UI state 的可重复测量，再迁移 `evaluate_drive_input()`、autonomous task review、body review 和 execution handoff；每迁移一个责任就删除原 Mixin 实现。
+1. **Planning orchestration**：以现有性能基线作为参照，继续收口 cognition/strategy 持久化编排、autonomous task review 状态编排、body review 和 execution handoff；每迁移一个责任就删除原 Mixin 实现，并在边界变化后复测受影响场景。
 2. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
 3. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
 4. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。

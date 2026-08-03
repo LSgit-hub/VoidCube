@@ -130,3 +130,101 @@ def build_cognition_state_projection(
         },
         "recent_events": recent_events,
     }
+
+
+def build_judgement_core_projection(
+    *,
+    deliberation: Dict[str, Any],
+    governance_channels: Dict[str, Any],
+    attention_agenda: Dict[str, Any],
+    uncertainty_ledger: Dict[str, Any],
+    observation_program: Dict[str, Any],
+    meta_governance: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the primary need/intent judgement from immutable projections."""
+    reflection = dict(deliberation.get("reflection") or {})
+    adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
+    needs = [
+        dict(item)
+        for item in list(deliberation.get("needs") or [])[:6]
+        if isinstance(item, dict)
+    ]
+    intents = [
+        dict(item)
+        for item in list(deliberation.get("intents") or [])[:6]
+        if isinstance(item, dict)
+    ]
+
+    primary_need = dict(needs[0]) if needs else {}
+    primary_intent: Dict[str, Any] = {}
+    if primary_need:
+        primary_need_type = str(primary_need.get("need_type") or "").strip()
+        if primary_need_type:
+            for intent in intents:
+                source_needs = [
+                    str(item).strip()
+                    for item in list(intent.get("source_needs") or [])
+                    if str(item).strip()
+                ]
+                if primary_need_type in source_needs:
+                    primary_intent = dict(intent)
+                    break
+    if not primary_intent and intents:
+        primary_intent = dict(intents[0])
+    governance_summary = {
+        "preferred_focus": str(adaptive_policy.get("preferred_focus") or "").strip() or None,
+        "dominant_constraint": str(reflection.get("dominant_constraint") or "").strip() or None,
+        "posture_signal_type": str(
+            dict(governance_channels.get("posture") or {}).get("signal_type") or ""
+        ).strip()
+        or None,
+        "observation_request_count": len(
+            list(governance_channels.get("observation_requests") or [])
+        ),
+        "governance_review_request_count": len(
+            list(governance_channels.get("governance_review_requests") or [])
+        ),
+        "truthfulness_alert_count": len(
+            list(governance_channels.get("truthfulness_alerts") or [])
+        ),
+        "autonomy_alignment_request_count": len(
+            list(governance_channels.get("autonomy_alignment_requests") or [])
+        ),
+    }
+
+    summary_parts = [
+        (
+            f"primary_need={str(primary_need.get('need_type') or '').strip()}"
+            if str(primary_need.get("need_type") or "").strip()
+            else ""
+        ),
+        (
+            f"primary_intent={str(primary_intent.get('intent_type') or '').strip()}"
+            if str(primary_intent.get("intent_type") or "").strip()
+            else ""
+        ),
+        (
+            f"focus={str(adaptive_policy.get('preferred_focus') or '').strip()}"
+            if str(adaptive_policy.get("preferred_focus") or "").strip()
+            else ""
+        ),
+        (
+            f"constraint={str(reflection.get('dominant_constraint') or '').strip()}"
+            if str(reflection.get("dominant_constraint") or "").strip()
+            else ""
+        ),
+    ]
+    summary = "Judgement core: " + "; ".join(
+        [item for item in summary_parts if item]
+    )
+    if summary == "Judgement core: ":
+        summary = "Judgement core is not available yet."
+
+    return {
+        "summary": summary,
+        "primary_need": primary_need or None,
+        "primary_intent": primary_intent or None,
+        "governance_outputs": governance_summary,
+        "active_needs": needs,
+        "active_intents": intents,
+    }

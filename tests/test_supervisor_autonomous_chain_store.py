@@ -60,6 +60,8 @@ from systems.supervisor.endogenous_cognitive_memory import (
 from systems.supervisor.endogenous_self_model import build_recent_reference_alignment
 from systems.supervisor.endogenous_state_projection import project_drive_history
 from systems.supervisor.endogenous_drive_context import build_drive_context
+from systems.supervisor.endogenous_cognition_state import build_judgement_core_projection
+from systems.supervisor.endogenous_strategy_memory import normalize_endogenous_strategy_memory
 from systems.supervisor.endogenous_self_iteration import (
     build_self_iteration_hypotheses,
 )
@@ -454,14 +456,14 @@ async def _plan_and_write_back_endogenous_cycle(
             task_id,
             {"decision": "approved", "reason": f"{reason}: approved"},
         )
-        supervisor._update_task_status(  # type: ignore[attr-defined]
+        supervisor._autonomous_task_state.update_status(
             task_id,
             status="running",
             reason=f"{reason}: running",
             actor="test",
             event_type="execution",
         )
-        supervisor._update_task_status(  # type: ignore[attr-defined]
+        supervisor._autonomous_task_state.update_status(
             task_id,
             status="completed",
             reason=reason,
@@ -473,14 +475,14 @@ async def _plan_and_write_back_endogenous_cycle(
             task_id,
             {"decision": "approved", "reason": f"{reason}: approved"},
         )
-        supervisor._update_task_status(  # type: ignore[attr-defined]
+        supervisor._autonomous_task_state.update_status(
             task_id,
             status="running",
             reason=f"{reason}: running",
             actor="test",
             event_type="execution",
         )
-        supervisor._update_task_status(  # type: ignore[attr-defined]
+        supervisor._autonomous_task_state.update_status(
             task_id,
             status="failed",
             reason=reason,
@@ -1417,7 +1419,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     assert drive_input["completed_learning_tasks"][0]["completed_at"]
     drive_input["drive_history"] = project_drive_history(
         history,
-        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+        normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
 
@@ -7494,7 +7496,7 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
         supervisor._load_endogenous_drive_history(),
-        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+        normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
     evidence_packet = build_lm_evidence_packet_from_runtime_config(
@@ -7583,7 +7585,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
         supervisor._load_endogenous_drive_history(),
-        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+        normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
     evidence_packet = build_lm_evidence_packet_from_runtime_config(
@@ -7682,7 +7684,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
         supervisor._load_endogenous_drive_history(),
-        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+        normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
     evidence_packet = build_lm_evidence_packet_from_runtime_config(
@@ -11310,7 +11312,7 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
         supervisor._load_endogenous_drive_history(),
-        normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+        normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
     evidence_packet = build_lm_evidence_packet_from_runtime_config(
@@ -11577,10 +11579,8 @@ def test_recent_meta_cognition_summary_is_unavailable_without_real_signals(tmp_p
 
 
 @pytest.mark.unit
-def test_judgement_core_keeps_primary_intent_aligned_with_primary_need(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-
-    judgement_core = supervisor._build_endogenous_judgement_core(
+def test_judgement_core_keeps_primary_intent_aligned_with_primary_need():
+    judgement_core = build_judgement_core_projection(
         deliberation={
             "reflection": {"dominant_constraint": "api_b_judgement_blockage"},
             "adaptive_policy": {"preferred_focus": "truthfulness"},
@@ -16085,7 +16085,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
         drive_input = await fake_drive_input()
         drive_input["drive_history"] = project_drive_history(
             supervisor._load_endogenous_drive_history(),
-            normalize_strategy_memory=supervisor._normalize_endogenous_strategy_memory,
+            normalize_strategy_memory=normalize_endogenous_strategy_memory,
         )
         drive_context = build_drive_context(drive_input)
         evidence_packet = build_lm_evidence_packet_from_runtime_config(

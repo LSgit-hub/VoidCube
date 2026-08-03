@@ -21,7 +21,22 @@ from systems.supervisor.endogenous_proposal_port import (
 )
 from systems.supervisor.endogenous_cognition_state import (
     build_cognition_state_projection,
+    build_judgement_core_projection,
 )
+from systems.supervisor.endogenous_strategy_projection import (
+    build_attention_agenda_projection,
+)
+from systems.supervisor.endogenous_uncertainty_projection import (
+    build_uncertainty_ledger_projection,
+)
+from systems.supervisor.endogenous_observation_projection import (
+    build_observation_program_entries,
+    project_observation_program,
+)
+from systems.supervisor.endogenous_strategy_memory import (
+    normalize_endogenous_strategy_memory,
+)
+from systems.supervisor.endogenous_meta_governance import derive_meta_governance_mode
 from systems.supervisor.endogenous_proposal_cognition import (
     compact_proposal_memory,
     build_proposal_cognition_projection,
@@ -51,6 +66,15 @@ from systems.supervisor.activity_projection import (
     parse_activity_timestamp,
     project_auto_activity_snapshot,
     project_runtime_observation_input,
+)
+from systems.supervisor.drive_input_evaluation import (
+    DriveInputEvaluationConfig,
+    evaluate_drive_input_snapshot,
+)
+from systems.supervisor.autonomous_task_review import (
+    build_autonomous_chain_auto_decision,
+    is_agent_pull_task,
+    normalize_autonomous_chain_decision,
 )
 
 logger = logging.getLogger("supervisor")
@@ -308,7 +332,7 @@ class PlanningRuntimeMixin:
             for item in list(raw.get("outcomes") or [])
             if isinstance(item, dict)
         ]
-        snapshot["strategy_memory"] = self._normalize_endogenous_strategy_memory(
+        snapshot["strategy_memory"] = normalize_endogenous_strategy_memory(
             raw.get("strategy_memory")
         )
         return self._trim_endogenous_drive_history(snapshot)
@@ -421,7 +445,7 @@ class PlanningRuntimeMixin:
         trimmed["version"] = 1
         trimmed["judgements"] = list(trimmed.get("judgements") or [])[: self._ENDOGENOUS_DRIVE_HISTORY_LIMIT]
         trimmed["outcomes"] = list(trimmed.get("outcomes") or [])[: self._ENDOGENOUS_DRIVE_HISTORY_LIMIT]
-        trimmed["strategy_memory"] = self._normalize_endogenous_strategy_memory(
+        trimmed["strategy_memory"] = normalize_endogenous_strategy_memory(
             trimmed.get("strategy_memory")
         )
         return trimmed
@@ -1182,141 +1206,6 @@ class PlanningRuntimeMixin:
             "autonomous_chain_gate_active": bool(payload.get("autonomous_chain_gate_active")),
         }
 
-    def _record_autonomous_task_transition(
-        self,
-        task: AutonomousChainTask,
-        *,
-        transition_kind: str,
-    ) -> None:
-        from memai.governance import (
-            GovernanceDecision,
-            GovernanceEvent,
-            GovernanceEventType,
-            GovernanceGitLineage,
-        )
-
-        status = str(task.status or "").strip().lower()
-        decision = {
-            "approved": GovernanceDecision.APPROVE,
-            "deferred": GovernanceDecision.DEFER,
-            "paused": GovernanceDecision.PAUSE,
-            "cancelled": GovernanceDecision.CANCEL,
-            "completed": GovernanceDecision.COMPLETED,
-            "failed": GovernanceDecision.FAILED,
-        }.get(status, GovernanceDecision.RECORD_ONLY)
-        latest_decision = task.decision_history[-1] if task.decision_history else None
-        execution_request = task.execution_request
-        lineage_payload = (
-            execution_request.git_lineage.model_dump(mode="json")
-            if execution_request is not None
-            else dict(task.evidence.get("git_lineage") or {})
-        )
-        repository = self._governor.governance_repository
-        repository.append(
-            GovernanceEvent.create(
-                event_type=GovernanceEventType.AUTONOMOUS_TASK_TRANSITION,
-                source_actor=(
-                    str(latest_decision.actor)
-                    if latest_decision is not None
-                    else "supervisor"
-                ),
-                decision=decision,
-                reason=(
-                    str(latest_decision.reason or task.decision_reason)
-                    if latest_decision is not None
-                    else task.decision_reason or f"Task {transition_kind}: {status}"
-                ),
-                task_id=task.task_id,
-                body_id=str(
-                    (execution_request.target_slot_id if execution_request else None)
-                    or task.metadata.get("target_slot_id")
-                    or ""
-                ),
-                git_lineage=GovernanceGitLineage.from_dict(lineage_payload),
-                execution_result={
-                    "transition_kind": transition_kind,
-                    "autonomous_task_projection": task.model_dump(mode="json"),
-                    "runtime_task_profile": {
-                        "governance_task_type": task.governance_task_type,
-                        "task_family": task.task_family,
-                        "execution_kind": task.execution_kind,
-                    },
-                },
-            )
-        )
-
-    def _record_autonomous_task_clear(
-        self,
-        tasks: list[AutonomousChainTask],
-    ) -> None:
-        from memai.governance import (
-            GovernanceDecision,
-            GovernanceEvent,
-            GovernanceEventType,
-        )
-
-        self._governor.governance_repository.append(
-            GovernanceEvent.create(
-                event_type=GovernanceEventType.AUTONOMOUS_TASK_CLEAR,
-                source_actor="supervisor_admin",
-                decision=GovernanceDecision.RECORD_ONLY,
-                reason="Administrative autonomous-chain runtime clear.",
-                execution_result={
-                    "cleared_task_ids": [task.task_id for task in tasks],
-                    "cleared_task_count": len(tasks),
-                },
-            )
-        )
-
-    def _create_autonomous_chain_task(self, **kwargs: Any) -> AutonomousChainTask:
-        return self._autonomous_chain_store.create_task(
-            **kwargs,
-            before_commit=lambda task: self._record_autonomous_task_transition(
-                task,
-                transition_kind="created",
-            ),
-        )
-
-    def _update_task_metadata(
-        self,
-        task_id: str,
-        *,
-        metadata: Optional[Dict[str, Any]] = None,
-        execution_request: Optional[AutonomousChainExecutionRequest] = None,
-    ) -> AutonomousChainTask:
-        task = self._autonomous_chain_store.update_metadata(
-            task_id,
-            metadata=metadata,
-            execution_request=execution_request,
-            before_commit=lambda updated: self._record_autonomous_task_transition(
-                updated,
-                transition_kind="metadata",
-            ),
-        )
-        return task
-
-    def _update_task_priority(
-        self,
-        task_id: str,
-        *,
-        priority: str,
-        actor: str,
-        reason: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> AutonomousChainTask:
-        task = self._autonomous_chain_store.update_priority(
-            task_id,
-            priority=priority,
-            actor=actor,
-            reason=reason,
-            context=context,
-            before_commit=lambda updated: self._record_autonomous_task_transition(
-                updated,
-                transition_kind="priority",
-            ),
-        )
-        return task
-
     async def _resolve_runtime_drive_input_request(
         self,
         request: Dict[str, Any],
@@ -1411,16 +1300,16 @@ class PlanningRuntimeMixin:
         adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
         drive_posture = self._drive_posture_signal_from_deliberation(deliberation)
         context_key = self._derive_endogenous_context_key(deliberation=deliberation)
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history_snapshot.get("strategy_memory")
         )
         corrective_mode = derive_corrective_mode(self_regulation)
-        attention_agenda = self._build_endogenous_attention_agenda(
+        attention_agenda = build_attention_agenda_projection(
             deliberation=deliberation,
             governance_channels=governance_channels,
             strategy_memory=strategy_memory,
         )
-        uncertainty_ledger = self._build_endogenous_uncertainty_ledger(
+        uncertainty_ledger = build_uncertainty_ledger_projection(
             deliberation=deliberation,
             governance_channels=governance_channels,
             self_regulation=self_regulation,
@@ -1432,7 +1321,7 @@ class PlanningRuntimeMixin:
             history=history_snapshot,
             context_key=context_key,
         )
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history_snapshot.get("strategy_memory")
         )
         meta_governance = self._build_endogenous_meta_governance(
@@ -1452,7 +1341,7 @@ class PlanningRuntimeMixin:
             self_regulation=self_regulation,
             history=history_snapshot,
         )
-        judgement_core = self._build_endogenous_judgement_core(
+        judgement_core = build_judgement_core_projection(
             deliberation=deliberation,
             governance_channels=governance_channels,
             attention_agenda=attention_agenda,
@@ -1483,101 +1372,6 @@ class PlanningRuntimeMixin:
             judgement_core=judgement_core,
             proposal_cognition=proposal_cognition,
         )
-
-    def _build_endogenous_judgement_core(
-        self,
-        *,
-        deliberation: Dict[str, Any],
-        governance_channels: Dict[str, Any],
-        attention_agenda: Dict[str, Any],
-        uncertainty_ledger: Dict[str, Any],
-        observation_program: Dict[str, Any],
-        meta_governance: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        reflection = dict(deliberation.get("reflection") or {})
-        adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
-        needs = [
-            dict(item)
-            for item in list(deliberation.get("needs") or [])[:6]
-            if isinstance(item, dict)
-        ]
-        intents = [
-            dict(item)
-            for item in list(deliberation.get("intents") or [])[:6]
-            if isinstance(item, dict)
-        ]
-
-        primary_need = dict(needs[0]) if needs else {}
-        primary_intent: Dict[str, Any] = {}
-        if primary_need:
-            primary_need_type = str(primary_need.get("need_type") or "").strip()
-            if primary_need_type:
-                for intent in intents:
-                    source_needs = [
-                        str(item).strip()
-                        for item in list(intent.get("source_needs") or [])
-                        if str(item).strip()
-                    ]
-                    if primary_need_type in source_needs:
-                        primary_intent = dict(intent)
-                        break
-        if not primary_intent and intents:
-            primary_intent = dict(intents[0])
-        governance_summary = {
-            "preferred_focus": str(adaptive_policy.get("preferred_focus") or "").strip() or None,
-            "dominant_constraint": str(reflection.get("dominant_constraint") or "").strip() or None,
-            "posture_signal_type": str(
-                dict(governance_channels.get("posture") or {}).get("signal_type") or ""
-            ).strip()
-            or None,
-            "observation_request_count": len(
-                list(governance_channels.get("observation_requests") or [])
-            ),
-            "governance_review_request_count": len(
-                list(governance_channels.get("governance_review_requests") or [])
-            ),
-            "truthfulness_alert_count": len(
-                list(governance_channels.get("truthfulness_alerts") or [])
-            ),
-            "autonomy_alignment_request_count": len(
-                list(governance_channels.get("autonomy_alignment_requests") or [])
-            ),
-        }
-
-        summary_parts = [
-            (
-                f"primary_need={str(primary_need.get('need_type') or '').strip()}"
-                if str(primary_need.get("need_type") or "").strip()
-                else ""
-            ),
-            (
-                f"primary_intent={str(primary_intent.get('intent_type') or '').strip()}"
-                if str(primary_intent.get("intent_type") or "").strip()
-                else ""
-            ),
-            (
-                f"focus={str(adaptive_policy.get('preferred_focus') or '').strip()}"
-                if str(adaptive_policy.get("preferred_focus") or "").strip()
-                else ""
-            ),
-            (
-                f"constraint={str(reflection.get('dominant_constraint') or '').strip()}"
-                if str(reflection.get("dominant_constraint") or "").strip()
-                else ""
-            ),
-        ]
-        summary = "Judgement core: " + "; ".join([item for item in summary_parts if item])
-        if summary == "Judgement core: ":
-            summary = "Judgement core is not available yet."
-
-        return {
-            "summary": summary,
-            "primary_need": primary_need or None,
-            "primary_intent": primary_intent or None,
-            "governance_outputs": governance_summary,
-            "active_needs": needs,
-            "active_intents": intents,
-        }
 
     def _build_endogenous_proposal_cognition(
         self,
@@ -2565,139 +2359,6 @@ class PlanningRuntimeMixin:
             ),
         }
 
-    def _derive_endogenous_meta_governance_mode(
-        self,
-        *,
-        attention_agenda: Dict[str, Any],
-        uncertainty_ledger: Dict[str, Any],
-        observation_program: Dict[str, Any],
-        self_regulation: Dict[str, Any],
-        reflection: Dict[str, Any],
-        adaptive_policy: Dict[str, Any],
-        strategy_memory: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        agenda_entries = [
-            dict(item)
-            for item in list(attention_agenda.get("entries") or [])
-            if isinstance(item, dict)
-        ]
-        ledger_entries = [
-            dict(item)
-            for item in list(uncertainty_ledger.get("entries") or [])
-            if isinstance(item, dict)
-        ]
-        observation_entries = [
-            dict(item)
-            for item in list(observation_program.get("entries") or [])
-            if isinstance(item, dict)
-        ]
-
-        dominant_agenda = agenda_entries[0] if agenda_entries else {}
-        dominant_uncertainty = ledger_entries[0] if ledger_entries else {}
-        dominant_observation = observation_entries[0] if observation_entries else {}
-        current_focus = str(adaptive_policy.get("preferred_focus") or "").strip().lower()
-        dominant_constraint = str(reflection.get("dominant_constraint") or "").strip().lower()
-        corrective_mode = derive_corrective_mode(self_regulation)
-        normalized_strategy_memory = self._normalize_endogenous_strategy_memory(strategy_memory)
-        meta_governance_stats = dict(normalized_strategy_memory.get("meta_governance_stats") or {})
-
-        observation_priority = float(dominant_observation.get("priority") or 0.0)
-        uncertainty_risk = float(dominant_uncertainty.get("risk") or 0.0)
-        agenda_priority = float(dominant_agenda.get("priority") or 0.0)
-        candidate_throttle = float(adaptive_policy.get("candidate_throttle") or 0.0)
-        observation_bias = float(adaptive_policy.get("observation_bias") or 0.0)
-        autonomy_readiness = float(reflection.get("autonomy_readiness") or 0.0)
-        last_mode = None
-        last_mode_stats: Dict[str, Any] = {}
-        if meta_governance_stats:
-            last_mode, last_mode_stats = max(
-                meta_governance_stats.items(),
-                key=lambda item: (
-                    int(item[1].get("seen") or 0),
-                    int(item[1].get("active_cycles") or 0),
-                    float(item[1].get("last_confidence") or 0.0),
-                ),
-            )
-            last_mode = str(last_mode or "").strip().lower() or None
-            last_mode_stats = dict(last_mode_stats or {})
-
-        mode_scores = {
-            "observe": (
-                observation_priority * 0.42
-                + observation_bias * 0.22
-                + uncertainty_risk * 0.2
-                + (0.1 if current_focus == "observation" else 0.0)
-                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage"} else 0.0)
-                + (0.06 if last_mode == "observe" else 0.0)
-                - (0.04 if last_mode == "expand" and uncertainty_risk < 0.3 else 0.0)
-            ),
-            "correct": (
-                float(self_regulation.get("dynamic_truthfulness_bias_boost") or 0.0) * 0.38
-                + float(self_regulation.get("dynamic_learning_expansion_suppression") or 0.0) * 0.24
-                + uncertainty_risk * 0.18
-                + (0.08 if corrective_mode.get("mode") == "corrective" else 0.0)
-                + (0.05 if last_mode == "correct" else 0.0)
-            ),
-            "expand": (
-                agenda_priority * 0.34
-                + float(adaptive_policy.get("learning_expansion_bias") or 0.0) * 0.26
-                + max(0.0, 0.58 - candidate_throttle) * 0.2
-                + max(0.0, autonomy_readiness - 0.35) * 0.1
-                - uncertainty_risk * 0.12
-                + (0.05 if last_mode == "expand" else 0.0)
-                - (0.03 if last_mode == "observe" and uncertainty_risk > 0.45 else 0.0)
-            ),
-            "conserve": (
-                candidate_throttle * 0.35
-                + max(0.0, 0.52 - autonomy_readiness) * 0.22
-                + float(self_regulation.get("dynamic_candidate_throttle_boost") or 0.0) * 0.18
-                + (0.06 if current_focus == "governance_hygiene" else 0.0)
-                + (0.04 if last_mode == "conserve" else 0.0)
-            ),
-        }
-        mode = max(mode_scores.items(), key=lambda item: item[1])[0]
-        confidence = self._clamp_endogenous_ratio(max(mode_scores.values()))
-        if confidence < 0.2:
-            mode = "observe" if uncertainty_risk >= agenda_priority else "conserve"
-        elif last_mode and last_mode == mode and last_mode_stats:
-            confidence = self._clamp_endogenous_ratio(
-                confidence + min(0.08, float(last_mode_stats.get("active_cycles") or 0) * 0.01)
-            )
-
-        guardrails = []
-        if mode in {"observe", "correct"}:
-            guardrails.append("prioritize evidence collection before expansion")
-        if mode == "expand":
-            guardrails.append("avoid expanding when uncertainty remains unresolved")
-        if mode == "conserve":
-            guardrails.append("limit new candidate volume until pressure decays")
-        if corrective_mode.get("active"):
-            guardrails.append("respect active self-regulation boosts")
-
-        stability = "stable"
-        if confidence >= 0.72:
-            stability = "strong"
-        elif confidence >= 0.45:
-            stability = "moderate"
-        elif confidence > 0.0:
-            stability = "fragile"
-
-        drivers = [
-            f"agenda={dominant_agenda.get('topic') or 'none'}",
-            f"uncertainty={dominant_uncertainty.get('domain') or 'none'}",
-            f"observation={dominant_observation.get('target') or 'none'}",
-            f"current_focus={current_focus or 'unknown'}",
-            f"dominant_constraint={dominant_constraint or 'none'}",
-            f"last_mode={last_mode or 'none'}",
-        ]
-        return {
-            "mode": mode,
-            "confidence": round(confidence, 4),
-            "drivers": drivers,
-            "guardrails": guardrails,
-            "stability": stability,
-        }
-
     def _build_endogenous_meta_governance(
         self,
         *,
@@ -2714,7 +2375,7 @@ class PlanningRuntimeMixin:
         uncertainty_ledger = dict(cognition_state_seed.get("uncertainty_ledger") or {})
         observation_program = dict(cognition_state_seed.get("observation_program") or {})
         correction_mode = dict(cognition_state_seed.get("corrective_mode") or {})
-        meta_mode = self._derive_endogenous_meta_governance_mode(
+        meta_mode = derive_meta_governance_mode(
             attention_agenda=attention_agenda,
             uncertainty_ledger=uncertainty_ledger,
             observation_program=observation_program,
@@ -2759,402 +2420,6 @@ class PlanningRuntimeMixin:
             "context": context,
         }
 
-    def _derive_endogenous_agenda_persistence_state(
-        self,
-        topic_stats: Dict[str, Any],
-    ) -> str:
-        seen = max(0, int(topic_stats.get("seen") or 0))
-        dragging = max(0, int(topic_stats.get("dragging") or 0))
-        resolved = max(0, int(topic_stats.get("resolved") or 0))
-        active_cycles = max(0, int(topic_stats.get("active_cycles") or 0))
-        last_status = str(topic_stats.get("last_status") or "").strip().lower()
-
-        if dragging >= 2 or (dragging >= 1 and active_cycles >= 3):
-            return "dragging"
-        if resolved >= 2 and resolved >= active_cycles:
-            return "stabilizing"
-        if seen >= 3 or active_cycles >= 3:
-            return "persistent"
-        if last_status == "resolved":
-            return "cooling"
-        return "emerging"
-
-    def _build_endogenous_attention_agenda(
-        self,
-        *,
-        deliberation: Dict[str, Any],
-        governance_channels: Dict[str, Any],
-        strategy_memory: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        needs = [
-            dict(item)
-            for item in list(deliberation.get("needs") or [])
-            if isinstance(item, dict)
-        ]
-        intents = [
-            dict(item)
-            for item in list(deliberation.get("intents") or [])
-            if isinstance(item, dict)
-        ]
-        signals = [
-            dict(item)
-            for item in list(deliberation.get("signals") or [])
-            if isinstance(item, dict)
-        ]
-        reflection = dict(deliberation.get("reflection") or {})
-        adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
-        preferred_focus = str(adaptive_policy.get("preferred_focus") or "").strip().lower()
-        normalized_strategy_memory = self._normalize_endogenous_strategy_memory(strategy_memory)
-        agenda_topic_stats = dict(normalized_strategy_memory.get("agenda_topic_stats") or {})
-
-        perspective_map = {
-            "stabilize_memory_continuity": "system_continuity",
-            "repair_truthfulness": "user_alignment",
-            "expand_learning_frontier": "self_growth",
-            "prepare_body_growth": "self_growth",
-            "observe_before_acting": "self_regulation",
-        }
-        channel_counts = {
-            name: len(list(governance_channels.get(name) or []))
-            for name in (
-                "task_candidates",
-                "observation_requests",
-                "governance_review_requests",
-                "truthfulness_alerts",
-                "autonomy_alignment_requests",
-            )
-        }
-        entries: list[Dict[str, Any]] = []
-
-        for need in needs:
-            need_type = str(need.get("need_type") or "").strip()
-            if not need_type:
-                continue
-            matching_intent = next(
-                (
-                    intent for intent in intents
-                    if need_type in set(intent.get("source_needs") or [])
-                ),
-                None,
-            )
-            matching_signal = next(
-                (
-                    signal for signal in signals
-                    if need_type in set(signal.get("source_needs") or [])
-                ),
-                None,
-            )
-            agenda_priority = self._clamp_endogenous_ratio(
-                float(need.get("severity") or 0.0) * 0.45
-                + float(need.get("urgency") or 0.0) * 0.35
-                + float(need.get("confidence") or 0.0) * 0.20
-            )
-            if need_type == "observe_before_acting":
-                agenda_priority = self._clamp_endogenous_ratio(
-                    agenda_priority
-                    + float(adaptive_policy.get("observation_bias") or 0.0) * 0.18
-                    + (0.12 if preferred_focus == "observation" else 0.0)
-                    + (0.08 if reflection.get("dominant_constraint") not in {None, "", "none"} else 0.0)
-                )
-            observation_required = (
-                need_type == "observe_before_acting"
-                or str((matching_intent or {}).get("output_channel") or "").strip() == "drive_signal"
-            )
-            blocked_by = None
-            if need_type == "observe_before_acting":
-                blocked_by = reflection.get("dominant_constraint")
-            elif need_type == "prepare_body_growth" and reflection.get("body_growth_blocked"):
-                blocked_by = "body_growth_cooldown"
-            topic_memory = dict(agenda_topic_stats.get(need_type) or {})
-            persistence_state = self._derive_endogenous_agenda_persistence_state(topic_memory)
-            trending = "steady"
-            if persistence_state in {"persistent", "dragging"}:
-                trending = "warming"
-            elif persistence_state in {"stabilizing", "cooling"}:
-                trending = "cooling"
-            entries.append(
-                {
-                    "agenda_id": f"agenda:{need_type}",
-                    "topic": need_type,
-                    "perspective": perspective_map.get(need_type, "governance"),
-                    "objective": (
-                        (matching_intent or {}).get("intent_type")
-                        or need_type
-                    ),
-                    "priority": round(agenda_priority, 4),
-                    "urgency": round(float(need.get("urgency") or 0.0), 4),
-                    "confidence": round(float(need.get("confidence") or 0.0), 4),
-                    "target_horizon": (matching_intent or {}).get("target_horizon"),
-                    "recommended_channel": (matching_intent or {}).get("output_channel"),
-                    "supporting_signal": (matching_signal or {}).get("signal_type"),
-                    "observation_required": observation_required,
-                    "blocked_by": blocked_by,
-                    "persistence_state": persistence_state,
-                    "trend": trending,
-                    "seen_count": max(0, int(topic_memory.get("seen") or 0)),
-                    "active_cycles": max(0, int(topic_memory.get("active_cycles") or 0)),
-                    "resolved_count": max(0, int(topic_memory.get("resolved") or 0)),
-                    "dragging_count": max(0, int(topic_memory.get("dragging") or 0)),
-                    "last_status": topic_memory.get("last_status"),
-                    "why_now": need.get("rationale"),
-                }
-            )
-
-        entries.sort(key=lambda item: item.get("priority") or 0.0, reverse=True)
-        top_focus = str(adaptive_policy.get("preferred_focus") or "unknown").strip().lower() or "unknown"
-        if entries:
-            summary = (
-                f"The endogenous core is prioritizing {entries[0]['topic']} while "
-                f"holding {len(entries)} active agenda item(s) under {top_focus} focus; "
-                f"top agenda persistence is {entries[0]['persistence_state']}."
-            )
-        else:
-            summary = "The endogenous core has no active agenda items for the current cycle."
-        return {
-            "summary": summary,
-            "active_count": len(entries),
-            "preferred_focus": top_focus,
-            "channel_counts": channel_counts,
-            "entries": entries[:6],
-        }
-
-    def _build_endogenous_uncertainty_ledger(
-        self,
-        *,
-        deliberation: Dict[str, Any],
-        governance_channels: Dict[str, Any],
-        self_regulation: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        perception = dict(deliberation.get("perception") or {})
-        world_model = dict(deliberation.get("world_model") or {})
-        reflection = dict(deliberation.get("reflection") or {})
-        adaptive_policy = dict(deliberation.get("adaptive_policy") or {})
-        corrective_mode = derive_corrective_mode(self_regulation)
-        entries: list[Dict[str, Any]] = []
-        autonomy_alignment_requests = len(
-            list(governance_channels.get("autonomy_alignment_requests") or [])
-        )
-
-        correction_signals = int(perception.get("correction_signals") or 0)
-        if correction_signals > 0:
-            risk = self._clamp_endogenous_ratio(
-                float(world_model.get("truthfulness_pressure") or 0.0) * 0.55
-                + min(correction_signals, 6) / 6.0 * 0.45
-            )
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:truthfulness",
-                    "domain": "truthfulness",
-                    "risk": round(risk, 4),
-                    "confidence": round(
-                        self._clamp_endogenous_ratio(
-                            0.56 + float(adaptive_policy.get("truthfulness_bias") or 0.0) * 0.24
-                        ),
-                        4,
-                    ),
-                    "hypothesis": (
-                        "Recent correction pressure may reflect unresolved truthfulness debt rather than isolated noise."
-                    ),
-                    "why_uncertain": (
-                        "The drive sees rising errors or high-uncertainty answers, but it still needs targeted review to confirm whether a stable truthfulness issue exists."
-                    ),
-                    "observation_target": "truthfulness",
-                    "recommended_probe": "review recent uncertain answers and correction signals",
-                    "evidence": [
-                        f"correction_signals={correction_signals}",
-                        f"recent_errors={int(perception.get('recent_errors') or 0)}",
-                        f"uncertainty_count={int(perception.get('uncertainty_count') or 0)}",
-                    ],
-                }
-            )
-
-        api_b_judgement_pressure = float(
-            reflection.get("api_b_judgement_blockage_pressure") or 0.0
-        )
-        if api_b_judgement_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
-            risk = self._clamp_endogenous_ratio(
-                api_b_judgement_pressure * 0.7
-                + (0.2 if str(world_model.get("governance_load_state") or "").strip() == "strained" else 0.08)
-            )
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:api_b_judgement_blockage",
-                    "domain": "api_b_judgement",
-                    "risk": round(risk, 4),
-                    "confidence": round(
-                        self._clamp_endogenous_ratio(
-                            0.58 + float(adaptive_policy.get("governance_hygiene_bias") or 0.0) * 0.18
-                        ),
-                        4,
-                    ),
-                    "hypothesis": (
-                        "Additional autonomous output may worsen backlog drag before governance review debt is reduced."
-                    ),
-                    "why_uncertain": (
-                        "Backlog pressure is visible, but the drive still needs to inspect whether the backlog is blocked by stale work, review debt, or repeated low-yield candidates."
-                    ),
-                    "observation_target": "api_b_judgement_blockage",
-                    "recommended_probe": "inspect stale, deferred, and pending-review endogenous tasks",
-                    "evidence": [
-                        f"api_b_judgement_blockage_state={reflection.get('api_b_judgement_blockage_state')}",
-                        f"api_b_judgement_count={int(perception.get('api_b_judgement_count') or 0)}",
-                        f"pending_review_count={int(perception.get('pending_review_count') or 0)}",
-                    ],
-                }
-            )
-
-        learning_yield_state = str(reflection.get("learning_yield_state") or "").strip().lower()
-        if learning_yield_state in {"cold", "mixed"} or str(reflection.get("dominant_constraint") or "") == "weak_learning_yield":
-            risk = self._clamp_endogenous_ratio(
-                max(0.0, 0.65 - float(reflection.get("autonomy_readiness") or 0.0)) * 0.6
-                + (0.18 if learning_yield_state == "cold" else 0.08)
-            )
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:learning_yield",
-                    "domain": "learning_yield",
-                    "risk": round(risk, 4),
-                    "confidence": round(
-                        self._clamp_endogenous_ratio(
-                            0.48 + float(adaptive_policy.get("observation_bias") or 0.0) * 0.24
-                        ),
-                        4,
-                    ),
-                    "hypothesis": (
-                        "Further learning expansion may create low-yield tasks before existing evidence is properly consolidated."
-                    ),
-                    "why_uncertain": (
-                        "The drive can see mixed or weak learning signals, but it lacks enough evidence to know whether the problem is topic choice, backlog drag, or low follow-through."
-                    ),
-                    "observation_target": "learning_yield",
-                    "recommended_probe": "compare recent learning quality against downstream task completion and review outcomes",
-                    "evidence": [
-                        f"learning_yield_state={learning_yield_state or 'unknown'}",
-                        f"autonomy_readiness={round(float(reflection.get('autonomy_readiness') or 0.0), 4)}",
-                        f"candidate_throttle={round(float(adaptive_policy.get('candidate_throttle') or 0.0), 4)}",
-                    ],
-                }
-            )
-
-        autonomy_readiness = float(reflection.get("autonomy_readiness") or 0.0)
-        dominant_constraint = str(reflection.get("dominant_constraint") or "").strip().lower()
-        if (
-            autonomy_alignment_requests > 0
-            or autonomy_readiness <= 0.45
-            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage"}
-        ):
-            risk = self._clamp_endogenous_ratio(
-                max(0.0, 0.58 - autonomy_readiness) * 0.75
-                + float(adaptive_policy.get("observation_bias") or 0.0) * 0.18
-                + autonomy_alignment_requests * 0.08
-            )
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:autonomy_alignment",
-                    "domain": "autonomy_alignment",
-                    "risk": round(risk, 4),
-                    "confidence": round(
-                        self._clamp_endogenous_ratio(
-                            0.52 + float(adaptive_policy.get("observation_bias") or 0.0) * 0.2
-                        ),
-                        4,
-                    ),
-                    "hypothesis": (
-                        "The current autonomous posture may be expanding or planning faster than the system can responsibly validate."
-                    ),
-                    "why_uncertain": (
-                        "Readiness and observation pressure suggest the core should verify alignment before treating more output as safe."
-                    ),
-                    "observation_target": dominant_constraint or "autonomy_alignment",
-                    "recommended_probe": "inspect whether current posture should remain guarded or corrective on the next endogenous cycle",
-                    "evidence": [
-                        f"autonomy_readiness={round(autonomy_readiness, 4)}",
-                        f"observation_bias={round(float(adaptive_policy.get('observation_bias') or 0.0), 4)}",
-                        f"autonomy_alignment_requests={autonomy_alignment_requests}",
-                        f"dominant_constraint={dominant_constraint or 'none'}",
-                    ],
-                }
-            )
-
-        if corrective_mode.get("active"):
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:self_regulation_decay",
-                    "domain": "self_regulation",
-                    "risk": round(
-                        self._clamp_endogenous_ratio(
-                            float(self_regulation.get("dynamic_candidate_throttle_boost") or 0.0) * 0.4
-                            + float(self_regulation.get("dynamic_truthfulness_bias_boost") or 0.0) * 0.6
-                        ),
-                        4,
-                    ),
-                    "confidence": round(0.62, 4),
-                    "hypothesis": (
-                        "Temporary corrective mode may still be shaping governance posture even if the original trigger is fading."
-                    ),
-                    "why_uncertain": (
-                        "Short-term boosts decay automatically, so the drive should verify whether the pressure is still real before treating guarded posture as the new normal."
-                    ),
-                    "observation_target": "self_regulation",
-                    "recommended_probe": "re-evaluate whether corrective boosts are still justified after the next endogenous cycle",
-                    "evidence": [
-                        f"corrective_mode={corrective_mode.get('mode')}",
-                        f"last_reason={corrective_mode.get('last_reason')}",
-                    ],
-                }
-            )
-
-        truthfulness_alerts = len(list(governance_channels.get("truthfulness_alerts") or []))
-        if truthfulness_alerts > 0 and not any(item.get("domain") == "truthfulness" for item in entries):
-            entries.append(
-                {
-                    "ledger_id": "uncertainty:latent_truthfulness",
-                    "domain": "truthfulness",
-                    "risk": round(self._clamp_endogenous_ratio(0.4 + truthfulness_alerts * 0.12), 4),
-                    "confidence": round(0.54, 4),
-                    "hypothesis": "Truthfulness alerts may indicate a latent evidence-quality problem.",
-                    "why_uncertain": "The alerts are present, but the correction pattern has not yet been fully explained by the current snapshot.",
-                    "observation_target": "truthfulness",
-                    "recommended_probe": "inspect which observation requests escalated into truthfulness alerts",
-                    "evidence": [f"truthfulness_alerts={truthfulness_alerts}"],
-                }
-            )
-
-        entries.sort(key=lambda item: item.get("risk") or 0.0, reverse=True)
-        highest_risk_domain = entries[0]["domain"] if entries else None
-        summary = (
-            f"The endogenous core is tracking {len(entries)} active uncertainty item(s); "
-            f"highest current risk is {highest_risk_domain}."
-            if entries
-            else "The endogenous core sees no active uncertainty requiring explicit tracking right now."
-        )
-        return {
-            "summary": summary,
-            "active_count": len(entries),
-            "highest_risk_domain": highest_risk_domain,
-            "entries": entries[:6],
-        }
-
-    def _derive_endogenous_observation_persistence_state(
-        self,
-        target_stats: Dict[str, Any],
-    ) -> str:
-        recommended = max(0, int(target_stats.get("recommended") or 0))
-        resolved = max(0, int(target_stats.get("resolved") or 0))
-        stalled = max(0, int(target_stats.get("stalled") or 0))
-        seen = max(0, int(target_stats.get("seen") or 0))
-        last_status = str(target_stats.get("last_status") or "").strip().lower()
-
-        if stalled >= 2 or (stalled >= 1 and recommended >= 3):
-            return "stalled"
-        if resolved >= 2 and resolved >= recommended:
-            return "stabilizing"
-        if recommended >= 3 or seen >= 3:
-            return "persistent"
-        if last_status == "resolved":
-            return "cooling"
-        return "emerging"
-
     def _build_endogenous_observation_program(
         self,
         *,
@@ -3164,64 +2429,10 @@ class PlanningRuntimeMixin:
         history: Dict[str, Any],
         context_key: str,
     ) -> Dict[str, Any]:
-        normalized_strategy_memory = self._normalize_endogenous_strategy_memory(strategy_memory)
-        observation_target_stats = dict(normalized_strategy_memory.get("observation_target_stats") or {})
-        observation_requests = [
-            dict(item)
-            for item in list(governance_channels.get("observation_requests") or [])
-            if isinstance(item, dict)
-        ]
-        entries_seed: list[Dict[str, Any]] = []
-
-        requests_by_target: Dict[str, Dict[str, Any]] = {}
-        for request in observation_requests:
-            payload = dict(request.get("payload") or {})
-            target = str(payload.get("observation_target") or "").strip().lower()
-            if target and target not in requests_by_target:
-                requests_by_target[target] = request
-
-        for ledger_entry in list(uncertainty_ledger.get("entries") or []):
-            if not isinstance(ledger_entry, dict):
-                continue
-            target = str(
-                ledger_entry.get("observation_target")
-                or ledger_entry.get("domain")
-                or ""
-            ).strip().lower()
-            if not target:
-                continue
-            observation_request = dict(requests_by_target.get(target) or {})
-            risk = self._clamp_endogenous_ratio(ledger_entry.get("risk") or 0.0)
-            priority = self._clamp_endogenous_ratio(
-                risk * 0.72
-                + self._clamp_endogenous_ratio(ledger_entry.get("confidence") or 0.0) * 0.18
-                + (0.08 if observation_request else 0.0)
-            )
-            evidence_items = list(ledger_entry.get("evidence") or [])
-            recommended_probe = str(ledger_entry.get("recommended_probe") or "").strip()
-            entries_seed.append(
-                {
-                    "program_id": f"observe:{target}",
-                    "target": target,
-                    "source_domain": ledger_entry.get("domain"),
-                    "priority": round(priority, 4),
-                    "risk": round(risk, 4),
-                    "confidence": round(
-                        self._clamp_endogenous_ratio(ledger_entry.get("confidence") or 0.0),
-                        4,
-                    ),
-                    "recommended_probe": recommended_probe,
-                    "evidence_goal": (
-                        f"Reduce uncertainty around {target} by collecting direct evidence about: "
-                        f"{recommended_probe}."
-                        if recommended_probe
-                        else f"Reduce uncertainty around {target}."
-                    ),
-                    "linked_request_signal": observation_request.get("signal_type"),
-                    "request_message": observation_request.get("message"),
-                    "supporting_evidence_count": len(evidence_items),
-                }
-            )
+        entries_seed = build_observation_program_entries(
+            uncertainty_ledger=uncertainty_ledger,
+            governance_channels=governance_channels,
+        )
 
         recorded_at = datetime.now(timezone.utc).isoformat()
         for entry in entries_seed:
@@ -3250,48 +2461,14 @@ class PlanningRuntimeMixin:
         if changed:
             self._persist_endogenous_drive_history(history)
 
-        refreshed_strategy_memory = self._normalize_endogenous_strategy_memory(
+        refreshed_strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         refreshed_target_stats = dict(refreshed_strategy_memory.get("observation_target_stats") or {})
-        entries: list[Dict[str, Any]] = []
-        for entry in entries_seed:
-            target = str(entry.get("target") or "").strip().lower()
-            target_memory = dict(refreshed_target_stats.get(target) or {})
-            persistence_state = self._derive_endogenous_observation_persistence_state(target_memory)
-            entries.append(
-                {
-                    **entry,
-                    "persistence_state": persistence_state,
-                    "last_status": target_memory.get("last_status"),
-                    "seen_count": max(0, int(target_memory.get("seen") or 0)),
-                    "recommended_count": max(0, int(target_memory.get("recommended") or 0)),
-                    "resolved_count": max(0, int(target_memory.get("resolved") or 0)),
-                    "stalled_count": max(0, int(target_memory.get("stalled") or 0)),
-                    "recommended_next_step": (
-                        "collect_observation"
-                        if float(entry.get("risk") or 0.0) >= 0.45
-                        or persistence_state in {"persistent", "stalled"}
-                        else "monitor"
-                    ),
-                }
-            )
-
-        entries.sort(key=lambda item: item.get("priority") or 0.0, reverse=True)
-        summary = (
-            f"The endogenous core has prepared {len(entries)} observation target(s); "
-            f"highest priority target is {entries[0]['target']}."
-            if entries
-            else "The endogenous core does not currently require an explicit observation program."
+        return project_observation_program(
+            entries_seed,
+            target_stats=refreshed_target_stats,
         )
-        highest_priority_target = entries[0]["target"] if entries else None
-
-        return {
-            "summary": summary,
-            "active_count": len(entries),
-            "highest_priority_target": highest_priority_target,
-            "entries": entries[:6],
-        }
 
     def _consume_endogenous_governance_review_events(self) -> Dict[str, Any]:
         snapshot = self._load_endogenous_governance_events()
@@ -3431,133 +2608,12 @@ class PlanningRuntimeMixin:
             "events": updated_events[:36],
         }
 
-    def _normalize_endogenous_strategy_memory(
-        self,
-        raw: Any,
-    ) -> Dict[str, Any]:
-        focus_stats: Dict[str, Dict[str, int]] = {}
-        contextual_focus_stats: Dict[str, Dict[str, Dict[str, int]]] = {}
-        agenda_topic_stats: Dict[str, Dict[str, Any]] = {}
-        observation_target_stats: Dict[str, Dict[str, Any]] = {}
-        meta_governance_stats: Dict[str, Dict[str, Any]] = {}
-        source = dict(raw or {}) if isinstance(raw, dict) else {}
-        raw_focus_stats = source.get("focus_stats")
-        if isinstance(raw_focus_stats, dict):
-            for focus, stats in raw_focus_stats.items():
-                focus_name = str(focus or "").strip().lower()
-                if not focus_name or not isinstance(stats, dict):
-                    continue
-                focus_stats[focus_name] = {
-                    "judged": max(0, int(stats.get("judged") or 0)),
-                    "completed": max(0, int(stats.get("completed") or 0)),
-                    "failed": max(0, int(stats.get("failed") or 0)),
-                    "dragging": max(0, int(stats.get("dragging") or 0)),
-                }
-        raw_contextual = source.get("contextual_focus_stats")
-        if isinstance(raw_contextual, dict):
-            for context_key, focus_map in raw_contextual.items():
-                normalized_context = str(context_key or "").strip().lower()
-                if not normalized_context or not isinstance(focus_map, dict):
-                    continue
-                context_bucket: Dict[str, Dict[str, int]] = {}
-                for focus, stats in focus_map.items():
-                    focus_name = str(focus or "").strip().lower()
-                    if not focus_name or not isinstance(stats, dict):
-                        continue
-                    context_bucket[focus_name] = {
-                        "judged": max(0, int(stats.get("judged") or 0)),
-                        "completed": max(0, int(stats.get("completed") or 0)),
-                        "failed": max(0, int(stats.get("failed") or 0)),
-                        "dragging": max(0, int(stats.get("dragging") or 0)),
-                    }
-                if context_bucket:
-                    contextual_focus_stats[normalized_context] = context_bucket
-        raw_agenda_topic_stats = source.get("agenda_topic_stats")
-        if isinstance(raw_agenda_topic_stats, dict):
-            for topic, stats in raw_agenda_topic_stats.items():
-                topic_name = str(topic or "").strip().lower()
-                if not topic_name or not isinstance(stats, dict):
-                    continue
-                agenda_topic_stats[topic_name] = {
-                    "seen": max(0, int(stats.get("seen") or 0)),
-                    "active_cycles": max(0, int(stats.get("active_cycles") or 0)),
-                    "resolved": max(0, int(stats.get("resolved") or 0)),
-                    "dragging": max(0, int(stats.get("dragging") or 0)),
-                    "last_priority": round(
-                        self._clamp_endogenous_ratio(stats.get("last_priority") or 0.0),
-                        4,
-                    ),
-                    "last_confidence": round(
-                        self._clamp_endogenous_ratio(stats.get("last_confidence") or 0.0),
-                        4,
-                    ),
-                    "last_status": str(stats.get("last_status") or "unknown").strip().lower() or "unknown",
-                    "last_seen_at": stats.get("last_seen_at"),
-                    "last_resolved_at": stats.get("last_resolved_at"),
-                    "last_context_key": str(stats.get("last_context_key") or "").strip().lower() or None,
-                }
-        raw_observation_target_stats = source.get("observation_target_stats")
-        if isinstance(raw_observation_target_stats, dict):
-            for target, stats in raw_observation_target_stats.items():
-                target_name = str(target or "").strip().lower()
-                if not target_name or not isinstance(stats, dict):
-                    continue
-                observation_target_stats[target_name] = {
-                    "seen": max(0, int(stats.get("seen") or 0)),
-                    "recommended": max(0, int(stats.get("recommended") or 0)),
-                    "resolved": max(0, int(stats.get("resolved") or 0)),
-                    "stalled": max(0, int(stats.get("stalled") or 0)),
-                    "last_priority": round(
-                        self._clamp_endogenous_ratio(stats.get("last_priority") or 0.0),
-                        4,
-                    ),
-                    "last_risk": round(
-                        self._clamp_endogenous_ratio(stats.get("last_risk") or 0.0),
-                        4,
-                    ),
-                    "last_status": str(stats.get("last_status") or "unknown").strip().lower() or "unknown",
-                    "last_seen_at": stats.get("last_seen_at"),
-                    "last_resolved_at": stats.get("last_resolved_at"),
-                    "last_context_key": str(stats.get("last_context_key") or "").strip().lower() or None,
-                }
-        raw_meta_governance_stats = source.get("meta_governance_stats")
-        if isinstance(raw_meta_governance_stats, dict):
-            for mode, stats in raw_meta_governance_stats.items():
-                mode_name = str(mode or "").strip().lower()
-                if not mode_name or not isinstance(stats, dict):
-                    continue
-                meta_governance_stats[mode_name] = {
-                    "seen": max(0, int(stats.get("seen") or 0)),
-                    "active_cycles": max(0, int(stats.get("active_cycles") or 0)),
-                    "resolved": max(0, int(stats.get("resolved") or 0)),
-                    "stalled": max(0, int(stats.get("stalled") or 0)),
-                    "last_priority": round(
-                        self._clamp_endogenous_ratio(stats.get("last_priority") or 0.0),
-                        4,
-                    ),
-                    "last_confidence": round(
-                        self._clamp_endogenous_ratio(stats.get("last_confidence") or 0.0),
-                        4,
-                    ),
-                    "last_status": str(stats.get("last_status") or "unknown").strip().lower() or "unknown",
-                    "last_seen_at": stats.get("last_seen_at"),
-                    "last_resolved_at": stats.get("last_resolved_at"),
-                    "last_context_key": str(stats.get("last_context_key") or "").strip().lower() or None,
-                }
-        return {
-            "focus_stats": focus_stats,
-            "contextual_focus_stats": contextual_focus_stats,
-            "agenda_topic_stats": agenda_topic_stats,
-            "observation_target_stats": observation_target_stats,
-            "meta_governance_stats": meta_governance_stats,
-        }
-
     def _strategy_agenda_topic_bucket(
         self,
         history: Dict[str, Any],
         topic: Optional[str],
     ) -> Dict[str, Any]:
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         history["strategy_memory"] = strategy_memory
@@ -3615,7 +2671,7 @@ class PlanningRuntimeMixin:
         history: Dict[str, Any],
         target: Optional[str],
     ) -> Dict[str, Any]:
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         history["strategy_memory"] = strategy_memory
@@ -3676,7 +2732,7 @@ class PlanningRuntimeMixin:
         context_key: Optional[str],
         recorded_at: str,
     ) -> bool:
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         history["strategy_memory"] = strategy_memory
@@ -3711,7 +2767,7 @@ class PlanningRuntimeMixin:
         history: Dict[str, Any],
         mode: Optional[str],
     ) -> Dict[str, Any]:
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         history["strategy_memory"] = strategy_memory
@@ -3770,7 +2826,7 @@ class PlanningRuntimeMixin:
         focus: Optional[str],
         context_key: Optional[str] = None,
     ) -> Dict[str, int]:
-        strategy_memory = self._normalize_endogenous_strategy_memory(
+        strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
         )
         history["strategy_memory"] = strategy_memory
@@ -3864,9 +2920,13 @@ class PlanningRuntimeMixin:
         judgement_records: list[Dict[str, Any]] = []
         recorded_active_topics: set[tuple[str, str]] = set()
         recorded_judged_focuses: set[tuple[str, str]] = set()
-        agenda_entries = self._build_endogenous_attention_agenda(
+        strategy_memory = normalize_endogenous_strategy_memory(
+            history.get("strategy_memory")
+        )
+        agenda_entries = build_attention_agenda_projection(
             deliberation=deliberation,
             governance_channels=self._governance_channels_from_deliberation(deliberation),
+            strategy_memory=strategy_memory,
         ).get("entries") or []
         agenda_map = {
             str(item.get("topic") or "").strip().lower(): dict(item)
@@ -4553,7 +3613,10 @@ class PlanningRuntimeMixin:
 
     def _is_api_a_execution_lane_task_record(self, task: AutonomousChainTask) -> bool:
         status = str(task.status or "").strip().lower()
-        return self._is_agent_pull_task(task) and status in {"approved", "running", "retry"}
+        return is_agent_pull_task(
+            task,
+            task_profile_policy=self._task_profile_policy,
+        ) and status in {"approved", "running", "retry"}
 
     def _autonomous_chain_task_summary_payload(
         self,
@@ -4610,7 +3673,10 @@ class PlanningRuntimeMixin:
     def _api_a_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
         for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks():
-            if not self._is_agent_pull_task(task):
+            if not is_agent_pull_task(
+                task,
+                task_profile_policy=self._task_profile_policy,
+            ):
                 continue
             rows.append(
                 (
@@ -4680,24 +3746,18 @@ class PlanningRuntimeMixin:
         }
 
     async def evaluate_drive_input(self, request: dict | None = None):
-        request = request or {}
-        requested_scope = str(request.get("perception_scope") or "").strip().lower()
+        request = dict(request or {})
+        runtime = getattr(self, "_service_runtime", None)
         gate_active = bool(
             request.get("autonomous_chain_gate_active")
-            or getattr(
-                getattr(self, "_service_runtime", None),
-                "autonomous_chain_gate_active",
-                False,
-            )
+            or getattr(runtime, "autonomous_chain_gate_active", False)
         )
-        perception_scope = "autonomous_only" if gate_active else (requested_scope or "full")
+        perception_scope = "autonomous_only" if gate_active else (
+            str(request.get("perception_scope") or "").strip().lower() or "full"
+        )
         effective_evidence_packet = dict(
             request.get("evidence_packet")
-            or getattr(
-                getattr(self, "_service_runtime", None),
-                "auto_evidence_packet",
-                {},
-            )
+            or getattr(runtime, "auto_evidence_packet", {})
             or {}
         )
         snapshot = await self._fetch_gateway_activity_snapshot()
@@ -4709,7 +3769,6 @@ class PlanningRuntimeMixin:
             try:
                 now = datetime.fromisoformat(now_override)
                 if now.tzinfo is not None:
-                    from datetime import timezone
                     now = now.astimezone(timezone.utc).replace(tzinfo=None)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid now override: {exc}")
@@ -4717,296 +3776,40 @@ class PlanningRuntimeMixin:
             now = datetime.utcnow()
 
         service_cfg = self.config.service_runtime
-        user_idle_threshold = int(
-            request.get(
-                "user_idle_seconds",
-                getattr(service_cfg, "activity_guard_user_seconds", 600),
-            )
-        )
-        memory_idle_threshold = int(
-            request.get(
-                "memory_idle_seconds",
-                getattr(service_cfg, "activity_guard_memory_seconds", 600),
-            )
-        )
-        workflow_idle_threshold = int(
-            request.get(
-                "workflow_idle_seconds",
-                getattr(service_cfg, "activity_guard_workflow_seconds", 600),
-            )
-        )
-        requested_task_profile = self._task_profile_policy.drive_input_profile(request)
-        requested_governance_task_type = str(requested_task_profile["governance_task_type"])
-        requested_task_family = str(requested_task_profile["task_family"])
-
-        last_user_request_at = parse_activity_timestamp(snapshot.get("last_user_request_at"))
-        last_memory_task_at = parse_activity_timestamp(snapshot.get("last_memory_task_at"))
-        last_self_learning_activity_at = parse_activity_timestamp(
-            snapshot.get("last_self_learning_activity_at")
-        )
-        last_autonomous_chain_plan_at = parse_activity_timestamp(
-            snapshot.get("last_autonomous_chain_plan_at")
-        )
-        last_autonomous_chain_execute_at = parse_activity_timestamp(
-            snapshot.get("last_autonomous_chain_execute_at")
-        )
-        last_autonomous_chain_activity_at = parse_activity_timestamp(
-            snapshot.get("last_autonomous_chain_activity_at")
-        )
-        active_cli_executor = dict(snapshot.get("active_cli_executor") or {})
-        active_cli_lane = str(active_cli_executor.get("agent_lane") or "").strip().lower()
-        active_cli_lease_status = str(active_cli_executor.get("lease_status") or "").strip().lower()
-        active_cli_execution_idle_seconds: Optional[float] = None
-        if active_cli_lane == "supervisor_task":
-            try:
-                active_cli_execution_idle_seconds = max(
-                    0.0,
-                    float(active_cli_executor.get("idle_seconds") or 0.0),
+        task_profile = self._task_profile_policy.drive_input_profile(request)
+        evaluation_config = DriveInputEvaluationConfig(
+            gateway_address=self.config.execution.gateway_address,
+            now=now,
+            user_idle_seconds=int(
+                request.get(
+                    "user_idle_seconds",
+                    getattr(service_cfg, "activity_guard_user_seconds", 600),
                 )
-            except (TypeError, ValueError):
-                active_cli_execution_idle_seconds = 0.0
-        active_cli_execution_is_stale = (
-            not active_cli_executor
-            or active_cli_lane != "supervisor_task"
-            or bool(active_cli_executor.get("is_stale"))
-            or active_cli_lease_status == "stale"
-        )
-
-        user_idle_seconds = idle_seconds_since(last_user_request_at, now=now)
-        memory_idle_seconds = idle_seconds_since(last_memory_task_at, now=now)
-        self_learning_idle_seconds = idle_seconds_since(last_self_learning_activity_at, now=now)
-        autonomous_chain_plan_idle_seconds = idle_seconds_since(
-            last_autonomous_chain_plan_at,
-            now=now,
-        )
-        autonomous_chain_execute_idle_seconds = idle_seconds_since(
-            last_autonomous_chain_execute_at,
-            now=now,
-        )
-        autonomous_chain_idle_seconds = idle_seconds_since(last_autonomous_chain_activity_at, now=now)
-        autonomous_execution_idle_candidates = [
-            value
-            for value in (
-                autonomous_chain_execute_idle_seconds,
-                active_cli_execution_idle_seconds,
-            )
-            if value is not None
-        ]
-        autonomous_execution_idle_seconds = (
-            min(autonomous_execution_idle_candidates)
-            if autonomous_execution_idle_candidates
-            else None
-        )
-
-        # ── correction_signals for truthfulness drive ──
-        # Source of truth: Gateway activity_state (architectural baseline §4.2
-        # — gateway is the activity fact source).  Counts are best-effort —
-        # a missing field defaults to 0 so the candidate simply does not fire
-        # when no error/uncertainty has been reported in the current session.
-        counts = dict(snapshot.get("counts") or {})
-        raw_error_count = snapshot.get("error_count")
-        if raw_error_count is None:
-            raw_error_count = counts.get("error_count") or counts.get("recent_errors")
-        raw_uncertainty_count = snapshot.get("uncertainty_high_count")
-        if raw_uncertainty_count is None:
-            raw_uncertainty_count = counts.get("uncertainty_high_count") or counts.get("high_uncertainty")
-        try:
-            error_count = int(raw_error_count) if raw_error_count is not None else 0
-        except (TypeError, ValueError):
-            error_count = 0
-        try:
-            uncertainty_count = int(raw_uncertainty_count) if raw_uncertainty_count is not None else 0
-        except (TypeError, ValueError):
-            uncertainty_count = 0
-        # Decay: a half-life of 4 hours reduces the count toward 0 unless new
-        # signals keep arriving. This keeps truthfulness candidates from being
-        # permanently produced by one old error long after the system has
-        # self-corrected. We use recent user-chain quiet time as a coarse proxy
-        # for "how long has the system been calm" — when the user chain has
-        # been quiet for a long time, an old error should weigh less, since a
-        # working session would have produced new activity. This is a
-        # best-effort heuristic (Gateway does not expose per-signal timestamps)
-        # and matches the architectural baseline §4.2 "activity facts come
-        # from gateway" without requiring a new field.
-        if user_idle_seconds is None:
-            user_idle_hours = 24.0
-        else:
-            user_idle_hours = min(user_idle_seconds / 3600.0, 24.0)
-        decay_factor = max(0.0, 1.0 - user_idle_hours / 4.0)
-        correction_signals = int(round((error_count + uncertainty_count) * decay_factor))
-
-        user_chain_quiet = (
-            user_idle_seconds is None
-            or user_idle_seconds >= user_idle_threshold
-        )
-        has_memory_idle = memory_idle_seconds is None or memory_idle_seconds >= memory_idle_threshold
-        has_api_a_execution_idle = (
-            active_cli_execution_is_stale
-            and (
-                autonomous_execution_idle_seconds is None
-                or autonomous_execution_idle_seconds >= workflow_idle_threshold
-            )
-        )
-        has_self_learning_idle = (
-            self_learning_idle_seconds is None
-            or self_learning_idle_seconds >= workflow_idle_threshold
-        )
-        has_autonomous_chain_plan_idle = (
-            autonomous_chain_plan_idle_seconds is None
-            or autonomous_chain_plan_idle_seconds >= workflow_idle_threshold
-        )
-        has_autonomous_chain_execute_idle = (
-            autonomous_chain_execute_idle_seconds is None
-            or autonomous_chain_execute_idle_seconds >= workflow_idle_threshold
-        )
-        has_autonomous_chain_idle = (
-            autonomous_chain_idle_seconds is None
-            or autonomous_chain_idle_seconds >= workflow_idle_threshold
-        )
-
-        # Whole-day automatic execution (baseline §6): the time-of-day
-        # execution window and the "wait for the user to be idle" gate have
-        # been removed. Supervisor autonomous-chain review runs on isolated subagents
-        # editing shell-slot code, so it does not disturb the user's CLI.
-        # User activity is now a SOFT signal (observability + cognition input)
-        # rather than a hard gate. The remaining has_*_idle checks below are
-        # anti-self-collision concurrency guards — they are NOT "wait for the
-        # user" gates.
-        active_sessions = int(snapshot.get("active_sessions") or 0)
-        if perception_scope == "autonomous_only":
-            user_chain_signal = {
-                "scope": "excluded_in_auto",
-                "observed": False,
-                "active_sessions": 0,
-                "is_quiet": True,
-                "recent_user_idle_seconds": None,
-                "quiet_after_seconds": user_idle_threshold,
-            }
-        else:
-            user_chain_signal = {
-                "scope": "soft_signal_only",
-                "active_sessions": active_sessions,
-                "is_quiet": bool(user_chain_quiet and active_sessions <= 0),
-                "recent_user_idle_seconds": user_idle_seconds,
-                "quiet_after_seconds": user_idle_threshold,
-            }
-        governance_task_type_decisions = {
-            "user": {
-                "eligible_for_planning": perception_scope != "autonomous_only",
-                "eligible_for_execution": perception_scope != "autonomous_only",
-            },
-            "self_learning": {
-                "eligible_for_planning": True,
-                "eligible_for_execution": (
-                    has_api_a_execution_idle
-                    and has_memory_idle
-                    and has_self_learning_idle
-                    and has_autonomous_chain_plan_idle
-                ),
-            },
-            "memory_maintenance": {
-                "eligible_for_planning": True,
-                "eligible_for_execution": has_memory_idle,
-            },
-            "self_evolution": {
-                "eligible_for_planning": (
-                    has_autonomous_chain_plan_idle
-                ),
-                "eligible_for_execution": (
-                    has_api_a_execution_idle
-                    and has_memory_idle
-                    and has_autonomous_chain_plan_idle
-                    and has_autonomous_chain_execute_idle
-                ),
-            },
-        }
-        task_family_decisions = {
-            "user": dict(governance_task_type_decisions["user"]),
-            "self_learning": dict(governance_task_type_decisions["self_learning"]),
-            "memory_maintenance": dict(governance_task_type_decisions["memory_maintenance"]),
-            "general_self_evolution": dict(governance_task_type_decisions["self_evolution"]),
-            "body_upgrade": dict(governance_task_type_decisions["self_evolution"]),
-            "body_switch": dict(governance_task_type_decisions["self_evolution"]),
-        }
-        selected_task_decisions = task_family_decisions[requested_task_family]
-
-        autonomous_chain_gate_active = bool(
-            request.get("autonomous_chain_gate_active")
-            or getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False)
-        )
-        if autonomous_chain_gate_active:
-            # With the autonomous-chain gate active, self_learning and
-            # memory_maintenance planning is no longer blocked on user-idle
-            # style signals. Execution still follows its own runtime decision.
-            governance_task_type_decisions["self_learning"]["eligible_for_planning"] = True
-            governance_task_type_decisions["memory_maintenance"]["eligible_for_planning"] = True
-            task_family_decisions["self_learning"]["eligible_for_planning"] = True
-            task_family_decisions["memory_maintenance"]["eligible_for_planning"] = True
-
-        return {
-            "status": "evaluated",
-            "evaluated_at": now.isoformat(),
-            "gateway_address": self.config.execution.gateway_address,
-            "governance_task_type": requested_governance_task_type,
-            "task_family": requested_task_family,
-            "execution_kind": requested_task_profile.get("execution_kind"),
-            "task_profile": requested_task_profile,
-            "activity": snapshot,
-            "shell_slot": self._current_shell_slot_context(),
-            "completed_learning_tasks": self._completed_learning_task_summaries(),
-            "correction_signals": correction_signals,
-            "error_count": error_count,
-            "uncertainty_high_count": uncertainty_count,
-            "correction_signal_decay": {
-                "factor": round(decay_factor, 4),
-                "user_idle_hours": round(user_idle_hours, 2),
-                "half_life_hours": 4.0,
-            },
-            "idle_seconds": {
-                "user": user_idle_seconds,
-                "api_a_execution": autonomous_execution_idle_seconds,
-                "memory": memory_idle_seconds,
-                "self_learning": self_learning_idle_seconds,
-                "autonomous_chain_plan": autonomous_chain_plan_idle_seconds,
-                "autonomous_chain_execute": autonomous_chain_execute_idle_seconds,
-                "autonomous_chain": autonomous_chain_idle_seconds,
-            },
-            "thresholds": {
-                "user_idle_seconds": user_idle_threshold,
-                "memory_idle_seconds": memory_idle_threshold,
-                "workflow_idle_seconds": workflow_idle_threshold,
-                "cli_lease_stale_after_seconds": (
-                    dict(snapshot.get("active_cli_executor") or {}).get("stale_after_seconds")
-                ),
-            },
-            "user_chain_signal": user_chain_signal,
-            "checks": {
-                "has_memory_idle": has_memory_idle,
-                "has_api_a_execution_idle": has_api_a_execution_idle,
-                "has_self_learning_idle": has_self_learning_idle,
-                "has_autonomous_chain_plan_idle": has_autonomous_chain_plan_idle,
-                "has_autonomous_chain_execute_idle": has_autonomous_chain_execute_idle,
-                "has_autonomous_chain_idle": has_autonomous_chain_idle,
-            },
-            "governance_task_type_decisions": governance_task_type_decisions,
-            "task_family_decisions": task_family_decisions,
-            "autonomous_chain_gate_active": autonomous_chain_gate_active,
-            "perception_scope": perception_scope,
-            "evidence_packet": (
-                effective_evidence_packet
-                if perception_scope == "autonomous_only"
-                else {}
             ),
-            "input_policy": {
-                "scope": perception_scope,
-                "user_activity_observed": perception_scope != "autonomous_only",
-                "desktop_environment_observed": False,
-            },
-            "decisions": {
-                "eligible_for_planning": selected_task_decisions["eligible_for_planning"],
-                "eligible_for_execution": selected_task_decisions["eligible_for_execution"],
-            },
-        }
+            memory_idle_seconds=int(
+                request.get(
+                    "memory_idle_seconds",
+                    getattr(service_cfg, "activity_guard_memory_seconds", 600),
+                )
+            ),
+            workflow_idle_seconds=int(
+                request.get(
+                    "workflow_idle_seconds",
+                    getattr(service_cfg, "activity_guard_workflow_seconds", 600),
+                )
+            ),
+            perception_scope=perception_scope,
+            autonomous_chain_gate_active=gate_active,
+            evidence_packet=effective_evidence_packet,
+        )
+        return evaluate_drive_input_snapshot(
+            request=request,
+            snapshot=snapshot,
+            config=evaluation_config,
+            task_profile=task_profile,
+            shell_slot=self._current_shell_slot_context(),
+            completed_learning_tasks=self._completed_learning_task_summaries(),
+        )
 
     async def _touch_gateway_activity(
         self,
@@ -5072,7 +3875,7 @@ class PlanningRuntimeMixin:
             ),
             load_self_regulation=self._load_endogenous_self_regulation,
             load_drive_history=self._load_endogenous_drive_history,
-            normalize_strategy_memory=self._normalize_endogenous_strategy_memory,
+            normalize_strategy_memory=normalize_endogenous_strategy_memory,
             api_b_judgement_task_summaries=self._api_b_judgement_task_summaries,
             api_a_execution_lane_task_summaries=self._api_a_execution_lane_task_summaries,
             build_deliberation_report=self._endogenous_drive_engine.build_deliberation_report,
@@ -5135,7 +3938,7 @@ class PlanningRuntimeMixin:
             "governance_event_stream": project_governance_event_stream(event_snapshot),
             "self_regulation": regulation,
             "corrective_mode": derive_corrective_mode(regulation),
-            "strategy_memory": self._normalize_endogenous_strategy_memory(
+            "strategy_memory": normalize_endogenous_strategy_memory(
                 drive_history.get("strategy_memory")
             ),
         }
@@ -5313,177 +4116,6 @@ class PlanningRuntimeMixin:
         )
         return await run_endogenous_drive_cycle(context=context)
 
-    def _normalize_autonomous_chain_decision(self, decision: Optional[str]) -> Optional[str]:
-        if decision is None:
-            return None
-        normalized = decision.strip().lower()
-        mapping = {
-            "planned": "planned",
-            "approve": "approved",
-            "approved": "approved",
-            "defer": "deferred",
-            "deferred": "deferred",
-            "fail": "failed",
-            "failed": "failed",
-            "pause": "paused",
-            "paused": "paused",
-            "cancel": "cancelled",
-            "cancelled": "cancelled",
-            "run": "running",
-            "running": "running",
-            "complete": "completed",
-            "completed": "completed",
-            "auto": "auto",
-        }
-        return mapping.get(normalized)
-
-    def _build_autonomous_chain_auto_decision(
-        self,
-        *,
-        task: AutonomousChainTask,
-        drive_input: Optional[Dict[str, Any]] = None,
-        autonomous_chain_gate_active: bool = False,
-    ) -> tuple[str, str]:
-        drive_input = dict(drive_input or {})
-        task_type = self._task_profile_policy.governance_type(task)
-        task_family = self._task_profile_policy.runtime_family(task)
-        if self._is_agent_pull_task(task):
-            execution_kind = self._task_profile_policy.execution_kind(task)
-            if execution_kind == "body_improvement":
-                if self._has_pending_self_learning_prerequisite(task):
-                    return (
-                        "deferred",
-                        "Body-improvement task deferred because there are still planned/approved/running self-learning tasks awaiting completion. Supervisor must let learning evidence settle before code-improvement execution is released.",
-                    )
-                learning_quality_score = self._body_improvement_learning_quality_score(task)
-                min_quality = float(
-                    getattr(
-                        self.config.service_runtime,
-                        "body_improvement_min_quality",
-                        60.0,
-                    )
-                    or 60.0
-                )
-                if learning_quality_score < min_quality:
-                    return (
-                        "cancelled",
-                        (
-                            "Body-improvement task cancelled because learning evidence is insufficient; "
-                            f"current score {learning_quality_score:.2f} is below required {min_quality:.2f}."
-                        ),
-                    )
-                return (
-                    "approved",
-                    "Agent-pull body-improvement task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
-                )
-            return (
-                "approved",
-                "Agent-pull self-learning task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
-            )
-
-        # With the autonomous-chain gate active, self_learning and
-        # memory_maintenance can execute without waiting for user-chain quiet
-        # signals. Other task families still follow their runtime decisions.
-        if autonomous_chain_gate_active:
-            if task_type == "self_learning":
-                return (
-                    "approved",
-                    "Autonomous-chain gate active: self-learning task transferred without waiting for user-chain quiet signals. Learn-only constraints still apply.",
-                )
-            if task_type == "memory_maintenance":
-                return (
-                    "approved",
-                    "Autonomous-chain gate active: memory-maintenance task transferred without waiting for user-chain quiet signals.",
-                )
-
-        decision = (
-            drive_input.get("task_family_decisions", {}).get(task_family)
-            or drive_input.get("governance_task_type_decisions", {}).get(task_type)
-            or drive_input["decisions"]
-        )
-
-        if decision["eligible_for_execution"]:
-            if task_type == "self_learning":
-                return (
-                    "approved",
-                    "该学习链路项已由 API-B 转交：当前没有冲突中的内部流程活动；用户链路只作为软感知信号，不构成自学习证据工作的硬门控。",
-                )
-            if task_type == "memory_maintenance":
-                return (
-                    "approved",
-                    "该记忆维护链路项已由 API-B 转交：当前运行时与记忆并发护栏满足要求；用户链路仍只作为软感知信号。",
-                )
-            return (
-                "approved",
-                "该链路项已由 API-B 转交，将进入下一轮自主交接；当前运行时并发护栏满足要求。",
-            )
-        if task_type == "self_learning":
-            return (
-                "deferred",
-                "该学习链路项暂缓：当前已有内部流程或子系统在途工作；这次延后来自并发护栏，而不是用户空闲门控。",
-            )
-        if task_type == "memory_maintenance":
-            return (
-                "deferred",
-                "该记忆维护链路项暂缓：当前仍有运行时或记忆侧工作在途；用户链路仍只作为软感知信号，并非这里的执行门。",
-            )
-        return (
-            "deferred",
-            "该链路项暂缓：当前运行时并发护栏尚未满足；任务继续留在 API-B 判断在途中等待后续复核。",
-        )
-
-    def _has_pending_self_learning_prerequisite(
-        self,
-        body_task: Optional[AutonomousChainTask] = None,
-    ) -> bool:
-        backlog_self_learning_pending = False
-        for task in self._active_autonomous_chain_tasks():
-            if self._task_profile_policy.governance_type(task) != "self_learning":
-                continue
-            if task.status not in {"planned", "approved", "running"}:
-                continue
-            if task.status == "running":
-                return True
-            backlog_self_learning_pending = True
-        if not backlog_self_learning_pending:
-            return False
-        if body_task is None:
-            return True
-        prior_self_learning_deferrals = sum(
-            1
-            for decision in body_task.decision_history
-            if str(decision.status) == "deferred"
-            and "self-learning tasks awaiting completion" in str(decision.reason)
-        )
-        return prior_self_learning_deferrals == 0
-
-    def _is_agent_pull_task(self, task: AutonomousChainTask) -> bool:
-        execution_kind = self._task_profile_policy.execution_kind(task)
-        return (
-            self._task_profile_policy.governance_type(task) == "self_learning"
-            or execution_kind == "body_improvement"
-        )
-
-    def _body_improvement_learning_quality_score(self, task: AutonomousChainTask) -> float:
-        evidence = dict(task.evidence or {})
-        metadata = dict(task.metadata or {})
-        candidates = [
-            evidence.get("learning_quality_score"),
-            metadata.get("learning_quality_score"),
-            metadata.get("quality_score"),
-        ]
-        for candidate in candidates:
-            if candidate is None:
-                continue
-            try:
-                score = float(candidate)
-            except (TypeError, ValueError):
-                continue
-            if 0.0 < score <= 1.0:
-                score *= 100.0
-            return max(0.0, min(100.0, score))
-        return self._calculate_learning_quality_score()
-
     async def _fetch_gateway_cli_session(self, session_id: str) -> Dict[str, Any]:
         import aiohttp
 
@@ -5510,7 +4142,10 @@ class PlanningRuntimeMixin:
     async def _recover_orphaned_agent_pull_tasks(self) -> int:
         recovered = 0
         for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="running"):
-            if not self._is_agent_pull_task(task):
+            if not is_agent_pull_task(
+                task,
+                task_profile_policy=self._task_profile_policy,
+            ):
                 continue
             metadata = dict(task.metadata or {})
             owner_session_id = str(metadata.get("owner_session_id") or "").strip()
@@ -5523,7 +4158,7 @@ class PlanningRuntimeMixin:
                     "owner_session_id 缺失，当前无法确认归属。",
                     task.task_id,
                 )
-                self._update_task_metadata(
+                self._autonomous_task_state.update_metadata(
                     task.task_id,
                     metadata={
                         "owner_session_missing_seen_at": datetime.now(timezone.utc).isoformat(),
@@ -5547,7 +4182,7 @@ class PlanningRuntimeMixin:
             ).strip().lower() == "stale"
             if not owner_missing and not owner_stale:
                 continue
-            self._update_task_status(
+            self._autonomous_task_state.update_status(
                 task.task_id,
                 status="approved",
                 actor="supervisor",
@@ -5565,7 +4200,7 @@ class PlanningRuntimeMixin:
                 },
                 event_type="recovery",
             )
-            self._update_task_metadata(
+            self._autonomous_task_state.update_metadata(
                 task.task_id,
                 metadata={
                     "recovered_from_orphaned_running": True,
@@ -5594,7 +4229,10 @@ class PlanningRuntimeMixin:
         decision: str,
         actor: str,
     ) -> str:
-        if not self._is_agent_pull_task(task):
+        if not is_agent_pull_task(
+            task,
+            task_profile_policy=self._task_profile_policy,
+        ):
             return ""
         if decision not in {"running", "completed", "failed"}:
             return ""
@@ -6093,7 +4731,7 @@ class PlanningRuntimeMixin:
     ):
         normalized_status = None
         if status is not None:
-            normalized_status = self._normalize_autonomous_chain_decision(status)
+            normalized_status = normalize_autonomous_chain_decision(status)
             if normalized_status is None or normalized_status == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported task status filter: {status}")
         tasks = self._autonomous_chain_store.list_chain_projection_tasks(
@@ -6141,8 +4779,7 @@ class PlanningRuntimeMixin:
             status = str(task.status)
             cleared_counts[status] = cleared_counts.get(status, 0) + 1
 
-        self._record_autonomous_task_clear(tasks)
-        self._autonomous_chain_store.clear_tasks()
+        self._autonomous_task_state.clear_tasks(tasks)
 
         if hasattr(self, "_clear_supervisor_ui_activity"):
             self._clear_supervisor_ui_activity()
@@ -6248,7 +4885,7 @@ class PlanningRuntimeMixin:
                 if not title:
                     raise HTTPException(status_code=400, detail="Each task item must include a title.")
                 request_metadata = self._request_task_metadata(item)
-                task = self._create_autonomous_chain_task(
+                task = self._autonomous_task_state.create_task(
                     title=title,
                     summary=str(item.get("summary", "")),
                     trace_id=str(item.get("trace_id") or uuid.uuid4()),
@@ -6266,7 +4903,7 @@ class PlanningRuntimeMixin:
                 raise HTTPException(status_code=400, detail="title is required")
             request_metadata = self._request_task_metadata(request)
             created.append(
-                self._create_autonomous_chain_task(
+                self._autonomous_task_state.create_task(
                     title=title,
                     summary=str(request.get("summary", "")),
                     trace_id=str(request.get("trace_id") or uuid.uuid4()),
@@ -6305,7 +4942,7 @@ class PlanningRuntimeMixin:
         if task is None:
             raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
 
-        normalized = self._normalize_autonomous_chain_decision(request.get("decision"))
+        normalized = normalize_autonomous_chain_decision(request.get("decision"))
         decision_context: Dict[str, Any] = {}
 
         if normalized is None or normalized == "auto":
@@ -6316,11 +4953,25 @@ class PlanningRuntimeMixin:
                 default_task_family=task_family,
                 default_execution_kind=task_execution_kind,
             )
-            normalized, auto_reason = self._build_autonomous_chain_auto_decision(
+            normalized, auto_reason = build_autonomous_chain_auto_decision(
                 task=task,
                 drive_input=drive_input,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
+                ),
+                task_profile_policy=self._task_profile_policy,
+                active_tasks=self._active_autonomous_chain_tasks(),
+                learning_history=self._autonomous_chain_store.list_writeback_history(
+                    status="completed"
+                ),
+                now=datetime.now(timezone.utc),
+                body_improvement_min_quality=float(
+                    getattr(
+                        self.config.service_runtime,
+                        "body_improvement_min_quality",
+                        60.0,
+                    )
+                    or 60.0
                 ),
             )
             decision_context = self._normalize_runtime_decision_context(
@@ -6371,10 +5022,13 @@ class PlanningRuntimeMixin:
         if (
             normalized in {"completed", "failed"}
             and task.status == "approved"
-            and self._is_agent_pull_task(task)
+            and is_agent_pull_task(
+                task,
+                task_profile_policy=self._task_profile_policy,
+            )
             and owner_session_id
         ):
-            task = self._update_task_status(
+            task = self._autonomous_task_state.update_status(
                 task_id,
                 status="running",
                 decision_id=str(uuid.uuid4()),
@@ -6393,7 +5047,7 @@ class PlanningRuntimeMixin:
                 event_type="writeback_reconcile",
             )
 
-        updated_task = self._update_task_status(
+        updated_task = self._autonomous_task_state.update_status(
             task_id,
             status=normalized,
             decision_id=decision_id,
@@ -6413,7 +5067,7 @@ class PlanningRuntimeMixin:
             enriched_metadata.setdefault("execution_source", "cli_agent_pull")
             decision_metadata = enriched_metadata
         if isinstance(decision_metadata, dict) and decision_metadata:
-            self._update_task_metadata(task_id, metadata=decision_metadata)
+            self._autonomous_task_state.update_metadata(task_id, metadata=decision_metadata)
 
         promotion_candidate = None
         if normalized in {"approved", "running", "completed"}:
@@ -6454,7 +5108,7 @@ class PlanningRuntimeMixin:
         statuses = request.get("statuses") or ["planned", "deferred", "paused"]
         normalized_statuses = []
         for status in statuses:
-            normalized = self._normalize_autonomous_chain_decision(str(status))
+            normalized = normalize_autonomous_chain_decision(str(status))
             if normalized is None or normalized == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported review status: {status}")
             normalized_statuses.append(normalized)
@@ -6507,11 +5161,25 @@ class PlanningRuntimeMixin:
                     default_task_family=task_family,
                     default_execution_kind=task_execution_kind,
                 )
-            target_status, default_reason = self._build_autonomous_chain_auto_decision(
+            target_status, default_reason = build_autonomous_chain_auto_decision(
                 task=task,
                 drive_input=task_drive_input,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
+                ),
+                task_profile_policy=self._task_profile_policy,
+                active_tasks=self._active_autonomous_chain_tasks(),
+                learning_history=self._autonomous_chain_store.list_writeback_history(
+                    status="completed"
+                ),
+                now=datetime.now(timezone.utc),
+                body_improvement_min_quality=float(
+                    getattr(
+                        self.config.service_runtime,
+                        "body_improvement_min_quality",
+                        60.0,
+                    )
+                    or 60.0
                 ),
             )
             decision_context: Dict[str, Any] = self._normalize_runtime_decision_context(
@@ -6525,7 +5193,7 @@ class PlanningRuntimeMixin:
                     decision_context["supervisor_followup_suggestion"] = followup_suggestion
                 priority_recommendation = self._extract_supervisor_priority_recommendation(review_action)
                 if priority_recommendation is not None and priority_recommendation != str(task.priority):
-                    task = self._update_task_priority(
+                    task = self._autonomous_task_state.update_priority(
                         task.task_id,
                         priority=priority_recommendation,
                         actor=str(request.get("actor", "supervisor")),
@@ -6557,7 +5225,10 @@ class PlanningRuntimeMixin:
                     preserve_agent_pull_approval = (
                         target_status == "approved"
                         and suggested_status in {"deferred", "paused"}
-                        and self._is_agent_pull_task(task)
+                        and is_agent_pull_task(
+                            task,
+                            task_profile_policy=self._task_profile_policy,
+                        )
                     )
                     if preserve_agent_pull_approval:
                         decision_context["supervisor_followup_suggestion"] = {
@@ -6624,7 +5295,7 @@ class PlanningRuntimeMixin:
                             ),
                         )
                     except ValueError:
-                        updated = self._update_task_status(
+                        updated = self._autonomous_task_state.update_status(
                             task.task_id,
                             status="deferred",
                             decision_id=decision_id,
@@ -6642,7 +5313,7 @@ class PlanningRuntimeMixin:
                     decision_id = str(request.get("decision_id") or uuid.uuid4())
             else:
                 decision_id = str(request.get("decision_id") or uuid.uuid4())
-            updated = self._update_task_status(
+            updated = self._autonomous_task_state.update_status(
                 task.task_id,
                 status=target_status,
                 decision_id=decision_id,
@@ -6759,7 +5430,7 @@ class PlanningRuntimeMixin:
                 "execution_kind": proposal.execution_kind,
                 "metadata": proposal_metadata,
             }
-            task = self._create_autonomous_chain_task(
+            task = self._autonomous_task_state.create_task(
                 title=proposal.title,
                 summary=proposal.summary,
                 trace_id=str(submission.metadata.get("trace_id") or submission.conclusion_id or uuid.uuid4()),
@@ -6938,7 +5609,7 @@ class PlanningRuntimeMixin:
                 "reason": "memory_promotion_service_unavailable",
             }
 
-        self._update_task_metadata(
+        self._autonomous_task_state.update_metadata(
             task.task_id,
             metadata={
                 "evolution_memory_id": result.get("source_memory_id"),
@@ -6966,14 +5637,14 @@ class PlanningRuntimeMixin:
         await self._propose_verified_conclusion_memory_promotion(task)
 
         # ── Mark running BEFORE any await to prevent duplicate handoff ──
-        self._update_task_status(
+        self._autonomous_task_state.update_status(
             task.task_id,
             status="running",
             actor="supervisor",
             reason="自主交接已开始",
             event_type="execution_handoff_started",
         )
-        self._update_task_metadata(
+        self._autonomous_task_state.update_metadata(
             task.task_id,
             metadata={
                 "executed_at": datetime.now(timezone.utc).isoformat(),
@@ -7034,7 +5705,7 @@ class PlanningRuntimeMixin:
             or normalized_result_status not in _SUCCESS_STATUSES
         )
         if normalized_result_status == "upgrade_awaiting_user_consent":
-            self._update_task_metadata(
+            self._autonomous_task_state.update_metadata(
                 task.task_id,
                 metadata={
                     "execution_result": result,
@@ -7043,7 +5714,7 @@ class PlanningRuntimeMixin:
                     ).isoformat(),
                 },
             )
-            self._update_task_status(
+            self._autonomous_task_state.update_status(
                 task.task_id,
                 status="awaiting_user_consent",
                 actor="supervisor_executor",
@@ -7088,14 +5759,14 @@ class PlanningRuntimeMixin:
             completion_reason = (
                 f"自主交接已完成，执行结果：{str(result_status)[:100]}"
             )
-        self._update_task_status(
+        self._autonomous_task_state.update_status(
             task.task_id,
             status="completed",
             actor=actor,
             reason=completion_reason,
             event_type="execution_handoff_completed",
         )
-        self._update_task_metadata(
+        self._autonomous_task_state.update_metadata(
             task.task_id,
             metadata={"execution_result": result},
         )
@@ -7139,7 +5810,7 @@ class PlanningRuntimeMixin:
             else "supervisor_executor"
         )
         terminal = failure_count >= max_retries
-        self._update_task_status(
+        self._autonomous_task_state.update_status(
             task.task_id,
             status="failed" if terminal else "approved",
             actor=actor,
@@ -7153,7 +5824,7 @@ class PlanningRuntimeMixin:
                 else "execution_handoff_retry"
             ),
         )
-        self._update_task_metadata(
+        self._autonomous_task_state.update_metadata(
             task.task_id,
             metadata={
                 "execution_failed": True,
@@ -7182,11 +5853,11 @@ class PlanningRuntimeMixin:
             reason = "User rejected the body activation; the candidate returned to shell."
         else:
             return
-        self._update_task_metadata(
+        self._autonomous_task_state.update_metadata(
             task_id,
             metadata={"body_switch_consent_result": dict(result)},
         )
-        self._update_task_status(
+        self._autonomous_task_state.update_status(
             task_id,
             status=target_status,
             actor="user_consent",
@@ -7227,7 +5898,7 @@ class PlanningRuntimeMixin:
                     if t.tzinfo is None:
                         t = t.replace(tzinfo=timezone.utc)
                     if (now - t).total_seconds() > 1800:
-                        self._update_task_status(
+                        self._autonomous_task_state.update_status(
                             task.task_id, status="failed",
                             reason="timeout: stuck >30min",
                             event_type="timeout",
@@ -7422,68 +6093,6 @@ class PlanningRuntimeMixin:
                 "focus": focus or None,
             },
         }
-
-    def _calculate_learning_quality_score(self) -> float:
-        completed_count = 0
-        quality_sum = 0.0
-        freshness_sum = 0.0
-        now = datetime.now(timezone.utc)
-
-        for task in self._autonomous_chain_store.list_writeback_history(status="completed"):
-            if self._task_profile_policy.runtime_family(task) != "self_learning":
-                continue
-            completed_count += 1
-
-            task_quality = float(task.metadata.get("quality_score") or 0.5)
-            quality_sum += task_quality
-
-            completed_at = task.metadata.get("completed_at")
-            if completed_at:
-                try:
-                    t = datetime.fromisoformat(str(completed_at))
-                    if t.tzinfo is None:
-                        t = t.replace(tzinfo=timezone.utc)
-                    age_days = (now - t).days
-                    freshness = max(0.0, 1.0 - age_days / 90.0)
-                    freshness_sum += freshness
-                except Exception:
-                    freshness_sum += 0.5
-
-        if completed_count == 0:
-            return 0.0
-
-        avg_quality = quality_sum / completed_count
-        avg_freshness = freshness_sum / completed_count
-        score = avg_quality * 60 + avg_freshness * 40
-        return max(0.0, min(100.0, score))
-
-    def _update_task_status(
-        self,
-        task_id: str,
-        status: str,
-        *,
-        reason: Optional[str] = None,
-        actor: str = "supervisor",
-        decision_id: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
-        execution_request: Optional[AutonomousChainExecutionRequest] = None,
-        event_type: str = "status_update",
-    ) -> AutonomousChainTask:
-        task = self._autonomous_chain_store.update_status(
-            task_id,
-            status=status,
-            decision_id=decision_id,
-            actor=actor,
-            reason=reason or f"Status updated to {status}",
-            context=dict(context or {}),
-            execution_request=execution_request,
-            before_commit=lambda updated: self._record_autonomous_task_transition(
-                updated,
-                transition_kind=event_type,
-            ),
-        )
-        self._record_endogenous_drive_outcome(task, event_type=event_type)
-        return task
 
     def _calc_file_repeat_penalty(self, slot_id: str, changed_files: list[str]) -> float:
         penalty = 0.0

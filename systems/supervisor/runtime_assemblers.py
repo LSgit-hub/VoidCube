@@ -28,6 +28,7 @@ from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
 from systems.supervisor.schedule_allocator import ScheduleAllocator
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
@@ -109,6 +110,18 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._autonomous_chain_store = AutonomousChainStore(
         supervisor.config.autonomous_chain_store_path
         or (runtime_root / "autonomous_chain_store.json")
+    )
+
+    def record_autonomous_task_status_change(
+        task: Any,
+        event_type: str,
+    ) -> None:
+        supervisor._record_endogenous_drive_outcome(task, event_type=event_type)
+
+    supervisor._autonomous_task_state = AutonomousTaskStateService(
+        store=supervisor._autonomous_chain_store,
+        governance_repository=supervisor._governor.governance_repository,
+        on_status_change=record_autonomous_task_status_change,
     )
     scheduled_store_path = (
         Path(supervisor.config.scheduled_task_store_path)
