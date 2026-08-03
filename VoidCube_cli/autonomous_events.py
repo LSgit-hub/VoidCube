@@ -68,4 +68,10 @@ def autonomous_execution_panel_height(host: Any) -> int:
         return 0
     from VoidCube_cli.autonomous_panel import build_autonomous_execution_panel_rows
 
-    return len(build_autonomous_execution_panel_rows(host))
+    return len(
+        build_autonomous_execution_panel_rows(
+            host,
+            state_ports=host._autonomous_panel_state_ports(),
+            render_ports=host._autonomous_panel_render_ports(),
+        )
+    )

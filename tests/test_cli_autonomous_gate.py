@@ -18,6 +18,10 @@ from VoidCube_cli import autonomous_panel as autonomous_panel_module
 from VoidCube_cli import autonomous_presence as autonomous_presence_module
 from VoidCube_cli import autonomous_runtime_host as autonomous_runtime_host_module
 from VoidCube_cli import autonomous_status_host as autonomous_status_host_module
+from VoidCube_cli.autonomous_panel import (
+    AutonomousPanelRenderPorts,
+    AutonomousPanelStatePorts,
+)
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
 from VoidCube_cli.autonomous_status_host import (
     autonomous_observation_summary_sections,
@@ -45,6 +49,39 @@ def _autonomous_runtime(cli: VoidcubeCLI):
         git_head_commit=_git_head_commit,
         git_improvement_diff=_git_improvement_diff,
         cprint=cli_module._cprint,
+    )
+
+
+def _panel_state_ports(host) -> AutonomousPanelStatePorts:
+    state_host = getattr(host, "_autonomous_component_host", None) or host
+
+    class _Pending:
+        def empty(self):
+            return True
+
+    pending_input = getattr(state_host, "_pending_input", _Pending())
+    return AutonomousPanelStatePorts(
+        gate_active=lambda: bool(getattr(host, "_autonomous_gate_active", False)),
+        session_id=lambda: str(getattr(state_host, "session_id", "") or ""),
+        current_task=lambda: getattr(state_host, "_current_autonomous_task", None),
+        current_task_started_at=lambda: float(
+            getattr(state_host, "_current_autonomous_task_started_at", 0.0) or 0.0
+        ),
+        agent_running=lambda: bool(getattr(state_host, "_agent_running", False)),
+        last_agent_turn_result=lambda: getattr(state_host, "_last_agent_turn_result", None),
+        pending_input_nonempty=lambda: not pending_input.empty(),
+        execution_events=lambda: list(
+            getattr(state_host, "_autonomous_execution_events", []) or []
+        ),
+        spinner_text=lambda: str(getattr(state_host, "_spinner_text", "") or ""),
+    )
+
+
+def _panel_render_ports(host) -> AutonomousPanelRenderPorts:
+    return AutonomousPanelRenderPorts(
+        terminal_width=host._get_tui_terminal_width,
+        trim_status_bar_text=host._trim_status_bar_text,
+        pad_status_bar_text=host._pad_status_bar_text,
     )
 
 
@@ -1158,7 +1195,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "API-A 自主执行面" in rendered
     assert "执行面: 当前会话 正常" in rendered
@@ -1191,7 +1228,7 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "执行面: 其他会话 " in rendered
     assert "已陈旧（静默 120s，场景 executing）" in rendered
@@ -1254,7 +1291,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: API-B 判断中" in rendered
     assert "链路项: 当前没有被认领的自主链路项" in rendered
@@ -1327,7 +1364,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: API-B 已转交" in rendered
     assert "Board handoff task" in rendered
@@ -1396,7 +1433,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: API-B 已转交" in rendered
     assert "Handoff waiting task" in rendered
@@ -1467,7 +1504,7 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: API-B 已转交" in rendered
     assert "Stage-card waiting task" in rendered
@@ -1537,7 +1574,7 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "Stage-card wins task" in rendered
     assert "状态: API-B 已转交" in rendered
@@ -1586,8 +1623,11 @@ def test_autonomous_panel_is_visible_for_api_b_state_without_api_a_task(monkeypa
     }
     cli._autonomous_gateway_status_cache = {}
 
-    assert autonomous_panel_module.has_visible_autonomous_work(cli) is True
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    assert autonomous_panel_module.has_visible_autonomous_work(
+        cli,
+        state_ports=_panel_state_ports(cli),
+    ) is True
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "API-B 模型: LM生成=未启用" in rendered
     assert "API-B 阶段: 候选=1 · 判断在途=0" in rendered
@@ -1627,7 +1667,7 @@ def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
     }
     cli._autonomous_gateway_status_cache = {}
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "API-B 模型: LM生成=已启用 · 模型=异常(deepseek-v4-flash)" in rendered
     assert "原因=HTTPError" in rendered
@@ -1682,7 +1722,7 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: API-B 已转交" in rendered
     assert "Loop-stage driven task" in rendered
@@ -1752,7 +1792,7 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: 他处执行中" in rendered
     assert "Running elsewhere task" in rendered
@@ -1788,7 +1828,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: 已认领待起跑" in rendered
     assert "Claimed not started task" in rendered
@@ -1832,7 +1872,7 @@ def test_autonomous_panel_shows_waiting_start_cause_after_autonomous_execution_s
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: 已认领待起跑" in rendered
     assert "近因: 自主执行已起跑，正在等待首个模型响应" in rendered
@@ -1871,7 +1911,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "状态: 等待回写" in rendered
     assert "Writeback waiting task" in rendered
@@ -2373,7 +2413,10 @@ def test_autonomous_component_panel_stays_hidden_when_idle():
 
     host._pending_input = _EmptyQueue()
 
-    assert autonomous_panel_module.has_visible_autonomous_work(host) is False
+    assert autonomous_panel_module.has_visible_autonomous_work(
+        host,
+        state_ports=_panel_state_ports(host),
+    ) is False
 
 
 def test_autonomous_component_panel_becomes_visible_for_execution_events():
@@ -2390,7 +2433,10 @@ def test_autonomous_component_panel_becomes_visible_for_execution_events():
 
     host._pending_input = _EmptyQueue()
 
-    assert autonomous_panel_module.has_visible_autonomous_work(host) is True
+    assert autonomous_panel_module.has_visible_autonomous_work(
+        host,
+        state_ports=_panel_state_ports(host),
+    ) is True
 
 
 def test_autonomous_panel_reads_embedded_component_state():
@@ -2409,7 +2455,10 @@ def test_autonomous_panel_reads_embedded_component_state():
 
     component._pending_input = _EmptyQueue()
 
-    assert autonomous_panel_module.has_visible_autonomous_work(host) is True
+    assert autonomous_panel_module.has_visible_autonomous_work(
+        host,
+        state_ports=_panel_state_ports(host),
+    ) is True
 
 
 def test_autonomous_executor_session_is_persisted_before_agent_pull():

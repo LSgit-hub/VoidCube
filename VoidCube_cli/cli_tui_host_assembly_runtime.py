@@ -1,0 +1,179 @@
+"""Bind CLI-owned callbacks to the generic interactive TUI factory."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+from prompt_toolkit.formatted_text import AnyFormattedText
+
+from VoidCube_cli.cli_interactive_registration_runtime import (
+    CliInteractiveRegistrations,
+)
+from VoidCube_cli.tui_composition_runtime import TuiCompositionPorts
+from VoidCube_cli.tui_indicator_widgets import IndicatorWidgetPorts
+from VoidCube_cli.tui_input_widgets import InputWidgetPorts
+from VoidCube_cli.tui_modal_navigation import ModalNavigationPorts
+from VoidCube_cli.tui_modal_widgets import ModalWidgetPorts
+from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts
+from VoidCube_cli.tui_runtime_factory import (
+    TuiRuntimeFactory,
+    TuiRuntimeFactoryPorts,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiPastePorts:
+    should_attach_clipboard_image: Callable[[str], bool]
+    attach_clipboard_image: Callable[[], bool]
+    paste_directory: Path
+    timestamp: Callable[[], str]
+    invalidate: Callable[[object], None]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiModalNavigationPorts:
+    clarify_state: Callable[[], object | None]
+    clarify_freetext_active: Callable[[], bool]
+    approval_state: Callable[[], object | None]
+    model_picker_state: Callable[[], object | None]
+    invalidate: Callable[[], None]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiInputPorts:
+    history_path: str
+    prompt_fragments: Callable[[], AnyFormattedText]
+    prompt_text: Callable[[], str]
+    command_available: Callable[[str], bool]
+    command_running: Callable[[], bool]
+    password_mask_active: Callable[[], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiModalPorts:
+    clarify_state: Callable[[], object | None]
+    clarify_freetext_active: Callable[[], bool]
+    sudo_state: Callable[[], object | None]
+    secret_state: Callable[[], object | None]
+    approval_state: Callable[[], object | None]
+    approval_fragments: Callable[[], AnyFormattedText]
+    model_picker_state: Callable[[], object | None]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiIndicatorPorts:
+    spinner_fragments: Callable[[], AnyFormattedText]
+    spinner_height: Callable[[], int]
+    hint_fragments: Callable[[], AnyFormattedText]
+    hint_height: Callable[[], int]
+    input_rule_height: Callable[[str], int]
+    image_fragments: Callable[[], AnyFormattedText]
+    images_visible: Callable[[], bool]
+    voice_fragments: Callable[[], AnyFormattedText]
+    voice_visible: Callable[[], bool]
+    autonomous_fragments: Callable[[], AnyFormattedText]
+    autonomous_visible: Callable[[], bool]
+    status_fragments: Callable[[], AnyFormattedText]
+    status_visible: Callable[[], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiCompositionPorts:
+    cursor: object | None
+    store_application: Callable[[object], None]
+    install_resize_cleanup: Callable[[object], None]
+
+
+@dataclass(frozen=True, slots=True)
+class CliTuiHostAssemblyPorts:
+    """CLI state projections and callbacks needed by the TUI composition root."""
+
+    registrations: CliInteractiveRegistrations
+    paste: CliTuiPastePorts
+    modal_navigation: CliTuiModalNavigationPorts
+    normal_input_active: Callable[[], bool]
+    input: CliTuiInputPorts
+    placeholder_text: Callable[[], str]
+    modal: CliTuiModalPorts
+    indicators: CliTuiIndicatorPorts
+    register_extra_keybindings: Callable[..., None]
+    composition: CliTuiCompositionPorts
+    extra_widgets: Callable[[], list[object]]
+
+
+class CliTuiHostAssemblyRuntime:
+    """Translate CLI-owned TUI callbacks into the generic factory contract."""
+
+    def __init__(self, ports: CliTuiHostAssemblyPorts) -> None:
+        self.ports = ports
+
+    def build(self) -> object:
+        ports = self.ports
+        registrations = ports.registrations
+        return TuiRuntimeFactory(
+            TuiRuntimeFactoryPorts(
+                enter=registrations.enter.handle,
+                ctrl_c=registrations.control.handle_ctrl_c,
+                ctrl_d=registrations.control.handle_ctrl_d,
+                ctrl_z=registrations.suspend.handle,
+                voice_key=registrations.voice_key,
+                voice=registrations.voice.handle,
+                paste=PasteRuntimePorts(
+                    should_attach_clipboard_image=ports.paste.should_attach_clipboard_image,
+                    attach_clipboard_image=ports.paste.attach_clipboard_image,
+                    paste_directory=ports.paste.paste_directory,
+                    timestamp=ports.paste.timestamp,
+                    invalidate=ports.paste.invalidate,
+                ),
+                modal_navigation=ModalNavigationPorts(
+                    clarify_state=ports.modal_navigation.clarify_state,
+                    clarify_freetext_active=ports.modal_navigation.clarify_freetext_active,
+                    approval_state=ports.modal_navigation.approval_state,
+                    model_picker_state=ports.modal_navigation.model_picker_state,
+                    invalidate=ports.modal_navigation.invalidate,
+                ),
+                normal_input_active=ports.normal_input_active,
+                input=InputWidgetPorts(
+                    history_path=ports.input.history_path,
+                    prompt_fragments=ports.input.prompt_fragments,
+                    prompt_text=ports.input.prompt_text,
+                    command_available=ports.input.command_available,
+                    command_running=ports.input.command_running,
+                    password_mask_active=ports.input.password_mask_active,
+                ),
+                placeholder_text=ports.placeholder_text,
+                modal=ModalWidgetPorts(
+                    clarify_state=ports.modal.clarify_state,
+                    clarify_freetext_active=ports.modal.clarify_freetext_active,
+                    sudo_state=ports.modal.sudo_state,
+                    secret_state=ports.modal.secret_state,
+                    approval_state=ports.modal.approval_state,
+                    approval_fragments=ports.modal.approval_fragments,
+                    model_picker_state=ports.modal.model_picker_state,
+                ),
+                indicators=IndicatorWidgetPorts(
+                    spinner_fragments=ports.indicators.spinner_fragments,
+                    spinner_height=ports.indicators.spinner_height,
+                    hint_fragments=ports.indicators.hint_fragments,
+                    hint_height=ports.indicators.hint_height,
+                    input_rule_height=ports.indicators.input_rule_height,
+                    image_fragments=ports.indicators.image_fragments,
+                    images_visible=ports.indicators.images_visible,
+                    voice_fragments=ports.indicators.voice_fragments,
+                    voice_visible=ports.indicators.voice_visible,
+                    autonomous_fragments=ports.indicators.autonomous_fragments,
+                    autonomous_visible=ports.indicators.autonomous_visible,
+                    status_fragments=ports.indicators.status_fragments,
+                    status_visible=ports.indicators.status_visible,
+                ),
+                register_extra_keybindings=ports.register_extra_keybindings,
+                composition=TuiCompositionPorts(
+                    cursor=ports.composition.cursor,
+                    store_application=ports.composition.store_application,
+                    install_resize_cleanup=ports.composition.install_resize_cleanup,
+                ),
+                extra_widgets=ports.extra_widgets,
+            )
+        ).build()

@@ -54,7 +54,7 @@ if sys.platform == 'win32':
         pass
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Callable, Mapping, Sequence, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
 from VoidCube_app.configuration import (
@@ -77,13 +77,11 @@ from VoidCube_app.interaction_contract import (
 from VoidCube_app.session_identity import resolve_session_identity
 from VoidCube_app.session_lifecycle import (
     SessionHydration,
-    SessionHydrationStatus,
     SessionLifecycleState,
     SessionTitleStatus,
     hydrate_session,
     set_session_title,
 )
-from VoidCube_app.turn_contract import begin_turn
 from VoidCube_app.tool_events import ToolEvent
 from VoidCube_app.turn_queue import (
     TurnInterruptReason,
@@ -95,21 +93,16 @@ from VoidCube_cli.turn_queue_adapter import (
     poll_interrupt_input,
     requeue_interrupted_inputs,
 )
-from VoidCube_cli.tui_composition_runtime import (
-    TuiCompositionPorts,
-)
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
-from VoidCube_cli.tui_modal_navigation import (
-    ModalNavigationPorts,
-)
-from VoidCube_cli.tui_modal_widgets import (
-    ModalWidgetPorts,
-)
-from VoidCube_cli.tui_indicator_widgets import (
-    IndicatorWidgetPorts,
-)
-from VoidCube_cli.tui_input_widgets import (
-    InputWidgetPorts,
+from VoidCube_cli.cli_tui_host_assembly_runtime import (
+    CliTuiCompositionPorts,
+    CliTuiHostAssemblyPorts,
+    CliTuiHostAssemblyRuntime,
+    CliTuiIndicatorPorts,
+    CliTuiInputPorts,
+    CliTuiModalNavigationPorts,
+    CliTuiModalPorts,
+    CliTuiPastePorts,
 )
 from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorPorts,
@@ -120,22 +113,106 @@ from VoidCube_cli.background_task_runtime import (
     BackgroundTaskRuntime,
     BackgroundTaskState,
 )
-from VoidCube_cli.cli_run_runtime import CliRunRuntime, CliRunRuntimePorts
-from VoidCube_cli.cli_idle_maintenance_runtime import (
-    CliIdleMaintenancePorts,
-    CliIdleMaintenanceRuntime,
-)
-from VoidCube_cli.cli_application_runtime import (
-    CliApplicationPorts,
-    CliApplicationRuntime,
+from VoidCube_cli.cli_interactive_lifecycle_assembly_runtime import (
+    CliInteractiveLifecycleAssemblyPorts,
+    CliInteractiveLifecycleAssemblyRuntime,
 )
 from VoidCube_cli.cli_interactive_state_runtime import (
     CliInteractiveStatePorts,
     CliInteractiveStateRuntime,
 )
-from VoidCube_cli.cli_interactive_preflight_runtime import (
-    CliInteractivePreflightPorts,
-    CliInteractivePreflightRuntime,
+from VoidCube_cli.cli_interactive_registration_runtime import (
+    CliInteractiveRegistrationPorts,
+    CliInteractiveRegistrationRuntime,
+)
+from VoidCube_cli.cli_history_display_runtime import (
+    CliHistoryDisplayPorts,
+    CliHistoryDisplayRuntime,
+)
+from VoidCube_cli.cli_status_bar_runtime import (
+    CliStatusBarPorts,
+    CliStatusBarRuntime,
+)
+from VoidCube_cli.cli_middle_status_runtime import (
+    CliMiddleStatusPorts,
+    CliMiddleStatusRuntime,
+)
+from VoidCube_cli.cli_subagent_observability_runtime import (
+    CliSubagentObservabilityPorts,
+    CliSubagentObservabilityRuntime,
+)
+from VoidCube_cli.cli_status_snapshot_runtime import (
+    CliStatusSnapshotPorts,
+    CliStatusSnapshotRuntime,
+)
+from VoidCube_cli.cli_git_status_runtime import (
+    CliGitStatusPorts,
+    CliGitStatusRuntime,
+)
+from VoidCube_cli.cli_background_response_runtime import (
+    CliBackgroundResponsePorts,
+    CliBackgroundResponseRuntime,
+)
+from VoidCube_cli.cli_voice_status_runtime import (
+    CliVoiceStatusPorts,
+    CliVoiceStatusRuntime,
+)
+from VoidCube_cli.cli_exit_summary_runtime import (
+    CliExitSummaryPorts,
+    CliExitSummaryRuntime,
+)
+from VoidCube_cli.cli_btw_runtime import CliBtwPorts, CliBtwRuntime
+from VoidCube_cli.cli_dynamic_command_runtime import (
+    CliDynamicCommandPorts,
+    CliDynamicCommandRuntime,
+)
+from VoidCube_cli.cli_turn_agent_route_runtime import (
+    CliTurnAgentRoutePorts,
+    CliTurnAgentRouteRuntime,
+)
+from VoidCube_cli.cli_runtime_credentials import (
+    CliRuntimeCredentialsPorts,
+    CliRuntimeCredentialsRuntime,
+)
+from VoidCube_cli.cli_agent_initialization_runtime import (
+    CliAgentInitializationPorts,
+    CliAgentInitializationRuntime,
+)
+from VoidCube_cli.cli_session_browser_runtime import (
+    CliSessionBrowserPorts,
+    CliSessionBrowserRuntime,
+)
+from VoidCube_cli.cli_model_picker_runtime import (
+    CliModelPickerPorts,
+    CliModelPickerRuntime,
+)
+from VoidCube_cli.cli_session_hydration_runtime import (
+    CliSessionHydrationPorts,
+    CliSessionHydrationRuntime,
+)
+from VoidCube_cli.cli_session_resume_runtime import (
+    CliSessionResumePorts,
+    CliSessionResumeRuntime,
+)
+from VoidCube_cli.cli_single_query_resume_runtime import (
+    CliSingleQueryResumePorts,
+    CliSingleQueryResumeRuntime,
+)
+from VoidCube_cli.cli_session_lifecycle_runtime import (
+    CliSessionLifecyclePorts,
+    CliSessionLifecycleRuntime,
+)
+from VoidCube_cli.cli_agent_turn_call_runtime import (
+    CliAgentTurnCallPorts,
+    CliAgentTurnCallRuntime,
+)
+from VoidCube_cli.cli_turn_input_preparation_runtime import (
+    CliTurnInputPreparationPorts,
+    CliTurnInputPreparationRuntime,
+)
+from VoidCube_cli.cli_chat_error_runtime import (
+    CliChatErrorPorts,
+    CliChatErrorRuntime,
 )
 from VoidCube_cli.cli_startup_runtime import CliStartupPorts, CliStartupRuntime
 from VoidCube_cli.cli_lifecycle_guards import (
@@ -154,11 +231,6 @@ from VoidCube_cli.voice_keybinding_runtime import (
     VoiceKeybindingPorts,
     VoiceKeybindingRuntime,
 )
-from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts
-from VoidCube_cli.tui_runtime_factory import (
-    TuiRuntimeFactory,
-    TuiRuntimeFactoryPorts,
-)
 from VoidCube_cli.suspend_keybinding_runtime import (
     SuspendKeybindingPorts,
     SuspendKeybindingRuntime,
@@ -167,18 +239,29 @@ from VoidCube_cli.tui_dynamic_text_runtime import (
     TuiDynamicTextPorts,
     TuiDynamicTextRuntime,
 )
+from VoidCube_cli.cli_tui_prompt_runtime import (
+    CliTuiPromptPorts,
+    CliTuiPromptRuntime,
+)
+from VoidCube_cli.cli_tui_layout_metrics_runtime import (
+    CliTuiLayoutMetricsPorts,
+    CliTuiLayoutMetricsRuntime,
+)
 from VoidCube_cli.pending_input_runtime import (
     PendingInputExecutionPorts,
     PendingInputRuntime,
 )
-from VoidCube_cli.chat_response_runtime import ChatResponsePorts, ChatResponseRuntime
 from VoidCube_cli.turn_postprocessing_runtime import (
     TurnPostprocessingPorts,
     TurnPostprocessingRuntime,
 )
-from VoidCube_cli.interrupted_followup_runtime import (
-    InterruptedFollowupPorts,
-    InterruptedFollowupRuntime,
+from VoidCube_cli.cli_chat_finalization_runtime import (
+    CliChatFinalizationPorts,
+    CliChatFinalizationRuntime,
+)
+from VoidCube_cli.cli_session_teardown_runtime import (
+    CliSessionTeardownPorts,
+    CliSessionTeardownRuntime,
 )
 from VoidCube_cli.turn_result_application_runtime import (
     TurnResultApplicationPorts,
@@ -209,7 +292,6 @@ from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
     looks_like_slash_command as _looks_like_slash_command,
     parse_cli_command,
-    resolve_dynamic_command,
 )
 from VoidCube_cli.command_handlers.registry import (
     autonomous_command_ports_for_host,
@@ -246,6 +328,8 @@ from VoidCube_cli.autonomous_presence import (
     push_cli_agent_scene as _push_cli_agent_scene,
 )
 from VoidCube_cli.autonomous_panel import (
+    AutonomousPanelRenderPorts,
+    AutonomousPanelStatePorts,
     get_autonomous_execution_panel_fragments as _get_autonomous_execution_panel_fragments_view,
     has_visible_autonomous_work as _has_visible_autonomous_work_view,
 )
@@ -1075,9 +1159,6 @@ class VoidcubeCLI:
         # ── Per-instance render caches (avoid disk I/O & subprocess on hot path) ──
         self._config_cache: Dict[str, Any] | None = None
         self._config_cache_ts: float = 0.0
-        self._git_status_cache: list | None = None
-        self._git_status_cache_ts: float = 0.0
-        self._git_status_refreshing: bool = False  # guard against concurrent git subprocess refresh
         self._ascii_fallback: bool | None = None  # cached once, never changes mid-session
 
         # State shared by interactive run() and single-query chat mode.
@@ -1414,67 +1495,37 @@ class VoidcubeCLI:
         return f"[{('█' * filled) + ('░' * max(0, width - filled))}]"
 
     def _get_status_bar_snapshot(self) -> Dict[str, Any]:
-        # Prefer the agent's model name — it updates on fallback.
-        # self.model reflects the originally configured model and never
-        # changes mid-session, so the TUI would show a stale name after
-        # _try_activate_fallback() switches provider/model.
+        """Build the session status snapshot through explicit data ports."""
         agent = getattr(self, "agent", None)
-        model_name = (getattr(agent, "model", None) or self.model or "unknown")
-        model_short = model_name.split("/")[-1] if "/" in model_name else model_name
-        if model_short.endswith(".gguf"):
-            model_short = model_short[:-5]
-        if len(model_short) > 26:
-            model_short = f"{model_short[:23]}..."
 
-        elapsed_seconds = max(0.0, (datetime.now() - self.session_start).total_seconds())
-        snapshot = {
-            "model_name": model_name,
-            "model_short": model_short,
-            "duration": _format_duration_compact_lazy(elapsed_seconds),
-            "context_tokens": 0,
-            "context_length": None,
-            "context_percent": None,
-            "session_input_tokens": 0,
-            "session_output_tokens": 0,
-            "session_cache_read_tokens": 0,
-            "session_cache_write_tokens": 0,
-            "session_prompt_tokens": 0,
-            "session_completion_tokens": 0,
-            "session_total_tokens": 0,
-            "session_api_calls": 0,
-            "compressions": 0,
-            "subagent": self._get_subagent_observability_snapshot(),
-        }
+        def _agent_usage() -> dict[str, Any]:
+            return {
+                field: getattr(agent, field, 0) or 0
+                for field in CliStatusSnapshotRuntime._USAGE_FIELDS
+            }
 
-        if not agent:
-            return snapshot
+        def _context_usage() -> dict[str, Any]:
+            compressor = getattr(agent, "context_compressor", None)
+            if not compressor:
+                return {}
+            return {
+                "context_tokens": getattr(compressor, "last_prompt_tokens", 0) or 0,
+                "context_length": getattr(compressor, "context_length", 0) or 0,
+                "compressions": getattr(compressor, "compression_count", 0) or 0,
+            }
 
-        snapshot["session_input_tokens"] = getattr(agent, "session_input_tokens", 0) or 0
-        snapshot["session_output_tokens"] = getattr(agent, "session_output_tokens", 0) or 0
-        snapshot["session_cache_read_tokens"] = getattr(agent, "session_cache_read_tokens", 0) or 0
-        snapshot["session_cache_write_tokens"] = getattr(agent, "session_cache_write_tokens", 0) or 0
-        snapshot["session_prompt_tokens"] = getattr(agent, "session_prompt_tokens", 0) or 0
-        snapshot["session_completion_tokens"] = getattr(agent, "session_completion_tokens", 0) or 0
-        snapshot["session_total_tokens"] = getattr(agent, "session_total_tokens", 0) or 0
-        snapshot["session_api_calls"] = getattr(agent, "session_api_calls", 0) or 0
-
-        compressor = getattr(agent, "context_compressor", None)
-        if compressor:
-            context_tokens = getattr(compressor, "last_prompt_tokens", 0) or 0
-            context_length = getattr(compressor, "context_length", 0) or 0
-            snapshot["context_tokens"] = context_tokens
-            snapshot["context_length"] = context_length or None
-            snapshot["compressions"] = getattr(compressor, "compression_count", 0) or 0
-            if context_length:
-                snapshot["context_percent"] = max(0, min(100, round((context_tokens / context_length) * 100)))
-
-        return snapshot
-
-    @staticmethod
-    def _normalize_subagent_status(task: Any) -> str:
-        status = getattr(task, "status", "")
-        value = getattr(status, "value", status)
-        return str(value or "").strip().lower()
+        return CliStatusSnapshotRuntime(
+            CliStatusSnapshotPorts(
+                configured_model=lambda: self.model,
+                active_model=lambda: getattr(agent, "model", None),
+                session_start=lambda: self.session_start,
+                now=datetime.now,
+                agent_usage=_agent_usage,
+                context_usage=_context_usage,
+                subagent_snapshot=self._get_subagent_observability_snapshot,
+                format_duration=_format_duration_compact_lazy,
+            )
+        ).snapshot()
 
     def _get_subagent_display_managers(self) -> list[Any]:
         agent = getattr(self, "agent", None)
@@ -1491,88 +1542,12 @@ class VoidcubeCLI:
             managers.append(single)
         return managers
 
-    @classmethod
-    def _truncate_subagent_preview(cls, text: str, limit: int) -> str:
-        value = " ".join(str(text or "").strip().split())
-        if len(value) <= limit:
-            return value
-        if limit <= 3:
-            return value[:limit]
-        return value[: limit - 3] + "..."
-
     def _get_subagent_observability_snapshot(self) -> Dict[str, Any]:
-        snapshot = {
-            "active": False,
-            "foreground_count": 0,
-            "background_count": 0,
-            "total_count": 0,
-            "counts_label": "0",
-            "focus_task_id": "",
-            "focus_tool": "",
-            "focus_preview": "",
-            "compact_preview": "",
-        }
-        managers = self._get_subagent_display_managers()
-        if not managers:
-            return snapshot
-
-        foreground_tasks = []
-        background_tasks = []
-        try:
-            for manager in managers:
-                foreground_tasks.extend(list(manager.list_tasks(include_background=False) or []))
-                background_tasks.extend(list(manager.list_background_tasks() or []))
-        except Exception:
-            return snapshot
-
-        terminal_statuses = {"completed", "failed", "interrupted", "cancelled"}
-
-        def _is_active(task: Any) -> bool:
-            return self._normalize_subagent_status(task) not in terminal_statuses
-
-        active_foreground = [task for task in foreground_tasks if _is_active(task)]
-        active_background = [task for task in background_tasks if _is_active(task)]
-        if not active_foreground and not active_background:
-            return snapshot
-
-        active_foreground.sort(key=lambda task: getattr(task, "task_index", 0))
-        active_background.sort(key=lambda task: getattr(task, "task_index", 0))
-        focus_task = active_foreground[0] if active_foreground else active_background[0]
-
-        focus_task_id = str(getattr(focus_task, "task_id", "") or "").strip()
-        focus_tool = str(getattr(focus_task, "current_tool", "") or "").strip()
-        focus_preview_source = (
-            focus_tool
-            or str(getattr(focus_task, "current_tool_preview", "") or "").strip()
-            or str(getattr(focus_task, "current_thinking", "") or "").strip()
-            or str(getattr(focus_task, "goal_preview", "") or "").strip()
-            or str(getattr(focus_task, "goal", "") or "").strip()
-        )
-        focus_preview = self._truncate_subagent_preview(focus_preview_source, 32)
-        compact_preview = self._truncate_subagent_preview(focus_preview_source, 18)
-        foreground_count = len(active_foreground)
-        background_count = len(active_background)
-        total_count = foreground_count + background_count
-        counts_label = (
-            f"{foreground_count}+{background_count}"
-            if background_count > 0
-            else str(foreground_count)
-        )
-
-        snapshot.update(
-            {
-                "active": True,
-                "foreground_count": foreground_count,
-                "background_count": background_count,
-                "total_count": total_count,
-                "counts_label": counts_label,
-                "focus_task_id": focus_task_id,
-                "focus_tool": focus_tool,
-                "focus_preview": focus_preview,
-                "compact_preview": compact_preview,
-            }
-        )
-        return snapshot
+        return CliSubagentObservabilityRuntime(
+            CliSubagentObservabilityPorts(
+                display_managers=self._get_subagent_display_managers,
+            )
+        ).snapshot()
 
     @staticmethod
     def _status_bar_display_width(text: str) -> int:
@@ -1626,62 +1601,66 @@ class VoidcubeCLI:
             return text
         return text + (" " * pad)
 
+    def _tui_layout_metrics_runtime(self) -> CliTuiLayoutMetricsRuntime:
+        return CliTuiLayoutMetricsRuntime(
+            CliTuiLayoutMetricsPorts(
+                agent_running=lambda: bool(getattr(self, "_agent_running", False)),
+                spinner_visible=lambda: bool(getattr(self, "_spinner_text", "")),
+            )
+        )
+
+    def _autonomous_panel_render_ports(self) -> AutonomousPanelRenderPorts:
+        layout_metrics = self._tui_layout_metrics_runtime()
+        return AutonomousPanelRenderPorts(
+            terminal_width=layout_metrics.terminal_width,
+            trim_status_bar_text=self._trim_status_bar_text,
+            pad_status_bar_text=self._pad_status_bar_text,
+        )
+
+    def _autonomous_panel_state_ports(self) -> AutonomousPanelStatePorts:
+        state_host = getattr(self, "_autonomous_component_host", None) or self
+
+        def pending_input_nonempty() -> bool:
+            try:
+                return not state_host._pending_input.empty()
+            except Exception:
+                return False
+
+        return AutonomousPanelStatePorts(
+            gate_active=lambda: bool(self._autonomous_gate_active),
+            session_id=lambda: str(getattr(state_host, "session_id", "") or ""),
+            current_task=lambda: getattr(state_host, "_current_autonomous_task", None),
+            current_task_started_at=lambda: float(
+                getattr(state_host, "_current_autonomous_task_started_at", 0.0) or 0.0
+            ),
+            agent_running=lambda: bool(getattr(state_host, "_agent_running", False)),
+            last_agent_turn_result=lambda: getattr(
+                state_host, "_last_agent_turn_result", None
+            ),
+            pending_input_nonempty=pending_input_nonempty,
+            execution_events=lambda: list(
+                getattr(state_host, "_autonomous_execution_events", []) or []
+            ),
+            spinner_text=lambda: str(getattr(state_host, "_spinner_text", "") or ""),
+        )
+
     @staticmethod
     def _get_tui_terminal_width(default: tuple[int, int] = (80, 24)) -> int:
-        """Return the live prompt_toolkit width, falling back to ``shutil``.
-
-        The TUI layout can be narrower than ``shutil.get_terminal_size()`` reports,
-        especially on Termux/mobile shells, so prefer prompt_toolkit's width whenever
-        an app is active.
-        """
-        try:
-            from prompt_toolkit.application import get_app
-            return get_app().output.get_size().columns
-        except Exception:
-            return shutil.get_terminal_size(default).columns
-
-    def _use_minimal_tui_chrome(self, width: Optional[int] = None) -> bool:
-        """Hide low-value chrome on narrow/mobile terminals to preserve rows."""
-        if width is None:
-            width = self._get_tui_terminal_width()
-        return width < 64
-
-    def _tui_input_rule_height(self, position: str, width: Optional[int] = None) -> int:
-        """Return the visible height for the top/bottom input separator rules."""
-        if position not in {"top", "bottom"}:
-            raise ValueError(f"Unknown input rule position: {position}")
-        if position == "top":
-            return 1
-        return 0 if self._use_minimal_tui_chrome(width=width) else 1
-
-    def _agent_spacer_height(self, width: Optional[int] = None) -> int:
-        """Return the spacer height shown above the status bar while the agent runs."""
-        if not getattr(self, "_agent_running", False):
-            return 0
-        return 0 if self._use_minimal_tui_chrome(width=width) else 1
-
-    def _spinner_widget_height(self, width: Optional[int] = None) -> int:
-        """Return the visible height for the spinner/status text line above the status bar."""
-        if not getattr(self, "_spinner_text", ""):
-            return 0
-        return 0 if self._use_minimal_tui_chrome(width=width) else 1
+        """Expose the layout metric to the autonomous panel adapter."""
+        return CliTuiLayoutMetricsRuntime.terminal_width(default)
 
     def _get_voice_status_fragments(self, width: Optional[int] = None):
-        """Return the voice status bar fragments for the interactive TUI."""
-        width = width or self._get_tui_terminal_width()
-        compact = self._use_minimal_tui_chrome(width=width)
-        if self._voice_recording:
-            if compact:
-                return [("class:voice-status-recording", " ● REC ")]
-            return [("class:voice-status-recording", " ● REC  Ctrl+B to stop ")]
-        if self._voice_processing:
-            if compact:
-                return [("class:voice-status", " ◉ STT ")]
-            return [("class:voice-status", " ◉ Transcribing... ")]
-        if compact:
-            return [("class:voice-status", " 🎤 Ctrl+B ")]
-        cont = " | Continuous" if self._voice_continuous else ""
-        return [("class:voice-status", f" 🎤 Voice mode{cont}  —  Ctrl+B to record ")]
+        """Build voice status fragments through the display runtime."""
+        layout_metrics = self._tui_layout_metrics_runtime()
+        return CliVoiceStatusRuntime(
+            CliVoiceStatusPorts(
+                terminal_width=layout_metrics.terminal_width,
+                minimal_chrome=layout_metrics.minimal_chrome,
+                recording=lambda: bool(self._voice_recording),
+                processing=lambda: bool(self._voice_processing),
+                continuous=lambda: bool(self._voice_continuous),
+            )
+        ).build(width)
 
     def _build_status_bar_text(self, width: Optional[int] = None) -> str:
         """Return a compact one-line session status string for the TUI footer.
@@ -1797,399 +1776,58 @@ class VoidcubeCLI:
         return self._config_cache
 
     def _get_middle_status_fragments(self, is_active: bool = False) -> list[tuple[str, str]]:
-        """Build middle status bar section: supervisor's model + supervisor scene.
-
-        The "memory model" is the supervisor's working LLM (configured via
-        memory.llm.* in config.yaml).  Its marquee and context% reflect the
-        **supervisor's** activity, not the agent's memory-tool calls.
-
-        - Marquee ON  → supervisor scene is NOT "idle" (planning / learning /
-          memory / execution)
-        - Context %   → supervisor's own MemAI token accumulator, reported via
-          /ui/state.mem_usage
-        """
-        frags: list[tuple[str, str]] = []
-        ascii_mode = self._use_ascii_fallback_cached()
-
-        # ── Fetch supervisor state once (cached 5s) ──
-        scene = "idle"
-        sup_active = False
-        mem_usage: Dict[str, Any] = {}
-        try:
-            supervisor_snapshot = _supervisor_activity_snapshot_view(self)
-            scene = str(supervisor_snapshot.get("scene") or "idle").strip() or "idle"
-            sup_active = bool(supervisor_snapshot.get("is_active"))
-            mem_usage = dict(supervisor_snapshot.get("mem_usage") or {})
-        except Exception:
-            pass
-
-        # ── Supervisor's model (memory.llm) ──
-        try:
-            config = self._cached_load_config()
-            memory_config = config.get("memory", {})
-            mem_llm = memory_config.get("llm", {})
-            mem_model = mem_llm.get("model", None)
-            if mem_model:
-                mem_short = mem_model.split("/")[-1] if "/" in mem_model else mem_model
-                if mem_short.endswith(".gguf"):
-                    mem_short = mem_short[:-5]
-                if len(mem_short) > 20:
-                    mem_short = mem_short[:17] + "..."
-            else:
-                mem_provider = mem_llm.get("provider", "") or "Mem"
-                mem_short = mem_provider if len(mem_provider) <= 12 else mem_provider[:9] + "..."
-
-            icon = "[M]" if ascii_mode else "🧠"
-            frags.append(("bg:#1a1a2e #6B7280", icon))
-
-            # Marquee: supervisor's model lights up when supervisor is working
-            mem_color = "#7CC9A0"  # mint green
-            if sup_active and len(mem_short) > 0:
-                import time
-                marquee_speed = 9
-                marquee_pos = int(time.time() * marquee_speed) % (len(mem_short) + 4)
-                for i, char in enumerate(mem_short):
-                    if i == marquee_pos - 1:
-                        frags.append(("bg:#1a1a2e #FFFFFF bold", char))
-                    elif i == marquee_pos:
-                        frags.append(("bg:#1a1a2e #C0FFC0 bold", char))
-                    elif i == marquee_pos + 1:
-                        frags.append(("bg:#1a1a2e #80C080 bold", char))
-                    else:
-                        frags.append((f"bg:#1a1a2e {mem_color} bold", char))
-            else:
-                frags.append((f"bg:#1a1a2e {mem_color} bold", mem_short))
-
-            # Context %: from supervisor's own token accumulator
-            mem_pct = mem_usage.get("context_percent") if mem_usage else None
-            if mem_pct is not None and mem_pct > 0:
-                if mem_pct >= 80:
-                    mem_pct_color = "#FF6B6B"
-                elif mem_pct >= 60:
-                    mem_pct_color = "#FFD700"
-                else:
-                    mem_pct_color = "#8FBC8F"
-                frags.append((f"bg:#1a1a2e {mem_pct_color} bold", f" {mem_pct}%"))
-            else:
-                frags.append(("bg:#1a1a2e #6B7280", " --"))
-        except Exception:
-            pass
-
-        # ── Supervisor scene (reuse `sup` from memory-model section above) ──
-        # Per architectural baseline §3.4/§3.6, the supervisor (API-B) only
-        # manages the task list and runs endogenous drive — it never
-        # executes learning or body-upgrade code.  Scenes that imply
-        # execution (`learning`, `execution`) are API-A territory and are
-        # not legal values for the supervisor's `scene` field; they remain
-        # in the map below as defensive fallbacks (the Agent may surface
-        # its own scene in the future) but the supervisor will never
-        # emit them.
-        try:
-            if scene:
-                if ascii_mode:
-                    scene_icons = {
-                        "idle": "(-)", "planning": "(?)", "memory": "(M)",
-                        "drive": "(D)", "handoff": "(>)", "maintenance": "(M)",
-                        "body_switch": "(S)",
-                    }
-                else:
-                    scene_icons = {
-                        "idle": "💤", "planning": "🤔", "memory": "🧠",
-                        "drive": "💡", "handoff": "📤", "maintenance": "🔧",
-                        "body_switch": "🔄",
-                    }
-                scene_colors = {
-                    "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
-                    "drive": "#E2B04A", "handoff": "#A78BFA", "maintenance": "#60A5FA",
-                    "body_switch": "#C084FC",
-                }
-                icon = scene_icons.get(scene, "●")
-                color = scene_colors.get(scene, "#9CA3AF")
-                if frags:
-                    frags.append(("bg:#1a1a2e #4B5563", " · "))
-                frags.append((f"bg:#1a1a2e {color}", icon))
-
-                # compact scene label
-                scene_labels = {
-                    "idle": "辅助", "planning": "规划", "memory": "记忆",
-                    "drive": "驱动", "handoff": "交接", "maintenance": "维护",
-                    "body_switch": "切换",
-                }
-                label = scene_labels.get(scene, scene)
-                frags.append((f"bg:#1a1a2e {color}", label))
-
-                # error indicator
-                error_count = sup.get("error_count", 0)
-                if error_count > 0:
-                    frags.append(("bg:#1a1a2e #FF6B6B bold", f" !{error_count}"))
-            else:
-                # Supervisor not reachable — show offline indicator
-                if frags:
-                    frags.append(("bg:#1a1a2e #4B5563", " · "))
-                icon = "[x]" if ascii_mode else "⚙️"
-                frags.append(("bg:#1a1a2e #6B7280", icon))
-                frags.append(("bg:#1a1a2e #6B7280", "离线"))
-        except Exception:
-            pass
-
-        try:
-            subagent = self._get_subagent_observability_snapshot()
-            if subagent.get("active"):
-                if frags:
-                    frags.append(("bg:#1a1a2e #4B5563", " · "))
-                icon = "[SA]" if ascii_mode else "🧩"
-                frags.append(("bg:#1a1a2e #F59E0B", icon))
-                frags.append(("bg:#1a1a2e #F59E0B bold", f" {subagent.get('counts_label', '0')}"))
-                compact_preview = str(subagent.get("compact_preview") or "").strip()
-                if compact_preview:
-                    frags.append(("bg:#1a1a2e #94A3B8", f" {compact_preview}"))
-        except Exception:
-            pass
-
-        return frags
+        """Build middle status fragments through the display runtime."""
+        return CliMiddleStatusRuntime(
+            CliMiddleStatusPorts(
+                supervisor_snapshot=lambda: _supervisor_activity_snapshot_view(self),
+                memory_llm=lambda: (
+                    self._cached_load_config().get("memory", {}).get("llm", {})
+                ),
+                ascii_mode=self._use_ascii_fallback_cached,
+                subagent_snapshot=self._get_subagent_observability_snapshot,
+            )
+        ).build()
 
     def _get_git_status_simple(self) -> list[tuple[str, str]]:
-        """简洁的Git状态显示，返回片段列表，支持高亮数字。
-
-        Git status is cached for 60 s and runs in a background thread so
-        it NEVER blocks the UI thread — spawning ``git status`` as a
-        subprocess is the #2 hot-path bottleneck after ``load_config()``,
-        and on Windows each subprocess spawn is especially expensive.
-        """
-        import time
-        import threading
-
-        now = time.time()
-        # Serve from cache while it's fresh
-        if self._git_status_cache is not None and (now - self._git_status_cache_ts) < 60.0:
-            return self._git_status_cache  # type: ignore[return-value]
-
-        # Prevent concurrent background refreshes
-        if getattr(self, "_git_status_refreshing", False):
-            return self._git_status_cache or []
-        self._git_status_refreshing = True
-
-        def _refresh():
-            try:
+        """Build compact git status through the cached display runtime."""
+        runtime = self.__dict__.get("_git_status_runtime_instance")
+        if runtime is None:
+            def _git_display_factory() -> Any:
                 from VoidCube_cli.git_display import GitDisplay
-                git_display = GitDisplay()
-                status = git_display.runner.get_status()
 
-                if not status.is_repo:
-                    self._git_status_cache = []
-                    self._git_status_cache_ts = time.time()
-                    return
+                return GitDisplay()
 
-                frags = []
-
-                # Git <branch>
-                frags.append(("bg:#1a1a2e #58A6FF", "Git "))
-                frags.append(("bg:#1a1a2e #9CA3AF", "<"))
-                frags.append(("bg:#1a1a2e #58A6FF bold", status.branch))
-                frags.append(("bg:#1a1a2e #9CA3AF", ">"))
-
-                # 暂存
-                if status.staged:
-                    frags.append(("bg:#1a1a2e #9CA3AF", "  暂存 "))
-                    frags.append(("bg:#1a1a2e #FFFFFF bold", str(len(status.staged))))
-
-                # 更改
-                changes = len(status.modified) + len(status.deleted) + len(status.untracked)
-                if changes > 0:
-                    frags.append(("bg:#1a1a2e #9CA3AF", "  更改 "))
-                    frags.append(("bg:#1a1a2e #FFFFFF bold", str(changes)))
-
-                # 检查远程 — use GitRunner for PowerShell/Win compat
-                try:
-                    code, out, _ = git_display.runner._run(["remote"])
-                    if code == 0 and out.strip():
-                        remotes = out.strip().splitlines()
-                        remote_str = ",".join(remotes)
-                        frags.append(("bg:#1a1a2e #9CA3AF", "  <"))
-                        frags.append(("bg:#1a1a2e #8B949E", remote_str))
-                        frags.append(("bg:#1a1a2e #9CA3AF", ">"))
-                except:
-                    pass
-
-                self._git_status_cache = frags
-                self._git_status_cache_ts = time.time()
-            except Exception:
-                self._git_status_cache = []
-                self._git_status_cache_ts = time.time()
-            finally:
-                self._git_status_refreshing = False
-                # Cache updated in-place; the next status-bar render will
-                # pick up the new fragments without any explicit invalidate.
-                # (Do NOT call self._invalidate() from a daemon thread —
-                #  prompt_toolkit's Application is not thread-safe.)
-
-        threading.Thread(target=_refresh, daemon=True, name="git-status-refresh").start()
-        # Return stale cache while refresh runs; empty list on first call
-        return self._git_status_cache or []
+            runtime = CliGitStatusRuntime(
+                CliGitStatusPorts(
+                    git_display_factory=_git_display_factory,
+                    clock=time.time,
+                    thread_factory=threading.Thread,
+                )
+            )
+            self._git_status_runtime_instance = runtime
+        return runtime.build()
     
     def _get_status_bar_fragments(self):
-        if not self._status_bar_visible or getattr(self, '_model_picker_state', None):
-            return []
-        try:
-            snapshot = self._get_status_bar_snapshot()
-            width = self._get_tui_terminal_width()
-            
-            percent = snapshot["context_percent"]
-            
-            # Simplified format: model name + percentage with color
-            # Color scheme: 0-60% green, 60-80% yellow, 80%+ red
-            if percent is not None:
-                if percent >= 80:
-                    percent_color = "#FF6B6B"
-                elif percent >= 60:
-                    percent_color = "#FFD700"
-                else:
-                    percent_color = "#8FBC8F"
-                percent_label = f"{percent}%"
-            else:
-                percent_color = "#8B8682"
-                percent_label = "--"
-            
-            # Check if agent is active (thinking, running tool, streaming, or command)
-            is_active = (
-                getattr(self, '_spinner_text', '') != '' or  # thinking
-                getattr(self, '_tool_start_time', 0) > 0 or  # tool running
-                getattr(self, '_command_running', False) or  # command running
-                self._stream_render_state.started           # streaming
+        """Build the status bar through the display-only runtime."""
+        layout_metrics = self._tui_layout_metrics_runtime()
+        is_active = (
+            getattr(self, "_spinner_text", "") != ""
+            or getattr(self, "_tool_start_time", 0) > 0
+            or getattr(self, "_command_running", False)
+            or self._stream_render_state.started
+        )
+        return CliStatusBarRuntime(
+            CliStatusBarPorts(
+                status_bar_visible=lambda: self._status_bar_visible,
+                model_picker_open=lambda: bool(getattr(self, "_model_picker_state", None)),
+                snapshot=self._get_status_bar_snapshot,
+                terminal_width=layout_metrics.terminal_width,
+                agent_active=lambda: is_active,
+                middle_fragments=self._get_middle_status_fragments,
+                git_fragments=self._get_git_status_simple,
+                fallback_text=lambda: self._build_status_bar_text(),
             )
-            
-            # Marquee effect when agent is active - 3 character highlighting with white/gray
-            model_name = snapshot["model_short"]
-            
-            # 构建左侧内容（模型名和百分比）
-            left_frags = []
-            
-            if is_active and len(model_name) > 0:
-                import time
-                # Create marquee effect: highlight 3 characters at a time
-                # that moves through the model name
-                marquee_speed = 9  # characters per second (3x faster)
-                marquee_pos = int(time.time() * marquee_speed) % (len(model_name) + 4)
-                
-                # Build model name with marquee effect
-                for i, char in enumerate(model_name):
-                    if i == marquee_pos - 1:
-                        # Leading highlight - bright white
-                        left_frags.append(('bg:#1a1a2e #FFFFFF bold', char))
-                    elif i == marquee_pos:
-                        # Main highlight - light gray
-                        left_frags.append(('bg:#1a1a2e #C0C0C0 bold', char))
-                    elif i == marquee_pos + 1:
-                        # Trailing highlight - medium gray
-                        left_frags.append(('bg:#1a1a2e #808080 bold', char))
-                    else:
-                        # Normal characters - dark blue (original color)
-                        left_frags.append(('bg:#1a1a2e #1E40AF bold', char))
-                
-                # Add trailing space for separator
-                left_frags.append(("class:status-bar", "  "))
-                left_frags.append((f'bg:#1a1a2e {percent_color} bold', percent_label))
-            else:
-                model_color = "#1E40AF"  # Original dark blue color
-                left_frags = [
-                    (f'bg:#1a1a2e {model_color} bold', model_name),
-                    ("class:status-bar", "  "),
-                    (f'bg:#1a1a2e {percent_color} bold', percent_label),
-                ]
-            
-            # 获取中间片段：记忆模型 + 监督者状态
-            middle_frags = self._get_middle_status_fragments(is_active=is_active)
-
-            # 获取 Git 状态片段
-            git_frags = self._get_git_status_simple()
-
-            if git_frags:
-                # 计算各段宽度
-                left_width = sum(self._status_bar_display_width(text) for _, text in left_frags)
-                mid_width = sum(self._status_bar_display_width(text) for _, text in middle_frags) if middle_frags else 0
-                git_width = sum(self._status_bar_display_width(text) for _, text in git_frags)
-
-                # 布局：left | spacer | middle | spacer | git
-                available = width - left_width - git_width - 6  # 6 = margins
-                if mid_width > 0 and available > 20:
-                    mid_pad_left = max(1, (available - mid_width) // 2)
-                    mid_pad_right = max(1, available - mid_width - mid_pad_left)
-                    frags = left_frags.copy()
-                    frags.append(("class:status-bar", " " * mid_pad_left))
-                    frags.extend(middle_frags)
-                    frags.append(("class:status-bar", " " * mid_pad_right))
-                    frags.extend(git_frags)
-                elif mid_width > 0 and available > 0:
-                    frags = left_frags.copy()
-                    frags.append(("class:status-bar", "  "))
-                    frags.extend(middle_frags)
-                    frags.append(("class:status-bar", "  "))
-                    frags.extend(git_frags)
-                else:
-                    padding_width = width - left_width - git_width - 4
-                    if padding_width > 0:
-                        frags = left_frags.copy()
-                        frags.append(("class:status-bar", " " * padding_width))
-                        frags.extend(git_frags)
-                    else:
-                        frags = left_frags.copy()
-                        frags.append(("class:status-bar", "  --  "))
-                        frags.extend(git_frags)
-
-                total_width = sum(self._status_bar_display_width(text) for _, text in frags)
-                if total_width > width:
-                    plain_text = "".join(text for _, text in frags)
-                    trimmed = self._trim_status_bar_text(plain_text, width)
-                    return [("class:status-bar", trimmed)]
-                return frags
-            else:
-                # 没有Git内容：left | spacer | middle
-                all_frags = left_frags.copy()
-                if middle_frags:
-                    mid_width = sum(self._status_bar_display_width(text) for _, text in middle_frags)
-                    left_w = sum(self._status_bar_display_width(text) for _, text in left_frags)
-                    pad = width - left_w - mid_width - 4
-                    if pad > 4:
-                        all_frags.append(("class:status-bar", " " * (pad // 2)))
-                        all_frags.extend(middle_frags)
-                        all_frags.append(("class:status-bar", " " * (pad - pad // 2)))
-                    elif pad > 0:
-                        all_frags.append(("class:status-bar", "  "))
-                        all_frags.extend(middle_frags)
-                total_width = sum(self._status_bar_display_width(text) for _, text in all_frags)
-                if total_width > width:
-                    plain_text = "".join(text for _, text in all_frags)
-                    trimmed = self._trim_status_bar_text(plain_text, width)
-                    return [("class:status-bar", trimmed)]
-                return all_frags
-        except Exception:
-            return [("class:status-bar", f" {self._build_status_bar_text()} ")]
-
-    def _normalize_model_for_provider(self, resolved_provider: str) -> bool:
-        """Normalize provider-specific model IDs and routing."""
-        current_model = (self.model or "").strip()
-        changed = False
-
-        try:
-            from VoidCube_app.model_normalization import (
-                AGGREGATOR_PROVIDERS,
-                normalize_model_for_provider,
-            )
-
-            if resolved_provider not in AGGREGATOR_PROVIDERS:
-                normalized_model = normalize_model_for_provider(current_model, resolved_provider)
-                if normalized_model and normalized_model != current_model:
-                    if not self._model_is_default:
-                        self.console.print(
-                            f"[yellow]⚠️  Normalized model '{current_model}' to '{normalized_model}' for {resolved_provider}.[/]"
-                        )
-                    self.model = normalized_model
-                    current_model = normalized_model
-                    changed = True
-        except Exception:
-            pass
-
-        return changed
+        ).build()
 
     def _on_thinking(self, text: str) -> None:
         """Called by agent when thinking starts/stops. Updates TUI spinner."""
@@ -2254,122 +1892,80 @@ class VoidcubeCLI:
         are picked up without restarting the CLI.
         Returns True if credentials are ready, False on auth failure.
         """
-        from VoidCube_app.runtime_provider import (
-            resolve_runtime_provider,
-            format_runtime_provider_error,
-        )
-
-        try:
-            runtime = resolve_runtime_provider(
-                requested=self.requested_provider,
+        resolution = CliRuntimeCredentialsRuntime(
+            CliRuntimeCredentialsPorts(
+                requested_provider=self.requested_provider,
                 explicit_api_key=self._explicit_api_key,
                 explicit_base_url=self._explicit_base_url,
+                current={
+                    "model": self.model,
+                    "api_key": self.api_key,
+                    "base_url": self.base_url,
+                    "provider": self.provider,
+                    "command": self.acp_command,
+                    "args": list(self.acp_args or []),
+                },
             )
-        except Exception as exc:
-            message = format_runtime_provider_error(exc)
-            try:
-                ChatConsole().print(f"[bold red]{message}[/]")
-            except Exception:
-                print(message)
-            return False
-
-        api_key = runtime.get("api_key")
-        base_url = runtime.get("base_url")
-        resolved_provider = runtime.get("provider", "openrouter")
-        resolved_acp_command = runtime.get("command")
-        resolved_acp_args = list(runtime.get("args") or [])
-        resolved_credential_pool = runtime.get("credential_pool")
-        if not isinstance(api_key, str) or not api_key:
-            # Custom / local endpoints (llama.cpp, ollama, vLLM, etc.) often
-            # don't require authentication.  When a base_url IS configured but
-            # no API key was found, use a placeholder so the OpenAI SDK
-            # doesn't reject the request and local servers just ignore it.
-            _source = runtime.get("source", "")
-            _has_custom_base = isinstance(base_url, str) and base_url and "openrouter.ai" not in base_url
-            if _has_custom_base:
-                api_key = "no-key-required"
-                logger.debug(
-                    "No API key for custom endpoint %s (source=%s), "
-                    "using placeholder — local servers typically ignore auth",
-                    base_url, _source,
-                )
+        ).resolve()
+        if not resolution.ready:
+            message = resolution.error or "Provider credentials are unavailable."
+            if message.startswith("Provider resolver returned") or message.startswith("No model selected"):
+                print(f"\n⚠️  {message}")
             else:
-                print("\n⚠️  Provider resolver returned an empty API key. "
-                      "Set OPENROUTER_API_KEY or run: /api")
-                return False
-        if not isinstance(base_url, str) or not base_url:
-            print("\n⚠️  Provider resolver returned an empty base URL. "
-                  "Check your provider config or run: /api")
+                try:
+                    ChatConsole().print(f"[bold red]{message}[/]")
+                except Exception:
+                    print(message)
             return False
 
-        credentials_changed = api_key != self.api_key or base_url != self.base_url
-        routing_changed = (
-            resolved_provider != self.provider
-            or resolved_acp_command != self.acp_command
-            or resolved_acp_args != self.acp_args
-        )
-        self.provider = resolved_provider
-        self.acp_command = resolved_acp_command
-        self.acp_args = resolved_acp_args
-        self._credential_pool = resolved_credential_pool
-        self._provider_source = runtime.get("source")
-        self.api_key = api_key
-        self.base_url = base_url
-
-        # When a custom_provider entry carries an explicit `model` field,
-        # use it as the effective model name.  Without this, running
-        # `VoidCube chat --model <provider-name>` sends the provider name
-        # (e.g. "my-provider") as the model string to the API instead of
-        # the configured model (e.g. "qwen3.6-plus"), causing 400 errors.
-        runtime_model = runtime.get("model")
-        if runtime_model and isinstance(runtime_model, str):
-            self.model = runtime_model
-
-        if not self.model:
-            print("\n⚠️  No model selected for the active provider. Run: /model")
-            return False
-
-        # Normalize model IDs to the selected provider's request format.
-        model_changed = self._normalize_model_for_provider(resolved_provider)
+        previous_model = self.model
+        self.provider = resolution.provider
+        self.acp_command = resolution.command
+        self.acp_args = list(resolution.args)
+        self._credential_pool = resolution.credential_pool
+        self._provider_source = resolution.source
+        self.api_key = resolution.api_key
+        self.base_url = resolution.base_url
+        self.model = resolution.model
+        if (
+            resolution.model_changed
+            and not self._model_is_default
+            and previous_model != self.model
+        ):
+            self.console.print(
+                f"[yellow]⚠️  Normalized model '{previous_model}' to '{self.model}' "
+                f"for {self.provider}.[/]"
+            )
 
         # AIAgent/OpenAI client holds auth at init time, so rebuild if key,
         # routing, or the effective model changed.
-        if (credentials_changed or routing_changed or model_changed) and self.agent is not None:
+        if (
+            resolution.credentials_changed
+            or resolution.routing_changed
+            or resolution.model_changed
+        ) and self.agent is not None:
             self.agent = None
             self._active_agent_route_signature = None
 
         return True
 
     def _resolve_turn_agent_config(self, user_message: str) -> dict:
-        """Resolve model/runtime overrides for a single user turn."""
-        from agent.smart_model_routing import resolve_turn_route
-        from VoidCube_app.models import resolve_fast_mode_overrides
-
-        route = resolve_turn_route(
-            user_message,
-            self._smart_model_routing,
-            {
-                "model": self.model,
-                "api_key": self.api_key,
-                "base_url": self.base_url,
-                "provider": self.provider,
-                "command": self.acp_command,
-                "args": list(self.acp_args or []),
-                "credential_pool": getattr(self, "_credential_pool", None),
-            },
-        )
-
-        service_tier = getattr(self, "service_tier", None)
-        if not service_tier:
-            route["request_overrides"] = None
-            return route
-
-        try:
-            overrides = resolve_fast_mode_overrides(route.get("model"))
-        except Exception:
-            overrides = None
-        route["request_overrides"] = overrides
-        return route
+        """Resolve one turn's model route through the routing runtime."""
+        return CliTurnAgentRouteRuntime(
+            CliTurnAgentRoutePorts(
+                smart_model_routing=self._smart_model_routing,
+                runtime_credentials={
+                    "model": self.model,
+                    "api_key": self.api_key,
+                    "base_url": self.base_url,
+                    "provider": self.provider,
+                    "command": self.acp_command,
+                    "args": list(self.acp_args or []),
+                    "credential_pool": getattr(self, "_credential_pool", None),
+                },
+                service_tier=getattr(self, "service_tier", None),
+            )
+        ).resolve(user_message)
 
     def _init_agent(self, *, model_override: Optional[str] = None, runtime_override: Optional[dict] = None, route_label: Optional[str] = None, request_overrides: dict | None = None) -> bool:
         """
@@ -2396,27 +1992,16 @@ class VoidcubeCLI:
         # Single-query callers do not run the interactive preload path.
         if self._resumed and self._session_db and not self.conversation_history:
             hydration, loaded_now = self._hydrate_resumed_session()
-            if hydration.status is SessionHydrationStatus.MISSING:
-                if loaded_now:
-                    _cprint(f"\033[1;31mSession not found: {self.session_id}{_RST}")
-                    _cprint(f"{_DIM}Use a session ID from a previous CLI run (VoidCube sessions list).{_RST}")
+            if not CliSingleQueryResumeRuntime(
+                CliSingleQueryResumePorts(
+                    session_id=lambda: self.session_id,
+                    accent_color=_accent_hex,
+                    escape=_escape,
+                    translate=t,
+                    emit=ChatConsole().print,
+                )
+            ).report(hydration, loaded_now):
                 return False
-            if loaded_now and hydration.status is SessionHydrationStatus.READY:
-                restored = hydration.conversation_history
-                msg_count = len([m for m in restored if m.get("role") == "user"])
-                title_part = ""
-                if hydration.metadata and hydration.metadata.get("title"):
-                    title_part = f" \"{hydration.metadata['title']}\""
-                ChatConsole().print(
-                    f"[bold {_accent_hex()}]↻ {t('prompts.resumed_session', default='Resumed session')}[/] "
-                    f"[bold]{_escape(self.session_id)}[/]"
-                    f"[bold {_accent_hex()}]{_escape(title_part)}[/] "
-                    f"({msg_count} {t('prompts.user_messages', default='user message')}{'s' if msg_count != 1 else ''}, {len(restored)} {t('prompts.total_messages', default='total messages')})"
-                )
-            elif loaded_now:
-                ChatConsole().print(
-                    f"[bold {_accent_hex()}]Session {_escape(self.session_id)} found but has no messages. Starting fresh.[/]"
-                )
         
         try:
             runtime = runtime_override or {
@@ -2428,44 +2013,41 @@ class VoidcubeCLI:
                 "credential_pool": getattr(self, "_credential_pool", None),
             }
             effective_model = model_override or self.model
-            self.agent = _get_AIAgent()(
-                model=effective_model,
-                api_key=runtime.get("api_key"),
-                base_url=runtime.get("base_url"),
-                provider=runtime.get("provider"),
-                acp_command=runtime.get("command"),
-                acp_args=runtime.get("args"),
-                credential_pool=runtime.get("credential_pool"),
-                max_iterations=self.max_turns,
-                enabled_toolsets=self.enabled_toolsets,
-                verbose_logging=self.verbose,
-                quiet_mode=not self.verbose,
-                ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
-                prefill_messages=self.prefill_messages or None,
-                reasoning_config=self.reasoning_config,
-                service_tier=self.service_tier,
-                request_overrides=request_overrides,
-                providers_allowed=self._providers_only,
-                providers_ignored=self._providers_ignore,
-                providers_order=self._providers_order,
-                provider_sort=self._provider_sort,
-                provider_require_parameters=self._provider_require_params,
-                provider_data_collection=self._provider_data_collection,
-                session_id=self.session_id,
-                platform="cli",
-                session_db=self._session_db,
-                clarification_sink=self._clarification_sink,
-                reasoning_callback=self._current_reasoning_callback(),
-
-                fallback_model=self._fallback_model,
-                thinking_callback=self._on_thinking,
-                checkpoints_enabled=self.checkpoints_enabled,
-                checkpoint_max_snapshots=self.checkpoint_max_snapshots,
-                pass_session_id=self.pass_session_id,
-                tool_event_sink=self._on_tool_event,
-                stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
-                tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
-            )
+            self.agent = CliAgentInitializationRuntime(
+                CliAgentInitializationPorts(
+                    agent_factory=_get_AIAgent(),
+                    runtime=runtime,
+                    model=effective_model,
+                    max_iterations=self.max_turns,
+                    enabled_toolsets=self.enabled_toolsets,
+                    verbose_logging=self.verbose,
+                    quiet_mode=not self.verbose,
+                    ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
+                    prefill_messages=self.prefill_messages or None,
+                    reasoning_config=self.reasoning_config,
+                    service_tier=self.service_tier,
+                    request_overrides=request_overrides,
+                    providers_allowed=self._providers_only,
+                    providers_ignored=self._providers_ignore,
+                    providers_order=self._providers_order,
+                    provider_sort=self._provider_sort,
+                    provider_require_parameters=self._provider_require_params,
+                    provider_data_collection=self._provider_data_collection,
+                    session_id=self.session_id,
+                    platform="cli",
+                    session_db=self._session_db,
+                    clarification_sink=self._clarification_sink,
+                    reasoning_callback=self._current_reasoning_callback(),
+                    fallback_model=self._fallback_model,
+                    thinking_callback=self._on_thinking,
+                    checkpoints_enabled=self.checkpoints_enabled,
+                    checkpoint_max_snapshots=self.checkpoint_max_snapshots,
+                    pass_session_id=self.pass_session_id,
+                    tool_event_sink=self._on_tool_event,
+                    stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
+                    tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
+                )
+            ).create()
             # Store reference for atexit memory provider shutdown
             global _active_agent_ref
             _active_agent_ref = self.agent
@@ -2607,17 +2189,20 @@ class VoidcubeCLI:
 
     def _hydrate_resumed_session(self) -> tuple[SessionHydration, bool]:
         """Return one cached hydration result for the selected session."""
-        hydration = self._session_hydration
-        loaded_now = hydration is None
-        if hydration is None:
-            hydration = hydrate_session(
-                repository=self._session_db,
-                session_id=self.session_id,
+        return CliSessionHydrationRuntime(
+            CliSessionHydrationPorts(
+                cached_hydration=lambda: self._session_hydration,
+                set_hydration=lambda value: setattr(
+                    self, "_session_hydration", value
+                ),
+                repository=lambda: self._session_db,
+                session_id=lambda: self.session_id,
+                set_conversation_history=lambda value: setattr(
+                    self, "conversation_history", value
+                ),
+                hydrate=hydrate_session,
             )
-            self._session_hydration = hydration
-        if hydration.status is SessionHydrationStatus.READY:
-            self.conversation_history = list(hydration.conversation_history)
-        return hydration, loaded_now
+        ).load()
 
     def _preload_resumed_session(self) -> bool:
         """Load a resumed session's history from the DB early (before first chat).
@@ -2629,239 +2214,30 @@ class VoidcubeCLI:
 
         The corresponding block in ``_init_agent()`` reuses the cached outcome.
         """
-        if not self._resumed or not self._session_db:
-            return False
-
-        hydration, _ = self._hydrate_resumed_session()
-        if hydration.status is SessionHydrationStatus.MISSING:
-            self.console.print(
-                f"[bold red]Session not found: {self.session_id}[/]"
+        return CliSessionResumeRuntime(
+            CliSessionResumePorts(
+                resumed=lambda: self._resumed,
+                repository_available=lambda: self._session_db is not None,
+                session_id=lambda: self.session_id,
+                hydrate=self._hydrate_resumed_session,
+                accent_color=_accent_hex,
+                translate=t,
+                emit=self.console.print,
             )
-            self.console.print(
-                "[dim]Use a session ID from a previous CLI run "
-                "(VoidCube sessions list).[/]"
-            )
-            return False
-
-        if hydration.status is SessionHydrationStatus.READY:
-            restored = hydration.conversation_history
-            msg_count = len([m for m in restored if m.get("role") == "user"])
-            title_part = ""
-            if hydration.metadata and hydration.metadata.get("title"):
-                title_part = f' "{hydration.metadata["title"]}"'
-            accent_color = _accent_hex()
-            self.console.print(
-                f"[{accent_color}]↻ {t('prompts.resumed_session', default='Resumed session')} [bold]{self.session_id}[/bold]"
-                f"{title_part} "
-                f"({msg_count} {t('prompts.user_messages', default='user message')}{'s' if msg_count != 1 else ''}, "
-                f"{len(restored)} {t('prompts.total_messages', default='total messages')})[/]"
-            )
-        else:
-            accent_color = _accent_hex()
-            self.console.print(
-                f"[{accent_color}]Session {self.session_id} found but has no "
-                f"messages. Starting fresh.[/]"
-            )
-            return False
-
-        return True
+        ).preload()
 
     def _display_resumed_history(self):
-        """Render a compact recap of previous conversation messages.
-
-        Uses Rich markup with dim/muted styling so the recap is visually
-        distinct from the active conversation.  Caps the display at the
-        last ``MAX_DISPLAY_EXCHANGES`` user/assistant exchanges and shows
-        an indicator for earlier hidden messages.
-        """
-        if not self.conversation_history:
-            return
-
-        # Check config: resume_display setting
-        if self.resume_display == "minimal":
-            return
-
-        MAX_DISPLAY_EXCHANGES = 10   # max user+assistant pairs to show
-        MAX_USER_LEN = 300           # truncate user messages
-        MAX_ASST_LEN = 200           # truncate assistant text
-        MAX_ASST_LINES = 3           # max lines of assistant text
-
-        def _strip_ansi_codes(text: str) -> str:
-            """Remove ANSI escape sequences from text to prevent display corruption."""
-            import re
-            if not text:
-                return text
-            ansi_escape = re.compile(
-                r"\x1b"
-                r"(?:"
-                r"\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"     # CSI sequence
-                r"|\][\s\S]*?(?:\x07|\x1b\\)"                  # OSC (BEL or ST terminator)
-                r"|[PX^_][\s\S]*?(?:\x1b\\)"                   # DCS/SOS/PM/APC strings
-                r"|[\x20-\x2f]+[\x30-\x7e]"                    # nF escape sequences
-                r"|[\x30-\x7e]"                                 # Fp/Fe/Fs single-byte
-                r")"
-                r"|\x9b[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"   # 8-bit CSI
-                r"|\x9d[\s\S]*?(?:\x07|\x9c)"                   # 8-bit OSC
-                r"|[\x80-\x9f]",                                # Other 8-bit C1 controls
-                re.DOTALL,
+        """Render the resumed history through the dedicated display runtime."""
+        CliHistoryDisplayRuntime(
+            CliHistoryDisplayPorts(
+                conversation_history=lambda: self.conversation_history,
+                resume_display=lambda: self.resume_display,
+                terminal_width=lambda: shutil.get_terminal_size((80, 24)).columns,
+                translate=t,
+                emit=_cprint,
+                emit_blank_line=lambda: print(),
             )
-            return ansi_escape.sub("", text)
-
-        def _strip_reasoning(text: str) -> str:
-            """Remove <REASONING_SCRATCHPAD>...</REASONING_SCRATCHPAD> blocks
-            from displayed text (reasoning model internal thoughts)."""
-            import re
-            cleaned = re.sub(
-                r"<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>\s*",
-                "", text, flags=re.DOTALL,
-            )
-            # Also strip unclosed reasoning tags at the end
-            cleaned = re.sub(
-                r"<REASONING_SCRATCHPAD>.*$",
-                "", cleaned, flags=re.DOTALL,
-            )
-            return cleaned.strip()
-
-        # Collect displayable entries (skip system, tool-result messages)
-        entries = []  # list of (role, display_text)
-        _last_asst_idx = None       # index of last assistant entry
-        _last_asst_full = None      # un-truncated display text for last assistant
-        first_timestamp = None       # timestamp of first message
-        last_timestamp = None        # timestamp of last displayed message
-        
-        for msg in self.conversation_history:
-            role = msg.get("role", "")
-            content = msg.get("content")
-            tool_calls = msg.get("tool_calls") or []
-            timestamp = msg.get("timestamp")
-            
-            if not first_timestamp:
-                first_timestamp = timestamp
-
-            if role == "system":
-                continue
-            if role == "tool":
-                continue
-
-            if role == "user":
-                text = "" if content is None else str(content)
-                # Handle multimodal content (list of dicts)
-                if isinstance(content, list):
-                    parts = []
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            parts.append(part.get("text", ""))
-                        elif isinstance(part, dict) and part.get("type") == "image_url":
-                            parts.append("[image]")
-                    text = " ".join(parts)
-                # Strip ANSI escape codes to prevent display corruption
-                text = _strip_ansi_codes(text)
-                if len(text) > MAX_USER_LEN:
-                    text = text[:MAX_USER_LEN] + "..."
-                entries.append(("user", text, timestamp))
-
-            elif role == "assistant":
-                text = "" if content is None else str(content)
-                # Strip ANSI escape codes to prevent display corruption
-                text = _strip_ansi_codes(text)
-                text = _strip_reasoning(text)
-                parts = []
-                full_parts = []  # un-truncated version
-                if text:
-                    full_parts.append(text)
-                    lines = text.splitlines()
-                    if len(lines) > MAX_ASST_LINES:
-                        text = "\n".join(lines[:MAX_ASST_LINES]) + " ..."
-                    if len(text) > MAX_ASST_LEN:
-                        text = text[:MAX_ASST_LEN] + "..."
-                    parts.append(text)
-                if tool_calls:
-                    tc_count = len(tool_calls)
-                    # Extract tool names
-                    names = []
-                    for tc in tool_calls:
-                        fn = tc.get("function", {})
-                        name = fn.get("name", "unknown") if isinstance(fn, dict) else "unknown"
-                        if name not in names:
-                            names.append(name)
-                    names_str = ", ".join(names[:4])
-                    if len(names) > 4:
-                        names_str += ", ..."
-                    noun = "call" if tc_count == 1 else "calls"
-                    tc_summary = f"[{tc_count} tool {noun}: {names_str}]"
-                    parts.append(tc_summary)
-                    full_parts.append(tc_summary)
-                if not parts:
-                    # Skip pure-reasoning messages that have no visible output
-                    continue
-                entries.append(("assistant", " ".join(parts), timestamp))
-                _last_asst_idx = len(entries) - 1
-                _last_asst_full = " ".join(full_parts)
-                last_timestamp = timestamp
-
-        if not entries:
-            return
-
-        # Determine if we need to truncate
-        skipped = 0
-        if len(entries) > MAX_DISPLAY_EXCHANGES * 2:
-            skipped = len(entries) - MAX_DISPLAY_EXCHANGES * 2
-            # Get timestamp of first displayed message
-            if entries:
-                last_timestamp = entries[0][2]
-            entries = entries[skipped:]
-
-        # Replace last assistant entry with full (un-truncated) text
-        # so the user can see where they left off without wasting tokens.
-        if _last_asst_idx is not None and _last_asst_full:
-            adj_idx = _last_asst_idx - skipped
-            if 0 <= adj_idx < len(entries):
-                # Keep the timestamp from the original entry
-                original_timestamp = entries[adj_idx][2] if len(entries[adj_idx]) > 2 else None
-                entries[adj_idx] = ("assistant_last", _last_asst_full, original_timestamp)
-
-        # Build the display using Rich
-        from rich.panel import Panel
-        from rich.text import Text
-
-        _history_text_c = "#FFF8DC"
-        _session_label_c = "#DAA520"
-        _session_border_c = "#8B8682"
-        _assistant_label_c = "#8FBC8F"
-
-        # Simple text output without borders to avoid wrapping issues
-        print()
-        _term_width = shutil.get_terminal_size((80, 24)).columns
-        _line_fill = _term_width - 2  # Full width minus 2 for margin
-        _cprint(f"\033[38;2;218;165;32m── {t('prompts.previous_conversation', default='Previous Conversation')}{'─' * ((_term_width - 2) - 2 - len(t('prompts.previous_conversation', default='Previous Conversation')))}{_RST}")
-        
-        if skipped and first_timestamp:
-            import datetime
-            first_time = datetime.datetime.fromtimestamp(first_timestamp).strftime("%m-%d %H:%M")
-            last_time = datetime.datetime.fromtimestamp(last_timestamp).strftime("%m-%d %H:%M")
-            _cprint(f"     ... {skipped} {t('prompts.earlier_messages', default='earlier messages')} ({first_time} - {last_time}) ...")
-        elif skipped:
-            _cprint(f"     ... {skipped} {t('prompts.earlier_messages', default='earlier messages')} ...")
-            print()
-
-        for i, (role, text, timestamp) in enumerate(entries):
-            if timestamp:
-                import datetime
-                time_str = datetime.datetime.fromtimestamp(timestamp).strftime("%H:%M")
-            else:
-                time_str = ""
-            
-            if role == "user":
-                _cprint(f"  ● {t('prompts.you', default='You')}{' ' + time_str if time_str else ''}: {text}")
-            elif role == "assistant_last":
-                _cprint(f"  ◆ {t('prompts.voidcube', default='Voidcube')}{' ' + time_str if time_str else ''}: {text}")
-            else:
-                _cprint(f"  ◆ {t('prompts.voidcube', default='Voidcube')}{' ' + time_str if time_str else ''}: {text}")
-            if i < len(entries) - 1:
-                print()
-        
-        print()
-        _cprint(f"\033[38;2;218;165;32m{'─' * (_term_width - 2)}{_RST}")
+        ).run()
 
     def _try_attach_clipboard_image(self) -> bool:
         """Check clipboard for an image and attach it if found.
@@ -3017,64 +2393,69 @@ class VoidcubeCLI:
             return self._fast_command_available()
         return True
 
+    def _session_browser_runtime(self) -> CliSessionBrowserRuntime:
+        runtime = self.__dict__.get("_session_browser_runtime_instance")
+        if runtime is not None:
+            return runtime
+
+        def list_sessions(**kwargs: Any) -> Sequence[Mapping[str, Any]]:
+            session_db = getattr(self, "_session_db", None)
+            if session_db is None:
+                return []
+            return session_db.list_sessions_rich(**kwargs)
+
+        from VoidCube_cli.main import _relative_time
+
+        runtime = CliSessionBrowserRuntime(
+            CliSessionBrowserPorts(
+                list_sessions=list_sessions,
+                active_session_id=lambda: str(getattr(self, "session_id", "") or ""),
+                relative_time=_relative_time,
+                translate=t,
+                emit=print,
+            )
+        )
+        self._session_browser_runtime_instance = runtime
+        return runtime
+
     def _list_recent_sessions(self, limit: int = 10) -> list[dict[str, Any]]:
         """Return recent CLI sessions for in-chat browsing/resume affordances."""
-        if not self._session_db:
-            return []
-        try:
-            sessions = self._session_db.list_sessions_rich(
-                source="cli",
-                exclude_sources=["tool"],
-                limit=limit,
-                exclude_id_prefixes=["scheduled_"],
-            )
-        except Exception:
-            return []
-        return [s for s in sessions if s.get("id") != self.session_id]
+        return self._session_browser_runtime().list_recent(limit=limit)
 
     def _show_recent_sessions(self, *, reason: str = "history", limit: int = 8) -> bool:
         """Render recent sessions inline from the active chat TUI.
 
         Returns True when something was shown, False if no session list was available.
         """
-        sessions = self._list_recent_sessions(limit=limit)
-        if not sessions:
-            return False
-
-        from VoidCube_cli.main import _relative_time
-
-        print()
-        if reason == "history":
-            print(t('no_messages_in_the_current_chat_yet_here_are_recent_sessions_you_can_resume'))
-        else:
-            print(t('recent_sessions'))
-        print()
-        print(f"  #  {'Title':<30} {'Preview':<38} {'Last Active':<13} {'ID'}")
-        print(f"  ─ {'─' * 30} {'─' * 38} {'─' * 13} {'─' * 24}")
-        for i, session in enumerate(sessions, 1):
-            title = (session.get("title") or "—")[:28]
-            preview = (session.get("preview") or "")[:36]
-            last_active = _relative_time(session.get("last_active"))
-            print(f"  {i}  {title:<30} {preview:<38} {last_active:<13} {session['id']}")
-        print()
-        print(t('use_resume_session_id_or_title_to_continue_where_you_left_off'))
-        print("  You can also use /resume <number> to resume by the number above!")
-        print()
-        return True
+        return self._session_browser_runtime().show_recent(
+            reason=reason,
+            limit=limit,
+        )
 
     def _apply_session_lifecycle_state(self, state: SessionLifecycleState) -> None:
         """Apply shared session state and synchronize the active Agent runtime."""
-        self.session_id = state.session_id
-        self.session_start = state.session_start
-        self.conversation_history = list(state.conversation_history)
-        self._pending_title = state.pending_title
-        self._resumed = state.resumed
-        self._session_hydration = None
-        if self.agent:
-            self.agent.activate_session(
-                state.session_id,
-                session_start=state.session_start,
+        CliSessionLifecycleRuntime(
+            CliSessionLifecyclePorts(
+                set_session_id=lambda value: setattr(self, "session_id", value),
+                set_session_start=lambda value: setattr(self, "session_start", value),
+                set_conversation_history=lambda value: setattr(
+                    self, "conversation_history", value
+                ),
+                set_pending_title=lambda value: setattr(
+                    self, "_pending_title", value
+                ),
+                set_resumed=lambda value: setattr(self, "_resumed", value),
+                clear_hydration=lambda: setattr(self, "_session_hydration", None),
+                activate_agent_session=lambda session_id, session_start: (
+                    self.agent.activate_session(
+                        session_id,
+                        session_start=session_start,
+                    )
+                    if self.agent
+                    else None
+                ),
             )
+        ).apply(state)
 
     def _run_curses_picker(self, title: str, items: list[str], default_index: int = 0) -> int | None:
         """Run curses_single_select via run_in_terminal so prompt_toolkit handles terminal ownership cleanly."""
@@ -3232,56 +2613,25 @@ class VoidcubeCLI:
             _cprint(t("    (session only — won't persist after restart)"))
 
     def _handle_model_picker_selection(self, persist_global: bool = True) -> None:
-        state = self._model_picker_state
-        if not state:
-            return
-        selected = state.get("selected", 0)
-        stage = state.get("stage")
-        if stage == "provider":
-            providers = state.get("providers") or []
-            if selected >= len(providers):
-                self._close_model_picker()
-                return
-            provider_data = providers[selected]
-            # Reuse the already collected list to keep the picker responsive.
-            model_list = provider_data.get("models", [])
-            state["stage"] = "model"
-            state["provider_data"] = provider_data
-            state["model_list"] = model_list
-            state["selected"] = 0
-            self._invalidate(min_interval=0.0)
-            return
-        if stage == "model":
-            provider_data = state.get("provider_data") or {}
-            model_list = state.get("model_list") or []
-            back_idx = len(model_list)
-            cancel_idx = len(model_list) + 1
-            if selected == back_idx:
-                state["stage"] = "provider"
-                state["selected"] = next((i for i, p in enumerate(state.get("providers") or []) if p.get("slug") == provider_data.get("slug")), 0)
-                self._invalidate(min_interval=0.0)
-                return
-            if selected >= cancel_idx:
-                self._close_model_picker()
-                return
-            if selected < len(model_list):
-                from VoidCube_cli.model_switch import switch_model
-                chosen_model = model_list[selected]
-                
-                result = switch_model(
-                    raw_input=chosen_model,
-                    current_provider=self.provider or "",
-                    current_model=self.model or "",
-                    current_base_url=self.base_url or "",
-                    current_api_key=self.api_key or "",
-                    is_global=persist_global,
-                    explicit_provider=provider_data.get("slug"),
-                    user_providers=state.get("user_provs"),
-                )
-                self._close_model_picker()
-                self._apply_model_switch_result(result, persist_global)
-                return
-            self._close_model_picker()
+        def switch_model(**kwargs: Any) -> Any:
+            from VoidCube_cli.model_switch import switch_model as _switch_model
+
+            return _switch_model(**kwargs)
+
+        CliModelPickerRuntime(
+            CliModelPickerPorts(
+                state=lambda: self._model_picker_state,
+                set_state=lambda value: setattr(self, "_model_picker_state", value),
+                close_picker=self._close_model_picker,
+                invalidate=lambda: self._invalidate(min_interval=0.0),
+                switch_model=switch_model,
+                apply_switch_result=self._apply_model_switch_result,
+                current_provider=lambda: self.provider,
+                current_model=lambda: self.model,
+                current_base_url=lambda: self.base_url or "",
+                current_api_key=lambda: self.api_key or "",
+            )
+        ).submit(persist_global=persist_global)
 
     def _should_handle_model_command_inline(self, text: str, has_images: bool = False) -> bool:
         """Return True when /model should be handled immediately on the UI thread."""
@@ -3307,7 +2657,6 @@ class VoidcubeCLI:
             bool: True to continue, False to exit
         """
         request = parse_cli_command(command)
-        cmd_lower = request.normalized
         builtin = self._builtin_command_executor.execute(request)
         if builtin.handled:
             return builtin.continue_running
@@ -3315,85 +2664,36 @@ class VoidcubeCLI:
         _skcmds = _get_skill_commands()
         from VoidCube_cli.commands import COMMANDS
 
-        route = resolve_dynamic_command(
-            request,
-            quick_commands=self.config.get("quick_commands", {}),
-            plugin_names=_get_plugin_cmd_handler_names(),
-            skill_commands=_skcmds,
-            known_commands=set(COMMANDS),
-        )
-        if route.kind == "quick_exec":
-            import shlex
-            import subprocess
-
-            try:
-                result = subprocess.run(
-                    shlex.split(route.executable),
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                output = result.stdout.strip() or result.stderr.strip()
-                if output:
-                    self.console.print(_rich_text_from_ansi(output))
-                else:
-                    self.console.print("[dim]Command returned no output[/]")
-            except subprocess.TimeoutExpired:
-                self.console.print("[bold red]Quick command timed out (30s)[/]")
-            except Exception as e:
-                self.console.print(f"[bold red]Quick command error: {e}[/]")
-        elif route.kind == "quick_alias":
-            return self.process_command(route.redirect_command)
-        elif route.kind == "quick_invalid":
-            if route.quick_type == "exec":
-                self.console.print(
-                    f"[bold red]Quick command '{request.base_token}' has no command defined[/]"
-                )
-            elif route.quick_type == "alias":
-                self.console.print(
-                    f"[bold red]Quick command '{request.base_token}' has no target defined[/]"
-                )
+        def _emit_dynamic_markup(text: str) -> None:
+            console = getattr(self, "console", None)
+            if console is not None:
+                console.print(text)
             else:
-                self.console.print(
-                    f"[bold red]Quick command '{request.base_token}' has unsupported type "
-                    "(supported: 'exec', 'alias')"
-                )
-        elif route.kind == "plugin":
-            from VoidCube_cli.plugins import get_plugin_command_handler
+                ChatConsole().print(text)
 
-            plugin_handler = get_plugin_command_handler(request.name)
-            if plugin_handler:
-                try:
-                    result = plugin_handler(request.arguments)
-                    if result:
-                        _cprint(str(result))
-                except Exception as e:
-                    _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
-        elif route.kind == "skill":
-            msg = _get_skill_invocation_message(
-                request.base_token,
-                request.arguments,
-                task_id=self.session_id,
+        return CliDynamicCommandRuntime(
+            CliDynamicCommandPorts(
+                quick_commands=self.config.get("quick_commands", {}),
+                plugin_names=_get_plugin_cmd_handler_names(),
+                skill_commands=_skcmds,
+                known_commands=set(COMMANDS),
+                get_plugin_handler=lambda name: __import__(
+                    "VoidCube_cli.plugins", fromlist=["get_plugin_command_handler"]
+                ).get_plugin_command_handler(name),
+                build_skill_message=lambda name, arguments, task_id: _get_skill_invocation_message(
+                    name, arguments, task_id=task_id
+                ),
+                session_id=lambda: self.session_id,
+                enqueue_pending_input=lambda message: (
+                    self._pending_input.put(message)
+                    if hasattr(self, "_pending_input")
+                    else None
+                ),
+                emit=_cprint,
+                emit_markup=_emit_dynamic_markup,
+                run_redirect=self.process_command,
             )
-            if msg:
-                skill_name = _skcmds[request.base_token]["name"]
-                print(f"\n🔧 Loading skill: {skill_name}")
-                if hasattr(self, '_pending_input'):
-                    self._pending_input.put(msg)
-            else:
-                ChatConsole().print(
-                    f"[bold red]Failed to load skill for {request.base_token}[/]"
-                )
-        elif route.kind == "redirect":
-            return self.process_command(route.redirect_command)
-        elif route.kind == "ambiguous":
-            _cprint(f"{_ACCENT}Ambiguous command: {cmd_lower}{_RST}")
-            _cprint(f"{_DIM}Did you mean: {', '.join(route.matches)}?{_RST}")
-        else:
-            _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
-            _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
-        
-        return True
+        ).run(request)
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
         """Non-fatal UI activity recording — best-effort, never throws."""
@@ -3437,32 +2737,42 @@ class VoidcubeCLI:
         persist_session: bool,
     ) -> Any:
         runtime = turn_route["runtime"]
-        return _get_AIAgent()(
-            model=turn_route["model"],
-            api_key=runtime.get("api_key"),
-            base_url=runtime.get("base_url"),
-            provider=runtime.get("provider"),
-            acp_command=runtime.get("command"),
-            acp_args=runtime.get("args"),
-            max_iterations=self.max_turns,
-            enabled_toolsets=self.enabled_toolsets,
-            quiet_mode=True,
-            verbose_logging=False,
-            session_id=task_id,
-            platform="cli",
-            session_db=self._session_db,
-            reasoning_config=self.reasoning_config,
-            service_tier=self.service_tier,
-            request_overrides=request_overrides or None,
-            providers_allowed=self._providers_only,
-            providers_ignored=self._providers_ignore,
-            providers_order=self._providers_order,
-            provider_sort=self._provider_sort,
-            provider_require_parameters=self._provider_require_params,
-            provider_data_collection=self._provider_data_collection,
-            fallback_model=self._fallback_model,
-            persist_session=persist_session,
-        )
+        return CliAgentInitializationRuntime(
+            CliAgentInitializationPorts(
+                agent_factory=_get_AIAgent(),
+                runtime=runtime,
+                model=turn_route["model"],
+                max_iterations=self.max_turns,
+                enabled_toolsets=self.enabled_toolsets,
+                verbose_logging=False,
+                quiet_mode=True,
+                ephemeral_system_prompt=None,
+                prefill_messages=None,
+                reasoning_config=self.reasoning_config,
+                service_tier=self.service_tier,
+                request_overrides=request_overrides or None,
+                providers_allowed=self._providers_only,
+                providers_ignored=self._providers_ignore,
+                providers_order=self._providers_order,
+                provider_sort=self._provider_sort,
+                provider_require_parameters=self._provider_require_params,
+                provider_data_collection=self._provider_data_collection,
+                session_id=task_id,
+                platform="cli",
+                session_db=self._session_db,
+                clarification_sink=None,
+                reasoning_callback=None,
+                fallback_model=self._fallback_model,
+                thinking_callback=None,
+                checkpoints_enabled=False,
+                checkpoint_max_snapshots=0,
+                pass_session_id=False,
+                tool_event_sink=None,
+                stream_delta_callback=None,
+                tool_gen_callback=None,
+                persist_session=persist_session,
+            )
+        ).create()
 
     @staticmethod
     def _announce_background_start(
@@ -3494,33 +2804,24 @@ class VoidcubeCLI:
         response_title: str | None,
         prompt: str,
     ) -> None:
-        if self._app:
-            self._app.invalidate()
-            time.sleep(0.05)
-        print()
-        ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-        if success:
-            _cprint(f"  ✅ {task_label} #{task_num} complete")
-        else:
-            _cprint(f"  ❌ {task_label} #{task_num} failed: {error}")
-        _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
-        ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-        if response:
-            label = "> Voidcube"
-            response_color = "#CD7F32"
-            ChatConsole().print(
-                Panel(
-                    _rich_text_from_ansi(response),
-                    title=f"[{response_color} bold]{response_title or (label + f' (background #{task_num})')}[/]",
-                    title_align="left",
-                    border_style=response_color,
-                    style="#FFF8DC",
-                    box=rich_box.HORIZONTALS,
-                    padding=(1, 2),
-                )
+        CliBackgroundResponseRuntime(
+            CliBackgroundResponsePorts(
+                invalidate=lambda: self._app.invalidate() if self._app else None,
+                sleep=time.sleep,
+                emit_blank_line=lambda: print(),
+                emit=_cprint,
+                create_console=ChatConsole,
+                rich_text_from_ansi=_rich_text_from_ansi,
             )
-        else:
-            _cprint("  (No response generated)")
+        ).render(
+            success,
+            response,
+            error,
+            task_num,
+            task_label,
+            response_title,
+            prompt,
+        )
 
     def _bell_background_completion(self) -> None:
         if self.bell_on_complete:
@@ -3551,107 +2852,72 @@ class VoidcubeCLI:
         )
 
     def _start_btw_side_question(self, question: str) -> bool:
-        """Run an ephemeral side question against a snapshot of session context.
+        """Start an ephemeral /btw question through the dedicated runtime."""
+        return CliBtwRuntime(
+            CliBtwPorts(
+                ensure_credentials=self._ensure_runtime_credentials,
+                resolve_agent_route=self._resolve_turn_agent_config,
+                conversation_history=lambda: self.conversation_history,
+                create_agent=self._create_btw_agent,
+                task_id_factory=lambda: (
+                    f"btw_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
+                ),
+                emit=_cprint,
+                invalidate=lambda: self._app.invalidate() if self._app else None,
+                sleep=time.sleep,
+                emit_blank_line=lambda: print(),
+                create_console=ChatConsole,
+                rich_text_from_ansi=_rich_text_from_ansi,
+                bell=self._bell_background_completion,
+                thread_factory=threading.Thread,
+            )
+        ).start(question)
 
-        Snapshots the current conversation history, spawns a no-tools agent in
-        a background thread, and prints the answer without persisting anything
-        to the main session.
-        """
-        task_id = f"btw_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
-
-        if not self._ensure_runtime_credentials():
-            _cprint("  (>_<) Cannot start /btw: no valid credentials.")
-            return False
-
-        turn_route = self._resolve_turn_agent_config(question)
-        history_snapshot = list(self.conversation_history)
-
-        preview = question[:60] + ("..." if len(question) > 60 else "")
-        _cprint(f'  💬 /btw: "{preview}"')
-
-        def run_btw():
-            try:
-                btw_agent = _get_AIAgent()(
-                    model=turn_route["model"],
-                    api_key=turn_route["runtime"].get("api_key"),
-                    base_url=turn_route["runtime"].get("base_url"),
-                    provider=turn_route["runtime"].get("provider"),
-                    acp_command=turn_route["runtime"].get("command"),
-                    acp_args=turn_route["runtime"].get("args"),
-                    max_iterations=8,
-                    enabled_toolsets=[],
-                    quiet_mode=True,
-                    verbose_logging=False,
-                    session_id=task_id,
-                    platform="cli",
-                    reasoning_config=self.reasoning_config,
-                    service_tier=self.service_tier,
-                    request_overrides=turn_route.get("request_overrides"),
-                    providers_allowed=self._providers_only,
-                    providers_ignored=self._providers_ignore,
-                    providers_order=self._providers_order,
-                    provider_sort=self._provider_sort,
-                    provider_require_parameters=self._provider_require_params,
-                    provider_data_collection=self._provider_data_collection,
-                    fallback_model=self._fallback_model,
-                    session_db=None,
-                    skip_memory=True,
-                    skip_context_files=True,
-                    persist_session=False,
-                )
-
-                btw_prompt = (
-                    "[Ephemeral /btw side question. Answer using the conversation "
-                    "context. No tools available. Be direct and concise.]\n\n"
-                    + question
-                )
-                result = btw_agent.run_conversation(
-                    user_message=btw_prompt,
-                    conversation_history=history_snapshot,
-                    task_id=task_id,
-                )
-
-                response = (result.get("final_response") or "") if result else ""
-                if not response and result and result.get("error"):
-                    response = f"Error: {result['error']}"
-
-                # TUI refresh before printing
-                if self._app:
-                    self._app.invalidate()
-                    time.sleep(0.05)
-                print()
-
-                if response:
-                    _resp_color = "#4F6D4A"
-
-                    ChatConsole().print(Panel(
-                        _rich_text_from_ansi(response),
-                        title=f"[{_resp_color} bold]> /btw[/]",
-                        title_align="left",
-                        border_style=_resp_color,
-                        box=rich_box.HORIZONTALS,
-                        padding=(1, 2),
-                    ))
-                else:
-                    _cprint("  💬 /btw: (no response)")
-
-                if self.bell_on_complete:
-                    sys.stdout.write("\a")
-                    sys.stdout.flush()
-
-            except Exception as e:
-                if self._app:
-                    self._app.invalidate()
-                    time.sleep(0.05)
-                print()
-                _cprint(f"  ❌ /btw failed: {e}")
-            finally:
-                if self._app:
-                    self._invalidate(min_interval=0)
-
-        thread = threading.Thread(target=run_btw, daemon=True, name=f"btw-{task_id}")
-        thread.start()
-        return True
+    def _create_btw_agent(
+        self,
+        turn_route: Mapping[str, Any],
+        task_id: str,
+    ) -> Any:
+        """Create the no-tools, non-persistent agent used by /btw."""
+        runtime = turn_route["runtime"]
+        return CliAgentInitializationRuntime(
+            CliAgentInitializationPorts(
+                agent_factory=_get_AIAgent(),
+                runtime=runtime,
+                model=turn_route["model"],
+                max_iterations=8,
+                enabled_toolsets=[],
+                verbose_logging=False,
+                quiet_mode=True,
+                ephemeral_system_prompt=None,
+                prefill_messages=None,
+                reasoning_config=self.reasoning_config,
+                service_tier=self.service_tier,
+                request_overrides=turn_route.get("request_overrides"),
+                providers_allowed=self._providers_only,
+                providers_ignored=self._providers_ignore,
+                providers_order=self._providers_order,
+                provider_sort=self._provider_sort,
+                provider_require_parameters=self._provider_require_params,
+                provider_data_collection=self._provider_data_collection,
+                session_id=task_id,
+                platform="cli",
+                session_db=None,
+                clarification_sink=None,
+                reasoning_callback=None,
+                fallback_model=self._fallback_model,
+                thinking_callback=None,
+                checkpoints_enabled=False,
+                checkpoint_max_snapshots=0,
+                pass_session_id=False,
+                tool_event_sink=None,
+                stream_delta_callback=None,
+                tool_gen_callback=None,
+                persist_session=False,
+                skip_memory=True,
+                skip_context_files=True,
+            )
+        ).create()
 
     @staticmethod
     def _try_launch_chrome_debug(port: int, system: str) -> bool:
@@ -4152,46 +3418,26 @@ class VoidcubeCLI:
         ):
             return None
         
-        # Pre-process images through the vision tool (Gemini Flash) so the
-        # main model receives text descriptions instead of raw base64 image
-        # content — works with any model, not just vision-capable ones.
-        if images:
-            message = self._preprocess_images_with_vision(
-                message if isinstance(message, str) else "", images
+        prepared_input = CliTurnInputPreparationRuntime(
+            CliTurnInputPreparationPorts(
+                message=message,
+                images=images,
+                conversation_history=self.conversation_history,
+                preprocess_images=self._preprocess_images_with_vision,
+                model=getattr(self, "model", "") or "",
+                base_url=getattr(self, "base_url", "") or "",
+                api_key=getattr(self, "api_key", "") or "",
+                cwd=os.getcwd,
+                should_emit=self._should_emit_scrollback_output,
+                emit=_cprint,
             )
-
-        # Expand @ context references (e.g. @file:main.py, @diff, @folder:src/)
-        if isinstance(message, str) and "@" in message:
-            try:
-                from agent.context_references import preprocess_context_references
-                from agent.model_metadata import get_model_context_length
-                _ctx_len = get_model_context_length(
-                    self.model, base_url=self.base_url or "", api_key=self.api_key or "")
-                _ctx_result = preprocess_context_references(
-                    message, cwd=os.getcwd(), context_length=_ctx_len)
-                if _ctx_result.expanded or _ctx_result.blocked:
-                    if _ctx_result.references:
-                        if self._should_emit_scrollback_output():
-                            _cprint(
-                                f"  {_DIM}[@ context: {len(_ctx_result.references)} ref(s), "
-                                f"{_ctx_result.injected_tokens} tokens]{_RST}")
-                    for w in _ctx_result.warnings:
-                        if self._should_emit_scrollback_output():
-                            _cprint(f"  {_DIM}⚠ {w}{_RST}")
-                    if _ctx_result.blocked:
-                        return "\n".join(_ctx_result.warnings) or "Context injection refused."
-                    message = _ctx_result.message
-            except Exception as e:
-                logging.debug("@ context reference expansion failed: %s", e)
-
-        # Sanitize surrogate characters that can arrive via clipboard paste from
-        # rich-text editors (Google Docs, Word, etc.).  Lone surrogates are invalid
-        # UTF-8 and crash JSON serialization in the OpenAI SDK.
-        if isinstance(message, str):
-            from agent.message_sanitizer import sanitize_surrogates
-            message = sanitize_surrogates(message)
-
-        turn_input = begin_turn(self.conversation_history, message)
+        ).prepare()
+        if prepared_input.blocked_response is not None:
+            return prepared_input.blocked_response
+        message = prepared_input.message
+        turn_input = prepared_input.turn_input
+        if turn_input is None:
+            return None
         self.conversation_history = list(turn_input.conversation_history)
 
         if self._should_emit_scrollback_output():
@@ -4218,34 +3464,35 @@ class VoidcubeCLI:
                 )
 
             def run_agent():
-                agent_message = _voice_prefix + message if _voice_prefix else message
-                # Prepend pending model switch note so the model knows about the switch
-                _msn = getattr(self, '_pending_model_switch_note', None)
-                if _msn:
-                    agent_message = _msn + "\n\n" + agent_message
-                    self._pending_model_switch_note = None
-                try:
-                    # Generate per-interaction trace_id for observability (C-03)
-                    self._current_trace_id = str(uuid.uuid4())
-                    return self.agent.run_conversation(
-                        user_message=agent_message,
-                        conversation_history=list(turn_input.prior_history),
+                return CliAgentTurnCallRuntime(
+                    CliAgentTurnCallPorts(
+                        message=message,
+                        voice_prefix=_voice_prefix,
+                        pending_model_switch_note=lambda: getattr(
+                            self, "_pending_model_switch_note", None
+                        ),
+                        clear_pending_model_switch_note=lambda: setattr(
+                            self, "_pending_model_switch_note", None
+                        ),
+                        prior_history=turn_input.prior_history,
+                        session_id=self.session_id,
                         stream_callback=stream_callback,
-                        task_id=self.session_id,
-                        trace_id=self._current_trace_id,
                         persist_user_message=message if _voice_prefix else None,
+                        new_trace_id=lambda: str(uuid.uuid4()),
+                        set_trace_id=lambda value: setattr(
+                            self, "_current_trace_id", value
+                        ),
+                        run_conversation=lambda **kwargs: self.agent.run_conversation(
+                            **kwargs
+                        ),
+                        summarize_error=summarize_api_error,
+                        log_error=lambda error: logging.error(
+                            "run_conversation raised: %s",
+                            error,
+                            exc_info=True,
+                        ),
                     )
-                except Exception as exc:
-                    logging.error("run_conversation raised: %s", exc, exc_info=True)
-                    _summary = summarize_api_error(exc)
-                    return {
-                        "final_response": f"Error: {_summary}",
-                        "messages": [],
-                        "api_calls": 0,
-                        "completed": False,
-                        "failed": True,
-                        "error": _summary,
-                    }
+                ).run()
 
             def check_autonomous_timeout() -> tuple[bool, bool]:
                 timed_out_task = autonomous_runtime.current_task()
@@ -4348,8 +3595,8 @@ class VoidcubeCLI:
                 sys.stdout.write("\a")
                 sys.stdout.flush()
 
-            ChatResponseRuntime(
-                ChatResponsePorts(
+            CliChatFinalizationRuntime(
+                CliChatFinalizationPorts(
                     should_emit_scrollback=self._should_emit_scrollback_output,
                     show_reasoning=lambda: bool(self.show_reasoning),
                     reasoning_already_shown=lambda: bool(
@@ -4361,8 +3608,15 @@ class VoidcubeCLI:
                     rich_text_from_ansi=_rich_text_from_ansi,
                     bell_on_complete=lambda: bool(self.bell_on_complete),
                     bell=bell,
+                    has_pending_queue=lambda: hasattr(self, "_pending_input"),
+                    requeue_followup=lambda payload: requeue_interrupted_inputs(
+                        self._pending_input,
+                        self._interrupt_queue,
+                        payload,
+                    ),
+                    emit_followup=print,
                 )
-            ).render(
+            ).finalize(
                 response=response,
                 response_previewed=response_previewed,
                 failed=outcome.failed,
@@ -4370,172 +3624,70 @@ class VoidcubeCLI:
                 stream_started=self._stream_render_state.started,
                 response_box_open=self._stream_render_state.response_box_open,
                 reasoning=outcome.last_reasoning,
+                pending_message=pending_message,
             )
-
-            InterruptedFollowupRuntime(
-                InterruptedFollowupPorts(
-                    has_queue=lambda: hasattr(self, "_pending_input"),
-                    requeue=lambda payload: requeue_interrupted_inputs(
-                        self._pending_input,
-                        self._interrupt_queue,
-                        payload,
-                    ),
-                    emit=print,
-                )
-            ).requeue(pending_message)
             
             return response
             
         except Exception as e:
-            error_result = {
-                "failed": True,
-                "partial": False,
-                "interrupted": False,
-                "error": str(e),
-                "response": "",
-            }
-            if autonomous_timeout_reported:
-                error_result.update(
-                    {
-                        "interrupted": True,
-                        "error": "Autonomous task timed out after 30 minutes.",
-                    }
+            CliChatErrorRuntime(
+                CliChatErrorPorts(
+                    autonomous_timeout_reported=autonomous_timeout_reported,
+                    autonomous_task_run_id=autonomous_task_run_id,
+                    autonomous_timeout_writeback_succeeded=(
+                        autonomous_timeout_writeback_succeeded
+                    ),
+                    current_autonomous_task=autonomous_runtime.current_task,
+                    set_last_agent_turn_result=(
+                        autonomous_runtime.set_last_agent_turn_result
+                    ),
+                    should_emit=self._should_emit_scrollback_output,
+                    emit=print,
                 )
-            if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
-                error_result["autonomous_task_run_id"] = autonomous_task_run_id
-                autonomous_runtime.set_last_agent_turn_result(error_result)
-            elif autonomous_runtime.current_task() is None:
-                autonomous_runtime.set_last_agent_turn_result(error_result)
-            if self._should_emit_scrollback_output():
-                print(f"Error: {e}")
+            ).handle(e)
             return None
         finally:
             self._active_chat_agent_role = previous_active_role
     
     def _print_exit_summary(self):
-        """Print session resume info on exit."""
-        print()
-        msg_count = len(self.conversation_history)
-        if msg_count > 0:
-            user_msgs = len([m for m in self.conversation_history if m.get("role") == "user"])
-            tool_calls = len([m for m in self.conversation_history if m.get("role") == "tool" or m.get("tool_calls")])
-            elapsed = datetime.now() - self.session_start
-            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            if hours > 0:
-                duration_str = f"{hours}h {minutes}m {seconds}s"
-            elif minutes > 0:
-                duration_str = f"{minutes}m {seconds}s"
-            else:
-                duration_str = f"{seconds}s"
-            
-            # Look up session title for resume-by-name hint
-            session_title = None
-            if self._session_db:
-                try:
-                    session_title = self._session_db.get_session_title(self.session_id)
-                except Exception:
-                    pass
+        """Render session resume information through the display runtime."""
+        CliExitSummaryRuntime(
+            CliExitSummaryPorts(
+                conversation_history=lambda: self.conversation_history,
+                session_id=lambda: self.session_id,
+                session_start=lambda: self.session_start,
+                now=datetime.now,
+                session_title=lambda: (
+                    self._session_db.get_session_title(self.session_id)
+                    if self._session_db
+                    else None
+                ),
+                translate=t,
+                emit=print,
+                emit_blank_line=lambda: print(),
+            )
+        ).render()
 
-            from VoidCube_cli.i18n import t
-            print(t("prompts.resume_session_with", default="Resume this session with:"))
-            print(f"  VoidCube --resume {self.session_id}")
-            if session_title:
-                print(f"  VoidCube -c \"{session_title}\"")
-            print()
-            print(f"{t('prompts.session', default='Session')}:        {self.session_id}")
-            if session_title:
-                print(f"{t('prompts.title', default='Title')}:          {session_title}")
-            print(f"{t('prompts.duration', default='Duration')}:       {duration_str}")
-            print(f"{t('prompts.messages', default='Messages')}:       {msg_count} ({user_msgs} user, {tool_calls} tool calls)")
-        else:
-            print("bye.")
-
-    def _get_tui_prompt_symbols(self) -> tuple[str, str]:
-        """Return ``(normal_prompt, state_suffix)`` for the fixed CLI style.
-
-        ``normal_prompt`` is the configured built-in prompt symbol.
-        ``state_suffix`` is what special states (sudo/secret/approval/agent)
-        should render after their leading icon.
-
-        When a profile is active (not "default"), the profile name is
-        prepended to the prompt symbol: ``coder ❯`` instead of ``❯``.
-        """
-        symbol = "❯ "
-
-        symbol = (symbol or "❯ ").rstrip() + " "
-
-        # Prepend profile name when not default
-        try:
-            from VoidCube_cli.profiles import get_active_profile_name
-            profile = get_active_profile_name()
-            if profile and profile not in ("default", "custom"):
-                symbol = f"{profile} {symbol}"
-        except Exception:
-            pass
-        stripped = symbol.rstrip()
-        if not stripped:
-            return "❯ ", "❯ "
-
-        parts = stripped.split()
-        candidate = parts[-1] if parts else ""
-        arrow_chars = ("❯", ">", "$", "#", "›", "»", "→")
-        if any(ch in candidate for ch in arrow_chars):
-            return symbol, candidate.rstrip() + " "
-
-        return symbol, symbol
-
-    def _audio_level_bar(self) -> str:
-        """Return a visual audio level indicator based on current RMS."""
-        _LEVEL_BARS = " ▁▂▃▄▅▆▇"
-        try:
-            rms = float(self._voice_tts().realtime_status().get("audio_rms", 0.0))
-        except Exception:
-            return ""
-        level = max(0, min(7, int(rms * 7)))
-        return _LEVEL_BARS[level]
-
-    def _get_tui_prompt_fragments(self):
-        """Return the prompt_toolkit fragments for the current interactive state."""
-        symbol, state_suffix = self._get_tui_prompt_symbols()
-        compact = self._use_minimal_tui_chrome(width=self._get_tui_terminal_width())
-
-        def _state_fragment(style: str, icon: str, extra: str = ""):
-            if compact:
-                text = icon
-                if extra:
-                    text = f"{text} {extra.strip()}".rstrip()
-                return [(style, text + " ")]
-            if extra:
-                return [(style, f"{icon} {extra} {state_suffix}")]
-            return [(style, f"{icon} {state_suffix}")]
-
-        if self._voice_recording:
-            bar = self._audio_level_bar()
-            return _state_fragment("class:voice-recording", "●", bar)
-        if self._voice_processing:
-            return _state_fragment("class:voice-processing", "◉")
-        if self._sudo_state:
-            return _state_fragment("class:sudo-prompt", "🔐")
-        if self._secret_state:
-            return _state_fragment("class:sudo-prompt", "🔑")
-        if self._approval_state:
-            return _state_fragment("class:prompt-working", "⚠")
-        if self._clarify_freetext:
-            return _state_fragment("class:clarify-selected", "✎")
-        if self._clarify_state:
-            return _state_fragment("class:prompt-working", "?")
-        if self._command_running:
-            return _state_fragment("class:prompt-working", self._command_spinner_frame())
-        if self._agent_running:
-            return _state_fragment("class:prompt-working", ">")
-        if self._voice_mode:
-            return _state_fragment("class:voice-prompt", "🎤")
-        return [("class:prompt", symbol)]
-
-    def _get_tui_prompt_text(self) -> str:
-        """Return the visible prompt text for width calculations."""
-        return "".join(text for _, text in self._get_tui_prompt_fragments())
+    def _tui_prompt_runtime(self) -> CliTuiPromptRuntime:
+        layout_metrics = self._tui_layout_metrics_runtime()
+        return CliTuiPromptRuntime(
+            CliTuiPromptPorts(
+                voice_recording=lambda: bool(self._voice_recording),
+                voice_processing=lambda: bool(self._voice_processing),
+                sudo_active=lambda: bool(self._sudo_state),
+                secret_active=lambda: bool(self._secret_state),
+                approval_active=lambda: bool(self._approval_state),
+                clarify_freetext=lambda: bool(self._clarify_freetext),
+                clarify_active=lambda: bool(self._clarify_state),
+                command_running=lambda: bool(self._command_running),
+                command_spinner_frame=self._command_spinner_frame,
+                agent_running=lambda: bool(self._agent_running),
+                voice_mode=lambda: bool(self._voice_mode),
+                minimal_tui_chrome=layout_metrics.minimal_chrome,
+                terminal_width=layout_metrics.terminal_width,
+                audio_status=lambda: self._voice_tts().realtime_status(),
+            )
+        )
 
     # --- Protected TUI extension hooks for wrapper CLIs ---
 
@@ -4801,6 +3953,7 @@ class VoidcubeCLI:
         )
 
     def _tui_dynamic_text_runtime(self) -> TuiDynamicTextRuntime:
+        layout_metrics = self._tui_layout_metrics_runtime()
         return TuiDynamicTextRuntime(
             TuiDynamicTextPorts(
                 voice_recording=lambda: bool(self._voice_recording),
@@ -4818,8 +3971,8 @@ class VoidcubeCLI:
                 spinner_text=lambda: self._spinner_text,
                 tool_start_time=lambda: self._tool_start_time,
                 now=time.monotonic,
-                agent_spacer_height=self._agent_spacer_height,
-                spinner_height=self._spinner_widget_height,
+                agent_spacer_height=layout_metrics.agent_spacer_height,
+                spinner_height=layout_metrics.spinner_height,
                 sudo_deadline=lambda: self._sudo_deadline,
                 secret_deadline=lambda: self._secret_deadline,
                 approval_deadline=lambda: self._approval_deadline,
@@ -4980,29 +4133,26 @@ class VoidcubeCLI:
             _get_set_approval_sink(None)
             _get_set_secret_capture_callback()(None)
 
-        def close_session() -> None:
-            if self._session_db and self.agent:
-                try:
-                    self._session_db.end_session(self.agent.session_id, "cli_close")
-                except (Exception, KeyboardInterrupt) as error:
-                    logger.debug("Could not close session in DB: %s", error)
+        def invoke_session_end(**kwargs: Any) -> None:
+            from VoidCube_cli.plugins import invoke_hook as _invoke_hook
 
-        def finish_interrupted_session() -> None:
-            # Normal completed turns already invoke this hook themselves.
-            if self.agent and self._agent_running:
-                try:
-                    from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+            _invoke_hook("on_session_end", **kwargs)
 
-                    _invoke_hook(
-                        "on_session_end",
-                        session_id=self.agent.session_id,
-                        completed=False,
-                        interrupted=True,
-                        model=getattr(self.agent, "model", None),
-                        platform=getattr(self.agent, "platform", None) or "cli",
-                    )
-                except Exception:
-                    pass
+        session_teardown = CliSessionTeardownRuntime(
+            CliSessionTeardownPorts(
+                repository=lambda: self._session_db,
+                session_id=lambda: self.agent.session_id if self.agent else "",
+                agent_available=lambda: self.agent is not None,
+                agent_running=lambda: bool(self._agent_running),
+                model=lambda: getattr(self.agent, "model", None),
+                platform=lambda: getattr(self.agent, "platform", None),
+                end_session=lambda repository, session_id, reason: repository.end_session(
+                    session_id, reason
+                ),
+                invoke_session_end=invoke_session_end,
+                log_debug=lambda message, error: logger.debug(message, error),
+            )
+        )
 
         return TuiTeardownPorts(
             stop_autonomous=lambda: self._stop_autonomous_execution_component(
@@ -5012,8 +4162,8 @@ class VoidcubeCLI:
             interrupt_voice=lambda: self._voice_tts().interrupt(),
             close_voice_tts=close_voice_tts,
             unregister_tool_callbacks=unregister_tool_callbacks,
-            close_session=close_session,
-            finish_interrupted_session=finish_interrupted_session,
+            close_session=session_teardown.close_session,
+            finish_interrupted_session=session_teardown.finish_interrupted_session,
             run_global_cleanup=_run_cleanup,
             print_exit_summary=self._print_exit_summary,
         )
@@ -5054,9 +4204,10 @@ class VoidcubeCLI:
         self._voice_runtime_state = run_state.voice_runtime_state
 
         from VoidCube_cli.plugins import get_plugin_manager
+        from VoidCube_app.config import load_config
 
-        CliInteractivePreflightRuntime(
-            CliInteractivePreflightPorts(
+        registrations = CliInteractiveRegistrationRuntime(
+            CliInteractiveRegistrationPorts(
                 register_plugin_cli=lambda: setattr(
                     get_plugin_manager(), "_cli_ref", self
                 ),
@@ -5067,41 +4218,31 @@ class VoidcubeCLI:
                 sudo_password_callback=self._sudo_password_callback,
                 approval_sink=self._approval_sink,
                 secret_capture_callback=self._secret_capture_callback,
+                create_enter_runtime=self._enter_keybinding_runtime,
+                create_control_runtime=self._control_keybinding_runtime,
+                create_voice_runtime=self._voice_keybinding_runtime,
+                create_suspend_runtime=self._suspend_keybinding_runtime,
+                create_dynamic_text_runtime=self._tui_dynamic_text_runtime,
+                load_voice_record_key=lambda: load_config()
+                .get("voice", {})
+                .get("record_key", "ctrl+b"),
             )
         ).prepare()
+        dynamic_text_runtime = registrations.dynamic_text
+        prompt_runtime = self._tui_prompt_runtime()
+        layout_metrics = self._tui_layout_metrics_runtime()
 
-        enter_runtime = self._enter_keybinding_runtime()
-        control_runtime = self._control_keybinding_runtime()
-        voice_runtime = self._voice_keybinding_runtime()
-        suspend_runtime = self._suspend_keybinding_runtime()
-        dynamic_text_runtime = self._tui_dynamic_text_runtime()
-
-        # Voice push-to-talk key: configurable via config.yaml (voice.record_key)
-        # Default: Ctrl+B (avoids conflict with Ctrl+R readline reverse-search)
-        # Config uses "ctrl+b" format; prompt_toolkit expects "c-b" format.
-        try:
-            from VoidCube_app.config import load_config
-            _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
-            _voice_key = _raw_key.lower().replace("ctrl+", "c-").replace("alt+", "a-")
-        except Exception:
-            _voice_key = "c-b"
-
-        app = TuiRuntimeFactory(
-            TuiRuntimeFactoryPorts(
-                enter=enter_runtime.handle,
-                ctrl_c=control_runtime.handle_ctrl_c,
-                ctrl_d=control_runtime.handle_ctrl_d,
-                ctrl_z=suspend_runtime.handle,
-                voice_key=_voice_key,
-                voice=voice_runtime.handle,
-                paste=PasteRuntimePorts(
+        app = CliTuiHostAssemblyRuntime(
+            CliTuiHostAssemblyPorts(
+                registrations=registrations,
+                paste=CliTuiPastePorts(
                     should_attach_clipboard_image=_should_auto_attach_clipboard_image_on_paste,
                     attach_clipboard_image=self._try_attach_clipboard_image,
                     paste_directory=_VoidCube_home / "pastes",
                     timestamp=lambda: datetime.now().strftime("%H%M%S"),
                     invalidate=lambda event: event.app.invalidate(),
                 ),
-                modal_navigation=ModalNavigationPorts(
+                modal_navigation=CliTuiModalNavigationPorts(
                     clarify_state=lambda: self._clarify_state,
                     clarify_freetext_active=lambda: self._clarify_freetext,
                     approval_state=lambda: self._approval_state,
@@ -5113,16 +4254,16 @@ class VoidcubeCLI:
                 and not self._sudo_state
                 and not self._secret_state
                 and not self._model_picker_state,
-                input=InputWidgetPorts(
+                input=CliTuiInputPorts(
                     history_path=str(self._history_file),
-                    prompt_fragments=self._get_tui_prompt_fragments,
-                    prompt_text=self._get_tui_prompt_text,
+                    prompt_fragments=prompt_runtime.fragments,
+                    prompt_text=prompt_runtime.text,
                     command_available=self._command_available,
                     command_running=lambda: bool(self._command_running),
                     password_mask_active=lambda: bool(self._sudo_state) or bool(self._secret_state),
                 ),
                 placeholder_text=dynamic_text_runtime.placeholder,
-                modal=ModalWidgetPorts(
+                modal=CliTuiModalPorts(
                     clarify_state=lambda: self._clarify_state,
                     clarify_freetext_active=lambda: bool(self._clarify_freetext),
                     sudo_state=lambda: self._sudo_state,
@@ -5131,12 +4272,12 @@ class VoidcubeCLI:
                     approval_fragments=self._get_approval_display_fragments,
                     model_picker_state=lambda: self._model_picker_state,
                 ),
-                indicators=IndicatorWidgetPorts(
+                indicators=CliTuiIndicatorPorts(
                     spinner_fragments=dynamic_text_runtime.spinner_fragments,
                     spinner_height=dynamic_text_runtime.spinner_widget_height,
                     hint_fragments=dynamic_text_runtime.hint_fragments,
                     hint_height=dynamic_text_runtime.hint_height,
-                    input_rule_height=self._tui_input_rule_height,
+                    input_rule_height=layout_metrics.input_rule_height,
                     image_fragments=lambda: (
                         [
                             (
@@ -5150,13 +4291,20 @@ class VoidcubeCLI:
                     images_visible=lambda: bool(self._attached_images),
                     voice_fragments=self._get_voice_status_fragments,
                     voice_visible=lambda: self._voice_mode,
-                    autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(self),
-                    autonomous_visible=lambda: _has_visible_autonomous_work_view(self),
+                    autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(
+                        self,
+                        state_ports=self._autonomous_panel_state_ports(),
+                        render_ports=self._autonomous_panel_render_ports(),
+                    ),
+                    autonomous_visible=lambda: _has_visible_autonomous_work_view(
+                        self,
+                        state_ports=self._autonomous_panel_state_ports(),
+                    ),
                     status_fragments=self._get_status_bar_fragments,
                     status_visible=lambda: self._status_bar_visible,
                 ),
                 register_extra_keybindings=self._register_extra_tui_keybindings,
-                composition=TuiCompositionPorts(
+                composition=CliTuiCompositionPorts(
                     cursor=_STEADY_CURSOR,
                     store_application=lambda application: setattr(
                         self, "_app", application
@@ -5167,53 +4315,53 @@ class VoidcubeCLI:
             )
         ).build()
 
-        idle_runtime = CliIdleMaintenanceRuntime(
-            CliIdleMaintenancePorts(
+        lifecycle_guards = self._cli_lifecycle_guards()
+
+        def report_unusable_stdin(error: BaseException) -> None:
+            print(
+                f"\nError: stdin is not usable ({error}).\n"
+                "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
+                "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
+            )
+
+        def refresh_gateway_presence(force: bool) -> None:
+            _refresh_gateway_cli_presence_view(
+                self,
+                force=force,
+                is_gateway_running=_is_gateway_running,
+                register_with_gateway=_register_with_gateway,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                monotonic_time=time.monotonic,
+            )
+
+        def refresh_observation_surfaces(refresh_gateway: Callable[[], None]) -> None:
+            _refresh_autonomous_observation_surfaces_view(
+                self,
+                refresh_gateway_cli_presence=refresh_gateway,
+            )
+
+        CliInteractiveLifecycleAssemblyRuntime(
+            CliInteractiveLifecycleAssemblyPorts(
+                application=app,
+                lifecycle_guards=lifecycle_guards,
                 agent_running=lambda: self._agent_running,
                 check_config_changes=self._check_config_mcp_changes,
-                refresh_observation_surfaces=lambda: _refresh_autonomous_observation_surfaces_view(
-                    self,
-                    refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
-                        self,
-                        force=False,
-                        is_gateway_running=_is_gateway_running,
-                        register_with_gateway=_register_with_gateway,
-                        push_cli_agent_scene=_push_cli_agent_scene,
-                        monotonic_time=time.monotonic,
-                    ),
-                ),
+                refresh_observation_surfaces=refresh_observation_surfaces,
+                refresh_gateway_presence=refresh_gateway_presence,
                 autonomous_gate_active=lambda: self._autonomous_gate_active,
                 start_autonomous_component=lambda: self._start_autonomous_execution_component(),
                 application_ready=lambda: bool(self._app),
                 invalidate=lambda interval: self._invalidate(min_interval=interval),
                 enqueue_pending_input=self._pending_input.put,
-            )
-        )
-
-        lifecycle_guards = self._cli_lifecycle_guards()
-
-        CliRunRuntime(
-            CliRunRuntimePorts(
                 stop_requested=lambda: self._should_exit,
-                application_ready=lambda: bool(self._app),
                 presence_refresh_needed=lambda: (
                     self._agent_running
                     or self._command_running
                     or self._stream_render_state.started
                     or self._get_subagent_observability_snapshot().get("active")
                 ),
-                refresh_presence=lambda: _refresh_gateway_cli_presence_view(
-                    self,
-                    force=True,
-                    is_gateway_running=_is_gateway_running,
-                    register_with_gateway=_register_with_gateway,
-                    push_cli_agent_scene=_push_cli_agent_scene,
-                    monotonic_time=time.monotonic,
-                ),
                 command_running=lambda: self._command_running,
-                invalidate=lambda interval: self._invalidate(min_interval=interval),
                 poll_scheduled_workflow=self._scheduled_executor_runtime.poll_workflow,
-                perform_idle_maintenance=idle_runtime.run_once,
                 execution_gate=self._api_a_execution_gate,
                 get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
                 empty_input=queue.Empty,
@@ -5223,26 +4371,9 @@ class VoidcubeCLI:
                 sleep=time.sleep,
                 monotonic_time=time.monotonic,
                 thread_factory=threading.Thread,
-            )
-        ).start()
-        
-        def report_unusable_stdin(error: BaseException) -> None:
-            print(
-                f"\nError: stdin is not usable ({error}).\n"
-                "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
-                "Try reinstalling Python via pyenv or Homebrew, then re-run: /api"
-            )
-
-        CliApplicationRuntime(
-            CliApplicationPorts(
                 register_exit_cleanup=atexit.register,
                 cleanup=_run_cleanup,
-                install_signal_handlers=lifecycle_guards.install_signal_handlers,
-                validate_stdin=lifecycle_guards.validate_stdin,
-                install_asyncio_exception_handler=lifecycle_guards.install_asyncio_exception_handler,
                 stdout_context=patch_stdout,
-                run_application=app.run,
-                is_unusable_stdin_error=lifecycle_guards.is_unusable_stdin_error,
                 report_unusable_stdin=report_unusable_stdin,
                 request_stop=lambda: setattr(self, "_should_exit", True),
                 teardown=lambda: run_tui_teardown(self._tui_teardown_ports()),

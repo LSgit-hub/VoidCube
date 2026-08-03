@@ -16,7 +16,11 @@ def _plain_cprint(message: str) -> None:
 def _render_rows(host: Any) -> None:
     from VoidCube_cli.autonomous_panel import build_autonomous_execution_panel_rows
 
-    for _style, text in build_autonomous_execution_panel_rows(host):
+    for _style, text in build_autonomous_execution_panel_rows(
+        host,
+        state_ports=host._autonomous_panel_state_ports(),
+        render_ports=host._autonomous_panel_render_ports(),
+    ):
         print(f"  {text}")
 
 
@@ -98,7 +102,10 @@ def run_autonomous_component_debug(
                     host._execute_pending_input(pending, app=None)
                     runtime.poll_workflow()
 
-            should_render = show_idle or has_visible_autonomous_work(host)
+            should_render = show_idle or has_visible_autonomous_work(
+                host,
+                state_ports=host._autonomous_panel_state_ports(),
+            )
             if should_render:
                 if clear and not once:
                     os.system("cls" if os.name == "nt" else "clear")

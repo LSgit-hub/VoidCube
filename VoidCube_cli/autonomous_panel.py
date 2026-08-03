@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Dict
 
 from VoidCube_cli.autonomous_observation import (
@@ -16,22 +18,46 @@ from VoidCube_cli.autonomous_status_host import (
 )
 
 
-def has_visible_autonomous_work(host: Any) -> bool:
+@dataclass(frozen=True, slots=True)
+class AutonomousPanelRenderPorts:
+    """Display metrics supplied by the terminal host."""
+
+    terminal_width: Callable[[], int]
+    trim_status_bar_text: Callable[[str, int], str]
+    pad_status_bar_text: Callable[[str, int], str]
+
+
+@dataclass(frozen=True, slots=True)
+class AutonomousPanelStatePorts:
+    """Read-only autonomous state supplied by the CLI host."""
+
+    gate_active: Callable[[], bool]
+    session_id: Callable[[], str]
+    current_task: Callable[[], object | None]
+    current_task_started_at: Callable[[], float]
+    agent_running: Callable[[], bool]
+    last_agent_turn_result: Callable[[], object | None]
+    pending_input_nonempty: Callable[[], bool]
+    execution_events: Callable[[], list[dict[str, object]]]
+    spinner_text: Callable[[], str]
+
+
+def has_visible_autonomous_work(
+    host: Any,
+    *,
+    state_ports: AutonomousPanelStatePorts,
+) -> bool:
     """Return True when the embedded autonomous panel should be visible."""
-    if not getattr(host, "_autonomous_gate_active", False):
+    if not state_ports.gate_active():
         return False
-    state_host = getattr(host, "_autonomous_component_host", None) or host
-    if getattr(state_host, "_agent_running", False):
+    if state_ports.agent_running():
         return True
-    if getattr(state_host, "_current_autonomous_task", None):
+    if state_ports.current_task():
         return True
-    if getattr(state_host, "_last_agent_turn_result", None):
+    if state_ports.last_agent_turn_result():
         return True
-    try:
-        if not state_host._pending_input.empty():
-            return True
-    except Exception:
-        pass
+    if state_ports.pending_input_nonempty():
+        return True
     visible_event_stages = {
         "claim",
         "autonomous_execution_started",
@@ -45,7 +71,7 @@ def has_visible_autonomous_work(host: Any) -> bool:
         "improvement_report_failed",
         "improvement_report_skipped",
     }
-    for event in list(getattr(state_host, "_autonomous_execution_events", []) or [])[-5:]:
+    for event in state_ports.execution_events()[-5:]:
         if str(event.get("stage") or "").strip().lower() in visible_event_stages:
             return True
     supervisor_state = fetch_supervisor_status(host)
@@ -222,23 +248,28 @@ def resolve_autonomous_waiting_start_cause(
     )
 
 
-def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
-    state_host = getattr(host, "_autonomous_component_host", None) or host
-    width = host._get_tui_terminal_width()
+def build_autonomous_execution_panel_rows(
+    host: Any,
+    *,
+    state_ports: AutonomousPanelStatePorts,
+    render_ports: AutonomousPanelRenderPorts,
+) -> list[tuple[str, str]]:
+    width = render_ports.terminal_width()
+    trim_status_bar_text = render_ports.trim_status_bar_text
     inner_width = max(34, min(width - 4, 92))
-    session_short = str(getattr(state_host, "session_id", "") or "")[-8:] or "unknown"
+    session_short = state_ports.session_id()[-8:] or "unknown"
     rows: list[tuple[str, str]] = []
     supervisor_state = fetch_supervisor_status(host)
     gateway_state = fetch_autonomous_gateway_status(host)
     focus_task = resolve_autonomous_panel_focus_task(
         supervisor_state,
-        getattr(state_host, "_current_autonomous_task", None),
+        state_ports.current_task(),
     )
     focus_stage = resolve_autonomous_panel_focus_stage(
         focus_task,
-        current_task=getattr(state_host, "_current_autonomous_task", None),
-        agent_running=bool(getattr(state_host, "_agent_running", False)),
-        last_agent_turn_result=getattr(state_host, "_last_agent_turn_result", None),
+        current_task=state_ports.current_task(),
+        agent_running=state_ports.agent_running(),
+        last_agent_turn_result=state_ports.last_agent_turn_result(),
     )
     supervisor_descriptor = resolve_supervisor_stage_descriptor(
         supervisor_state,
@@ -254,7 +285,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     elif focus_stage == "local_claimed_waiting_first_turn":
         status_label = "已认领待起跑"
         status_style = "class:auto-panel-warn"
-    elif getattr(state_host, "_agent_running", False):
+    elif state_ports.agent_running():
         status_label = "模型处理中"
         status_style = "class:auto-panel-good"
     elif focus_stage == "waiting_api_a_claim":
@@ -273,14 +304,14 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         rows,
         supervisor_state,
         inner_width,
-        trim_status_bar_text=host._trim_status_bar_text,
+        trim_status_bar_text=trim_status_bar_text,
     )
     rows.append(
         build_autonomous_executor_lease_row(
             gateway_state,
             inner_width,
-            session_id=str(getattr(state_host, "session_id", "") or ""),
-            trim_status_bar_text=host._trim_status_bar_text,
+            session_id=state_ports.session_id(),
+            trim_status_bar_text=trim_status_bar_text,
         )
     )
     task_id = str(focus_task.get("task_id") or "").strip()
@@ -294,32 +325,32 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     if task_id:
         label = "改进" if execution_kind == "body_improvement" else "学习"
         task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '未命名'}"
-        current_task = getattr(state_host, "_current_autonomous_task", None)
+        current_task = state_ports.current_task()
         if focus_task is current_task:
-            started_at = float(getattr(state_host, "_current_autonomous_task_started_at", 0.0) or 0.0)
+            started_at = state_ports.current_task_started_at()
             if started_at > 0:
                 elapsed = max(0, int(time.time() - started_at))
                 task_text += f" · {elapsed}s"
-        rows.append(("class:auto-panel-text", host._trim_status_bar_text(task_text, inner_width)))
+        rows.append(("class:auto-panel-text", trim_status_bar_text(task_text, inner_width)))
         if focus_stage == "local_claimed_waiting_first_turn":
             rows.append(
                 (
                     "class:auto-panel-warn",
-                    host._trim_status_bar_text(
+                    trim_status_bar_text(
                         "链路: 自主执行面已认领该链路项，等待进入首个模型或工具回合",
                         inner_width,
                     ),
                 )
             )
             cause_style, cause_text = resolve_autonomous_waiting_start_cause(
-                list(getattr(state_host, "_autonomous_execution_events", []) or [])
+                state_ports.execution_events()
             )
-            rows.append((cause_style, host._trim_status_bar_text(cause_text, inner_width)))
+            rows.append((cause_style, trim_status_bar_text(cause_text, inner_width)))
         elif focus_stage == "local_claimed_waiting_writeback":
             rows.append(
                 (
                     "class:auto-panel-info",
-                    host._trim_status_bar_text(
+                    trim_status_bar_text(
                         "链路: 自主执行面已完成执行，等待结果回写到自主链路",
                         inner_width,
                     ),
@@ -329,7 +360,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
             rows.append(
                 (
                     "class:auto-panel-warn",
-                    host._trim_status_bar_text(
+                    trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
                             or "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手"
@@ -342,7 +373,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
             rows.append(
                 (
                     "class:auto-panel-info",
-                    host._trim_status_bar_text(
+                    trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
                             or "链路: 该链路项已被其他 API-A 自主执行面认领"
@@ -354,12 +385,12 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     else:
         rows.append(("class:auto-panel-dim", "链路项: 当前没有被认领的自主链路项"))
         reason_style, reason_text = resolve_autonomous_no_task_reason(supervisor_state)
-        rows.append((reason_style, host._trim_status_bar_text(reason_text, inner_width)))
+        rows.append((reason_style, trim_status_bar_text(reason_text, inner_width)))
 
-    spinner_text = str(getattr(state_host, "_spinner_text", "") or "").strip()
+    spinner_text = state_ports.spinner_text().strip()
     if spinner_text:
         activity_text = f"执行流: {spinner_text}"
-    elif focus_stage == "local_claimed_active" or getattr(state_host, "_agent_running", False):
+    elif focus_stage == "local_claimed_active" or state_ports.agent_running():
         activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
     elif focus_stage == "local_claimed_waiting_first_turn":
         activity_text = "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合"
@@ -380,7 +411,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
             supervisor_descriptor.get("activity_text")
             or "执行流: API-B 判断、重排或再读取后再交给 API-A"
         )
-    rows.append(("class:auto-panel-text", host._trim_status_bar_text(activity_text, inner_width)))
+    rows.append(("class:auto-panel-text", trim_status_bar_text(activity_text, inner_width)))
 
     timeline = list(supervisor_state.get("timeline") or [])
     if timeline:
@@ -390,11 +421,11 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
             rows.append(
                 (
                     "class:auto-panel-info",
-                    host._trim_status_bar_text(f"监督: {latest_supervisor}", inner_width),
+                    trim_status_bar_text(f"监督: {latest_supervisor}", inner_width),
                 )
             )
 
-    for event in list(getattr(state_host, "_autonomous_execution_events", []) or [])[-3:]:
+    for event in state_ports.execution_events()[-3:]:
         tone = str(event.get("tone") or "info").strip().lower()
         style = {
             "success": "class:auto-panel-good",
@@ -402,24 +433,33 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
             "error": "class:auto-panel-bad",
         }.get(tone, "class:auto-panel-dim")
         msg = f"{event.get('at', '--:--:--')} · {event.get('message', '')}"
-        rows.append((style, host._trim_status_bar_text(msg, inner_width)))
+        rows.append((style, trim_status_bar_text(msg, inner_width)))
 
     rows.append(("class:auto-panel-dim", "控制: /auto-q 临时停用自主链路"))
     return rows
 
 
-def get_autonomous_execution_panel_fragments(host: Any):
-    rows = build_autonomous_execution_panel_rows(host)
+def get_autonomous_execution_panel_fragments(
+    host: Any,
+    *,
+    state_ports: AutonomousPanelStatePorts,
+    render_ports: AutonomousPanelRenderPorts,
+):
+    rows = build_autonomous_execution_panel_rows(
+        host,
+        state_ports=state_ports,
+        render_ports=render_ports,
+    )
     if not rows:
         return []
-    width = host._get_tui_terminal_width()
+    width = render_ports.terminal_width()
     inner_width = max(34, min(width - 4, 92))
     lines = []
     border_style = "class:auto-panel-border"
 
     lines.append((border_style, "╭" + ("─" * (inner_width + 2)) + "╮\n"))
     for style, text in rows:
-        padded = host._pad_status_bar_text(text, inner_width)
+        padded = render_ports.pad_status_bar_text(text, inner_width)
         lines.append((border_style, "│ "))
         lines.append((style, padded))
         lines.append((border_style, " │\n"))

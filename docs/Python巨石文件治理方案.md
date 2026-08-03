@@ -727,11 +727,71 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 进度记录：plugin manager 引用、command busy reset、terminal prompt callbacks 与 tirith security preflight 已迁移到 `CliInteractivePreflightRuntime` 显式 ports；CLI/TUI/autonomous 回归 `78 passed`，`app.py` 当前为 5,705 行。
 
+进度记录：paste 文件 UTF-8 持久化已收口到 `TuiPasteRuntime` 显式目录/时钟端口，`TuiRuntimeFactory` 已统一 keybinding、widget graph 与 composition wiring；相关 CLI/TUI/架构/文档/打包回归 `88 passed`，production compileall、退役扫描与 wheel 合同通过，`app.py` 当前为 5,634 行。
+
+进度记录：interactive lifecycle 的 loop/application 端口拼装已迁移到 `CliInteractiveLifecycleRuntime`，CLI 保留状态 callback 与具体 host wiring；相关 CLI/TUI/生命周期回归 `56 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,624 行。
+
+进度记录：idle maintenance ports 已纳入 `CliInteractiveLifecycleRuntime`，由 coordinator 统一创建并接入 `CliRunRuntime`；本阶段完整 CLI/TUI 回归 `56 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,621 行。
+
+进度记录：resumed-history 的过滤、ANSI/reasoning 清理、tool-call 摘要与截断展示已迁移到 `CliHistoryDisplayRuntime`，CLI 仅保留显式 display ports 入口；CLI/TUI/启动/恢复回归 `115 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,441 行。
+
+进度记录：status bar 的模型/上下文、middle/git 布局、窄终端裁剪与回退已迁移到 `CliStatusBarRuntime` 显式 display ports；runtime/CLI 相关回归 `16 passed`，`app.py` 当前为 5,328 行。
+
+进度记录：supervisor memory/scene、error indicator 与 subagent 摘要的 middle status 格式化已迁移到 `CliMiddleStatusRuntime` 显式 ports；middle/status/CLI 回归 `19 passed`，`app.py` 当前为 5,193 行。
+
+进度记录：subagent manager 任务投影与 session model/token/context snapshot 已迁移到 `CliSubagentObservabilityRuntime`、`CliStatusSnapshotRuntime` 显式 ports；status/autonomous/CLI 回归 `90 passed`，`app.py` 当前为 5,095 行。
+
+进度记录：git status 的 60 秒缓存、后台刷新、remote/变更片段和异常回退已迁移到 `CliGitStatusRuntime` 显式 ports；git/status/CLI 回归 `90 passed`，`app.py` 当前为 5,036 行。
+
+进度记录：后台任务完成/失败提示、prompt 截断与 response panel 已迁移到 `CliBackgroundResponseRuntime` 显式 display ports；后台/response/CLI 回归 `85 passed`，`app.py` 当前为 5,031 行。
+
+进度记录：voice status footer 与退出 session resume 摘要已迁移到 `CliVoiceStatusRuntime`、`CliExitSummaryRuntime` 显式 display ports；voice/lifecycle/CLI 回归 `11 passed`，`app.py` 当前为 5,014 行。
+
+进度记录：`/btw` ephemeral side-question 的线程、临时 agent、历史快照、结果展示与错误回退已迁移到 `CliBtwRuntime` 显式 ports；btw/command/CLI 回归 `150 passed`，`app.py` 当前为 4,970 行。
+
+进度记录：quick/plugin/skill/redirect/ambiguous dynamic command 的解析后执行已迁移到 `CliDynamicCommandRuntime` 显式 ports，内置命令优先级保持不变；dynamic command/CLI 回归 `163 passed`，`app.py` 当前为 4,923 行。
+
+进度记录：单回合 model/provider route 与 fast-mode request override 投影已迁移到 `CliTurnAgentRouteRuntime` 显式 ports；route/command/scheduled 回归 `94 passed`，`app.py` 当前为 4,914 行。
+
+进度记录：runtime credential/provider/model resolution 与 interactive、background、`/btw` agent initialization wiring 已迁移到 `CliRuntimeCredentialsRuntime`、`CliAgentInitializationRuntime` 显式 ports；CLI 保留错误展示、session/Gateway 副作用和 agent 生命周期，相关回归 `83 passed`，`app.py` 当前为 4,884 行。
+
+进度记录：recent-session 查询过滤与 in-chat 表格展示已迁移到 `CliSessionBrowserRuntime` 显式 ports；CLI 保留 session 状态与生命周期变更，command/session 回归 `147 passed`，`app.py` 当前为 4,882 行。
+
+进度记录：model picker 的 provider/model 两级选择、返回/取消与 switch dispatch 已迁移到 `CliModelPickerRuntime` 显式 ports；CLI 保留 picker state、model mutation 与 UI callback，model/command/TUI 回归 `75 passed`，`app.py` 当前为 4,855 行。
+
+进度记录：session hydration cache/history projection 与 interactive resume preload 状态展示已迁移到 `CliSessionHydrationRuntime`、`CliSessionResumeRuntime` 显式 ports；CLI 保留 session lifecycle state owner，session/startup/command 回归 `64 passed`，`app.py` 当前为 4,841 行。
+
+进度记录：single-query resume status 与 session lifecycle state application 已迁移到 `CliSingleQueryResumeRuntime`、`CliSessionLifecycleRuntime` 显式 ports；CLI 保留 session 属性 owner 和 agent 生命周期 callback，resume/lifecycle/command 回归 `215 passed`，`app.py` 当前为 4,848 行。
+
+进度记录：chat 内联 agent-call 的 voice prefix、model-switch note、trace id 与异常结果投影已迁移到 `CliAgentTurnCallRuntime` 显式 ports；CLI 保留 turn execution 与 response/session owner，agent/chat/autonomous 回归 `152 passed`，`app.py` 当前为 4,853 行。
+
+进度记录：chat 的图片、`@` context expansion、surrogate 清理与 `begin_turn` 输入准备已迁移到 `CliTurnInputPreparationRuntime` 显式 ports；CLI 保留 conversation history owner，input/command/autonomous 回归 `147 passed`，`app.py` 当前为 4,836 行。
+
+进度记录：chat outer exception 的 failed observation、autonomous timeout/writeback 与滚动输出抑制已迁移到 `CliChatErrorRuntime` 显式 ports；CLI 保留 finally 生命周期恢复，error/command/autonomous 回归 `147 passed`，`app.py` 当前为 4,834 行。
+
+进度记录：response panel/rendering 与 interrupted follow-up requeue 的 finalization 组合已迁移到 `CliChatFinalizationRuntime` 显式 ports；CLI 保留 display/queue owner，response/follow-up/command 回归 `129 passed`，`app.py` 当前为 4,829 行。
+
+进度记录：session close 与 interrupted-session hook 的 teardown 边界已迁移到 `CliSessionTeardownRuntime` 显式 ports；CLI 保留具体 repository、agent 与 plugin hook wiring，teardown/autonomous 回归 `71 passed`，`app.py` 当前为 4,830 行。
+
+进度记录：interactive preflight、keybinding runtime 注册与 voice record key 规范化已迁移到 `CliInteractiveRegistrationRuntime` 显式 ports；CLI 保留插件、状态 callback 与 TUI factory wiring，registration/lifecycle/TUI 回归 `77 passed`，`app.py` 当前为 4,829 行。
+
+进度记录：CLI-owned registrations、paste/modal/input/indicator/composition callback 到通用 TUI factory 的 host assembly 已迁移到 `CliTuiHostAssemblyRuntime`；CLI 保留状态 callback 与 widget extension wiring，TUI/lifecycle/autonomous 回归 `78 passed`，`app.py` 当前为 4,809 行。
+
+进度记录：idle maintenance、Gateway presence 的 idle/forced refresh 与 interactive lifecycle ports assembly 已迁移到 `CliInteractiveLifecycleAssemblyRuntime`；CLI 保留具体状态、Gateway 与 teardown callback，lifecycle/TUI/autonomous 回归 `77 passed`，`app.py` 当前为 4,800 行。
+
+进度记录：prompt symbol、profile suffix、voice RMS bar、compact rendering 与交互状态优先级已迁移到 `CliTuiPromptRuntime` 显式 ports；CLI 保留 prompt state callback 与 extension hook，prompt/TUI/lifecycle/autonomous 回归 `81 passed`，`app.py` 当前为 4,739 行。
+
+进度记录：terminal width、窄终端 compact policy、input rule、agent spacer 与 spinner height 已迁移到 `CliTuiLayoutMetricsRuntime`；autonomous/status 现有 host consumer 仅保留转发 adapter，layout/prompt/voice/status/dynamic-text 回归 `82 passed`，`app.py` 当前为 4,721 行。
+
+进度记录：autonomous panel 的 terminal width、trim、pad 已收口到 `AutonomousPanelRenderPorts`，CLI 主渲染路径不再直接读取 panel host 的显示方法；autonomous/layout/prompt 回归 `72 passed`，`app.py` 当前为 4,733 行。
+
+进度记录：autonomous panel 的 gate、session、current task、agent/turn、pending input、spinner 与 execution events 已收口到 `AutonomousPanelStatePorts`，CLI 主渲染路径不再读取 `state_host`；autonomous/panel/TUI 回归 `74 passed`，`app.py` 当前为 4,765 行。
+
 当前 P0 行数：
 
 | 文件 | 行数 |
 | --- | ---: |
-| `VoidCube_cli/app.py` | 5,705 |
+| `VoidCube_cli/app.py` | 4,765 |
 | `systems/supervisor/planning_runtime.py` | 8,072 |
 | `systems/supervisor/endogenous_drive.py` | 231 |
 | `systems/supervisor/ui_runtime.py` | 420 |
@@ -745,4 +805,4 @@ Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖�
 
 ## 16. 下一次实施起点
 
-下一批继续盘点 `run()` 剩余的 paste-file、runtime factory 与 TUI composition host wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+下一批继续清理 autonomous panel 诊断 fallback 的 host 读取，并盘点 CLI/TUI extension wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
