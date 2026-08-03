@@ -1,7 +1,7 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：Stage 0 + CLI-0、Stage 2 UI 纯投影器、Stage 3 shared contract、CLI-3 command domain、CLI-4 TUI runtime、CLI-5 runtime boundary、terminal TTS owner/async adapter、Stage 4 TaskProfilePolicy/ScheduleAllocator、Stage 5 candidate/evidence/proposal/context/snapshot/selection/factory/learning/materialization/materialization-context/LM-evidence-packet/LM-generation-request/LM-generation-execution/candidate-stream-assembly/body-mapping/eligibility/adaptive-policy/drive-context/drive-input-normalization/drive-state/drive-models/deliberation/history/candidate-stream/candidate-stream-preparation/agenda/self-iteration/task-priors/LM-evidence-assembly/LM-evidence-context/reflection/cognitive-posture/meta-cognition/cognitive-memory/cognition-charter/self-model/API-B snapshot/research/shell-body-profile/body-projection/pressure/drive-judgement/LM-materialization-runtime/runtime-config-adapters/runtime-gate/latest-generation-state-projection/LM-application-state-port/cognition-state-projection/proposal-cognition-projection/proposal-memory-compaction pure pipeline、activity projection 与 endogenous persistence repository 当前批次已完成；adaptive policy 输入归一化、drive-judgement、LM evidence context/packet、LM generation request/execution、drive input normalization、candidate stream assembly、LM materialization runtime、runtime config adapters、LM runtime gate、deliberation、candidate preparation projection、latest-generation state application port、LM application state port、cognition state read-model projection、proposal cognition read-model projection 与 proposal memory compaction 已并入 owner；下一重点为剩余 Supervisor orchestration boundary。
-> 编制日期：2026-07-29。  
+> 状态：治理未完成。Stage 1、Stage 2 已完成；Stage 0、Stage 3、Stage 4、Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未执行。当前先补齐可重复性能基线，再收口 Supervisor Planning orchestration、共享应用层 contract、CLI host state 和 Supervisor route/lifecycle。
+> 基线日期：2026-08-03。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
 ## 1. 决策摘要
@@ -18,15 +18,16 @@
 
 本轮核心范围：
 
-| 文件 | 当前规模 | 主要问题 | 优先级 |
+| 文件/边界 | 当前规模 | 当前判断 | 优先级 |
 | --- | ---: | --- | --- |
-| `VoidCube_cli/app.py` | 6,245 行 | command domain 已大量分离；仍混合 Agent 编排、TUI、语音 runtime 和部分 host command operation | P0 |
-| `systems/supervisor/planning_runtime.py` | 8,072 行 | JSON persistence、只读 state projection、task profile policy 与 schedule allocation 已外移；`PlanningRuntimeMixin` 仍混合认知、治理和执行交接 | P0 |
-| `systems/supervisor/endogenous_drive.py` | 231 行 | `EndogenousDriveEngine` 仍保留 LM proposal 调用交接与 latest-generation state write-back | P0 |
-| `systems/supervisor/ui_runtime.py` | 1,189 行 | 静态资源与只读 UI 投影已外移；runtime 保留资料加载、并发编排与 HTTP/SSE adapter | P0 |
-| `agent/* -> VoidCube_cli/*` 边界 | 非单文件 | 第二批已归零，需持续由架构测试禁止回归 | P0 边界 |
+| `VoidCube_cli/app.py` | 4,827 行 | `run()`、`chat()` 和 command domain 已明显缩小；类仍持有共享业务状态、Agent/session 生命周期和大量 host wiring | P0 |
+| `systems/supervisor/planning_runtime.py` | 8,072 行 | repository、state projection、task profile 和 schedule 已外移；`PlanningRuntimeMixin` 仍是认知、治理、任务流和执行交接的实现中心 | P0，当前第一优先级 |
+| `systems/supervisor/endogenous_drive.py` | 231 行 | 主流水线已组件化；Engine 仅保留 facade、LM proposal 交接和 latest-generation state 写回 | P0，接近收口 |
+| `systems/supervisor/ui_runtime.py` | 420 行 | 静态资源和主要投影已外移；`SupervisorUIMixin` 仍保留 HTTP/SSE、缓存和生命周期 owner | P0 |
+| `systems/supervisor/supervisor.py` | 600 行 | 组合根仍内联注册全部路由，`_setup_routes()` 尚未成为薄 route adapter | P0 边界 |
+| 共享包到前端的依赖边界 | 0 条例外 | `agent`、`systems`、`VoidCube_core`、`VoidCube_app` 当前不依赖 `VoidCube_cli`，必须持续保持 | P0 护栏 |
 
-次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与四条 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到阈值时才进入后续批次。
+次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到第 10 节阈值时才进入后续批次。
 
 ## 2. 治理目标
 
@@ -69,6 +70,15 @@
 10. 文档、测试、wheel、退役集成扫描和 smoke 测试通过。
 
 行数只作为趋势指标：`cli.py` 和三个 Supervisor P0 文件应明显缩小，且不得出现另一个 8,000 行以上的替代文件。
+
+完成状态必须按责任边界判定：仅创建新模块、增加端口 dataclass、缩短单个方法或让 focused tests 通过，都不能单独把阶段标记为完成。对应生产调用者必须切换到新 owner，旧实现和双写路径必须删除，阶段验收项必须全部满足。
+
+四条 P0 主线的收口含义固定为：
+
+- `VoidCube_cli/app.py` 只保留 CLI adapter 组合、显示状态和具体设备/终端 wiring，不再拥有可被其他前端复用的 session、turn、审批、语音协调或自主任务业务规则。
+- `PlanningRuntimeMixin` 被删除，或缩减为不含业务规则且只做显式 runtime 委托的短期装配层；认知、任务状态转换、review 和 execution handoff 不再依赖不可枚举的 `self` 属性。
+- `EndogenousDriveEngine` 可以保留为稳定 facade，但内部阶段通过显式输入输出组合，runtime state 只有一个写入 owner。
+- `SupervisorUIMixin` 被 route object、event broker、state projector 和 lifecycle owner 取代；`supervisor.py` 只负责服务装配与路由挂载。
 
 ## 4. 依赖方向
 
@@ -158,7 +168,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 
 ### 6.1 当前问题
 
-`VoidcubeCLI.__init__` 约 304 行，混合以下状态：
+`VoidCube_cli/app.py` 当前 4,827 行。`VoidcubeCLI.__init__` 约 301 行，`chat()` 约 286 行，`run()` 约 204 行，`process_command()` 约 48 行。TUI、命令、turn execution 和显示投影已经大量迁出，但 `VoidcubeCLI` 仍是聚合 host，并继续混合以下状态与 wiring：
 
 - Provider、模型、凭证和 Agent；
 - session、conversation、checkpoint 和 resume；
@@ -167,7 +177,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 - 语音录制、TTS 和持续监听；
 - 自主组件、后台任务、scheduled execution 和执行锁。
 
-`run()` 约 1,732 行，`chat()` 约 505 行。已有 `chat_stream_*`、`command_execution.py` 等模块，但部分模块仍通过 `host: Any` 访问聚合状态，说明拆分尚未形成完整的显式端口边界。
+当前剩余问题不是继续机械缩短 `run()`，而是把可跨前端共享的状态和 use case 移至 `VoidCube_app`，并删除 runtime 对完整 CLI host、`Any` 和散落 `getattr` 的依赖。CLI adapter 可以保留 prompt_toolkit、ANSI、设备回调和窗口生命周期，但不能继续作为共享业务能力的 canonical owner。
 
 ### 6.2 目标结构
 
@@ -282,7 +292,7 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 将以下职责放在一个 8,889 行类体内：
+`PlanningRuntimeMixin` 当前 8,072 行，包含 161 个方法，其中仍有多项超过 100 行。以下职责仍集中在同一隐式 `self` 边界：
 
 - 内生历史、治理事件、认知状态和 self-regulation 的持久化；
 - 认知判断、候选注释、策略记忆和观察议程；
@@ -291,18 +301,18 @@ VoidCube_windows/                未来才创建
 - 自主任务创建、决策、review、恢复和执行交接；
 - body improvement 质量评分和审查。
 
-这种 Mixin 拆法虽然减少了 `supervisor.py` 行数，但没有缩小隐式 `self` API。继续增加 Mixin 只会把依赖藏到运行时属性中。
+`EndogenousStateRepository`、只读 state projection、`TaskProfilePolicy` 和 `ScheduleAllocator` 已有明确 owner，但 drive input evaluation、认知/self-regulation、autonomous task review、body improvement review 和 execution handoff 仍在 Mixin 内。继续增加 Mixin 或只留下大量委托壳都不算完成。
 
 ### 7.2 目标组件
 
-建议逐步形成：
+目标组件和当前缺口：
 
-- `EndogenousStateRepository`：历史、事件、认知和 regulation 的原子读写。
-- `CognitionProjector`：从显式输入构建认知、判断和不确定性快照。
-- `StrategyMemoryService`：agenda、observation、meta-governance 记忆。
-- `TaskProfilePolicy`：task family/type/profile 和 execution kind。
-- `ScheduleAllocator`：时间槽、冲突、排序和 active task 查询。
-- `AutonomousTaskService`：plan/decide/review/clear/recover 的状态转换。
+- `EndogenousStateRepository`：已建立，继续保持历史、事件、认知和 regulation 的唯一持久化 owner。
+- `CognitionProjector`：已有部分纯 projection，仍需从 Mixin 收口剩余认知和 self-regulation 组合。
+- `StrategyMemoryService`：未形成完整 service，需承接 agenda、observation 和 meta-governance 记忆规则。
+- `TaskProfilePolicy`：已建立，task family/type/profile 和 execution kind 不得回流 Mixin。
+- `ScheduleAllocator`：已建立，时间槽、冲突、排序和 active task 查询不得回流 Mixin。
+- `AutonomousTaskService`：未完成，需承接 plan/decide/review/clear/recover 状态转换。
 - `ExecutionHandoffService`：执行请求、Gateway owner 和失败回写。
 - `BodyImprovementReviewer`：diff、probe、质量和稳定性审查。
 - `PlanningRuntime`：协调上述服务并提供 Supervisor 路由所需端口。
@@ -358,42 +368,24 @@ DrivePerceptionBuilder
 
 ## 9. Supervisor UI Python 主线
 
-### 9.1 第一阶段：静态资源外移
+### 9.1 静态资源边界
 
-先执行行为等价迁移：
+该边界已经完成：canonical UI 资源位于 `systems/supervisor/web/supervisor.html`，由 `ui_assets.py` 使用 `importlib.resources` 加载，并由 package-data 与 wheel 合同覆盖。固定约束如下：
 
-```text
-systems/supervisor/web/
-├─ index.html
-└─ assets/
-   ├─ app.css
-   ├─ app.js
-   ├─ api_client.js
-   ├─ house.js
-   ├─ voice.js
-   └─ auto.js
-```
-
-- 使用 FastAPI 静态资源与 `importlib.resources` 定位，不依赖当前工作目录。
-- 首阶段使用原生 ES modules，不引入 Node/Vite 或新框架。
-- 更新 package-data、wheel 契约和前端资源测试。
-- 测试从直接断言 `UI_HTML` 字符串改为加载资源并验证 DOM/行为契约。
-- 资源迁移完成后删除 `UI_HTML`，不保留内嵌 fallback。
+- 不恢复 `UI_HTML` 或任何内嵌 fallback。
+- 资源加载不依赖仓库根目录或当前工作目录。
+- 是否进一步拆分 CSS/JavaScript 文件由前端维护性决定，不作为 Python 巨石治理的完成条件。
+- 修改 DOM、资源路径或 package-data 时必须同时更新源码与 wheel 合同。
 
 ### 9.2 第二阶段：Python 职责拆分
 
-建议组件：
+已形成的 projection/adapters 包括 state orchestration、observation、cognition、trace、body、memory、identity/proxy、media、activity、snapshot、stream 和 auto-open lifecycle。剩余目标组件：
 
-- `UIActivityStore`：近期活动的原子持久化。
-- `UIEventBroker`：state、voice、media SSE 队列和断线处理。
-- `SupervisorStateProjector`：组合 UI state。
-- `AutonomousObservationProjector`：自主观察、stage、rail、trace。
-- `CognitionUIProjector`：判断、不确定性和标签。
-- `BodyTreeProjector`：身体槽位和升级树。
-- `UIMetricsService`：Memory 和 tier 指标。
-- `UIRoutes`：薄 HTTP/SSE endpoints。
+- `UIEventBroker`：统一 state、voice、media SSE 队列和断线处理。
+- `UIRoutes`：承接薄 HTTP/SSE endpoints 和请求/响应映射。
+- `SupervisorUILifecycle`：承接缓存初始化、auto-open、关闭和并发资源清理。
 
-先抽纯标签、normalize 和 projector，再抽 store/broker，最后缩小 `get_supervisor_ui_state()`。`SupervisorUIMixin` 最终删除，由 route object 或显式组合服务替代。
+`SupervisorUIMixin` 最终删除，由 route object、event broker 和显式 lifecycle owner 替代。`supervisor.py::_setup_routes()` 只挂载 route 集合，不逐条承载业务 endpoint wiring。
 
 ### 9.3 前端安全收口
 
@@ -451,13 +443,15 @@ systems/supervisor/web/
 
 ## 12. 分阶段实施计划
 
+阶段状态只使用“已完成 / 部分完成 / 基本完成 / 未开始”四种值，并以验收条件是否满足为准。当前状态见第 15 节；本节只定义实施内容和退出条件。
+
 ### Stage 0：基线和护栏
 
 - 固化四个 P0 文件的行为测试和依赖扫描。
 - 建立反向导入、巨型方法新增和包层级约束。
 - 建立目标包依赖矩阵：共享层不得导入 CLI/Windows，两个 adapter 不得互相导入。
 - 为现有 `agent`/`systems`/`VoidCube_core -> VoidCube_cli` 依赖生成例外清单并要求只减不增。
-- 记录 smoke、关键单测和冷启动基准。
+- 固化 smoke、关键单测入口和导入/CLI/turn/服务/UI state 性能基准。
 - 给每条主线建立组件清单，不预建空目录。
 
 验收：基线可重复；测试失败能指出边界回归，而不是只比较行数。
@@ -525,7 +519,7 @@ systems/supervisor/web/
 5. 删除旧实现、重复字段、旧参数和无调用兼容分支。
 6. 运行针对测试、依赖扫描和 `git diff --check`。
 7. 检查是否出现双写、循环依赖、catch-all context 或另一个聚合巨石。
-8. 更新本文阶段状态和下一批次入口。
+8. 仅在阶段状态或优先级变化时更新第 15、16 节，不记录批次过程。
 
 禁止以这些方式“完成拆分”：
 
@@ -535,6 +529,17 @@ systems/supervisor/web/
 - 使用 `Any`、`getattr` 和 `hasattr` 模拟未定义接口；
 - 为避免修改调用者而长期保留两个导入路径；
 - 把多个大文件简单拼成一个新的 `helpers.py`/`runtime.py`。
+
+### 13.1 方案文档维护规则
+
+本文是治理基线和实施路线，不是实施日志。固定维护规则如下：
+
+- 只记录当前有效的架构约束、owner、阶段状态、验收门槛和后续顺序。
+- 不记录每次提交迁移了哪个 helper，不累计 focused test 数量，不保留文件从某个行数下降到另一个行数的过程。
+- 单次批次的测试命令、通过数量、超时、临时风险和代码行变化放在提交说明、PR、CI 或会话交付中。
+- 已完成能力只按责任域归纳，不枚举内部函数、DTO、projection 或 adapter 名称长串。
+- 状态变化时覆盖旧快照；过期规模、旧入口和临时兼容说明直接删除，不追加“历史记录”。
+- 第 15 节最多保留一份当前快照，第 16 节最多保留五项有顺序的后续工作。
 
 ## 14. 启动 Windows adapter 的 Go/No-Go 门槛
 
@@ -553,265 +558,53 @@ systems/supervisor/web/
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-## 15. 已完成治理总览（截至 2026-08-02）
+当前判定为 **No-Go**：共享应用 contract、Planning orchestration、CLI host state、Supervisor route/lifecycle 和 Stage 7 全量验证尚未全部收口。
 
-以下内容替代已完成批次的逐条实时记录。它只描述当前仍有效的结构、所有权与验证基线；已删除的迁移过程、阶段性行数和过期“下一步”不再作为后续实现依据。
+## 15. 当前实施快照
 
+本节只描述当前有效事实。更新时直接替换，不追加历史批次。
 
-### 15.1 当前安全与发行约束
+### 15.1 阶段状态
 
-- 三类已退役的模型集成保持零入口：活跃代码、可加载技能和 wheel 均不得保留入口；涉及模型、鉴权、请求协议、技能或打包的改动必须运行退役集成扫描与相关测试。
-- skill 安装先进入 quarantine，经 scan 和 integration policy 允许后才安装；不能通过 force 类参数绕过退役集成拒绝。
-- deployment preset 仅描述潜在破坏性运维步骤。实际执行必须先单独建立 approved execution runtime、环境目标和审批契约，不能从 slash handler 直接调用系统命令。
-- wheel 合同覆盖 Python 源、CLI locale、Supervisor UI、skills 相关资源、command handler 和 `tools/presets/*.yaml`，已删除模块不得重新进入发行物。
+| 阶段 | 状态 | 当前有效结果 | 退出前仍需完成 |
+| --- | --- | --- | --- |
+| Stage 0 | 部分完成 | 反向导入、前端边界、P0 增长、打包和退役集成护栏已建立 | 补齐可重复的 smoke 与性能基线；迁移结束后把临时行数护栏改为长期边界合同 |
+| Stage 1 | 已完成 | 根 `cli.py` 已成为薄兼容入口；共享配置、Provider 和 Gateway 基础能力已进入 `VoidCube_app` | 持续禁止根模块反向导入和共享层依赖前端 |
+| Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 不恢复内嵌 HTML fallback |
+| Stage 3 | 部分完成 | 已有共享 session lifecycle、turn input/outcome、queue/cancel、tool event、approval/clarify contract；CLI command domain 已分组 | 建立共享应用组合根、ApplicationState、稳定事件集合和真正通过公共端口运行的 adapter contract tests |
+| Stage 4 | 部分完成 | repository、state projection、task profile、schedule allocation 已有独立 owner | 完成 cognition/strategy、autonomous task service、body review、execution handoff，并删除对应 Mixin 实现 |
+| Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 在 Planning orchestration 收口后完成等价全链路验收，确认无旧 helper 和双写入口 |
+| Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成大量显式 runtime/ports | 收口 CLI 共享业务状态；删除 `PlanningRuntimeMixin`、`SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
+| Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
 
-### 15.2 验证基线
+### 15.2 当前稳定边界
 
-CLI-4/CLI-5 当前相关联合回归基线为 `332 passed`；已运行架构检查、compileall、`git diff --check`、退役集成扫描和 wheel source-to-artifact 验证。
+- 生产代码不反向导入根 `cli.py`；共享包不导入 CLI/Windows adapter。
+- 根 `cli.py` 只保留兼容入口；CLI slash command、ANSI、Rich 和 prompt_toolkit 仍归 CLI adapter。
+- Supervisor UI 资源通过包资源加载，源码与 wheel 使用同一 canonical 文件。
+- session lifecycle、turn 输入/结果、取消/队列、工具事件、审批和 clarify 已有无界面基础 contract。
+- endogenous repository、task profile、schedule allocation 和主要 candidate/evidence/LM/deliberation pipeline 已有直接 owner。
+- 语音设备实现归 `systems.voice` 与 adapter，退役的 `tools.voice_mode` 不得恢复。
+- 已退役模型集成在活跃代码、可加载技能和 wheel 中保持零入口。
 
-Stage 4 activity projection 的 focused 行为回归为 `5 passed`，覆盖 pure projection、runtime observation 与 memory-activity Auto decision；另外 `activity projection + packaging contract + 退役集成扫描` 为 `32 passed`，并已重建和校验 wheel。已运行 compileall、架构检查和 `git diff --check`。聚合 Supervisor 测试文件在产品的 60 秒单命令上限内未能完整结束，因此不将它表述为全量通过。
+### 15.3 当前缺口
 
-Stage 4 endogenous persistence repository 的 focused 回归为 `12 passed`，覆盖 repository 的 root/path/read/write/invalid-JSON 边界、真实 Supervisor 装配，以及既有 Supervisor governance/cognition/self-regulation persistence 行为。已运行相关 compileall 和 `git diff --check`；本批的架构、退役集成扫描和 wheel 验证结果继续在下方验证更新后记录。
+- `VoidCube_app` 尚无共享应用组合根，也未形成完整的 `SessionEvent`、`TurnEvent`、`MessageDelta`、usage 和 artifact 事件体系。
+- `PlanningRuntimeMixin` 仍是 8,072 行实现中心，drive evaluation、认知调节、autonomous review、body review 和 execution handoff 尚未形成完整 service 边界。
+- `VoidcubeCLI` 仍持有跨前端可复用的状态和生命周期，不能仅因 `run()` 已缩短就判定 CLI-1/CLI-2/CLI-5 完成。
+- `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
+- 尚无当前最终结构上的全量测试与性能对比证据，因此不能进入 Windows adapter 实施。
 
-Stage 4 endogenous state projection 的 focused 回归为 `16 passed`，覆盖三项纯 projection 与 13 项相关 Supervisor history/governance/cognition/self-regulation 行为。已运行相关 compileall；本批的架构、退役集成扫描、wheel 和最终 diff 检查将在当前验证完成后记录。
+### 15.4 验证基线
 
-本批 terminal TTS async adapter 的 focused 回归为 `2 passed`；CLI voice handler、command execution 与 TUI teardown 联合回归为 `147 passed`，并已运行 compileall 与 `git diff --check`。既有 `test_voice_transport.py` 在当前 Python 3.11 环境中因缺少可选语音依赖 `sherpa_onnx`、`truststore` 和 `numpy` 有 9 项环境失败，不能表述为语音 transport 全量通过。
+每个 P0 批次至少运行直接 owner 测试、受影响集成测试、架构护栏、production compileall 和 `git diff --check`。涉及模型、鉴权、请求协议、技能或打包时，额外运行退役集成扫描、packaging contract 并验证 wheel source-to-artifact parity。
 
-本批 TaskProfilePolicy 的纯 policy 回归为 `3 passed`，既有 runtime task profile 回归为 `3 passed`，Supervisor wiring 相关回归为 `21 passed`，task/profile/schedule/serialization 精确回归为 `9 passed`。`PlanningRuntimeMixin` 从 9,213 行降至 9,094 行；完整 `test_supervisor_autonomous_chain_store.py` 仍超过当前 60 秒单命令上限，未将其表述为全量通过。
+focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全量测试结果、性能数据和环境限制由 CI/交付报告保存，本文只在 Stage 7 是否通过时更新状态。
 
-本批 ScheduleAllocator 的纯计算回归为 `3 passed`，既有排程集成回归为 `4 passed`；`PlanningRuntimeMixin` 从 9,094 行降至 8,889 行。完整 `test_supervisor_autonomous_chain_store.py` 仍超过当前 60 秒单命令上限，未将其表述为全量通过。
+## 16. 后续实施顺序
 
-本批 Stage 5 candidate/evidence pure pipeline 的模块回归为 `7 passed`，与 gap coverage 合并为 `43 passed, 1 xfailed`；Supervisor endogenous/learning 精确回归为 `74 passed`；架构/退役策略为 `14 passed`，TaskProfile/Schedule/activity 为 `9 passed`，TTS/CLI/TUI 为 `61 passed`，packaging contract 为 `20 passed`。已完成 production compileall、`git diff --check`、退役集成扫描和 wheel source-to-artifact 校验；`EndogenousDriveEngine` 从 9,303 行降至 8,866 行。聚合 Supervisor wiring 与完整 autonomous-chain 文件仍受当前 60 秒单命令上限限制，不将超时表述为全量通过。
-
-本批 Stage 5 candidate factory/evidence channel 的纯模块与 gap 联合回归为 `47 passed, 1 xfailed`，Supervisor LM evidence/external research/channel 回归为 `6 passed`，candidate budget/selection 回归为 `7 passed`，runtime wiring 精确回归为 `1 passed`；架构/退役策略为 `14 passed`，packaging contract 与纯模块联合为 `31 passed`。`EndogenousDriveEngine` 从 8,866 行降至 8,448 行；四个 P0 增长基线已按当前实际值收紧。已完成 production compileall、`git diff --check`、生产退役扫描和 wheel source-to-artifact 校验。
-
-本批 Stage 5 LM proposal boundary 新增模块回归为 `12 passed`，proposal/candidate/evidence 三块纯模块联合为 `23 passed`，Supervisor LM/认知/引用 focused 回归为 `16 passed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略为 `14 passed`，packaging/documentation contract 为 `28 passed`。已完成 production compileall、`git diff --check`、生产退役扫描和 wheel source-to-artifact 校验；`EndogenousDriveEngine` 从 8,448 行降至 7,927 行，`_materialize_lm_task_proposals()` 从 351 行降至 308 行，P0 行数与大方法增长基线已同步收紧。
-
-本批 Stage 5 learning boundary 新增纯模块回归为 `4 passed`，learning topic/候选相关 Phase 1 回归为 `4 passed`，candidate/gap 联合回归为 `45 passed, 1 xfailed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略、packaging/documentation contract 与 production compileall 已通过，`git diff --check` 已通过。`EndogenousDriveEngine` 从 7,927 行降至 6,510 行，`_candidate_stream()` 从 441 行降至 364 行；learning topic policy、shell baseline、exploratory learning 与 cognitive-review factory 已完成直接 owner 测试。
-
-本批 Stage 5 materialization boundary 新增纯模块回归为 `3 passed`，proposal/pipeline/factory/materialization 联合回归为 `24 passed`，Supervisor LM/引用/body focused 回归为 `56 passed`；完整 `test_supervisor_autonomous_chain_store.py` 为 `265 passed, 4 skipped`。架构/退役策略、packaging/documentation contract 与 production compileall 已通过，`git diff --check` 已通过。wheel 已重建并完成 source-to-artifact parity 与退役 marker 零入口审计。`EndogenousDriveEngine` 从 6,510 行降至 6,099 行，`_materialize_lm_task_proposals()` 从 308 行降至 80 行，旧大方法增长例外已从架构护栏删除。
-
-本批 Stage 5 body mapping boundary 新增纯模块与 gap body 回归为 `8 passed`，Supervisor body-improvement/structure-mapping focused 回归为 `7 passed`；完整 Supervisor 文件在当前 122 秒单命令上限内未完成，不将超时表述为全量通过。`EndogenousDriveEngine` 从 6,099 行降至 5,826 行；`_candidate_stream()` 保持 364 行，`_materialize_lm_task_proposals()` 保持 80 行。body mapping 已完成直接 owner 测试，架构基线和文档状态同步收紧。
-
-本批 Stage 5 candidate eligibility signal boundary 的 materialization pure 回归为 `4 passed`，governance/body/LM focused Supervisor 回归为 `14 passed`。`EndogenousDriveEngine` 从 5,826 行降至 5,789 行；治理卫生当前/历史 signal 已完成直接 owner 测试，旧 Engine 私有 signal helper 已删除。架构/退役/打包/文档契约与 production compileall 已完成最终验证并保持同步。
-
-本批 Stage 5 candidate eligibility plan boundary 的 materialization owner 回归为 `5 passed`，candidate/deliberation focused Supervisor 回归为 `39 passed`；`test_supervisor_runtime_wiring.py` 全量为 `96 passed`，gap coverage 全量为 `36 passed, 1 xfailed`。`EndogenousDriveEngine` 从 5,789 行降至 5,777 行；family-first decision resolution 已完成直接 owner 测试，旧 `_decision_for()` 已删除。架构/退役/打包/文档契约、production compileall 与 `git diff --check` 已通过。
-
-本批 Stage 5 needs policy gate boundary 的纯 policy 回归为 `2 passed`，与 materialization/gap 联合回归为 `43 passed, 1 xfailed`；`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,777 行降至 5,759 行；truthfulness threshold、memory recovery gate 与 PlanningRuntime 的共享 import 已完成直接 owner 测试，旧 Engine policy gate 定义已删除。架构/退役/打包/文档契约与 production compileall 已通过。
-
-本批 Stage 5 needs calculation boundary 的直接 owner characterization 回归为 `8 passed`；gap coverage 全量为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,759 行降至 5,440 行；`DriveNeed` 与 `_detect_needs()` 已迁至 `systems.supervisor.endogenous_needs`，保留排序、历史欠交边界、观察 gate 和 API-A 未结算时 body growth gate 语义。架构/退役/打包/文档契约与 production compileall 已通过。
-
-本批 Stage 5 LM eligibility input boundary 的 materialization owner 回归为 `6 passed`，LM/body focused Supervisor 回归为 `17 passed`；gap coverage 全量为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 全量为 `96 passed`。`EndogenousDriveEngine` 从 5,440 行降至 5,438 行；LM eligibility 组合已完成直接 owner 测试，Engine 不再直接调用底层 LM-kind eligibility rule。
-
-本批 Stage 5 candidate stream eligibility boundary 新增 owner 回归为 `4 passed`，candidate/materialization/policy/learning/factory 联合回归为 `25 passed`；gap coverage 为 `36 passed, 1 xfailed`，`test_supervisor_runtime_wiring.py` 为 `96 passed`，静态完成冷却 focused 回归为 `2 passed`。`EndogenousDriveEngine` 从 5,438 行降至 5,410 行；`_candidate_stream()` 当前为 370 行，active-kind/body gate 与静态完成冷却已迁出 Engine，架构基线已同步收紧。此前大型 autonomous-chain 文件在当前命令上限内未完成的事实仍不改写为全量通过。
-
-本批 Stage 5 adaptive policy boundary 新增 owner 回归为 `4 passed`，adaptive/gap focused 回归为 `5 passed`，autonomous-chain adaptive subset 为 `20 passed`。`EndogenousDriveEngine` 从 5,410 行降至 4,933 行，`_build_adaptive_policy()` 从 517 行降至 50 行；架构基线已删除失效的大方法例外。完整 autonomous-chain 文件仍不改写为全量通过。
-
-本批 Stage 5 body eligibility boundary 新增 owner 回归为 `4 passed`，body/mapping/adaptive/candidate focused 回归为 `15 passed`，gap body/adaptive subset 为 `9 passed`，body improvement Supervisor subset 为 `8 passed`。`EndogenousDriveEngine` 从 4,933 行降至 4,837 行；body quality、slot readiness 和 cooldown gate 已完成直接 owner 测试，架构基线已同步收紧。
-
-本批 Stage 5 intent/signal projection boundary 新增纯 owner 回归为 `5 passed`，全部 endogenous 纯模块回归为 `71 passed`，精选 Supervisor autonomous-chain intent/signal 回归为 `30 passed`，完整 autonomous-chain 回归为 `265 passed, 4 skipped`；`EndogenousDriveEngine` 从 4,837 行降至 4,550 行，intent priority、candidate-kind mapping、governance/truthfulness/observation/posture signal projection 已迁至 `systems.supervisor.endogenous_intent_signal`，Engine 只保留 DTO 装配 wrapper。架构、gap coverage（`36 passed, 1 xfailed`）、runtime wiring（`96 passed`）、退役扫描和 wheel 验证均已完成。
-
-本批 Stage 5 drive-context boundary 新增 owner 回归为 `3 passed`，与 intent/signal、adaptive policy 联合回归为 `10 passed`；`build_drive_context()`、strategy-memory normalization 与 timestamp parsing 已迁至 `systems.supervisor.endogenous_drive_context`，Engine 删除旧私有入口并降至 4,355 行。backlog/stale/API-A lane 计数语义保持不变，架构基线已同步收紧。
-
-本批 Stage 5 history boundary 新增 owner 回归为 `3 passed`，与 gap/context 联合回归为 `39 passed, 1 xfailed`；historical outcome ordering、scope、drag/relapse pressure 与 underdelivery detection 已迁至 `systems.supervisor.endogenous_history`，Engine 删除旧历史 helper 并降至 4,221 行。adaptive policy 与 reflection 的历史输入契约保持不变，架构基线已同步收紧。
-
-本批 Stage 5 candidate stream assembler boundary 新增 owner 回归为 `2 passed`，candidate/gap/learning/factory/eligibility 联合回归为 `49 passed, 1 xfailed`；memory、truthfulness、learning、governance、body candidate 组装、LM merge 与最终 budget 已迁至 `systems.supervisor.endogenous_candidate_stream`。`_candidate_stream()` 从 370 行降至 141 行，`EndogenousDriveEngine` 从 4,221 行降至 3,972 行，Engine 只保留显式准备和调用编排。
-
-本批 Stage 5 agenda graph boundary 新增 owner 回归为 `2 passed`，并与 candidate stream owner 回归合并为 `4 passed`；need、intent、signal、evidence topic 及其关系边的 agenda projection 已迁至 `systems.supervisor.endogenous_agenda`。旧 `_build_agenda_graph()` 已删除，`EndogenousDriveEngine` 从 3,972 行降至 3,733 行，Engine 不保留旧代理或双路径。
-
-本批 Stage 5 self-iteration hypothesis boundary 新增 owner 回归为 `2 passed`，self-iteration/grounding/LM focused 回归为 `6 passed`，context/snapshot/proposal/evidence 联合回归为 `25 passed`；readiness、grounding、research、proposal drift、trend、switch regulation 与 post-task effect 的 hypothesis projection 已迁至 `systems.supervisor.endogenous_self_iteration`。旧 `_build_self_iteration_hypotheses()` 和 Engine 私有测试入口已删除，`EndogenousDriveEngine` 从 3,733 行降至 3,466 行，Engine 不保留代理或双路径。
-
-本批 Stage 5 task-type prior boundary 新增 owner 回归为 `2 passed`，proposal-drift focused 回归为 `3 passed`；observation、review、learning、maintenance、improvement 的 program prior、drift adjustment 与 reason projection 已迁至 `systems.supervisor.endogenous_task_priors`。旧 `_build_task_type_priors()`、`_task_type_prior_reasons()` 已删除，`EndogenousDriveEngine` 从 3,466 行降至 3,238 行，Engine 不保留代理或双路径。
-
-本批 Stage 5 LM evidence assembly boundary 新增 owner 回归为 `2 passed`，LM/autonomous focused 回归为 `11 passed`，context/snapshot/proposal/evidence 联合回归为 `25 passed`，gap focused 回归为 `11 passed`；grounding focus projection、context-layer assembly、packet plans/diagnostics/evidence/backlog 截断已迁至 `systems.supervisor.endogenous_lm_evidence`。`EndogenousDriveEngine._build_lm_evidence_packet()` 从 231 行降至 145 行，只保留显式字段准备与 cognition orchestration，`EndogenousDriveEngine` 从 3,238 行降至 3,152 行。
-
-本批 Stage 5 reflection projection boundary 新增 owner 回归为 `2 passed`，gap reflection/deliberation 回归为 `8 passed`，Supervisor reflection/history focused 回归为 `20 passed`，adaptive/intent/materialization 联合回归为 `13 passed`；learning yield、API-B blockage、body cooldown、historical pressure、autonomy readiness 与 dominant constraint projection 已迁至 `systems.supervisor.endogenous_reflection`。旧 `_build_reflection()` 已删除，Engine 仅装配 `DriveReflection` DTO，`EndogenousDriveEngine` 从 3,152 行降至 2,976 行。
-
-本批 Stage 5 cognitive posture boundary 新增 owner 回归为 `8 passed`，Supervisor cognitive-posture/proposal-drift/explanation focused 回归为 `14 passed`，gap cognition/posture focused 回归为 `2 passed`；manual profile、service pressure、truthfulness correction、drift/readiness、evidence repair 与 explanation pressure 的 posture selection 已迁至 `systems.supervisor.endogenous_cognitive_posture`。旧 `_resolve_cognitive_posture_from_policy()` 已删除，Engine 只准备显式 posture inputs 并调用纯 projection，`EndogenousDriveEngine` 从 2,976 行降至 2,807 行。
-
-本批 Stage 5 proposal drift/meta-cognition boundary 新增 owner 回归为 `4 passed`，endogenous owner 联合回归为 `101 passed`，Supervisor proposal-drift/meta-cognition/posture focused 回归为 `21 passed`，gap cognition/posture focused 回归为 `2 passed`；recent cognitive alignment、proposal drift memory 与统一 meta-cognition profile 已迁至 `systems.supervisor.endogenous_meta_cognition`，`EndogenousDriveEngine` 从 2,807 行降至 2,458 行。`test_supervisor_runtime_wiring.py` 在当前 60 秒单命令上限内未完成，不将其表述为全量通过。
-
-本批 Stage 5 cognitive memory boundary 新增 owner 回归为 `4 passed`，Supervisor auxiliary/post-task/meta focused 回归为 `27 passed`；LM cognitive assessment、self-iteration trend、stay/switch regulation 与 post-task effect memory 已迁至 `systems.supervisor.endogenous_cognitive_memory`，`EndogenousDriveEngine` 从 2,458 行降至 1,986 行。架构、退役、打包合同、production compileall 与 `git diff --check` 已完成最终验证。
-
-本批 Stage 5 cognition charter boundary 新增 owner 回归为 `3 passed`，Supervisor cognition-charter/cognition focused 回归为 `16 passed`，runtime cognition/endogenous wiring 回归为 `3 passed`；charter fallback、context layering defaults 与 prompt attention defaults 已迁至 `systems.supervisor.endogenous_cognition_charter`，`EndogenousDriveEngine` 从 1,986 行降至 1,870 行。完整 runtime wiring 文件仍受当前 60 秒单命令上限限制，不将其表述为全量通过。
-
-本批 Stage 5 self-model/API-B/research/shell input boundary 新增 owner 回归为 `3 + 2 + 2 + 4 passed`，shell/body/cognition focused Supervisor 回归为 `25 passed`；recent reference alignment、self-model/evidence credibility、API-B snapshot、configured/file research evidence 与 shell body profile 已迁至专属模块。`EndogenousDriveEngine` 从 1,870 行降至 1,486 行，旧 shell profile helper 与专用导入已删除；架构基线、production compileall 与 focused runtime wiring 已通过。完整 `test_supervisor_runtime_wiring.py` 仍受当前 60 秒单命令上限限制，不将其表述为全量通过。
-
-本批 Stage 5 body projection/pressure boundary 新增 owner 回归为 `5 passed`，gap/body/pressure focused 回归为 `7 passed`；body improvement projection、backlog pressure penalty、memory-maintenance urgency、governance-hygiene urgency 与 lane assembly 已迁至专属模块。`EndogenousDriveEngine` 从 1,486 行降至 1,382 行，旧 body/pressure/urgency helper 与 gap 测试私有入口已删除；架构基线、production compileall 与 focused runtime wiring 已通过。
-
-本批 Stage 5 drive-state boundary 新增 owner 回归为 `3 passed`，drive-state/body/pressure focused 回归为 `15 passed`，gap focused 回归为 `7 passed`，autonomous-chain focused 回归为 `29 passed`；perception snapshot 与 world-model projection 已迁至 `systems.supervisor.endogenous_drive_state`，Engine 仅保留 DTO 装配。`EndogenousDriveEngine` 从 1,382 行降至 1,240 行，架构基线、production compileall 与 focused runtime wiring 已通过。
-
-本批 Stage 5 drive-model boundary 新增 serialization owner 回归为 `1 passed`，模型/state/pressure/body focused 回归为 `9 passed`，autonomous-chain focused 回归为 `29 passed`，runtime wiring focused 回归为 `10 passed`；drive DTO 与 deliberation serialization 已迁至 `systems.supervisor.endogenous_drive_models`，测试不再从 Engine 导入模型。`EndogenousDriveEngine` 从 1,240 行降至 1,036 行，架构基线、production compileall 与 wheel parity 已通过。
-
-本批 Stage 5 adaptive-policy input boundary 新增 owner 回归为 `1 passed`（adaptive owner 合计 `5 passed`），runtime wiring focused 回归为 `10 passed`；strategy/history normalization 与 context-key assembly 已并入 `build_adaptive_policy`，Engine 删除 40 行组装壳并降至 996 行。架构基线、production compileall 与 diff check 已通过。
-
-本批 Stage 5 drive-judgement boundary 新增 owner 回归为 `2 passed`，autonomous-chain 相关回归为 `31 passed`，runtime wiring 为 `10 passed`，candidate/materialization/adaptive/drive-judgement 联合回归为 `15 passed`；candidate judgement metadata 已迁至 `systems.supervisor.endogenous_drive_judgement`，Engine 删除旧 metadata helper 并降至 908 行。架构基线、production compileall 与退役/打包合同待本批最终验证后同步确认。
-
-本批 Stage 5 LM evidence context boundary 新增 owner 回归为 `1 passed`（LM evidence owner 合计 `3 passed`），LM/cognition/context/snapshot focused 回归为 `18 passed`，candidate/materialization/drive-judgement/adaptive/proposal focused 回归为 `27 passed`；posture context 与 LM cognition projection 已并入 `systems.supervisor.endogenous_lm_evidence`，`EndogenousDriveEngine` 删除重复 context orchestration 与失效导入并降至 814 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 deliberation boundary 新增 owner 与输入 normalization 回归为 `2 passed`，deliberation/state/reflection/intent/policy focused 回归为 `15 passed`，candidate/LM/materialization/cognition 联合回归为 `15 passed`；完整 deliberation DTO pipeline 已迁至 `systems.supervisor.endogenous_deliberation`，Engine 删除三个 projection wrapper、neutral adaptive fallback 与 shell-slot 私有入口并降至 611 行。架构、退役、打包、production compileall 与 wheel 合同待本批最终验证后同步确认。
-
-本批 Stage 5 materialization context 与 candidate stream preparation boundary 新增 owner 回归为 `2 passed`，materialization/candidate/LM/deliberation 联合回归为 `22 passed`；LM materialization inputs 已迁至 `systems.supervisor.endogenous_materialization`，candidate stream preparation 已迁至 `systems.supervisor.endogenous_candidate_stream`，Engine 仅保留 LM runtime/materialization callbacks 并降至 510 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 LM evidence packet boundary 新增 owner 回归为 `1 passed`，LM evidence/cognition/materialization focused 回归为 `18 passed`；LM evidence packet preparation 已迁至 `systems.supervisor.endogenous_lm_evidence`，Engine 删除重复 evidence/context/packet assembly 并降至 447 行，latest-generation diagnostics/proposals 状态保持在 Engine。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 LM generation request/execution boundary 新增 owner 回归为 `2 passed`，proposal/generation/evidence focused 回归为 `20 passed`；charter/role/limit request normalization、result filtering 与 diagnostics snapshot assembly 已迁至 `systems.supervisor.endogenous_proposals`，Engine 继续唯一持有 latest-generation state，当前为 437 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 drive-input normalization boundary 新增 owner 回归为 `1 passed`，drive-context/proposal/generation gap 回归为 `21 passed`；`_resolve_drive_input` 已删除，mapping/empty-input normalization 已迁至 `systems.supervisor.endogenous_drive_context`，Engine 当前为 423 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 candidate stream assembly 与 LM materialization runtime boundary 新增 owner/迁移回归为 `2 passed`，endogenous 全集为 `143 passed`，gap coverage 为 `36 passed, 1 xfailed`；preparation DTO assembly 已迁至 `systems.supervisor.endogenous_candidate_stream.assemble_prepared_candidate_stream`，LM materialization context、backlog-pressure/drive-judgement callback binding 已迁至 `systems.supervisor.endogenous_materialization.materialize_lm_proposals_for_deliberation`，Engine 删除 `_materialize_lm_task_proposals` 并降至 334 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 runtime-config adapter boundary 的 endogenous/proposal owner 回归为 `144 passed`，Supervisor evidence/generation focused 回归为 `7 passed`；LM evidence runtime config 读取已迁至 `systems.supervisor.endogenous_lm_evidence.build_lm_evidence_packet_from_runtime_config`，LM generation runtime config 读取已迁至 `systems.supervisor.endogenous_proposals.execute_lm_task_generation_from_runtime_config`，Engine 删除 `_build_lm_evidence_packet` 与 `_generate_lm_task_proposals` 私有入口，当前为 233 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 LM runtime gate boundary 新增 owner 回归为 `1 passed`，proposal/runtime wiring focused 回归为 `25 passed`；`is_lm_task_generation_enabled` 已成为 Engine 与 PlanningRuntime 共用 gate owner，Engine 删除冗余 `service_runtime is None` 分支并降至 232 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 latest-generation state application port boundary 新增 characterization 回归为 `1 passed`，endogenous 全集为 `146 passed`，Supervisor runtime wiring 为 `2 passed`，LM/evidence focused 为 `6 passed`；`get_latest_lm_task_generation_state()` 已成为唯一只读 state projection，联合返回 context/proposals 并以深复制隔离嵌套调用方修改，Engine 继续是 latest-generation state 的唯一写入 owner，当前为 231 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 LM application state port boundary 新增 owner characterization 回归为 `2 passed`，proposal owner/wiring 联合回归为 `21 passed`，Supervisor autonomous LM/evidence focused 回归为 `6 passed`；同一 evaluate cycle 的 LM reasoning state 与第二候选 pass proposal override 已由 `systems.supervisor.endogenous_proposal_port.project_lm_generation_application_state` 统一投影，PlanningRuntime 删除重复 getter/helper 路径并降至 8,858 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 cognition state projection boundary 新增 owner characterization 回归为 `3 passed`，cognition-focused Supervisor 回归为 `6 passed`，runtime wiring 为 `2 passed`；cognition read-model assembly 已迁至 `systems.supervisor.endogenous_cognition_state.build_cognition_state_projection`，PlanningRuntime 保留领域输入计算与 persistence owner，当前降至 8,786 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 proposal cognition projection boundary 新增 owner characterization 回归为 `1 passed`，proposal cognition focused 回归为 `8 passed`，runtime wiring 为 `2 passed`；proposal cognition 最终 read-model assembly 已迁至 `systems.supervisor.endogenous_proposal_cognition.build_proposal_cognition_projection`，PlanningRuntime 继续持有 history fallback 与认知计算，当前降至 8,711 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 proposal memory compaction boundary 新增 owner characterization 回归为 `1 passed`，endogenous 全集为 `151 passed`，Supervisor autonomous chain store 为 `265 passed, 4 skipped`；bounded auxiliary-memory projection 已迁至 `systems.supervisor.endogenous_proposal_cognition.compact_proposal_memory`，PlanningRuntime 删除旧 286 行 compaction 方法，当前降至 8,426 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 endogenous drive evaluation orchestration boundary 新增 owner characterization 回归为 `2 passed`；evaluation 输入准备、Engine 调用、LM snapshot 应用、self-regulation repass、persistence/read-model 分支、UI activity 与 response assembly 已迁至 `systems.supervisor.endogenous_drive_orchestration.evaluate_endogenous_drive`，通过显式 `EndogenousDriveEvaluationContext` 注入 runtime callbacks；PlanningRuntime 保留资源、history、UI 与 state write-back owner，当前降至 8,238 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 5 endogenous drive cycle boundary 新增 owner characterization 回归为 `1 passed`，cycle/posture focused 回归为 `15 passed`；posture candidate gate 与 evaluation-to-persistence-to-plan-to-gateway activity 编排已迁至 `systems.supervisor.endogenous_drive_cycle`，PlanningRuntime 仅保留 runtime callback wiring，并删除 `_gate_endogenous_candidates_by_posture` 私有实现，当前降至 8,072 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI state orchestration boundary 新增 owner characterization 回归为 `2 passed`，UI state/cognition focused 回归为 `6 passed`，完整 runtime wiring 为 `96 passed`；chain projection、observation/memory/body adapters、trace enrichment、cognition/LM panel assembly 与 final web-room snapshot 已迁至 `systems.supervisor.ui_state_orchestration`。`SupervisorUIMixin` 保留缓存、HTTP、store、voice/media 与生命周期 owner，当前 `ui_runtime.py` 降至 931 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI stream/route adapter boundary 新增 owner characterization 回归为 `2 passed`，完整 runtime wiring 为 `96 passed`；state、voice-level、media SSE transport 与 media enqueue request normalization 已迁至 `systems.supervisor.ui_stream_adapters`，`SupervisorUIMixin` 仅保留 callback wiring 和 media/voice state owner，当前 `ui_runtime.py` 降至 862 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI identity/proxy adapter boundary 新增 owner characterization 回归为 `4 passed`，完整 runtime wiring 保持 `96 passed`；identity archive/turns、evolution promotion audit/candidates、owner consent、identity experience verification 与 Gateway memory-service discovery 已迁至 `systems.supervisor.ui_identity_proxy_adapters`，`SupervisorUIMixin` 仅保留 route callback 与 gateway/header context wiring，当前 `ui_runtime.py` 降至 601 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI memory-status/trace adapter boundary 新增 owner characterization 回归为 `4 passed`，UI adapter/state focused 回归为 `8 passed`，完整 runtime wiring 为 `96 passed`；Tier 1/rules health HTTP loading 已迁至 `systems.supervisor.ui_memory_status_adapters`，trace record collection、observation timeline、trace detail loading 与 observation enrichment 已迁至 `systems.supervisor.ui_trace_adapters`，`SupervisorUIMixin` 仅保留 runtime callback/context wiring，当前 `ui_runtime.py` 降至 517 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI body/snapshot adapter boundary 新增 owner characterization 回归为 `3 passed`，UI owner focused 回归为 `11 passed`；body registry status/card loading 已迁至 `systems.supervisor.ui_body_status_adapters`，observation input 与 memory stats 的 timeout/cache/default normalization 已迁至 `systems.supervisor.ui_snapshot_adapters`，缓存与 body registry 仍由 Supervisor runtime 持有，当前 `ui_runtime.py` 降至 471 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI activity persistence boundary 新增 owner characterization 回归为 `2 passed`，UI owner focused 回归为 `13 passed`，完整 runtime wiring 保持 `96 passed`；activity load/persist/clear、合法 scene guard、recent projection 与 latest drive candidate snapshot 已迁至 `systems.supervisor.ui_activity_adapters`，`SupervisorUIMixin` 仅保留 deque/path/history callback wiring，当前 `ui_runtime.py` 降至 420 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 Stage 6 Supervisor UI media/lifecycle adapter boundary 新增 owner characterization 回归为 `5 passed`，UI owner focused 回归为 `18 passed`，完整 runtime wiring 保持 `96 passed`；media revision/current payload mutation 与 auto-open timer/browser scheduling 已迁至 `systems.supervisor.ui_media_state_adapters`、`systems.supervisor.ui_open_lifecycle_adapters`，`SupervisorUIMixin` 保留 media state callback 与 config route wiring，当前 `ui_runtime.py` 保持 420 行。架构、退役、打包、production compileall 与 wheel 合同已通过。
-
-本批 CLI-5 terminal voice recording caller boundary 新增 `VoiceSessionManager.transcribe_once()` canonical operation 与 terminal adapter wiring；`voice_recording_runtime` 仅保留 CLI 状态投影、按键中断和输入队列映射，TTS/录音/转写共用一个 `VoiceTtsAdapter` 持有的 canonical manager，移除 beep、同步 recorder contract、临时录音清理 facade 与全部 `tools.voice_mode` 生产入口；voice recording/CLI focused 回归为 `155 passed`，新增 canonical transcribe characterization 通过。完整可选 voice transport 回归仍受本机缺少 `numpy`、`sherpa_onnx`、`truststore` 等依赖影响，未将这些环境缺失误记为本批逻辑失败。
-
-本批 CLI-5 scheduled execution boundary 将 `ScheduledTaskExecutorRuntime` 从完整 `VoidcubeCLI` host 迁移到显式 `ScheduledTaskExecutorPorts`；scheduled executor 仅通过 busy-state、execution gate、session id、active flag 与 background-start callback 端口协调，不再反射读取或写入 CLI host 属性。scheduled task/polling 回归为 `25 passed`，CLI/架构 focused 回归为 `150 passed`，P0 `__init__` 增长护栏恢复通过。
-
-本批 CLI-5 manual background task runtime boundary 将 `_start_background_agent_task` 的 tracking、agent 创建、timeout/interruption、completion callback 与 worker cleanup 迁至 `VoidCube_cli.background_task_runtime`；`BackgroundTaskState` 成为 tracking owner，`VoidcubeCLI` 仅组装显式 ports 与终端显示 callback，删除原 200 行内嵌 worker 实现。background/CLI/scheduled 联合回归为 `94 passed`，architecture growth guard 与 compileall 通过。
-
-本批 CLI-5 embedded autonomous component lifecycle boundary 新增 `EmbeddedAutonomousComponentRuntime` 与 `EmbeddedAutonomousRuntimePorts`；child host ensure、loop start、pending input、status refresh、idle scene、stop sequencing 与 interrupt callback 已从 `app.py` 内联实现迁至 coordinator，CLI 仅提供显式生命周期 callback。embedded host/loop/stop/autonomous gate 回归为 `76 passed`，architecture focused 回归保持通过。
-
-本批 CLI-5 `AutonomousExecutorRuntime` host-state boundary 新增 `AutonomousExecutorPorts`；session identity、running task/current task state、pending input、agent-running gate、last-turn result、timeout writeback 与 autonomous execution event callback 已通过显式 ports 注入，executor 不再持有或读取 CLI host，`app.py` 的 autonomous turn integration 改用 runtime state API。autonomous executor/embedded/CLI 回归为 `134 passed`，architecture/integration/documentation/packaging/scheduled 联合回归为 `65 passed`，production compileall、退役扫描、wheel contract 与 diff check 已通过。
-
-本批 CLI-5 pending-input command/turn boundary 新增 `PendingInputRuntime` 与 `PendingInputExecutionPorts`；文件拖入、粘贴展开、slash command 分流、agent turn busy lifecycle、连续语音重启与 process completion notification 已从 `app.py` 内联实现迁至 runtime，CLI 仅提供命令、turn、UI 和队列 ports。pending-input/CLI/autonomous 回归为 `132 passed`，`app.py` 从 6,245 行降至 6,105 行，production compileall 已通过。
-
-本批 CLI-5 threaded turn execution boundary 新增 `TurnExecutionRuntime` 与 `TurnExecutionPorts`；agent worker thread、interactive interrupt polling、clarification defer、autonomous timeout interruption、async-client cleanup 与 stream/output flush 已从 `chat()` 内联实现迁至 runtime，`chat()` 保留模型输入准备、outcome/session 状态和 response rendering owner。turn runtime/CLI/autonomous 回归为 `148 passed`，`app.py` 当前为 6,076 行，production compileall 已通过。
-
-进度记录：conversation-history/result application、run-loop lifecycle 与 Enter keybinding routing 已迁移到对应 runtime；相关回归 `191 passed`，`app.py` 当前为 5,930 行。
-
-进度记录：Ctrl+C/D 控制键、push-to-talk、bracketed/快捷键图片粘贴与大文本折叠已迁移到显式 ports runtime；既有 `TuiTeardownPorts` 继续作为退出收尾边界，本批 focused 回归 `27 passed`，`app.py` 当前为 5,829 行。
-
-进度记录：Ctrl+Z 与 placeholder、modal hint、spinner 动态文本已迁移到显式 ports runtime，并补齐 `run()` 的 modal widget 组合 wiring；相关回归 `17 passed`，`app.py` 当前为 5,795 行。
-
-进度记录：startup 展示、resume/recent session、tool/skill registry 计数与 application/layout 组合已迁移到显式 ports runtime；相关回归 `16 passed`，`app.py` 当前为 5,774 行。
-
-进度记录：signal、asyncio exception、stdin preflight 与 teardown ports wiring 已迁移到显式 lifecycle boundary；相关回归 `11 passed`，`app.py` 当前为 5,763 行。
-
-进度记录：idle maintenance、process completion drain 与 interactive application wait/atexit wiring 已迁移到 `CliIdleMaintenanceRuntime`、`CliApplicationRuntime` 显式 ports；新增 runtime focused 回归 `5 passed`，CLI/TUI/lifecycle 联合回归 `117 passed`，`app.py` 当前为 5,752 行。
-
-进度记录：Enter、Ctrl+C/D/Z、voice、paste、文本编辑、modal navigation 与 history navigation 的注册 wiring 已迁移到 `TuiKeybindingAssemblyRuntime` 显式 ports；TUI/CLI focused 回归 `92 passed`，`app.py` 当前为 5,718 行。
-
-进度记录：input、modal、indicator widget graph 的构造、placeholder 安装与 buffer text-change wiring 已迁移到 `TuiWidgetGraphRuntime` 显式 ports；TUI/CLI 联合回归 `86 passed`，`app.py` 当前为 5,713 行。
-
-进度记录：interactive run 的队列、配置 watcher、modal、附件与 voice state snapshot 已迁移到 `CliInteractiveStateRuntime`，CLI 继续接管并持有状态；同步清理失效 voice state 测试断言，相关回归 `77 passed`，`app.py` 当前为 5,706 行。
-
-进度记录：plugin manager 引用、command busy reset、terminal prompt callbacks 与 tirith security preflight 已迁移到 `CliInteractivePreflightRuntime` 显式 ports；CLI/TUI/autonomous 回归 `78 passed`，`app.py` 当前为 5,705 行。
-
-进度记录：paste 文件 UTF-8 持久化已收口到 `TuiPasteRuntime` 显式目录/时钟端口，`TuiRuntimeFactory` 已统一 keybinding、widget graph 与 composition wiring；相关 CLI/TUI/架构/文档/打包回归 `88 passed`，production compileall、退役扫描与 wheel 合同通过，`app.py` 当前为 5,634 行。
-
-进度记录：interactive lifecycle 的 loop/application 端口拼装已迁移到 `CliInteractiveLifecycleRuntime`，CLI 保留状态 callback 与具体 host wiring；相关 CLI/TUI/生命周期回归 `56 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,624 行。
-
-进度记录：idle maintenance ports 已纳入 `CliInteractiveLifecycleRuntime`，由 coordinator 统一创建并接入 `CliRunRuntime`；本阶段完整 CLI/TUI 回归 `56 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,621 行。
-
-进度记录：resumed-history 的过滤、ANSI/reasoning 清理、tool-call 摘要与截断展示已迁移到 `CliHistoryDisplayRuntime`，CLI 仅保留显式 display ports 入口；CLI/TUI/启动/恢复回归 `115 passed`，架构/文档/打包/退役合同 `47 passed`，`app.py` 当前为 5,441 行。
-
-进度记录：status bar 的模型/上下文、middle/git 布局、窄终端裁剪与回退已迁移到 `CliStatusBarRuntime` 显式 display ports；runtime/CLI 相关回归 `16 passed`，`app.py` 当前为 5,328 行。
-
-进度记录：supervisor memory/scene、error indicator 与 subagent 摘要的 middle status 格式化已迁移到 `CliMiddleStatusRuntime` 显式 ports；middle/status/CLI 回归 `19 passed`，`app.py` 当前为 5,193 行。
-
-进度记录：subagent manager 任务投影与 session model/token/context snapshot 已迁移到 `CliSubagentObservabilityRuntime`、`CliStatusSnapshotRuntime` 显式 ports；status/autonomous/CLI 回归 `90 passed`，`app.py` 当前为 5,095 行。
-
-进度记录：git status 的 60 秒缓存、后台刷新、remote/变更片段和异常回退已迁移到 `CliGitStatusRuntime` 显式 ports；git/status/CLI 回归 `90 passed`，`app.py` 当前为 5,036 行。
-
-进度记录：后台任务完成/失败提示、prompt 截断与 response panel 已迁移到 `CliBackgroundResponseRuntime` 显式 display ports；后台/response/CLI 回归 `85 passed`，`app.py` 当前为 5,031 行。
-
-进度记录：voice status footer 与退出 session resume 摘要已迁移到 `CliVoiceStatusRuntime`、`CliExitSummaryRuntime` 显式 display ports；voice/lifecycle/CLI 回归 `11 passed`，`app.py` 当前为 5,014 行。
-
-进度记录：`/btw` ephemeral side-question 的线程、临时 agent、历史快照、结果展示与错误回退已迁移到 `CliBtwRuntime` 显式 ports；btw/command/CLI 回归 `150 passed`，`app.py` 当前为 4,970 行。
-
-进度记录：quick/plugin/skill/redirect/ambiguous dynamic command 的解析后执行已迁移到 `CliDynamicCommandRuntime` 显式 ports，内置命令优先级保持不变；dynamic command/CLI 回归 `163 passed`，`app.py` 当前为 4,923 行。
-
-进度记录：单回合 model/provider route 与 fast-mode request override 投影已迁移到 `CliTurnAgentRouteRuntime` 显式 ports；route/command/scheduled 回归 `94 passed`，`app.py` 当前为 4,914 行。
-
-进度记录：runtime credential/provider/model resolution 与 interactive、background、`/btw` agent initialization wiring 已迁移到 `CliRuntimeCredentialsRuntime`、`CliAgentInitializationRuntime` 显式 ports；CLI 保留错误展示、session/Gateway 副作用和 agent 生命周期，相关回归 `83 passed`，`app.py` 当前为 4,884 行。
-
-进度记录：recent-session 查询过滤与 in-chat 表格展示已迁移到 `CliSessionBrowserRuntime` 显式 ports；CLI 保留 session 状态与生命周期变更，command/session 回归 `147 passed`，`app.py` 当前为 4,882 行。
-
-进度记录：model picker 的 provider/model 两级选择、返回/取消与 switch dispatch 已迁移到 `CliModelPickerRuntime` 显式 ports；CLI 保留 picker state、model mutation 与 UI callback，model/command/TUI 回归 `75 passed`，`app.py` 当前为 4,855 行。
-
-进度记录：session hydration cache/history projection 与 interactive resume preload 状态展示已迁移到 `CliSessionHydrationRuntime`、`CliSessionResumeRuntime` 显式 ports；CLI 保留 session lifecycle state owner，session/startup/command 回归 `64 passed`，`app.py` 当前为 4,841 行。
-
-进度记录：single-query resume status 与 session lifecycle state application 已迁移到 `CliSingleQueryResumeRuntime`、`CliSessionLifecycleRuntime` 显式 ports；CLI 保留 session 属性 owner 和 agent 生命周期 callback，resume/lifecycle/command 回归 `215 passed`，`app.py` 当前为 4,848 行。
-
-进度记录：chat 内联 agent-call 的 voice prefix、model-switch note、trace id 与异常结果投影已迁移到 `CliAgentTurnCallRuntime` 显式 ports；CLI 保留 turn execution 与 response/session owner，agent/chat/autonomous 回归 `152 passed`，`app.py` 当前为 4,853 行。
-
-进度记录：chat 的图片、`@` context expansion、surrogate 清理与 `begin_turn` 输入准备已迁移到 `CliTurnInputPreparationRuntime` 显式 ports；CLI 保留 conversation history owner，input/command/autonomous 回归 `147 passed`，`app.py` 当前为 4,836 行。
-
-进度记录：chat outer exception 的 failed observation、autonomous timeout/writeback 与滚动输出抑制已迁移到 `CliChatErrorRuntime` 显式 ports；CLI 保留 finally 生命周期恢复，error/command/autonomous 回归 `147 passed`，`app.py` 当前为 4,834 行。
-
-进度记录：response panel/rendering 与 interrupted follow-up requeue 的 finalization 组合已迁移到 `CliChatFinalizationRuntime` 显式 ports；CLI 保留 display/queue owner，response/follow-up/command 回归 `129 passed`，`app.py` 当前为 4,829 行。
-
-进度记录：session close 与 interrupted-session hook 的 teardown 边界已迁移到 `CliSessionTeardownRuntime` 显式 ports；CLI 保留具体 repository、agent 与 plugin hook wiring，teardown/autonomous 回归 `71 passed`，`app.py` 当前为 4,830 行。
-
-进度记录：interactive preflight、keybinding runtime 注册与 voice record key 规范化已迁移到 `CliInteractiveRegistrationRuntime` 显式 ports；CLI 保留插件、状态 callback 与 TUI factory wiring，registration/lifecycle/TUI 回归 `77 passed`，`app.py` 当前为 4,829 行。
-
-进度记录：CLI-owned registrations、paste/modal/input/indicator/composition callback 到通用 TUI factory 的 host assembly 已迁移到 `CliTuiHostAssemblyRuntime`；CLI 保留状态 callback 与 widget extension wiring，TUI/lifecycle/autonomous 回归 `78 passed`，`app.py` 当前为 4,809 行。
-
-进度记录：idle maintenance、Gateway presence 的 idle/forced refresh 与 interactive lifecycle ports assembly 已迁移到 `CliInteractiveLifecycleAssemblyRuntime`；CLI 保留具体状态、Gateway 与 teardown callback，lifecycle/TUI/autonomous 回归 `77 passed`，`app.py` 当前为 4,800 行。
-
-进度记录：prompt symbol、profile suffix、voice RMS bar、compact rendering 与交互状态优先级已迁移到 `CliTuiPromptRuntime` 显式 ports；CLI 保留 prompt state callback 与 extension hook，prompt/TUI/lifecycle/autonomous 回归 `81 passed`，`app.py` 当前为 4,739 行。
-
-进度记录：terminal width、窄终端 compact policy、input rule、agent spacer 与 spinner height 已迁移到 `CliTuiLayoutMetricsRuntime`；autonomous/status 现有 host consumer 仅保留转发 adapter，layout/prompt/voice/status/dynamic-text 回归 `82 passed`，`app.py` 当前为 4,721 行。
-
-进度记录：autonomous panel 的 terminal width、trim、pad 已收口到 `AutonomousPanelRenderPorts`，CLI 主渲染路径不再直接读取 panel host 的显示方法；autonomous/layout/prompt 回归 `72 passed`，`app.py` 当前为 4,733 行。
-
-进度记录：autonomous panel 的 gate、session、current task、agent/turn、pending input、spinner 与 execution events 已收口到 `AutonomousPanelStatePorts`，CLI 主渲染路径不再读取 `state_host`；autonomous/panel/TUI 回归 `74 passed`，`app.py` 当前为 4,765 行。
-
-进度记录：autonomous panel 事件追加与 Supervisor 事件同步已收口到 `AutonomousPanelEventPorts`，删除无调用的 panel height 旧入口；focused 回归 `126 passed`，完整 CLI/TUI 回归 `450 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,806 行。
-
-进度记录：CLI/TUI wrapper 的额外 keybindings、application composition 与 extra widgets 已收拢为 `CliTuiExtensionPorts`，core TUI state ports 与扩展 hook wiring 分界明确；CLI/TUI 回归 `450 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,809 行。
-
-进度记录：clarify/approval/sudo/secret/model-picker 的 modal callback 投影与 normal-input/password-mask policy 已迁移到 `CliTuiModalStateRuntime`；CLI/TUI 回归 `451 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,807 行。
-
-进度记录：`/fast` 模型能力判断与 TUI/help/command availability 投影已迁移到 `CliCommandAvailabilityRuntime`，app 仅保留显式模型与 capability callback adapter；CLI/TUI 回归 `453 passed`，架构/文档/集成/打包合同 `42 passed`，`app.py` 当前为 4,826 行。
-
-当前 P0 行数：
-
-| 文件 | 行数 |
-| --- | ---: |
-| `VoidCube_cli/app.py` | 4,827 |
-| `systems/supervisor/planning_runtime.py` | 8,072 |
-| `systems/supervisor/endogenous_drive.py` | 231 |
-| `systems/supervisor/ui_runtime.py` | 420 |
-
-### 15.3 仍未完成的治理主线
-
-- CLI-4：已分离 `run()` 的 TUI application、layout、keybindings、modal、输入队列、动态提示/状态文本、startup 展示、status bar、idle maintenance、process notification、application wait、atexit、signal/asyncio/stdin guards、lifecycle 与 teardown；保持 turn/queue runtime 及各 cleanup resource 的既有 owner。
-- CLI-5：terminal voice recording caller 已迁移到 canonical `systems.voice` owner，并删除 `tools.voice_mode` transitional facade；scheduled execution、manual background task runtime、embedded autonomous component lifecycle、`AutonomousExecutorRuntime` host-state boundary、pending-input command/turn boundary、threaded turn execution、response rendering、turn postprocessing、interrupted-input queue、result application、run-loop lifecycle、Enter/control keybinding、push-to-talk 与 paste boundary 已迁移到显式 ports，CLI 仅保留命令、显示和具体 host wiring owner，不复制设备、线程或后台生命周期。
-- Stage 4 / 5：TaskProfilePolicy 与 ScheduleAllocator 已完成；Stage 5 candidate DTO/factory/scoring/adaptive budget/signature、evidence normalization/channel/graph/freshness、LM proposal transport/normalization/reference advisory、LM context/snapshot/LM evidence context/packet、LM generation request/execution、runtime config adapters/runtime gate、deliberation、materialization context/runtime、candidate stream preparation/assembly、selection merge、stable candidate families、learning topic policy、materialization、body structure mapping/eligibility、body projection、candidate eligibility、adaptive policy/input normalization、pressure/urgency、drive-state/models、needs policy gates、needs calculation、LM eligibility input projection、intent/signal projection、drive-context normalization、history normalization、candidate stream assembler、agenda graph projection、self-iteration hypothesis projection、task-type prior projection、LM evidence assembly、reflection projection、cognitive posture/context projection、proposal drift/meta-cognition projection、cognitive memory projection、cognition charter、self-model、API-B snapshot、research、shell body profile、drive-judgement projection、latest-generation state application projection、LM application state port、cognition state projection、proposal cognition projection 与 proposal memory compaction 已迁至专属模块或明确 application port。`EndogenousDriveEngine` 仍持有 proposal 调用交接与 latest-generation state 写回，是 runtime state 的唯一 owner。endogenous JSON repository、只读 state projection 与 Planning 的纯排程计算已完成，不得重新把已迁移 helper 放回旧 owner。
-- Stage 6：Supervisor UI 的 state、stream、identity/proxy、memory status、trace、body status、snapshot、activity persistence、media state 与 auto-open lifecycle 边界已收口；剩余 route registration 和 Supervisor 生命周期注册仍保留在 `supervisor.py` owner 内。
-- 进度记录：CLI indicator display assembly 已迁移到 `CliTuiIndicatorAssemblyRuntime`，`app.py` 仅提供显式显示 ports；相关 CLI/TUI 回归通过，当前 `app.py` 为 4,827 行。
-
-## 16. 下一次实施起点
-
-下一批继续盘点 `run()` 中剩余的生命周期/宿主 wiring；保持阶段记录简短，并维护已完成 ports 与 `tools.voice_mode` 零旧入口约束。
+1. **基线与 Planning orchestration**：先建立导入、首次 CLI、首次 turn、服务启动和 UI state 的可重复测量，再迁移 `evaluate_drive_input()`、autonomous task review、body review 和 execution handoff；每迁移一个责任就删除原 Mixin 实现。
+2. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
+3. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
+4. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
+5. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。
