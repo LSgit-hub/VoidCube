@@ -3962,8 +3962,8 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     supervisor._ui_runtime.latest_drive_candidates = lambda: [  # type: ignore[method-assign]
         {"title": "cached drive"}
     ]
-    supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
-    supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    supervisor._ui_runtime._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
+    supervisor._ui_runtime.recent_local_observation_timeline = lambda limit=12: []  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
         return _formal_endogenous_drive_input_payload()
@@ -4020,8 +4020,8 @@ async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_e
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     supervisor._ui_runtime.latest_drive_candidates = lambda: []  # type: ignore[method-assign]
-    supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
-    supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    supervisor._ui_runtime._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
+    supervisor._ui_runtime.recent_local_observation_timeline = lambda limit=12: []  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
         return _formal_endogenous_drive_input_payload()
@@ -19358,7 +19358,7 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
 
     monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
 
-    stats = await supervisor._fetch_tier1_stats()
+    stats = await supervisor._ui_runtime._fetch_tier1_stats()
 
     assert stats["memory_unavailable"] is True
     assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
@@ -19397,7 +19397,7 @@ async def test_fetch_tier1_stats_uses_configured_gateway_address(tmp_path, monke
 
     monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
 
-    await supervisor._fetch_tier1_stats()
+    await supervisor._ui_runtime._fetch_tier1_stats()
 
     assert requested_urls == ["http://127.0.0.1:6123/admin/services"]
 
@@ -19460,7 +19460,7 @@ async def test_fetch_tier1_stats_accepts_gateway_service_list(tmp_path, monkeypa
 
     monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
 
-    stats = await supervisor._fetch_tier1_stats()
+    stats = await supervisor._ui_runtime._fetch_tier1_stats()
 
     assert stats["turn_count"] == 3
     assert stats["llm_healthy"] is True

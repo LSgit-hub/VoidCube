@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：治理未完成。Stage 0 至 Stage 6 已完成；Stage 7 尚未开始。当前进入全量回归、发行物和次级巨石评估，Windows 前端仍保持 No-Go。
+> 状态：治理未完成。Stage 0 至 Stage 7 已完成；Stage 8 尚未开始。当前进入次级巨石 owner 收口，Windows 前端仍保持 No-Go。
 > 基线日期：2026-08-04。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -16,18 +16,20 @@
 - 两个前端共享 session、turn、工具、审批、模型配置、Memory、Gateway、Supervisor 和 Execution 能力；
 - 两个前端只隔离输入、渲染、平台集成和发行依赖，不能互相导入。
 
-本轮核心范围：
+当前治理重点：
 
 | 文件/边界 | 当前责任判断 | 优先级 |
 | --- | --- | --- |
-| `VoidCube_cli/app.py` | 命令、TUI 和 turn 子责任已外移；仍保留 Agent 生命周期、终端显示和 host wiring，继续作为 CLI adapter 组合根治理 | P0 |
-| `systems/supervisor/planning_runtime.py` | 只保留运行时投影、内生驱动输入/评估、跨快照组合和显式 service 委托；已拆出的业务责任不得回迁 | P0，持续观察 |
-| `systems/supervisor/endogenous_drive.py` | 保留 facade、LM proposal 交接和 latest-generation state 写回；流水线阶段与 runtime state owner 已明确 | P0，持续观察 |
+| `run_agent.py` | 会话循环和 Agent 初始化仍聚合模型调用、工具、持久化、恢复与输出协调，需要拆为显式 runtime/ports | P0 |
+| `systems/memory/memory_service.py` | 数据库装配与迁移仍集中，且与 HTTP/use case owner 边界需要进一步收口 | P0 |
+| `VoidCube_cli/main.py` | 入口函数仍聚合 argparse、命令注册、配置和 dispatch；应收口为薄 CLI 入口 | P0 |
+| `systems/gateway/internal_gateway.py` | 方法责任暂未达到升级条件，保持 registry/auth/session/routes 边界观察 | P1 |
+| `VoidCube_cli/app.py`、Planning、Endogenous | 原 P0 owner 边界已收口；只维持依赖、状态所有权和防回迁护栏 | 已收口 |
 | `systems/supervisor/ui_runtime.py` | `SupervisorUIRuntime` 统一拥有 UI 活动、缓存、媒体状态、SSE、身份代理和 auto-open 生命周期 | 已收口 |
 | `systems/supervisor/supervisor.py` | 只负责服务组合和路由挂载；UI endpoint wiring 通过 `ui_routes.py` 的显式 ports 接入 | 已收口 |
 | 共享包到前端的依赖边界 | `agent`、`systems`、`VoidCube_core`、`VoidCube_app` 不依赖 `VoidCube_cli`；CLI/Windows 只向共享层依赖 | P0 护栏 |
 
-次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到第 10 节阈值时才进入后续批次。
+Stage 8 仍按单一责任边界依次推进，不并行重构三个 P0 文件。Gateway 与 `VoidCube_cli/config.py` 保持观察，只有达到第 10 节阈值才升级。
 
 ## 2. 治理目标
 
@@ -406,13 +408,13 @@ UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projecti
 
 ## 10. 次级巨石处理策略
 
-完成四条 P0 主线后重新测量：
+当前分级如下：
 
-- `run_agent.py`：优先把编排继续下沉至 `agent/` 已有模块。
-- `systems/memory/memory_service.py`：按 repository、recall、governance、backup 和 HTTP routes 评估。
-- `systems/gateway/internal_gateway.py`：按 registry、auth、session lease、scene projection 和 routes 评估。
-- `VoidCube_cli/config.py`：先拆 migration、schema、credentials/env 和 persistence。
-- `VoidCube_cli/main.py`：先把 argparse/dispatch 拆成命令注册，不与 `cli.py` TUI 拆分同时进行。
+- `run_agent.py`：会话循环和 Agent 初始化存在跨责任巨型方法，升级为 Stage 8 P0。
+- `systems/memory/memory_service.py`：数据库装配/迁移与服务入口边界需要收口，升级为 Stage 8 P0。
+- `VoidCube_cli/main.py`：入口函数聚合参数解析、命令注册和 dispatch，升级为 Stage 8 P0。
+- `systems/gateway/internal_gateway.py`：现有方法责任可枚举，继续按 registry、auth、session lease、scene projection 和 routes 观察。
+- `VoidCube_cli/config.py`：当前保持薄导出边界，不再作为独立拆分对象。
 
 满足任一条件才提升为 P0：
 
@@ -524,6 +526,15 @@ UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projecti
 - 评估次级巨石是否需要后续治理。
 - 只有达到第 14 节门槛，才开始实现 Windows adapter 和重新决定后台传输/进程模型。
 
+### Stage 8：次级巨石 owner 收口
+
+- `run_agent.py` 先拆会话 runtime、Agent 生命周期和输出/持久化协调，生产调用者改用显式 ports，不复制现有 turn contract。
+- Memory Service 再拆数据库 schema/migration owner，并保持 recall、governance、backup 与 HTTP routes 的既有真相边界。
+- `VoidCube_cli/main.py` 最后拆命令注册、参数解析和 dispatch，入口只负责装配与退出码映射。
+- Gateway 继续观察，不因文件规模单独升级；三个 P0 文件不得并行迁移。
+
+验收：三个入口不再包含跨责任巨型方法；共享状态、数据库真相和命令语义不变；旧实现、重复参数和兼容分支已删除；重新通过 Stage 7 验收门槛。
+
 ## 13. 每个迁移批次的固定流程
 
 1. 写明被迁移责任、输入、输出、状态所有者和副作用。
@@ -567,13 +578,14 @@ UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projecti
 - CLI contract tests 通过 `VoidCube_app` 公共端口运行，未来 Windows adapter 无需模拟 slash command 或解析 ANSI。
 - Supervisor UI 静态资源已外移，UI state/observation projector 有明确边界。
 - `PlanningRuntimeMixin` 和 `EndogenousDriveEngine` 的主流水线已组件化，不再依赖不可枚举的共享 `self` 状态。
+- Stage 8 的会话 runtime、Memory schema/migration 和 CLI 入口 owner 已收口，不再存在跨责任巨型方法。
 - CLI、Gateway、Memory、Supervisor、Execution 的状态所有权文档与代码一致。
 - 全量测试、wheel、退役集成扫描通过，且首次 CLI/turn/服务/UI 性能没有显著回归。
 - 没有为了迁移遗留大规模双路径兼容层。
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-当前判定为 **No-Go**：Stage 7 全量验证尚未完成；在此之前不启动 Windows adapter。
+当前判定为 **No-Go**：Stage 8 新识别的 P0 owner 边界尚未收口；在此之前不启动 Windows adapter。
 
 ## 15. 当前实施快照
 
@@ -590,7 +602,8 @@ UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projecti
 | Stage 4 | 已完成 | Planning 的持久化、投影/策略、任务状态、review/recovery、执行交接和自主周期责任均由显式 owner 承担；Planning 只保留运行时组合、投影和 service 委托 | 无 |
 | Stage 5 | 已完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer；等价链路、稳定投影和 override 只读边界已闭合 | 无 |
 | Stage 6 | 已完成 | CLI 的 TUI、voice session、background task state 和 autonomous component lifecycle 已形成显式 runtime/ports；Supervisor UI 的状态、SSE、身份代理、媒体和生命周期由 `SupervisorUIRuntime` 统一拥有，路由通过显式 ports 挂载；旧 Mixin、宿主镜像和无调用代理已清理 | 无 |
-| Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
+| Stage 7 | 已完成 | 全量主项目/Mem 回归、smoke、发行物、退役扫描和性能复测已完成；次级巨石已按治理阈值重新分级 | 无 |
+| Stage 8 | 未开始 | `run_agent.py`、Memory Service 和 CLI main 已升级为 P0；Gateway 保持观察 | 依次完成三个 P0 owner 边界并重新运行 Stage 7 验收 |
 
 ### 15.2 当前稳定边界
 
@@ -608,8 +621,9 @@ UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projecti
 
 ### 15.3 当前缺口
 
-- Stage 7 的全量主项目/Mem 回归、smoke、发行物验证、退役扫描和性能复测尚未完成。
-- 次级巨石的优先级尚待 Stage 7 依据当前边界和变化风险重新评估。
+- `run_agent.py` 的会话 runtime 与 Agent 生命周期仍需形成显式 owner。
+- Memory Service 的 schema/migration 与 HTTP/use case 边界仍需收口。
+- CLI main 的命令注册、参数解析和 dispatch 仍需拆离入口函数。
 
 ### 15.4 验证基线
 
@@ -619,4 +633,7 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。
+1. **Stage 8-A**：收口 `run_agent.py` 的会话 runtime、Agent 生命周期和输出/持久化 ports。
+2. **Stage 8-B**：收口 Memory Service 的 schema/migration owner，并保持现有 Memory 真相边界。
+3. **Stage 8-C**：将 CLI main 收口为命令注册、参数解析和 dispatch 的薄组合入口。
+4. **Stage 8 验收**：重新运行 Stage 7 门槛并重新判定 Windows Go/No-Go。

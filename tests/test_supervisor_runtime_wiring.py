@@ -2119,7 +2119,9 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
 async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_live_probes_fail(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_drive_input = AsyncMock(side_effect=RuntimeError("gateway down"))  # type: ignore[method-assign]
-    supervisor._fetch_tier1_stats = AsyncMock(side_effect=RuntimeError("memory down"))  # type: ignore[method-assign]
+    supervisor._ui_runtime._fetch_tier1_stats = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("memory down")
+    )
     supervisor.get_runtime_timeline = AsyncMock(side_effect=RuntimeError("timeline down"))  # type: ignore[method-assign]
 
     state = await supervisor._ui_runtime.get_state()

@@ -83,7 +83,7 @@ class SupervisorUIRuntimePorts:
     activity_buffer_size: int
     legal_scenes: Collection[str]
     record_activity_history: Callable[[JsonDict], None]
-    gateway_url: str
+    load_gateway_url: Callable[[], str]
     gateway_memory_headers: Callable[..., Dict[str, str]]
     ui_event_interval_seconds: float
     voice_realtime_status: Callable[[], JsonDict]
@@ -183,7 +183,7 @@ class SupervisorUIRuntime:
 
     def _identity_context(self) -> SupervisorUIIdentityProxyContext:
         return SupervisorUIIdentityProxyContext(
-            gateway_url=self.ports.gateway_url,
+            gateway_url=self.ports.load_gateway_url(),
             gateway_memory_headers=self.ports.gateway_memory_headers,
         )
 
@@ -377,7 +377,9 @@ class SupervisorUIRuntime:
 
     async def _fetch_tier1_stats(self) -> JsonDict:
         return await fetch_tier1_stats(
-            context=SupervisorUIMemoryStatusContext(gateway_url=self.ports.gateway_url)
+            context=SupervisorUIMemoryStatusContext(
+                gateway_url=self.ports.load_gateway_url()
+            )
         )
 
     def maybe_open(self) -> None:

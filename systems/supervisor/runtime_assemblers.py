@@ -448,7 +448,9 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             activity_buffer_size=config.ui_activity_buffer_size,
             legal_scenes=SUPERVISOR_LEGAL_SCENES,
             record_activity_history=record_activity_history,
-            gateway_url=str(config.execution.gateway_address).rstrip("/"),
+            load_gateway_url=lambda: str(
+                supervisor.config.execution.gateway_address
+            ).rstrip("/"),
             gateway_memory_headers=supervisor._gateway_memory_headers,
             ui_event_interval_seconds=config.ui_event_interval_seconds,
             voice_realtime_status=supervisor._voice_manager.realtime_status,

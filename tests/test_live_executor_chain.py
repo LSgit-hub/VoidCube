@@ -287,7 +287,7 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
             assert trace["count"] == 1
             assert trace["events"][0]["metadata"]["trace_id"] == trace_id
 
-            tier1_stats = await supervisor._fetch_tier1_stats()
+            tier1_stats = await supervisor._ui_runtime._fetch_tier1_stats()
             assert tier1_stats.get("memory_unavailable") is not True
 
             provider = MemMemoryProvider()
@@ -340,7 +340,7 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
         assert memory._compression_task is not None
         assert memory._compression_task.done()
 
-        unavailable = await supervisor._fetch_tier1_stats()
+        unavailable = await supervisor._ui_runtime._fetch_tier1_stats()
         assert unavailable["memory_unavailable"] is True
         assert unavailable["memory_active"] is False
         assert unavailable["memory_unavailable_reason"] == "ClientConnectorError"
