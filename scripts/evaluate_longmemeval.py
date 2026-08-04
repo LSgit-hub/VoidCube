@@ -42,6 +42,7 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -205,11 +206,43 @@ def _metric_contribs(returned_ids: list[str], evidence: set[str]) -> tuple[bool,
     return hit, mrr, map_contrib
 
 
+def _semantic_config_from_overrides(
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+):
+    """Build an explicit SemanticIndexConfig from CLI embedding overrides.
+
+    Returns None when no embedding override is requested, in which case the
+    service uses its configured default (the local CharNgramEmbedder, or any
+    provider set in ~/.VoidCube/config.yaml).
+    """
+    if not (provider or model or base_url):
+        return None
+    from systems.memory.semantic_index import SemanticIndexConfig
+
+    return SemanticIndexConfig(
+        enabled=True,
+        provider=(provider or "openai").strip() or "openai",
+        model=(model or "").strip(),
+        base_url=(base_url or "").strip().rstrip("/"),
+        api_key=(
+            os.environ.get(api_key_env, "") if api_key_env else ""
+        ),
+        dimensions=None if (provider or base_url) else 256,
+    )
+
+
 async def evaluate_longmemeval(
     dataset_path: str | Path = DEFAULT_DATASET,
     *,
     limit_per_category: int = 3,
     output: str | Path | None = None,
+    semantic_provider: str | None = None,
+    semantic_model: str | None = None,
+    semantic_base_url: str | None = None,
+    semantic_api_key_env: str | None = None,
 ) -> dict[str, Any]:
     instances = load_dataset(dataset_path)
     now = datetime.now(timezone.utc)
@@ -226,6 +259,12 @@ async def evaluate_longmemeval(
         if pool:
             sampled.extend(pool[: max(1, int(limit_per_category))])
 
+    semantic_config = _semantic_config_from_overrides(
+        semantic_provider,
+        semantic_model,
+        semantic_base_url,
+        semantic_api_key_env,
+    )
     details: list[dict[str, Any]] = []
     hits = 0
     mrr_sum = 0.0
@@ -240,6 +279,12 @@ async def evaluate_longmemeval(
                     recall_candidate_limit=100,
                 )
             )
+            if semantic_config is not None:
+                from systems.memory.semantic_index import SemanticMemoryIndex
+
+                service._semantic_index = SemanticMemoryIndex(
+                    service._db_path, semantic_config
+                )
             evidence = seed_instance(service, instance, instance_index=index, now=now)
             # Build the semantic index for this instance's seeded turns so the
             # recall can use embedding similarity in addition to lexical match.
@@ -320,12 +365,20 @@ def main() -> int:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--limit-per-category", type=int, default=3)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--semantic-provider", help="embedding provider (e.g. openai, ollama)")
+    parser.add_argument("--semantic-model", help="embedding model id (e.g. text-embedding-3-small)")
+    parser.add_argument("--semantic-base-url", help="OpenAI-compatible /embeddings base URL")
+    parser.add_argument("--semantic-api-key-env", help="env var holding the API key")
     args = parser.parse_args()
     report = asyncio.run(
         evaluate_longmemeval(
             args.dataset,
             limit_per_category=args.limit_per_category,
             output=args.output,
+            semantic_provider=args.semantic_provider,
+            semantic_model=args.semantic_model,
+            semantic_base_url=args.semantic_base_url,
+            semantic_api_key_env=args.semantic_api_key_env,
         )
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

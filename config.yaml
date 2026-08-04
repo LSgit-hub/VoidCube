@@ -170,7 +170,7 @@ memory:
     prefetch_max_context_chars: 3500
     redact_before_store: true
   semantic_recall:
-    enabled: false
+    enabled: true
     provider: ''
     model: ''
     api_key_env: ''

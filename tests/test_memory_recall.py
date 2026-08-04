@@ -1101,6 +1101,16 @@ def test_build_recall_plan_resolves_this_week_and_this_month():
     assert plan_plain.timespan_end is None
 
 
+def test_build_recall_plan_detects_current_state_intent():
+    anchor = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+
+    current = build_recall_plan("用户现在用什么容器运行时", now=anchor)
+    assert current.current_state_intent is True
+
+    past = build_recall_plan("之前提到过的那个新项目叫什么", now=anchor)
+    assert past.current_state_intent is False
+
+
 @pytest.mark.asyncio
 async def test_explicit_month_window_filters_to_in_window_memory(tmp_path):
     service = _service(tmp_path)

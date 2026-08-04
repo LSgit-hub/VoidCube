@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.evaluate_longmemeval import evaluate_longmemeval
+from scripts.evaluate_longmemeval import _semantic_config_from_overrides, evaluate_longmemeval
 
 
 pytestmark = [pytest.mark.unit]
+
+
+def test_semantic_config_from_overrides_builds_external_provider():
+    cfg = _semantic_config_from_overrides(
+        "openai", "text-embedding-3-small", "https://api.example.com/v1", "EMB_KEY"
+    )
+    assert cfg is not None
+    assert cfg.enabled is True
+    assert cfg.provider == "openai"
+    assert cfg.model == "text-embedding-3-small"
+    assert cfg.base_url == "https://api.example.com/v1"
+
+    # No overrides → default (local embedder) path, config left to the service.
+    assert _semantic_config_from_overrides() is None
 
 
 @pytest.mark.asyncio

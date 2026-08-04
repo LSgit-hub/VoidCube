@@ -42,6 +42,20 @@ _RECENCY_MARKERS = (
     "earlier",
 )
 _IMMEDIATE_RECENCY_MARKERS = ("刚才", "刚刚", "方才")
+# Queries about the *current* state of something ("现在用什么", "目前如何").
+# For these, recency matters more than for historical/past queries, because the
+# latest statement about a topic supersedes older ones (knowledge updates).
+_CURRENT_STATE_MARKERS = (
+    "现在",
+    "目前",
+    "当前",
+    "如今",
+    "眼下",
+    "now",
+    "currently",
+    "nowadays",
+    "at present",
+)
 _RECENT_CONVERSATION_PATTERNS = (
     "聊了什么",
     "讨论了什么",
@@ -189,6 +203,7 @@ class RecallPlan:
     intent: str
     temporal_intent: str = "none"
     as_of: str | None = None
+    current_state_intent: bool = False
 
     @property
     def search_terms(self) -> tuple[str, ...]:
@@ -208,6 +223,7 @@ class RecallPlan:
             "intent": self.intent,
             "temporal_intent": self.temporal_intent,
             "as_of": self.as_of,
+            "current_state_intent": self.current_state_intent,
             "method": "lexical_concept_hybrid",
         }
 
@@ -290,6 +306,9 @@ def build_recall_plan(
         intent=intent,
         temporal_intent=temporal_intent,
         as_of=_optional_text(as_of),
+        current_state_intent=any(
+            marker in normalized for marker in _CURRENT_STATE_MARKERS
+        ),
     )
 
 
@@ -823,15 +842,15 @@ def _tier2_candidates(
                 + 0.30 * semantic
                 + 0.12 * dynamic_weight
                 + 0.10 * float(row[6] or 0.0)
-                + 0.06 * recency
+                + (0.12 if plan.current_state_intent else 0.06) * recency
                 + 0.10 * temporal_fit
             )
         else:
             score = (
-                0.62 * lexical
-                + 0.18 * dynamic_weight
+                (0.58 if plan.current_state_intent else 0.62) * lexical
+                + 0.16 * dynamic_weight
                 + 0.12 * float(row[6] or 0.0)
-                + 0.08 * recency
+                + (0.16 if plan.current_state_intent else 0.08) * recency
                 + 0.10 * temporal_fit
             )
         results.append(
@@ -1314,14 +1333,14 @@ def _tier1_candidates(
                 0.50 * lexical
                 + 0.34 * semantic
                 + 0.08 * float(row[5] or 0.0)
-                + 0.08 * recency
+                + (0.18 if plan.current_state_intent else 0.08) * recency
                 + 0.10 * temporal_fit
             )
         else:
             score = (
-                0.76 * lexical
-                + 0.12 * float(row[5] or 0.0)
-                + 0.12 * recency
+                (0.60 if plan.current_state_intent else 0.76) * lexical
+                + 0.10 * float(row[5] or 0.0)
+                + (0.30 if plan.current_state_intent else 0.12) * recency
                 + 0.10 * temporal_fit
             )
         results.append(
