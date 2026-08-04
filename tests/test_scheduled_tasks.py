@@ -22,6 +22,7 @@ from VoidCube_cli.scheduled_executor import (
     ScheduledTaskExecutorRuntime,
     ScheduledWritebackOutbox,
 )
+from VoidCube_cli.background_task_runtime import BackgroundTaskState
 
 
 def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
@@ -30,11 +31,7 @@ def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
         return bool(component is not None and getattr(component, "_agent_running", False))
 
     def manual_background_task_running() -> bool:
-        tasks = getattr(host, "_background_tasks", {})
-        return any(
-            callable(getattr(thread, "is_alive", None)) and thread.is_alive()
-            for thread in tasks.values()
-        )
+        return host._background_task_state.has_running_tasks()
 
     return ScheduledTaskExecutorPorts(
         is_embedded_component=host._is_embedded_autonomous_component,
@@ -289,6 +286,7 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
     host = SimpleNamespace(
         session_id="main-cli",
         _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
     )
@@ -385,6 +383,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
     host = SimpleNamespace(
         session_id="main-cli",
         _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
     )
@@ -431,6 +430,7 @@ def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> No
     host = SimpleNamespace(
         session_id="main-cli",
         _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
         _autonomous_component_host=SimpleNamespace(_agent_running=True),
         _is_embedded_autonomous_component=lambda: False,
         _start_background_agent_task=Mock(),
@@ -608,7 +608,7 @@ def test_scheduled_executor_waits_for_foreground_api_a_and_execution_gate(tmp_pa
         _scheduled_execution_active=False,
         _agent_running=True,
         _command_running=False,
-        _background_tasks={},
+        _background_task_state=BackgroundTaskState(),
         _api_a_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
@@ -631,11 +631,15 @@ def test_scheduled_executor_waits_for_manual_background_api_a(tmp_path) -> None:
         _scheduled_execution_active=False,
         _agent_running=False,
         _command_running=False,
-        _background_tasks={"manual-background": background_thread},
+        _background_task_state=BackgroundTaskState(),
         _api_a_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
         _start_background_agent_task=Mock(),
+    )
+    host._background_task_state.register_thread(
+        "manual-background",
+        background_thread,
     )
     runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
     runtime._post = Mock()  # type: ignore[method-assign]
@@ -654,7 +658,7 @@ def test_scheduled_executor_holds_api_a_gate_until_writeback(tmp_path) -> None:
         _scheduled_execution_active=False,
         _agent_running=False,
         _command_running=False,
-        _background_tasks={},
+        _background_task_state=BackgroundTaskState(),
         _api_a_execution_gate=gate,
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
@@ -697,7 +701,7 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
         _scheduled_execution_active=False,
         _agent_running=False,
         _command_running=False,
-        _background_tasks={},
+        _background_task_state=BackgroundTaskState(),
         _api_a_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,

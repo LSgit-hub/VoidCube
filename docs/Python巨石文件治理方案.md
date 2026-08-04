@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：治理未完成。Stage 0、Stage 1、Stage 2、Stage 3、Stage 4 已完成；Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未开始。当前优先完成 Endogenous 等价验收和 Stage 6 的 adapter/lifecycle 边界，最后进入 Stage 7 全量验收。
+> 状态：治理未完成。Stage 0、Stage 1、Stage 2、Stage 3、Stage 4、Stage 5 已完成；Stage 6 部分完成；Stage 7 尚未开始。当前优先完成 Stage 6 的 adapter/lifecycle 边界，最后进入 Stage 7 全量验收。
 > 基线日期：2026-08-04。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -579,7 +579,7 @@ DrivePerceptionBuilder
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-当前判定为 **No-Go**：Endogenous 最终等价验收、Stage 6 adapter/lifecycle 边界和 Stage 7 全量验证尚未全部收口。
+当前判定为 **No-Go**：Stage 6 adapter/lifecycle 边界和 Stage 7 全量验证尚未全部收口。
 
 ## 15. 当前实施快照
 
@@ -594,8 +594,8 @@ DrivePerceptionBuilder
 | Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 无 |
 | Stage 3 | 已完成 | 公共 session/history/title/turn-control use case、结构化应用事件和无 CLI 依赖的 adapter contract 已建立；session、hydration、title、busy、queue/cancel 和 active turn 均由 `ApplicationRuntime` 统一持有，命令 handler 通过显式端口接入 | 无 |
 | Stage 4 | 已完成 | Planning 的持久化、投影/策略、任务状态、review/recovery、执行交接和自主周期责任均由显式 owner 承担；Planning 只保留运行时组合、投影和 service 委托 | 无 |
-| Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 完成等价全链路验收，确认无旧 helper、旧调用路径和双写入口 |
-| Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成显式 runtime/ports | 收口 CLI 的显示/设备/autonomous adapter 生命周期；删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
+| Stage 5 | 已完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer；等价链路、稳定投影和 override 只读边界已闭合 | 无 |
+| Stage 6 | 部分完成 | CLI 的 TUI、voice session、background task state 和 autonomous component lifecycle 已形成显式 runtime/ports；UI projection 已有独立边界 | 删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
 | Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
 
 ### 15.2 当前稳定边界
@@ -605,6 +605,7 @@ DrivePerceptionBuilder
 - Supervisor UI 资源通过包资源加载，源码与 wheel 使用同一 canonical 文件。
 - session lifecycle、history/title mutation、hydration、turn 输入/结果、取消路由、工具、审批、clarify、usage 和 artifact 已有无界面公共 contract；对应 adapter contract 可脱离 CLI 运行。
 - `ApplicationRuntime` 独占共享会话、hydration、title、busy/queue/cancel 和 active turn 状态，并统一发布结构化应用事件；CLI slash command、终端渲染和设备交互仍归 adapter。
+- CLI background task state 只有一个 owner；共享 voice session 和 autonomous component lifecycle 位于 `VoidCube_app`，CLI 只提供终端设备、child host 和输出隔离 ports。
 - Planning 的持久化、纯投影/策略、任务状态、治理 review/recovery、Memory/Execution handoff 和自主周期已有显式 owner；副作用通过明确端口进入外部系统，已拆出的责任不得回迁。
 - endogenous drive 的主要流水线已组件化，Engine 保持稳定 facade 和 runtime state 的单一写入 owner。
 - `scripts/performance_baseline.py` 提供版本化 `voidcube.performance-baseline.v1` 基线，覆盖 import graph、CLI help、turn contract、Supervisor 初始化和 UI projection；测量使用冷进程，必要时同时记录无外部副作用的 operation timing。
@@ -613,9 +614,8 @@ DrivePerceptionBuilder
 
 ### 15.3 当前缺口
 
-- CLI host 仍包含较多终端、设备、Agent 生命周期和 adapter 组合 wiring，属于 Stage 6 的收口范围，不再拥有共享 session/turn 真相。
 - `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
-- Endogenous 尚缺最终等价全链路验收；全量测试、发行物验证和最终性能复测仍未完成，因此不能进入 Windows adapter 实施。
+- 全量测试、发行物验证和最终性能复测仍未完成；Stage 6 尚未收口，因此不能进入 Windows adapter 实施。
 
 ### 15.4 验证基线
 
@@ -625,7 +625,5 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **Stage 5 验收**：完成 Endogenous 等价全链路验证，确认没有旧 helper、双写或回迁入口后再标记完成。
-2. **Stage 6 CLI adapter 收口**：完成 TUI application、语音设备、后台任务和 autonomous host 的显示/设备/共享业务边界。
-3. **Stage 6 Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
-4. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。
+1. **Stage 6 Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
+2. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。

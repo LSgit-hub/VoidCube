@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from systems.supervisor.endogenous_candidate_pipeline import (
-    EndogenousTaskCandidate as _EndogenousTaskCandidate,
-)
+from systems.supervisor.endogenous_candidate_pipeline import EndogenousTaskCandidate
 from systems.supervisor.endogenous_materialization import (
     materialize_lm_proposals_for_deliberation,
 )
@@ -12,9 +10,7 @@ from systems.supervisor.endogenous_candidate_stream import (
     assemble_prepared_candidate_stream,
     prepare_candidate_stream,
 )
-from systems.supervisor.endogenous_drive_models import (
-    DriveDeliberationReport,
-)
+from systems.supervisor.endogenous_drive_models import DriveDeliberationReport
 from systems.supervisor.endogenous_drive_context import (
     build_drive_context,
     get_shell_slot_meta,
@@ -35,9 +31,7 @@ from systems.supervisor.endogenous_meta_cognition import (
 from systems.supervisor.endogenous_self_model import build_recent_reference_alignment
 from systems.supervisor.endogenous_research import build_external_research_evidence
 from systems.supervisor.endogenous_shell_profile import build_shell_body_profile
-from systems.supervisor.endogenous_evidence import (
-    normalize_recent_learning_evidence,
-)
+from systems.supervisor.endogenous_evidence import normalize_recent_learning_evidence
 from systems.supervisor.endogenous_proposals import (
     execute_lm_task_generation_from_runtime_config,
     is_lm_task_generation_enabled,
@@ -129,7 +123,7 @@ class EndogenousDriveEngine:
         max_candidates: int = 3,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[_EndogenousTaskCandidate]:
+    ) -> List[EndogenousTaskCandidate]:
         drive_input = normalize_drive_input(drive_input)
         existing_keys = set(existing_drive_keys)
         candidates = self._candidate_stream(
@@ -157,7 +151,7 @@ class EndogenousDriveEngine:
         existing_keys: set[str] = None,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[_EndogenousTaskCandidate]:
+    ) -> List[EndogenousTaskCandidate]:
         if existing_keys is None:
             existing_keys = set()
         preparation = prepare_candidate_stream(
@@ -193,7 +187,7 @@ class EndogenousDriveEngine:
         self_learning_plan: Dict[str, Any],
         autonomous_improvement_plan: Dict[str, Any],
         proposals_override: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[_EndogenousTaskCandidate]:
+    ) -> List[EndogenousTaskCandidate]:
         drive_input = normalize_drive_input(drive_input)
         service_runtime = getattr(self.config, "service_runtime", None)
         if not is_lm_task_generation_enabled(service_runtime):

@@ -108,6 +108,36 @@ def test_tasks_handler_falls_back_to_background_summary():
     assert "Summarize the repo" in output[0]
 
 
+def test_background_task_state_is_the_only_tracking_owner():
+    state = BackgroundTaskState()
+    thread = SimpleNamespace(name="bg-task-one", is_alive=lambda: True)
+    state.record_info(
+        "one",
+        {
+            "task_num": 4,
+            "prompt_preview": "Inspect lifecycle",
+            "started_at": 180.0,
+        },
+    )
+    state.register_thread("one", thread)
+
+    assert state.has_running_tasks() is True
+    assert state.active_snapshots() == (
+        BackgroundTaskSnapshot(
+            task_id="one",
+            thread_name="bg-task-one",
+            task_num=4,
+            prompt_preview="Inspect lifecycle",
+            started_at=180.0,
+        ),
+    )
+
+    state.finish("one")
+
+    assert state.has_running_tasks() is False
+    assert state.active_snapshots() == ()
+
+
 def test_process_command_routes_tasks(monkeypatch):
     called = {"tasks": 0}
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
@@ -234,8 +264,6 @@ def _capture_agent(agent, kwargs):
 def _background_test_app():
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
     app._background_task_state = BackgroundTaskState()
-    app._background_tasks = app._background_task_state.tasks
-    app._background_task_info = app._background_task_state.info
     app._ensure_runtime_credentials = lambda: True
     app._resolve_turn_agent_config = lambda _prompt: {
         "model": "safe-model",

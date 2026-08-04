@@ -521,61 +521,20 @@ class Tier1ToTier2Bridge:
     def _build_pipeline(self):
         """Build ChroniclePipeline — LLM-first with heuristic fallback.
 
-        LLM credentials are resolved by
-        ``memai.model_config.resolve_mem_llm_client`` — the same source
-        the supervisor's endogenous drive and the rest of
-        ``MemoryService`` use, so the model selection is consistent
-        across all Mem LLM callers and is controlled entirely by the
-        CLI ``/api`` command's writes to ``memory.llm.*``.
+        Uses the shared ``llm_extraction.build_llm_first_pipeline`` so the
+        LLM extraction result is cached by (task, model, input hash), bounding
+        the cost of re-compressing the same turn batch. LLM credentials are
+        resolved by ``memai.model_config.resolve_mem_llm_client`` (the
+        ``extraction`` role) — the same source the supervisor and the rest of
+        ``MemoryService`` use, so the model selection is consistent and
+        controlled entirely by the CLI ``/api`` command's ``memory.llm.*``.
         """
         if self.pipeline_factory is not None:
             return self.pipeline_factory()
 
-        from memai.pipeline import ChroniclePipeline
+        from systems.memory.llm_extraction import build_llm_first_pipeline
 
-        try:
-            from memai.model_config import resolve_mem_llm_client
-            llm_client, _ = resolve_mem_llm_client(role="default")
-        except Exception:
-            llm_client = None
-
-        if llm_client is None:
-            return ChroniclePipeline()
-
-        try:
-            from memai.extraction import EventExtractor, LLMEventExtractionBackend
-            from memai.scholar import LLMScholarBackend
-
-            class _LLMExtractionAdapter:
-                def __init__(self, llm):
-                    self._llm = llm
-                def extract_events(self, turns):
-                    turn_texts = [f"[{t.turn_id}] {t.speaker}: {t.text}" for t in turns]
-                    prompt = (
-                        "Extract memory-worthy events from the conversation. "
-                        "Output JSON array with: title, summary, event_kind, "
-                        "importance, confidence, topics, entities, source_turns.\n\n"
-                        + "\n".join(turn_texts)
-                    )
-                    result = self._llm.complete_json(
-                        system_prompt="You are a precise memory extraction assistant.",
-                        user_payload={"conversation": prompt},
-                        task="extractor.events",
-                    )
-                    if isinstance(result, list):
-                        return result
-                    if isinstance(result, dict):
-                        return result.get("events") or result.get("result") or []
-                    return []
-
-            extraction_backend = LLMEventExtractionBackend(client=_LLMExtractionAdapter(llm_client))  # type: ignore[arg-type]
-            scholar_backend = LLMScholarBackend(client=llm_client)
-            return ChroniclePipeline(
-                event_extractor=EventExtractor(backend=extraction_backend),
-                scholar_backend=scholar_backend,
-            )
-        except Exception:
-            return ChroniclePipeline()
+        return build_llm_first_pipeline(self.db_path, role="extraction")
 
     def _build_tier2_output(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Convert turns to TranscriptTurn and feed into ChroniclePipeline."""

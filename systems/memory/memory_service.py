@@ -803,6 +803,9 @@ class MemoryService:
         from systems.memory.entity_graph import setup_entity_graph
 
         setup_entity_graph(conn)
+        from systems.memory.llm_cache import setup_llm_cache
+
+        setup_llm_cache(conn)
         seeded = ensure_founding_memories(conn)
         released_revisions = reconcile_released_identity_revisions(conn)
 
@@ -1171,20 +1174,46 @@ class MemoryService:
         level_names = {0: "事件", 1: "场景", 2: "弧线", 3: "纪元", 4: "终章"}
         from_name = level_names.get(from_level, str(from_level))
         to_name = level_names.get(to_level, str(to_level))
+        topics_text = ", ".join(topics[:5]) if topics else "通用"
 
-        # Try LLM via the unified resolver
+        # Try LLM via the unified resolver (summarization role; cached).
         try:
-            client, _ = self._resolve_mem_llm_client()
+            from systems.memory.llm_cache import (
+                build_cache_key,
+                open_cached,
+                store_cached,
+            )
+
+            client, model = self._resolve_mem_llm_client(role="summarization")
             if client is not None:
                 prompt = (
                     f"将以下{from_name}级别的记忆升级为{to_name}级别的摘要。\n"
                     f"原始标题: {title}\n"
                     f"原始摘要: {summary}\n"
-                    f"主题: {', '.join(topics[:5]) if topics else '通用'}\n\n"
+                    f"主题: {topics_text}\n\n"
                     f"{to_name}级别的摘要应该更抽象、更关注长期意义和结构性变化，"
                     f"而不是具体细节。保留核心事实但提升抽象层次。\n"
                     f"用中文输出JSON: {{\"title\": \"...\", \"summary\": \"...\"}}"
                 )
+                input_text = (
+                    f"{mem_id}|{from_level}|{to_level}|{title}|{summary}|{topics_text}"
+                )
+                cache_key = build_cache_key("escalate", model, input_text)
+                cached = None
+                try:
+                    cached = open_cached(self._db_path, cache_key)
+                except Exception:
+                    cached = None
+                if cached is not None and isinstance(cached, dict):
+                    cached_title = str(cached.get("title", "")).strip()
+                    cached_summary = str(cached.get("summary", "")).strip()
+                    if cached_title and cached_summary:
+                        logger.info(
+                            "Cached LLM escalated %s: %s→%s (%s→%s)",
+                            mem_id, from_name, to_name, title[:40], cached_title[:40],
+                        )
+                        return cached_title, cached_summary
+
                 result = client.complete_json(
                     system_prompt=(
                         "你是长期记忆的编年史学者。你的任务是将低层记忆升级为更高抽象层次。"
@@ -1197,6 +1226,17 @@ class MemoryService:
                     llm_title = str(result.get("title", "")).strip()
                     llm_summary = str(result.get("summary", "")).strip()
                     if llm_title and llm_summary:
+                        try:
+                            store_cached(
+                                self._db_path,
+                                cache_key=cache_key,
+                                task="escalate",
+                                model=model,
+                                input_text=input_text,
+                                result=result,
+                            )
+                        except Exception:
+                            pass
                         logger.info(
                             "LLM escalated %s: %s→%s (%s→%s)",
                             mem_id, from_name, to_name, title[:40], llm_title[:40],
@@ -1223,13 +1263,30 @@ class MemoryService:
         and Tier 2 compression.
         """
         try:
-            client, _ = self._resolve_mem_llm_client()
+            from systems.memory.llm_cache import (
+                build_cache_key,
+                open_cached,
+                store_cached,
+            )
+
+            client, model = self._resolve_mem_llm_client()
             if client is None:
                 return False  # No LLM → purge (safe: entries are >2 years old)
+            topics_text = ", ".join(topics[:5]) if topics else "无"
+            input_text = f"{mem_id}|{title}|{summary}|{topics_text}"
+            cache_key = build_cache_key("purge_review", model, input_text)
+            cached = None
+            try:
+                cached = open_cached(self._db_path, cache_key)
+            except Exception:
+                cached = None
+            if cached is not None and isinstance(cached, dict) and "keep" in cached:
+                return bool(cached.get("keep", False))
+
             prompt = (
                 f"以下是一条即将被永久删除的长期记忆（超过730天）。"
                 f"判断是否具有持久历史价值应保留。\n"
-                f"标题: {title}\n摘要: {summary}\n主题: {', '.join(topics[:5]) if topics else '无'}\n"
+                f"标题: {title}\n摘要: {summary}\n主题: {topics_text}\n"
                 f"重大决策/架构转折/身份定义 → 保留。过时进度细节 → 删除。"
                 f"输出JSON: {{\"keep\": true/false, \"reason\": \"...\"}}"
             )
@@ -1239,6 +1296,17 @@ class MemoryService:
                 task="scholar.revision",
             )
             if isinstance(result, dict):
+                try:
+                    store_cached(
+                        self._db_path,
+                        cache_key=cache_key,
+                        task="purge_review",
+                        model=model,
+                        input_text=input_text,
+                        result=result,
+                    )
+                except Exception:
+                    pass
                 return bool(result.get("keep", False))
         except Exception:
             pass
@@ -1857,15 +1925,19 @@ class MemoryService:
             "runtime_identity_changed": False,
         }
 
-    def _resolve_mem_llm_client(self):
-        """Resolve a configured Mem LLM client.
+    def _resolve_mem_llm_client(self, *, role: str = "default"):
+        """Resolve a configured Mem LLM client for a Mem role.
 
         Thin pass-through to the canonical resolver at
         ``memai.model_config.resolve_mem_llm_client``.  All resolution
-        logic (memory.llm.* priority,
+        logic (memory.llm.* priority, role overrides,
         provider credential lookup, OpenAICompatibleLLMClient construction) lives in
         one place inside the memai package; this method is just a
         convenient accessor.
+
+        ``role`` picks the ``memory.llm.roles.*`` override (extraction,
+        summarization, ...) and falls back to the default config when the role
+        has no override.
 
         Returns ``(client, model_name)``.  ``client`` is ``None`` when
         no API key is available; callers must degrade to heuristic /
@@ -1873,7 +1945,7 @@ class MemoryService:
         """
         try:
             from memai.model_config import resolve_mem_llm_client
-            return resolve_mem_llm_client(role="default")
+            return resolve_mem_llm_client(role=role)
         except Exception:
             return None, ""
 
@@ -3139,7 +3211,7 @@ class MemoryService:
     def _build_compression_pipeline(self):
         """Build ChroniclePipeline — LLM-first with explicit degraded fallback.
 
-        When LLM is healthy: uses LLMEventExtractionBackend + LLMScholarBackend.
+        When LLM is healthy: uses cached LLM extraction + LLM scholar.
         When LLM is degraded: falls back to heuristic (keyword-based).
         Caller should check self._llm_healthy to decide whether to proceed.
 
@@ -3149,77 +3221,14 @@ class MemoryService:
         compression, escalation, and purge review.
         """
         from memai.pipeline import ChroniclePipeline
-        from memai.extraction import (
-            EventExtractor,
-            LLMEventExtractionBackend,
-        )
-        from memai.scholar import LLMScholarBackend
 
         if not self._llm_healthy:
             logger.warning("LLM unhealthy — using heuristic compression (degraded mode)")
             return ChroniclePipeline()
 
-        llm_client, model = self._resolve_mem_llm_client()
-        if llm_client is None:
-            logger.warning("No LLM API key — using heuristic compression")
-            return ChroniclePipeline()
+        from systems.memory.llm_extraction import build_llm_first_pipeline
 
-        try:
-            # LLMEventExtractionBackend needs an LLMExtractionClient protocol;
-            # wrap OpenAICompatibleLLMClient into an adapter
-            class LLMExtractionAdapter:
-                """Adapt OpenAICompatibleLLMClient → LLMExtractionClient protocol."""
-                def __init__(self, llm):
-                    self._llm = llm
-
-                def extract_events(self, turns):
-                    """Call LLM to extract structured events from conversation turns."""
-                    turn_texts = [
-                        f"[{t.turn_id}] {t.speaker}: {t.text}"
-                        for t in turns
-                    ]
-                    prompt = (
-                        "Extract memory-worthy events from the following conversation. "
-                        "For each event, output JSON with: title, summary, event_kind "
-                        "(decision|progress|blocker|shift|completion|conflict|correction), "
-                        "importance (0-1), confidence (0-1), topics (list), entities (list), "
-                        "source_turns (list of turn_ids), impact_scope (local|thread|arc|epoch).\n\n"
-                        + "\n".join(turn_texts)
-                    )
-                    result = self._llm.complete_json(
-                        system_prompt=(
-                            "You are a precise memory extraction assistant. "
-                            "Extract only genuinely meaningful events — ignore greetings, "
-                            "filler, and trivial remarks.  Output a JSON array of event objects."
-                        ),
-                        user_payload={"conversation": prompt},
-                        task="extractor.events",
-                    )
-                    if isinstance(result, list):
-                        return result
-                    if isinstance(result, dict):
-                        items = result.get("events") or result.get("result") or []
-                        return items if isinstance(items, list) else [result]
-                    return []
-
-            extraction_client = LLMExtractionAdapter(llm_client)
-            extraction_backend = LLMEventExtractionBackend(client=extraction_client)  # type: ignore[arg-type]
-            scholar_backend = LLMScholarBackend(client=llm_client)
-
-            pipeline = ChroniclePipeline(
-                event_extractor=EventExtractor(backend=extraction_backend),
-                scholar_backend=scholar_backend,
-            )
-            logger.info(
-                "LLM compression pipeline built: model=%s extraction=llm scholar=llm",
-                model,
-            )
-            return pipeline
-        except Exception as exc:
-            logger.warning(
-                "Failed to build LLM compression pipeline: %s; falling back to heuristic", exc
-            )
-            return ChroniclePipeline()
+        return build_llm_first_pipeline(self._db_path, role="extraction")
 
     async def tier1_stats(
         self,

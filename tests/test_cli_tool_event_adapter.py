@@ -19,7 +19,6 @@ def _host(**overrides):
         "_autonomous_gate_active": False,
         "_current_autonomous_task": None,
         "_inline_diffs_enabled": False,
-        "_voice_mode": False,
         "tool_progress_mode": "off",
         "_last_scrollback_tool": "",
         "_should_emit_scrollback_output": lambda: True,

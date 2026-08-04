@@ -1,0 +1,311 @@
+{
+  "format": "voidcube.memory.longmemeval-zh",
+  "version": 1,
+  "schema_note": "LongMemEval-schema (arXiv 2410.10813). Instances are conversations + questions; evidence turns carry has_answer. date_specs are relative so the subset never goes stale; real LongMemEval data uses absolute haystack_dates and is consumed by the same harness.",
+  "instances": [
+    {
+      "question_id": "pref-browser",
+      "question_type": "single-session-preference",
+      "question": "用户最喜欢哪个浏览器?",
+      "answer": "Firefox。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我最常用的浏览器是 Firefox。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "pref-language",
+      "question_type": "single-session-preference",
+      "question": "用户写代码时偏好什么语言?",
+      "answer": "Python。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我写 Python 比写别的顺手。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "pref-notification",
+      "question_type": "single-session-preference",
+      "question": "用户要求晚上几点后不要被打扰?",
+      "answer": "晚上十点后。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "晚上十点之后请勿推送通知。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "multi-project-name",
+      "question_type": "multi-session",
+      "question": "之前提到的那个新项目叫什么名字?",
+      "answer": "VoidCube。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"offset_days": 30}, {"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我准备把新项目命名为 VoidCube。", "has_answer": true}
+        ],
+        [
+          {"role": "user", "content": "今天天气不错,项目的事我们明天再聊。"}
+        ]
+      ]
+    },
+    {
+      "question_id": "multi-restaurant",
+      "question_type": "multi-session",
+      "question": "用户常去的那家餐厅叫什么?",
+      "answer": "蜀香阁。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"offset_days": 20}, {"offset_days": 1}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我常去的那家川菜馆叫蜀香阁。", "has_answer": true}
+        ],
+        [
+          {"role": "user", "content": "蜀香阁的毛血旺不错。"}
+        ]
+      ]
+    },
+    {
+      "question_id": "multi-stack",
+      "question_type": "multi-session",
+      "question": "用户上次会话里说了用什么语言?",
+      "answer": "Go。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"offset_days": 15}, {"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "上次聊到,我现在主要写 Go。", "has_answer": true}
+        ],
+        [
+          {"role": "user", "content": "这周先把手头的 Python 脚本修完。"}
+        ]
+      ]
+    },
+    {
+      "question_id": "temp-yesterday",
+      "question_type": "temporal-reasoning",
+      "question": "昨天确定了什么发布策略?",
+      "answer": "发布窗口定在周五晚上十点。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"calendar": "yesterday"}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "昨天确认发布窗口定在周五晚上十点。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "temp-last-month",
+      "question_type": "temporal-reasoning",
+      "question": "上个月做的数据库迁移决定是什么?",
+      "answer": "迁移前先做完整备份。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"calendar": "last_month"}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "上个月我们决定迁移前先做完整备份。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "temp-this-week-plan",
+      "question_type": "temporal-reasoning",
+      "question": "用户本周早些时候对日志保留说了什么?",
+      "answer": "改成 30 天。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"calendar": "this_week"}, {"calendar": "today"}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "本周早些时候,日志保留时间我打算改成 30 天。", "has_answer": true}
+        ],
+        [
+          {"role": "user", "content": "日志保留时间的讨论先放一放。"}
+        ]
+      ]
+    },
+    {
+      "question_id": "update-runtime",
+      "question_type": "knowledge-update",
+      "question": "用户现在用什么容器运行时?",
+      "answer": "podman。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"offset_days": 30}, {"offset_days": 0}],
+      "answer_session_ids": ["s1"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "容器运行时我用 docker。"}
+        ],
+        [
+          {"role": "user", "content": "我现在统一用 podman 了。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "update-framework",
+      "question_type": "knowledge-update",
+      "question": "项目现在用什么框架?",
+      "answer": "React。",
+      "haystack_session_ids": ["s0", "s1"],
+      "date_specs": [{"offset_days": 20}, {"offset_days": 1}],
+      "answer_session_ids": ["s1"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "项目框架我们用的是 Vue。"}
+        ],
+        [
+          {"role": "user", "content": "我们改用 React 了。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "update-deploy",
+      "question_type": "knowledge-update",
+      "question": "现在部署方案是什么?",
+      "answer": "还是用回 Swarm。",
+      "haystack_session_ids": ["s0", "s1", "s2"],
+      "date_specs": [{"offset_days": 40}, {"offset_days": 10}, {"offset_days": 0}],
+      "answer_session_ids": ["s2"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "部署方案就用 Docker Swarm。"}
+        ],
+        [
+          {"role": "user", "content": "先切回 Compose 看看。"}
+        ],
+        [
+          {"role": "user", "content": "还是用回 Swarm 吧。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "user-move",
+      "question_type": "single-session-user",
+      "question": "用户最近要做什么?",
+      "answer": "下周搬去杭州。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我下周就要搬去杭州了。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "user-blocker",
+      "question_type": "single-session-user",
+      "question": "用户当前遇到了什么问题?",
+      "answer": "卡在一个报错上。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "现在卡在一个报错上,查了一下午。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "user-preferred-name",
+      "question_type": "single-session-user",
+      "question": "用户希望被怎么称呼?",
+      "answer": "River。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "以后叫我 River 就好。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "assistant-log-rotation",
+      "question_type": "single-session-assistant",
+      "question": "助手提议日志多久轮转一次?",
+      "answer": "每 7 天一次。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "assistant", "content": "我可以帮你把日志轮转配置成每 7 天一次。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "assistant-risk-warning",
+      "question_type": "single-session-assistant",
+      "question": "助手提醒了什么风险?",
+      "answer": "直接改生产库有风险。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "assistant", "content": "注意:直接改生产库有风险。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "assistant-backup-plan",
+      "question_type": "single-session-assistant",
+      "question": "助手建议什么时候做备份?",
+      "answer": "每次迁移前。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": ["s0"],
+      "haystack_sessions": [
+        [
+          {"role": "assistant", "content": "建议每次数据库迁移前都做一次备份。", "has_answer": true}
+        ]
+      ]
+    },
+    {
+      "question_id": "abs-favorite-color_abs",
+      "question_type": "abstention",
+      "question": "用户最喜欢的颜色是什么?",
+      "answer": "无法从记忆中得知。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": [],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "用户喜欢喝咖啡,不喜欢太甜的。"}
+        ]
+      ]
+    },
+    {
+      "question_id": "abs-sibling_abs",
+      "question_type": "abstention",
+      "question": "用户有个妹妹吗?",
+      "answer": "记忆中只提到过弟弟,无法确认妹妹。",
+      "haystack_session_ids": ["s0"],
+      "date_specs": [{"offset_days": 0}],
+      "answer_session_ids": [],
+      "haystack_sessions": [
+        [
+          {"role": "user", "content": "我弟弟在深圳工作。"}
+        ]
+      ]
+    }
+  ]
+}

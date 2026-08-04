@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
-from VoidCube_cli.voice_tts_adapter import VoiceTtsAdapter
+from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,7 @@ class VoiceRecordingPorts:
     emit: Callable[[str], None]
     enqueue_input: Callable[[str], None]
     clear_attached_images: Callable[[], None]
-    voice: VoiceTtsAdapter | None = None
+    voice: VoiceSessionRuntime | None = None
 
 
 def start_terminal_voice_recording(ports: VoiceRecordingPorts) -> None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 from threading import Event
 from types import SimpleNamespace
 
-from VoidCube_cli import embedded_autonomous_runtime as runtime_module
-from VoidCube_cli.embedded_autonomous_runtime import (
-    EmbeddedAutonomousComponentRuntime,
-    EmbeddedAutonomousRuntimePorts,
+from VoidCube_app import autonomous_component_runtime as runtime_module
+from VoidCube_app.autonomous_component_runtime import (
+    AutonomousComponentRuntime,
+    AutonomousComponentRuntimePorts,
 )
 
 
@@ -15,7 +15,7 @@ def _ports(calls, *, host):
     stored_threads = []
     executor = SimpleNamespace(poll_workflow=lambda: calls.append("poll"))
 
-    ports = EmbeddedAutonomousRuntimePorts(
+    ports = AutonomousComponentRuntimePorts(
         get_component_host=lambda: host,
         ensure_component_host=lambda: calls.append("ensure") or host,
         get_component_thread=lambda: None,
@@ -58,11 +58,11 @@ def test_component_runtime_delegates_start_to_one_loop_owner(monkeypatch):
 
     monkeypatch.setattr(
         runtime_module,
-        "start_embedded_autonomous_component_loop",
+        "start_autonomous_component_loop",
         start_loop,
     )
 
-    assert EmbeddedAutonomousComponentRuntime(ports).start() is True
+    assert AutonomousComponentRuntime(ports).start() is True
     assert calls == ["ensure", ("active", True), "runtime", "loop"]
     assert len(stored_threads) == 1
     assert captured[0].poll_workflow is not None
@@ -74,12 +74,12 @@ def test_component_runtime_stop_uses_existing_host_without_creating_one(monkeypa
     ports, _stop_event, _stored_threads = _ports(calls, host=host)
     monkeypatch.setattr(
         runtime_module,
-        "stop_embedded_autonomous_component",
+        "stop_autonomous_component",
         lambda stop_ports, *, interrupt: calls.append(
             ("stop", interrupt, stop_ports.deactivate_component_host())
         ),
     )
 
-    EmbeddedAutonomousComponentRuntime(ports).stop(interrupt=True)
+    AutonomousComponentRuntime(ports).stop(interrupt=True)
 
     assert calls == ["deactivate", ("stop", True, True)]

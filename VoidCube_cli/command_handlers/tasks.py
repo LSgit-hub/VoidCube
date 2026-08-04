@@ -5,16 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
+from VoidCube_cli.background_task_runtime import BackgroundTaskSnapshot
 from VoidCube_cli.command_router import ParsedCliCommand
-
-
-@dataclass(frozen=True, slots=True)
-class BackgroundTaskSnapshot:
-    task_id: str
-    thread_name: str
-    task_num: int | None
-    prompt_preview: str
-    started_at: float
 
 
 @dataclass(frozen=True, slots=True)

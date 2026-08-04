@@ -1435,7 +1435,7 @@ class PlanningRuntimeMixin:
             persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
             load_governance_events=self._endogenous_governance_state_persistence_service.load_governance_events,
             build_cognition_state=self._endogenous_cognition_state_assembly_service.build,
-            record_ui_activity=self._record_supervisor_ui_activity,
+            record_ui_activity=self._ui_runtime.record_activity,
             build_response_fields=self._build_drive_input_response_fields,
             drive_posture_from_deliberation=self._drive_posture_signal_from_deliberation,
             core_values=CORE_VALUES,

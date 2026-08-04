@@ -517,7 +517,7 @@ async def test_supervisor_health_degrades_when_body_manifest_is_missing(tmp_path
 async def test_supervisor_room_state_exposes_healthy_body_integrity(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     body_status = state["body_status"]
     assert body_status["integrity"]["healthy"] is True
@@ -535,7 +535,7 @@ async def test_supervisor_room_state_projects_body_manifest_violation_to_slot_ca
     manifest_path = supervisor._body_registry.slot_worktree_manifest_path("slot-A")
     manifest_path.unlink()
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     body_status = state["body_status"]
     violations = body_status["integrity"]["violations"]
@@ -556,7 +556,7 @@ async def test_supervisor_room_state_keeps_unreadable_registry_diagnostic_read_o
     supervisor = _make_supervisor(tmp_path)
     supervisor._body_registry.registry_path.write_text("{", encoding="utf-8")
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     health = await supervisor.health_check()
 
     body_status = state["body_status"]
@@ -1140,7 +1140,7 @@ async def test_supervisor_evolution_promotion_audit_is_fixed_read_only_projectio
         ),
     )
 
-    audit = await supervisor.get_supervisor_evolution_promotion_audit(limit=25)
+    audit = await supervisor._ui_runtime.get_evolution_promotion_audit(limit=25)
 
     assert requests[0] == (
         "http://127.0.0.1:6000/api/mem/promotions",
@@ -1233,7 +1233,7 @@ async def test_supervisor_evolution_promotion_candidates_are_fixed_projection(
         SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
     )
 
-    result = await supervisor.get_supervisor_evolution_promotion_candidates(limit=20)
+    result = await supervisor._ui_runtime.get_evolution_promotion_candidates(limit=20)
 
     assert captured["url"] == "http://127.0.0.1:6000/api/mem/promotion-candidates"
     assert captured["params"] == {
@@ -1291,7 +1291,7 @@ async def test_supervisor_owner_consent_ignores_browser_scope_and_actor(
         SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
     )
 
-    result = await supervisor.consent_supervisor_evolution_promotion_candidate(
+    result = await supervisor._ui_runtime.consent_evolution_promotion_candidate(
         "candidate-1",
         {
             "approved": True,
@@ -1490,7 +1490,7 @@ async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_gove
             "decision_id": "decision-runtime-1",
         },
     )
-    supervisor._record_supervisor_ui_activity(
+    supervisor._ui_runtime.record_activity(
         "trace_marker",
         scene="learning",
         summary="来自监督者活动的轨迹标记。",
@@ -1967,14 +1967,14 @@ def test_supervisor_room_ui_records_bounded_activity_timeline(tmp_path):
     )
     supervisor = Supervisor(config)
 
-    supervisor._record_supervisor_ui_activity("first", summary="第一条事件")
-    supervisor._record_supervisor_ui_activity("second", summary="第二条事件")
-    supervisor._record_supervisor_ui_activity("third", summary="第三条事件")
+    supervisor._ui_runtime.record_activity("first", summary="第一条事件")
+    supervisor._ui_runtime.record_activity("second", summary="第二条事件")
+    supervisor._ui_runtime.record_activity("third", summary="第三条事件")
 
-    timeline = supervisor._recent_supervisor_ui_activity(limit=10)
+    timeline = supervisor._ui_runtime.recent_activity(limit=10)
     assert [event["event_type"] for event in timeline] == ["third", "second"]
     assert timeline[0]["summary"] == "第三条事件"
-    persisted = supervisor._supervisor_ui_activity_path.read_text(encoding="utf-8")
+    persisted = supervisor._ui_runtime.activity_path.read_text(encoding="utf-8")
     assert "third" in persisted
     assert "first" not in persisted
 
@@ -1985,21 +1985,21 @@ def test_supervisor_room_ui_restores_activity_timeline_from_runtime_store(tmp_pa
         update={"ui_activity_buffer_size": 3}
     )
     first = Supervisor(config)
-    first._record_supervisor_ui_activity("remembered", summary="已持久化事件")
+    first._ui_runtime.record_activity("remembered", summary="已持久化事件")
 
     second = Supervisor(config)
-    timeline = second._recent_supervisor_ui_activity(limit=10)
+    timeline = second._ui_runtime.recent_activity(limit=10)
 
     assert timeline[0]["event_type"] == "remembered"
     assert timeline[0]["summary"] == "已持久化事件"
-    assert second._supervisor_ui_activity_path == first._supervisor_ui_activity_path
+    assert second._ui_runtime.activity_path == first._ui_runtime.activity_path
 
 
 @pytest.mark.unit
 def test_supervisor_room_ui_activity_is_mirrored_to_governance_history(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    event = supervisor._record_supervisor_ui_activity(
+    event = supervisor._ui_runtime.record_activity(
         "task_decided",
         scene="execution",
         summary="裁决已镜像到治理历史",
@@ -2030,7 +2030,7 @@ async def test_supervisor_room_state_read_does_not_mirror_observation_to_governa
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
     before = len(supervisor._governor.list_history(limit=100))
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     after = supervisor._governor.list_history(limit=100)
     assert state["status"] == "ok"
@@ -2050,7 +2050,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     assert state["scene"] == "maintenance"
     judgement = _observation_section(state["autonomous_observation"], "api_b_judgement")
@@ -2095,7 +2095,7 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
         }
     )  # type: ignore[method-assign]
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     candidate_section = _observation_section(state["autonomous_observation"], "api_b_candidates")
     assert candidate_section["items"] == []
@@ -2122,7 +2122,7 @@ async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_l
     supervisor._fetch_tier1_stats = AsyncMock(side_effect=RuntimeError("memory down"))  # type: ignore[method-assign]
     supervisor.get_runtime_timeline = AsyncMock(side_effect=RuntimeError("timeline down"))  # type: ignore[method-assign]
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     runtime = state["autonomous_observation"]["runtime"]
     assert runtime["user_chain_signal"]["active_sessions"] == 0
@@ -2220,7 +2220,7 @@ async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     duplicate = _find_autonomous_observation_task(
         state,
         title="Duplicate learning branch",
@@ -2286,7 +2286,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     task = _find_autonomous_observation_task(
         state,
         task_id=task_id,
@@ -2327,7 +2327,7 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     task = _find_autonomous_observation_task(
         state,
         task_id=task_id,
@@ -2408,7 +2408,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
         {"decision": "approve", "reason": "first agent task"},
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     observation = state["autonomous_observation"]
     loop_stage_keys = [item["stage_key"] for item in observation["loop"]["stage_cards"]]
     group_keys = [group["key"] for group in observation["chain"]["segments"]]
@@ -2606,7 +2606,7 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
         reason="claimed by API-A executor",
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     observation = state["autonomous_observation"]
     api_a_handoff = _observation_section(observation, "api_a_handoff")
     api_a_execution = _observation_loop_stage(observation, "api_a_execution")
@@ -2654,7 +2654,7 @@ async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tm
         reason="claimed by API-A executor",
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     assert state["scene"] == "handoff"
     assert "自主交接中" in state["title"]
@@ -2680,7 +2680,7 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
             },
         }
     )
-    supervisor._record_supervisor_ui_activity(
+    supervisor._ui_runtime.record_activity(
         "endogenous_drive_evaluated",
         scene="drive",
         summary="已缓存内生驱动候选。",
@@ -2720,7 +2720,7 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     observation = state["autonomous_observation"]
 
     judgement = _observation_section(observation, "api_b_judgement")
@@ -2749,7 +2749,7 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
         }
     )
     drive_key = "creativity:self_learning:cognitive_review:memory"
-    supervisor._record_supervisor_ui_activity(
+    supervisor._ui_runtime.record_activity(
         "endogenous_drive_evaluated",
         scene="planning",
         summary="旧候选快照。",
@@ -2792,7 +2792,7 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
         reason="writeback completed",
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     observation = state["autonomous_observation"]
 
     candidates = _observation_section(observation, "api_b_candidates")
@@ -2805,13 +2805,13 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
 
 def test_latest_drive_candidate_snapshot_stops_at_newer_idle_event(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._record_supervisor_ui_activity(
+    supervisor._ui_runtime.record_activity(
         "endogenous_drive_evaluated",
         scene="planning",
         summary="旧候选快照。",
         metadata={"candidates": [{"title": "旧候选"}]},
     )
-    supervisor._record_supervisor_ui_activity(
+    supervisor._ui_runtime.record_activity(
         "endogenous_drive_idle",
         scene="idle",
         summary="本轮没有候选。",
@@ -2856,7 +2856,7 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
         reason="已完成的自主学习写回。",
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
     mem_recent = state["autonomous_observation"]["chain"]["segments"][3]["items"][0]
     mem_stage = _observation_loop_stage(state["autonomous_observation"], "mem_writeback")
@@ -2999,7 +2999,7 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     cognition = state["cognition"]
     judgement = cognition["judgement"]
     uncertainty = cognition["uncertainty"]
@@ -3063,7 +3063,7 @@ async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_r
         }
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
     observation = state["autonomous_observation"]
     recent = observation["board"]["recent_activity"]
 
@@ -3117,7 +3117,7 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
         {"decision": "approve", "reason": "creative task ready"},
     )
 
-    state = await supervisor.get_supervisor_ui_state()
+    state = await supervisor._ui_runtime.get_state()
 
     assert state["scene"] == "idle"
     assert "api_b" not in state["autonomous_observation"]
@@ -3133,14 +3133,14 @@ async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path
         "systems.supervisor.ui_state_orchestration.project_supervisor_scene",
         return_value=("planning", "Auto judgement", "Auto work is active."),
     ):
-        daily = await supervisor.get_supervisor_ui_state()
+        daily = await supervisor._ui_runtime.get_state()
 
         assert daily["stellar_mode"]["mode"] == "daily_companion"
         assert daily["scene"] == "idle"
         assert daily["title"] == "日常陪伴中"
 
         supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
-        auto = await supervisor.get_supervisor_ui_state()
+        auto = await supervisor._ui_runtime.get_state()
 
         assert auto["stellar_mode"]["mode"] == "auto_evolution"
         assert auto["scene"] == "planning"
@@ -3522,13 +3522,17 @@ def test_auto_mode_disables_voice_controls_in_supervisor_ui():
 def test_media_enqueue_replaces_current_item_and_revisions_repeat_url(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    supervisor.enqueue_media({"url": "https://example.com/song.mp3", "title": "第一次"})
-    first_revision = supervisor._current_media["_revision"]
-    supervisor.enqueue_media({"url": "https://example.com/song.mp3", "title": "第二次"})
+    supervisor._ui_runtime.enqueue_media(
+        {"url": "https://example.com/song.mp3", "title": "第一次"}
+    )
+    first_revision = supervisor._ui_runtime.current_media["_revision"]
+    supervisor._ui_runtime.enqueue_media(
+        {"url": "https://example.com/song.mp3", "title": "第二次"}
+    )
 
-    assert supervisor._current_media["title"] == "第二次"
-    assert supervisor._current_media["_revision"] == first_revision + 1
-    assert supervisor._media_revision == first_revision + 1
+    assert supervisor._ui_runtime.current_media["title"] == "第二次"
+    assert supervisor._ui_runtime.current_media["_revision"] == first_revision + 1
+    assert supervisor._ui_runtime.media_revision == first_revision + 1
 
 
 @pytest.mark.asyncio

@@ -180,8 +180,8 @@ from VoidCube_cli.command_handlers.voice import (
     VoiceCommandPorts,
     handle_voice_command,
 )
+from VoidCube_cli.background_task_runtime import BackgroundTaskSnapshot
 from VoidCube_cli.command_handlers.tasks import (
-    BackgroundTaskSnapshot,
     TaskMoveResult,
     TasksCommandPorts,
     handle_tasks_command,
@@ -574,7 +574,7 @@ def install_cli_command_execution(
                     tts_status=host._show_voice_tts_status,
                     tts_speak=host._speak_voice_tts,
                     show_status=host._show_voice_status,
-                    voice_mode_enabled=lambda: host._voice_mode,
+                    voice_mode_enabled=lambda: host._voice_state().mode,
                     emit=emit,
                 ),
             ),
@@ -866,23 +866,7 @@ def _tasks_command_ports(
         return "\n\n".join(str(manager.render_tasks_command()) for manager in managers())
 
     def background_tasks() -> tuple[BackgroundTaskSnapshot, ...]:
-        threads = getattr(host, "_background_tasks", {})
-        details = getattr(host, "_background_task_info", {})
-        snapshots: list[BackgroundTaskSnapshot] = []
-        for task_id, thread in threads.items():
-            if not thread.is_alive():
-                continue
-            info = details.get(task_id, {})
-            snapshots.append(
-                BackgroundTaskSnapshot(
-                    task_id=str(task_id),
-                    thread_name=str(getattr(thread, "name", "")),
-                    task_num=info.get("task_num"),
-                    prompt_preview=str(info.get("prompt_preview") or task_id),
-                    started_at=float(info.get("started_at") or 0.0),
-                )
-            )
-        return tuple(snapshots)
+        return tuple(host._list_background_tasks())
 
     def move(task_ref: str, *, background: bool) -> TaskMoveResult:
         for manager in managers():

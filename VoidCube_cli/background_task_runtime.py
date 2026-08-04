@@ -16,14 +16,66 @@ CompletionOutcome = Callable[[dict[str, Any] | None], tuple[bool, str, str]]
 AgentFactory = Callable[[dict[str, Any], str, dict[str, Any], bool], Any]
 
 
+@dataclass(frozen=True, slots=True)
+class BackgroundTaskSnapshot:
+    task_id: str
+    thread_name: str
+    task_num: int | None
+    prompt_preview: str
+    started_at: float
+
+
 @dataclass
 class BackgroundTaskState:
-    """Mutable tracking owned by the background runtime."""
+    """Single mutable owner for manual and scheduled background task tracking."""
 
-    tasks: dict[str, Thread] = field(default_factory=dict)
-    info: dict[str, dict[str, Any]] = field(default_factory=dict)
-    counter: int = 0
-    lock: RLock = field(default_factory=RLock)
+    _tasks: dict[str, Thread] = field(default_factory=dict)
+    _info: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _counter: int = 0
+    _lock: RLock = field(default_factory=RLock)
+
+    def next_task_number(self) -> int:
+        with self._lock:
+            self._counter += 1
+            return self._counter
+
+    def record_info(self, task_id: str, info: dict[str, Any]) -> None:
+        with self._lock:
+            self._info[task_id] = dict(info)
+
+    def register_thread(self, task_id: str, thread: Thread) -> None:
+        with self._lock:
+            self._tasks[task_id] = thread
+
+    def finish(self, task_id: str) -> None:
+        with self._lock:
+            self._tasks.pop(task_id, None)
+            self._info.pop(task_id, None)
+
+    def has_running_tasks(self) -> bool:
+        with self._lock:
+            return any(
+                callable(getattr(thread, "is_alive", None)) and thread.is_alive()
+                for thread in self._tasks.values()
+            )
+
+    def active_snapshots(self) -> tuple[BackgroundTaskSnapshot, ...]:
+        with self._lock:
+            snapshots: list[BackgroundTaskSnapshot] = []
+            for task_id, thread in self._tasks.items():
+                if not thread.is_alive():
+                    continue
+                info = self._info.get(task_id, {})
+                snapshots.append(
+                    BackgroundTaskSnapshot(
+                        task_id=task_id,
+                        thread_name=str(getattr(thread, "name", "")),
+                        task_num=info.get("task_num"),
+                        prompt_preview=str(info.get("prompt_preview") or task_id),
+                        started_at=float(info.get("started_at") or 0.0),
+                    )
+                )
+            return tuple(snapshots)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +114,7 @@ class BackgroundTaskRuntime:
         on_complete: Callable[[bool, str, str], None] | None = None,
     ) -> bool:
         state = self.ports.state
-        with state.lock:
-            state.counter += 1
-            task_num = state.counter
+        task_num = state.next_task_number()
         task_id = task_id or (
             f"bg_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
         )
@@ -82,8 +132,7 @@ class BackgroundTaskRuntime:
             ),
             "started_at": time.time(),
         }
-        with state.lock:
-            state.info[task_id] = task_info
+        state.record_info(task_id, task_info)
 
         turn_route = self.ports.resolve_agent_route(prompt)
         request_overrides = dict(turn_route.get("request_overrides") or {})
@@ -167,9 +216,7 @@ class BackgroundTaskRuntime:
                 active_agent.clear()
                 if timeout_timer is not None:
                     timeout_timer.cancel()
-                with state.lock:
-                    state.tasks.pop(task_id, None)
-                    state.info.pop(task_id, None)
+                state.finish(task_id)
                 self.ports.invalidate()
 
         thread = self.ports.thread_factory(
@@ -177,8 +224,7 @@ class BackgroundTaskRuntime:
             daemon=True,
             name=f"bg-task-{task_id}",
         )
-        with state.lock:
-            state.tasks[task_id] = thread
+        state.register_thread(task_id, thread)
         thread.start()
         return True
 

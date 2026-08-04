@@ -43,6 +43,7 @@ from VoidCube_cli.command_handlers.browser import BrowserCommandPorts
 from VoidCube_cli.command_handlers.mcp import McpCommandPorts, handle_mcp_command
 from VoidCube_cli.command_handlers.tools import ToolsCommandPorts, ToolsCommandText
 from VoidCube_cli.command_handlers.skills import SkillsCommandPorts
+from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
 from VoidCube_cli.command_handlers.tasks import TasksCommandPorts
 from VoidCube_cli.command_handlers.autonomous import AutonomousCommandPorts
 from VoidCube_cli.command_handlers.plan import PlanCommandPorts
@@ -492,7 +493,7 @@ def test_cli_process_routes_voice_through_explicit_ports() -> None:
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
-    app._voice_mode = False
+    app._voice_runtime_state = CliVoiceRuntimeState()
     app._enable_voice_mode = lambda: events.append("enable")
     app._disable_voice_mode = lambda: events.append("disable")
     app._show_voice_tts_status = lambda: events.append("tts_status")

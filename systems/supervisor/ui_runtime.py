@@ -1,17 +1,58 @@
+"""State, projection, stream, and lifecycle owner for the Supervisor web UI."""
+
 from __future__ import annotations
 
 import logging
 from collections import deque
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from systems.supervisor.ui_activity_adapters import (
+    SupervisorUIActivityContext,
+    clear_supervisor_ui_activity,
+    latest_drive_candidate_snapshot,
+    load_supervisor_ui_activity,
+    persist_supervisor_ui_activity,
+    recent_supervisor_ui_activity,
+    record_supervisor_ui_activity,
+)
 from systems.supervisor.ui_assets import load_supervisor_ui_html
-from systems.supervisor.ui_projection import (
-    default_observation_input_snapshot,
-    runtime_activity_label,
+from systems.supervisor.ui_body_status_adapters import (
+    SupervisorUIBodyStatusContext,
+    load_body_status,
+)
+from systems.supervisor.ui_identity_proxy_adapters import (
+    SupervisorUIIdentityProxyContext,
+    consent_evolution_promotion_candidate,
+    get_evolution_promotion_audit,
+    get_evolution_promotion_candidates,
+    get_identity_archive,
+    get_identity_turns,
+    verify_identity_experience,
+)
+from systems.supervisor.ui_media_state_adapters import (
+    SupervisorUIMediaStateContext,
+    enqueue_media_state,
+)
+from systems.supervisor.ui_memory_status_adapters import (
+    SupervisorUIMemoryStatusContext,
+    fetch_tier1_stats,
+)
+from systems.supervisor.ui_open_lifecycle_adapters import (
+    SupervisorUIOpenLifecycleContext,
+    maybe_open_supervisor_ui,
+)
+from systems.supervisor.ui_projection import default_observation_input_snapshot
+from systems.supervisor.ui_snapshot_adapters import (
+    SupervisorUIMemorySnapshotContext,
+    SupervisorUIObservationSnapshotContext,
+    load_memory_stats,
+    load_observation_input_snapshot,
 )
 from systems.supervisor.ui_state_orchestration import (
     SupervisorUIStateContext,
@@ -23,19 +64,6 @@ from systems.supervisor.ui_stream_adapters import (
     supervisor_state_events,
     voice_level_events,
 )
-from systems.supervisor.ui_identity_proxy_adapters import (
-    SupervisorUIIdentityProxyContext,
-    consent_evolution_promotion_candidate,
-    get_evolution_promotion_audit,
-    get_evolution_promotion_candidates,
-    get_identity_archive,
-    get_identity_turns,
-    verify_identity_experience,
-)
-from systems.supervisor.ui_memory_status_adapters import (
-    SupervisorUIMemoryStatusContext,
-    fetch_tier1_stats,
-)
 from systems.supervisor.ui_trace_adapters import (
     SupervisorUITraceContext,
     attach_recent_trace_details_to_observation,
@@ -43,96 +71,94 @@ from systems.supervisor.ui_trace_adapters import (
     load_recent_trace_details,
     recent_local_supervisor_observation_timeline,
 )
-from systems.supervisor.ui_body_status_adapters import (
-    SupervisorUIBodyStatusContext,
-    load_body_status,
-)
-from systems.supervisor.ui_snapshot_adapters import (
-    SupervisorUIObservationSnapshotContext,
-    SupervisorUIMemorySnapshotContext,
-    load_memory_stats,
-    load_observation_input_snapshot,
-)
-from systems.supervisor.ui_activity_adapters import (
-    SupervisorUIActivityContext,
-    clear_supervisor_ui_activity,
-    latest_drive_candidate_snapshot,
-    load_supervisor_ui_activity,
-    persist_supervisor_ui_activity,
-    recent_supervisor_ui_activity,
-    record_supervisor_ui_activity,
-)
-from systems.supervisor.ui_media_state_adapters import (
-    SupervisorUIMediaStateContext,
-    enqueue_media_state,
-)
-from systems.supervisor.ui_open_lifecycle_adapters import (
-    SupervisorUIOpenLifecycleContext,
-    maybe_open_supervisor_ui,
-)
 
+
+JsonDict = Dict[str, Any]
 logger = logging.getLogger("supervisor")
 
 
-class SupervisorUIMixin:
-    """内置监督者小屋 UI 与 API-B 主视角状态映射。"""
+@dataclass(frozen=True, slots=True)
+class SupervisorUIRuntimePorts:
+    runtime_root: Path
+    activity_buffer_size: int
+    legal_scenes: Collection[str]
+    record_activity_history: Callable[[JsonDict], None]
+    gateway_url: str
+    gateway_memory_headers: Callable[..., Dict[str, str]]
+    ui_event_interval_seconds: float
+    voice_realtime_status: Callable[[], JsonDict]
+    load_runtime_observation_input: Callable[[], Any]
+    inspect_body_layout: Callable[[], JsonDict]
+    load_body_slot_meta: Callable[[str], JsonDict]
+    collect_trace_records_from_tasks: Callable[..., List[JsonDict]]
+    collect_trace_records_from_supervisor_activity: Callable[..., List[JsonDict]]
+    collect_trace_records_from_governor_history: Callable[..., List[JsonDict]]
+    build_trace_timeline: Callable[..., List[JsonDict]]
+    summarize_single_trace: Callable[..., JsonDict]
+    runtime_config: Any
+    list_chain_projection_tasks: Callable[[], List[Any]]
+    serialize_chain_task: Callable[[Any], JsonDict]
+    load_cognition_state: Callable[[], JsonDict]
+    stellar_mode_status: Callable[[], JsonDict]
+    voice_status: Callable[[], JsonDict]
+    ui_enabled: bool
+    ui_auto_open: bool
+    ui_url: str
+    ui_auto_open_delay_seconds: float
 
-    def _initialize_supervisor_ui_runtime(self) -> None:
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        ).resolve()
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        self._supervisor_ui_activity_path = runtime_root / "supervisor-ui-activity.json"
-        self._supervisor_ui_events: Deque[Dict[str, Any]] = deque(
-            self._load_supervisor_ui_activity(),
-            maxlen=self.config.ui_activity_buffer_size,
+
+class SupervisorUIRuntime:
+    """Own all mutable state and HTTP-facing behavior of the web-room UI."""
+
+    def __init__(self, ports: SupervisorUIRuntimePorts) -> None:
+        self.ports = ports
+        ports.runtime_root.mkdir(parents=True, exist_ok=True)
+        self.activity_path = ports.runtime_root / "supervisor-ui-activity.json"
+        self.events: deque[JsonDict] = deque(
+            load_supervisor_ui_activity(
+                path=self.activity_path,
+                max_events=ports.activity_buffer_size,
+            ),
+            maxlen=ports.activity_buffer_size,
         )
-        self._supervisor_ui_observation_input_cache: Dict[str, Any] = {}
-        self._supervisor_ui_memory_stats_cache: Dict[str, Any] = {}
-        # 媒体播放是即时指令；revision 保证相同 URL 的重复播放也会重新推送。
-        self._current_media: Optional[Dict[str, Any]] = None
-        self._media_revision = 0
+        self.observation_input_cache: JsonDict = {}
+        self.memory_stats_cache: JsonDict = {}
+        self.current_media: JsonDict | None = None
+        self.media_revision = 0
 
-    def enqueue_media(self, media: Dict[str, Any]) -> None:
-        """将媒体项加入播放队列，Web UI 自动弹出播放器。
-
-        ``media`` 字段：
-        - url (str, 必填): 媒体 URL（YouTube/B站/直链）
-        - title (str): 标题，显示在播放器上
-        - type (str): "youtube" | "bilibili" | "audio" | "video" | "auto"
-        - auto_play (bool): 是否自动播放，默认 True
-        """
+    def enqueue_media(self, media: JsonDict) -> None:
         current = enqueue_media_state(
             context=SupervisorUIMediaStateContext(
-                current_revision=self._media_revision,
+                current_revision=self.media_revision,
                 set_revision=lambda revision: setattr(
-                    self, "_media_revision", revision
+                    self,
+                    "media_revision",
+                    revision,
                 ),
                 set_current_media=lambda value: setattr(
-                    self, "_current_media", value
+                    self,
+                    "current_media",
+                    value,
                 ),
             ),
             media=media,
         )
         logger.info("Media enqueued: %s (%s)", current.get("title"), current.get("type"))
 
-    def _record_supervisor_ui_activity(
+    def record_activity(
         self,
         event_type: str,
         *,
         scene: str = "planning",
         summary: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        from systems.supervisor.planning_runtime import SUPERVISOR_LEGAL_SCENES
-
+        metadata: JsonDict | None = None,
+    ) -> JsonDict:
         return record_supervisor_ui_activity(
             context=SupervisorUIActivityContext(
-                activity_path=self._supervisor_ui_activity_path,
-                events=self._supervisor_ui_events,
-                legal_scenes=SUPERVISOR_LEGAL_SCENES,
-                record_history=self._record_supervisor_ui_activity_history,
+                activity_path=self.activity_path,
+                events=self.events,
+                legal_scenes=self.ports.legal_scenes,
+                record_history=self.ports.record_activity_history,
             ),
             event_type=event_type,
             scene=scene,
@@ -140,281 +166,229 @@ class SupervisorUIMixin:
             metadata=metadata,
         )
 
-    def _recent_supervisor_ui_activity(self, limit: int = 20) -> List[Dict[str, Any]]:
-        return recent_supervisor_ui_activity(
-            events=getattr(self, "_supervisor_ui_events", None),
-            limit=limit,
-        )
+    def recent_activity(self, limit: int = 20) -> List[JsonDict]:
+        return recent_supervisor_ui_activity(events=self.events, limit=limit)
 
-    def _latest_drive_candidate_snapshot(self) -> List[Dict[str, Any]]:
-        return latest_drive_candidate_snapshot(
-            events=getattr(self, "_supervisor_ui_events", None)
-        )
+    def latest_drive_candidates(self) -> List[JsonDict]:
+        return latest_drive_candidate_snapshot(events=self.events)
 
-    def _load_supervisor_ui_activity(self) -> List[Dict[str, Any]]:
-        return load_supervisor_ui_activity(
-            path=getattr(self, "_supervisor_ui_activity_path", None),
-            max_events=self.config.ui_activity_buffer_size,
-        )
+    def persist_activity(self) -> None:
+        persist_supervisor_ui_activity(path=self.activity_path, events=self.events)
 
-    def _persist_supervisor_ui_activity(self) -> None:
-        persist_supervisor_ui_activity(
-            path=getattr(self, "_supervisor_ui_activity_path", None),
-            events=getattr(self, "_supervisor_ui_events", None),
-        )
+    def clear_activity(self) -> None:
+        clear_supervisor_ui_activity(path=self.activity_path, events=self.events)
 
-    def _clear_supervisor_ui_activity(self) -> None:
-        clear_supervisor_ui_activity(
-            path=getattr(self, "_supervisor_ui_activity_path", None),
-            events=getattr(self, "_supervisor_ui_events", None),
-        )
-
-    def _record_supervisor_ui_activity_history(self, event: Dict[str, Any]) -> None:
-        governor = getattr(self, "_governor", None)
-        if governor is None or not hasattr(governor, "record_supervisor_activity"):
-            return
-        try:
-            governor.record_supervisor_activity(event=event)
-        except Exception:
-            return
-
-    async def get_supervisor_ui(self) -> HTMLResponse:
+    async def get_ui(self) -> HTMLResponse:
         return HTMLResponse(load_supervisor_ui_html())
 
-    def _supervisor_ui_identity_proxy_context(
-        self,
-    ) -> SupervisorUIIdentityProxyContext:
+    def _identity_context(self) -> SupervisorUIIdentityProxyContext:
         return SupervisorUIIdentityProxyContext(
-            gateway_url=str(self.config.execution.gateway_address).rstrip("/"),
-            gateway_memory_headers=self._gateway_memory_headers,
+            gateway_url=self.ports.gateway_url,
+            gateway_memory_headers=self.ports.gateway_memory_headers,
         )
 
-    async def get_supervisor_identity_archive(self) -> Dict[str, Any]:
-        return await get_identity_archive(
-            context=self._supervisor_ui_identity_proxy_context()
-        )
+    async def get_identity_archive(self) -> JsonDict:
+        return await get_identity_archive(context=self._identity_context())
 
-    async def get_supervisor_identity_turns(self, limit: int = 20) -> Dict[str, Any]:
+    async def get_identity_turns(self, limit: int = 20) -> JsonDict:
         return await get_identity_turns(
-            context=self._supervisor_ui_identity_proxy_context(),
+            context=self._identity_context(),
             limit=limit,
         )
 
-    async def get_supervisor_evolution_promotion_audit(
-        self,
-        limit: int = 100,
-    ) -> Dict[str, Any]:
+    async def get_evolution_promotion_audit(self, limit: int = 100) -> JsonDict:
         return await get_evolution_promotion_audit(
-            context=self._supervisor_ui_identity_proxy_context(),
+            context=self._identity_context(),
             limit=limit,
         )
 
-    async def get_supervisor_evolution_promotion_candidates(
+    async def get_evolution_promotion_candidates(
         self,
         limit: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> JsonDict:
         return await get_evolution_promotion_candidates(
-            context=self._supervisor_ui_identity_proxy_context(),
+            context=self._identity_context(),
             limit=limit,
         )
 
-    async def consent_supervisor_evolution_promotion_candidate(
+    async def consent_evolution_promotion_candidate(
         self,
         candidate_id: str,
-        request: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        request: JsonDict,
+    ) -> JsonDict:
         return await consent_evolution_promotion_candidate(
-            context=self._supervisor_ui_identity_proxy_context(),
+            context=self._identity_context(),
             candidate_id=candidate_id,
             request=request,
         )
 
-    async def verify_supervisor_identity_experience(
-        self, request: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def verify_identity_experience(self, request: JsonDict) -> JsonDict:
         return await verify_identity_experience(
-            context=self._supervisor_ui_identity_proxy_context(),
+            context=self._identity_context(),
             request=request,
         )
 
-    async def get_supervisor_ui_events(self, request: Request) -> StreamingResponse:
+    async def get_events(self, request: Request) -> StreamingResponse:
         return supervisor_state_events(
             request,
-            load_state=self.get_supervisor_ui_state,
-            interval_seconds=self.config.ui_event_interval_seconds,
+            load_state=self.get_state,
+            interval_seconds=self.ports.ui_event_interval_seconds,
         )
 
-    async def get_voice_level_events(self, request: Request) -> StreamingResponse:
+    async def get_voice_levels(self, request: Request) -> StreamingResponse:
         return voice_level_events(
             request,
-            realtime_status=self._voice_manager.realtime_status,
+            realtime_status=self.ports.voice_realtime_status,
         )
 
     async def get_media_events(self, request: Request) -> StreamingResponse:
-        return media_events(
-            request,
-            current_media=lambda: self._current_media,
-        )
+        return media_events(request, current_media=lambda: self.current_media)
 
-    async def enqueue_media_endpoint(self, request: Request) -> Dict[str, Any]:
+    async def enqueue_media_endpoint(self, request: Request) -> JsonDict:
         return await enqueue_media_request(
             request,
             enqueue_media=self.enqueue_media,
-            current_revision=lambda: self._media_revision,
+            current_revision=lambda: self.media_revision,
         )
 
-    async def _load_ui_observation_input_snapshot(
+    async def _load_observation_input_snapshot(
         self,
         *,
         timeout_seconds: float = 0.8,
-    ) -> tuple[Dict[str, Any], bool]:
+    ) -> tuple[JsonDict, bool]:
         return await load_observation_input_snapshot(
             context=SupervisorUIObservationSnapshotContext(
-                load_runtime_observation_input=self.get_runtime_observation_input,
+                load_runtime_observation_input=self.ports.load_runtime_observation_input,
                 default_snapshot=default_observation_input_snapshot,
-                get_cached_snapshot=lambda: dict(
-                    getattr(self, "_supervisor_ui_observation_input_cache", {}) or {}
-                ),
+                get_cached_snapshot=lambda: dict(self.observation_input_cache),
                 set_cached_snapshot=lambda snapshot: setattr(
-                    self, "_supervisor_ui_observation_input_cache", snapshot
+                    self,
+                    "observation_input_cache",
+                    snapshot,
                 ),
             ),
             timeout_seconds=timeout_seconds,
         )
 
-    async def _load_ui_memory_stats(
+    async def _load_memory_stats(
         self,
         *,
         timeout_seconds: float = 0.8,
-    ) -> Dict[str, Any]:
+    ) -> JsonDict:
         return await load_memory_stats(
             context=SupervisorUIMemorySnapshotContext(
                 fetch_tier1_stats=self._fetch_tier1_stats,
-                get_cached_snapshot=lambda: dict(
-                    getattr(self, "_supervisor_ui_memory_stats_cache", {}) or {}
-                ),
+                get_cached_snapshot=lambda: dict(self.memory_stats_cache),
                 set_cached_snapshot=lambda snapshot: setattr(
-                    self, "_supervisor_ui_memory_stats_cache", snapshot
+                    self,
+                    "memory_stats_cache",
+                    snapshot,
                 ),
             ),
             timeout_seconds=timeout_seconds,
         )
 
-    def _load_ui_body_status(
-        self,
-        chain_history_projection: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+    def _load_body_status(self, chain_history: List[JsonDict]) -> JsonDict:
         return load_body_status(
             context=SupervisorUIBodyStatusContext(
-                inspect_layout=self._body_registry.inspect_layout,
-                load_slot_meta=self._body_registry.load_slot_meta,
+                inspect_layout=self.ports.inspect_body_layout,
+                load_slot_meta=self.ports.load_body_slot_meta,
             ),
-            chain_history_projection=chain_history_projection,
+            chain_history_projection=chain_history,
         )
 
-    async def _load_ui_observation_timeline(
-        self,
-        *,
-        limit: int = 12,
-    ) -> List[Dict[str, Any]]:
+    async def _load_observation_timeline(self, *, limit: int = 12) -> List[JsonDict]:
         try:
-            return self._recent_local_supervisor_observation_timeline(limit=limit)
+            return self.recent_local_observation_timeline(limit=limit)
         except Exception:
-            return self._recent_supervisor_ui_activity(limit=limit)
+            return self.recent_activity(limit=limit)
 
-    def _supervisor_ui_trace_context(self) -> SupervisorUITraceContext:
+    def _trace_context(self) -> SupervisorUITraceContext:
         return SupervisorUITraceContext(
-            collect_trace_records_from_tasks=self._collect_trace_records_from_tasks,
+            collect_trace_records_from_tasks=self.ports.collect_trace_records_from_tasks,
             collect_trace_records_from_supervisor_activity=(
-                self._collect_trace_records_from_supervisor_activity
+                self.ports.collect_trace_records_from_supervisor_activity
             ),
             collect_trace_records_from_governor_history=(
-                self._collect_trace_records_from_governor_history
+                self.ports.collect_trace_records_from_governor_history
             ),
-            build_trace_timeline=self._build_trace_timeline,
-            summarize_single_trace=self._summarize_single_trace,
+            build_trace_timeline=self.ports.build_trace_timeline,
+            summarize_single_trace=self.ports.summarize_single_trace,
         )
 
-    def _collect_ui_trace_records(
+    def collect_trace_records(
         self,
         *,
-        trace_id: Optional[str] = None,
+        trace_id: str | None = None,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[JsonDict]:
         return collect_ui_trace_records(
-            context=self._supervisor_ui_trace_context(),
+            context=self._trace_context(),
             trace_id=trace_id,
             limit=limit,
         )
 
-    def _recent_local_supervisor_observation_timeline(
+    def recent_local_observation_timeline(
         self,
         *,
         limit: int = 12,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[JsonDict]:
         return recent_local_supervisor_observation_timeline(
-            context=self._supervisor_ui_trace_context(),
+            context=self._trace_context(),
             limit=limit,
         )
 
-    async def get_supervisor_ui_state(self) -> Dict[str, Any]:
-        context = SupervisorUIStateContext(
-            runtime_config=getattr(self.config, "service_runtime", None),
-            list_chain_projection_tasks=self._autonomous_chain_store.list_chain_projection_tasks,
-            serialize_chain_task=self._autonomous_chain_planning_service.serialize_task,
-            latest_drive_candidates=self._latest_drive_candidate_snapshot,
-            load_observation_input_snapshot=self._load_ui_observation_input_snapshot,
-            load_memory_stats=self._load_ui_memory_stats,
-            load_observation_timeline=self._load_ui_observation_timeline,
-            load_body_status=self._load_ui_body_status,
-            attach_trace_details=self._attach_recent_trace_details_to_observation,
-            load_cognition_state=self._endogenous_governance_state_persistence_service.load_cognition_state,
-            stellar_mode_status=self._stellar_mode_status,
-            voice_status=self._voice_manager.status,
-            current_media=lambda: self._current_media,
+    async def get_state(self) -> JsonDict:
+        return await build_supervisor_ui_state(
+            context=SupervisorUIStateContext(
+                runtime_config=self.ports.runtime_config,
+                list_chain_projection_tasks=self.ports.list_chain_projection_tasks,
+                serialize_chain_task=self.ports.serialize_chain_task,
+                latest_drive_candidates=self.latest_drive_candidates,
+                load_observation_input_snapshot=self._load_observation_input_snapshot,
+                load_memory_stats=self._load_memory_stats,
+                load_observation_timeline=self._load_observation_timeline,
+                load_body_status=self._load_body_status,
+                attach_trace_details=self.attach_recent_trace_details,
+                load_cognition_state=self.ports.load_cognition_state,
+                stellar_mode_status=self.ports.stellar_mode_status,
+                voice_status=self.ports.voice_status,
+                current_media=lambda: self.current_media,
+            )
         )
-        return await build_supervisor_ui_state(context=context)
 
-
-    async def _load_recent_trace_details(
+    async def load_recent_trace_details(
         self,
         trace_ids: List[str],
         *,
         limit: int = 6,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> Dict[str, JsonDict]:
         return await load_recent_trace_details(
-            context=self._supervisor_ui_trace_context(),
+            context=self._trace_context(),
             trace_ids=trace_ids,
             limit=limit,
         )
 
-    async def _attach_recent_trace_details_to_observation(
-        self,
-        observation: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    async def attach_recent_trace_details(self, observation: JsonDict) -> JsonDict:
         return await attach_recent_trace_details_to_observation(
-            context=self._supervisor_ui_trace_context(),
+            context=self._trace_context(),
             observation=observation,
         )
 
-    async def _fetch_tier1_stats(self) -> Dict[str, Any]:
+    async def _fetch_tier1_stats(self) -> JsonDict:
         return await fetch_tier1_stats(
-            context=SupervisorUIMemoryStatusContext(
-                gateway_url=str(self.config.execution.gateway_address).rstrip("/")
-            )
+            context=SupervisorUIMemoryStatusContext(gateway_url=self.ports.gateway_url)
         )
 
-    def _maybe_open_supervisor_ui(self) -> None:
+    def maybe_open(self) -> None:
         maybe_open_supervisor_ui(
             context=SupervisorUIOpenLifecycleContext(
-                ui_enabled=self.config.ui_enabled,
-                auto_open=self.config.ui_auto_open,
-                url=f"http://{self.config.host}:{self.config.port}{self.config.ui_path}",
-                delay_seconds=self.config.ui_auto_open_delay_seconds,
+                ui_enabled=self.ports.ui_enabled,
+                auto_open=self.ports.ui_auto_open,
+                url=self.ports.ui_url,
+                delay_seconds=self.ports.ui_auto_open_delay_seconds,
             )
         )
 
 
-
-
-
+__all__ = ["SupervisorUIRuntime", "SupervisorUIRuntimePorts"]

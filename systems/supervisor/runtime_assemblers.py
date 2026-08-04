@@ -93,12 +93,23 @@ from systems.supervisor.scheduled_tasks import ScheduledTaskStore
 from systems.supervisor.schedule_allocator import ScheduleAllocator
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
 from systems.supervisor.runtime_migration import migrate_supervisor_runtime
+from systems.supervisor.planning_runtime import SUPERVISOR_LEGAL_SCENES
+from systems.supervisor.ui_runtime import (
+    SupervisorUIRuntime,
+    SupervisorUIRuntimePorts,
+)
 
 
 logger = logging.getLogger("supervisor")
 
 
 def assemble_supervisor_runtime_state(supervisor: Any) -> None:
+    def record_ui_activity(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return supervisor._ui_runtime.record_activity(*args, **kwargs)
+
+    def clear_ui_activity() -> None:
+        supervisor._ui_runtime.clear_activity()
+
     execution_config = supervisor.config.execution
     body_runtime_config = supervisor.config.body_runtime
     body_state_root = Path(body_runtime_config.state_root)
@@ -250,7 +261,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._autonomous_chain_runtime_reset_service = AutonomousChainRuntimeResetService(
         list_tasks=supervisor._autonomous_chain_store.list_tasks,
         clear_tasks=supervisor._autonomous_task_state.clear_tasks,
-        clear_ui_activity=supervisor._clear_supervisor_ui_activity,
+        clear_ui_activity=clear_ui_activity,
         clear_governor_projection=supervisor._governor.clear_runtime_projection,
         default_drive_history=supervisor._endogenous_drive_history_persistence_service.default_snapshot,
         persist_drive_history=supervisor._endogenous_drive_history_persistence_service.persist,
@@ -307,7 +318,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         task_profile_policy=supervisor._task_profile_policy,
         schedule_allocator=supervisor._schedule_allocator,
         build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
-        record_activity=supervisor._record_supervisor_ui_activity,
+        record_activity=record_ui_activity,
         record_drive_outcome=supervisor._record_endogenous_drive_outcome,
         touch_activity=supervisor._touch_gateway_activity,
     )
@@ -361,7 +372,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         build_response_fields=supervisor._build_drive_input_response_fields,
         serialize_task=supervisor._autonomous_chain_planning_service.serialize_task,
         build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
-        record_activity=supervisor._record_supervisor_ui_activity,
+        record_activity=record_ui_activity,
         touch_activity=supervisor._touch_gateway_activity,
         get_active_tasks=supervisor._active_autonomous_chain_tasks,
         get_review_statuses=lambda: ["planned", "deferred", "paused"],
@@ -405,7 +416,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         restore_evaluation_snapshots=supervisor._restore_endogenous_evaluation_snapshots,
         lm_generation_application_state=supervisor._lm_generation_application_state,
         plan_autonomous_chain_task=supervisor._autonomous_chain_planning_service.plan,
-        record_ui_activity=supervisor._record_supervisor_ui_activity,
+        record_ui_activity=record_ui_activity,
         touch_gateway_activity=supervisor._touch_gateway_activity,
         run_review_cycle=supervisor._autonomous_task_review_cycle_service.run,
         update_drive_schedule=update_drive_schedule,
@@ -415,6 +426,62 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
     supervisor._probe_runner = ProbeRunner()
     supervisor._probe_executor = ProbeExecutor()
+
+
+def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
+    def record_activity_history(event: dict[str, Any]) -> None:
+        governor = getattr(supervisor, "_governor", None)
+        if governor is None or not hasattr(governor, "record_supervisor_activity"):
+            return
+        try:
+            governor.record_supervisor_activity(event=event)
+        except Exception:
+            return
+
+    config = supervisor.config
+    runtime_root = Path(
+        getattr(supervisor, "_runtime_root", None) or config.soul_store_path
+    ).resolve()
+    supervisor._ui_runtime = SupervisorUIRuntime(
+        SupervisorUIRuntimePorts(
+            runtime_root=runtime_root,
+            activity_buffer_size=config.ui_activity_buffer_size,
+            legal_scenes=SUPERVISOR_LEGAL_SCENES,
+            record_activity_history=record_activity_history,
+            gateway_url=str(config.execution.gateway_address).rstrip("/"),
+            gateway_memory_headers=supervisor._gateway_memory_headers,
+            ui_event_interval_seconds=config.ui_event_interval_seconds,
+            voice_realtime_status=supervisor._voice_manager.realtime_status,
+            load_runtime_observation_input=supervisor.get_runtime_observation_input,
+            inspect_body_layout=supervisor._body_registry.inspect_layout,
+            load_body_slot_meta=supervisor._body_registry.load_slot_meta,
+            collect_trace_records_from_tasks=supervisor._collect_trace_records_from_tasks,
+            collect_trace_records_from_supervisor_activity=(
+                supervisor._collect_trace_records_from_supervisor_activity
+            ),
+            collect_trace_records_from_governor_history=(
+                supervisor._collect_trace_records_from_governor_history
+            ),
+            build_trace_timeline=supervisor._build_trace_timeline,
+            summarize_single_trace=supervisor._summarize_single_trace,
+            runtime_config=config.service_runtime,
+            list_chain_projection_tasks=(
+                supervisor._autonomous_chain_store.list_chain_projection_tasks
+            ),
+            serialize_chain_task=(
+                supervisor._autonomous_chain_planning_service.serialize_task
+            ),
+            load_cognition_state=(
+                supervisor._endogenous_governance_state_persistence_service.load_cognition_state
+            ),
+            stellar_mode_status=supervisor._stellar_mode_status,
+            voice_status=supervisor._voice_manager.status,
+            ui_enabled=config.ui_enabled,
+            ui_auto_open=config.ui_auto_open,
+            ui_url=f"http://{config.host}:{config.port}{config.ui_path}",
+            ui_auto_open_delay_seconds=config.ui_auto_open_delay_seconds,
+        )
+    )
 
 
 def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
@@ -482,7 +549,10 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
             propose_memory_promotion=supervisor._autonomous_task_memory_promotion_service.propose,
             task_activity_metadata=supervisor._task_activity_metadata,
             touch_gateway_activity=supervisor._touch_gateway_activity,
-            record_ui_activity=supervisor._record_supervisor_ui_activity,
+            record_ui_activity=lambda *args, **kwargs: supervisor._ui_runtime.record_activity(
+                *args,
+                **kwargs,
+            ),
         )
     )
     supervisor._execution_service = VoidCubeExecutionService(

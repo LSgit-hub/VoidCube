@@ -1,6 +1,6 @@
 import asyncio
 
-from VoidCube_cli.voice_tts_adapter import VoiceTtsAdapter
+from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
 
 
 class FakeVoiceManager:
@@ -42,7 +42,7 @@ class FakeVoiceManager:
         return {"audio_rms": 0.25}
 
 
-def test_voice_tts_adapter_keeps_async_manager_on_one_loop() -> None:
+def test_voice_session_runtime_keeps_manager_on_one_loop() -> None:
     managers: list[FakeVoiceManager] = []
 
     def create_manager() -> FakeVoiceManager:
@@ -50,18 +50,18 @@ def test_voice_tts_adapter_keeps_async_manager_on_one_loop() -> None:
         managers.append(manager)
         return manager
 
-    adapter = VoiceTtsAdapter(manager_factory=create_manager)
+    runtime = VoiceSessionRuntime(manager_factory=create_manager)
     try:
-        assert adapter.status()["status"] == "available"
-        assert adapter.speak("你好", reason="test")["status"] == "complete"
-        assert managers[0].spoken == [("你好", "test")]
-        assert adapter.interrupt()["status"] == "interrupted"
+        assert runtime.status()["status"] == "available"
+        assert runtime.speak("hello", reason="test")["status"] == "complete"
+        assert managers[0].spoken == [("hello", "test")]
+        assert runtime.interrupt()["status"] == "interrupted"
         assert managers[0].interrupted is True
     finally:
-        adapter.close()
+        runtime.close()
 
 
-def test_voice_tts_adapter_reports_disabled_output_without_success() -> None:
+def test_voice_session_runtime_reports_disabled_output_without_success() -> None:
     class DisabledManager(FakeVoiceManager):
         def status(self) -> dict[str, object]:
             return {
@@ -73,9 +73,9 @@ def test_voice_tts_adapter_reports_disabled_output_without_success() -> None:
         async def speak_text(self, text: str, *, reason: str) -> dict[str, str]:
             return {"status": "disabled", "reason": "voice_disabled"}
 
-    adapter = VoiceTtsAdapter(manager_factory=DisabledManager)
+    runtime = VoiceSessionRuntime(manager_factory=DisabledManager)
     try:
-        assert adapter.status() == {
+        assert runtime.status() == {
             "status": "unavailable",
             "reason": "voice_output_disabled",
             "voice": {
@@ -84,25 +84,25 @@ def test_voice_tts_adapter_reports_disabled_output_without_success() -> None:
                 "playback_available": True,
             },
         }
-        assert adapter.speak("不会播放")["status"] == "disabled"
+        assert runtime.speak("disabled")["status"] == "disabled"
     finally:
-        adapter.close()
+        runtime.close()
 
 
-def test_voice_tts_adapter_maps_terminal_recording_to_same_manager() -> None:
+def test_voice_session_runtime_maps_capture_to_the_same_manager() -> None:
     manager = FakeVoiceManager()
-    adapter = VoiceTtsAdapter(manager_factory=lambda: manager)
+    runtime = VoiceSessionRuntime(manager_factory=lambda: manager)
     try:
-        enabled = adapter.enable()
-        result = adapter.transcribe_once(session_id="terminal")
+        enabled = runtime.enable()
+        result = runtime.transcribe_once(session_id="terminal")
 
         assert enabled["stt_configured"] is True
         assert result == {
             "status": "complete",
             "transcript": "terminal: transcript",
         }
-        assert adapter.realtime_status() == {"audio_rms": 0.25}
+        assert runtime.realtime_status() == {"audio_rms": 0.25}
         assert manager.transcribed is True
-        adapter.disable()
+        runtime.disable()
     finally:
-        adapter.close()
+        runtime.close()

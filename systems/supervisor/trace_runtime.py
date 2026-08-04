@@ -218,7 +218,7 @@ class TraceRuntimeMixin:
         trace_id: Optional[str],
     ) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []
-        events = self._recent_supervisor_ui_activity(
+        events = self._ui_runtime.recent_activity(
             limit=max(int(self.config.ui_activity_buffer_size), 1)
         )
         for event in events:

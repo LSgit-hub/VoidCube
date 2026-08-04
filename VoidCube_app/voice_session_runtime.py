@@ -1,4 +1,4 @@
-"""Terminal adapter for the canonical asynchronous voice transport."""
+"""UI-independent bridge to the canonical asynchronous voice session."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ T = TypeVar("T")
 VoiceManagerFactory = Callable[[], Any]
 
 
-class VoiceTtsAdapter:
-    """Bridge terminal operations to one canonical voice manager event loop."""
+class VoiceSessionRuntime:
+    """Keep one canonical voice manager on a dedicated event loop."""
 
     def __init__(
         self,
@@ -58,7 +58,6 @@ class VoiceTtsAdapter:
         return {"status": state, "reason": reason, "voice": payload}
 
     def realtime_status(self) -> dict[str, Any]:
-        """Return the manager's non-blocking view state for terminal rendering."""
         return self._call(lambda manager: manager.realtime_status())
 
     def enable(self) -> dict[str, Any]:
@@ -120,7 +119,7 @@ class VoiceTtsAdapter:
         with self._lock:
             loop = self._loop
         if loop is None:
-            raise RuntimeError("voice adapter event loop is not running")
+            raise RuntimeError("voice session event loop is not running")
 
         async def invoke() -> T:
             result = operation(self._manager)
@@ -140,14 +139,14 @@ class VoiceTtsAdapter:
                 self._startup_error = None
                 thread = self._thread_factory(
                     target=self._run_loop,
-                    name="voidcube-voice-tts",
+                    name="voidcube-voice-session",
                     daemon=True,
                 )
                 self._thread = thread
                 thread.start()
         self._ready.wait(timeout=5.0)
         if not self._ready.is_set():
-            raise RuntimeError("voice adapter startup timed out")
+            raise RuntimeError("voice session startup timed out")
         if self._startup_error is not None:
             raise RuntimeError("voice manager startup failed") from self._startup_error
 
@@ -181,4 +180,4 @@ def _create_voice_manager() -> Any:
     return VoiceSessionManager(VoiceConfig.from_env())
 
 
-__all__ = ["VoiceTtsAdapter"]
+__all__ = ["VoiceSessionRuntime"]

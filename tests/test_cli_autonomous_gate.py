@@ -33,6 +33,7 @@ from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_execution import initialize_command_execution
 from VoidCube_cli.tui_layout import build_tui_layout_children
+from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
 
 
 class _FakeUrlopenResponse:
@@ -717,9 +718,7 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     cli._tool_start_time = 12.0
     cli._current_tool_name = "shell"
     cli._last_scrollback_tool = "shell"
-    cli._voice_mode = False
-    cli._voice_continuous = False
-    cli._voice_recording = False
+    cli._voice_runtime_state = CliVoiceRuntimeState()
     cli._pending_input = type("_Queue", (), {"put": lambda self, payload: None})()
 
     calls = []
@@ -760,9 +759,7 @@ def test_embedded_autonomous_component_execute_pending_input_stays_out_of_main_s
     cli._tool_start_time = 12.0
     cli._current_tool_name = "shell"
     cli._last_scrollback_tool = "shell"
-    cli._voice_mode = False
-    cli._voice_continuous = False
-    cli._voice_recording = False
+    cli._voice_runtime_state = CliVoiceRuntimeState()
     cli._pending_input = type("_Queue", (), {"put": lambda self, payload: None})()
 
     chat_calls = []
@@ -804,7 +801,7 @@ def test_embedded_autonomous_component_tool_progress_records_panel_events_withou
     cli._last_scrollback_tool = ""
     cli.tool_progress_mode = "all"
     cli._invalidate = lambda *args, **kwargs: None
-    cli._voice_mode = False
+    cli._voice_runtime_state = CliVoiceRuntimeState()
 
     scrollback = []
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append((args, kwargs)))
@@ -855,8 +852,7 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
     cli._interrupt_queue = queue.Queue()
     cli._pending_input = queue.Queue()
     cli._invalidate = lambda *args, **kwargs: None
-    cli._voice_mode = False
-    cli._voice_continuous = False
+    cli._voice_runtime_state = CliVoiceRuntimeState()
     cli._clarify_state = None
     cli._clarify_freetext = False
     cli.show_reasoning = False

@@ -557,7 +557,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     first = await supervisor._autonomous_cycle_service.run_drive_cycle()
     second = await supervisor._autonomous_cycle_service.run_drive_cycle()
     chain_projection = await supervisor.list_autonomous_chain_tasks()
-    timeline = supervisor._recent_supervisor_ui_activity(limit=10)
+    timeline = supervisor._ui_runtime.recent_activity(limit=10)
 
     assert first["status"] == "planned"
     assert first["planned"] == 2
@@ -3999,7 +3999,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     }
     supervisor._endogenous_governance_state_persistence_service.persist_cognition_state(cognition_state)
 
-    ui_state = await supervisor.get_supervisor_ui_state()
+    ui_state = await supervisor._ui_runtime.get_state()
 
     assert ui_state["lm_input"]["generation_enabled"] is True
     assert ui_state["lm_input"]["status"] == "completed"
@@ -4030,7 +4030,7 @@ async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_e
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     supervisor.evaluate_endogenous_drive = fail_live_refresh  # type: ignore[method-assign]
 
-    ui_state = await supervisor.get_supervisor_ui_state()
+    ui_state = await supervisor._ui_runtime.get_state()
 
     candidate_section = next(
         section
@@ -6550,6 +6550,7 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
                 "missing_posture_alignment_count": 3,
                 "missing_priority_basis_count": 3,
             },
+        },
         proposals=[],
     )
 

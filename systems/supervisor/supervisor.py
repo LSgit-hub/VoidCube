@@ -29,11 +29,15 @@ from systems.supervisor.planning_runtime import PlanningRuntimeMixin
 from systems.supervisor.runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
+    assemble_supervisor_ui_runtime,
 )
 from systems.supervisor.scheduled_tasks import ScheduledTaskRuntimeMixin
 from systems.supervisor.service_runtime import ServiceRuntimeMixin
 from systems.supervisor.trace_runtime import TraceRuntimeMixin
-from systems.supervisor.ui_runtime import SupervisorUIMixin
+from systems.supervisor.ui_routes import (
+    SupervisorUIRoutePorts,
+    mount_supervisor_ui_routes,
+)
 from systems.voice import VoiceConfig, VoiceSessionManager
 
 logging.basicConfig(level=logging.INFO)
@@ -107,7 +111,6 @@ class Supervisor(
     ScheduledTaskRuntimeMixin,
     ServiceRuntimeMixin,
     TraceRuntimeMixin,
-    SupervisorUIMixin,
 ):
     def __init__(self, config: SupervisorConfig | None = None):
         self.config = config or SupervisorConfig()
@@ -130,7 +133,7 @@ class Supervisor(
             "task": None, "last_outcome": None, "last_body_upgrade_trace_id": None,
         })()
         assemble_supervisor_runtime_state(self)
-        self._initialize_supervisor_ui_runtime()
+        assemble_supervisor_ui_runtime(self)
         assemble_supervisor_execution_runtime(self)
         try:
             self._autonomous_chain_recovery_service.recover()
@@ -166,55 +169,29 @@ class Supervisor(
                 raise HTTPException(status_code=400, detail=str(exc))
 
         self.app.add_api_route("/", self.health_check, methods=["GET"])
-        if self.config.ui_enabled:
-            self.app.add_api_route(self.config.ui_path, self.get_supervisor_ui, methods=["GET"])
-            self.app.add_api_route("/ui/state", self.get_supervisor_ui_state, methods=["GET"])
-            self.app.add_api_route("/ui/events", self.get_supervisor_ui_events, methods=["GET"])
-            self.app.add_api_route(
-                "/ui/voice-levels",
-                self.get_voice_level_events,
-                methods=["GET"],
+        mount_supervisor_ui_routes(
+            SupervisorUIRoutePorts(
+                app=self.app,
+                enabled=self.config.ui_enabled,
+                ui_path=self.config.ui_path,
+                get_ui=self._ui_runtime.get_ui,
+                get_state=self._ui_runtime.get_state,
+                get_events=self._ui_runtime.get_events,
+                get_voice_levels=self._ui_runtime.get_voice_levels,
+                get_media_events=self._ui_runtime.get_media_events,
+                enqueue_media=self._ui_runtime.enqueue_media_endpoint,
+                get_identity_archive=self._ui_runtime.get_identity_archive,
+                get_identity_turns=self._ui_runtime.get_identity_turns,
+                get_evolution_audit=self._ui_runtime.get_evolution_promotion_audit,
+                get_evolution_candidates=(
+                    self._ui_runtime.get_evolution_promotion_candidates
+                ),
+                consent_evolution_candidate=(
+                    self._ui_runtime.consent_evolution_promotion_candidate
+                ),
+                verify_identity_experience=self._ui_runtime.verify_identity_experience,
             )
-            self.app.add_api_route(
-                "/ui/media-events",
-                self.get_media_events,
-                methods=["GET"],
-            )
-            self.app.add_api_route(
-                "/ui/media/enqueue",
-                self.enqueue_media_endpoint,
-                methods=["POST"],
-            )
-            self.app.add_api_route(
-                "/ui/identity/archive",
-                self.get_supervisor_identity_archive,
-                methods=["GET"],
-            )
-            self.app.add_api_route(
-                "/ui/identity/turns",
-                self.get_supervisor_identity_turns,
-                methods=["GET"],
-            )
-            self.app.add_api_route(
-                "/ui/evolution-promotions",
-                self.get_supervisor_evolution_promotion_audit,
-                methods=["GET"],
-            )
-            self.app.add_api_route(
-                "/ui/evolution-promotion-candidates",
-                self.get_supervisor_evolution_promotion_candidates,
-                methods=["GET"],
-            )
-            self.app.add_api_route(
-                "/ui/evolution-promotion-candidates/{candidate_id}/consent",
-                self.consent_supervisor_evolution_promotion_candidate,
-                methods=["POST"],
-            )
-            self.app.add_api_route(
-                "/ui/identity/experiences/verify",
-                self.verify_supervisor_identity_experience,
-                methods=["POST"],
-            )
+        )
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])
         self.app.add_api_route("/runtime/observation-input", self.get_runtime_observation_input, methods=["GET"])
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])
@@ -564,7 +541,7 @@ class Supervisor(
         else:
             self._gateway_service_id = service_id
         await self._start_periodic_tasks()
-        self._maybe_open_supervisor_ui()
+        self._ui_runtime.maybe_open()
         try:
             yield
         finally:

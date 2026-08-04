@@ -116,6 +116,7 @@ from VoidCube_cli.scheduled_executor import (
 from VoidCube_cli.background_task_runtime import (
     BackgroundTaskPorts,
     BackgroundTaskRuntime,
+    BackgroundTaskSnapshot,
     BackgroundTaskState,
 )
 from VoidCube_cli.cli_interactive_lifecycle_assembly_runtime import (
@@ -286,15 +287,14 @@ from VoidCube_cli.voice_recording_runtime import (
     start_terminal_voice_recording,
     stop_terminal_voice_recording,
 )
-from VoidCube_cli.voice_tts_adapter import VoiceTtsAdapter
-from VoidCube_cli.embedded_autonomous_host import (
-    EmbeddedAutonomousHostPorts,
-    ensure_embedded_autonomous_component_host,
+from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
+from VoidCube_app.autonomous_component_runtime import (
+    AutonomousComponentHostPorts,
+    AutonomousComponentRuntime,
+    AutonomousComponentRuntimePorts,
+    ensure_autonomous_component_host,
 )
-from VoidCube_cli.embedded_autonomous_runtime import (
-    EmbeddedAutonomousComponentRuntime,
-    EmbeddedAutonomousRuntimePorts,
-)
+from VoidCube_cli.autonomous_component_output import run_component_operation_silently
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -1070,58 +1070,6 @@ class VoidcubeCLI:
         self.__dict__.pop("_session_start", None)
         return runtime
 
-    @property
-    def _voice_lock(self):
-        return self._voice_state().lock
-
-    @property
-    def _voice_mode(self):
-        return self._voice_state().mode
-
-    @_voice_mode.setter
-    def _voice_mode(self, value):
-        self._voice_state().mode = value
-
-    @property
-    def _voice_recording(self):
-        return self._voice_state().recording
-
-    @_voice_recording.setter
-    def _voice_recording(self, value):
-        self._voice_state().recording = value
-
-    @property
-    def _voice_processing(self):
-        return self._voice_state().processing
-
-    @_voice_processing.setter
-    def _voice_processing(self, value):
-        self._voice_state().processing = value
-
-    @property
-    def _voice_continuous(self):
-        return self._voice_state().continuous
-
-    @_voice_continuous.setter
-    def _voice_continuous(self, value):
-        self._voice_state().continuous = value
-
-    @property
-    def _voice_stop_continuous(self):
-        return self._voice_state().stop_continuous
-
-    @_voice_stop_continuous.setter
-    def _voice_stop_continuous(self, value):
-        self._voice_state().stop_continuous = value
-
-    @property
-    def _no_speech_count(self):
-        return self._voice_state().no_speech_count
-
-    @_no_speech_count.setter
-    def _no_speech_count(self, value):
-        self._voice_state().no_speech_count = value
-    
     def __init__(
         self,
         model: Optional[str] = None,
@@ -1400,8 +1348,6 @@ class VoidcubeCLI:
 
         # Background task tracking is owned by the explicit runtime state.
         self._background_task_state = BackgroundTaskState()
-        self._background_tasks = self._background_task_state.tasks
-        self._background_task_info = self._background_task_state.info
         self._last_gateway_presence_refresh_at: float = 0.0
         self._gateway_presence_refresh_interval_seconds: float = 30.0
         self._autonomous_execution_events: List[Dict[str, str]] = []
@@ -1435,11 +1381,7 @@ class VoidcubeCLI:
                         False,
                     )
                 ),
-                manual_background_task_running=lambda: any(
-                    thread.is_alive()
-                    for thread in self._background_tasks.values()
-                    if callable(getattr(thread, "is_alive", None))
-                ),
+                manual_background_task_running=self._has_running_background_tasks,
                 agent_running=lambda: bool(self._agent_running),
                 command_running=lambda: bool(self._command_running),
                 execution_gate=self._api_a_execution_gate,
@@ -1470,8 +1412,8 @@ class VoidcubeCLI:
                 pass_session_id=True,
             )
 
-        return ensure_embedded_autonomous_component_host(
-            EmbeddedAutonomousHostPorts(
+        return ensure_autonomous_component_host(
+            AutonomousComponentHostPorts(
                 get_component_host=lambda: getattr(self, "_autonomous_component_host", None),
                 create_component_host=create_component_host,
                 set_component_active=lambda host, active: setattr(
@@ -1499,8 +1441,8 @@ class VoidcubeCLI:
             cprint=self._quiet_autonomous_component_cprint,
         )
 
-    def _embedded_autonomous_runtime(self) -> EmbeddedAutonomousComponentRuntime:
-        runtime = self.__dict__.get("_embedded_autonomous_runtime_instance")
+    def _autonomous_component_lifecycle(self) -> AutonomousComponentRuntime:
+        runtime = self.__dict__.get("_autonomous_component_lifecycle_runtime")
         if runtime is not None:
             return runtime
 
@@ -1563,8 +1505,8 @@ class VoidcubeCLI:
         def signal_stop() -> None:
             ensure_stop_event().set()
 
-        runtime = EmbeddedAutonomousComponentRuntime(
-            EmbeddedAutonomousRuntimePorts(
+        runtime = AutonomousComponentRuntime(
+            AutonomousComponentRuntimePorts(
                 get_component_host=lambda: getattr(
                     self,
                     "_autonomous_component_host",
@@ -1592,9 +1534,11 @@ class VoidcubeCLI:
                 refresh_statuses=refresh_statuses,
                 can_poll_workflow=can_poll_workflow,
                 get_pending_input=get_pending_input,
-                execute_pending_input=lambda host, pending: host._execute_pending_input(
-                    pending,
-                    app=None,
+                execute_pending_input=lambda host, pending: run_component_operation_silently(
+                    lambda: host._execute_pending_input(
+                        pending,
+                        app=None,
+                    )
                 ),
                 invalidate=lambda: self._invalidate(min_interval=0.5),
                 report_error=lambda error: logger.debug(
@@ -1613,15 +1557,15 @@ class VoidcubeCLI:
                 thread_factory=threading.Thread,
             )
         )
-        self._embedded_autonomous_runtime_instance = runtime
+        self._autonomous_component_lifecycle_runtime = runtime
         return runtime
 
     def _start_autonomous_execution_component(self) -> bool:
         """Start the embedded API-A autonomous execution component."""
-        return self._embedded_autonomous_runtime().start()
+        return self._autonomous_component_lifecycle().start()
 
     def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
-        self._embedded_autonomous_runtime().stop(interrupt=interrupt)
+        self._autonomous_component_lifecycle().stop(interrupt=interrupt)
 
     def _interrupt_autonomous_component_task(
         self,
@@ -1855,9 +1799,9 @@ class VoidcubeCLI:
             CliVoiceStatusPorts(
                 terminal_width=layout_metrics.terminal_width,
                 minimal_chrome=layout_metrics.minimal_chrome,
-                recording=lambda: bool(self._voice_recording),
-                processing=lambda: bool(self._voice_processing),
-                continuous=lambda: bool(self._voice_continuous),
+                recording=lambda: bool(self._voice_state().recording),
+                processing=lambda: bool(self._voice_state().processing),
+                continuous=lambda: bool(self._voice_state().continuous),
             )
         ).build(width)
 
@@ -1919,9 +1863,9 @@ class VoidcubeCLI:
                 invalidate_app=invalidate_app,
                 exit_app=exit_app,
                 voice_restart_ready=lambda: bool(
-                    self._voice_mode
-                    and self._voice_continuous
-                    and not self._voice_recording
+                    self._voice_state().mode
+                    and self._voice_state().continuous
+                    and not self._voice_state().recording
                 ),
                 restart_voice_recording=self._voice_start_recording,
                 enqueue_pending_input=self._pending_input.put,
@@ -2916,8 +2860,6 @@ class VoidcubeCLI:
         if state is None:
             state = BackgroundTaskState()
             self._background_task_state = state
-            self._background_tasks = state.tasks
-            self._background_task_info = state.info
         runtime = BackgroundTaskRuntime(
             BackgroundTaskPorts(
                 state=state,
@@ -2934,6 +2876,12 @@ class VoidcubeCLI:
         )
         self._background_task_runtime_instance = runtime
         return runtime
+
+    def _has_running_background_tasks(self) -> bool:
+        return self._background_task_runtime().ports.state.has_running_tasks()
+
+    def _list_background_tasks(self) -> tuple[BackgroundTaskSnapshot, ...]:
+        return self._background_task_runtime().ports.state.active_snapshots()
 
     def _create_background_agent(
         self,
@@ -3350,7 +3298,7 @@ class VoidcubeCLI:
             emit=lambda message: _cprint(f"{_DIM}{message}{_RST}"),
             enqueue_input=self._pending_input.put,
             clear_attached_images=self._attached_images.clear,
-            voice=self._voice_tts(),
+            voice=self._voice_session(),
         )
 
     def _voice_start_recording(self) -> None:
@@ -3361,11 +3309,12 @@ class VoidcubeCLI:
 
     def _enable_voice_mode(self):
         """Enable voice mode after checking requirements."""
-        if self._voice_mode:
+        state = self._voice_state()
+        if state.mode:
             _cprint(f"{_DIM}Voice mode is already enabled.{_RST}")
             return
 
-        voice = self._voice_tts()
+        voice = self._voice_session()
         reqs = voice.enable()
         if not reqs.get("capture_available") or not reqs.get("stt_configured"):
             voice.disable()
@@ -3376,8 +3325,8 @@ class VoidcubeCLI:
                 _cprint(f"  {_DIM}Configure the canonical STT provider before enabling voice mode.{_RST}")
             return
 
-        with self._voice_lock:
-            self._voice_mode = True
+        with state.lock:
+            state.mode = True
 
         # Voice mode instruction is injected as a user message prefix (not a
         # system prompt change) to avoid invalidating the prompt cache.  See
@@ -3397,27 +3346,28 @@ class VoidcubeCLI:
 
     def _disable_voice_mode(self):
         """Disable voice mode, cancel any active recording, and stop TTS."""
-        with self._voice_lock:
-            recording = self._voice_recording
-            self._voice_recording = False
-            self._voice_mode = False
-            self._voice_continuous = False
+        state = self._voice_state()
+        with state.lock:
+            recording = state.recording
+            state.recording = False
+            state.mode = False
+            state.continuous = False
         if recording:
-            self._voice_tts().interrupt()
-        self._voice_tts().disable()
+            self._voice_session().interrupt()
+        self._voice_session().disable()
 
         _cprint(f"\n{_DIM}Voice mode disabled.{_RST}")
 
-    def _voice_tts(self) -> VoiceTtsAdapter:
-        adapter = self.__dict__.get("_voice_tts_adapter")
-        if adapter is None:
-            adapter = VoiceTtsAdapter()
-            self._voice_tts_adapter = adapter
-        return adapter
+    def _voice_session(self) -> VoiceSessionRuntime:
+        runtime = self.__dict__.get("_voice_session_runtime")
+        if runtime is None:
+            runtime = VoiceSessionRuntime()
+            self._voice_session_runtime = runtime
+        return runtime
 
     def _show_voice_tts_status(self):
         """Project canonical voice transport readiness into terminal text."""
-        result = self._voice_tts().status()
+        result = self._voice_session().status()
         status = result.get("status") or "unavailable"
         reason = result.get("reason") or "unknown"
         _cprint(f"{_DIM}Terminal TTS: {status} ({reason}).{_RST}")
@@ -3430,7 +3380,7 @@ class VoidcubeCLI:
             return
 
         def _speak() -> None:
-            result = self._voice_tts().speak(message)
+            result = self._voice_session().speak(message)
             status = str(result.get("status") or "unavailable")
             if status == "complete":
                 _cprint(f"{_DIM}Terminal TTS complete.{_RST}")
@@ -3444,16 +3394,17 @@ class VoidcubeCLI:
         """Show current voice mode status."""
         from VoidCube_app.config import load_config
 
-        reqs = self._voice_tts().status().get("voice", {})
+        reqs = self._voice_session().status().get("voice", {})
 
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
-        _cprint(f"  Mode:      {'ON' if self._voice_mode else 'OFF'}")
-        tts_status = self._voice_tts().status()
+        state = self._voice_state()
+        _cprint(f"  Mode:      {'ON' if state.mode else 'OFF'}")
+        tts_status = self._voice_session().status()
         _cprint(
             f"  TTS:       {tts_status.get('status', 'unavailable')} "
             f"({tts_status.get('reason', 'unknown')})"
         )
-        _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
+        _cprint(f"  Recording: {'YES' if state.recording else 'no'}")
         _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
         _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
         _cprint(f"  Record key: {_display_key}")
@@ -3685,7 +3636,7 @@ class VoidcubeCLI:
             # model responds concisely. The prefix is API-call-local only —
             # run_conversation persists the original clean user message.
             _voice_prefix = ""
-            if self._voice_mode and isinstance(message, str):
+            if self._voice_state().mode and isinstance(message, str):
                 _voice_prefix = (
                     "[Voice input — respond concisely and conversationally, "
                     "2-3 sentences max. No code blocks or markdown.] "
@@ -3805,9 +3756,9 @@ class VoidcubeCLI:
                 TurnPostprocessingPorts(
                     session_db=lambda: self._session_db,
                     session_id=lambda: str(self.session_id or ""),
-                    voice_continuous=lambda: bool(self._voice_continuous),
+                    voice_continuous=lambda: bool(self._voice_state().continuous),
                     stop_voice_continuous=lambda: setattr(
-                        self, "_voice_continuous", False
+                        self._voice_state(), "continuous", False
                     ),
                     emit=_cprint,
                 )
@@ -3903,8 +3854,8 @@ class VoidcubeCLI:
         layout_metrics = self._tui_layout_metrics_runtime()
         return CliTuiPromptRuntime(
             CliTuiPromptPorts(
-                voice_recording=lambda: bool(self._voice_recording),
-                voice_processing=lambda: bool(self._voice_processing),
+                voice_recording=lambda: bool(self._voice_state().recording),
+                voice_processing=lambda: bool(self._voice_state().processing),
                 sudo_active=lambda: bool(self._sudo_state),
                 secret_active=lambda: bool(self._secret_state),
                 approval_active=lambda: bool(self._approval_state),
@@ -3913,10 +3864,10 @@ class VoidcubeCLI:
                 command_running=lambda: bool(self._command_running),
                 command_spinner_frame=self._command_spinner_frame,
                 agent_running=lambda: bool(self._agent_running),
-                voice_mode=lambda: bool(self._voice_mode),
+                voice_mode=lambda: bool(self._voice_state().mode),
                 minimal_tui_chrome=layout_metrics.minimal_chrome,
                 terminal_width=layout_metrics.terminal_width,
-                audio_status=lambda: self._voice_tts().realtime_status(),
+                audio_status=lambda: self._voice_session().realtime_status(),
             )
         )
 
@@ -4060,9 +4011,10 @@ class VoidcubeCLI:
             threading.Thread(target=operation, daemon=True).start()
 
         def cancel_voice_recording() -> None:
-            with self._voice_lock:
-                self._voice_recording = False
-                self._voice_continuous = False
+            state = self._voice_state()
+            with state.lock:
+                state.recording = False
+                state.continuous = False
 
         def clear_input(event: Any) -> None:
             event.app.current_buffer.reset()
@@ -4080,9 +4032,9 @@ class VoidcubeCLI:
         return ControlKeybindingRuntime(
             ControlKeybindingPorts(
                 now=time.time,
-                voice_recording=lambda: bool(self._voice_recording),
+                voice_recording=lambda: bool(self._voice_state().recording),
                 cancel_voice_recording=cancel_voice_recording,
-                interrupt_voice=lambda: self._voice_tts().interrupt(),
+                interrupt_voice=lambda: self._voice_session().interrupt(),
                 run_background=run_background,
                 sudo_active=lambda: bool(self._sudo_state),
                 submit_sudo_cancel=lambda: self._sudo_state["response_queue"].put(""),
@@ -4130,8 +4082,9 @@ class VoidcubeCLI:
             threading.Thread(target=operation, daemon=True).start()
 
         def set_continuous(value: bool) -> None:
-            with self._voice_lock:
-                self._voice_continuous = bool(value)
+            state = self._voice_state()
+            with state.lock:
+                state.continuous = bool(value)
 
         def invalidate_app() -> None:
             app = getattr(self, "_app", None)
@@ -4140,14 +4093,14 @@ class VoidcubeCLI:
 
         return VoiceKeybindingRuntime(
             VoiceKeybindingPorts(
-                voice_mode=lambda: bool(self._voice_mode),
-                recording=lambda: bool(self._voice_recording),
+                voice_mode=lambda: bool(self._voice_state().mode),
+                recording=lambda: bool(self._voice_state().recording),
                 set_continuous=set_continuous,
                 agent_running=lambda: bool(self._agent_running),
                 modal_active=lambda: bool(
                     self._clarify_state or self._sudo_state or self._approval_state
                 ),
-                processing=lambda: bool(self._voice_processing),
+                processing=lambda: bool(self._voice_state().processing),
                 start_recording=self._voice_start_recording,
                 stop_recording=self._voice_stop_and_transcribe,
                 run_background=run_background,
@@ -4186,8 +4139,8 @@ class VoidcubeCLI:
         layout_metrics = self._tui_layout_metrics_runtime()
         return TuiDynamicTextRuntime(
             TuiDynamicTextPorts(
-                voice_recording=lambda: bool(self._voice_recording),
-                voice_processing=lambda: bool(self._voice_processing),
+                voice_recording=lambda: bool(self._voice_state().recording),
+                voice_processing=lambda: bool(self._voice_state().processing),
                 sudo_active=lambda: bool(self._sudo_state),
                 secret_active=lambda: bool(self._secret_state),
                 approval_active=lambda: bool(self._approval_state),
@@ -4197,7 +4150,7 @@ class VoidcubeCLI:
                 command_spinner_frame=self._command_spinner_frame,
                 command_status=lambda: self._command_status or "",
                 agent_running=lambda: bool(self._agent_running),
-                voice_mode=lambda: bool(self._voice_mode),
+                voice_mode=lambda: bool(self._voice_state().mode),
                 spinner_text=lambda: self._spinner_text,
                 tool_start_time=lambda: self._tool_start_time,
                 now=time.monotonic,
@@ -4353,10 +4306,10 @@ class VoidcubeCLI:
                 except Exception:
                     pass
 
-        def close_voice_tts() -> None:
-            adapter = self.__dict__.get("_voice_tts_adapter")
-            if adapter is not None:
-                adapter.close()
+        def close_voice_session() -> None:
+            runtime = self.__dict__.get("_voice_session_runtime")
+            if runtime is not None:
+                runtime.close()
 
         def unregister_tool_callbacks() -> None:
             _get_set_sudo_password_callback(None)
@@ -4389,8 +4342,8 @@ class VoidcubeCLI:
                 interrupt=True
             ),
             interrupt_agent=interrupt_running_agent,
-            interrupt_voice=lambda: self._voice_tts().interrupt(),
-            close_voice_tts=close_voice_tts,
+            interrupt_voice=lambda: self._voice_session().interrupt(),
+            close_voice_session=close_voice_session,
             unregister_tool_callbacks=unregister_tool_callbacks,
             close_session=session_teardown.close_session,
             finish_interrupted_session=session_teardown.finish_interrupted_session,
@@ -4481,7 +4434,7 @@ class VoidcubeCLI:
                     format_badges=_format_image_attachment_badges,
                 ),
                 voice_fragments=self._get_voice_status_fragments,
-                voice_visible=lambda: self._voice_mode,
+                voice_visible=lambda: self._voice_state().mode,
                 autonomous_fragments=lambda: _get_autonomous_execution_panel_fragments_view(
                     self,
                     state_ports=self._autonomous_panel_state_ports(),

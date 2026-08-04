@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import systems.supervisor.endogenous_drive as endogenous_drive_module
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.endogenous_generation_state import LmGenerationStateOwner
 from systems.supervisor.endogenous_proposal_port import (
@@ -95,6 +96,78 @@ def test_latest_lm_generation_state_is_a_single_defensive_application_projection
             {"candidate_kind": "observation", "metadata": {"tags": ["grounded"]}}
         ],
     }
+
+
+def test_engine_generation_execution_has_one_state_owner_and_override_is_read_only(
+    monkeypatch,
+):
+    generation_state = LmGenerationStateOwner()
+    engine = EndogenousDriveEngine(
+        config=SimpleNamespace(
+            service_runtime=SimpleNamespace(
+                endogenous_drive_lm_task_generation_enabled=True,
+            ),
+            execution=SimpleNamespace(),
+        ),
+        generation_state=generation_state,
+    )
+    execution_calls = []
+
+    monkeypatch.setattr(
+        endogenous_drive_module,
+        "build_lm_evidence_packet_from_runtime_config",
+        lambda **kwargs: {"evidence": "packet"},
+    )
+    monkeypatch.setattr(
+        endogenous_drive_module,
+        "execute_lm_task_generation_from_runtime_config",
+        lambda **kwargs: execution_calls.append(kwargs)
+        or SimpleNamespace(
+            context_snapshot={
+                "status": "completed",
+                "cognitive_assessment": {"focus": "fresh"},
+            },
+            proposals=[{"candidate_kind": "observation"}],
+        ),
+    )
+    materialization_calls = []
+
+    def materialize(**kwargs):
+        materialization_calls.append(kwargs)
+        return list(kwargs["proposals"])
+
+    monkeypatch.setattr(
+        endogenous_drive_module,
+        "materialize_lm_proposals_for_deliberation",
+        materialize,
+    )
+    common = {
+        "existing_keys": set(),
+        "deliberation": SimpleNamespace(),
+        "drive_context": {},
+        "memory_plan": {},
+        "self_learning_plan": {},
+        "autonomous_improvement_plan": {},
+    }
+
+    assert engine._llm_task_proposals(**common) == [
+        {"candidate_kind": "observation"}
+    ]
+    assert len(execution_calls) == 1
+    assert materialization_calls[0]["cognitive_assessment"] == {"focus": "fresh"}
+    assert generation_state.snapshot()["proposals"] == [
+        {"candidate_kind": "observation"}
+    ]
+
+    assert engine._llm_task_proposals(
+        **common,
+        proposals_override=[{"candidate_kind": "override"}],
+    ) == [{"candidate_kind": "override"}]
+    assert len(execution_calls) == 1
+    assert materialization_calls[1]["cognitive_assessment"] == {"focus": "fresh"}
+    assert generation_state.snapshot()["proposals"] == [
+        {"candidate_kind": "observation"}
+    ]
 
 
 def test_lm_generation_application_port_projects_one_snapshot_for_both_consumers():

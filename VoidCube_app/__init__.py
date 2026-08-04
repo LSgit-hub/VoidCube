@@ -81,6 +81,11 @@ from VoidCube_app.turn_queue import (
     resolve_interrupted_followup,
     route_turn_input,
 )
+from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
+from VoidCube_app.autonomous_component_runtime import (
+    AutonomousComponentRuntime,
+    AutonomousComponentRuntimePorts,
+)
 
 __all__ = [
     "application_config",
@@ -153,4 +158,7 @@ __all__ = [
     "prepare_interrupted_input_batch",
     "resolve_interrupted_followup",
     "route_turn_input",
+    "VoiceSessionRuntime",
+    "AutonomousComponentRuntime",
+    "AutonomousComponentRuntimePorts",
 ]
