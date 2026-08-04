@@ -57,6 +57,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, Mapping, Sequence, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
+from VoidCube_app.application import ApplicationRuntime
+from VoidCube_app.contracts.events import MessageDelta
 from VoidCube_app.configuration import (
     get_application_config,
     reload_application_config,
@@ -901,6 +903,82 @@ class VoidcubeCLI:
         return state
 
     @property
+    def session_id(self) -> str:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.session_id
+        return str(self.__dict__.get("_session_id", "") or "")
+
+    @session_id.setter
+    def session_id(self, value: str) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.state.session_id = str(value or "")
+        else:
+            self.__dict__["_session_id"] = str(value or "")
+
+    @property
+    def session_start(self) -> datetime:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.session_start
+        return self.__dict__["_session_start"]
+
+    @session_start.setter
+    def session_start(self, value: datetime) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.state.session_start = value
+        else:
+            self.__dict__["_session_start"] = value
+
+    @property
+    def conversation_history(self) -> List[Dict[str, Any]]:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.conversation_history
+        return self.__dict__.setdefault("_conversation_history", [])
+
+    @conversation_history.setter
+    def conversation_history(self, value: Sequence[Mapping[str, Any]]) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.replace_history(value)
+        else:
+            self.__dict__["_conversation_history"] = (
+                value if isinstance(value, list) else [dict(message) for message in value]
+            )
+
+    def _initialize_application_runtime(self, session_identity) -> None:
+        self.session_id = session_identity.session_id
+        self._resumed = session_identity.resumed
+        self._application_runtime = ApplicationRuntime.create(
+            session_id=self.session_id,
+            session_start=self.session_start,
+            conversation_history=self.__dict__.pop("_conversation_history", ()),
+            resumed=self._resumed,
+            event_sink=self._handle_application_event,
+        )
+        self.__dict__.pop("_session_id", None)
+        self.__dict__.pop("_session_start", None)
+
+    def _ensure_application_runtime(self) -> ApplicationRuntime:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime
+        runtime = ApplicationRuntime.create(
+            session_id=self.session_id,
+            session_start=self.__dict__.get("_session_start", datetime.now()),
+            conversation_history=self.conversation_history,
+            resumed=bool(self.__dict__.get("_resumed", False)),
+            event_sink=self._handle_application_event,
+        )
+        self.__dict__["_application_runtime"] = runtime
+        self.__dict__.pop("_session_id", None)
+        self.__dict__.pop("_session_start", None)
+        return runtime
+
+    @property
     def _voice_lock(self):
         return self._voice_state().lock
 
@@ -1154,8 +1232,7 @@ class VoidcubeCLI:
             interactive_source="cli",
             autonomous_source="cli_supervisor_task_lane",
         )
-        self.session_id = session_identity.session_id
-        self._resumed = session_identity.resumed
+        self._initialize_application_runtime(session_identity)
         self._session_hydration: SessionHydration | None = None
         if session_identity.resume_lookup_error:
             logger.warning(
@@ -2074,15 +2151,21 @@ class VoidcubeCLI:
                     session_id=self.session_id,
                     platform="cli",
                     session_db=self._session_db,
-                    clarification_sink=self._clarification_sink,
+                    clarification_sink=self._ensure_application_runtime().clarification_sink(
+                        self._clarification_sink
+                    ),
                     reasoning_callback=self._current_reasoning_callback(),
                     fallback_model=self._fallback_model,
                     thinking_callback=self._on_thinking,
                     checkpoints_enabled=self.checkpoints_enabled,
                     checkpoint_max_snapshots=self.checkpoint_max_snapshots,
                     pass_session_id=self.pass_session_id,
-                    tool_event_sink=self._on_tool_event,
-                    stream_delta_callback=self._stream_delta if self.streaming_enabled else None,
+                    tool_event_sink=self._ensure_application_runtime().tool_event_sink,
+                    stream_delta_callback=(
+                        self._ensure_application_runtime().message_delta_sink
+                        if self.streaming_enabled
+                        else None
+                    ),
                     tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
                 )
             ).create()
@@ -3174,6 +3257,12 @@ class VoidcubeCLI:
             emit_line=_cprint,
         )
 
+    def _handle_application_event(self, event) -> None:
+        if isinstance(event, ToolEvent):
+            self._on_tool_event(event)
+        elif isinstance(event, MessageDelta):
+            self._stream_delta(event.text)
+
     # ====================================================================
     # Voice mode methods
     # ====================================================================
@@ -3363,12 +3452,15 @@ class VoidcubeCLI:
         return ""
 
     def _approval_sink(self, request: ApprovalRequest) -> ApprovalDecision:
-        return _approval_sink_view(
-            self,
+        return self._ensure_application_runtime().resolve_approval(
             request,
-            timeout=60,
-            notify_timeout=lambda: _cprint(
-                f"\n{_DIM}  ⏱ Timeout — denying command{_RST}"
+            lambda approval_request: _approval_sink_view(
+                self,
+                approval_request,
+                timeout=60,
+                notify_timeout=lambda: _cprint(
+                    f"\n{_DIM}  ⏱ Timeout — denying command{_RST}"
+                ),
             ),
         )
 
@@ -3497,6 +3589,7 @@ class VoidcubeCLI:
                 cwd=os.getcwd,
                 should_emit=self._should_emit_scrollback_output,
                 emit=_cprint,
+                begin_turn=self._ensure_application_runtime().begin_turn,
             )
         ).prepare()
         if prepared_input.blocked_response is not None:
@@ -3505,8 +3598,6 @@ class VoidcubeCLI:
         turn_input = prepared_input.turn_input
         if turn_input is None:
             return None
-        self.conversation_history = list(turn_input.conversation_history)
-
         if self._should_emit_scrollback_output():
             ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
             print(flush=True)
@@ -3622,6 +3713,7 @@ class VoidcubeCLI:
                     set_conversation_history=lambda history: setattr(
                         self, "conversation_history", history
                     ),
+                    publish_usage=self._ensure_application_runtime().usage_sink,
                     record_autonomous_result=autonomous_runtime.record_turn_result,
                     record_autonomous_finished=autonomous_runtime.record_model_turn_finished,
                 )
@@ -3634,6 +3726,10 @@ class VoidcubeCLI:
             outcome = applied.outcome
             response = outcome.response
             turn_result = applied.turn_result
+            self._ensure_application_runtime().finish_turn(
+                outcome,
+                history_applied=True,
+            )
 
             postprocessed = TurnPostprocessingRuntime(
                 TurnPostprocessingPorts(

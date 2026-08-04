@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind
 
 
@@ -42,6 +43,26 @@ def test_completed_event_normalizes_duration_and_error_state() -> None:
     assert event.duration == 0
     assert event.is_error is True
     assert event.result == "failed"
+
+
+def test_completed_event_carries_structured_artifacts() -> None:
+    artifact = Artifact(
+        kind="image",
+        uri="C:/tmp/screenshot.png",
+        mime_type="image/png",
+    )
+
+    event = ToolEvent.completed(
+        call_id="call-3",
+        name="browser_vision",
+        arguments={},
+        result='{"success": true}',
+        duration=1.0,
+        is_error=False,
+        artifacts=(artifact,),
+    )
+
+    assert event.artifacts == (artifact,)
 
 
 def test_reasoning_and_subagent_progress_are_distinct_events() -> None:

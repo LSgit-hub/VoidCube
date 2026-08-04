@@ -32,7 +32,9 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from agent.tool_execution import ToolExecutionResult
 from VoidCube_app.config import load_config
+from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_core.constants import get_cache_dir
 from tools.browser_camofox_state import get_camofox_identity
 from tools.registry import tool_error
@@ -490,8 +492,9 @@ def camofox_get_images(task_id: Optional[str] = None) -> str:
 
 def camofox_vision(question: str, annotate: bool = False,
                    task_id: Optional[str] = None,
-                   main_runtime: Optional[Dict[str, Any]] = None) -> str:
+                   main_runtime: Optional[Dict[str, Any]] = None) -> str | ToolExecutionResult:
     """Take a screenshot and analyze it with vision AI via Camofox."""
+    screenshot_path: str | None = None
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -570,12 +573,45 @@ def camofox_vision(question: str, annotate: bool = False,
         from agent.redact import redact_sensitive_text
         analysis = redact_sensitive_text(analysis)
 
-        return json.dumps({
-            "success": True,
-            "analysis": analysis,
-            "screenshot_path": screenshot_path,
-        })
+        return ToolExecutionResult(
+            content=json.dumps({
+                "success": True,
+                "analysis": analysis,
+                "screenshot_path": screenshot_path,
+            }),
+            artifacts=(
+                Artifact(
+                    kind="image",
+                    uri=screenshot_path,
+                    mime_type="image/png",
+                    title="Browser screenshot",
+                    metadata={
+                        "tool": "browser_vision",
+                        "backend": "camofox",
+                        "annotated": bool(annotate),
+                    },
+                ),
+            ),
+        )
     except Exception as e:
+        if screenshot_path and os.path.exists(screenshot_path):
+            return ToolExecutionResult(
+                content=tool_error(str(e), success=False),
+                artifacts=(
+                    Artifact(
+                        kind="image",
+                        uri=screenshot_path,
+                        mime_type="image/png",
+                        title="Browser screenshot",
+                        metadata={
+                            "tool": "browser_vision",
+                            "backend": "camofox",
+                            "annotated": bool(annotate),
+                            "analysis_failed": True,
+                        },
+                    ),
+                ),
+            )
         return tool_error(str(e), success=False)
 
 
@@ -594,4 +630,3 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         "note": "Console log capture is not available with the Camofox backend. "
                 "Use browser_snapshot or browser_vision to inspect page state.",
     })
-

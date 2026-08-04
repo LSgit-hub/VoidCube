@@ -32,6 +32,7 @@ class CliTurnInputPreparationPorts:
     context_length: Optional[Callable[[str, str, str], int]] = None
     expand_context: Optional[Callable[..., Any]] = None
     sanitize: Optional[Callable[[str], str]] = None
+    begin_turn: Optional[Callable[[Any], TurnInput]] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +87,15 @@ class CliTurnInputPreparationRuntime:
             sanitize = ports.sanitize or self._default_sanitize
             message = sanitize(message)
 
+        turn_builder = ports.begin_turn
+        turn_input = (
+            turn_builder(message)
+            if turn_builder is not None
+            else begin_turn(ports.conversation_history, message)
+        )
         return PreparedCliTurnInput(
             message=message,
-            turn_input=begin_turn(ports.conversation_history, message),
+            turn_input=turn_input,
         )
 
     def _expand_context(self, message: str) -> Any:

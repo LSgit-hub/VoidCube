@@ -66,6 +66,8 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from agent.auxiliary_client import call_llm
+from agent.tool_execution import ToolExecutionResult
+from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_cli.i18n import t
 from VoidCube_core.constants import get_cache_dir, get_VoidCube_home
 
@@ -1981,7 +1983,7 @@ def browser_vision(
     annotate: bool = False,
     task_id: Optional[str] = None,
     main_runtime: Optional[Dict[str, Any]] = None,
-) -> str:
+) -> str | ToolExecutionResult:
     """
     Take a screenshot of the current page and analyze it with vision AI.
     
@@ -2142,7 +2144,21 @@ def browser_vision(
         # Include annotation data if annotated screenshot was taken
         if annotate and result.get("data", {}).get("annotations"):
             response_data["annotations"] = result["data"]["annotations"]
-        return json.dumps(response_data, ensure_ascii=False)
+        return ToolExecutionResult(
+            content=json.dumps(response_data, ensure_ascii=False),
+            artifacts=(
+                Artifact(
+                    kind="image",
+                    uri=str(screenshot_path),
+                    mime_type="image/png",
+                    title="Browser screenshot",
+                    metadata={
+                        "tool": "browser_vision",
+                        "annotated": bool(annotate),
+                    },
+                ),
+            ),
+        )
     
     except Exception as e:
         # Keep the screenshot if it was captured successfully — the failure is
@@ -2154,6 +2170,22 @@ def browser_vision(
         if screenshot_path.exists():
             error_info["screenshot_path"] = str(screenshot_path)
             error_info["note"] = "Screenshot was captured but vision analysis failed. You can still share it via MEDIA:<path>."
+            return ToolExecutionResult(
+                content=json.dumps(error_info, ensure_ascii=False),
+                artifacts=(
+                    Artifact(
+                        kind="image",
+                        uri=str(screenshot_path),
+                        mime_type="image/png",
+                        title="Browser screenshot",
+                        metadata={
+                            "tool": "browser_vision",
+                            "annotated": bool(annotate),
+                            "analysis_failed": True,
+                        },
+                    ),
+                ),
+            )
         return json.dumps(error_info, ensure_ascii=False)
 
 

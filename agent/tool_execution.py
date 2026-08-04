@@ -9,8 +9,17 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 
+from VoidCube_app.contracts.artifacts import Artifact
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecutionResult:
+    """Tool content plus structured user-consumable artifacts."""
+
+    content: str
+    artifacts: tuple[Artifact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,7 @@ class ToolCallOutcome:
     duration: float
     is_error: bool
     skip_reason: Literal["before_batch", "after_call"] | None = None
+    artifacts: tuple[Artifact, ...] = ()
 
     @property
     def skipped(self) -> bool:
@@ -189,9 +199,15 @@ class ToolExecutionCoordinator:
         started = self._clock()
         try:
             raw_result = self._invoke(call)
-            content = raw_result if isinstance(raw_result, str) else str(raw_result)
+            if isinstance(raw_result, ToolExecutionResult):
+                content = str(raw_result.content)
+                artifacts = raw_result.artifacts
+            else:
+                content = raw_result if isinstance(raw_result, str) else str(raw_result)
+                artifacts = ()
         except Exception as exc:
             content = f"Error executing tool '{call.name}': {exc}"
+            artifacts = ()
             logger.error(
                 "Tool invocation raised for %s: %s",
                 call.name,
@@ -205,6 +221,7 @@ class ToolExecutionCoordinator:
             content=content,
             duration=duration,
             is_error=is_error,
+            artifacts=tuple(artifacts),
         )
 
     @staticmethod
@@ -229,6 +246,7 @@ class ToolExecutionCoordinator:
             duration=0.0,
             is_error=False,
             skip_reason=reason,
+            artifacts=(),
         )
 
     @staticmethod

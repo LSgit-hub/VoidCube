@@ -7,6 +7,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+from VoidCube_app.contracts.artifacts import Artifact
 
 class ToolEventKind(str, Enum):
     STARTED = "tool.started"
@@ -28,6 +29,7 @@ class ToolEvent:
     duration: float = 0.0
     is_error: bool = False
     text: str = ""
+    artifacts: tuple[Artifact, ...] = ()
 
     @classmethod
     def started(
@@ -56,6 +58,7 @@ class ToolEvent:
         result: str,
         duration: float,
         is_error: bool,
+        artifacts: tuple[Artifact, ...] = (),
     ) -> "ToolEvent":
         return cls(
             kind=ToolEventKind.COMPLETED,
@@ -65,6 +68,7 @@ class ToolEvent:
             result=result,
             duration=max(0.0, float(duration)),
             is_error=bool(is_error),
+            artifacts=tuple(artifacts),
         )
 
     @classmethod

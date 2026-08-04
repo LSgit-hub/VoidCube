@@ -593,7 +593,7 @@ DrivePerceptionBuilder
 | Stage 0 | 已完成 | 反向导入、前端边界、P0 增长、打包、退役集成和可重复性能基线护栏已建立 | 无 |
 | Stage 1 | 已完成 | 根 `cli.py` 已成为薄兼容入口；共享配置、Provider 和 Gateway 基础能力已进入 `VoidCube_app` | 无 |
 | Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 无 |
-| Stage 3 | 部分完成 | session、turn、queue/cancel、工具、审批和 clarify 已有无界面基础 contract；CLI command domain 已分组 | 建立共享应用组合根、ApplicationState、稳定事件集合和真正通过公共端口运行的 adapter contract tests |
+| Stage 3 | 部分完成 | `VoidCube_app` 已有最小组合根、`ApplicationState`、稳定事件/端口；CLI 的 turn、tool、stream delta、approval、clarify、Agent 最终 usage 和浏览器 artifact 已经通过共享 runtime 发布 | 补齐完整公共 use case 和通过公共端口运行的 adapter contract tests |
 | Stage 4 | 已完成 | repository、治理状态、projection/policy、task state、review/recovery、任务决策、runtime reset、owner session、治理 review adviser、memory promotion、body consent、body review、execution handoff、autonomous-chain planning 和 autonomous cycle 均由显式 owner 承担；Planning 仅保留运行时组合、投影和 service 委托 | 无 |
 | Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 完成等价全链路验收，确认无旧 helper、旧调用路径和双写入口 |
 | Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成大量显式 runtime/ports | 收口 CLI 共享业务状态；删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
@@ -605,6 +605,8 @@ DrivePerceptionBuilder
 - 根 `cli.py` 只保留兼容入口；CLI slash command、ANSI、Rich 和 prompt_toolkit 仍归 CLI adapter。
 - Supervisor UI 资源通过包资源加载，源码与 wheel 使用同一 canonical 文件。
 - session lifecycle、turn 输入/结果、取消/队列、工具事件、审批和 clarify 已有无界面基础 contract。
+- `ApplicationRuntime` 独占 CLI session/turn 的共享历史和活动 turn 状态；CLI 只注入输入、Agent、队列和渲染端口。
+- `ApplicationRuntime` 统一发布 tool、message delta、approval、clarification、最终 usage 和结构化 artifact 事件；浏览器视觉工具的截图是当前已接入的 artifact 来源。
 - endogenous repository、projection/policy、task state、batch review、review cycle/recovery、autonomous-chain planning、autonomous cycle 和治理事件消费已有直接 owner；纯计算不再依赖完整 Supervisor。
 - `EndogenousGovernanceStatePersistenceService` 独占治理事件、cognition state 和 self-regulation 的默认结构、加载、规范化、裁剪、衰减、时间戳和原子持久化；Planning 与治理事件 consumer 通过该 owner 访问，旧 persistence helper 已删除。
 - cognitive posture/alignment 与 self-regulation（包括 carryover release）由显式 service 承接；runtime assembler 负责实例化，Planning 只组合 policy、posture、alignment 和 reasoning snapshot。
@@ -622,7 +624,7 @@ DrivePerceptionBuilder
 
 ### 15.3 当前缺口
 
-- `VoidCube_app` 尚无共享应用组合根，也未形成完整的 `SessionEvent`、`TurnEvent`、`MessageDelta`、usage 和 artifact 事件体系。
+- `VoidCube_app` 已建立最小共享组合根、`ApplicationState`、session/turn/tool/approval/clarify/message delta/usage/artifact 事件和 event sink/基础端口；仍缺完整公共 use case 与 adapter contract。
 - `VoidcubeCLI` 仍持有跨前端可复用的状态和生命周期，不能仅因 `run()` 已缩短就判定 CLI-1/CLI-2/CLI-5 完成。
 - `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
 - 当前性能基线只用于迁移前后和阶段收口对比，不等同于 Stage 7 全量验收；全量测试、发行物验证和最终性能复测仍未完成，因此不能进入 Windows adapter 实施。
@@ -635,7 +637,7 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
+1. **共享应用层 contract 收口**：补齐公共 use case 和 adapter contract tests，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
 2. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
 3. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
 4. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。

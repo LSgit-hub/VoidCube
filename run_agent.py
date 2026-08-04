@@ -129,6 +129,7 @@ from agent.tool_execution import (
     PreparedToolCall,
     ToolCallOutcome,
     ToolExecutionCoordinator,
+    ToolExecutionResult,
 )
 from agent.tool_turn import (
     context_pressure_tracker,
@@ -3157,9 +3158,10 @@ class AIAgent:
                 messages=messages,
                 effective_task_id=effective_task_id,
             )
-            display_result = (
-                raw_result if isinstance(raw_result, str) else str(raw_result)
-            )
+            if isinstance(raw_result, ToolExecutionResult):
+                display_result = raw_result.content
+                return raw_result
+            display_result = raw_result if isinstance(raw_result, str) else str(raw_result)
             return display_result
         except Exception as exc:
             display_result = f"Error executing tool '{call.name}': {exc}"
@@ -3366,6 +3368,7 @@ class AIAgent:
                 result=result,
                 duration=outcome.duration,
                 is_error=outcome.is_error,
+                artifacts=outcome.artifacts,
             )
         )
 

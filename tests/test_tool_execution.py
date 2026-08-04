@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.tool_execution import ToolExecutionCoordinator
+from agent.tool_execution import ToolExecutionCoordinator, ToolExecutionResult
+from VoidCube_app.contracts.artifacts import Artifact
 from run_agent import AIAgent
 from VoidCube_app.tool_events import ToolEventKind
 
@@ -182,6 +183,26 @@ def test_invocation_exception_becomes_an_error_outcome():
     assert outcome.content == "Error executing tool 'web_search': backend unavailable"
 
 
+def test_structured_tool_result_preserves_artifacts_in_outcome():
+    artifact = Artifact(
+        kind="image",
+        uri="C:/tmp/screenshot.png",
+        mime_type="image/png",
+    )
+    coordinator = _coordinator(
+        invoke=lambda _call: ToolExecutionResult(
+            content='{"success": true}',
+            artifacts=(artifact,),
+        )
+    )
+    calls = coordinator.prepare([_tool_call("call-1", "browser_vision", {})])
+
+    outcome = coordinator.execute(calls, parallel=False)[0]
+
+    assert outcome.content == '{"success": true}'
+    assert outcome.artifacts == (artifact,)
+
+
 def test_sequential_delay_runs_only_between_started_calls():
     sleeps: list[float] = []
     coordinator = _coordinator(
@@ -265,6 +286,45 @@ def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch
         }
     ]
     assert budgeted == [messages]
+
+
+def test_agent_canonical_path_keeps_structured_artifacts_on_tool_event(monkeypatch):
+    import run_agent
+
+    artifact = Artifact(
+        kind="image",
+        uri="C:/tmp/screenshot.png",
+        mime_type="image/png",
+    )
+    events = []
+    agent = _agent()
+    agent.tool_event_sink = events.append
+
+    monkeypatch.setattr(
+        run_agent,
+        "handle_function_call",
+        lambda *_args, **_kwargs: ToolExecutionResult(
+            content='{"success": true}',
+            artifacts=(artifact,),
+        ),
+    )
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+
+    assistant = SimpleNamespace(
+        tool_calls=[_tool_call("call-1", "browser_vision", {})]
+    )
+    messages: list[dict] = []
+
+    agent._execute_tool_calls(assistant, messages, "task-artifact")
+
+    assert events[1].artifacts == (artifact,)
+    assert messages[0]["content"] == '{"success": true}'
 
 
 def test_agent_clarify_route_passes_options_to_shared_sink() -> None:
