@@ -57,6 +57,7 @@ from VoidCube_app.session_lifecycle import (
     SessionHydrationStatus,
     SessionLifecycleState,
 )
+from VoidCube_app.application import ApplicationRuntime
 from VoidCube_app.interaction_contract import ApprovalStatus
 from VoidCube_app.turn_queue import interrupt_text
 from VoidCube_cli.turn_queue_adapter import requeue_interrupted_inputs
@@ -1050,10 +1051,16 @@ def test_compression_ports_sync_host_to_the_agent_continuation_session() -> None
         session_id="continuation-id",
         persist_compressed_session_history=persisted.append,
     )
+    application_runtime = SimpleNamespace(
+        state=SimpleNamespace(session_hydration=object()),
+        clear_session_hydration=lambda: setattr(
+            application_runtime.state, "session_hydration", None
+        ),
+    )
     host = SimpleNamespace(
         conversation_history=[],
         session_id="previous-id",
-        _session_hydration=object(),
+        _ensure_application_runtime=lambda: application_runtime,
     )
 
     ports = command_handler_registry._compression_command_ports(
@@ -1065,7 +1072,7 @@ def test_compression_ports_sync_host_to_the_agent_continuation_session() -> None
     assert persisted == [history]
     assert host.conversation_history == history
     assert host.session_id == "continuation-id"
-    assert host._session_hydration is None
+    assert application_runtime.state.session_hydration is None
 
 
 def test_api_command_ports_bind_only_explicit_runtime_updates(monkeypatch) -> None:
@@ -1212,9 +1219,14 @@ def test_cli_process_routes_resume_through_registry_and_shared_use_case(
         observed.append(kwargs)
         return ResumeSessionResult(state=state, metadata={"title": "Saved"})
 
-    monkeypatch.setattr(command_handler_registry, "resume_session", fake_resume_session)
     repository = object()
+    runtime = ApplicationRuntime.create(
+        session_id="current-id",
+        session_start=started_at,
+    )
+    monkeypatch.setattr(runtime, "resume_session", fake_resume_session)
     app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._application_runtime = runtime
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
@@ -1234,7 +1246,6 @@ def test_cli_process_routes_resume_through_registry_and_shared_use_case(
     assert observed == [
         {
             "repository": repository,
-            "current_session_id": "current-id",
             "target_session_id": "target-id",
             "session_start": started_at,
         }
@@ -1269,10 +1280,16 @@ def test_cli_process_routes_branch_through_registry_with_runtime_snapshot(
             copied_message_count=1,
         )
 
-    monkeypatch.setattr(command_handler_registry, "branch_session", fake_branch_session)
     monkeypatch.setenv("VOIDCUBE_SESSION_SOURCE", "integration-test")
     repository = object()
+    runtime = ApplicationRuntime.create(
+        session_id="current-id",
+        session_start=state.session_start,
+        conversation_history=history,
+    )
+    monkeypatch.setattr(runtime, "branch_session", fake_branch_session)
     app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._application_runtime = runtime
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
@@ -1289,8 +1306,6 @@ def test_cli_process_routes_branch_through_registry_with_runtime_snapshot(
     assert len(observed) == 1
     call = observed[0]
     assert call["repository"] is repository
-    assert call["current_session_id"] == "current-id"
-    assert call["conversation_history"] is history
     assert call["requested_title"] == "Mixed Case"
     assert call["source"] == "integration-test"
     assert call["model"] == "active-model"
@@ -1326,18 +1341,19 @@ def test_cli_process_routes_new_through_shared_session_transition(
 
     monkeypatch.setattr(
         command_handler_registry,
-        "start_new_session",
-        fake_start_new_session,
-    )
-    monkeypatch.setattr(
-        command_handler_registry,
         "_notify_session_boundary",
         lambda _host, event: events.append(("hook", event)),
     )
     monkeypatch.setenv("VOIDCUBE_SESSION_SOURCE", "integration-test")
     repository = object()
     agent = object()
+    runtime = ApplicationRuntime.create(
+        session_id="current-id",
+        session_start=state.session_start,
+    )
+    monkeypatch.setattr(runtime, "start_new_session", fake_start_new_session)
     app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._application_runtime = runtime
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
@@ -1364,7 +1380,6 @@ def test_cli_process_routes_new_through_shared_session_transition(
     assert len(observed) == 1
     call = observed[0]
     assert call["repository"] is repository
-    assert call["current_session_id"] == "current-id"
     assert call["source"] == "integration-test"
     assert call["model"] == "active-model"
     assert call["model_config"] == {
@@ -1385,8 +1400,12 @@ def test_cli_process_routes_clear_transition_before_tui_display(monkeypatch) -> 
         resumed=False,
     )
 
+    runtime = ApplicationRuntime.create(
+        session_id="current-id",
+        session_start=state.session_start,
+    )
     monkeypatch.setattr(
-        command_handler_registry,
+        runtime,
         "start_new_session",
         lambda **_kwargs: events.append("start") or state,
     )
@@ -1396,6 +1415,7 @@ def test_cli_process_routes_clear_transition_before_tui_display(monkeypatch) -> 
         flush=lambda: events.append("flush"),
     )
     app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._application_runtime = runtime
     app._command_running = False
     app._command_status = ""
     app._invalidate = lambda **kwargs: None
@@ -1545,7 +1565,7 @@ def test_cli_applies_shared_session_state_through_public_agent_port() -> None:
     assert app.session_start == started_at
     assert app.conversation_history == [{"role": "user", "content": "hello"}]
     assert app._pending_title is None
-    assert app._resumed is True
+    assert app._application_runtime.state.resumed is True
     assert app._session_hydration is None
     assert calls == [("target", started_at)]
 
@@ -1563,9 +1583,14 @@ def test_cli_reuses_one_shared_hydration_result(monkeypatch) -> None:
         calls.append((repository, session_id))
         return hydration
 
-    monkeypatch.setattr(cli_module, "hydrate_session", fake_hydrate_session)
     repository = object()
+    runtime = ApplicationRuntime.create(
+        session_id="target",
+        session_start=datetime(2026, 7, 29, 20, 4, 0),
+    )
+    monkeypatch.setattr(runtime, "hydrate_session", fake_hydrate_session)
     app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._application_runtime = runtime
     app._session_db = repository
     app.session_id = "target"
     app.conversation_history = []

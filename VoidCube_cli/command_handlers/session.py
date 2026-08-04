@@ -30,7 +30,6 @@ from VoidCube_cli.session_command_adapter import (
 class TitleCommandPorts:
     get_title: Callable[[], SessionTitleResult]
     set_title: Callable[[str], SessionTitleResult]
-    set_pending_title: Callable[[str | None], None]
     emit: Callable[[str], None]
     unavailable_message: str
 
@@ -233,7 +232,6 @@ def _show_title_update(
             f"{result.conflicting_session_id}"
         )
     elif result.status is SessionTitleStatus.QUEUED:
-        ports.set_pending_title(result.title)
         ports.emit(
             f"  Session title queued: {result.title} (will be saved on first message)"
         )

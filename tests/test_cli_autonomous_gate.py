@@ -193,7 +193,6 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
 
     cli.agent = None
     cli._ensure_runtime_credentials = lambda: True
-    cli._resumed = False
     cli.conversation_history = []
     cli._clarification_sink = None
     cli._pending_title = None

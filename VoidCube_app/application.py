@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import queue
 from typing import Any, Mapping, Sequence
 import uuid
 
@@ -32,7 +33,33 @@ from VoidCube_app.interaction_contract import (
     resolve_clarification,
 )
 from VoidCube_app.session_identity import generate_session_id
+from VoidCube_app.session_lifecycle import (
+    BranchSessionResult,
+    HistoryMutationResult,
+    ResumeSessionResult,
+    SessionHydration,
+    SessionHydrationStatus,
+    SessionLifecycleState,
+    SessionRepository,
+    SessionTitleResult,
+    SessionTitleStatus,
+    branch_session as _branch_session,
+    get_session_title as _get_session_title,
+    hydrate_session as _hydrate_session,
+    remove_last_user_turn as _remove_last_user_turn,
+    resume_session as _resume_session,
+    set_session_title as _set_session_title,
+    start_new_session as _start_new_session,
+)
 from VoidCube_app.tool_events import ToolEvent
+from VoidCube_app.turn_queue import (
+    TurnInputRoute,
+    TurnInterrupt,
+    TurnInterruptReason,
+    cancel_turn as _cancel_turn,
+    interrupt_for_input as _interrupt_for_input,
+    route_turn_input as _route_turn_input,
+)
 from VoidCube_app.turn_contract import (
     Message,
     TurnInput,
@@ -50,6 +77,11 @@ class ApplicationState:
     conversation_history: list[Message] = field(default_factory=list)
     resumed: bool = False
     active_turn_id: str | None = None
+    pending_title: str | None = None
+    session_hydration: SessionHydration | None = None
+    agent_running: bool = False
+    pending_input_queue: queue.Queue[Any] = field(default_factory=queue.Queue)
+    interrupt_queue: queue.Queue[Any] = field(default_factory=queue.Queue)
 
     @property
     def turn_active(self) -> bool:
@@ -116,6 +148,235 @@ class ApplicationRuntime:
     def replace_history(self, history: Sequence[Mapping[str, Any]]) -> None:
         self.state.conversation_history = [dict(message) for message in history]
 
+    def set_pending_title(self, title: str | None) -> None:
+        self.state.pending_title = title
+
+    def clear_pending_title(self) -> None:
+        self.state.pending_title = None
+
+    def set_session_hydration(self, hydration: SessionHydration) -> None:
+        self.state.session_hydration = hydration
+
+    def clear_session_hydration(self) -> None:
+        self.state.session_hydration = None
+
+    def load_session_hydration(
+        self,
+        *,
+        repository: SessionRepository | None,
+        session_id: str | None = None,
+    ) -> tuple[SessionHydration, bool]:
+        """Load and cache one hydration result in the shared session state."""
+        hydration = self.state.session_hydration
+        loaded_now = hydration is None
+        if hydration is None:
+            hydration = self.hydrate_session(
+                repository=repository,
+                session_id=session_id,
+            )
+            self.set_session_hydration(hydration)
+        if hydration.status is SessionHydrationStatus.READY:
+            self.replace_history(hydration.conversation_history)
+        return hydration, loaded_now
+
+    def reset_input_queues(self) -> None:
+        """Start a fresh adapter run while retaining shared session identity."""
+        self.state.pending_input_queue = queue.Queue()
+        self.state.interrupt_queue = queue.Queue()
+
+    def set_agent_running(self, value: bool) -> None:
+        self.state.agent_running = bool(value)
+
+    def apply_session_state(self, state: SessionLifecycleState) -> None:
+        """Adopt one shared session transition before adapter-side activation."""
+        previous_session_id = self.state.session_id
+        if previous_session_id != state.session_id:
+            self._emit(
+                SessionEvent(
+                    kind=SessionEventKind.ENDED,
+                    session_id=previous_session_id,
+                    reason="session_transition",
+                )
+            )
+        self.state.session_id = state.session_id
+        self.state.session_start = state.session_start
+        self.replace_history(state.conversation_history)
+        self.state.resumed = bool(state.resumed)
+        self.state.active_turn_id = None
+        self.state.pending_title = state.pending_title
+        self.clear_session_hydration()
+        self.set_agent_running(False)
+        self._emit(
+            SessionEvent(
+                kind=(
+                    SessionEventKind.RESUMED
+                    if state.resumed
+                    else SessionEventKind.STARTED
+                ),
+                session_id=state.session_id,
+                resumed=state.resumed,
+            )
+        )
+
+    def start_new_session(
+        self,
+        *,
+        repository: SessionRepository | None,
+        started_at: datetime,
+        source: str,
+        model: str,
+        model_config: Mapping[str, Any],
+        create_record: bool,
+    ) -> SessionLifecycleState:
+        """Create the next session transition through the shared use case."""
+        return _start_new_session(
+            repository=repository,
+            current_session_id=self.state.session_id,
+            started_at=started_at,
+            source=source,
+            model=model,
+            model_config=model_config,
+            create_record=create_record,
+            uuid_factory=self._uuid_factory,
+        )
+
+    def resume_session(
+        self,
+        *,
+        repository: SessionRepository,
+        target_session_id: str,
+        session_start: datetime,
+    ) -> ResumeSessionResult:
+        """Resolve a stored session against the current shared session."""
+        return _resume_session(
+            repository=repository,
+            current_session_id=self.state.session_id,
+            target_session_id=target_session_id,
+            session_start=session_start,
+        )
+
+    def branch_session(
+        self,
+        *,
+        repository: SessionRepository,
+        started_at: datetime,
+        requested_title: str,
+        source: str,
+        model: str,
+        model_config: Mapping[str, Any],
+    ) -> BranchSessionResult:
+        """Create a child session from the canonical shared history."""
+        return _branch_session(
+            repository=repository,
+            current_session_id=self.state.session_id,
+            conversation_history=self.state.conversation_history,
+            started_at=started_at,
+            requested_title=requested_title,
+            source=source,
+            model=model,
+            model_config=model_config,
+            uuid_factory=self._uuid_factory,
+        )
+
+    def hydrate_session(
+        self,
+        *,
+        repository: SessionRepository | None,
+        session_id: str | None = None,
+    ) -> SessionHydration:
+        """Load session history through the shared session read use case."""
+        return _hydrate_session(
+            repository=repository,
+            session_id=session_id or self.state.session_id,
+        )
+
+    def remove_last_user_turn(
+        self,
+        *,
+        repository: SessionRepository | None,
+    ) -> HistoryMutationResult:
+        """Apply one history mutation and update shared state on success."""
+        result = _remove_last_user_turn(
+            self.state.conversation_history,
+            repository=repository,
+            session_id=self.state.session_id if repository is not None else "",
+        )
+        if result.conversation_history != tuple(self.state.conversation_history):
+            self.replace_history(result.conversation_history)
+        return result
+
+    def get_session_title(
+        self,
+        *,
+        repository: SessionRepository | None,
+    ) -> SessionTitleResult:
+        return _get_session_title(
+            repository=repository,
+            session_id=self.state.session_id,
+            pending_title=self.state.pending_title,
+        )
+
+    def set_session_title(
+        self,
+        *,
+        repository: SessionRepository | None,
+        raw_title: str,
+    ) -> SessionTitleResult:
+        result = _set_session_title(
+            repository=repository,
+            session_id=self.state.session_id,
+            raw_title=raw_title,
+        )
+        if result.status is SessionTitleStatus.QUEUED:
+            self.set_pending_title(result.title)
+        return result
+
+    def enqueue_turn_input(
+        self,
+        payload: Any,
+        *,
+        is_command: bool,
+        busy_input_mode: Any,
+    ) -> TurnInputRoute:
+        """Route and enqueue input through the shared turn state."""
+        route = _route_turn_input(
+            agent_running=self.state.agent_running,
+            is_command=is_command,
+            busy_input_mode=busy_input_mode,
+        )
+        target = (
+            self.state.pending_input_queue
+            if route is TurnInputRoute.NEXT_TURN
+            else self.state.interrupt_queue
+        )
+        target.put(payload)
+        return route
+
+    def route_turn_input(
+        self,
+        *,
+        agent_running: bool | None = None,
+        is_command: bool,
+        busy_input_mode: Any,
+    ) -> TurnInputRoute:
+        return _route_turn_input(
+            agent_running=(
+                self.state.agent_running
+                if agent_running is None
+                else agent_running
+            ),
+            is_command=is_command,
+            busy_input_mode=busy_input_mode,
+        )
+
+    @staticmethod
+    def interrupt_for_input(payload: Any) -> TurnInterrupt:
+        return _interrupt_for_input(payload)
+
+    @staticmethod
+    def cancel_turn(reason: TurnInterruptReason) -> TurnInterrupt:
+        return _cancel_turn(reason)
+
     def begin_turn(self, user_message: Any) -> TurnInput:
         if self.state.turn_active:
             raise RuntimeError("an application turn is already active")
@@ -123,6 +384,7 @@ class ApplicationRuntime:
         turn_input = _begin_turn(self.state.conversation_history, user_message)
         self.state.conversation_history = list(turn_input.conversation_history)
         self.state.active_turn_id = turn_id
+        self.set_agent_running(True)
         self._emit(
             TurnEvent(
                 kind=TurnEventKind.STARTED,
@@ -151,6 +413,7 @@ class ApplicationRuntime:
             )
         )
         self.state.active_turn_id = None
+        self.set_agent_running(False)
 
     def tool_event_sink(self, event: ToolEvent) -> None:
         self._emit(event)

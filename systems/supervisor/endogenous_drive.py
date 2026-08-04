@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional
 
 from systems.supervisor.endogenous_candidate_pipeline import (
@@ -43,6 +42,7 @@ from systems.supervisor.endogenous_proposals import (
     execute_lm_task_generation_from_runtime_config,
     is_lm_task_generation_enabled,
 )
+from systems.supervisor.endogenous_generation_state import LmGenerationStateOwner
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
 
 
@@ -58,14 +58,17 @@ class EndogenousDriveEngine:
     context-aware learning topics.
     """
 
-    def __init__(self, config: Any | None = None) -> None:
+    def __init__(
+        self,
+        config: Any | None = None,
+        *,
+        generation_state: LmGenerationStateOwner | None = None,
+    ) -> None:
         self.config = config
-        self._latest_lm_task_generation_context: Dict[str, Any] = {}
-        self._latest_lm_task_generation_proposals: List[Dict[str, Any]] = []
+        self._generation_state = generation_state or LmGenerationStateOwner()
 
     def get_latest_lm_task_generation_state(self) -> Dict[str, Any]:
-        return {"context": deepcopy(self._latest_lm_task_generation_context or {}),
-                "proposals": deepcopy(self._latest_lm_task_generation_proposals)}
+        return self._generation_state.snapshot()
 
     def resolve_cognitive_posture_state(
         self,
@@ -211,20 +214,23 @@ class EndogenousDriveEngine:
                 evidence_packet=evidence_packet,
                 runtime_config=service_runtime,
             )
-            self._latest_lm_task_generation_proposals = execution.proposals
-            self._latest_lm_task_generation_context = execution.context_snapshot
+            self._generation_state.record(
+                context_snapshot=execution.context_snapshot,
+                proposals=execution.proposals,
+            )
             proposals = execution.proposals
         else:
             proposals = [dict(item) for item in proposals_override if isinstance(item, dict)]
         if not proposals:
             return []
+        generation_state = self._generation_state.snapshot()
         return materialize_lm_proposals_for_deliberation(
             proposals=proposals,
             existing_keys=existing_keys,
             deliberation=deliberation,
             drive_context=drive_context,
             evidence_packet=evidence_packet,
-            cognitive_assessment=self._latest_lm_task_generation_context.get(
+            cognitive_assessment=dict(generation_state["context"]).get(
                 "cognitive_assessment"
             ),
         )

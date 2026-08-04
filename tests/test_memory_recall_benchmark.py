@@ -15,6 +15,7 @@ async def test_versioned_memory_recall_quality_benchmark_passes():
     assert result["passed"] is True
     assert result["metrics"]["recall_at_5"] >= 1.0
     assert result["metrics"]["mrr"] >= 0.8
+    assert result["metrics"]["map_at_5"] >= 0.8
     assert result["metrics"]["scope_leakage_rate"] == 0.0
 
 

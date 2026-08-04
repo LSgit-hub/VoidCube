@@ -4,10 +4,8 @@ import queue
 
 import pytest
 
-from VoidCube_app.turn_queue import TurnInputRoute
 from VoidCube_cli.turn_queue_adapter import (
     InterruptPollStatus,
-    enqueue_turn_input,
     poll_interrupt_input,
     requeue_interrupted_inputs,
 )
@@ -28,25 +26,6 @@ def test_adapter_drains_interrupt_queue_without_using_empty_as_a_guard() -> None
     assert pending.get_nowait() == "first\nsecond\nthird"
     with pytest.raises(queue.Empty):
         interrupts.get_nowait()
-
-
-def test_adapter_projects_shared_route_to_exactly_one_queue() -> None:
-    pending = queue.Queue()
-    interrupts = queue.Queue()
-
-    route = enqueue_turn_input(
-        pending,
-        interrupts,
-        ("inspect", ["screen.png"]),
-        agent_running=True,
-        is_command=False,
-        busy_input_mode="interrupt",
-    )
-
-    assert route is TurnInputRoute.INTERRUPT
-    assert interrupts.get_nowait() == ("inspect", ["screen.png"])
-    with pytest.raises(queue.Empty):
-        pending.get_nowait()
 
 
 def test_interrupt_poll_returns_structured_empty_result() -> None:

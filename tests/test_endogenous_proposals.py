@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_generation_state import LmGenerationStateOwner
 from systems.supervisor.endogenous_proposal_port import (
     project_lm_generation_application_state,
 )
@@ -58,14 +59,17 @@ def test_lm_generation_gate_owner_normalizes_runtime_flag():
 
 
 def test_latest_lm_generation_state_is_a_single_defensive_application_projection():
-    engine = EndogenousDriveEngine()
-    engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "assessment": {"gaps": ["missing trace"]},
-    }
-    engine._latest_lm_task_generation_proposals = [
-        {"candidate_kind": "observation", "metadata": {"tags": ["grounded"]}}
-    ]
+    generation_state = LmGenerationStateOwner()
+    engine = EndogenousDriveEngine(generation_state=generation_state)
+    generation_state.record(
+        context_snapshot={
+            "status": "completed",
+            "assessment": {"gaps": ["missing trace"]},
+        },
+        proposals=[
+            {"candidate_kind": "observation", "metadata": {"tags": ["grounded"]}}
+        ],
+    )
 
     state = engine.get_latest_lm_task_generation_state()
 
@@ -82,13 +86,15 @@ def test_latest_lm_generation_state_is_a_single_defensive_application_projection
     state["context"]["assessment"]["gaps"].append("weak source")
     state["proposals"][0]["metadata"]["tags"].append("reviewable")
 
-    assert engine._latest_lm_task_generation_context == {
-        "status": "completed",
-        "assessment": {"gaps": ["missing trace"]},
+    assert engine.get_latest_lm_task_generation_state() == {
+        "context": {
+            "status": "completed",
+            "assessment": {"gaps": ["missing trace"]},
+        },
+        "proposals": [
+            {"candidate_kind": "observation", "metadata": {"tags": ["grounded"]}}
+        ],
     }
-    assert engine._latest_lm_task_generation_proposals == [
-        {"candidate_kind": "observation", "metadata": {"tags": ["grounded"]}}
-    ]
 
 
 def test_lm_generation_application_port_projects_one_snapshot_for_both_consumers():

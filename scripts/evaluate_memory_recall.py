@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -27,7 +27,40 @@ def load_benchmark(path: str | Path = DEFAULT_DATASET) -> dict[str, Any]:
 
 
 def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    """Seed benchmark records into the service SQLite store.
+
+    Records may anchor their timestamps relative to "now" via optional
+    ``timestamp_days_ago`` (turn/archive), ``timespan_days_ago`` (compressed),
+    or ``valid_from_days_ago`` (profile) fields so temporal benchmark cases
+    never go stale. Compressed records may also set ``memory_type``,
+    ``importance`` and ``confidence``. Fields omitted fall back to the
+    previous defaults (anchored at now).
+    """
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+
+    def days_ago(days: Any) -> str:
+        return (now_dt - timedelta(days=max(0, int(days)))).isoformat()
+
+    def month_window(months_back: int) -> tuple[str, str]:
+        """Return (first-day, last-day) ISO bounds of a calendar month."""
+        first_current = now_dt.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        year, month = first_current.year, first_current.month
+        for _ in range(max(0, int(months_back))):
+            month -= 1
+            if month < 1:
+                month = 12
+                year -= 1
+        first = first_current.replace(year=year, month=month)
+        if first.month == 12:
+            next_month = first.replace(year=first.year + 1, month=1)
+        else:
+            next_month = first.replace(month=first.month + 1)
+        last = next_month - timedelta(seconds=1)
+        return first.isoformat(), last.isoformat()
+
     conn = open_memory_sqlite(service._db_path)
     try:
         for record in records:
@@ -44,14 +77,16 @@ def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> No
                     (session_id, owner_id, workspace_id, now, now),
                 )
             if source_type == "turn":
+                timestamp = days_ago(record.get("timestamp_days_ago", 0))
                 conn.execute(
                     "INSERT INTO turns "
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
                     "decay_factor, tags, metadata, compressed_to_tier2, owner_id, workspace_id) "
                     "VALUES (?, ?, 'user', ?, ?, 1.0, 0.01, '[]', '{}', 0, ?, ?)",
-                    (memory_id, session_id, record["text"], now, owner_id, workspace_id),
+                    (memory_id, session_id, record["text"], timestamp, owner_id, workspace_id),
                 )
             elif source_type == "archive":
+                timestamp = days_ago(record.get("timestamp_days_ago", 0))
                 conn.execute(
                     "INSERT INTO turns_archive "
                     "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
@@ -62,33 +97,49 @@ def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> No
                         session_id,
                         record["text"][:500],
                         record["text"],
-                        now,
+                        timestamp,
                         now,
                         owner_id,
                         workspace_id,
                     ),
                 )
             elif source_type == "compressed":
+                anchor = str(record.get("timespan_anchor") or "")
+                if anchor == "this_month":
+                    span_start, span_end = month_window(0)
+                elif anchor == "last_month":
+                    span_start, span_end = month_window(1)
+                else:
+                    span = days_ago(record.get("timespan_days_ago", 0))
+                    span_start, span_end = span, span
+                memory_type = str(record.get("memory_type") or "event")
+                importance = float(record.get("importance") or 0.8)
+                confidence = float(record.get("confidence") or 0.9)
                 conn.execute(
                     "INSERT INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, compressed_at, "
                     "status, weight, event_kind, owner_id, workspace_id) "
-                    "VALUES (?, 'event', ?, ?, ?, ?, 0.8, 0.9, ?, '[]', '[]', ?, "
-                    "'active', 0.8, 'decision', ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, "
+                    "'active', ?, 'decision', ?, ?)",
                     (
                         memory_id,
+                        memory_type,
                         record["title"],
                         record["summary"],
-                        now,
-                        now,
+                        span_start,
+                        span_end,
+                        importance,
+                        confidence,
                         json.dumps(record.get("topics") or [], ensure_ascii=False),
                         now,
+                        float(record.get("weight") or importance),
                         owner_id,
                         workspace_id,
                     ),
                 )
             elif source_type == "profile":
+                valid_from = days_ago(record.get("valid_from_days_ago", 0))
                 conn.execute(
                     "INSERT INTO profile_memories "
                     "(memory_id, memory_kind, subject, predicate, value, summary, confidence, "
@@ -102,7 +153,7 @@ def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> No
                         record["predicate"],
                         record["value"],
                         record["summary"],
-                        now,
+                        valid_from,
                         owner_id,
                         workspace_id,
                         now,
@@ -131,6 +182,7 @@ async def evaluate_recall_benchmark(
         _seed_benchmark(service, list(benchmark["records"]))
         details = []
         reciprocal_ranks = []
+        average_precisions = []
         hits = 0
         leak_cases = 0
         for case in benchmark["cases"]:
@@ -138,6 +190,8 @@ async def evaluate_recall_benchmark(
                 RecallRequest(
                     query=case["query"],
                     memory_type=case.get("memory_type"),
+                    timespan_start=case.get("timespan_start"),
+                    timespan_end=case.get("timespan_end"),
                     limit=5,
                     owner_id=case["owner_id"],
                     workspace_id=case["workspace_id"],
@@ -152,6 +206,19 @@ async def evaluate_recall_benchmark(
             hits += int(hit)
             leak_cases += int(leaked)
             reciprocal_ranks.append(1.0 / min(ranks) if ranks else 0.0)
+            expected_count = min(len(expected), 5)
+            if expected_count:
+                precision_sum = 0.0
+                for index, item in enumerate(returned):
+                    if item not in expected:
+                        continue
+                    hits_in_top = sum(
+                        1 for r in returned[: index + 1] if r in expected
+                    )
+                    precision_sum += hits_in_top / (index + 1)
+                average_precisions.append(precision_sum / expected_count)
+            else:
+                average_precisions.append(0.0)
             details.append(
                 {
                     "name": case["name"],
@@ -166,14 +233,18 @@ async def evaluate_recall_benchmark(
     metrics = {
         "recall_at_5": round(hits / case_count, 6),
         "mrr": round(sum(reciprocal_ranks) / case_count, 6),
+        "map_at_5": round(sum(average_precisions) / case_count, 6),
         "scope_leakage_rate": round(leak_cases / case_count, 6),
     }
     thresholds = dict(benchmark["thresholds"])
-    passed = (
-        metrics["recall_at_5"] >= float(thresholds["recall_at_5"])
-        and metrics["mrr"] >= float(thresholds["mrr"])
-        and metrics["scope_leakage_rate"] <= float(thresholds["scope_leakage_rate"])
-    )
+    passed_checks = [
+        metrics["recall_at_5"] >= float(thresholds["recall_at_5"]),
+        metrics["mrr"] >= float(thresholds["mrr"]),
+        metrics["scope_leakage_rate"] <= float(thresholds["scope_leakage_rate"]),
+    ]
+    if "map_at_5" in thresholds:
+        passed_checks.append(metrics["map_at_5"] >= float(thresholds["map_at_5"]))
+    passed = all(passed_checks)
     return {
         "dataset": str(Path(dataset_path)),
         "version": benchmark["version"],

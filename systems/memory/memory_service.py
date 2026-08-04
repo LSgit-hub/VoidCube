@@ -192,6 +192,7 @@ class RecallRequest(BaseModel):
     topic: Optional[str] = None
     timespan_start: Optional[str] = None
     timespan_end: Optional[str] = None
+    as_of: Optional[str] = None  # bi-temporal transaction-time snapshot
     limit: Optional[int] = Field(default=None, ge=1, le=50)
     max_context_chars: Optional[int] = Field(default=None, ge=256, le=20000)
     min_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -720,7 +721,8 @@ class MemoryService:
                 verified_at TEXT,                     -- source verification timestamp
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
                 workspace_id TEXT NOT NULL DEFAULT 'default',
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction'
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
+                created_at TEXT                  -- immutable transaction-time anchor (when this version became current); COALESCE(created_at, compressed_at)
             )
         ''')
 
@@ -798,6 +800,9 @@ class MemoryService:
             reconcile_released_identity_revisions,
         )
         setup_memory_fts(conn)
+        from systems.memory.entity_graph import setup_entity_graph
+
+        setup_entity_graph(conn)
         seeded = ensure_founding_memories(conn)
         released_revisions = reconcile_released_identity_revisions(conn)
 
@@ -957,6 +962,7 @@ class MemoryService:
             ("status", "TEXT DEFAULT 'active'"),
             ("superseded_by", "TEXT"),
             ("weight", "REAL DEFAULT 1.0"),
+            ("created_at", "TEXT"),
             # Five-dimensional content-aware weight signals
             ("event_kind", "TEXT"),
             ("access_count", "INTEGER DEFAULT 0"),
@@ -973,6 +979,12 @@ class MemoryService:
         for col_name, col_def in migrations:
             if col_name not in existing:
                 cursor.execute(f"ALTER TABLE compressed_memories ADD COLUMN {col_name} {col_def}")
+        # Backfill the transaction-time anchor for any row missing it
+        # (legacy rows and rows written before created_at was populated).
+        cursor.execute(
+            "UPDATE compressed_memories SET created_at = compressed_at "
+            "WHERE created_at IS NULL"
+        )
         if "embedding" in existing:
             cursor.execute("ALTER TABLE compressed_memories DROP COLUMN embedding")
 
@@ -1105,8 +1117,32 @@ class MemoryService:
                     "WHERE memory_id = ?",
                     (parent_id,),
                 )
+                # Record the new parent's entities in the entity graph.
+                from systems.memory.entity_graph import update_entity_graph
+
+                parent_entities = []
+                if entities_json:
+                    try:
+                        parent_entities = json.loads(entities_json)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        parent_entities = []
+                update_entity_graph(
+                    conn,
+                    memory_id=parent_id,
+                    memory_type=next_type,
+                    entities=parent_entities,
+                    owner_id=str(owner_id),
+                    workspace_id=str(workspace_id),
+                    memory_domain=str(memory_domain),
+                    now=now.isoformat(),
+                )
                 escalated += 1
 
+        # Backfill the transaction-time anchor for any row still missing one.
+        conn.execute(
+            "UPDATE compressed_memories SET created_at = compressed_at "
+            "WHERE created_at IS NULL"
+        )
         conn.commit()
         conn.close()
         if escalated or purged:
@@ -1307,6 +1343,16 @@ class MemoryService:
             methods=["POST"],
         )
         self.app.add_api_route("/admin/exports", self.export_memory, methods=["POST"])
+        # Entity graph introspection + maintenance
+        self.app.add_api_route("/graph/entities", self.list_graph_entities, methods=["GET"])
+        self.app.add_api_route("/graph/rebuild", self.rebuild_entity_graph, methods=["POST"])
+        self.app.add_api_route(
+            "/graph/neighbors/{entity_id}",
+            self.get_graph_neighbors,
+            methods=["GET"],
+        )
+        # Compression quality dashboard
+        self.app.add_api_route("/compressed/quality", self.compression_quality, methods=["GET"])
 
     async def create_backup(self):
         result = await asyncio.to_thread(self._backup_manager.create_backup)
@@ -1336,6 +1382,128 @@ class MemoryService:
     async def semantic_backfill(self):
         indexed = await asyncio.to_thread(self._semantic_index.index_pending)
         return {"status": "indexed", "indexed": indexed, **self._semantic_index.status()}
+
+    # ── Entity graph introspection ────────────────────────────────────────
+
+    @staticmethod
+    def _parse_graph_domains(source_domains: str | None) -> tuple[str, ...]:
+        if not source_domains:
+            return (DEFAULT_MEMORY_DOMAIN.value,)
+        return tuple(
+            dict.fromkeys(str(item).strip() for item in source_domains.split(",") if item.strip())
+        )
+
+    async def list_graph_entities(
+        self,
+        limit: int = 50,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        source_domains: str | None = None,
+    ):
+        from systems.memory.entity_graph import list_graph_entities as _list_entities
+
+        domains = self._parse_graph_domains(source_domains)
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            entities = _list_entities(
+                conn,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                source_domains=domains,
+                limit=limit,
+            )
+        finally:
+            conn.close()
+        return {"entities": entities, "count": len(entities)}
+
+    async def get_graph_neighbors(
+        self,
+        entity_id: str,
+        limit: int = 50,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        source_domains: str | None = None,
+    ):
+        from systems.memory.entity_graph import list_graph_neighbors as _neighbors
+
+        domains = self._parse_graph_domains(source_domains)
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            neighbors = _neighbors(
+                conn,
+                entity_id,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                source_domains=domains,
+                limit=limit,
+            )
+        finally:
+            conn.close()
+        return {"entity_id": entity_id, "neighbors": neighbors, "count": len(neighbors)}
+
+    async def rebuild_entity_graph(
+        self,
+        owner_id: str = GLOBAL_SCOPE_ID,
+        workspace_id: str = GLOBAL_SCOPE_ID,
+        memory_domain: str | None = None,
+    ):
+        from systems.memory.entity_graph import rebuild_entity_graph as _rebuild
+
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            linked = _rebuild(
+                conn,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_domain=memory_domain,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"status": "rebuilt", "memory_records_linked": linked}
+
+    # ── Compression quality dashboard ─────────────────────────────────────
+
+    async def compression_quality(self, limit: int = 20):
+        bounded = max(1, min(int(limit), 200))
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT evaluated_at, status, candidate_count, event_count, "
+                "covered_turn_count, event_coverage, backlink_completeness, "
+                "compression_ratio, degraded_fraction, source_support, "
+                "identifier_fidelity, polarity_consistency, thresholds, failed_checks "
+                "FROM compression_quality_audit ORDER BY evaluated_at DESC LIMIT ?",
+                (bounded,),
+            ).fetchall()
+        finally:
+            conn.close()
+        audits = [
+            {
+                "evaluated_at": str(row[0] or ""),
+                "status": str(row[1] or ""),
+                "candidate_count": int(row[2] or 0),
+                "event_count": int(row[3] or 0),
+                "covered_turn_count": int(row[4] or 0),
+                "event_coverage": float(row[5] or 0.0),
+                "backlink_completeness": float(row[6] or 0.0),
+                "compression_ratio": float(row[7] or 0.0),
+                "degraded_fraction": float(row[8] or 0.0),
+                "source_support": float(row[9] or 0.0),
+                "identifier_fidelity": float(row[10] or 0.0),
+                "polarity_consistency": float(row[11] or 0.0),
+                "thresholds": row[12],
+                "failed_checks": row[13],
+            }
+            for row in rows
+        ]
+        passed = sum(1 for audit in audits if audit["status"] == "accepted")
+        return {
+            "audits": audits,
+            "count": len(audits),
+            "accepted": passed,
+            "rejected": len(audits) - passed,
+        }
 
     @staticmethod
     def _identity_revision_row(row) -> Dict[str, Any]:
@@ -3383,6 +3551,7 @@ class MemoryService:
                 topic=request.topic,
                 timespan_start=request.timespan_start,
                 timespan_end=request.timespan_end,
+                as_of=request.as_of,
             )
             semantic_matches = await asyncio.to_thread(
                 self._semantic_index.search,

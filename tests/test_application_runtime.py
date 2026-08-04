@@ -8,6 +8,7 @@ import pytest
 from VoidCube_app.application import ApplicationRuntime
 from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_app.contracts.events import SessionEventKind, TurnEventKind
+from VoidCube_app.session_lifecycle import SessionLifecycleState
 from VoidCube_app.interaction_contract import (
     ApprovalDecision,
     ApprovalRequest,
@@ -77,6 +78,37 @@ def test_application_runtime_rejects_overlapping_turns_and_fails_closed_on_sink_
     runtime.begin_turn("first")
     with pytest.raises(RuntimeError, match="already active"):
         runtime.begin_turn("second")
+
+
+def test_application_runtime_applies_session_transition_and_emits_boundary_events() -> None:
+    events = []
+    runtime = ApplicationRuntime.create(
+        session_id="old-session",
+        session_start=datetime(2026, 8, 4),
+        event_sink=events.append,
+        uuid_factory=_fixed_uuid,
+    )
+
+    runtime.apply_session_state(
+        SessionLifecycleState(
+            session_id="new-session",
+            session_start=datetime(2026, 8, 5),
+            conversation_history=({"role": "user", "content": "hello"},),
+            resumed=True,
+        )
+    )
+
+    assert runtime.state.session_id == "new-session"
+    assert runtime.state.session_start == datetime(2026, 8, 5)
+    assert runtime.state.conversation_history == [
+        {"role": "user", "content": "hello"}
+    ]
+    assert [event.kind for event in events] == [
+        SessionEventKind.STARTED,
+        SessionEventKind.ENDED,
+        SessionEventKind.RESUMED,
+    ]
+    assert events[1].session_id == "old-session"
 
 
 def test_application_runtime_publishes_interaction_and_delivery_events() -> None:

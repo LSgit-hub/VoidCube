@@ -131,7 +131,10 @@ def _seed_current_lm_reasoning_state(
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = dict(state)
+    supervisor._endogenous_drive_engine._generation_state.record(
+        context_snapshot=state,
+        proposals=[],
+    )
     supervisor._endogenous_drive_engine._llm_task_proposals = lambda **_: []  # type: ignore[method-assign]
 
 
@@ -6534,19 +6537,21 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_count": 2,
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.1,
-            "drift_state": "drifting",
-            "posture_alignment_health": "missing",
-            "priority_basis_health": "missing",
-            "missing_posture_alignment_count": 3,
-            "missing_priority_basis_count": 3,
-        },
-    }
+    supervisor._endogenous_drive_engine._generation_state.record(
+        context_snapshot={
+            "status": "completed",
+            "proposal_count": 2,
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.1,
+                "drift_state": "drifting",
+                "posture_alignment_health": "missing",
+                "priority_basis_health": "missing",
+                "missing_posture_alignment_count": 3,
+                "missing_priority_basis_count": 3,
+            },
+        proposals=[],
+    )
 
     async def fake_drive_input(_request=None):
         return {

@@ -13,7 +13,6 @@ from VoidCube_app.session_lifecycle import (
     HistoryMutationResult,
     HistoryMutationStatus,
     SessionHydration,
-    remove_last_user_turn,
 )
 from VoidCube_cli.command_router import ParsedCliCommand
 
@@ -47,7 +46,7 @@ class HistoryMutationPorts:
     conversation_history: Callable[[], Sequence[Message]]
     repository: Callable[[], Any | None]
     session_id: Callable[[], str]
-    set_conversation_history: Callable[[list[Message]], None]
+    remove_last_user_turn: Callable[[Any | None], HistoryMutationResult]
     synchronize_agent_history: Callable[[list[Message]], None]
     hydration: Callable[[], SessionHydration | None]
     set_hydration: Callable[[SessionHydration], None]
@@ -150,11 +149,7 @@ def remove_last_user_turn_from_history(
     history = ports.conversation_history()
     has_user_turn = any(message.get("role") == "user" for message in history)
     repository = ports.repository() if has_user_turn else None
-    result = remove_last_user_turn(
-        history,
-        repository=repository,
-        session_id=ports.session_id() if repository is not None else "",
-    )
+    result = ports.remove_last_user_turn(repository)
     if result.status is HistoryMutationStatus.EMPTY:
         ports.emit(empty_message)
         return None
@@ -166,7 +161,6 @@ def remove_last_user_turn_from_history(
         return None
 
     history = list(result.conversation_history)
-    ports.set_conversation_history(history)
     ports.synchronize_agent_history(history)
     hydration = ports.hydration()
     ports.set_hydration(

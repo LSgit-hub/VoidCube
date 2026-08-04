@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
-
 from VoidCube_app.session_lifecycle import SessionLifecycleState
 
 
@@ -14,12 +12,7 @@ from VoidCube_app.session_lifecycle import SessionLifecycleState
 class CliSessionLifecyclePorts:
     """Session state and active-agent operations supplied by the host."""
 
-    set_session_id: Callable[[str], None]
-    set_session_start: Callable[[datetime], None]
-    set_conversation_history: Callable[[list[dict[str, Any]]], None]
-    set_pending_title: Callable[[str | None], None]
-    set_resumed: Callable[[bool], None]
-    clear_hydration: Callable[[], None]
+    apply_shared_state: Callable[[SessionLifecycleState], None]
     activate_agent_session: Callable[[str, datetime], None]
 
 
@@ -31,10 +24,5 @@ class CliSessionLifecycleRuntime:
 
     def apply(self, state: SessionLifecycleState) -> None:
         ports = self.ports
-        ports.set_session_id(state.session_id)
-        ports.set_session_start(state.session_start)
-        ports.set_conversation_history(list(state.conversation_history))
-        ports.set_pending_title(state.pending_title)
-        ports.set_resumed(state.resumed)
-        ports.clear_hydration()
+        ports.apply_shared_state(state)
         ports.activate_agent_session(state.session_id, state.session_start)

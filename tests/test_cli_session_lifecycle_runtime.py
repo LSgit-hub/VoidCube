@@ -12,12 +12,7 @@ def test_session_lifecycle_runtime_applies_state_before_agent_activation():
     started_at = datetime(2026, 8, 3, 12, 0, 0)
     runtime = CliSessionLifecycleRuntime(
         CliSessionLifecyclePorts(
-            set_session_id=lambda value: events.append(("id", value)),
-            set_session_start=lambda value: events.append(("start", value)),
-            set_conversation_history=lambda value: events.append(("history", value)),
-            set_pending_title=lambda value: events.append(("title", value)),
-            set_resumed=lambda value: events.append(("resumed", value)),
-            clear_hydration=lambda: events.append(("clear",)),
+            apply_shared_state=lambda value: events.append(("shared", value)),
             activate_agent_session=lambda session_id, session_start: events.append(
                 ("activate", session_id, session_start)
             ),
@@ -33,13 +28,5 @@ def test_session_lifecycle_runtime_applies_state_before_agent_activation():
 
     runtime.apply(state)
 
-    assert [event[0] for event in events] == [
-        "id",
-        "start",
-        "history",
-        "title",
-        "resumed",
-        "clear",
-        "activate",
-    ]
+    assert [event[0] for event in events] == ["shared", "activate"]
     assert events[-1] == ("activate", "target", started_at)

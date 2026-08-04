@@ -8,13 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from VoidCube_app.session_lifecycle import (
-    branch_session,
-    get_session_title,
-    resume_session,
-    set_session_title,
-    start_new_session,
-)
 from VoidCube_cli.clear_command_adapter import (
     ClearBannerState,
     ClearDisplayPorts,
@@ -261,10 +254,8 @@ def install_cli_command_execution(
                 ports=BranchCommandPorts(
                     conversation_history=lambda: host.conversation_history,
                     repository_available=lambda: host._session_db is not None,
-                    branch=lambda name: branch_session(
+                    branch=lambda name: host._ensure_application_runtime().branch_session(
                         repository=host._session_db,
-                        current_session_id=host.session_id,
-                        conversation_history=host.conversation_history,
                         started_at=datetime.now(),
                         requested_title=name,
                         source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
@@ -497,16 +488,13 @@ def install_cli_command_execution(
                     ),
                     list_recent_sessions=lambda: host._list_recent_sessions(limit=50),
                     resolve_named=_resolve_named_session,
-                    resume=lambda target_id: resume_session(
+                    resume=lambda target_id: host._ensure_application_runtime().resume_session(
                         repository=host._session_db,
-                        current_session_id=host.session_id,
                         target_session_id=target_id,
                         session_start=host.session_start,
                     ),
                     apply_state=host._apply_session_lifecycle_state,
-                    set_hydration=lambda value: setattr(
-                        host, "_session_hydration", value
-                    ),
+                    set_hydration=host._ensure_application_runtime().set_session_hydration,
                     display_history=host._display_resumed_history,
                     emit=emit,
                     text=ResumeCommandText(
@@ -610,17 +598,13 @@ def install_cli_command_execution(
             "title": lambda request: handle_title_command(
                 request,
                 ports=TitleCommandPorts(
-                    get_title=lambda: get_session_title(
+                    get_title=lambda: host._ensure_application_runtime().get_session_title(
                         repository=host._session_db,
-                        session_id=host.session_id,
-                        pending_title=host._pending_title,
                     ),
-                    set_title=lambda raw_title: set_session_title(
+                    set_title=lambda raw_title: host._ensure_application_runtime().set_session_title(
                         repository=host._session_db,
-                        session_id=host.session_id,
                         raw_title=raw_title,
                     ),
-                    set_pending_title=lambda value: setattr(host, "_pending_title", value),
                     emit=emit,
                     unavailable_message=translate("  Session database not available."),
                 ),
@@ -793,9 +777,8 @@ def _new_session_ports(
         agent_available=lambda: host.agent is not None,
         notify_boundary=lambda event_type: _notify_session_boundary(host, event_type),
         reset_trace=lambda: setattr(host, "_current_trace_id", ""),
-        start_session=lambda create_record: start_new_session(
+        start_session=lambda create_record: host._ensure_application_runtime().start_new_session(
             repository=host._session_db,
-            current_session_id=host.session_id,
             started_at=datetime.now(),
             source=os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
             model=host.model,
@@ -1060,12 +1043,14 @@ def _history_mutation_ports(
         conversation_history=lambda: host.conversation_history,
         repository=lambda: host._session_db,
         session_id=lambda: host.session_id,
-        set_conversation_history=lambda history: setattr(
-            host, "conversation_history", history
+        remove_last_user_turn=lambda repository: (
+            host._ensure_application_runtime().remove_last_user_turn(
+                repository=repository,
+            )
         ),
         synchronize_agent_history=synchronize_agent_history,
-        hydration=lambda: host._session_hydration,
-        set_hydration=lambda hydration: setattr(host, "_session_hydration", hydration),
+        hydration=lambda: host._ensure_application_runtime().state.session_hydration,
+        set_hydration=host._ensure_application_runtime().set_session_hydration,
         emit=emit,
     )
 
@@ -1099,7 +1084,7 @@ def _compression_command_ports(
         agent.persist_compressed_session_history(history)
         host.conversation_history = history
         host.session_id = agent.session_id
-        host._session_hydration = None
+        host._ensure_application_runtime().clear_session_hydration()
 
     return CompressionCommandPorts(
         conversation_history=lambda: host.conversation_history,

@@ -16,6 +16,7 @@ from VoidCube_app.session_lifecycle import (
     SessionNotFoundError,
     SessionTitleResult,
     SessionTitleStatus,
+    remove_last_user_turn,
 )
 from VoidCube_cli.command_handlers.display import (
     ConfigDisplayPorts,
@@ -1779,11 +1780,21 @@ def test_undo_handler_rolls_back_last_user_turn_and_synchronizes_adapter_state()
     )
     synced: list[list[dict[str, object]]] = []
     state = {"history": history, "hydration": hydrated}
+
+    def apply_history_mutation(repository_port):
+        result = remove_last_user_turn(
+            state["history"],
+            repository=repository_port,
+            session_id="active",
+        )
+        state["history"] = list(result.conversation_history)
+        return result
+
     mutation_ports = HistoryMutationPorts(
         conversation_history=lambda: state["history"],
         repository=lambda: repository,
         session_id=lambda: "active",
-        set_conversation_history=lambda value: state.__setitem__("history", value),
+        remove_last_user_turn=apply_history_mutation,
         synchronize_agent_history=lambda value: synced.append(value),
         hydration=lambda: state["hydration"],
         set_hydration=lambda value: state.__setitem__("hydration", value),
@@ -1822,7 +1833,11 @@ def test_undo_handler_keeps_history_when_no_user_turn_exists() -> None:
         conversation_history=lambda: history,
         repository=lambda: pytest.fail("no-user history must not write"),
         session_id=lambda: "active",
-        set_conversation_history=lambda _value: pytest.fail("no-user history must not mutate"),
+        remove_last_user_turn=lambda repository_port: remove_last_user_turn(
+            history,
+            repository=repository_port,
+            session_id="",
+        ),
         synchronize_agent_history=lambda _value: pytest.fail("no-user history must not sync"),
         hydration=lambda: None,
         set_hydration=lambda _value: pytest.fail("no-user history must not hydrate"),
@@ -2390,7 +2405,6 @@ def test_title_handler_projects_query_statuses(result, expected) -> None:
     ports = TitleCommandPorts(
         get_title=lambda: result,
         set_title=lambda _value: result,
-        set_pending_title=lambda _value: None,
         emit=output.append,
         unavailable_message="  Session database not available.",
     )
@@ -2438,7 +2452,6 @@ def test_title_handler_projects_update_statuses(result, expected) -> None:
     ports = TitleCommandPorts(
         get_title=lambda: result,
         set_title=lambda _value: result,
-        set_pending_title=lambda _value: None,
         emit=output.append,
         unavailable_message="  Session database not available.",
     )
@@ -2448,8 +2461,7 @@ def test_title_handler_projects_update_statuses(result, expected) -> None:
     assert output == [expected]
 
 
-def test_title_handler_queues_pending_title_through_port() -> None:
-    pending: list[str | None] = []
+def test_title_handler_projects_queued_title() -> None:
     output: list[str] = []
     result = SessionTitleResult(
         SessionTitleStatus.QUEUED,
@@ -2459,14 +2471,12 @@ def test_title_handler_queues_pending_title_through_port() -> None:
     ports = TitleCommandPorts(
         get_title=lambda: result,
         set_title=lambda _value: result,
-        set_pending_title=pending.append,
         emit=output.append,
         unavailable_message="unavailable",
     )
 
     handle_title_command(parse_cli_command("/title Future title"), ports=ports)
 
-    assert pending == ["Future title"]
     assert output == [
         "  Session title queued: Future title (will be saved on first message)"
     ]

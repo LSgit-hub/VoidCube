@@ -187,6 +187,8 @@ class RecallPlan:
     recency_intent: bool
     immediate_recency: bool
     intent: str
+    temporal_intent: str = "none"
+    as_of: str | None = None
 
     @property
     def search_terms(self) -> tuple[str, ...]:
@@ -204,6 +206,8 @@ class RecallPlan:
             "recency_intent": self.recency_intent,
             "immediate_recency": self.immediate_recency,
             "intent": self.intent,
+            "temporal_intent": self.temporal_intent,
+            "as_of": self.as_of,
             "method": "lexical_concept_hybrid",
         }
 
@@ -219,6 +223,7 @@ def build_recall_plan(
     topic: str | None = None,
     timespan_start: str | None = None,
     timespan_end: str | None = None,
+    as_of: str | None = None,
     now: datetime | None = None,
 ) -> RecallPlan:
     raw_query = str(query or "").strip()
@@ -229,14 +234,14 @@ def build_recall_plan(
     start = _optional_text(timespan_start)
     end = _optional_text(timespan_end)
 
-    if not start and ("今天" in normalized or "today" in normalized):
-        day_start = wall_clock.replace(hour=0, minute=0, second=0, microsecond=0)
-        start = day_start.astimezone(timezone.utc).isoformat()
-        end = (day_start + timedelta(days=1)).astimezone(timezone.utc).isoformat()
-    elif not start and ("昨天" in normalized or "yesterday" in normalized):
-        day_end = wall_clock.replace(hour=0, minute=0, second=0, microsecond=0)
-        start = (day_end - timedelta(days=1)).astimezone(timezone.utc).isoformat()
-        end = day_end.astimezone(timezone.utc).isoformat()
+    temporal_intent = "explicit" if (start or end) else "none"
+    if not start and not end:
+        resolved_start, resolved_end, resolved_intent = _resolve_temporal_scope(
+            normalized, wall_clock
+        )
+        start = resolved_start
+        end = resolved_end
+        temporal_intent = resolved_intent
 
     types: list[str] = []
     raw_types: Iterable[object]
@@ -283,6 +288,8 @@ def build_recall_plan(
             marker in normalized for marker in _IMMEDIATE_RECENCY_MARKERS
         ),
         intent=intent,
+        temporal_intent=temporal_intent,
+        as_of=_optional_text(as_of),
     )
 
 
@@ -391,6 +398,20 @@ def recall_memories(
                     record_filter=record_filter,
                 )
             )
+    if include_tier2 and plan.intent == "specific_memory":
+        existing_ids = {str(item.get("id") or "") for item in candidates}
+        candidates.extend(
+            _graph_candidates(
+                conn,
+                plan,
+                bounded_candidates,
+                reference,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                source_domains=source_domains,
+                existing_ids=existing_ids,
+            )
+        )
 
     candidates = _apply_feedback_scores(
         conn,
@@ -501,6 +522,107 @@ def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
     return "Relevant recalled memory:\n" + "\n".join(lines)
 
 
+_IMPLICIT_RECENT_MARKERS = ("最近", "近期", "recent")
+_IMPLICIT_HISTORY_MARKERS = ("历史", "过去", "historically", "history")
+_ISO_DATE_RE = re.compile(r"(20\d{2})[-/](\d{1,2})(?:[-/](\d{1,2}))?")
+
+
+def _resolve_temporal_scope(
+    normalized_query: str,
+    anchor: datetime,
+) -> tuple[str | None, str | None, str]:
+    """Resolve an explicit or implicit temporal window from the query text.
+
+    Returns ``(start, end, temporal_intent)``:
+      - ``start``/``end`` are ISO-8601 strings, or ``None`` when unbounded.
+      - ``temporal_intent`` is ``"explicit"`` (calendar phrase or ISO date —
+        a temporal-fit ranking bonus applies), ``"implicit"`` (vague recent /
+        history phrasing — carried for audit, no ranking bonus), or
+        ``"none"``.
+
+    This is the runtime port of ``memai.QueryPlanner._resolve_temporal_scope``
+    (Mem/src/memai/query_planner.py) so time-first recall semantics reach the
+    live ``/recall`` path instead of living only in the memai CLI.
+    """
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    utc = timezone.utc
+
+    if "今天" in normalized_query or "today" in normalized_query:
+        day_start = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = day_start.astimezone(utc).isoformat()
+        end = (day_start + timedelta(days=1)).astimezone(utc).isoformat()
+        return start, end, "explicit"
+    if "昨天" in normalized_query or "yesterday" in normalized_query:
+        day_end = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = (day_end - timedelta(days=1)).astimezone(utc).isoformat()
+        end = day_end.astimezone(utc).isoformat()
+        return start, end, "explicit"
+    if any(marker in normalized_query for marker in ("本周", "这周", "this week")):
+        week_start = (anchor - timedelta(days=anchor.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        start = week_start.astimezone(utc).isoformat()
+        end = (week_start + timedelta(days=7)).astimezone(utc).isoformat()
+        return start, end, "explicit"
+    if any(marker in normalized_query for marker in ("上周", "last week")):
+        week_end = (anchor - timedelta(days=anchor.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        start = (week_end - timedelta(days=7)).astimezone(utc).isoformat()
+        end = week_end.astimezone(utc).isoformat()
+        return start, end, "explicit"
+    if any(marker in normalized_query for marker in ("本月", "这个月", "this month")):
+        month_start = anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_start.month == 12:
+            month_end = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            month_end = month_start.replace(month=month_start.month + 1)
+        start = month_start.astimezone(utc).isoformat()
+        end = (month_end - timedelta(seconds=1)).astimezone(utc).isoformat()
+        return start, end, "explicit"
+    if any(marker in normalized_query for marker in ("上个月", "上月", "last month")):
+        month_start = anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_start.month == 1:
+            month_start = month_start.replace(year=month_start.year - 1, month=12)
+        else:
+            month_start = month_start.replace(month=month_start.month - 1)
+        if month_start.month == 12:
+            month_end = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            month_end = month_start.replace(month=month_start.month + 1)
+        start = month_start.astimezone(utc).isoformat()
+        end = (month_end - timedelta(seconds=1)).astimezone(utc).isoformat()
+        return start, end, "explicit"
+
+    iso_match = _ISO_DATE_RE.search(normalized_query)
+    if iso_match:
+        year, month = int(iso_match.group(1)), int(iso_match.group(2))
+        day_text = iso_match.group(3)
+        base = datetime(year, month, int(day_text) if day_text else 1, tzinfo=utc)
+        if day_text:
+            start = base.isoformat()
+            end = (base + timedelta(days=1) - timedelta(seconds=1)).isoformat()
+        else:
+            if month == 12:
+                month_end = base.replace(year=year + 1, month=1)
+            else:
+                month_end = base.replace(month=month + 1)
+            start = base.isoformat()
+            end = (month_end - timedelta(seconds=1)).isoformat()
+        return start, end, "explicit"
+
+    if any(marker in normalized_query for marker in _IMPLICIT_RECENT_MARKERS):
+        start = (anchor - timedelta(days=30)).astimezone(utc).isoformat()
+        end = anchor.astimezone(utc).isoformat()
+        return start, end, "implicit"
+
+    if any(marker in normalized_query for marker in _IMPLICIT_HISTORY_MARKERS):
+        return None, None, "implicit"
+
+    return None, None, "none"
+
+
 def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
     weighted: dict[str, int] = {}
 
@@ -567,18 +689,40 @@ def _tier2_candidates(
     semantic_matches: dict[tuple[str, str], float],
     record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
-    clauses = [
-        "status = 'active'",
-        "hidden = 0",
-        "((owner_id = ? AND workspace_id = ?) OR "
-        "(owner_id = ? AND workspace_id = ?))",
-    ]
-    params: list[Any] = [
-        owner_id,
-        workspace_id,
-        GLOBAL_SCOPE_ID,
-        GLOBAL_SCOPE_ID,
-    ]
+    if plan.as_of:
+        # Bi-temporal as-of (transaction time): the version that was current
+        # at :as_of is the newest in its superseded_by chain with a creation
+        # time at or before :as_of.
+        clauses = [
+            "(COALESCE(created_at, compressed_at) <= ? "
+            "AND NOT EXISTS (SELECT 1 FROM compressed_memories successor "
+            "WHERE compressed_memories.superseded_by = successor.memory_id "
+            "AND COALESCE(successor.created_at, successor.compressed_at) <= ?))",
+            "hidden = 0",
+            "((owner_id = ? AND workspace_id = ?) OR "
+            "(owner_id = ? AND workspace_id = ?))",
+        ]
+        params: list[Any] = [
+            plan.as_of,
+            plan.as_of,
+            owner_id,
+            workspace_id,
+            GLOBAL_SCOPE_ID,
+            GLOBAL_SCOPE_ID,
+        ]
+    else:
+        clauses = [
+            "status = 'active'",
+            "hidden = 0",
+            "((owner_id = ? AND workspace_id = ?) OR "
+            "(owner_id = ? AND workspace_id = ?))",
+        ]
+        params: list[Any] = [
+            owner_id,
+            workspace_id,
+            GLOBAL_SCOPE_ID,
+            GLOBAL_SCOPE_ID,
+        ]
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
@@ -660,25 +804,36 @@ def _tier2_candidates(
             pinned=bool(row[14]),
         )
         recency = _recency_score(row[5], now)
-        score = (
-            0.69
-            + _FOUNDING_IDENTITY_PRIORITY.get(str(row[0]), 0.0)
-            + 0.15 * lexical
-            + 0.03 * dynamic_weight
-            + 0.03 * float(row[6] or 0.0)
-            if plan.intent == "identity"
-            else
-            0.42 * lexical
-            + 0.30 * semantic
-            + 0.12 * dynamic_weight
-            + 0.10 * float(row[6] or 0.0)
-            + 0.06 * recency
-            if semantic > 0
-            else 0.62 * lexical
-            + 0.18 * dynamic_weight
-            + 0.12 * float(row[6] or 0.0)
-            + 0.08 * recency
+        temporal_fit = (
+            _temporal_fit_score(row[4], row[5], plan.timespan_start, plan.timespan_end)
+            if plan.temporal_intent == "explicit"
+            else 0.0
         )
+        if plan.intent == "identity":
+            score = (
+                0.69
+                + _FOUNDING_IDENTITY_PRIORITY.get(str(row[0]), 0.0)
+                + 0.15 * lexical
+                + 0.03 * dynamic_weight
+                + 0.03 * float(row[6] or 0.0)
+            )
+        elif semantic > 0:
+            score = (
+                0.42 * lexical
+                + 0.30 * semantic
+                + 0.12 * dynamic_weight
+                + 0.10 * float(row[6] or 0.0)
+                + 0.06 * recency
+                + 0.10 * temporal_fit
+            )
+        else:
+            score = (
+                0.62 * lexical
+                + 0.18 * dynamic_weight
+                + 0.12 * float(row[6] or 0.0)
+                + 0.08 * recency
+                + 0.10 * temporal_fit
+            )
         results.append(
             {
                 "id": row[0],
@@ -702,6 +857,7 @@ def _tier2_candidates(
                     "importance": round(float(row[6] or 0.0), 6),
                     "recency": round(recency, 6),
                     "semantic": round(semantic, 6),
+                    "temporal_fit": round(temporal_fit, 6),
                 },
             }
         )
@@ -723,12 +879,29 @@ def _profile_candidates(
 ) -> list[dict[str, Any]]:
     if plan.memory_types and "profile" not in plan.memory_types:
         return []
-    clauses = [
-        "status = 'active'",
-        "owner_id = ?",
-        "workspace_id = ?",
-    ]
-    params: list[Any] = [owner_id, workspace_id]
+    if plan.as_of:
+        # Bi-temporal as-of (transaction time): current at :as_of means
+        # created at or before it and not superseded by a successor created
+        # at or before it (supersession is recorded in the successor's
+        # ``supersedes`` JSON list).
+        clauses = [
+            "(created_at <= ? "
+            "AND NOT EXISTS (SELECT 1 FROM profile_memories successor "
+            "WHERE successor.memory_id != profile_memories.memory_id "
+            "AND successor.created_at <= ? "
+            "AND EXISTS (SELECT 1 FROM json_each(successor.supersedes) "
+            "WHERE json_each.value = profile_memories.memory_id)))",
+            "owner_id = ?",
+            "workspace_id = ?",
+        ]
+        params: list[Any] = [plan.as_of, plan.as_of, owner_id, workspace_id]
+    else:
+        clauses = [
+            "status = 'active'",
+            "owner_id = ?",
+            "workspace_id = ?",
+        ]
+        params: list[Any] = [owner_id, workspace_id]
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
@@ -772,16 +945,26 @@ def _profile_candidates(
         if lexical <= 0 and plan.terms and semantic < 0.35:
             continue
         recency = _recency_score(row[8], now, decay_days=365.0)
-        score = (
-            0.46 * lexical
-            + 0.32 * semantic
-            + 0.16 * float(row[6] or 0.0)
-            + 0.06 * recency
-            if semantic > 0
-            else 0.70 * lexical
-            + 0.22 * float(row[6] or 0.0)
-            + 0.08 * recency
+        temporal_fit = (
+            _temporal_fit_score(row[8], row[9], plan.timespan_start, plan.timespan_end)
+            if plan.temporal_intent == "explicit"
+            else 0.0
         )
+        if semantic > 0:
+            score = (
+                0.46 * lexical
+                + 0.32 * semantic
+                + 0.16 * float(row[6] or 0.0)
+                + 0.06 * recency
+                + 0.10 * temporal_fit
+            )
+        else:
+            score = (
+                0.70 * lexical
+                + 0.22 * float(row[6] or 0.0)
+                + 0.08 * recency
+                + 0.10 * temporal_fit
+            )
         results.append(
             {
                 "id": row[0],
@@ -806,6 +989,7 @@ def _profile_candidates(
                     "confidence": round(float(row[6] or 0.0), 6),
                     "recency": round(recency, 6),
                     "semantic": round(semantic, 6),
+                    "temporal_fit": round(temporal_fit, 6),
                 },
             }
         )
@@ -863,6 +1047,9 @@ def _archive_candidates(
     if plan.timespan_end:
         clauses.append("timestamp <= ?")
         params.append(plan.timespan_end)
+    if plan.as_of:
+        clauses.append("timestamp <= ?")
+        params.append(plan.as_of)
     params.append(candidate_limit)
     rows = conn.execute(
         "SELECT turn_id, session_id, speaker, original_text, text_summary, "
@@ -879,11 +1066,26 @@ def _archive_candidates(
         if lexical <= 0 and plan.terms and semantic < 0.35:
             continue
         recency = _recency_score(row[5], now, decay_days=180.0)
-        score = (
-            0.48 * lexical + 0.34 * semantic + 0.06 + 0.12 * recency
-            if semantic > 0
-            else 0.72 * lexical + 0.08 + 0.20 * recency
+        temporal_fit = (
+            _temporal_fit_score(row[5], row[5], plan.timespan_start, plan.timespan_end)
+            if plan.temporal_intent == "explicit"
+            else 0.0
         )
+        if semantic > 0:
+            score = (
+                0.48 * lexical
+                + 0.34 * semantic
+                + 0.06
+                + 0.12 * recency
+                + 0.10 * temporal_fit
+            )
+        else:
+            score = (
+                0.72 * lexical
+                + 0.08
+                + 0.20 * recency
+                + 0.10 * temporal_fit
+            )
         results.append(
             {
                 "id": row[0],
@@ -903,6 +1105,111 @@ def _archive_candidates(
                     "recency": round(recency, 6),
                     "archive_fallback": True,
                     "semantic": round(semantic, 6),
+                    "temporal_fit": round(temporal_fit, 6),
+                },
+            }
+        )
+    return results
+
+
+def _graph_candidates(
+    conn: sqlite3.Connection,
+    plan: RecallPlan,
+    candidate_limit: int,
+    now: datetime,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    source_domains: Sequence[str],
+    existing_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Entity-graph expansion: surface memories connected to query entities.
+
+    When the query references known entity nodes, this returns memories that
+    reference those entities directly (proximity 1.0) or reference co-occurring
+    neighbor entities (proximity 0.6) — the multi-hop access pattern plain
+    lexical FTS cannot provide. Memories already surfaced by other candidate
+    sources are skipped. Returns an empty list when the query matches no known
+    entities, so recall is unaffected when the graph is empty.
+    """
+    from systems.memory.entity_graph import (
+        entity_names_matching_query,
+        graph_expand_memory_ids,
+    )
+
+    query_entities = entity_names_matching_query(
+        conn,
+        plan.search_terms,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        source_domains=source_domains,
+    )
+    if not query_entities:
+        return []
+    expanded = graph_expand_memory_ids(
+        conn,
+        query_entities,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        source_domains=source_domains,
+        as_of=plan.as_of,
+        max_depth=1,
+        limit=candidate_limit,
+    )
+    if not expanded:
+        return []
+    placeholders = ",".join("?" for _ in expanded)
+    rows = conn.execute(
+        "SELECT memory_id, memory_type, title, summary, timespan_start, "
+        "timespan_end, importance, confidence, topics, entities, source_turns, "
+        "event_kind, access_count, citation_count, pinned, weight, "
+        "identity_layer, evidence_refs, memory_domain "
+        f"FROM compressed_memories WHERE memory_id IN ({placeholders})",
+        list(expanded),
+    ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        memory_id = str(row[0])
+        if memory_id in existing_ids:
+            continue
+        proximity = float(expanded.get(memory_id, 0.0))
+        dynamic_weight = _dynamic_weight(
+            float(row[15] or 0.0),
+            event_kind=row[11],
+            access_count=int(row[12] or 0),
+            citation_count=int(row[13] or 0),
+            pinned=bool(row[14]),
+        )
+        importance = float(row[6] or 0.0)
+        recency = _recency_score(row[5], now)
+        score = (
+            0.55 * proximity
+            + 0.25 * dynamic_weight
+            + 0.20 * importance
+            + 0.05 * recency
+        )
+        results.append(
+            {
+                "id": memory_id,
+                "tier": "graph",
+                "memory_type": row[1],
+                "title": row[2],
+                "summary": row[3],
+                "timespan_start": row[4],
+                "timespan_end": row[5],
+                "topics": _json_list(row[8]),
+                "entities": _json_list(row[9]),
+                "source_turns": _json_list(row[10]),
+                "identity_layer": row[16],
+                "evidence_refs": _json_list(row[17]),
+                "memory_domain": row[18],
+                "score": round(min(score, 1.0), 6),
+                "matched_terms": list(query_entities),
+                "signals": {
+                    "graph_proximity": round(proximity, 6),
+                    "dynamic_weight": round(dynamic_weight, 6),
+                    "importance": round(importance, 6),
+                    "recency": round(recency, 6),
                 },
             }
         )
@@ -956,6 +1263,9 @@ def _tier1_candidates(
     if plan.timespan_end:
         clauses.append("timestamp <= ?")
         params.append(plan.timespan_end)
+    if plan.as_of:
+        clauses.append("timestamp <= ?")
+        params.append(plan.as_of)
     params.append(candidate_limit)
     rows = conn.execute(
         "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, tags, memory_domain "
@@ -980,6 +1290,11 @@ def _tier1_candidates(
             decay_days=(2.0 if plan.immediate_recency else 90.0),
         )
         same_session = bool(current_session_id and str(row[1]) == current_session_id)
+        temporal_fit = (
+            _temporal_fit_score(row[4], row[4], plan.timespan_start, plan.timespan_end)
+            if plan.temporal_intent == "explicit"
+            else 0.0
+        )
         if plan.intent == "recent_conversation":
             score = (
                 0.68
@@ -994,16 +1309,20 @@ def _tier1_candidates(
                 + 0.08 * float(row[5] or 0.0)
                 + (0.05 if same_session else 0.0)
             )
-        else:
+        elif semantic > 0:
             score = (
                 0.50 * lexical
                 + 0.34 * semantic
                 + 0.08 * float(row[5] or 0.0)
                 + 0.08 * recency
-                if semantic > 0
-                else 0.76 * lexical
+                + 0.10 * temporal_fit
+            )
+        else:
+            score = (
+                0.76 * lexical
                 + 0.12 * float(row[5] or 0.0)
                 + 0.12 * recency
+                + 0.10 * temporal_fit
             )
         results.append(
             {
@@ -1024,6 +1343,7 @@ def _tier1_candidates(
                     "recency": round(recency, 6),
                     "same_session": same_session,
                     "semantic": round(semantic, 6),
+                    "temporal_fit": round(temporal_fit, 6),
                 },
             }
         )
@@ -1234,7 +1554,7 @@ def _deduplicate_and_rank(
         candidates,
         key=lambda item: (
             float(item.get("score") or 0.0),
-            1 if item.get("tier") == "tier2" else 0,
+            _structural_rank(item),
             str(item.get("timespan_start") or item.get("timestamp") or ""),
         ),
         reverse=True,
@@ -1261,6 +1581,18 @@ def _deduplicate_and_rank(
         if len(unique) >= limit:
             return unique, index < len(ranked) - 1
     return unique, False
+
+
+def _structural_rank(item: Mapping[str, Any]) -> int:
+    """Structural hierarchy level used as a ranking tie-breaker.
+
+    Higher-level durable memory (epoch > arc > scene > event) is preferred
+    over raw turns / profiles when scores are close, per the doctrine
+    "structure over accumulation". tier2 entries always rank above non-tier2
+    (all four levels score >= 1 vs 0 for raw records).
+    """
+    memory_type = str(item.get("memory_type") or "")
+    return {"epoch": 4, "arc": 3, "scene": 2, "event": 1}.get(memory_type, 0)
 
 
 def _apply_context_budget(
@@ -1400,6 +1732,53 @@ def _dynamic_weight(
     # access alone creates a self-reinforcing ranking loop.
     del access_count
     return max(0.0, min(1.0, base_weight + content_bonus + citation_bonus))
+
+
+def _temporal_fit_score(
+    candidate_start: object,
+    candidate_end: object,
+    query_start: str | None,
+    query_end: str | None,
+) -> float:
+    """Score how well a candidate's span covers the query time window.
+
+    Mirrors the memai ``MemoryQueryEngine`` range ranking: a span candidate is
+    scored by its overlap ratio with the window (a memory covering the whole
+    queried period scores 1.0, a one-day memory inside a 30-day window scores
+    ~1/30). A point candidate (tier1/archive single timestamp) scores 1.0 when
+    contained and decays by distance when outside.
+
+    Returns 0.0 when no usable query window is present.
+    """
+    if not (query_start and query_end):
+        return 0.0
+    q_start = _parse_datetime(query_start)
+    q_end = _parse_datetime(query_end)
+    if q_start is None or q_end is None:
+        return 0.0
+    c_start = _parse_datetime(candidate_start)
+    if c_start is None:
+        return 0.0
+    c_end = _parse_datetime(candidate_end) if candidate_end else c_start
+    if c_end is None:
+        c_end = c_start
+
+    query_seconds = max((q_end - q_start).total_seconds(), 1.0)
+    if c_start == c_end:
+        # Point candidate.
+        if q_start <= c_start <= q_end:
+            return 1.0
+        distance_seconds = min(
+            abs((c_start - q_start).total_seconds()),
+            abs((c_start - q_end).total_seconds()),
+        )
+        return max(0.0, min(1.0, 1.0 - distance_seconds / max(query_seconds * 4, 1.0)))
+
+    # Span candidate: overlap ratio over the query window.
+    overlap_start = max(c_start, q_start)
+    overlap_end = min(c_end, q_end)
+    overlap_seconds = max((overlap_end - overlap_start).total_seconds(), 0.0)
+    return max(0.0, min(1.0, overlap_seconds / query_seconds))
 
 
 def _recency_score(

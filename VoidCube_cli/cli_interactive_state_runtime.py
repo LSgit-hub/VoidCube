@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import queue
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,8 +16,6 @@ class CliInteractiveRunState:
     """Transient values copied into the CLI host at interactive-run start."""
 
     agent_running: bool
-    pending_input: queue.Queue
-    interrupt_queue: queue.Queue
     should_exit: bool
     last_ctrl_c_time: float
     config_mtime: float
@@ -60,8 +57,6 @@ class CliInteractiveStateRuntime:
         config_mtime = config_path.stat().st_mtime if config_path.exists() else 0.0
         return CliInteractiveRunState(
             agent_running=False,
-            pending_input=queue.Queue(),
-            interrupt_queue=queue.Queue(),
             should_exit=False,
             last_ctrl_c_time=0.0,
             config_mtime=config_mtime,

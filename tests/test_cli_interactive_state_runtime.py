@@ -23,8 +23,6 @@ def test_interactive_state_runtime_creates_fresh_run_scoped_state(tmp_path) -> N
     second_state = runtime.initialize()
 
     assert state.agent_running is False
-    assert state.pending_input.empty()
-    assert state.interrupt_queue.empty()
     assert state.config_mtime == config.stat().st_mtime
     assert state.config_mcp_servers == {"local": {"command": "server"}}
     assert state.voice_runtime_state is voice_state

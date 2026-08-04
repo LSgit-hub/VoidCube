@@ -81,8 +81,6 @@ from VoidCube_app.session_lifecycle import (
     SessionHydration,
     SessionLifecycleState,
     SessionTitleStatus,
-    hydrate_session,
-    set_session_title,
 )
 from VoidCube_app.tool_events import ToolEvent
 from VoidCube_app.turn_queue import (
@@ -91,7 +89,6 @@ from VoidCube_app.turn_queue import (
     normalize_busy_input_mode,
 )
 from VoidCube_cli.turn_queue_adapter import (
-    enqueue_turn_input,
     poll_interrupt_input,
     requeue_interrupted_inputs,
 )
@@ -200,10 +197,6 @@ from VoidCube_cli.cli_session_browser_runtime import (
 from VoidCube_cli.cli_model_picker_runtime import (
     CliModelPickerPorts,
     CliModelPickerRuntime,
-)
-from VoidCube_cli.cli_session_hydration_runtime import (
-    CliSessionHydrationPorts,
-    CliSessionHydrationRuntime,
 )
 from VoidCube_cli.cli_session_resume_runtime import (
     CliSessionResumePorts,
@@ -949,14 +942,99 @@ class VoidcubeCLI:
                 value if isinstance(value, list) else [dict(message) for message in value]
             )
 
+    @property
+    def _pending_title(self) -> str | None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.pending_title
+        return self.__dict__.get("_pending_title_fallback")
+
+    @_pending_title.setter
+    def _pending_title(self, value: str | None) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.set_pending_title(value)
+        else:
+            self.__dict__["_pending_title_fallback"] = value
+
+    @property
+    def _session_hydration(self) -> SessionHydration | None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.session_hydration
+        return self.__dict__.get("_session_hydration_fallback")
+
+    @_session_hydration.setter
+    def _session_hydration(self, value: SessionHydration | None) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            if value is None:
+                runtime.clear_session_hydration()
+            else:
+                runtime.set_session_hydration(value)
+        else:
+            self.__dict__["_session_hydration_fallback"] = value
+
+    @property
+    def _agent_running(self) -> bool:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.agent_running
+        return bool(self.__dict__.get("_agent_running_fallback", False))
+
+    @_agent_running.setter
+    def _agent_running(self, value: bool) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.set_agent_running(value)
+        else:
+            self.__dict__["_agent_running_fallback"] = bool(value)
+
+    @property
+    def _pending_input(self):
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.pending_input_queue
+        fallback = self.__dict__.get("_pending_input_fallback")
+        if fallback is None:
+            fallback = queue.Queue()
+            self.__dict__["_pending_input_fallback"] = fallback
+        return fallback
+
+    @_pending_input.setter
+    def _pending_input(self, value) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.state.pending_input_queue = value
+        else:
+            self.__dict__["_pending_input_fallback"] = value
+
+    @property
+    def _interrupt_queue(self):
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.state.interrupt_queue
+        fallback = self.__dict__.get("_interrupt_queue_fallback")
+        if fallback is None:
+            fallback = queue.Queue()
+            self.__dict__["_interrupt_queue_fallback"] = fallback
+        return fallback
+
+    @_interrupt_queue.setter
+    def _interrupt_queue(self, value) -> None:
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.state.interrupt_queue = value
+        else:
+            self.__dict__["_interrupt_queue_fallback"] = value
+
     def _initialize_application_runtime(self, session_identity) -> None:
         self.session_id = session_identity.session_id
-        self._resumed = session_identity.resumed
         self._application_runtime = ApplicationRuntime.create(
             session_id=self.session_id,
             session_start=self.session_start,
             conversation_history=self.__dict__.pop("_conversation_history", ()),
-            resumed=self._resumed,
+            resumed=session_identity.resumed,
             event_sink=self._handle_application_event,
         )
         self.__dict__.pop("_session_id", None)
@@ -970,9 +1048,23 @@ class VoidcubeCLI:
             session_id=self.session_id,
             session_start=self.__dict__.get("_session_start", datetime.now()),
             conversation_history=self.conversation_history,
-            resumed=bool(self.__dict__.get("_resumed", False)),
+            resumed=False,
             event_sink=self._handle_application_event,
         )
+        pending_title = self.__dict__.pop("_pending_title_fallback", None)
+        hydration = self.__dict__.pop("_session_hydration_fallback", None)
+        agent_running = self.__dict__.pop("_agent_running_fallback", False)
+        pending_input = self.__dict__.pop("_pending_input_fallback", None)
+        interrupt_queue = self.__dict__.pop("_interrupt_queue_fallback", None)
+        if pending_title is not None:
+            runtime.set_pending_title(pending_title)
+        if hydration is not None:
+            runtime.set_session_hydration(hydration)
+        runtime.set_agent_running(agent_running)
+        if pending_input is not None:
+            runtime.state.pending_input_queue = pending_input
+        if interrupt_queue is not None:
+            runtime.state.interrupt_queue = interrupt_queue
         self.__dict__["_application_runtime"] = runtime
         self.__dict__.pop("_session_id", None)
         self.__dict__.pop("_session_start", None)
@@ -1210,7 +1302,6 @@ class VoidcubeCLI:
         # Conversation state
         self.conversation_history: List[Dict[str, Any]] = []
         self.session_start = datetime.now()
-        self._resumed = False
         # Initialize SQLite session store early so /title works before first message
         self._session_db = None
         try:
@@ -1218,9 +1309,6 @@ class VoidcubeCLI:
             self._session_db = SessionDB()
         except Exception as e:
             logger.warning("Failed to initialize SessionDB — session will NOT be indexed for search: %s", e)
-        
-        # Deferred title: stored in memory until the session is created in the DB
-        self._pending_title: Optional[str] = None
         
         session_identity = resolve_session_identity(
             requested_session_id=resume,
@@ -1233,13 +1321,12 @@ class VoidcubeCLI:
             autonomous_source="cli_supervisor_task_lane",
         )
         self._initialize_application_runtime(session_identity)
-        self._session_hydration: SessionHydration | None = None
         if session_identity.resume_lookup_error:
             logger.warning(
                 "Failed to auto-resume last session: %s",
                 session_identity.resume_lookup_error,
             )
-        elif resume is None and self._resumed:
+        elif resume is None and self._application_runtime.state.resumed:
             logger.info("Auto-resuming last session: %s", self.session_id)
         
         # History file for persistent input recall across sessions
@@ -1255,10 +1342,7 @@ class VoidcubeCLI:
         # State shared by interactive run() and single-query chat mode.
         # These must exist before any direct chat() call because single-query
         # mode does not go through run().
-        self._agent_running = False
         self._autonomous_gate_active: bool = False
-        self._pending_input: queue.Queue = queue.Queue()
-        self._interrupt_queue: queue.Queue = queue.Queue()
         self._should_exit = False
         self._last_ctrl_c_time = 0
         self._clarify_state = None
@@ -2105,7 +2189,11 @@ class VoidcubeCLI:
                 logger.warning("SQLite session store not available — session will NOT be indexed: %s", e)
         
         # Single-query callers do not run the interactive preload path.
-        if self._resumed and self._session_db and not self.conversation_history:
+        if (
+            self._ensure_application_runtime().state.resumed
+            and self._session_db
+            and not self.conversation_history
+        ):
             hydration, loaded_now = self._hydrate_resumed_session()
             if not CliSingleQueryResumeRuntime(
                 CliSingleQueryResumePorts(
@@ -2187,12 +2275,13 @@ class VoidcubeCLI:
                 tuple(runtime.get("args") or ()),
             )
 
-            if self._pending_title and self._session_db:
+            application_runtime = self._ensure_application_runtime()
+            pending_title = application_runtime.state.pending_title
+            if pending_title and self._session_db:
                 try:
-                    title_result = set_session_title(
+                    title_result = application_runtime.set_session_title(
                         repository=self._session_db,
-                        session_id=self.session_id,
-                        raw_title=self._pending_title,
+                        raw_title=pending_title,
                     )
                     if title_result.status is SessionTitleStatus.UPDATED:
                         _cprint(f"  Session title applied: {title_result.title}")
@@ -2202,7 +2291,7 @@ class VoidcubeCLI:
                         _cprint("  Could not apply pending title: session is not persisted")
                 except Exception as e:
                     _cprint(f"  Could not apply pending title: {e}")
-                self._pending_title = None
+                application_runtime.clear_pending_title()
 
             # ── Gateway observability ───────────────────────────────────
             # The interactive CLI remains the canonical API-A runtime for
@@ -2310,20 +2399,10 @@ class VoidcubeCLI:
 
     def _hydrate_resumed_session(self) -> tuple[SessionHydration, bool]:
         """Return one cached hydration result for the selected session."""
-        return CliSessionHydrationRuntime(
-            CliSessionHydrationPorts(
-                cached_hydration=lambda: self._session_hydration,
-                set_hydration=lambda value: setattr(
-                    self, "_session_hydration", value
-                ),
-                repository=lambda: self._session_db,
-                session_id=lambda: self.session_id,
-                set_conversation_history=lambda value: setattr(
-                    self, "conversation_history", value
-                ),
-                hydrate=hydrate_session,
-            )
-        ).load()
+        return self._ensure_application_runtime().load_session_hydration(
+            repository=self._session_db,
+            session_id=self.session_id,
+        )
 
     def _preload_resumed_session(self) -> bool:
         """Load a resumed session's history from the DB early (before first chat).
@@ -2337,7 +2416,7 @@ class VoidcubeCLI:
         """
         return CliSessionResumeRuntime(
             CliSessionResumePorts(
-                resumed=lambda: self._resumed,
+                resumed=lambda: self._ensure_application_runtime().state.resumed,
                 repository_available=lambda: self._session_db is not None,
                 session_id=lambda: self.session_id,
                 hydrate=self._hydrate_resumed_session,
@@ -2572,16 +2651,7 @@ class VoidcubeCLI:
         """Apply shared session state and synchronize the active Agent runtime."""
         CliSessionLifecycleRuntime(
             CliSessionLifecyclePorts(
-                set_session_id=lambda value: setattr(self, "session_id", value),
-                set_session_start=lambda value: setattr(self, "session_start", value),
-                set_conversation_history=lambda value: setattr(
-                    self, "conversation_history", value
-                ),
-                set_pending_title=lambda value: setattr(
-                    self, "_pending_title", value
-                ),
-                set_resumed=lambda value: setattr(self, "_resumed", value),
-                clear_hydration=lambda: setattr(self, "_session_hydration", None),
+                apply_shared_state=self._ensure_application_runtime().apply_session_state,
                 activate_agent_session=lambda session_id, session_start: (
                     self.agent.activate_session(
                         session_id,
@@ -3820,11 +3890,9 @@ class VoidcubeCLI:
                 session_id=lambda: self.session_id,
                 session_start=lambda: self.session_start,
                 now=datetime.now,
-                session_title=lambda: (
-                    self._session_db.get_session_title(self.session_id)
-                    if self._session_db
-                    else None
-                ),
+                 session_title=lambda: self._ensure_application_runtime()
+                 .get_session_title(repository=self._session_db)
+                 .title,
                 translate=t,
                 emit=print,
                 emit_blank_line=lambda: print(),
@@ -3976,14 +4044,11 @@ class VoidcubeCLI:
                 run_api_command=run_api_command,
                 autonomous_gate_active=lambda: bool(self._autonomous_gate_active),
                 exit_autonomous_gate_fast=exit_autonomous_gate_fast,
-                enqueue_input=lambda payload, is_command: enqueue_turn_input(
-                    self._pending_input,
-                    self._interrupt_queue,
-                    payload,
-                    agent_running=self._agent_running,
-                    is_command=is_command,
-                    busy_input_mode=self.busy_input_mode,
-                ),
+                 enqueue_input=lambda payload, is_command: self._ensure_application_runtime().enqueue_turn_input(
+                     payload,
+                     is_command=is_command,
+                     busy_input_mode=self.busy_input_mode,
+                 ),
                 agent_running=lambda: bool(self._agent_running),
                 busy_input_mode=lambda: self.busy_input_mode,
                 emit=_cprint,
@@ -4223,7 +4288,7 @@ class VoidcubeCLI:
                     flush=True,
                 ),
                 show_banner=self.show_banner,
-                resumed=lambda: bool(self._resumed),
+                resumed=lambda: self._ensure_application_runtime().state.resumed,
                 preload_resumed_session=self._preload_resumed_session,
                 display_resumed_history=self._display_resumed_history,
                 memory_model_display=memory_model_display,
@@ -4345,9 +4410,8 @@ class VoidcubeCLI:
                 config_mcp_servers=self.config.get("mcp_servers") or {},
             )
         ).initialize()
+        self._ensure_application_runtime().reset_input_queues()
         self._agent_running = run_state.agent_running
-        self._pending_input = run_state.pending_input
-        self._interrupt_queue = run_state.interrupt_queue
         self._should_exit = run_state.should_exit
         self._last_ctrl_c_time = run_state.last_ctrl_c_time
         self._config_mtime = run_state.config_mtime

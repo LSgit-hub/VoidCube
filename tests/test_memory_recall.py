@@ -19,7 +19,11 @@ from systems.memory.memory_service import (
     TurnCreate,
     TurnPairCreate,
 )
-from systems.memory.recall import build_recall_plan, normalize_text
+from systems.memory.recall import (
+    _temporal_fit_score,
+    build_recall_plan,
+    normalize_text,
+)
 from systems.memory.tier1_to_tier2_bridge import (
     _write_compressed_memories_to_db,
     open_memory_sqlite,
@@ -93,6 +97,7 @@ def _insert_compressed(
     timestamp: datetime,
     importance: float = 0.8,
     topics: list[str] | None = None,
+    memory_type: str = "event",
     owner_id: str = "local-user",
     workspace_id: str = "default",
 ) -> None:
@@ -104,10 +109,11 @@ def _insert_compressed(
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, compressed_at, "
             "status, weight, event_kind, owner_id, workspace_id) "
-            "VALUES (?, 'event', ?, ?, ?, ?, ?, 0.9, ?, '[]', '[]', ?, "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0.9, ?, '[]', '[]', ?, "
             "'active', 0.8, 'decision', ?, ?)",
             (
                 memory_id,
+                memory_type,
                 title,
                 summary,
                 stamp,
@@ -1065,3 +1071,139 @@ async def test_all_direct_memory_reads_and_mutations_enforce_scope(tmp_path):
                 workspace_id="workspace-a",
             )
         )
+
+
+# ── Temporal-aware recall (time-first runtime port) ─────────────────────
+
+
+def test_build_recall_plan_resolves_this_week_and_this_month():
+    anchor = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+
+    plan = build_recall_plan("这个月我们做了什么", now=anchor)
+    assert plan.temporal_intent == "explicit"
+    assert plan.timespan_start is not None
+    assert plan.timespan_end is not None
+    assert plan.timespan_start.startswith("2026-08-01")
+
+    plan_week = build_recall_plan("本周进展如何", now=anchor)
+    assert plan_week.temporal_intent == "explicit"
+    # 2026-08-04 is a Tuesday; the week starts Monday 2026-08-03.
+    assert plan_week.timespan_start.startswith("2026-08-03")
+
+    plan_recent = build_recall_plan("最近聊了什么", now=anchor)
+    assert plan_recent.temporal_intent == "implicit"
+    assert plan_recent.timespan_start is not None
+    assert plan_recent.timespan_end is not None
+
+    plan_plain = build_recall_plan("记忆系统方案", now=anchor)
+    assert plan_plain.temporal_intent == "none"
+    assert plan_plain.timespan_start is None
+    assert plan_plain.timespan_end is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_month_window_filters_to_in_window_memory(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_compressed(
+        service,
+        memory_id="in-month",
+        title="本月告警阈值",
+        summary="本月把监控告警阈值改为 90 秒。",
+        timestamp=now,
+        topics=["监控"],
+    )
+    _insert_compressed(
+        service,
+        memory_id="out-of-month",
+        title="旧版告警阈值",
+        summary="很久以前把监控告警阈值改为 120 秒。",
+        timestamp=now - timedelta(days=70),
+        topics=["监控"],
+    )
+
+    result = await service.recall(RecallRequest(query="这个月监控告警阈值", limit=5))
+
+    returned = [item["id"] for item in result["results"]]
+    assert result["query_plan"]["temporal_intent"] == "explicit"
+    assert "in-month" in returned
+    assert "out-of-month" not in returned
+
+
+@pytest.mark.asyncio
+async def test_explicit_window_records_temporal_fit_signal(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_compressed(
+        service,
+        memory_id="window-memory",
+        title="本月告警阈值",
+        summary="本月把监控告警阈值改为 90 秒。",
+        timestamp=now,
+        topics=["监控"],
+    )
+
+    result = await service.recall(RecallRequest(query="这个月监控告警阈值", limit=3))
+
+    assert result["query_plan"]["temporal_intent"] == "explicit"
+    assert result["results"]
+    assert result["results"][0]["id"] == "window-memory"
+    assert result["results"][0]["signals"]["temporal_fit"] == pytest.approx(1.0)
+
+
+def test_temporal_fit_ranks_inside_window_above_edge():
+    window_start = "2026-08-01T00:00:00Z"
+    window_end = "2026-08-31T23:59:59Z"
+    full = _temporal_fit_score(
+        "2026-08-01T00:00:00Z",
+        "2026-08-31T23:59:59Z",
+        window_start,
+        window_end,
+    )
+    edge = _temporal_fit_score(
+        "2026-08-30T00:00:00Z",
+        "2026-08-30T23:59:59Z",
+        window_start,
+        window_end,
+    )
+    outside = _temporal_fit_score(
+        "2026-07-01T00:00:00Z",
+        "2026-07-01T23:59:59Z",
+        window_start,
+        window_end,
+    )
+
+    assert full == pytest.approx(1.0)
+    assert full > edge > 0
+    assert outside == 0.0
+
+
+@pytest.mark.asyncio
+async def test_structural_tie_breaker_prefers_arc_over_event(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_compressed(
+        service,
+        memory_id="arc-memory",
+        title="记忆压缩主弧线",
+        summary="记忆压缩主线跨越多轮迭代形成完整脉络。",
+        timestamp=now,
+        topics=["记忆压缩"],
+        memory_type="arc",
+    )
+    _insert_compressed(
+        service,
+        memory_id="event-memory",
+        title="记忆压缩事件",
+        summary="记忆压缩事件记录了本次压缩决策。",
+        timestamp=now,
+        topics=["记忆压缩"],
+        memory_type="event",
+    )
+
+    result = await service.recall(RecallRequest(query="记忆压缩", limit=5))
+
+    returned = [item["id"] for item in result["results"]]
+    assert returned[0] == "arc-memory"
+    assert "event-memory" in returned
+    assert returned.index("arc-memory") < returned.index("event-memory")
