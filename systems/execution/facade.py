@@ -52,7 +52,7 @@ class VoidCubeExecutionFacade:
     async def confirm_body_switch(self, request: dict | None = None) -> Dict[str, Any]:
         result = await self.body_upgrade.confirm_body_switch(request)
         if self.supervisor is not None:
-            self.supervisor._reconcile_body_switch_consent_outcome(result)
+            self.supervisor._autonomous_body_switch_consent_service.reconcile(result)
         return result
 
     async def execute_autonomous_chain_request(self, request: dict) -> Dict[str, Any]:

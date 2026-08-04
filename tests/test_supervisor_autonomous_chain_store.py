@@ -18187,7 +18187,7 @@ async def test_autonomous_task_review_cycle_recovers_orphaned_agent_pull_running
             "drive_input": {},
         }
 
-    supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service._fetch_cli_session = fake_owner_session
     supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
 
     result = await supervisor._autonomous_task_review_cycle_service.run()
@@ -18242,7 +18242,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     async def failing_owner_session(_session_id):
         raise HTTPException(status_code=503, detail="gateway down")
 
-    supervisor._fetch_gateway_cli_session = failing_owner_session  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service._fetch_cli_session = failing_owner_session
 
     recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_autonomous_chain_task(task_id)
@@ -18292,7 +18292,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
         assert session_id == "deleted-cli-session"
         return {"session_id": session_id, "missing": True}
 
-    supervisor._fetch_gateway_cli_session = missing_owner_session  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service._fetch_cli_session = missing_owner_session
 
     recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_autonomous_chain_task(task_id)
@@ -19074,7 +19074,7 @@ async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tm
     assert waiting.status == "awaiting_user_consent"
     assert waiting.status not in {"completed", "failed", "cancelled"}
 
-    supervisor._reconcile_body_switch_consent_outcome(
+    supervisor._autonomous_body_switch_consent_service.reconcile(
         {
             "status": "body_switch_activated",
             "autonomous_task_link": {"task_id": task_id},
@@ -19174,7 +19174,7 @@ async def test_body_handoff_user_rejection_cancels_original_task(tmp_path):
         reason="waiting",
     )
 
-    supervisor._reconcile_body_switch_consent_outcome(
+    supervisor._autonomous_body_switch_consent_service.reconcile(
         {
             "status": "body_switch_rejected",
             "autonomous_task_link": {"task_id": task_id},
@@ -19202,7 +19202,7 @@ async def test_autonomous_task_review_cycle_skips_when_cycle_already_running(tmp
         lock.release()
 
     assert result["skipped"] == "cycle_already_running"
-    supervisor.review_autonomous_chain_tasks.assert_not_awaited()  # type: ignore[attr-defined]
+    supervisor._autonomous_task_review_service.review.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -19246,7 +19246,7 @@ async def test_autonomous_task_review_cycle_times_out_agent_pull_execution_start
         },
     )
 
-    supervisor._fetch_gateway_cli_session = AsyncMock(  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service._fetch_cli_session = AsyncMock(
         return_value={
             "session_id": "live-cli-session",
             "is_stale": False,

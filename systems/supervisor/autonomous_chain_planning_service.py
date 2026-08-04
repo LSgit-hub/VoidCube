@@ -13,6 +13,7 @@ from systems.supervisor.autonomous_chain_store import (
     AutonomousChainTask,
 )
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
+from systems.supervisor.autonomous_task_review import normalize_autonomous_chain_decision
 from systems.supervisor.schedule_allocator import ScheduleAllocator
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
 
@@ -153,6 +154,57 @@ class AutonomousChainPlanningService:
             ),
         }
         return payload
+
+    async def list_tasks(
+        self,
+        status: Optional[str] = None,
+        task_type: Optional[str] = None,
+        execution_kind: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_status = None
+        if status is not None:
+            normalized_status = normalize_autonomous_chain_decision(status)
+            if normalized_status is None or normalized_status == "auto":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported task status filter: {status}",
+                )
+
+        tasks = self._store.list_chain_projection_tasks(
+            status=normalized_status,
+            include_cancelled=True,
+        )
+        if task_type:
+            normalized_type = str(task_type).strip()
+            tasks = [
+                task
+                for task in tasks
+                if self._task_profile_policy.governance_type(task) == normalized_type
+            ]
+        if execution_kind:
+            normalized_kind = self._task_profile_policy.normalize_family(execution_kind)
+            explicit_kind = str(execution_kind).strip().lower()
+            tasks = [
+                task
+                for task in tasks
+                if (
+                    str(self._task_profile_policy.execution_kind(task) or "").strip().lower()
+                    == explicit_kind
+                    or str(self.serialize_task(task).get("execution_kind") or "").strip().lower()
+                    == explicit_kind
+                    or self._task_profile_policy.execution_kind(task) == normalized_kind
+                )
+            ]
+        return {
+            "tasks": [self.serialize_task(task) for task in tasks],
+            "count": len(tasks),
+        }
+
+    async def get_task(self, task_id: str) -> Dict[str, Any]:
+        task = self._store.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
+        return self.serialize_task(task)
 
     def _governance_action_label(self, value: Any) -> str:
         normalized = str(value or "").strip().lower()

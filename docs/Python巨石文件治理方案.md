@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：治理未完成。Stage 0、Stage 1、Stage 2 已完成；Stage 3、Stage 4、Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未开始。当前优先收口 Planning 的任务决策、恢复和 review 组合边界，随后处理共享应用层 contract、CLI host state 和 Supervisor route/lifecycle。
+> 状态：治理未完成。Stage 0、Stage 1、Stage 2、Stage 4 已完成；Stage 3、Stage 6 部分完成；Stage 5 基本完成；Stage 7 尚未开始。当前优先处理共享应用层 contract、CLI host state 和 Supervisor route/lifecycle，随后进行 Stage 7 全量验收。
 > 基线日期：2026-08-04。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -21,7 +21,7 @@
 | 文件/边界 | 当前规模 | 当前判断 | 优先级 |
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 4,827 行 | `run()`、`chat()` 和 command domain 已明显缩小；类仍持有共享业务状态、Agent/session 生命周期和大量 host wiring | P0 |
-| `systems/supervisor/planning_runtime.py` | 约 2,522 行 / 66 个方法 | repository、state projection、task profile、schedule、drive-input evaluation、judgement core、strategy memory mutation、drive history persistence、governance state persistence、observation、meta-governance projection、cognitive history summary、cognition state assembly、review/recovery service、governance event consumer、task state mutation、cognitive posture/alignment、self-regulation、body review 和 execution handoff 已形成独立 owner；自主任务规划/序列化/self-learning 提案和 drive→plan→review→handoff 周期已有显式 service，`PlanningRuntimeMixin` 仍保留任务决策、恢复和 route-facing 跨 service 组合 | P0，当前第一优先级 |
+| `systems/supervisor/planning_runtime.py` | 约 1,672 行 / 50 个方法 | 保留运行时投影、内生驱动输入/评估、跨快照组合和显式 service 委托；任务决策、恢复、reset、owner session、治理 review adviser、memory promotion、body consent 及自主任务查询已有对应 owner | P0，持续观察 |
 | `systems/supervisor/endogenous_drive.py` | 231 行 | 主流水线已组件化；Engine 仅保留 facade、LM proposal 交接和 latest-generation state 写回 | P0，接近收口 |
 | `systems/supervisor/ui_runtime.py` | 420 行 | 静态资源和主要投影已外移；`SupervisorUIMixin` 仍保留 HTTP/SSE、缓存和生命周期 owner | P0 |
 | `systems/supervisor/supervisor.py` | 600 行 | 组合根仍内联注册全部路由，`_setup_routes()` 尚未成为薄 route adapter | P0 边界 |
@@ -303,14 +303,14 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 当前约 2,522 行、66 个方法，仍有多项职责集中在同一运行时边界：
+`PlanningRuntimeMixin` 当前约 1,672 行、50 个方法，仍是 Supervisor Planning 的运行时组合边界，但不再是自主任务治理责任的业务实现中心：
 
-- 任务流、候选注释、策略记忆和观察议程的运行时组合；cognitive history summary、cognition state assembly、posture/alignment 与 self-regulation signal 已由显式 service 承担；
+- 任务流、候选注释、策略记忆和观察议程的运行时组合；cognitive history summary、cognition state assembly、posture/alignment 与 self-regulation signal 由显式 service 承担；
 - task profile、schedule、排序和冲突；
 - Gateway 活动投影和 drive 输入；
-- 任务决策、agent-pull 归属校验、恢复相关 route 适配和 review adviser 的跨 service 组合。
+- 跨快照状态组合以及 Supervisor route 所需的薄委托。
 
-已有的 repository、治理/认知/self-regulation persistence、纯 projection/policy、task state mutation、batch review、review cycle/recovery、治理事件消费、cognitive history summary、cognition state assembly、cognitive posture/alignment、self-regulation、drive history persistence、body improvement review、execution handoff、autonomous-chain planning 和 autonomous cycle service 已形成明确边界。Planning 仍保留任务决策与 route-facing 跨 service 组合。继续增加 Mixin 或只留下大量委托壳都不算完成。
+已有的 repository、治理/认知/self-regulation persistence、纯 projection/policy、task state mutation、batch review、review cycle/recovery、治理事件消费、cognitive history summary、cognition state assembly、cognitive posture/alignment、self-regulation、drive history persistence、body improvement review、execution handoff、autonomous-chain planning、任务 review、recovery、runtime reset、owner session、memory promotion、body consent 和 autonomous cycle service 已形成明确边界。Planning 只保留运行时组合、投影和显式 service 委托。继续增加 Mixin、回迁业务规则或只留下大量委托壳都不算治理收口。
 
 ### 7.2 目标责任边界
 
@@ -324,6 +324,12 @@ Planning 只保留组合和跨组件编排。责任边界固定如下：
 | strategy memory bucket mutation | strategy memory service | 只修改传入 history；持久化由 drive history persistence service 提交 |
 | 任务状态、治理 transition 和 status 观察 | task state service | 统一写入治理真相，不调用 Gateway 或 Execution |
 | task review、schedule 冲突、恢复和周期编排 | review policy / review cycle service | policy 无副作用；service 通过显式 ports 编排 |
+| 任务决策、agent-pull 归属校验和执行请求准备 | `AutonomousTaskReviewService` | 只通过显式 task/Gateway/Execution ports 读取和写回，不依赖完整 Supervisor |
+| Supervisor 治理 review adviser | `AutonomousTaskGovernanceReviewService` | 只输出结构化审查建议，不拥有任务真相 |
+| Mem recovery 与 autonomous runtime reset | `AutonomousChainRecoveryService` / `AutonomousChainRuntimeResetService` | recovery 负责恢复投影；reset 负责清理运行时状态和对应外部 activity |
+| Gateway owner session 查询 | `AutonomousTaskOwnerSessionService` | 只负责 Gateway 查询和响应规范化 |
+| verified conclusion memory promotion | `AutonomousTaskMemoryPromotionService` | 负责候选记忆写入和 promotion request，不改变任务状态真相 |
+| body-switch consent 写回 | `AutonomousBodySwitchConsentService` | 只协调 execution facade 结果到 Supervisor 运行态的写回 |
 | 自主任务请求、任务创建、序列化和 judgement preview | `AutonomousChainPlanningService` | 负责输入规范化和读模型，不直接实现任务状态转换 |
 | self-learning conclusion 提案转为判断在途任务 | `AutonomousChainPlanningService` | 只创建 API-B 判断在途提案，任务真相仍由 task state service 写入 |
 | drive、planning、review 和 handoff 的完整周期 | `AutonomousCycleService` | 只协调显式 service/port，并写回周期时间和 UI activity |
@@ -334,11 +340,11 @@ Planning 只保留组合和跨组件编排。责任边界固定如下：
 
 已有 owner 继续保持；缺口只按上述责任边界补齐，不再以新增 Mixin 或通用 helper 作为拆分目标。
 
-### 7.3 剩余责任
+### 7.3 收口约束
 
-1. 将任务决策中的 policy、agent-pull 归属/恢复、执行请求准备和状态写回前后的组合继续归入显式 owner；Planning 只保留请求验证、调用和响应映射。
-2. 将 Supervisor review adviser、Mem recovery 及剩余跨 service 组合从 Planning runtime 收敛到已有 service/port，并固定任务真相、Gateway、Memory 和 Execution 的写入顺序。
-3. 将 Supervisor 初始化继续收敛到显式 assembler；相关生产消费者切换后，删除 `PlanningRuntimeMixin` 中剩余的无业务意义组合方法、旧参数和无调用兼容分支。
+1. Planning 只保留请求验证、运行时组合、投影、调用和响应映射；上述责任不得回迁到 Mixin。
+2. 各 owner 通过显式 service/port 访问任务真相、Gateway、Memory 和 Execution，并保持既定写入顺序；不增加双写或隐式 `self` 依赖。
+3. 后续生产消费者继续由 runtime assembler 显式装配；若责任边界再次变化，必须删除失效参数、旧入口和无调用兼容分支。
 
 验收：核心 projector/policy 无需构造完整 Supervisor 即可测试；任务状态仍先写治理事件；Gateway、Memory、Execution 所有权不变。
 
@@ -499,9 +505,9 @@ DrivePerceptionBuilder
 
 - 保持 repository、projection/policy、task state、strategy memory mutation、batch review 和治理事件消费的 owner 边界。
 - 固化 cognitive history summary、cognition state assembly、cognition posture/alignment/self-regulation、drive history persistence、body review 和 execution handoff 的 service owner 边界。
-- 将自主任务规划、任务序列化、self-learning conclusion 提案和 drive→plan→review→handoff 周期置于显式 service；继续收口任务决策、恢复、review adviser 及剩余跨 service 组合。
+- 将自主任务规划、任务序列化、self-learning conclusion 提案、任务决策、恢复、runtime reset、owner session、治理 review adviser、memory promotion、body consent 和 drive→plan→review→handoff 周期置于显式 service。
 
-验收：Planning 不再是上述责任的业务实现中心；任务规划、任务真相、治理事件、恢复、body review 和执行交接的调用者都通过显式 owner 运行，关键写入顺序和全链路语义保持一致。
+验收：Planning 不再是上述责任的业务实现中心；任务规划、任务决策、任务真相、治理事件、恢复、body review 和执行交接的调用者都通过显式 owner 运行，关键写入顺序和全链路语义保持一致。完成后不得以新增 Mixin、委托壳或双路径兼容重新聚合责任。
 
 ### Stage 5：Endogenous pipeline
 
@@ -574,7 +580,7 @@ DrivePerceptionBuilder
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-当前判定为 **No-Go**：共享应用 contract、Planning residual orchestration、CLI host state、Supervisor route/lifecycle 和 Stage 7 全量验证尚未全部收口。
+当前判定为 **No-Go**：共享应用 contract、CLI host state、Supervisor route/lifecycle 和 Stage 7 全量验证尚未全部收口。
 
 ## 15. 当前实施快照
 
@@ -588,7 +594,7 @@ DrivePerceptionBuilder
 | Stage 1 | 已完成 | 根 `cli.py` 已成为薄兼容入口；共享配置、Provider 和 Gateway 基础能力已进入 `VoidCube_app` | 无 |
 | Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 无 |
 | Stage 3 | 部分完成 | session、turn、queue/cancel、工具、审批和 clarify 已有无界面基础 contract；CLI command domain 已分组 | 建立共享应用组合根、ApplicationState、稳定事件集合和真正通过公共端口运行的 adapter contract tests |
-| Stage 4 | 部分完成 | repository、governance state persistence、projection/policy、task state、strategy memory mutation、drive history persistence、batch review、review cycle/recovery、治理事件消费、cognitive history summary、cognition state assembly、cognitive posture/alignment、self-regulation、body review、execution handoff、autonomous-chain planning 和 autonomous cycle 已有独立 owner；Planning 仍保留任务决策、恢复相关适配和 review/route 跨 service 组合 | 收口任务决策、恢复、review adviser 及剩余跨 service 组合，删除无业务意义的 Mixin 实现并完成 Stage 4 全链路验收 |
+| Stage 4 | 已完成 | repository、治理状态、projection/policy、task state、review/recovery、任务决策、runtime reset、owner session、治理 review adviser、memory promotion、body consent、body review、execution handoff、autonomous-chain planning 和 autonomous cycle 均由显式 owner 承担；Planning 仅保留运行时组合、投影和 service 委托 | 无 |
 | Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 完成等价全链路验收，确认无旧 helper、旧调用路径和双写入口 |
 | Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成大量显式 runtime/ports | 收口 CLI 共享业务状态；删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
 | Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
@@ -617,7 +623,6 @@ DrivePerceptionBuilder
 ### 15.3 当前缺口
 
 - `VoidCube_app` 尚无共享应用组合根，也未形成完整的 `SessionEvent`、`TurnEvent`、`MessageDelta`、usage 和 artifact 事件体系。
-- `PlanningRuntimeMixin` 仍约 2,522 行、66 个方法；自主任务规划、序列化、self-learning conclusion 提案和 autonomous cycle 已外移，剩余缺口集中在任务决策、恢复相关适配、review adviser 和 route-facing 跨 service 组合，Stage 4 尚未收口。
 - `VoidcubeCLI` 仍持有跨前端可复用的状态和生命周期，不能仅因 `run()` 已缩短就判定 CLI-1/CLI-2/CLI-5 完成。
 - `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
 - 当前性能基线只用于迁移前后和阶段收口对比，不等同于 Stage 7 全量验收；全量测试、发行物验证和最终性能复测仍未完成，因此不能进入 Windows adapter 实施。
@@ -630,8 +635,7 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **Planning residual orchestration**：收口任务决策、恢复、review adviser 和 route-facing 跨 service 组合，并删除剩余无业务 Mixin 实现。
-2. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
-3. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
-4. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
-5. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。
+1. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
+2. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
+3. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
+4. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。

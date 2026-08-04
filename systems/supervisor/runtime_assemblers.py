@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+
 from VoidCube_core.runtime_paths import (
     get_legacy_project_runtime_layout,
     get_runtime_layout,
@@ -43,6 +45,12 @@ from systems.supervisor.autonomous_chain_planning_service import (
 from systems.supervisor.autonomous_chain_recovery_service import (
     AutonomousChainRecoveryService,
 )
+from systems.supervisor.autonomous_chain_runtime_reset_service import (
+    AutonomousChainRuntimeResetService,
+)
+from systems.supervisor.autonomous_body_switch_consent_service import (
+    AutonomousBodySwitchConsentService,
+)
 from systems.supervisor.autonomous_cycle_service import AutonomousCycleService
 from systems.supervisor.body_improvement_review_service import (
     BodyImprovementReviewService,
@@ -72,6 +80,12 @@ from systems.supervisor.autonomous_task_review_cycle_service import (
 )
 from systems.supervisor.autonomous_task_governance_review_service import (
     AutonomousTaskGovernanceReviewService,
+)
+from systems.supervisor.autonomous_task_memory_promotion_service import (
+    AutonomousTaskMemoryPromotionService,
+)
+from systems.supervisor.autonomous_task_owner_session_service import (
+    AutonomousTaskOwnerSessionService,
 )
 from systems.supervisor.autonomous_task_review_service import AutonomousTaskReviewService
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
@@ -174,6 +188,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         governance_repository_path=mem_governance_repository_path,
         touch_activity=supervisor._touch_gateway_activity,
     )
+    supervisor._autonomous_task_owner_session_service = AutonomousTaskOwnerSessionService(
+        gateway_address=execution_config.gateway_address,
+    )
 
     def record_autonomous_task_status_change(
         task: Any,
@@ -185,6 +202,17 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         store=supervisor._autonomous_chain_store,
         governance_repository=supervisor._governor.governance_repository,
         on_status_change=record_autonomous_task_status_change,
+    )
+    supervisor._autonomous_body_switch_consent_service = AutonomousBodySwitchConsentService(
+        store=supervisor._autonomous_chain_store,
+        task_state=supervisor._autonomous_task_state,
+    )
+    supervisor._autonomous_task_memory_promotion_service = (
+        AutonomousTaskMemoryPromotionService(
+            task_state=supervisor._autonomous_task_state,
+            gateway_address=execution_config.gateway_address,
+            gateway_memory_headers=supervisor._gateway_memory_headers,
+        )
     )
     scheduled_store_path = (
         Path(supervisor.config.scheduled_task_store_path)
@@ -202,6 +230,33 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
     supervisor._endogenous_drive_history_persistence_service = (
         EndogenousDriveHistoryPersistenceService(supervisor._endogenous_state_repository)
+    )
+
+    async def clear_gateway_activity() -> None:
+        async with aiohttp.ClientSession() as session:
+            await session.post(
+                f"{execution_config.gateway_address}/admin/activity/clear",
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+
+    def reset_autonomous_schedule() -> None:
+        runtime = supervisor._service_runtime
+        runtime.last_review_at = None
+        runtime.next_review_at = None
+        runtime.last_drive_at = None
+        runtime.next_drive_at = None
+        runtime.suppress_candidate_refresh = True
+
+    supervisor._autonomous_chain_runtime_reset_service = AutonomousChainRuntimeResetService(
+        list_tasks=supervisor._autonomous_chain_store.list_tasks,
+        clear_tasks=supervisor._autonomous_task_state.clear_tasks,
+        clear_ui_activity=supervisor._clear_supervisor_ui_activity,
+        clear_governor_projection=supervisor._governor.clear_runtime_projection,
+        default_drive_history=supervisor._endogenous_drive_history_persistence_service.default_snapshot,
+        persist_drive_history=supervisor._endogenous_drive_history_persistence_service.persist,
+        clear_gateway_activity=clear_gateway_activity,
+        reset_schedule=reset_autonomous_schedule,
+        reset_watch_window=lambda: setattr(supervisor, "_watch_window_last_outcome", None),
     )
     supervisor._endogenous_governance_state_persistence_service = (
         EndogenousGovernanceStatePersistenceService(
@@ -302,7 +357,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         resolve_drive_input=supervisor._resolve_runtime_drive_input_request,
         auto_decision=autonomous_task_auto_decision,
         normalize_context=supervisor._normalize_runtime_decision_context,
-        propose_memory_promotion=supervisor._propose_verified_conclusion_memory_promotion,
+        propose_memory_promotion=supervisor._autonomous_task_memory_promotion_service.propose,
         build_response_fields=supervisor._build_drive_input_response_fields,
         serialize_task=supervisor._autonomous_chain_planning_service.serialize_task,
         build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
@@ -322,7 +377,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             )
         ),
         get_task=supervisor._autonomous_chain_store.get_task,
-        fetch_cli_session=lambda session_id: supervisor._fetch_gateway_cli_session(session_id),
+         fetch_cli_session=supervisor._autonomous_task_owner_session_service.fetch,
          review_tasks=lambda request: supervisor._autonomous_task_review_service.review(request),
         consume_governance_events=lambda: supervisor._endogenous_governance_event_consumer.consume_governance_review_requests(),
         consume_alignment_events=lambda: supervisor._endogenous_governance_event_consumer.consume_alignment_requests(),
@@ -424,7 +479,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
             task_store=supervisor._autonomous_chain_store,
             task_profile_policy=supervisor._task_profile_policy,
             execution_facade_provider=lambda: supervisor._execution_facade,
-            propose_memory_promotion=supervisor._propose_verified_conclusion_memory_promotion,
+            propose_memory_promotion=supervisor._autonomous_task_memory_promotion_service.propose,
             task_activity_metadata=supervisor._task_activity_metadata,
             touch_gateway_activity=supervisor._touch_gateway_activity,
             record_ui_activity=supervisor._record_supervisor_ui_activity,
