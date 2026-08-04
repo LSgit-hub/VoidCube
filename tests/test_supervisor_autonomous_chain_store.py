@@ -94,6 +94,10 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     return supervisor
 
 
+def _drive_history_service(supervisor: Supervisor):
+    return supervisor._endogenous_drive_history_persistence_service
+
+
 def _auditable_body_task_fields(seed: str = "1") -> dict:
     source_commit = f"source-{seed}"
     return {
@@ -847,7 +851,7 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     assert history["judgements"]
     candidate = result["candidates"][0]
@@ -879,7 +883,7 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
     result = await supervisor.evaluate_endogenous_drive(
         {"record_activity": False, "persist_evaluation": False}
     )
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     governance_events = supervisor._load_endogenous_governance_events()
     cognition_snapshot = supervisor._load_endogenous_cognition_state()
 
@@ -914,7 +918,7 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
     with pytest.raises(RuntimeError, match="cognition persist failed"):
         await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     governance_events = supervisor._load_endogenous_governance_events()
 
     assert history["judgements"] == []
@@ -1324,7 +1328,7 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
             "reason": "hold for later",
         },
     )
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     assert any(outcome["event_type"] == "planned" for outcome in history["outcomes"])
     assert any(
@@ -1398,7 +1402,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         },
     )
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     completed_outcome = next(
         outcome
         for outcome in history["outcomes"]
@@ -1452,7 +1456,7 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
             "reason": "hold for later",
         },
     )
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     deferred_outcome = next(
         outcome
         for outcome in history["outcomes"]
@@ -1481,13 +1485,13 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
     history["outcomes"] = filler + [deferred_outcome]
     history["strategy_memory"]["focus_stats"][preferred_focus]["dragging"] = 1
     history["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["dragging"] = 1
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     task = supervisor._autonomous_chain_store.get_task(task_id)
     assert task is not None
     supervisor._record_endogenous_drive_outcome(task, event_type="decision")
 
-    after = supervisor._load_endogenous_drive_history()
+    after = _drive_history_service(supervisor).load()
     matching = [
         outcome
         for outcome in after["outcomes"]
@@ -1560,7 +1564,7 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     assert cycle["tasks"]
     preferred_focus = next(
@@ -1634,7 +1638,7 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     assert len(result["candidates"]) >= 2
     preferred_focus = result["deliberation"]["adaptive_policy"]["preferred_focus"]
@@ -1668,7 +1672,7 @@ async def test_endogenous_drive_history_outcome_persists_reference_alignment(tmp
     )
 
     supervisor._record_endogenous_drive_outcome(task, event_type="planned")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -1701,7 +1705,7 @@ async def test_endogenous_drive_history_outcome_persists_cognitive_alignment(tmp
     )
 
     supervisor._record_endogenous_drive_outcome(task, event_type="planned")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -1733,7 +1737,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tm
     )
 
     supervisor._record_endogenous_drive_outcome(task, event_type="planned")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -1776,7 +1780,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
     )
 
     supervisor._record_endogenous_drive_outcome(task, event_type="planned")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -1822,7 +1826,7 @@ async def test_planned_outcome_does_not_synthesize_cognitive_assessment_from_dri
     )
 
     supervisor._record_endogenous_drive_outcome(task, event_type="planned")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -1885,7 +1889,7 @@ async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_
     )
 
     supervisor._record_endogenous_drive_outcome(completed, event_type="decision")
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     recorded = next(
         outcome
         for outcome in history["outcomes"]
@@ -2246,7 +2250,7 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Drifting proposal one",
@@ -2271,7 +2275,7 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -2394,7 +2398,7 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Aligned proposal one",
@@ -2408,7 +2412,7 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -2631,7 +2635,7 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Mostly aligned proposal",
@@ -2645,7 +2649,7 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -2740,7 +2744,7 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Partial proposal",
@@ -2754,7 +2758,7 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -2843,7 +2847,7 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "真实性问题提案",
@@ -2857,7 +2861,7 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -3233,7 +3237,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.explanation_inconsistent_truthfulness_boost = 0.09
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Conflicted explanation",
@@ -3249,7 +3253,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
             "llm_priority_basis": ["prioritize action despite unresolved evidence"],
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -3722,7 +3726,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -3765,7 +3769,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     snapshot = supervisor._endogenous_self_regulation_default()
     snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
@@ -4347,14 +4351,14 @@ async def test_repeated_observation_history_does_not_saturate_observation_bias_w
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {"status": "deferred", "task_family": "self_learning", "title": "a"},
         {"status": "failed", "task_family": "self_learning", "title": "b"},
         {"status": "deferred", "task_family": "memory_maintenance", "title": "c"},
         {"status": "completed", "task_family": "self_learning", "title": "d"},
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -4435,7 +4439,7 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -4490,7 +4494,7 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -4538,7 +4542,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -4605,7 +4609,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -4653,7 +4657,7 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -4712,7 +4716,7 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
             },
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
@@ -4773,7 +4777,7 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -4831,7 +4835,7 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
             },
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -4886,7 +4890,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -4940,7 +4944,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     regulation_snapshot = supervisor._endogenous_self_regulation_default()
     regulation_snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -5035,7 +5039,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -5078,7 +5082,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def stable_drive_input(_request=None):
         return {
@@ -5126,7 +5130,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             if not cycle.get("writeback_skipped"):
                 wrote_back_cycles += 1
 
-    history_after_cycles = supervisor._load_endogenous_drive_history()
+    history_after_cycles = _drive_history_service(supervisor).load()
     continuity_bucket = history_after_cycles["strategy_memory"]["focus_stats"].get("memory_continuity", {})
     assert wrote_back_cycles >= 2
     assert continuity_bucket.get("judged", 0) >= 1
@@ -5176,7 +5180,7 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Recovered self-learning A",
@@ -5207,7 +5211,7 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def stable_memory_drive_input(_request=None):
         return {
@@ -5384,7 +5388,7 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
         supervisor.evaluate_drive_input = strained_drive_input  # type: ignore[method-assign]
         final = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     focus_stats = history["strategy_memory"]["focus_stats"]
     meta_stats = history["strategy_memory"]["meta_governance_stats"]
     observation_stats = history["strategy_memory"]["observation_target_stats"]
@@ -5411,7 +5415,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Recovered self-learning A",
@@ -5430,7 +5434,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
             "quality_score": 0.77,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     def _build_drive_input(
         *,
@@ -5515,7 +5519,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     assert "repair_truthfulness" in observed_primary_needs
     assert "expand_learning_frontier" in observed_primary_needs
 
-    accumulated_history = supervisor._load_endogenous_drive_history()
+    accumulated_history = _drive_history_service(supervisor).load()
     strategy_memory = accumulated_history["strategy_memory"]
     focus_stats = strategy_memory["focus_stats"]
     contextual_focus_stats = strategy_memory["contextual_focus_stats"]
@@ -5534,7 +5538,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         replay_root.mkdir()
         replay = _make_supervisor(replay_root)
         replay._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-        replay._persist_endogenous_drive_history(json.loads(json.dumps(accumulated_history)))
+        _drive_history_service(replay).persist(json.loads(json.dumps(accumulated_history)))
         replay._endogenous_state_repository.paths.self_regulation.write_text(
             json.dumps(accumulated_regulation),
             encoding="utf-8",
@@ -5575,7 +5579,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         )
         memory_result = await memory_supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    memory_history_after_replay = memory_supervisor._load_endogenous_drive_history()
+    memory_history_after_replay = _drive_history_service(memory_supervisor).load()
     memory_observation_stats = memory_history_after_replay["strategy_memory"]["observation_target_stats"]
 
     assert learning_result["deliberation"]["reflection"]["dominant_constraint"] == "none"
@@ -5760,7 +5764,7 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["strategy_memory"]["meta_governance_stats"] = {
         "observe": {
             "seen": 5,
@@ -5772,7 +5776,7 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
             "last_status": "active",
         }
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -5903,7 +5907,7 @@ async def test_meta_governance_persists_mode_history_across_cycles(tmp_path):
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     meta = second["cognition_state"]["meta_governance"]
     stats = history["strategy_memory"]["meta_governance_stats"]
@@ -5972,7 +5976,7 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     third = await supervisor.evaluate_endogenous_drive({"record_activity": False})
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
 
     memory_stats = history["strategy_memory"]["agenda_topic_stats"]["stabilize_memory_continuity"]
     agenda_entries = {
@@ -6167,7 +6171,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
     supervisor.evaluate_endogenous_drive = fake_evaluate_endogenous_drive  # type: ignore[method-assign]
 
     cycle = await supervisor._run_endogenous_drive_cycle()
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     focus_stats = history["strategy_memory"]["focus_stats"]
     judgement_keys = {
         judgement.get("candidate_key")
@@ -6265,14 +6269,14 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_failed  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan  # type: ignore[method-assign]
-    history_before_failure = supervisor._load_endogenous_drive_history()
+    history_before_failure = _drive_history_service(supervisor).load()
     events_before_failure = supervisor._load_endogenous_governance_events()
     cognition_before_failure = supervisor._load_endogenous_cognition_state()
 
     with pytest.raises(RuntimeError, match="plan failed after drive persistence"):
         await supervisor._run_endogenous_drive_cycle()
 
-    history_after_failure = supervisor._load_endogenous_drive_history()
+    history_after_failure = _drive_history_service(supervisor).load()
     events_after_failure = supervisor._load_endogenous_governance_events()
     cognition_after_failure = supervisor._load_endogenous_cognition_state()
     assert history_after_failure["judgements"] == history_before_failure["judgements"]
@@ -6290,7 +6294,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
     result = await supervisor._run_endogenous_drive_cycle()
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     events_after_success = supervisor._load_endogenous_governance_events()["events"]
     judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
 
@@ -6389,13 +6393,13 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_first_failure  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan_first  # type: ignore[method-assign]
-    history_before_first_failure = supervisor._load_endogenous_drive_history()
+    history_before_first_failure = _drive_history_service(supervisor).load()
     events_before_first_failure = supervisor._load_endogenous_governance_events()
 
     with pytest.raises(RuntimeError, match="first drive plan failed"):
         await supervisor._run_endogenous_drive_cycle()
 
-    assert supervisor._load_endogenous_drive_history()["judgements"] == (
+    assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_first_failure["judgements"]
     )
     assert supervisor._load_endogenous_governance_events()["events"] == (
@@ -6473,14 +6477,14 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_second_failure  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan_second  # type: ignore[method-assign]
-    history_before_second_failure = supervisor._load_endogenous_drive_history()
+    history_before_second_failure = _drive_history_service(supervisor).load()
     events_before_second_failure = supervisor._load_endogenous_governance_events()
     cognition_before_second_failure = supervisor._load_endogenous_cognition_state()
 
     with pytest.raises(RuntimeError, match="second drive plan failed"):
         await supervisor._run_endogenous_drive_cycle()
 
-    assert supervisor._load_endogenous_drive_history()["judgements"] == (
+    assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_second_failure["judgements"]
     )
     assert supervisor._load_endogenous_governance_events()["events"] == (
@@ -6497,7 +6501,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
     second_drive_result = await supervisor._run_endogenous_drive_cycle()
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
     focus_stats = history["strategy_memory"]["focus_stats"]
     contextual_stats = history["strategy_memory"]["contextual_focus_stats"]
@@ -6771,7 +6775,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Weak previous proposal",
@@ -6789,7 +6793,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -7452,7 +7456,7 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
 async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -7470,7 +7474,7 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -7495,7 +7499,7 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
 
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
-        supervisor._load_endogenous_drive_history(),
+        _drive_history_service(supervisor).load(),
         normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
@@ -7538,7 +7542,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
         "external_research_titles",
         "long_tail_summary",
     ]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -7559,7 +7563,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -7584,7 +7588,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
 
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
-        supervisor._load_endogenous_drive_history(),
+        _drive_history_service(supervisor).load(),
         normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
@@ -7622,8 +7626,8 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
-    supervisor._persist_endogenous_drive_history(history)
+    history = _drive_history_service(supervisor).default_snapshot()
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -7683,7 +7687,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
 
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
-        supervisor._load_endogenous_drive_history(),
+        _drive_history_service(supervisor).load(),
         normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
@@ -8882,7 +8886,7 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Review evidence drift",
@@ -8894,7 +8898,7 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -8937,7 +8941,7 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
 @pytest.mark.unit
 def test_engine_recent_reference_alignment_summary_stays_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Reference drift seed",
@@ -8967,7 +8971,7 @@ def test_engine_recent_reference_alignment_summary_stays_thin(tmp_path):
 @pytest.mark.unit
 def test_engine_proposal_drift_memory_source_stays_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Weak posture conflict",
@@ -9013,7 +9017,7 @@ def test_engine_proposal_drift_memory_source_stays_thin(tmp_path):
 @pytest.mark.unit
 def test_runtime_recent_cognitive_alignment_summary_source_stays_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Weak posture conflict",
@@ -9041,7 +9045,7 @@ def test_runtime_recent_cognitive_alignment_summary_source_stays_thin(tmp_path):
         },
     ]
 
-    summary = supervisor._build_recent_cognitive_alignment_summary(
+    summary = supervisor._endogenous_cognitive_posture_service.recent_alignment(
         history_snapshot=history
     )
 
@@ -9064,7 +9068,7 @@ def test_runtime_recent_cognitive_alignment_summary_source_stays_thin(tmp_path):
 @pytest.mark.unit
 def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -9110,7 +9114,7 @@ def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
 @pytest.mark.unit
 def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -9157,7 +9161,7 @@ def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
 @pytest.mark.unit
 def test_engine_post_task_effect_memory_source_stays_thin_and_ignores_planned(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Planned only",
@@ -9244,7 +9248,7 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Recent grounding miss",
@@ -9256,7 +9260,7 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     shell_worktree = (tmp_path / ".body-slots" / "slot-Z" / "worktree").resolve()
     shell_worktree.mkdir(parents=True, exist_ok=True)
@@ -9334,7 +9338,7 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous review-first judgement",
@@ -9352,7 +9356,7 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9408,7 +9412,7 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -9424,7 +9428,7 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9479,7 +9483,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Trend A",
@@ -9506,7 +9510,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9563,7 +9567,7 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Switch outcome",
@@ -9584,7 +9588,7 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9635,7 +9639,7 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Helpful grounding task",
@@ -9658,7 +9662,7 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9708,7 +9712,7 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous review-first judgement",
@@ -9730,7 +9734,7 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -9918,7 +9922,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Repair evidence references",
@@ -9930,7 +9934,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     shell_worktree = (tmp_path / ".body-slots" / "slot-B" / "worktree").resolve()
     shell_worktree.mkdir(parents=True, exist_ok=True)
@@ -10018,7 +10022,7 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Weak reference alignment",
@@ -10030,7 +10034,7 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -10105,7 +10109,7 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Misaligned improvement attempt",
@@ -10138,7 +10142,7 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
             ],
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -10191,7 +10195,7 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
 async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Weak posture explanation",
@@ -10211,7 +10215,7 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
             ],
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {
@@ -10386,7 +10390,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     supervisor._endogenous_drive_engine.config = supervisor.config
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "manual"
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.active_posture_profile = "observe_first"
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -10406,7 +10410,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -10729,7 +10733,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
 async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Trend A",
@@ -10762,7 +10766,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -10804,7 +10808,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
 async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Previous cognition",
@@ -10818,7 +10822,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -10864,7 +10868,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
 async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Fallback cognition",
@@ -10880,7 +10884,7 @@ async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     result = supervisor._build_endogenous_proposal_cognition(
         history_snapshot=history,
@@ -10906,7 +10910,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Reference drift seed",
@@ -10919,7 +10923,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     _seed_current_lm_reasoning_state(
         supervisor,
         {},
@@ -10970,7 +10974,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
 async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Trend A",
@@ -10997,7 +11001,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -11042,7 +11046,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
 async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Switch outcome",
@@ -11063,7 +11067,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -11106,7 +11110,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
 async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Helpful grounding task",
@@ -11129,7 +11133,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -11171,7 +11175,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
 async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Meta cognition seed",
@@ -11193,7 +11197,7 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -11266,7 +11270,7 @@ def test_post_task_effect_memory_ignores_planned_only_outcomes(tmp_path):
 async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Evidence packet seed",
@@ -11286,7 +11290,7 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
             },
         }
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -11311,7 +11315,7 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
 
     drive_input = await fake_drive_input()
     drive_input["drive_history"] = project_drive_history(
-        supervisor._load_endogenous_drive_history(),
+        _drive_history_service(supervisor).load(),
         normalize_strategy_memory=normalize_endogenous_strategy_memory,
     )
     drive_context = build_drive_context(drive_input)
@@ -12210,7 +12214,7 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Retry self-learning H",
@@ -12285,7 +12289,7 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
             "quality_score": 0.74,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12332,7 +12336,7 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12375,7 +12379,7 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12422,7 +12426,7 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12465,7 +12469,7 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12512,7 +12516,7 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12563,7 +12567,7 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12611,7 +12615,7 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12654,7 +12658,7 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12707,7 +12711,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12750,7 +12754,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -12812,7 +12816,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12855,7 +12859,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
@@ -12927,7 +12931,7 @@ async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -12970,7 +12974,7 @@ async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not
             "quality_score": 0.79,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
@@ -13028,7 +13032,7 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -13095,7 +13099,7 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
             "quality_score": 0.21,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -13143,7 +13147,7 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -13210,7 +13214,7 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -13260,7 +13264,7 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Retry self-learning H",
@@ -13335,7 +13339,7 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
             "quality_score": 0.84,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -13511,15 +13515,15 @@ async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_a
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    first_history = supervisor._endogenous_drive_history_default()
+    first_history = _drive_history_service(supervisor).default_snapshot()
     first_history["outcomes"] = newest_first
-    supervisor._persist_endogenous_drive_history(first_history)
+    _drive_history_service(supervisor).persist(first_history)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    second_history = supervisor._endogenous_drive_history_default()
+    second_history = _drive_history_service(supervisor).default_snapshot()
     second_history["outcomes"] = scrambled_same_facts
-    supervisor._persist_endogenous_drive_history(second_history)
+    _drive_history_service(supervisor).persist(second_history)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -13656,15 +13660,15 @@ async def test_legacy_history_without_timestamps_stays_conservative_across_order
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    first_history = supervisor._endogenous_drive_history_default()
+    first_history = _drive_history_service(supervisor).default_snapshot()
     first_history["outcomes"] = newest_first
-    supervisor._persist_endogenous_drive_history(first_history)
+    _drive_history_service(supervisor).persist(first_history)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    second_history = supervisor._endogenous_drive_history_default()
+    second_history = _drive_history_service(supervisor).default_snapshot()
     second_history["outcomes"] = recovery_front_loaded
-    supervisor._persist_endogenous_drive_history(second_history)
+    _drive_history_service(supervisor).persist(second_history)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -13683,7 +13687,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Retry self-learning H",
@@ -13782,7 +13786,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
             "quality_score": 0.21,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -13832,7 +13836,7 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Recovered self-learning 5",
@@ -13954,7 +13958,7 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -14003,7 +14007,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         _self_learning_outcome(
             title,
@@ -14054,7 +14058,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
             }
         },
     }
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     regulation_snapshot = supervisor._endogenous_self_regulation_default()
     regulation_snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
@@ -14103,7 +14107,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
     fake_client = _FakeLLMClient({"proposals": []})
 
     def build_history_with_strategy(outcomes: list[dict], strategy_memory: dict) -> dict:
-        history = supervisor._endogenous_drive_history_default()
+        history = _drive_history_service(supervisor).default_snapshot()
         history["outcomes"] = outcomes
         history["strategy_memory"] = json.loads(json.dumps(strategy_memory))
         return history
@@ -14154,7 +14158,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
                 allow_empty_candidates=True,
             )
 
-    accumulated_strategy = supervisor._load_endogenous_drive_history()["strategy_memory"]
+    accumulated_strategy = _drive_history_service(supervisor).load()["strategy_memory"]
     focus_stats = accumulated_strategy["focus_stats"]
     contextual_stats = accumulated_strategy["contextual_focus_stats"]
     assert sum(bucket.get("judged", 0) for bucket in focus_stats.values()) >= 3
@@ -14178,7 +14182,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
             ("Failed old", "failed", 5, 0.20),
         )
     ]
-    supervisor._persist_endogenous_drive_history(
+    _drive_history_service(supervisor).persist(
         build_history_with_strategy(relapse_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
@@ -14219,7 +14223,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
             ("Failed old", "failed", 5, 0.20),
         )
     ]
-    supervisor._persist_endogenous_drive_history(
+    _drive_history_service(supervisor).persist(
         build_history_with_strategy(recovered_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
@@ -14286,7 +14290,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
             )
 
     accumulated_strategy = json.loads(
-        json.dumps(supervisor._load_endogenous_drive_history()["strategy_memory"])
+        json.dumps(_drive_history_service(supervisor).load()["strategy_memory"])
     )
     assert accumulated_strategy["focus_stats"]
     assert accumulated_strategy["contextual_focus_stats"]
@@ -14306,10 +14310,10 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         )
 
     def install_history(outcomes: list[dict]) -> None:
-        history = supervisor._endogenous_drive_history_default()
+        history = _drive_history_service(supervisor).default_snapshot()
         history["outcomes"] = json.loads(json.dumps(outcomes))
         history["strategy_memory"] = json.loads(json.dumps(accumulated_strategy))
-        supervisor._persist_endogenous_drive_history(history)
+        _drive_history_service(supervisor).persist(history)
         install_decayed_self_regulation()
 
     dirty_relapse_outcomes = [
@@ -14441,7 +14445,7 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
                 allow_empty_candidates=True,
             )
 
-    accumulated_history = supervisor._load_endogenous_drive_history()
+    accumulated_history = _drive_history_service(supervisor).load()
     terminal_outcomes = [
         dict(item)
         for item in list(accumulated_history.get("outcomes") or [])
@@ -14484,10 +14488,10 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
         )
 
     def _install_replay_history(outcomes: list[dict]) -> None:
-        history = supervisor._endogenous_drive_history_default()
+        history = _drive_history_service(supervisor).default_snapshot()
         history["outcomes"] = json.loads(json.dumps(outcomes))
         history["strategy_memory"] = json.loads(json.dumps(replay_strategy))
-        supervisor._persist_endogenous_drive_history(history)
+        _drive_history_service(supervisor).persist(history)
 
     supervisor.evaluate_drive_input = replay_drive_input  # type: ignore[method-assign]
     _install_replay_history(replay_outcomes)
@@ -14584,14 +14588,14 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
         },
     ]
 
-    history_baseline = supervisor._endogenous_drive_history_default()
+    history_baseline = _drive_history_service(supervisor).default_snapshot()
     history_baseline["outcomes"] = list(base_bad3)
-    supervisor._persist_endogenous_drive_history(history_baseline)
+    _drive_history_service(supervisor).persist(history_baseline)
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         baseline = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    history_with_memory_recovery = supervisor._endogenous_drive_history_default()
+    history_with_memory_recovery = _drive_history_service(supervisor).default_snapshot()
     history_with_memory_recovery["outcomes"] = list(base_bad3) + [
         {
             "title": "Recovered memory maintenance D",
@@ -14634,7 +14638,7 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
             "quality_score": 0.86,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history_with_memory_recovery)
+    _drive_history_service(supervisor).persist(history_with_memory_recovery)
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         with_memory_recovery = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -14658,7 +14662,7 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -14685,7 +14689,7 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
             "quality_score": 0.31,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -14736,7 +14740,7 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Failed self-learning A",
@@ -14763,7 +14767,7 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
             "quality_score": 0.31,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -14815,7 +14819,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Deferred backlog item A",
@@ -14842,7 +14846,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -14897,7 +14901,7 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -14948,7 +14952,7 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -15010,7 +15014,7 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -15053,7 +15057,7 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -15114,7 +15118,7 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -15157,7 +15161,7 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -15216,7 +15220,7 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -15267,7 +15271,7 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -15325,7 +15329,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Q A",
@@ -15360,7 +15364,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
             "quality_score": 0.20,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "治理在途卫生债务 A",
@@ -15434,7 +15438,7 @@ async def test_weak_governance_backlog_debt_does_not_materialize_governance_hygi
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -15461,7 +15465,7 @@ async def test_weak_governance_backlog_debt_does_not_materialize_governance_hygi
             "quality_score": 0.31,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -15524,7 +15528,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "SL A",
@@ -15551,7 +15555,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
             "quality_score": 0.31,
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
     planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "治理在途复核债务 A",
@@ -16018,7 +16022,7 @@ def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
 async def test_proposal_drift_memory_biases_program_task_type_priors_toward_observation_and_review(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
+    history = _drive_history_service(supervisor).default_snapshot()
     history["outcomes"] = [
         {
             "title": "Misaligned improvement attempt A",
@@ -16039,7 +16043,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             },
         },
     ]
-    supervisor._persist_endogenous_drive_history(history)
+    _drive_history_service(supervisor).persist(history)
 
     async def fake_drive_input(_request=None):
         return {
@@ -16084,7 +16088,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
     else:
         drive_input = await fake_drive_input()
         drive_input["drive_history"] = project_drive_history(
-            supervisor._load_endogenous_drive_history(),
+            _drive_history_service(supervisor).load(),
             normalize_strategy_memory=normalize_endogenous_strategy_memory,
         )
         drive_context = build_drive_context(drive_input)
@@ -16639,7 +16643,7 @@ def test_annotated_endogenous_judgement_omits_legacy_context_for_formal_drive_in
         ],
     )
 
-    history = supervisor._load_endogenous_drive_history()
+    history = _drive_history_service(supervisor).load()
     judgement = history["judgements"][0]
 
     assert judgement["candidate_key"] == "formal-drive-input-candidate"

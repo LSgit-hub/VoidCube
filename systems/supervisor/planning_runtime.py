@@ -107,7 +107,6 @@ SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
 
 class PlanningRuntimeMixin:
     """Supervisor planning, activity-guard evaluation, and autonomous-chain orchestration."""
-    _ENDOGENOUS_DRIVE_HISTORY_LIMIT = 240
     _ENDOGENOUS_GOVERNANCE_EVENT_LIMIT = 240
 
     _LM_GOVERNANCE_ACTION_TO_STATUS: Dict[str, str] = {
@@ -128,18 +127,6 @@ class PlanningRuntimeMixin:
         return {
             "history": self._governor.list_history(limit=limit),
             "latest": self._governor.get_latest(),
-        }
-
-    def _endogenous_drive_history_default(self) -> Dict[str, Any]:
-        return {
-            "version": 1,
-            "updated_at": None,
-            "judgements": [],
-            "outcomes": [],
-            "strategy_memory": {
-                "focus_stats": {},
-                "agenda_topic_stats": {},
-            },
         }
 
     def _endogenous_governance_events_default(self) -> Dict[str, Any]:
@@ -314,29 +301,6 @@ class PlanningRuntimeMixin:
     def _endogenous_state_repository(self, repository: EndogenousStateRepository) -> None:
         self._endogenous_state_repository_instance = repository
 
-    def _load_endogenous_drive_history(self) -> Dict[str, Any]:
-        raw = self._endogenous_state_repository.read_object(
-            self._endogenous_state_repository.paths.drive_history
-        )
-        if raw is None:
-            return self._endogenous_drive_history_default()
-        snapshot = self._endogenous_drive_history_default()
-        snapshot["updated_at"] = raw.get("updated_at")
-        snapshot["judgements"] = [
-            dict(item)
-            for item in list(raw.get("judgements") or [])
-            if isinstance(item, dict)
-        ]
-        snapshot["outcomes"] = [
-            dict(item)
-            for item in list(raw.get("outcomes") or [])
-            if isinstance(item, dict)
-        ]
-        snapshot["strategy_memory"] = normalize_endogenous_strategy_memory(
-            raw.get("strategy_memory")
-        )
-        return self._trim_endogenous_drive_history(snapshot)
-
     def _load_endogenous_governance_events(self) -> Dict[str, Any]:
         raw = self._endogenous_state_repository.read_object(
             self._endogenous_state_repository.paths.governance_events
@@ -440,16 +404,6 @@ class PlanningRuntimeMixin:
         self._persist_endogenous_self_regulation(decayed)
         return decayed
 
-    def _trim_endogenous_drive_history(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        trimmed = dict(snapshot or {})
-        trimmed["version"] = 1
-        trimmed["judgements"] = list(trimmed.get("judgements") or [])[: self._ENDOGENOUS_DRIVE_HISTORY_LIMIT]
-        trimmed["outcomes"] = list(trimmed.get("outcomes") or [])[: self._ENDOGENOUS_DRIVE_HISTORY_LIMIT]
-        trimmed["strategy_memory"] = normalize_endogenous_strategy_memory(
-            trimmed.get("strategy_memory")
-        )
-        return trimmed
-
     def _trim_endogenous_governance_events(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         trimmed = dict(snapshot or {})
         trimmed["version"] = 1
@@ -510,13 +464,6 @@ class PlanningRuntimeMixin:
             return None
         return "\x1f".join(parts)
 
-    def _persist_endogenous_drive_history(self, snapshot: Dict[str, Any]) -> None:
-        payload = self._trim_endogenous_drive_history(snapshot)
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._endogenous_state_repository.write_object(
-            self._endogenous_state_repository.paths.drive_history, payload
-        )
-
     def _persist_endogenous_governance_events(self, snapshot: Dict[str, Any]) -> None:
         payload = self._trim_endogenous_governance_events(snapshot)
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -546,593 +493,6 @@ class PlanningRuntimeMixin:
             runtime_config=getattr(self.config, "service_runtime", None),
             state_loader=getattr(engine, "get_latest_lm_task_generation_state", None),
         )
-
-    def _derive_cognitive_self_regulation(
-        self,
-        *,
-        drive_history: Dict[str, Any],
-        lm_reasoning_state: Dict[str, Any],
-        deliberation: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        runtime_config = getattr(self.config, "service_runtime", None)
-        charter_model = getattr(runtime_config, "endogenous_drive_cognition_charter", None)
-        cognitive_control_policy_model = getattr(
-            charter_model,
-            "cognitive_control_policy",
-            None,
-        )
-        if hasattr(cognitive_control_policy_model, "model_dump"):
-            policy = cognitive_control_policy_model.model_dump(mode="json")
-        else:
-            policy = dict(cognitive_control_policy_model or {})
-        posture_profile = self._resolve_cognitive_posture_profile(
-            policy,
-            lm_reasoning_state=lm_reasoning_state,
-            drive_history=drive_history,
-            deliberation=deliberation,
-        )
-        regulation = {
-            "dynamic_candidate_throttle_boost": 0.0,
-            "dynamic_observation_bias_boost": 0.0,
-            "dynamic_truthfulness_bias_boost": 0.0,
-            "dynamic_learning_expansion_suppression": 0.0,
-            "last_reason": None,
-        }
-        reasons: list[str] = []
-
-        proposal_drift_memory = dict(lm_reasoning_state.get("proposal_drift_memory") or {})
-        recent_reference_alignment = dict(
-            lm_reasoning_state.get("recent_reference_alignment") or {}
-        )
-        evidence_basis = dict(lm_reasoning_state.get("evidence_basis") or {})
-        recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
-            history_snapshot=drive_history,
-        )
-
-        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
-        drift_average_score = self._clamp_endogenous_ratio(
-            proposal_drift_memory.get("average_score") or 0.0
-        )
-        posture_alignment_health = str(
-            proposal_drift_memory.get("posture_alignment_health") or ""
-        ).strip().lower()
-        priority_basis_health = str(
-            proposal_drift_memory.get("priority_basis_health") or ""
-        ).strip().lower()
-        missing_posture_alignment_count = max(
-            0,
-            int(proposal_drift_memory.get("missing_posture_alignment_count") or 0),
-        )
-        missing_priority_basis_count = max(
-            0,
-            int(proposal_drift_memory.get("missing_priority_basis_count") or 0),
-        )
-        dominant_posture_conflict_reason = str(
-            proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
-        ).strip().lower()
-        reference_alignment_score = self._clamp_endogenous_ratio(
-            recent_reference_alignment.get("average_alignment_score") or 0.0
-        )
-        weak_reference_count = max(
-            0,
-            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
-        )
-        reference_alignment_available = (
-            bool(recent_reference_alignment.get("available"))
-            or "average_alignment_score" in recent_reference_alignment
-            or weak_reference_count > 0
-        )
-        readiness_score = self._clamp_endogenous_ratio(
-            evidence_basis.get("self_iteration_readiness_score") or 0.0
-        )
-        readiness_available = "self_iteration_readiness_score" in evidence_basis
-        weak_or_missing_channels = [
-            str(item).strip()
-            for item in list(evidence_basis.get("weak_or_missing_channels") or [])[:6]
-            if str(item).strip()
-        ]
-        self_understanding_gaps = [
-            str(item).strip()
-            for item in list(evidence_basis.get("self_understanding_gaps") or [])[:6]
-            if str(item).strip()
-        ]
-        alignment_average_score = self._clamp_endogenous_ratio(
-            recent_cognitive_alignment.get("average_score") or 0.0
-        )
-        alignment_quality_counts = dict(
-            recent_cognitive_alignment.get("quality_counts") or {}
-        )
-        weak_alignment_count = max(0, int(alignment_quality_counts.get("weak") or 0))
-        partial_alignment_count = max(0, int(alignment_quality_counts.get("partial") or 0))
-        observation_multiplier = max(
-            0.0,
-            float(posture_profile.get("observation_multiplier") or 1.0),
-        )
-        throttle_multiplier = max(
-            0.0,
-            float(posture_profile.get("throttle_multiplier") or 1.0),
-        )
-        truthfulness_multiplier = max(
-            0.0,
-            float(posture_profile.get("truthfulness_multiplier") or 1.0),
-        )
-        learning_suppression_multiplier = max(
-            0.0,
-            float(posture_profile.get("learning_suppression_multiplier") or 1.0),
-        )
-        explanation_missing_threshold = max(
-            1,
-            int(policy.get("auto_explanation_repair_missing_threshold") or 2),
-        )
-        explanation_inconsistent_threshold = max(
-            1,
-            int(policy.get("auto_explanation_repair_inconsistent_threshold") or 1),
-        )
-        explanation_missing_pressure = max(
-            missing_posture_alignment_count,
-            missing_priority_basis_count,
-        )
-        explanation_inconsistent_pressure = 0
-        if posture_alignment_health == "inconsistent":
-            explanation_inconsistent_pressure += 1
-        if priority_basis_health == "inconsistent":
-            explanation_inconsistent_pressure += 1
-
-        if drift_state == "drifting":
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("drift_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("drift_observation_boost") or 0.0
-            ) * observation_multiplier
-            regulation["dynamic_learning_expansion_suppression"] += float(
-                policy.get("drift_learning_suppression_boost") or 0.0
-            ) * learning_suppression_multiplier
-            reasons.append("proposal_drift_is_active")
-        elif drift_state == "correcting":
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("correcting_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("correcting_observation_boost") or 0.0
-            ) * observation_multiplier
-            regulation["dynamic_learning_expansion_suppression"] += float(
-                policy.get("correcting_learning_suppression_boost") or 0.0
-            ) * learning_suppression_multiplier
-            reasons.append("proposal_drift_is_being_corrected")
-
-        drift_observe_trigger_score = self._clamp_endogenous_ratio(
-            float(policy.get("drift_observe_trigger_score") or 0.5)
-            + float(posture_profile.get("drift_trigger_delta") or 0.0)
-        )
-        drift_strong_trigger_score = self._clamp_endogenous_ratio(
-            float(policy.get("drift_strong_trigger_score") or 0.45)
-            + float(posture_profile.get("drift_trigger_delta") or 0.0)
-        )
-        if drift_average_score > 0.0 and drift_average_score < drift_observe_trigger_score:
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("low_alignment_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("low_alignment_observation_boost") or 0.0
-            ) * observation_multiplier
-            reasons.append("proposal_alignment_average_is_low")
-
-        if explanation_missing_pressure >= explanation_missing_threshold:
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("explanation_missing_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("explanation_missing_observation_boost") or 0.0
-            ) * observation_multiplier
-            reasons.append("proposal_explanation_memory_is_missing")
-
-        if explanation_inconsistent_pressure >= explanation_inconsistent_threshold:
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("explanation_inconsistent_observation_boost") or 0.0
-            ) * observation_multiplier
-            regulation["dynamic_truthfulness_bias_boost"] += float(
-                policy.get("explanation_inconsistent_truthfulness_boost") or 0.0
-            ) * truthfulness_multiplier
-            regulation["dynamic_learning_expansion_suppression"] += float(
-                policy.get("explanation_inconsistent_learning_suppression_boost") or 0.0
-            ) * learning_suppression_multiplier
-            if dominant_posture_conflict_reason:
-                reasons.append(f"proposal_explanation_conflict:{dominant_posture_conflict_reason}")
-            else:
-                reasons.append("proposal_explanation_is_inconsistent")
-
-        if recent_cognitive_alignment.get("available"):
-            weak_alignment_count_trigger = max(
-                1,
-                int(policy.get("weak_alignment_count_trigger") or 2),
-            )
-            if (
-                weak_alignment_count >= weak_alignment_count_trigger
-                or alignment_average_score < drift_strong_trigger_score
-            ):
-                regulation["dynamic_candidate_throttle_boost"] += float(
-                    policy.get("weak_alignment_throttle_boost") or 0.0
-                ) * throttle_multiplier
-                regulation["dynamic_observation_bias_boost"] += float(
-                    policy.get("weak_alignment_observation_boost") or 0.0
-                ) * observation_multiplier
-                regulation["dynamic_learning_expansion_suppression"] += float(
-                    policy.get("weak_alignment_learning_suppression_boost") or 0.0
-                ) * learning_suppression_multiplier
-                reasons.append("recent_cognitive_alignment_is_weak")
-            elif partial_alignment_count >= 2:
-                regulation["dynamic_observation_bias_boost"] += float(
-                    policy.get("partial_alignment_observation_boost") or 0.0
-                ) * observation_multiplier
-                reasons.append("recent_cognitive_alignment_remains_partial")
-
-        reference_alignment_min_score = self._clamp_endogenous_ratio(
-            float(policy.get("reference_alignment_min_score") or 0.65)
-            + float(posture_profile.get("reference_alignment_delta") or 0.0)
-        )
-        if reference_alignment_available and reference_alignment_score < reference_alignment_min_score:
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("weak_reference_observation_boost") or 0.0
-            ) * observation_multiplier
-            regulation["dynamic_truthfulness_bias_boost"] += float(
-                policy.get("weak_reference_truthfulness_boost") or 0.0
-            ) * truthfulness_multiplier
-            reasons.append("reference_alignment_is_not_stable")
-        weak_reference_count_trigger = max(
-            1,
-            int(policy.get("weak_reference_count_trigger") or 2),
-        )
-        if weak_reference_count >= weak_reference_count_trigger:
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("repeated_weak_reference_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_truthfulness_bias_boost"] += float(
-                policy.get("repeated_weak_reference_truthfulness_boost") or 0.0
-            ) * truthfulness_multiplier
-            reasons.append("reference_alignment_has_multiple_weak_entries")
-
-        readiness_min_score = self._clamp_endogenous_ratio(
-            float(policy.get("readiness_min_score") or 0.52)
-            + float(posture_profile.get("readiness_delta") or 0.0)
-        )
-        if readiness_available and readiness_score < readiness_min_score:
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("low_readiness_throttle_boost") or 0.0
-            ) * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("low_readiness_observation_boost") or 0.0
-            ) * observation_multiplier
-            regulation["dynamic_learning_expansion_suppression"] += float(
-                policy.get("low_readiness_learning_suppression_boost") or 0.0
-            ) * learning_suppression_multiplier
-            reasons.append("self_iteration_readiness_is_low")
-
-        if weak_or_missing_channels:
-            channel_penalty = min(
-                len(weak_or_missing_channels),
-                max(1, int(policy.get("weak_channel_count_observe_cap") or 3)),
-            )
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("weak_channel_observation_step") or 0.0
-            ) * channel_penalty * observation_multiplier
-            regulation["dynamic_truthfulness_bias_boost"] += float(
-                policy.get("weak_channel_truthfulness_step") or 0.0
-            ) * channel_penalty * truthfulness_multiplier
-            reasons.append("weak_evidence_channels_require_more_observation")
-
-        if self_understanding_gaps:
-            gap_penalty = min(
-                len(self_understanding_gaps),
-                max(1, int(policy.get("self_gap_observe_cap") or 3)),
-            )
-            regulation["dynamic_candidate_throttle_boost"] += float(
-                policy.get("self_gap_throttle_step") or 0.0
-            ) * gap_penalty * throttle_multiplier
-            regulation["dynamic_observation_bias_boost"] += float(
-                policy.get("self_gap_observation_step") or 0.0
-            ) * gap_penalty * observation_multiplier
-            reasons.append("self_understanding_gaps_are_active")
-
-        for key in (
-            "dynamic_candidate_throttle_boost",
-            "dynamic_observation_bias_boost",
-            "dynamic_truthfulness_bias_boost",
-            "dynamic_learning_expansion_suppression",
-        ):
-            regulation[key] = round(
-                self._clamp_endogenous_ratio(regulation[key]),
-                4,
-            )
-
-        if reasons:
-            regulation["last_reason"] = "; ".join(reasons[:6])
-        return regulation
-
-    def _release_cleared_historical_observation_carryover(
-        self,
-        *,
-        persisted_self_regulation: Dict[str, Any],
-        cognitive_self_regulation: Dict[str, Any],
-        deliberation: Dict[str, Any],
-        lm_reasoning_state: Dict[str, Any],
-        drive_history: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        adjusted = dict(cognitive_self_regulation or {})
-        reflection = dict(deliberation.get("reflection") or {})
-        perception = dict(deliberation.get("perception") or {})
-
-        if str(reflection.get("dominant_constraint") or "").strip().lower() != "none":
-            return adjusted
-        if float(
-            reflection.get("api_b_judgement_blockage_pressure") or 0.0
-        ) >= 0.18:
-            return adjusted
-        if str(reflection.get("learning_yield_state") or "").strip().lower() not in {"mixed", "strong"}:
-            return adjusted
-        if max(
-            0,
-            int(
-                perception.get("api_b_judgement_count")
-                or 0
-            ),
-        ) > 0:
-            return adjusted
-        if max(0, int(perception.get("stale_backlog_count") or 0)) > 0:
-            return adjusted
-        if max(0, int(perception.get("pending_review_count") or 0)) > 0:
-            return adjusted
-        if (
-            max(0, int(perception.get("correction_signals") or 0))
-            >= TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
-        ):
-            return adjusted
-
-        posture_profile = self._current_active_cognitive_posture_profile(
-            lm_reasoning_state=lm_reasoning_state,
-            history_snapshot=drive_history,
-            deliberation=deliberation,
-        )
-        if str(posture_profile.get("name") or "").strip().lower() != "observe_first":
-            return adjusted
-
-        persisted_observation = float(
-            persisted_self_regulation.get("dynamic_observation_bias_boost") or 0.0
-        )
-        persisted_throttle = float(
-            persisted_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
-        )
-        persisted_learning_suppression = float(
-            persisted_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
-        )
-        if max(
-            persisted_observation,
-            persisted_throttle,
-            persisted_learning_suppression,
-        ) < 0.08:
-            return adjusted
-
-        proposal_drift_memory = dict(lm_reasoning_state.get("proposal_drift_memory") or {})
-        recent_reference_alignment = dict(
-            lm_reasoning_state.get("recent_reference_alignment") or {}
-        )
-        evidence_basis = dict(lm_reasoning_state.get("evidence_basis") or {})
-
-        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
-        drift_average_score = self._clamp_endogenous_ratio(
-            proposal_drift_memory.get("average_score") or 0.0
-        )
-        reference_alignment_score = self._clamp_endogenous_ratio(
-            recent_reference_alignment.get("average_alignment_score") or 0.0
-        )
-        weak_reference_count = max(
-            0,
-            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
-        )
-        readiness_score = self._clamp_endogenous_ratio(
-            evidence_basis.get("self_iteration_readiness_score") or 0.0
-        )
-        weak_channel_count = len(
-            [
-                str(item).strip()
-                for item in list(evidence_basis.get("weak_or_missing_channels") or [])[:6]
-                if str(item).strip()
-            ]
-        )
-        if drift_state != "correcting":
-            return adjusted
-        if drift_average_score < 0.42:
-            return adjusted
-        if reference_alignment_score < 0.58:
-            return adjusted
-        if weak_reference_count > 1:
-            return adjusted
-        if readiness_score < 0.48:
-            return adjusted
-        if weak_channel_count > 1:
-            return adjusted
-
-        observation_boost = float(
-            cognitive_self_regulation.get("dynamic_observation_bias_boost") or 0.0
-        )
-        throttle_boost = float(
-            cognitive_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
-        )
-        learning_suppression = float(
-            cognitive_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
-        )
-        if max(observation_boost, throttle_boost, learning_suppression) < 0.12:
-            return adjusted
-
-        # Historical underdelivery is already cleared here, so do not let a
-        # fresh corrective pass restack observation/throttle pressure on top
-        # of decaying persisted guard carryover.
-        adjusted["dynamic_observation_bias_boost"] = 0.0
-        adjusted["dynamic_candidate_throttle_boost"] = 0.0
-        adjusted["dynamic_learning_expansion_suppression"] = 0.0
-        reason = str(adjusted.get("last_reason") or "").strip()
-        release_reason = "cleared_historical_window_releases_composite_observation_carryover"
-        adjusted["last_reason"] = (
-            f"{reason}; {release_reason}" if reason else release_reason
-        )
-        return adjusted
-
-    def _resolve_cognitive_posture_profile(
-        self,
-        policy: Dict[str, Any],
-        *,
-        lm_reasoning_state: Optional[Dict[str, Any]] = None,
-        drive_history: Optional[Dict[str, Any]] = None,
-        deliberation: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        selection_mode = str(policy.get("posture_selection_mode") or "auto").strip().lower()
-        profile_name = str(policy.get("active_posture_profile") or "balanced").strip().lower()
-        profiles = dict(policy.get("posture_profiles") or {})
-        auto_selection_reason = "manual_selection"
-        if selection_mode != "manual":
-            profile_name, auto_selection_reason = self._select_cognitive_posture_profile_name(
-                policy=policy,
-                lm_reasoning_state=lm_reasoning_state or {},
-                drive_history=drive_history or {},
-                deliberation=deliberation or {},
-            )
-        selected = profiles.get(profile_name)
-        if not isinstance(selected, dict):
-            profile_name = "balanced"
-            selected = profiles.get(profile_name) or {}
-        resolved = dict(selected or {})
-        resolved["name"] = profile_name
-        resolved["selection_mode"] = selection_mode
-        resolved["selection_reason"] = auto_selection_reason
-        return resolved
-
-    def _select_cognitive_posture_profile_name(
-        self,
-        *,
-        policy: Dict[str, Any],
-        lm_reasoning_state: Dict[str, Any],
-        drive_history: Dict[str, Any],
-        deliberation: Dict[str, Any],
-    ) -> tuple[str, str]:
-        perception = dict(deliberation.get("perception") or {})
-        reflection = dict(deliberation.get("reflection") or {})
-        recent_reference_alignment = dict(
-            lm_reasoning_state.get("recent_reference_alignment") or {}
-        )
-        evidence_basis = dict(lm_reasoning_state.get("evidence_basis") or {})
-        proposal_drift_memory = dict(lm_reasoning_state.get("proposal_drift_memory") or {})
-        recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
-            history_snapshot=drive_history,
-        )
-
-        correction_signals = max(0, int(perception.get("correction_signals") or 0))
-        active_sessions = max(0, int(perception.get("active_sessions") or 0))
-        weak_reference_count = max(
-            0,
-            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
-        )
-        weak_channels = [
-            str(item).strip()
-            for item in list(evidence_basis.get("weak_or_missing_channels") or [])[:6]
-            if str(item).strip()
-        ]
-        self_gaps = [
-            str(item).strip()
-            for item in list(evidence_basis.get("self_understanding_gaps") or [])[:6]
-            if str(item).strip()
-        ]
-        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
-        posture_alignment_health = str(
-            proposal_drift_memory.get("posture_alignment_health") or ""
-        ).strip().lower()
-        priority_basis_health = str(
-            proposal_drift_memory.get("priority_basis_health") or ""
-        ).strip().lower()
-        missing_posture_alignment_count = max(
-            0,
-            int(proposal_drift_memory.get("missing_posture_alignment_count") or 0),
-        )
-        missing_priority_basis_count = max(
-            0,
-            int(proposal_drift_memory.get("missing_priority_basis_count") or 0),
-        )
-        dominant_posture_conflict_reason = str(
-            proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
-        ).strip().lower()
-        readiness_score = self._clamp_endogenous_ratio(
-            evidence_basis.get("self_iteration_readiness_score") or 0.0
-        )
-        alignment_average_score = self._clamp_endogenous_ratio(
-            recent_cognitive_alignment.get("average_score") or 0.0
-        )
-        dominant_constraint = str(reflection.get("dominant_constraint") or "").strip().lower()
-
-        service_active_sessions_threshold = max(
-            0,
-            int(policy.get("auto_service_active_sessions_threshold") or 1),
-        )
-        truthfulness_signal_threshold = max(
-            1,
-            int(
-                policy.get("auto_truthfulness_correction_signal_threshold")
-                or TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
-            ),
-        )
-        evidence_repair_signal_threshold = max(
-            1,
-            int(policy.get("auto_evidence_repair_signal_threshold") or 3),
-        )
-        explanation_missing_threshold = max(
-            1,
-            int(policy.get("auto_explanation_repair_missing_threshold") or 2),
-        )
-        explanation_inconsistent_threshold = max(
-            1,
-            int(policy.get("auto_explanation_repair_inconsistent_threshold") or 1),
-        )
-        explanation_missing_pressure = max(
-            missing_posture_alignment_count,
-            missing_priority_basis_count,
-        )
-        explanation_inconsistent_pressure = 0
-        if posture_alignment_health == "inconsistent":
-            explanation_inconsistent_pressure += 1
-        if priority_basis_health == "inconsistent":
-            explanation_inconsistent_pressure += 1
-
-        if active_sessions >= service_active_sessions_threshold:
-            return "conservative", "service_pressure_requires_conservative_posture"
-        if correction_signals >= truthfulness_signal_threshold:
-            return "truthfulness_first", "truthfulness_signals_are_elevated"
-        if (
-            explanation_missing_pressure >= explanation_missing_threshold
-            and explanation_inconsistent_pressure >= explanation_inconsistent_threshold
-        ):
-            return "evidence_repair_first", "explanation_quality_requires_evidence_repair"
-        if explanation_missing_pressure >= explanation_missing_threshold:
-            return "observe_first", "missing_explanation_memory_requires_observation"
-        if explanation_inconsistent_pressure >= explanation_inconsistent_threshold:
-            if "truthfulness" in dominant_posture_conflict_reason or "reference_alignment" in dominant_posture_conflict_reason:
-                return "truthfulness_first", "explanation_conflict_requires_truthfulness_repair"
-            return "observe_first", "explanation_conflict_requires_observation"
-        if (
-            weak_reference_count >= evidence_repair_signal_threshold
-            or len(weak_channels) >= evidence_repair_signal_threshold
-            or "reference_alignment_is_unstable" in self_gaps
-        ):
-            return "evidence_repair_first", "evidence_repair_pressure_is_elevated"
-        if (
-            drift_state in {"drifting", "correcting"}
-            or alignment_average_score < self._clamp_endogenous_ratio(
-                policy.get("drift_observe_trigger_score") or 0.5
-            )
-            or readiness_score < self._clamp_endogenous_ratio(
-                policy.get("readiness_min_score") or 0.52
-            )
-            or dominant_constraint in {"api_b_judgement_blockage", "historical_underdelivery"}
-        ):
-            return "observe_first", "drift_or_readiness_requires_observation"
-        return "balanced", "balanced_posture_is_sufficient"
 
     @staticmethod
     def _clamp_endogenous_ratio(value: Any) -> float:
@@ -1293,7 +653,7 @@ class PlanningRuntimeMixin:
         candidate_items: list[Dict[str, Any]],
         lm_reasoning_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        history_snapshot = self._load_endogenous_drive_history()
+        history_snapshot = self._endogenous_drive_history_persistence_service.load()
         perception = dict(deliberation.get("perception") or {})
         world_model = dict(deliberation.get("world_model") or {})
         reflection = dict(deliberation.get("reflection") or {})
@@ -1470,13 +830,13 @@ class PlanningRuntimeMixin:
                 ).strip(),
                 "hypothesis_count": hypothesis_count,
             }
-        recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
+        recent_cognitive_alignment = self._endogenous_cognitive_posture_service.recent_alignment(
             history_snapshot=history_snapshot,
         )
         current_candidates = self._build_current_candidate_cognition_summary(
             candidate_items=candidate_items,
         )
-        active_cognitive_posture_profile = self._current_active_cognitive_posture_profile(
+        active_cognitive_posture_profile = self._endogenous_cognitive_posture_service.active_profile(
             lm_reasoning_state=lm_reasoning_state,
             history_snapshot=history_snapshot,
             deliberation=deliberation,
@@ -1494,7 +854,9 @@ class PlanningRuntimeMixin:
 
         return build_proposal_cognition_projection(
             lm_reasoning_state=lm_reasoning_state,
-            cognitive_control_policy=self._current_cognitive_control_policy(),
+            cognitive_control_policy=(
+                self._endogenous_cognitive_posture_service.current_policy()
+            ),
             active_cognitive_posture_profile=active_cognitive_posture_profile,
             meta_cognition_profile=meta_cognition_profile,
             cognitive_assessment_memory=cognitive_assessment_memory,
@@ -1580,13 +942,6 @@ class PlanningRuntimeMixin:
             ),
         }
 
-    def _current_cognitive_control_policy(self) -> Dict[str, Any]:
-        runtime_config = getattr(self.config, "service_runtime", None)
-        charter_model = getattr(runtime_config, "endogenous_drive_cognition_charter", None)
-        policy_model = getattr(charter_model, "cognitive_control_policy", None)
-        if hasattr(policy_model, "model_dump"):
-            return policy_model.model_dump(mode="json")
-        return dict(policy_model or {})
 
     def _build_recent_lm_cognitive_assessment_summary(
         self,
@@ -2154,148 +1509,6 @@ class PlanningRuntimeMixin:
             ),
         }
 
-    def _current_active_cognitive_posture_profile(
-        self,
-        *,
-        lm_reasoning_state: Optional[Dict[str, Any]] = None,
-        history_snapshot: Optional[Dict[str, Any]] = None,
-        deliberation: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        policy = self._current_cognitive_control_policy()
-        return self._resolve_cognitive_posture_profile(
-            policy,
-            lm_reasoning_state=lm_reasoning_state,
-            drive_history=history_snapshot,
-            deliberation=deliberation,
-        )
-
-    def _build_recent_cognitive_alignment_summary(
-        self,
-        *,
-        history_snapshot: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        outcomes = [
-            dict(item)
-            for item in list(history_snapshot.get("outcomes") or [])
-            if isinstance(item, dict)
-        ]
-        entry_count = 0
-        score_total = 0.0
-        quality_counts: Dict[str, int] = {"strong": 0, "partial": 0, "weak": 0}
-        reason_counts: Dict[str, int] = {}
-        top_priority_counts: Dict[str, int] = {}
-        posture_alignment_counts: Dict[str, int] = {}
-        priority_basis_counts: Dict[str, int] = {}
-        missing_posture_alignment_count = 0
-        missing_priority_basis_count = 0
-
-        for outcome in outcomes[:12]:
-            cognitive_alignment = outcome.get("cognitive_alignment")
-            metadata = dict(outcome.get("metadata") or {})
-            evidence = dict(outcome.get("evidence") or {})
-            if not isinstance(cognitive_alignment, dict):
-                cognitive_alignment = metadata.get("cognitive_alignment")
-            if not isinstance(cognitive_alignment, dict):
-                cognitive_alignment = evidence.get("cognitive_alignment")
-            if not isinstance(cognitive_alignment, dict) or not cognitive_alignment:
-                continue
-
-            quality = str(cognitive_alignment.get("quality") or "partial").strip().lower()
-            if quality not in quality_counts:
-                quality = "partial"
-            quality_counts[quality] += 1
-            suggested_task_shape = str(
-                cognitive_alignment.get("top_priority_task_type") or ""
-            ).strip().lower()
-            if suggested_task_shape:
-                top_priority_counts[suggested_task_shape] = (
-                    top_priority_counts.get(suggested_task_shape, 0) + 1
-                )
-            reasons = [
-                str(reason).strip()
-                for reason in list(cognitive_alignment.get("reasons") or [])[:4]
-                if str(reason).strip()
-            ]
-            posture_alignment = outcome.get("llm_posture_alignment")
-            if not isinstance(posture_alignment, list):
-                posture_alignment = metadata.get("llm_posture_alignment")
-            if not isinstance(posture_alignment, list):
-                posture_alignment = evidence.get("llm_posture_alignment")
-            normalized_posture_alignment = [
-                str(item).strip()
-                for item in list(posture_alignment or [])[:3]
-                if str(item).strip()
-            ]
-            if normalized_posture_alignment:
-                for item in normalized_posture_alignment:
-                    posture_alignment_counts[item] = posture_alignment_counts.get(item, 0) + 1
-            else:
-                missing_posture_alignment_count += 1
-            priority_basis = outcome.get("llm_priority_basis")
-            if not isinstance(priority_basis, list):
-                priority_basis = metadata.get("llm_priority_basis")
-            if not isinstance(priority_basis, list):
-                priority_basis = evidence.get("llm_priority_basis")
-            normalized_priority_basis = [
-                str(item).strip()
-                for item in list(priority_basis or [])[:3]
-                if str(item).strip()
-            ]
-            if normalized_priority_basis:
-                for item in normalized_priority_basis:
-                    priority_basis_counts[item] = priority_basis_counts.get(item, 0) + 1
-            else:
-                missing_priority_basis_count += 1
-            for reason in reasons:
-                reason_counts[reason] = reason_counts.get(reason, 0) + 1
-            score_total += round(
-                self._clamp_endogenous_ratio(cognitive_alignment.get("score") or 0.0),
-                4,
-            )
-            entry_count += 1
-            if entry_count >= 4:
-                break
-
-        if not entry_count:
-            return {
-                "available": False,
-                "average_score": 0.0,
-                "quality_counts": {},
-                "dominant_task_shape": None,
-                "summary": "No recent cognitive alignment feedback is available yet.",
-                "reason_count": 0,
-                "posture_alignment_signal_count": 0,
-                "priority_basis_signal_count": 0,
-                "missing_posture_alignment_count": 0,
-                "missing_priority_basis_count": 0,
-                "entry_count": 0,
-            }
-
-        average_score = score_total / entry_count
-        dominant_task_shape = None
-        if top_priority_counts:
-            dominant_task_shape = max(
-                top_priority_counts.items(),
-                key=lambda item: (item[1], item[0]),
-            )[0]
-        summary = (
-            f"Recent cognitive alignment average={average_score:.2f}; "
-            f"dominant quality="
-            f"{max(quality_counts.items(), key=lambda item: (item[1], item[0]))[0]}."
-        )
-        return {
-            "available": True,
-            "average_score": round(self._clamp_endogenous_ratio(average_score), 4),
-            "quality_counts": quality_counts,
-            "dominant_task_shape": dominant_task_shape,
-            "summary": summary,
-            "reason_count": len(reason_counts),
-            "posture_alignment_signal_count": len(posture_alignment_counts),
-            "priority_basis_signal_count": len(priority_basis_counts),
-            "missing_posture_alignment_count": missing_posture_alignment_count,
-            "missing_priority_basis_count": missing_priority_basis_count,
-            "entry_count": entry_count,
-        }
 
     def _build_current_candidate_cognition_summary(
         self,
@@ -2406,7 +1619,7 @@ class PlanningRuntimeMixin:
             recorded_at=recorded_at,
             status="active",
         )
-        self._persist_endogenous_drive_history(history)
+        self._endogenous_drive_history_persistence_service.persist(history)
         return {
             "summary": (
                 f"The endogenous core is operating in {meta_mode['mode']} mode with "
@@ -2459,7 +1672,7 @@ class PlanningRuntimeMixin:
         ):
             changed = True
         if changed:
-            self._persist_endogenous_drive_history(history)
+            self._endogenous_drive_history_persistence_service.persist(history)
 
         refreshed_strategy_memory = normalize_endogenous_strategy_memory(
             history.get("strategy_memory")
@@ -2534,7 +1747,7 @@ class PlanningRuntimeMixin:
             return []
         drive_input = dict(drive_input or {})
 
-        history = self._load_endogenous_drive_history()
+        history = self._endogenous_drive_history_persistence_service.load()
         evaluation_id = str(uuid.uuid4())
         recorded_at = datetime.now(timezone.utc).isoformat()
         prepared: list[Dict[str, Any]] = []
@@ -2708,7 +1921,7 @@ class PlanningRuntimeMixin:
 
         if judgement_records:
             history["judgements"] = judgement_records + list(history.get("judgements") or [])
-            self._persist_endogenous_drive_history(history)
+            self._endogenous_drive_history_persistence_service.persist(history)
         return prepared
 
     def _restore_endogenous_evaluation_snapshots(
@@ -2718,7 +1931,7 @@ class PlanningRuntimeMixin:
         governance_events: Dict[str, Any],
         cognition_state: Dict[str, Any],
     ) -> None:
-        self._persist_endogenous_drive_history(drive_history)
+        self._endogenous_drive_history_persistence_service.persist(drive_history)
         self._persist_endogenous_governance_events(governance_events)
         self._persist_endogenous_cognition_state(
             dict(cognition_state.get("state") or {})
@@ -2734,7 +1947,7 @@ class PlanningRuntimeMixin:
         candidate_items: list[Dict[str, Any]],
         lm_reasoning_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        history_snapshot_before = self._load_endogenous_drive_history()
+        history_snapshot_before = self._endogenous_drive_history_persistence_service.load()
         governance_snapshot_before = self._load_endogenous_governance_events()
         cognition_snapshot_before = self._load_endogenous_cognition_state()
         try:
@@ -2790,7 +2003,7 @@ class PlanningRuntimeMixin:
         latest_decision = task.decision_history[-1].model_dump(mode="json") if task.decision_history else {}
         decision_id = str(latest_decision.get("decision_id") or "").strip()
         status = str(task.status or "").strip()
-        history = self._load_endogenous_drive_history()
+        history = self._endogenous_drive_history_persistence_service.load()
         for existing in list(history.get("outcomes") or []):
             if not isinstance(existing, dict):
                 continue
@@ -2956,7 +2169,7 @@ class PlanningRuntimeMixin:
                     status=agenda_status,
                 )
         history["outcomes"] = [outcome] + list(history.get("outcomes") or [])
-        self._persist_endogenous_drive_history(history)
+        self._endogenous_drive_history_persistence_service.persist(history)
 
     def _canonical_cognitive_assessment_from_drive_judgement(
         self,
@@ -3492,6 +2705,51 @@ class PlanningRuntimeMixin:
                 now=datetime.now(),
             )
 
+        def derive_cognitive_self_regulation(
+            *,
+            drive_history: Dict[str, Any],
+            lm_reasoning_state: Dict[str, Any],
+            deliberation: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            posture_service = self._endogenous_cognitive_posture_service
+            policy = posture_service.current_policy()
+            return self._endogenous_self_regulation_service.derive(
+                policy=policy,
+                posture_profile=posture_service.resolve_profile(
+                    policy,
+                    lm_reasoning_state=lm_reasoning_state,
+                    drive_history=drive_history,
+                    deliberation=deliberation,
+                ),
+                recent_cognitive_alignment=(
+                    posture_service.recent_alignment(
+                        history_snapshot=drive_history,
+                    )
+                ),
+                lm_reasoning_state=lm_reasoning_state,
+            )
+
+        def release_cleared_observation_carryover(
+            *,
+            persisted_self_regulation: Dict[str, Any],
+            cognitive_self_regulation: Dict[str, Any],
+            deliberation: Dict[str, Any],
+            lm_reasoning_state: Dict[str, Any],
+            drive_history: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            posture_service = self._endogenous_cognitive_posture_service
+            return self._endogenous_self_regulation_service.release_cleared_historical_observation_carryover(
+                persisted_self_regulation=persisted_self_regulation,
+                cognitive_self_regulation=cognitive_self_regulation,
+                deliberation=deliberation,
+                lm_reasoning_state=lm_reasoning_state,
+                posture_profile=posture_service.active_profile(
+                    lm_reasoning_state=lm_reasoning_state,
+                    history_snapshot=drive_history,
+                    deliberation=deliberation,
+                ),
+            )
+
         context = EndogenousDriveEvaluationContext(
             runtime_config=self.config.service_runtime,
             resolve_drive_input_request=lambda payload: self._resolve_runtime_drive_input_request(
@@ -3499,7 +2757,7 @@ class PlanningRuntimeMixin:
                 include_gate_default=True,
             ),
             load_self_regulation=self._load_endogenous_self_regulation,
-            load_drive_history=self._load_endogenous_drive_history,
+            load_drive_history=self._endogenous_drive_history_persistence_service.load,
             normalize_strategy_memory=normalize_endogenous_strategy_memory,
             api_b_judgement_task_summaries=self._api_b_judgement_task_summaries,
             api_a_execution_lane_task_summaries=self._api_a_execution_lane_task_summaries,
@@ -3508,10 +2766,8 @@ class PlanningRuntimeMixin:
             existing_drive_keys=self._existing_endogenous_drive_keys,
             schedule_candidate_items=schedule_candidate_items,
             lm_generation_application_state=self._lm_generation_application_state,
-            derive_cognitive_self_regulation=self._derive_cognitive_self_regulation,
-            release_cleared_observation_carryover=(
-                self._release_cleared_historical_observation_carryover
-            ),
+            derive_cognitive_self_regulation=derive_cognitive_self_regulation,
+            release_cleared_observation_carryover=release_cleared_observation_carryover,
             governance_channels_from_deliberation=self._governance_channels_from_deliberation,
             persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
             load_governance_events=self._load_endogenous_governance_events,
@@ -3555,7 +2811,7 @@ class PlanningRuntimeMixin:
         cognition_snapshot = self._load_endogenous_cognition_state()
         event_snapshot = self._load_endogenous_governance_events()
         regulation = self._load_endogenous_self_regulation()
-        drive_history = self._load_endogenous_drive_history()
+        drive_history = self._endogenous_drive_history_persistence_service.load()
         return {
             "status": "ok",
             "updated_at": cognition_snapshot.get("updated_at"),
@@ -3729,7 +2985,7 @@ class PlanningRuntimeMixin:
             runtime_config=self.config.service_runtime,
             evaluate_drive=self.evaluate_endogenous_drive,
             drive_input_fields_from_evaluation=self._drive_input_fields_from_evaluation,
-            load_drive_history=self._load_endogenous_drive_history,
+            load_drive_history=self._endogenous_drive_history_persistence_service.load,
             load_governance_events=self._load_endogenous_governance_events,
             load_cognition_state=self._load_endogenous_cognition_state,
             persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
@@ -4335,7 +3591,9 @@ class PlanningRuntimeMixin:
         if governor is not None and hasattr(governor, "clear_runtime_projection"):
             governor.clear_runtime_projection()
         try:
-            self._persist_endogenous_drive_history(self._endogenous_drive_history_default())
+            self._endogenous_drive_history_persistence_service.persist(
+                self._endogenous_drive_history_persistence_service.default_snapshot()
+            )
         except Exception:
             pass
 

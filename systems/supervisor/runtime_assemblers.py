@@ -31,8 +31,17 @@ from systems.supervisor.endogenous_governance_event_consumer import (
     EndogenousGovernanceEventConsumer,
 )
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
+from systems.supervisor.endogenous_drive_history_persistence_service import (
+    EndogenousDriveHistoryPersistenceService,
+)
 from systems.supervisor.endogenous_strategy_memory_service import (
     EndogenousStrategyMemoryService,
+)
+from systems.supervisor.endogenous_self_regulation_service import (
+    EndogenousSelfRegulationService,
+)
+from systems.supervisor.endogenous_cognitive_posture_service import (
+    EndogenousCognitivePostureService,
 )
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from systems.supervisor.autonomous_task_review import build_autonomous_chain_auto_decision
@@ -149,6 +158,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         ),
     )
     supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
+    supervisor._endogenous_drive_history_persistence_service = (
+        EndogenousDriveHistoryPersistenceService(supervisor._endogenous_state_repository)
+    )
     supervisor._endogenous_governance_event_consumer = EndogenousGovernanceEventConsumer(
         load_events=lambda: supervisor._load_endogenous_governance_events(),
         persist_events=lambda snapshot: supervisor._persist_endogenous_governance_events(
@@ -160,6 +172,10 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         ),
     )
     supervisor._endogenous_strategy_memory_service = EndogenousStrategyMemoryService()
+    supervisor._endogenous_cognitive_posture_service = EndogenousCognitivePostureService(
+        runtime_config=supervisor.config.service_runtime,
+    )
+    supervisor._endogenous_self_regulation_service = EndogenousSelfRegulationService()
     supervisor._task_profile_policy = TaskProfilePolicy()
     supervisor._schedule_allocator = ScheduleAllocator(
         slot_interval_seconds=int(
