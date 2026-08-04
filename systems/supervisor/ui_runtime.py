@@ -95,7 +95,7 @@ class SupervisorUIRuntimePorts:
     collect_trace_records_from_governor_history: Callable[..., List[JsonDict]]
     build_trace_timeline: Callable[..., List[JsonDict]]
     summarize_single_trace: Callable[..., JsonDict]
-    runtime_config: Any
+    load_runtime_config: Callable[[], Any]
     list_chain_projection_tasks: Callable[[], List[Any]]
     serialize_chain_task: Callable[[Any], JsonDict]
     load_cognition_state: Callable[[], JsonDict]
@@ -341,7 +341,7 @@ class SupervisorUIRuntime:
     async def get_state(self) -> JsonDict:
         return await build_supervisor_ui_state(
             context=SupervisorUIStateContext(
-                runtime_config=self.ports.runtime_config,
+                runtime_config=self.ports.load_runtime_config(),
                 list_chain_projection_tasks=self.ports.list_chain_projection_tasks,
                 serialize_chain_task=self.ports.serialize_chain_task,
                 latest_drive_candidates=self.latest_drive_candidates,

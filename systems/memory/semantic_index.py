@@ -17,6 +17,12 @@ from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
 
 EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 
+# Calibration factor applied to raw cosine similarities from the local
+# CharNgramEmbedder, whose sparse character n-gram vectors cluster lower than
+# trained embedding models. 3.0 maps the observed ~0-0.33 raw range onto the
+# 0-1 scale the recall ranking threshold (0.35) expects.
+_LOCAL_SIMILARITY_BOOST = 3.0
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticIndexConfig:
@@ -53,9 +59,15 @@ class SemanticIndexConfig:
 
     @property
     def ready(self) -> bool:
+        """Ready when enabled — either an external provider is configured, or
+        the zero-dependency local ``CharNgramEmbedder`` fallback applies
+        (empty provider or ``provider == "local"``)."""
+        if not self.enabled:
+            return False
+        if not self.provider or self.provider == "local":
+            return True  # local zero-dep embedder
         return bool(
-            self.enabled
-            and self.provider
+            self.provider
             and self.model
             and self.base_url
             and (self.api_key or self.provider == "ollama")
@@ -73,6 +85,23 @@ class SemanticMemoryIndex:
         self.db_path = Path(db_path)
         self.config = config or SemanticIndexConfig.from_voidcube_config()
         self._transport = transport
+        self._local_fallback = False
+        if (
+            self._transport is None
+            and self.config.enabled
+            and (not self.config.provider or self.config.provider == "local")
+        ):
+            # Default to the zero-dependency local embedder when no external
+            # embedding provider is configured. Its sparse character n-gram
+            # vectors produce lower raw cosine values than trained models, so
+            # search applies a calibration boost to map them onto the same
+            # 0-1 similarity scale used by the recall ranking threshold.
+            from systems.memory.local_embedding import CharNgramEmbedder
+
+            self._transport = CharNgramEmbedder(
+                dimensions=self.config.dimensions or 256
+            )
+            self._local_fallback = True
         self._last_error = ""
         self._setup_table()
 
@@ -189,9 +218,13 @@ class SemanticMemoryIndex:
                 ).fetchall()
             finally:
                 conn.close()
+            boost = _LOCAL_SIMILARITY_BOOST if self._local_fallback else 1.0
             ranked = sorted(
                 (
-                    ((str(row[0]), str(row[1])), _cosine(query_vector, json.loads(row[2])))
+                    (
+                        (str(row[0]), str(row[1])),
+                        _cosine(query_vector, json.loads(row[2])) * boost,
+                    )
                     for row in rows
                 ),
                 key=lambda item: item[1],

@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 状态：治理未完成。Stage 0、Stage 1、Stage 2、Stage 3、Stage 4、Stage 5 已完成；Stage 6 部分完成；Stage 7 尚未开始。当前优先完成 Stage 6 的 adapter/lifecycle 边界，最后进入 Stage 7 全量验收。
+> 状态：治理未完成。Stage 0 至 Stage 6 已完成；Stage 7 尚未开始。当前进入全量回归、发行物和次级巨石评估，Windows 前端仍保持 No-Go。
 > 基线日期：2026-08-04。
 > 决策：以“单仓库、共享应用核心、CLI/Windows 双前端、双发行物”为目标完成 Python 解耦，再实施 Windows 前端。
 
@@ -18,14 +18,14 @@
 
 本轮核心范围：
 
-| 文件/边界 | 当前规模 | 当前判断 | 优先级 |
-| --- | ---: | --- | --- |
-| `VoidCube_cli/app.py` | 约 4,900 行 | 命令、TUI 和 turn 子责任已大量外移；共享 session/turn 状态已有唯一 runtime owner，类仍承担 Agent 生命周期和 host wiring | P0 |
-| `systems/supervisor/planning_runtime.py` | 约 1,670 行 | 保留运行时投影、内生驱动输入/评估、跨快照组合和显式 service 委托；已拆出的业务责任不得回迁 | P0，持续观察 |
-| `systems/supervisor/endogenous_drive.py` | 231 行 | 主流水线已组件化；Engine 仅保留 facade、LM proposal 交接和 latest-generation state 写回 | P0，接近收口 |
-| `systems/supervisor/ui_runtime.py` | 420 行 | 静态资源和主要投影已外移；`SupervisorUIMixin` 仍保留 HTTP/SSE、缓存和生命周期 owner | P0 |
-| `systems/supervisor/supervisor.py` | 约 600 行 | 组合根仍内联注册全部路由，`_setup_routes()` 尚未成为薄 route adapter | P0 边界 |
-| 共享包到前端的依赖边界 | 0 条例外 | `agent`、`systems`、`VoidCube_core`、`VoidCube_app` 当前不依赖 `VoidCube_cli`，必须持续保持 | P0 护栏 |
+| 文件/边界 | 当前责任判断 | 优先级 |
+| --- | --- | --- |
+| `VoidCube_cli/app.py` | 命令、TUI 和 turn 子责任已外移；仍保留 Agent 生命周期、终端显示和 host wiring，继续作为 CLI adapter 组合根治理 | P0 |
+| `systems/supervisor/planning_runtime.py` | 只保留运行时投影、内生驱动输入/评估、跨快照组合和显式 service 委托；已拆出的业务责任不得回迁 | P0，持续观察 |
+| `systems/supervisor/endogenous_drive.py` | 保留 facade、LM proposal 交接和 latest-generation state 写回；流水线阶段与 runtime state owner 已明确 | P0，持续观察 |
+| `systems/supervisor/ui_runtime.py` | `SupervisorUIRuntime` 统一拥有 UI 活动、缓存、媒体状态、SSE、身份代理和 auto-open 生命周期 | 已收口 |
+| `systems/supervisor/supervisor.py` | 只负责服务组合和路由挂载；UI endpoint wiring 通过 `ui_routes.py` 的显式 ports 接入 | 已收口 |
+| 共享包到前端的依赖边界 | `agent`、`systems`、`VoidCube_core`、`VoidCube_app` 不依赖 `VoidCube_cli`；CLI/Windows 只向共享层依赖 | P0 护栏 |
 
 次级观察对象包括 `run_agent.py`、Memory Service、Gateway、`VoidCube_cli/config.py` 和 `VoidCube_cli/main.py`。它们暂不与 P0 主线同时展开；只有在 P0 拆分需要明确依赖边界，或其修改频率和缺陷率达到第 10 节阈值时才进入后续批次。
 
@@ -179,7 +179,7 @@ CLI 的 slash command 只是 use case 的一种输入映射，不能成为共享
 
 ### 6.1 当前问题
 
-`VoidCube_cli/app.py` 当前约 4,900 行。TUI、命令、turn execution 和显示投影已经形成专属组件，公共 session/turn use case、状态和应用事件也已进入 `VoidCube_app`；`VoidcubeCLI` 仍是聚合 host，并继续混合以下 adapter 状态与 wiring：
+`VoidCube_cli/app.py` 仍是 CLI 聚合 host。TUI、命令、turn execution 和显示投影已经形成专属组件，公共 session/turn use case、状态和应用事件也已进入 `VoidCube_app`；剩余责任集中在以下 adapter 状态与 wiring：
 
 - Provider、模型、凭证和 Agent；
 - 应用 runtime 端口、Agent 生命周期和 turn 执行 wiring；
@@ -302,7 +302,7 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 当前约 1,672 行、50 个方法，仍是 Supervisor Planning 的运行时组合边界，但不再是自主任务治理责任的业务实现中心：
+`PlanningRuntimeMixin` 仍是 Supervisor Planning 的运行时组合边界，但不再是自主任务治理责任的业务实现中心：
 
 - 任务流、候选注释、策略记忆和观察议程的运行时组合；cognitive history summary、cognition state assembly、posture/alignment 与 self-regulation signal 由显式 service 承担；
 - task profile、schedule、排序和冲突；
@@ -398,13 +398,7 @@ DrivePerceptionBuilder
 
 ### 9.2 Python 职责拆分
 
-已形成的 projection/adapters 包括 state orchestration、observation、cognition、trace、body、memory、identity/proxy、media、activity、snapshot、stream 和 auto-open lifecycle。剩余目标组件：
-
-- `UIEventBroker`：统一 state、voice、media SSE 队列和断线处理。
-- `UIRoutes`：承接薄 HTTP/SSE endpoints 和请求/响应映射。
-- `SupervisorUILifecycle`：承接缓存初始化、auto-open、关闭和并发资源清理。
-
-`SupervisorUIMixin` 最终删除，由 route object、event broker 和显式 lifecycle owner 替代。`supervisor.py::_setup_routes()` 只挂载 route 集合，不逐条承载业务 endpoint wiring。
+UI Python 边界由 `SupervisorUIRuntime`、`ui_routes.py` 及独立的 projection/adapter 组件共同承担：runtime owner 持有可变 UI 状态、缓存、媒体和 SSE 生命周期；route module 只做 endpoint 挂载与请求/响应映射；projection/adapter 只处理明确的数据或设备端口。`supervisor.py::_setup_routes()` 只挂载 route 集合，不拥有 UI 业务状态。旧 Mixin、宿主镜像字段和无调用代理不属于有效架构。
 
 ### 9.3 前端安全收口
 
@@ -418,7 +412,7 @@ DrivePerceptionBuilder
 - `systems/memory/memory_service.py`：按 repository、recall、governance、backup 和 HTTP routes 评估。
 - `systems/gateway/internal_gateway.py`：按 registry、auth、session lease、scene projection 和 routes 评估。
 - `VoidCube_cli/config.py`：先拆 migration、schema、credentials/env 和 persistence。
-- `VoidCube_cli/main.py`：先把 1,242 行 `main()` 的 argparse/dispatch 拆成命令注册，不与 `cli.py` TUI 拆分同时进行。
+- `VoidCube_cli/main.py`：先把 argparse/dispatch 拆成命令注册，不与 `cli.py` TUI 拆分同时进行。
 
 满足任一条件才提升为 P0：
 
@@ -579,7 +573,7 @@ DrivePerceptionBuilder
 
 达到门槛代表可以在同一仓库开始实现 Windows adapter，但仍需根据已经形成的 API-A runtime 和 UI 边界，用 ADR 决定进程内调用、薄本机 API/BFF 或混合模式。无论选哪种传输，两种前端都只能调用同一应用 use case。
 
-当前判定为 **No-Go**：Stage 6 adapter/lifecycle 边界和 Stage 7 全量验证尚未全部收口。
+当前判定为 **No-Go**：Stage 7 全量验证尚未完成；在此之前不启动 Windows adapter。
 
 ## 15. 当前实施快照
 
@@ -595,7 +589,7 @@ DrivePerceptionBuilder
 | Stage 3 | 已完成 | 公共 session/history/title/turn-control use case、结构化应用事件和无 CLI 依赖的 adapter contract 已建立；session、hydration、title、busy、queue/cancel 和 active turn 均由 `ApplicationRuntime` 统一持有，命令 handler 通过显式端口接入 | 无 |
 | Stage 4 | 已完成 | Planning 的持久化、投影/策略、任务状态、review/recovery、执行交接和自主周期责任均由显式 owner 承担；Planning 只保留运行时组合、投影和 service 委托 | 无 |
 | Stage 5 | 已完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer；等价链路、稳定投影和 override 只读边界已闭合 | 无 |
-| Stage 6 | 部分完成 | CLI 的 TUI、voice session、background task state 和 autonomous component lifecycle 已形成显式 runtime/ports；UI projection 已有独立边界 | 删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
+| Stage 6 | 已完成 | CLI 的 TUI、voice session、background task state 和 autonomous component lifecycle 已形成显式 runtime/ports；Supervisor UI 的状态、SSE、身份代理、媒体和生命周期由 `SupervisorUIRuntime` 统一拥有，路由通过显式 ports 挂载；旧 Mixin、宿主镜像和无调用代理已清理 | 无 |
 | Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
 
 ### 15.2 当前稳定边界
@@ -614,8 +608,8 @@ DrivePerceptionBuilder
 
 ### 15.3 当前缺口
 
-- `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
-- 全量测试、发行物验证和最终性能复测仍未完成；Stage 6 尚未收口，因此不能进入 Windows adapter 实施。
+- Stage 7 的全量主项目/Mem 回归、smoke、发行物验证、退役扫描和性能复测尚未完成。
+- 次级巨石的优先级尚待 Stage 7 依据当前边界和变化风险重新评估。
 
 ### 15.4 验证基线
 
@@ -625,5 +619,4 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **Stage 6 Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。
-2. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。
+1. **Stage 7**：执行全量主项目/Mem 回归、smoke、wheel、退役扫描和性能复测，然后评估次级巨石并重新判定 Windows Go/No-Go。

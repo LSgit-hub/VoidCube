@@ -464,7 +464,7 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             ),
             build_trace_timeline=supervisor._build_trace_timeline,
             summarize_single_trace=supervisor._summarize_single_trace,
-            runtime_config=config.service_runtime,
+            load_runtime_config=lambda: supervisor.config.service_runtime,
             list_chain_projection_tasks=(
                 supervisor._autonomous_chain_store.list_chain_projection_tasks
             ),

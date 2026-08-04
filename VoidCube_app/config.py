@@ -627,7 +627,10 @@ DEFAULT_CONFIG = {
         # Optional true semantic retrieval. This is deliberately independent
         # from memory.llm: a chat model is never treated as an embedding model.
         "semantic_recall": {
-            "enabled": False,
+            # Enabled by default via the zero-dependency local CharNgramEmbedder
+            # (empty provider). Configure an external embedding provider/model
+            # (or Ollama) to upgrade to real semantic embeddings.
+            "enabled": True,
             "provider": "",
             "model": "",
             "api_key_env": "",

@@ -2817,7 +2817,7 @@ def test_latest_drive_candidate_snapshot_stops_at_newer_idle_event(tmp_path):
         summary="本轮没有候选。",
     )
 
-    assert supervisor._latest_drive_candidate_snapshot() == []
+    assert supervisor._ui_runtime.latest_drive_candidates() == []
 
 
 @pytest.mark.asyncio

@@ -3959,7 +3959,9 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
         }
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
-    supervisor._latest_drive_candidate_snapshot = lambda: [{"title": "cached drive"}]  # type: ignore[method-assign]
+    supervisor._ui_runtime.latest_drive_candidates = lambda: [  # type: ignore[method-assign]
+        {"title": "cached drive"}
+    ]
     supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
     supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
@@ -4017,7 +4019,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
 async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_evaluation(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._latest_drive_candidate_snapshot = lambda: []  # type: ignore[method-assign]
+    supervisor._ui_runtime.latest_drive_candidates = lambda: []  # type: ignore[method-assign]
     supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
     supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
 

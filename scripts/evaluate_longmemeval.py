@@ -43,15 +43,21 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+# Running as a script puts only ``scripts/`` on sys.path; add the repo root so
+# first-party top-level packages (VoidCube_app, systems, agent) resolve.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import MemoryService, RecallRequest
 from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = REPO_ROOT / "Mem" / "benchmarks" / "longmemeval_zh.v1.json"
 
 CATEGORIES = (
@@ -235,6 +241,12 @@ async def evaluate_longmemeval(
                 )
             )
             evidence = seed_instance(service, instance, instance_index=index, now=now)
+            # Build the semantic index for this instance's seeded turns so the
+            # recall can use embedding similarity in addition to lexical match.
+            try:
+                service._semantic_index.index_pending(limit=10000)
+            except Exception:
+                pass
             result = await service.recall(
                 RecallRequest(
                     query=instance["question"],
