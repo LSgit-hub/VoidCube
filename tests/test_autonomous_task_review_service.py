@@ -54,7 +54,6 @@ async def test_review_service_runs_through_explicit_ports(tmp_path) -> None:
         resolve_drive_input=resolve_drive_input,
         auto_decision=lambda task, drive_input: ("deferred", "busy"),
         normalize_context=lambda **kwargs: dict(kwargs),
-        build_execution_request=lambda *args, **kwargs: None,
         propose_memory_promotion=promote,
         build_response_fields=lambda **kwargs: {"drive_input": kwargs["drive_input"]},
         serialize_task=lambda task: task.model_dump(mode="json"),
@@ -67,9 +66,11 @@ async def test_review_service_runs_through_explicit_ports(tmp_path) -> None:
         touch_activity=touch_activity,
         get_active_tasks=lambda: store.list_tasks(),
         get_review_statuses=lambda: ["planned"],
+        review_adviser=adviser,
+        planning_activity_kind_for_task=lambda task_type: "autonomous_chain_plan",
     )
 
-    result = await service.review({}, review_adviser=adviser)
+    result = await service.review({})
 
     assert result["status"] == "reviewed"
     assert result["decision"] == "deferred"

@@ -37,6 +37,13 @@ from systems.supervisor.endogenous_drive_history_persistence_service import (
 from systems.supervisor.autonomous_chain_execution_handoff_service import (
     AutonomousChainExecutionHandoffService,
 )
+from systems.supervisor.autonomous_chain_planning_service import (
+    AutonomousChainPlanningService,
+)
+from systems.supervisor.autonomous_chain_recovery_service import (
+    AutonomousChainRecoveryService,
+)
+from systems.supervisor.autonomous_cycle_service import AutonomousCycleService
 from systems.supervisor.body_improvement_review_service import (
     BodyImprovementReviewService,
 )
@@ -62,6 +69,9 @@ from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from systems.supervisor.autonomous_task_review import build_autonomous_chain_auto_decision
 from systems.supervisor.autonomous_task_review_cycle_service import (
     AutonomousTaskReviewCycleService,
+)
+from systems.supervisor.autonomous_task_governance_review_service import (
+    AutonomousTaskGovernanceReviewService,
 )
 from systems.supervisor.autonomous_task_review_service import AutonomousTaskReviewService
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
@@ -148,6 +158,23 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         or (runtime_root / "autonomous_chain_store.json")
     )
 
+    def load_mem_governance_events() -> list[Any]:
+        return supervisor._governor.governance_repository.list_events()
+
+    def mem_governance_repository_path() -> Path:
+        repository = supervisor._governor.governance_repository
+        repository_path = getattr(repository, "path", None)
+        if repository_path:
+            return Path(repository_path)
+        return Path(supervisor._governor.storage_root) / "mem_governance.jsonl"
+
+    supervisor._autonomous_chain_recovery_service = AutonomousChainRecoveryService(
+        store=supervisor._autonomous_chain_store,
+        load_governance_events=load_mem_governance_events,
+        governance_repository_path=mem_governance_repository_path,
+        touch_activity=supervisor._touch_gateway_activity,
+    )
+
     def record_autonomous_task_status_change(
         task: Any,
         event_type: str,
@@ -219,6 +246,16 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             supervisor.config.service_runtime.autonomous_chain_review_interval or 300
         )
     )
+    supervisor._autonomous_chain_planning_service = AutonomousChainPlanningService(
+        store=supervisor._autonomous_chain_store,
+        task_state=supervisor._autonomous_task_state,
+        task_profile_policy=supervisor._task_profile_policy,
+        schedule_allocator=supervisor._schedule_allocator,
+        build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
+        record_activity=supervisor._record_supervisor_ui_activity,
+        record_drive_outcome=supervisor._record_endogenous_drive_outcome,
+        touch_activity=supervisor._touch_gateway_activity,
+    )
 
     def autonomous_task_auto_decision(
         task: Any,
@@ -250,6 +287,13 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             ),
         )
 
+    supervisor._autonomous_task_governance_review_service = (
+        AutonomousTaskGovernanceReviewService(
+            store=supervisor._autonomous_chain_store,
+            task_profile_policy=supervisor._task_profile_policy,
+            schedule_allocator=supervisor._schedule_allocator,
+        )
+    )
     supervisor._autonomous_task_review_service = AutonomousTaskReviewService(
         store=supervisor._autonomous_chain_store,
         task_profile_policy=supervisor._task_profile_policy,
@@ -258,15 +302,16 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         resolve_drive_input=supervisor._resolve_runtime_drive_input_request,
         auto_decision=autonomous_task_auto_decision,
         normalize_context=supervisor._normalize_runtime_decision_context,
-        build_execution_request=supervisor._build_autonomous_chain_execution_request,
         propose_memory_promotion=supervisor._propose_verified_conclusion_memory_promotion,
         build_response_fields=supervisor._build_drive_input_response_fields,
-        serialize_task=supervisor._serialize_autonomous_chain_task,
+        serialize_task=supervisor._autonomous_chain_planning_service.serialize_task,
         build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,
         record_activity=supervisor._record_supervisor_ui_activity,
         touch_activity=supervisor._touch_gateway_activity,
         get_active_tasks=supervisor._active_autonomous_chain_tasks,
         get_review_statuses=lambda: ["planned", "deferred", "paused"],
+        review_adviser=supervisor._autonomous_task_governance_review_service.review,
+        planning_activity_kind_for_task=supervisor._planning_activity_kind_for_task,
     )
     supervisor._autonomous_task_review_cycle_service = AutonomousTaskReviewCycleService(
         task_profile_policy=supervisor._task_profile_policy,
@@ -278,12 +323,38 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         ),
         get_task=supervisor._autonomous_chain_store.get_task,
         fetch_cli_session=lambda session_id: supervisor._fetch_gateway_cli_session(session_id),
-        review_tasks=lambda request: supervisor.review_autonomous_chain_tasks(request),
+         review_tasks=lambda request: supervisor._autonomous_task_review_service.review(request),
         consume_governance_events=lambda: supervisor._endogenous_governance_event_consumer.consume_governance_review_requests(),
         consume_alignment_events=lambda: supervisor._endogenous_governance_event_consumer.consume_alignment_requests(),
         consume_truthfulness_alerts=lambda: supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts(),
         handoff_execution=lambda task: supervisor._autonomous_chain_execution_handoff_service.handoff(task),
         handoff_limit=lambda: supervisor.config.service_runtime.autonomous_chain_handoff_limit_per_cycle,
+    )
+
+    def update_drive_schedule(last_at: datetime, next_at: datetime) -> None:
+        supervisor._service_runtime.last_drive_at = last_at
+        supervisor._service_runtime.next_drive_at = next_at
+
+    def update_review_schedule(last_at: datetime, next_at: datetime) -> None:
+        supervisor._service_runtime.last_review_at = last_at
+        supervisor._service_runtime.next_review_at = next_at
+
+    supervisor._autonomous_cycle_service = AutonomousCycleService(
+        runtime_config=supervisor.config.service_runtime,
+        evaluate_drive=supervisor.evaluate_endogenous_drive,
+        drive_input_fields_from_evaluation=supervisor._drive_input_fields_from_evaluation,
+        load_drive_history=supervisor._endogenous_drive_history_persistence_service.load,
+        load_governance_events=supervisor._endogenous_governance_state_persistence_service.load_governance_events,
+        load_cognition_state=supervisor._endogenous_governance_state_persistence_service.load_cognition_state,
+        persist_evaluation=supervisor._persist_endogenous_evaluation_for_candidates,
+        restore_evaluation_snapshots=supervisor._restore_endogenous_evaluation_snapshots,
+        lm_generation_application_state=supervisor._lm_generation_application_state,
+        plan_autonomous_chain_task=supervisor._autonomous_chain_planning_service.plan,
+        record_ui_activity=supervisor._record_supervisor_ui_activity,
+        touch_gateway_activity=supervisor._touch_gateway_activity,
+        run_review_cycle=supervisor._autonomous_task_review_cycle_service.run,
+        update_drive_schedule=update_drive_schedule,
+        update_review_schedule=update_review_schedule,
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)

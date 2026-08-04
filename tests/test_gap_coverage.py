@@ -206,8 +206,8 @@ class TestServiceRuntimeLifecycle:
         sv._execution_facade.get_body_registry = Mock(return_value={})
         sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
         sv._endogenous_drive_task = None
-        sv._run_endogenous_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
-        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
+        sv._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
+        sv._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
         sv._touch_gateway_activity = AsyncMock()
         sv._memory_maintenance_executor = Mock()
         sv._ensure_watch_window_task = Mock()

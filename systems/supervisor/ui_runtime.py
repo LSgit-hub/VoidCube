@@ -361,7 +361,7 @@ class SupervisorUIMixin:
         context = SupervisorUIStateContext(
             runtime_config=getattr(self.config, "service_runtime", None),
             list_chain_projection_tasks=self._autonomous_chain_store.list_chain_projection_tasks,
-            serialize_chain_task=self._serialize_autonomous_chain_task,
+            serialize_chain_task=self._autonomous_chain_planning_service.serialize_task,
             latest_drive_candidates=self._latest_drive_candidate_snapshot,
             load_observation_input_snapshot=self._load_ui_observation_input_snapshot,
             load_memory_stats=self._load_ui_memory_stats,

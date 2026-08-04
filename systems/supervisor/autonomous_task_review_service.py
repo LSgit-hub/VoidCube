@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
+    AutonomousChainGitLineage,
     AutonomousChainStore,
     AutonomousChainTask,
 )
@@ -24,7 +25,6 @@ from systems.supervisor.task_profile_policy import TaskProfilePolicy
 ResolveDriveInput = Callable[..., Awaitable[Dict[str, Any]]]
 ReviewAdviser = Callable[..., Awaitable[Dict[str, Dict[str, Any]]]]
 AutoDecision = Callable[[AutonomousChainTask, Dict[str, Any]], tuple[str, str]]
-BuildExecutionRequest = Callable[..., Optional[AutonomousChainExecutionRequest]]
 MemoryPromotion = Callable[[AutonomousChainTask], Awaitable[Optional[Dict[str, Any]]]]
 NormalizeContext = Callable[..., Dict[str, Any]]
 SerializeTask = Callable[[AutonomousChainTask], Dict[str, Any]]
@@ -46,7 +46,6 @@ class AutonomousTaskReviewService:
         resolve_drive_input: ResolveDriveInput,
         auto_decision: AutoDecision,
         normalize_context: NormalizeContext,
-        build_execution_request: BuildExecutionRequest,
         propose_memory_promotion: MemoryPromotion,
         build_response_fields: Callable[..., Dict[str, Any]],
         serialize_task: SerializeTask,
@@ -55,6 +54,8 @@ class AutonomousTaskReviewService:
         touch_activity: TouchActivity,
         get_active_tasks: Callable[[], list[AutonomousChainTask]],
         get_review_statuses: Callable[[], list[str]],
+        review_adviser: ReviewAdviser,
+        planning_activity_kind_for_task: Callable[[str], str],
     ) -> None:
         self._store = store
         self._task_profile_policy = task_profile_policy
@@ -63,7 +64,6 @@ class AutonomousTaskReviewService:
         self._resolve_drive_input = resolve_drive_input
         self._auto_decision = auto_decision
         self._normalize_context = normalize_context
-        self._build_execution_request = build_execution_request
         self._propose_memory_promotion = propose_memory_promotion
         self._build_response_fields = build_response_fields
         self._serialize_task = serialize_task
@@ -72,12 +72,272 @@ class AutonomousTaskReviewService:
         self._touch_activity = touch_activity
         self._get_active_tasks = get_active_tasks
         self._get_review_statuses = get_review_statuses
+        self._review_adviser = review_adviser
+        self._planning_activity_kind_for_task = planning_activity_kind_for_task
+
+    def _build_execution_request(
+        self,
+        task: AutonomousChainTask,
+        *,
+        decision_id: str,
+        actor: str,
+        reason: str,
+        decision_context: Dict[str, Any],
+    ) -> Optional[AutonomousChainExecutionRequest]:
+        execution = dict(task.metadata.get("execution_request") or {})
+        raw_kind = self._task_profile_policy.execution_kind(task) or "general_self_evolution"
+        kind = "memory_maintenance" if raw_kind == "memory_maintenance" else "general_self_evolution"
+        task_family = self._task_profile_policy.runtime_family(task)
+        governance_task_type = self._task_profile_policy.governance_type(task)
+
+        git_lineage = {
+            **dict(task.evidence.get("git_lineage") or {}),
+            **dict(execution.get("git_lineage") or {}),
+        }
+        rollback_plan = {
+            **dict(task.constraints.get("rollback_plan") or {}),
+            **dict(execution.get("rollback_plan") or {}),
+        }
+        governor_decision = {
+            "decision": "approved_for_execution",
+            "actor": actor,
+            "reason": reason,
+            "task_status": "approved",
+        }
+        if "governor_decision" in task.evidence:
+            governor_decision["evidence_decision"] = task.evidence["governor_decision"]
+
+        decision_fields = self._build_response_fields(
+            drive_input=dict(decision_context.get("drive_input") or {})
+        )
+        return AutonomousChainExecutionRequest(
+            task_id=task.task_id,
+            trace_id=task.trace_id,
+            task_type=task.task_type,
+            governance_task_type=governance_task_type,
+            task_family=task_family,
+            execution_kind=raw_kind,
+            decision_id=decision_id,
+            kind=kind,  # type: ignore[arg-type]
+            source_actor=str(execution.get("source_actor") or actor or "mem_supervisor"),
+            target_slot_id=(
+                execution.get("target_slot_id")
+                or task.metadata.get("target_slot_id")
+                or task.constraints.get("target_slot_id")
+            ),
+            git_lineage=AutonomousChainGitLineage.model_validate(git_lineage),
+            probe_report_ref=(
+                execution.get("probe_report_ref")
+                or task.evidence.get("probe_report_ref")
+                or task.evidence.get("probe_report_path")
+            ),
+            drive_input_evidence=dict(decision_fields.get("drive_input") or {}),
+            governor_decision=governor_decision,
+            rollback_plan=rollback_plan,
+        )
+
+    @staticmethod
+    def _request_agent_session_id(request: Dict[str, Any]) -> str:
+        session_id = str(request.get("session_id") or "").strip()
+        if session_id:
+            return session_id
+        context = request.get("context")
+        if isinstance(context, dict):
+            return str(context.get("session_id") or "").strip()
+        return ""
+
+    def _ensure_agent_pull_task_owner(
+        self,
+        *,
+        task: AutonomousChainTask,
+        request: Dict[str, Any],
+        decision: str,
+        actor: str,
+    ) -> str:
+        if not is_agent_pull_task(task, task_profile_policy=self._task_profile_policy):
+            return ""
+        if decision not in {"running", "completed", "failed"}:
+            return ""
+        if str(actor or "").strip().lower() not in {"agent", "cli_agent", "gateway"}:
+            return ""
+
+        session_id = self._request_agent_session_id(request)
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Agent-pull task decisions require a session_id in request or context.",
+            )
+
+        owner_session_id = str(dict(task.metadata or {}).get("owner_session_id") or "").strip()
+        if decision == "running":
+            if owner_session_id and owner_session_id != session_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "当前 agent-pull 链路项已被另一 CLI 会话认领 "
+                        f"({owner_session_id})。"
+                    ),
+                )
+            return session_id
+
+        if not owner_session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前 agent-pull 链路项处于运行中但缺少 owner_session_id；"
+                    "由于归属未知，完成/失败写回已被拒绝。"
+                ),
+            )
+        if owner_session_id != session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前 agent-pull 链路项写回已被拒绝：请求会话 "
+                    f"{session_id} 并不拥有链路项 {task.task_id}。"
+                ),
+            )
+        return session_id
+
+    async def decide(
+        self,
+        task_id: str,
+        request: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        request = dict(request or {})
+        task = self._store.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
+
+        normalized = normalize_autonomous_chain_decision(request.get("decision"))
+        decision_context: Dict[str, Any] = {}
+        if normalized is None or normalized == "auto":
+            task_family = self._task_profile_policy.runtime_family(task)
+            task_execution_kind = self._task_profile_policy.execution_kind(task)
+            drive_input = await self._resolve_drive_input(
+                request,
+                default_task_family=task_family,
+                default_execution_kind=task_execution_kind,
+            )
+            normalized, auto_reason = self._auto_decision(task, drive_input)
+            decision_context = self._normalize_context(
+                decision_context,
+                drive_input=drive_input,
+            )
+            reason = str(request.get("reason") or auto_reason)
+        else:
+            reason = str(request.get("reason") or f"Task marked as {normalized} by supervisor decision.")
+            request_context = request.get("context")
+            if isinstance(request_context, dict) and request_context:
+                decision_context = self._normalize_context(dict(request_context))
+            if normalized in {"completed", "failed"}:
+                final_response = str(request.get("final_response") or "").strip()
+                if final_response:
+                    decision_context["autonomous_executor_final_response"] = final_response[:4000]
+
+        if task.status == "cancelled":
+            return {
+                "status": "unchanged",
+                "task": self._serialize_task(task),
+                "reason": "Cancelled tasks are terminal and cannot be re-decided by the supervisor.",
+            }
+
+        actor = str(request.get("actor", "supervisor"))
+        decision_id = str(request.get("decision_id") or uuid.uuid4())
+        owner_session_id = self._ensure_agent_pull_task_owner(
+            task=task,
+            request=request,
+            decision=normalized,
+            actor=actor,
+        )
+        execution_request = None
+        if normalized == "approved" and self._task_profile_policy.requires_execution_request(task):
+            try:
+                execution_request = self._build_execution_request(
+                    task,
+                    decision_id=decision_id,
+                    actor=actor,
+                    reason=reason,
+                    decision_context=decision_context,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        if (
+            normalized in {"completed", "failed"}
+            and task.status == "approved"
+            and is_agent_pull_task(task, task_profile_policy=self._task_profile_policy)
+            and owner_session_id
+        ):
+            task = self._task_state.update_status(
+                task_id,
+                status="running",
+                decision_id=str(uuid.uuid4()),
+                actor=actor,
+                reason=(
+                    "监督者恢复过程曾把链路项重置为待执行；"
+                    "当前已接纳这次晚到的 agent-pull 写回，并在终态写回前恢复运行中状态。"
+                ),
+                context={
+                    **decision_context,
+                    "session_id": owner_session_id,
+                    "late_agent_pull_writeback": True,
+                    "restored_from_status": "approved",
+                },
+                execution_request=None,
+                event_type="writeback_reconcile",
+            )
+
+        updated_task = self._task_state.update_status(
+            task_id,
+            status=normalized,
+            decision_id=decision_id,
+            actor=actor,
+            reason=reason,
+            context=decision_context,
+            execution_request=execution_request,
+            event_type="decision",
+        )
+
+        decision_metadata = request.get("metadata")
+        if normalized == "running" and owner_session_id:
+            enriched_metadata = dict(decision_metadata or {})
+            enriched_metadata.setdefault("owner_session_id", owner_session_id)
+            enriched_metadata.setdefault("execution_source", "cli_agent_pull")
+            decision_metadata = enriched_metadata
+        if isinstance(decision_metadata, dict) and decision_metadata:
+            self._task_state.update_metadata(task_id, metadata=decision_metadata)
+
+        promotion_candidate = None
+        if normalized in {"approved", "running", "completed"}:
+            promotion_candidate = await self._propose_memory_promotion(updated_task)
+
+        activity_metadata = self._build_activity_metadata(
+            [updated_task],
+            action="decision",
+            extra={"status": normalized},
+        )
+        await self._touch_activity(
+            self._planning_activity_kind_for_task(task.task_type),
+            metadata=activity_metadata,
+        )
+        self._record_activity(
+            "task_decided",
+            scene="planning",
+            summary=f"监督者已将「{updated_task.title}」更新为 {normalized} 状态。",
+            metadata=activity_metadata,
+        )
+
+        response: Dict[str, Any] = {
+            "status": normalized,
+            "task": self._serialize_task(updated_task),
+        }
+        if promotion_candidate is not None:
+            response["memory_promotion_candidate"] = promotion_candidate
+        return response
 
     async def review(
         self,
         request: Optional[Dict[str, Any]] = None,
-        *,
-        review_adviser: ReviewAdviser,
     ) -> Dict[str, Any]:
         request = dict(request or {})
         statuses = request.get("statuses") or self._get_review_statuses()
@@ -119,7 +379,7 @@ class AutonomousTaskReviewService:
         ]
         candidate_tasks.sort(key=self._schedule_allocator.task_sort_key)
 
-        review_actions = await review_adviser(
+        review_actions = await self._review_adviser(
             candidate_tasks,
             drive_input=drive_input,
         )

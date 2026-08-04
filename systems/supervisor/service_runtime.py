@@ -1179,7 +1179,7 @@ class ServiceRuntimeMixin:
                 now = datetime.now(timezone.utc)
                 self._service_runtime.last_review_at = now
                 try:
-                    await self._run_autonomous_chain_review_cycle()
+                    await self._autonomous_task_review_cycle_service.run()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1203,7 +1203,7 @@ class ServiceRuntimeMixin:
                     now = datetime.now(timezone.utc)
                     self._service_runtime.last_drive_at = now
                     try:
-                        await self._run_endogenous_drive_cycle()
+                        await self._autonomous_cycle_service.run_drive_cycle()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:

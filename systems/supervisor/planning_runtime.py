@@ -4,14 +4,12 @@ import asyncio
 import logging
 import json
 import uuid
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 import aiohttp
 
-from systems.self_learning.models import SupervisorConclusionSubmission
 from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
 from systems.supervisor.endogenous_proposal_port import (
     LmGenerationApplicationState,
@@ -43,21 +41,13 @@ from systems.supervisor.endogenous_drive_orchestration import (
     EndogenousDriveEvaluationContext,
     evaluate_endogenous_drive as run_endogenous_drive_evaluation,
 )
-from systems.supervisor.endogenous_drive_cycle import (
-    EndogenousDriveCycleContext,
-    run_endogenous_drive_cycle,
-)
 from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
 from systems.supervisor.endogenous_state_projection import (
     derive_corrective_mode,
     project_governance_event_stream,
 )
-from systems.supervisor.autonomous_chain_store import (
-    AutonomousChainExecutionRequest,
-    AutonomousChainGitLineage,
-    AutonomousChainTask,
-)
+from systems.supervisor.autonomous_chain_store import AutonomousChainTask
 from systems.supervisor.activity_projection import (
     enforce_auto_drive_input_boundary,
     idle_seconds_since,
@@ -70,7 +60,6 @@ from systems.supervisor.drive_input_evaluation import (
     evaluate_drive_input_snapshot,
 )
 from systems.supervisor.autonomous_task_review import (
-    build_autonomous_chain_auto_decision,
     is_agent_pull_task,
     normalize_autonomous_chain_decision,
 )
@@ -106,20 +95,6 @@ SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
 class PlanningRuntimeMixin:
     """Supervisor planning, activity-guard evaluation, and autonomous-chain orchestration."""
 
-    _LM_GOVERNANCE_ACTION_TO_STATUS: Dict[str, str] = {
-        "approve": "approved",
-        "approved": "approved",
-        "defer": "deferred",
-        "deferred": "deferred",
-        "cancel": "cancelled",
-        "cancelled": "cancelled",
-        "pause": "paused",
-        "paused": "paused",
-    }
-    _LM_GOVERNANCE_SHADOW_ACTIONS: frozenset[str] = frozenset(
-        {"retire", "merge"}
-    )
-
     async def get_governor_history(self, limit: int = 20):
         return {
             "history": self._governor.list_history(limit=limit),
@@ -145,7 +120,6 @@ class PlanningRuntimeMixin:
             runtime_config=getattr(self.config, "service_runtime", None),
             state_loader=getattr(engine, "get_latest_lm_task_generation_state", None),
         )
-
     @staticmethod
     def _clamp_endogenous_ratio(value: Any) -> float:
         try:
@@ -194,16 +168,6 @@ class PlanningRuntimeMixin:
         return self._build_drive_input_response_fields(
             drive_input=dict(evaluation.get("drive_input") or {}),
         )
-
-    def _drive_input_fields_from_decision_context(
-        self,
-        decision_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Dict[str, Any]]:
-        decision_context = dict(decision_context or {})
-        return self._build_drive_input_response_fields(
-            drive_input=dict(decision_context.get("drive_input") or {}),
-        )
-
     @staticmethod
     def _build_drive_input_context_snapshot(source_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = dict(source_payload or {})
@@ -985,30 +949,6 @@ class PlanningRuntimeMixin:
             "switch_reason": "",
         }
 
-    def _request_task_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        metadata = dict(payload.get("metadata") or {})
-        for key in ("governance_task_type", "task_family", "execution_kind", "rationale"):
-            value = payload.get(key)
-            if value is not None:
-                metadata[key] = value
-        for key in (
-            "scheduled_for",
-            "preset_time",
-            "scheduled_at",
-            "run_at",
-            "execute_after",
-            "time_slot",
-            "window",
-        ):
-            value = payload.get(key)
-            if value is not None and key not in metadata:
-                metadata[key] = value
-        metadata = self._schedule_allocator.normalize_metadata(metadata)
-        explicit_execution_kind = str(metadata.get("execution_kind") or "").strip().lower()
-        if explicit_execution_kind in {"body_switch", "body_improvement"} and not metadata.get("task_family"):
-            metadata["task_family"] = explicit_execution_kind
-        return metadata
-
     def _active_autonomous_chain_tasks(self) -> list[AutonomousChainTask]:
         """Return active autonomous-chain rows across API-B and API-A lanes."""
         rows: list[AutonomousChainTask] = []
@@ -1703,23 +1643,6 @@ class PlanningRuntimeMixin:
             self._endogenous_governance_state_persistence_service.persist_governance_events(snapshot)
         return project_governance_event_stream(snapshot)
 
-    async def _run_endogenous_drive_cycle(self) -> Dict[str, Any]:
-        context = EndogenousDriveCycleContext(
-            runtime_config=self.config.service_runtime,
-            evaluate_drive=self.evaluate_endogenous_drive,
-            drive_input_fields_from_evaluation=self._drive_input_fields_from_evaluation,
-            load_drive_history=self._endogenous_drive_history_persistence_service.load,
-            load_governance_events=self._endogenous_governance_state_persistence_service.load_governance_events,
-            load_cognition_state=self._endogenous_governance_state_persistence_service.load_cognition_state,
-            persist_evaluation=self._persist_endogenous_evaluation_for_candidates,
-            restore_evaluation_snapshots=self._restore_endogenous_evaluation_snapshots,
-            lm_generation_application_state=self._lm_generation_application_state,
-            plan_autonomous_chain_task=self.plan_autonomous_chain_task,
-            record_ui_activity=self._record_supervisor_ui_activity,
-            touch_gateway_activity=self._touch_gateway_activity,
-        )
-        return await run_endogenous_drive_cycle(context=context)
-
     async def _fetch_gateway_cli_session(self, session_id: str) -> Dict[str, Any]:
         import aiohttp
 
@@ -1742,505 +1665,6 @@ class PlanningRuntimeMixin:
         payload.setdefault("session_id", session_id)
         payload.setdefault("missing", False)
         return payload
-
-    def _request_agent_session_id(self, request: Dict[str, Any]) -> str:
-        session_id = str(request.get("session_id") or "").strip()
-        if session_id:
-            return session_id
-        context = request.get("context")
-        if isinstance(context, dict):
-            session_id = str(context.get("session_id") or "").strip()
-            if session_id:
-                return session_id
-        return ""
-
-    def _ensure_agent_pull_task_owner(
-        self,
-        *,
-        task: AutonomousChainTask,
-        request: Dict[str, Any],
-        decision: str,
-        actor: str,
-    ) -> str:
-        if not is_agent_pull_task(
-            task,
-            task_profile_policy=self._task_profile_policy,
-        ):
-            return ""
-        if decision not in {"running", "completed", "failed"}:
-            return ""
-        actor_normalized = str(actor or "").strip().lower()
-        if actor_normalized not in {"agent", "cli_agent", "gateway"}:
-            return ""
-
-        session_id = self._request_agent_session_id(request)
-        if not session_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Agent-pull task decisions require a session_id in request or context.",
-            )
-
-        metadata = dict(task.metadata or {})
-        owner_session_id = str(metadata.get("owner_session_id") or "").strip()
-        if decision == "running":
-            if owner_session_id and owner_session_id != session_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "当前 agent-pull 链路项已被另一 CLI 会话认领 "
-                        f"({owner_session_id})。"
-                    ),
-                )
-            return session_id
-
-        if not owner_session_id:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "当前 agent-pull 链路项处于运行中但缺少 owner_session_id；"
-                    "由于归属未知，完成/失败写回已被拒绝。"
-                ),
-            )
-        if owner_session_id != session_id:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "当前 agent-pull 链路项写回已被拒绝：请求会话 "
-                    f"{session_id} 并不拥有链路项 {task.task_id}。"
-                ),
-            )
-        return session_id
-
-    def _build_autonomous_chain_execution_request(
-        self,
-        task: AutonomousChainTask,
-        *,
-        decision_id: str,
-        actor: str,
-        reason: str,
-        decision_context: Dict[str, Any],
-    ) -> Optional[AutonomousChainExecutionRequest]:
-        execution = dict(task.metadata.get("execution_request") or {})
-        raw_kind = self._task_profile_policy.execution_kind(task) or "general_self_evolution"
-        kind = "memory_maintenance" if raw_kind == "memory_maintenance" else "general_self_evolution"
-        task_family = self._task_profile_policy.runtime_family(task)
-        governance_task_type = self._task_profile_policy.governance_type(task)
-
-        git_lineage = {
-            **dict(task.evidence.get("git_lineage") or {}),
-            **dict(execution.get("git_lineage") or {}),
-        }
-        rollback_plan = {
-            **dict(task.constraints.get("rollback_plan") or {}),
-            **dict(execution.get("rollback_plan") or {}),
-        }
-        governor_decision = {
-            "decision": "approved_for_execution",
-            "actor": actor,
-            "reason": reason,
-            "task_status": "approved",
-        }
-        if "governor_decision" in task.evidence:
-            governor_decision["evidence_decision"] = task.evidence["governor_decision"]
-
-        decision_fields = self._drive_input_fields_from_decision_context(decision_context)
-        drive_input_evidence = dict(decision_fields.get("drive_input") or {})
-        execution_request = AutonomousChainExecutionRequest(
-            task_id=task.task_id,
-            trace_id=task.trace_id,
-            task_type=task.task_type,
-            governance_task_type=governance_task_type,
-            task_family=task_family,
-            execution_kind=raw_kind,
-            decision_id=decision_id,
-            kind=kind,  # type: ignore[arg-type]
-            source_actor=str(execution.get("source_actor") or actor or "mem_supervisor"),
-            target_slot_id=(
-                execution.get("target_slot_id")
-                or task.metadata.get("target_slot_id")
-                or task.constraints.get("target_slot_id")
-            ),
-            git_lineage=AutonomousChainGitLineage.model_validate(git_lineage),
-            probe_report_ref=(
-                execution.get("probe_report_ref")
-                or task.evidence.get("probe_report_ref")
-                or task.evidence.get("probe_report_path")
-            ),
-            drive_input_evidence=drive_input_evidence,
-            governor_decision=governor_decision,
-            rollback_plan=rollback_plan,
-        )
-        return execution_request
-
-    @staticmethod
-    def _normalize_execution_request_evidence_payload(
-        execution_request_payload: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        payload = dict(execution_request_payload or {})
-        drive_input_evidence = dict(payload.get("drive_input_evidence") or {})
-        payload.pop("activity_guard_evidence", None)
-        if not drive_input_evidence:
-            return payload
-        payload["drive_input_evidence"] = dict(drive_input_evidence)
-        return payload
-
-    def _serialize_autonomous_chain_task(self, task: AutonomousChainTask) -> Dict[str, Any]:
-        payload = task.model_dump(mode="json")
-        execution_request_payload = payload.get("execution_request")
-        if isinstance(execution_request_payload, dict):
-            payload["execution_request"] = self._normalize_execution_request_evidence_payload(
-                execution_request_payload
-            )
-        runtime_profile = self._task_profile_policy.runtime_profile(task)
-        execution = dict(task.metadata.get("execution_request") or {})
-        payload["governance_task_type"] = (
-            execution.get("governance_task_type")
-            or task.metadata.get("governance_task_type")
-            or task.governance_task_type
-            or task.metadata.get("governance_task_type")
-            or runtime_profile.get("governance_task_type")
-        )
-        payload["task_family"] = (
-            execution.get("task_family")
-            or task.metadata.get("task_family")
-            or task.task_family
-            or task.metadata.get("task_family")
-            or runtime_profile.get("task_family")
-        )
-        payload["execution_kind"] = (
-            execution.get("execution_kind")
-            or task.metadata.get("execution_kind")
-            or task.execution_kind
-            or task.metadata.get("execution_kind")
-            or runtime_profile.get("execution_kind")
-        )
-        scheduled_for = self._schedule_allocator.task_schedule_token(task)
-        if scheduled_for is not None:
-            payload["scheduled_for"] = scheduled_for
-        requested_kind = str(execution.get("kind") or "").strip() or None
-        decision_history = payload.get("decision_history") or []
-        latest_context: Dict[str, Any] = {}
-        if isinstance(decision_history, list) and decision_history:
-            latest = decision_history[-1]
-            if isinstance(latest, dict):
-                latest_context = dict(latest.get("context") or {})
-        judgement_preview = self._judgement_preview_projection(
-            latest_context=latest_context,
-            current_task=task,
-        )
-        if judgement_preview:
-            payload["judgement_preview"] = judgement_preview
-        display_kind = (
-            requested_kind
-            or payload.get("execution_kind")
-            or payload.get("task_family")
-            or payload.get("governance_task_type")
-            or payload.get("task_type")
-        )
-        payload["task_identity"] = {
-            "task_id": payload.get("task_id"),
-            "title": payload.get("title"),
-            "task_type": payload.get("task_type"),
-            "governance_task_type": payload.get("governance_task_type"),
-            "task_family": payload.get("task_family"),
-            "execution_kind": payload.get("execution_kind"),
-            "runtime_task_family": runtime_profile.get("task_family"),
-            "runtime_execution_kind": runtime_profile.get("execution_kind"),
-            "requested_kind": requested_kind,
-            "display_kind": display_kind,
-            "summary": (
-                f"{payload.get('title')} ({display_kind})"
-                if payload.get("title") and display_kind
-                else payload.get("title") or display_kind or payload.get("task_id")
-            ),
-        }
-        return payload
-
-    def _governance_action_label(self, value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        return {
-            "approve": "转交",
-            "defer": "延后",
-            "cancel": "清退",
-            "pause": "暂停",
-            "retire": "退休建议",
-            "merge": "合并建议",
-            "reprioritize": "重排优先级",
-            "reprioritise": "重排优先级",
-        }.get(normalized, str(value or "").strip() or "判断动作")
-
-    def _governance_priority_label(self, value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        return {
-            "low": "低",
-            "normal": "中",
-            "high": "高",
-        }.get(normalized, str(value or "").strip() or "未识别")
-
-    def _governance_merge_target_title(self, task_id: Any) -> str:
-        normalized = str(task_id or "").strip()
-        if not normalized:
-            return ""
-        target = self._autonomous_chain_store.get_task(normalized)
-        if target is None:
-            return ""
-        return str(target.title or "").strip()
-
-    def _judgement_preview_projection(
-        self,
-        *,
-        latest_context: Dict[str, Any],
-        current_task: AutonomousChainTask,
-    ) -> Dict[str, Any]:
-        judgement_preview: Dict[str, Any] = {}
-        notes: list[str] = []
-
-        review_context = latest_context.get("supervisor_review_outcome")
-        if isinstance(review_context, dict):
-            review_payload = dict(review_context)
-            action_label = self._governance_action_label(review_payload.get("action"))
-            review_payload["action_label"] = action_label
-            review_payload["summary"] = (
-                f"监督者已采纳判断动作: {action_label}"
-                + (
-                    f" · {str(review_payload.get('reason') or '').strip()[:120]}"
-                    if str(review_payload.get("reason") or "").strip()
-                    else ""
-                )
-            )
-            judgement_preview["review_outcome"] = review_payload
-            notes.append(str(review_payload["summary"]))
-
-        followup_context = latest_context.get("supervisor_followup_suggestion")
-        if isinstance(followup_context, dict):
-            followup_payload = dict(followup_context)
-            action_label = self._governance_action_label(followup_payload.get("action"))
-            followup_payload["action_label"] = action_label
-            merge_target_title = self._governance_merge_target_title(
-                followup_payload.get("merge_into")
-            )
-            if merge_target_title:
-                followup_payload["merge_into_title"] = merge_target_title
-            if followup_payload.get("merge_into") and merge_target_title:
-                followup_extra = f" · 并入 {merge_target_title}"
-            elif followup_payload.get("merge_into"):
-                followup_extra = f" · 并入 {str(followup_payload.get('merge_into') or '')[:16]}"
-            else:
-                followup_extra = ""
-            followup_payload["summary"] = (
-                f"监督者保留建议: {action_label}{followup_extra}"
-                + (
-                    f" · {str(followup_payload.get('reason') or '').strip()[:120]}"
-                    if str(followup_payload.get("reason") or "").strip()
-                    else ""
-                )
-            )
-            judgement_preview["followup_suggestion"] = followup_payload
-            notes.append(str(followup_payload["summary"]))
-
-        priority_context = latest_context.get("supervisor_priority_adjustment")
-        if isinstance(priority_context, dict):
-            priority_payload = dict(priority_context)
-            priority_label = self._governance_priority_label(priority_payload.get("priority"))
-            priority_payload["priority_label"] = priority_label
-            priority_payload["summary"] = (
-                f"监督者已重排优先级: {priority_label}"
-                + (
-                    f" · {str(priority_payload.get('reason') or '').strip()[:120]}"
-                    if str(priority_payload.get("reason") or "").strip()
-                    else ""
-                )
-            )
-            judgement_preview["priority_adjustment"] = priority_payload
-            notes.append(str(priority_payload["summary"]))
-
-        if notes:
-            judgement_preview["notes"] = notes[:3]
-            judgement_preview["summary"] = notes[0]
-        if judgement_preview:
-            judgement_preview["task_title"] = str(current_task.title or "").strip()
-        return judgement_preview
-
-    def _build_supervisor_review_snapshot(
-        self,
-        tasks: list[AutonomousChainTask],
-    ) -> list[Dict[str, Any]]:
-        snapshot: list[Dict[str, Any]] = []
-        for task in tasks:
-            metadata = dict(task.metadata or {})
-            evidence = dict(task.evidence or {})
-            constraints = dict(task.constraints or {})
-            snapshot.append(
-                {
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "summary": task.summary,
-                    "status": task.status,
-                    "priority": task.priority,
-                    "source": task.source,
-                    "governance_task_type": self._task_profile_policy.governance_type(task),
-                    "task_family": self._task_profile_policy.runtime_family(task),
-                    "execution_kind": self._task_profile_policy.execution_kind(task),
-                    "scheduled_for": self._schedule_allocator.task_schedule_token(task),
-                    "metadata": {
-                        "endogenous_drive_key": metadata.get("endogenous_drive_key"),
-                        "utility": metadata.get("utility"),
-                        "quality_score": metadata.get("quality_score"),
-                        "learning_branch": metadata.get("learning_branch"),
-                        "self_learning_mode": metadata.get("self_learning_mode"),
-                    },
-                    "evidence": {
-                        "recent_errors": evidence.get("recent_errors"),
-                        "uncertainty_high_count": evidence.get("uncertainty_high_count"),
-                        "learning_quality_score": evidence.get("learning_quality_score"),
-                        "topic_source": (
-                            (evidence.get("endogenous_drive") or {}).get("topic_source")
-                            or evidence.get("topic_source")
-                        ),
-                        "learning_branch": (
-                            (evidence.get("endogenous_drive") or {}).get("learning_branch")
-                            or evidence.get("learning_branch")
-                        ),
-                    },
-                    "constraints": {
-                        "execution_policy": constraints.get("execution_policy"),
-                        "target_slot": constraints.get("target_slot"),
-                        "must_commit": constraints.get("must_commit"),
-                    },
-                    "decision_history_count": len(task.decision_history or []),
-                }
-            )
-        return snapshot
-
-    def _coerce_supervisor_review_action(
-        self,
-        action: Any,
-        *,
-        current_status: str,
-    ) -> Optional[str]:
-        if not isinstance(action, str):
-            return None
-        normalized = self._LM_GOVERNANCE_ACTION_TO_STATUS.get(action.strip().lower())
-        if normalized is None:
-            return None
-        if current_status in {"completed", "failed", "cancelled"}:
-            return None
-        return normalized
-
-    def _extract_supervisor_followup_suggestion(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        action = str(item.get("action") or "").strip().lower()
-        if action not in self._LM_GOVERNANCE_SHADOW_ACTIONS:
-            return None
-
-        recommendation: Dict[str, Any] = {
-            "action": action,
-            "reason": str(item.get("reason") or "").strip()[:500],
-        }
-        if action == "merge":
-            recommendation["merge_into"] = str(item.get("merge_into") or "").strip()[:200]
-        return recommendation
-
-    def _extract_supervisor_priority_recommendation(self, item: Dict[str, Any]) -> Optional[str]:
-        action = str(item.get("action") or "").strip().lower()
-        if action not in {"reprioritize", "reprioritise"}:
-            return None
-        priority = str(item.get("priority") or "").strip().lower()
-        if priority not in {"low", "normal", "high"}:
-            return None
-        return priority
-
-    async def _review_task_governance_with_supervisor(
-        self,
-        tasks: list[AutonomousChainTask],
-        *,
-        drive_input: Dict[str, Any],
-    ) -> Dict[str, Dict[str, Any]]:
-        if not tasks:
-            return {}
-        drive_input = dict(drive_input or {})
-
-        try:
-            from memai.model_config import resolve_mem_llm_client
-
-            llm_client, _ = resolve_mem_llm_client(role="governance_reasoner")
-            if llm_client is None:
-                return {}
-        except Exception:
-            return {}
-
-        api_b_judgement_snapshot = self._build_supervisor_review_snapshot(tasks)
-        prompt = (
-            "你是 VoidCube 的 API-B 判断层。你的职责不是产出新任务，"
-            "而是观察并裁定当前 API-B 判断在途链路项。\n\n"
-            "请基于当前 drive_input、API-B 判断在途快照和用户优先级，"
-            "为每个链路项给出一个结构化判断动作建议。你可以使用以下动作：\n"
-            "- approve: 建议当前任务本轮由 API-B 转交给 API-A 接手\n"
-            "- defer: 建议当前任务继续等待\n"
-            "- cancel: 建议当前任务清退/取消\n"
-            "- pause: 建议当前任务暂停\n"
-            "- retire: 建议该任务退休，但先仅记录建议，不直接落状态\n"
-            "- merge: 建议该任务与另一任务合并，但先仅记录建议，不直接合并\n"
-            "- reprioritize: 建议调整优先级，但先仅记录建议，不直接改优先级\n\n"
-            "注意：\n"
-            "1. 不要新增任务\n"
-            "2. 不要改写 task_id\n"
-            "3. 不要为同一任务返回多个动作\n"
-            "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
-            "5. body_improvement 只有在学习证据足够时才建议 approve；这里的 approve 只表示转交 API-A 接手，不表示 Web 小屋可控制执行\n\n"
-            "6. 同一个 scheduled_for / preset_time 只能保留一个活跃任务；"
-            "如果时间重叠，按先后顺序只保留一个，不能与现有自主链计划时段重复，其余建议 defer 或 cancel；"
-            "该保留/顺延建议由监督者 LM 判断\n\n"
-            "输出 JSON 对象，格式为：\n"
-            "{\n"
-            '  "actions": [\n'
-            '    {"task_id": "...", "action": "approve|defer|cancel|pause|retire|merge|reprioritize", "reason": "...", "merge_into": "...", "priority": "..."}\n'
-            "  ]\n"
-            "}\n\n"
-            f"【drive_input】\n{json.dumps(drive_input, ensure_ascii=False, default=str)[:3000]}\n\n"
-            f"【api_b_judgement】\n{json.dumps(api_b_judgement_snapshot, ensure_ascii=False, default=str)[:5000]}"
-        )
-
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    llm_client.complete_json,
-                    system_prompt=(
-                        "你是 VoidCube 的监督者身份。你观察并裁定 API-B 判断在途链路项的生命周期，"
-                        "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
-                    ),
-                    user_payload={"governance_review": prompt},
-                    task="scholar.revision",
-                ),
-                timeout=8.0,
-            )
-        except Exception:
-            return {}
-
-        if not isinstance(result, dict):
-            return {}
-
-        actions = result.get("actions")
-        if not isinstance(actions, list):
-            return {}
-
-        reviewed: Dict[str, Dict[str, Any]] = {}
-        for item in actions:
-            if not isinstance(item, dict):
-                continue
-            task_id = str(item.get("task_id") or "").strip()
-            if not task_id:
-                continue
-            reviewed[task_id] = {
-                "action": item.get("action"),
-                "reason": str(item.get("reason") or "").strip()[:500],
-            }
-            followup_suggestion = self._extract_supervisor_followup_suggestion(item)
-            if followup_suggestion is not None:
-                reviewed[task_id]["followup_suggestion"] = followup_suggestion
-            priority = self._extract_supervisor_priority_recommendation(item)
-            if priority is not None:
-                reviewed[task_id]["priority"] = priority
-        return reviewed
 
     def _autonomous_chain_task_git_lineage(self, task: AutonomousChainTask) -> Dict[str, Any]:
         execution = dict(task.metadata.get("execution_request") or {})
@@ -2273,7 +1697,10 @@ class PlanningRuntimeMixin:
             for task in tasks:
                 task_execution_kind = str(self._task_profile_policy.execution_kind(task) or "").strip().lower()
                 serialized_execution_kind = str(
-                    self._serialize_autonomous_chain_task(task).get("execution_kind") or ""
+                    self._autonomous_chain_planning_service.serialize_task(task).get(
+                        "execution_kind"
+                    )
+                    or ""
                 ).strip().lower()
                 if task_execution_kind == explicit_execution_kind:
                     filtered_tasks.append(task)
@@ -2285,7 +1712,10 @@ class PlanningRuntimeMixin:
                     filtered_tasks.append(task)
             tasks = filtered_tasks
         return {
-            "tasks": [self._serialize_autonomous_chain_task(task) for task in tasks],
+            "tasks": [
+                self._autonomous_chain_planning_service.serialize_task(task)
+                for task in tasks
+            ],
             "count": len(tasks),
         }
 
@@ -2293,7 +1723,7 @@ class PlanningRuntimeMixin:
         task = self._autonomous_chain_store.get_task(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
-        return self._serialize_autonomous_chain_task(task)
+        return self._autonomous_chain_planning_service.serialize_task(task)
 
     async def clear_autonomous_chain_runtime(self, request: dict | None = None):
         del request
@@ -2347,366 +1777,14 @@ class PlanningRuntimeMixin:
             "tasks_remaining": 0,
         }
 
-    def _mem_governance_repository_path(self) -> Path:
-        governor = getattr(self, "_governor", None)
-        repository = getattr(governor, "governance_repository", None)
-        repository_path = getattr(repository, "path", None)
-        if repository_path:
-            return Path(repository_path)
-        storage_root = getattr(governor, "storage_root", None)
-        if storage_root:
-            return Path(storage_root) / "mem_governance.jsonl"
-        runtime_root = Path(
-            getattr(self, "_runtime_root", None)
-            or self.config.soul_store_path
-        )
-        return runtime_root / "mem_governance.jsonl"
-
-    def _load_mem_governance_events(self) -> list[Any]:
-        governor = getattr(self, "_governor", None)
-        repository = getattr(governor, "governance_repository", None)
-        if repository is None:
-            return []
-        return repository.list_events()
-
-    def _recover_autonomous_chain_store_from_mem_governance(
-        self,
-        *,
-        replace: bool = False,
-    ) -> Dict[str, Any]:
-        existing_count = len(self._autonomous_chain_store.list_tasks())
-        events = self._load_mem_governance_events()
-        result = self._autonomous_chain_store.recover_from_governance_events(
-            events,
-            replace=replace,
-        )
-        return {
-            **result,
-            "existing_task_count": existing_count,
-            "mem_governance_path": str(self._mem_governance_repository_path()),
-        }
-
     async def recover_autonomous_chain_from_mem(self, request: dict | None = None):
-        request = request or {}
-        result = self._recover_autonomous_chain_store_from_mem_governance(
-            replace=bool(request.get("replace", False)),
-        )
-        if result.get("added_task_count") or result.get("updated_task_count"):
-            await self._touch_gateway_activity(
-                "autonomous_chain_plan",
-                metadata={
-                    "action": "recover_from_mem_governance",
-                    "added_task_count": result.get("added_task_count", 0),
-                    "updated_task_count": result.get("updated_task_count", 0),
-                },
-            )
-        return result
-
-    async def plan_autonomous_chain_task(self, request: dict | None = None):
-        request = request or {}
-        items = request.get("items")
-
-        created = []
-        if isinstance(items, list) and items:
-            for item in items:
-                title = str(item.get("title") or "").strip()
-                if not title:
-                    raise HTTPException(status_code=400, detail="Each task item must include a title.")
-                request_metadata = self._request_task_metadata(item)
-                task = self._autonomous_task_state.create_task(
-                    title=title,
-                    summary=str(item.get("summary", "")),
-                    trace_id=str(item.get("trace_id") or uuid.uuid4()),
-                    task_type=self._task_profile_policy.request_type(item, metadata=request_metadata),
-                    source=str(item.get("source", "self_learning")),
-                    priority=str(item.get("priority", "normal")),
-                    metadata=request_metadata,
-                    evidence=dict(item.get("evidence") or {}),
-                    constraints=dict(item.get("constraints") or {}),
-                )
-                created.append(task)
-        else:
-            title = str(request.get("title") or "").strip()
-            if not title:
-                raise HTTPException(status_code=400, detail="title is required")
-            request_metadata = self._request_task_metadata(request)
-            created.append(
-                self._autonomous_task_state.create_task(
-                    title=title,
-                    summary=str(request.get("summary", "")),
-                    trace_id=str(request.get("trace_id") or uuid.uuid4()),
-                    task_type=self._task_profile_policy.request_type(request, metadata=request_metadata),
-                    source=str(request.get("source", "self_learning")),
-                    priority=str(request.get("priority", "normal")),
-                    metadata=request_metadata,
-                    evidence=dict(request.get("evidence") or {}),
-                    constraints=dict(request.get("constraints") or {}),
-                )
-            )
-
-        await self._touch_gateway_activity(
-            "autonomous_chain_plan",
-            metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
-        )
-        if created:
-            for task in created:
-                self._record_endogenous_drive_outcome(task, event_type="planned")
-            self._record_supervisor_ui_activity(
-                "tasks_planned",
-                scene="planning",
-                summary=f"监督者已把 {len(created)} 个链路项纳入 API-B 判断在途存储。",
-                metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
-            )
-
-        return {
-            "status": "planned",
-            "tasks": [self._serialize_autonomous_chain_task(task) for task in created],
-            "count": len(created),
-        }
+        return await self._autonomous_chain_recovery_service.recover_from_mem(request)
 
     async def decide_autonomous_chain_task(self, task_id: str, request: dict | None = None):
-        request = request or {}
-        task = self._autonomous_chain_store.get_task(task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
-
-        normalized = normalize_autonomous_chain_decision(request.get("decision"))
-        decision_context: Dict[str, Any] = {}
-
-        if normalized is None or normalized == "auto":
-            task_family = self._task_profile_policy.runtime_family(task)
-            task_execution_kind = self._task_profile_policy.execution_kind(task)
-            drive_input = await self._resolve_runtime_drive_input_request(
-                request,
-                default_task_family=task_family,
-                default_execution_kind=task_execution_kind,
-            )
-            normalized, auto_reason = build_autonomous_chain_auto_decision(
-                task=task,
-                drive_input=drive_input,
-                autonomous_chain_gate_active=getattr(
-                    getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
-                ),
-                task_profile_policy=self._task_profile_policy,
-                active_tasks=self._active_autonomous_chain_tasks(),
-                learning_history=self._autonomous_chain_store.list_writeback_history(
-                    status="completed"
-                ),
-                now=datetime.now(timezone.utc),
-                body_improvement_min_quality=float(
-                    getattr(
-                        self.config.service_runtime,
-                        "body_improvement_min_quality",
-                        60.0,
-                    )
-                    or 60.0
-                ),
-            )
-            decision_context = self._normalize_runtime_decision_context(
-                decision_context,
-                drive_input=drive_input,
-            )
-            reason = str(request.get("reason") or auto_reason)
-        else:
-            reason = str(request.get("reason") or f"Task marked as {normalized} by supervisor decision.")
-            request_context = request.get("context")
-            if isinstance(request_context, dict) and request_context:
-                decision_context = self._normalize_runtime_decision_context(
-                    dict(request_context)
-                )
-            if normalized in {"completed", "failed"}:
-                final_response = str(request.get("final_response") or "").strip()
-                if final_response:
-                    decision_context["autonomous_executor_final_response"] = final_response[:4000]
-
-        if task.status == "cancelled":
-            return {
-                "status": "unchanged",
-                "task": self._serialize_autonomous_chain_task(task),
-                "reason": "Cancelled tasks are terminal and cannot be re-decided by the supervisor.",
-            }
-
-        actor = str(request.get("actor", "supervisor"))
-        decision_id = str(request.get("decision_id") or uuid.uuid4())
-        owner_session_id = self._ensure_agent_pull_task_owner(
-            task=task,
-            request=request,
-            decision=normalized,
-            actor=actor,
-        )
-        execution_request = None
-        if normalized == "approved" and self._task_profile_policy.requires_execution_request(task):
-            try:
-                execution_request = self._build_autonomous_chain_execution_request(
-                    task,
-                    decision_id=decision_id,
-                    actor=actor,
-                    reason=reason,
-                    decision_context=decision_context,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-
-        if (
-            normalized in {"completed", "failed"}
-            and task.status == "approved"
-            and is_agent_pull_task(
-                task,
-                task_profile_policy=self._task_profile_policy,
-            )
-            and owner_session_id
-        ):
-            task = self._autonomous_task_state.update_status(
-                task_id,
-                status="running",
-                decision_id=str(uuid.uuid4()),
-                actor=actor,
-                reason=(
-                    "监督者恢复过程曾把链路项重置为待执行；"
-                    "当前已接纳这次晚到的 agent-pull 写回，并在终态写回前恢复运行中状态。"
-                ),
-                context={
-                    **decision_context,
-                    "session_id": owner_session_id,
-                    "late_agent_pull_writeback": True,
-                    "restored_from_status": "approved",
-                },
-                execution_request=None,
-                event_type="writeback_reconcile",
-            )
-
-        updated_task = self._autonomous_task_state.update_status(
-            task_id,
-            status=normalized,
-            decision_id=decision_id,
-            actor=actor,
-            reason=reason,
-            context=decision_context,
-            execution_request=execution_request,
-            event_type="decision",
-        )
-
-        # Persist any metadata attached to the decision (e.g. executed_by_cli,
-        # execution_result from CLI agent execution).
-        decision_metadata = request.get("metadata")
-        if normalized == "running" and owner_session_id:
-            enriched_metadata = dict(decision_metadata or {})
-            enriched_metadata.setdefault("owner_session_id", owner_session_id)
-            enriched_metadata.setdefault("execution_source", "cli_agent_pull")
-            decision_metadata = enriched_metadata
-        if isinstance(decision_metadata, dict) and decision_metadata:
-            self._autonomous_task_state.update_metadata(task_id, metadata=decision_metadata)
-
-        promotion_candidate = None
-        if normalized in {"approved", "running", "completed"}:
-            promotion_candidate = (
-                await self._propose_verified_conclusion_memory_promotion(
-                    updated_task
-                )
-            )
-
-        await self._touch_gateway_activity(
-            self._planning_activity_kind_for_task(task.task_type),
-            metadata=self._build_autonomous_chain_activity_metadata(
-                [updated_task],
-                action="decision",
-                extra={"status": normalized},
-            ),
-        )
-        self._record_supervisor_ui_activity(
-            "task_decided",
-            scene="planning",
-            summary=f"监督者已将「{updated_task.title}」更新为 {normalized} 状态。",
-            metadata={
-                **self._task_activity_metadata(updated_task),
-                "status": normalized,
-            },
-        )
-
-        response = {
-            "status": normalized,
-            "task": self._serialize_autonomous_chain_task(updated_task),
-        }
-        if promotion_candidate is not None:
-            response["memory_promotion_candidate"] = promotion_candidate
-        return response
+        return await self._autonomous_task_review_service.decide(task_id, request)
 
     async def review_autonomous_chain_tasks(self, request: dict | None = None):
-        return await self._autonomous_task_review_service.review(
-            request,
-            review_adviser=self._review_task_governance_with_supervisor,
-        )
-
-    async def submit_self_learning_conclusion(self, request: dict | None = None):
-        try:
-            submission = SupervisorConclusionSubmission.model_validate(request or {})
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        created = []
-        for proposal in submission.proposals:
-            proposal_metadata = {
-                **submission.metadata,
-                **proposal.metadata,
-            }
-            if proposal.governance_task_type is not None:
-                proposal_metadata["governance_task_type"] = proposal.governance_task_type
-            if proposal.task_family is not None:
-                proposal_metadata["task_family"] = proposal.task_family
-            if proposal.execution_kind is not None:
-                proposal_metadata["execution_kind"] = proposal.execution_kind
-            proposal_payload = {
-                "task_type": proposal.task_type,
-                "source": proposal.source,
-                "governance_task_type": proposal.governance_task_type,
-                "task_family": proposal.task_family,
-                "execution_kind": proposal.execution_kind,
-                "metadata": proposal_metadata,
-            }
-            task = self._autonomous_task_state.create_task(
-                title=proposal.title,
-                summary=proposal.summary,
-                trace_id=str(submission.metadata.get("trace_id") or submission.conclusion_id or uuid.uuid4()),
-                task_type=self._task_profile_policy.request_type(proposal_payload, metadata=proposal_metadata),
-                source=proposal.source,
-                priority=proposal.priority,
-                metadata=proposal_metadata,
-                evidence={
-                    **submission.evidence,
-                    **proposal.evidence,
-                },
-                constraints=dict(proposal.constraints),
-            )
-            created.append(self._serialize_autonomous_chain_task(task))
-
-        if created:
-            self._record_supervisor_ui_activity(
-                "self_learning_submitted",
-                scene="drive",
-                summary=f"自主学习结论已提交 {len(created)} 个 API-B 判断在途提案。",
-                metadata={
-                    "count": len(created),
-                    "conclusion_id": submission.conclusion_id,
-                    "task_ids": [task.get("task_id") for task in created],
-                },
-            )
-            await self._touch_gateway_activity(
-                "self_learning",
-                metadata={
-                    "action": "self_learning_submission",
-                    "count": len(created),
-                    "conclusion_id": submission.conclusion_id,
-                },
-            )
-
-        return {
-            "status": "accepted",
-            "source": submission.source,
-            "conclusion_id": submission.conclusion_id,
-            "topic_id": submission.topic_id,
-            "count": len(created),
-            "tasks": created,
-        }
+        return await self._autonomous_task_review_service.review(request)
 
     async def _propose_verified_conclusion_memory_promotion(
         self,
@@ -2884,101 +1962,3 @@ class PlanningRuntimeMixin:
             reason=reason,
             event_type="body_switch_consent_outcome",
         )
-
-    async def _run_autonomous_chain_review_cycle(self) -> Dict[str, Any]:
-        return await self._autonomous_task_review_cycle_service.run()
-
-    async def run_autonomous_cycle(self, request: dict | None = None) -> Dict[str, Any]:
-        """Execute one full autonomous cycle: drive → plan → review → handoff.
-
-        This is the single-endpoint entry point used by the ``/auto`` switch.
-        It runs the same pipeline as the periodic background loops, but is
-        triggered synchronously on demand so the autonomous chain responds
-        immediately.
-
-        Returns a summary of every phase so the CLI can report what happened.
-        """
-        request = request or {}
-        focus = str(request.get("focus") or "").strip()
-        phases: Dict[str, Any] = {}
-
-        # ── Phase 1: Endogenous drive → form API-B judgement projections ──
-        try:
-            drive_result = await self._run_endogenous_drive_cycle()
-            phases["drive"] = {
-                "status": drive_result.get("status"),
-                "planned": drive_result.get("planned", 0),
-                "task_ids": [
-                    task.get("task_id")
-                    for task in drive_result.get("tasks", [])
-                    if isinstance(task, dict)
-                ],
-            }
-            now = datetime.now(timezone.utc)
-            self._service_runtime.last_drive_at = now
-            self._service_runtime.next_drive_at = now + timedelta(
-                seconds=self.config.service_runtime.endogenous_drive_interval
-            )
-        except Exception as exc:
-            phases["drive"] = {"status": "error", "error": str(exc)}
-
-        # ── Phase 2: autonomous-chain review → approve & handoff ──
-        try:
-            cycle_result = await self._run_autonomous_chain_review_cycle()
-            phases["review"] = {
-                "reviewed": cycle_result.get("reviewed", 0),
-                "handed_off": [
-                    dict(item) if isinstance(item, dict) else {"task_id": str(item)}
-                    for item in cycle_result.get("handed_off", [])
-                ],
-                "governance_consumption": dict(cycle_result.get("governance_consumption") or {}),
-                "alignment_consumption": dict(cycle_result.get("alignment_consumption") or {}),
-                "truthfulness_consumption": dict(cycle_result.get("truthfulness_consumption") or {}),
-            }
-            now = datetime.now(timezone.utc)
-            self._service_runtime.last_review_at = now
-            self._service_runtime.next_review_at = now + timedelta(
-                seconds=self.config.service_runtime.autonomous_chain_review_interval
-            )
-        except Exception as exc:
-            phases["review"] = {"status": "error", "error": str(exc)}
-
-        # ── Phase 3: Record supervisor UI activity ──
-        total_handed_off = len(phases.get("review", {}).get("handed_off", []))
-        total_planned = phases.get("drive", {}).get("planned", 0)
-        self._record_supervisor_ui_activity(
-            "autonomous_cycle_completed",
-            scene="handoff" if total_handed_off > 0 else "planning",
-            summary=(
-                f"自主链路一轮完成：新增 {total_planned} 个候选，"
-                f"{total_handed_off} 个链路项已进入自主交接。"
-            ),
-            metadata={
-                "phases": {
-                    k: {sk: sv for sk, sv in v.items() if sk != "task_ids"}
-                    for k, v in phases.items()
-                },
-                "total_planned": total_planned,
-                "total_handed_off": total_handed_off,
-                "focus": focus or None,
-            },
-        )
-
-        return {
-            "status": "completed",
-            "phases": phases,
-            "summary": {
-                "planned": total_planned,
-                "handed_off": total_handed_off,
-                "governance_consumed": int(
-                    phases.get("review", {}).get("governance_consumption", {}).get("count", 0)
-                ),
-                "alignment_consumed": int(
-                    phases.get("review", {}).get("alignment_consumption", {}).get("count", 0)
-                ),
-                "truthfulness_consumed": int(
-                    phases.get("review", {}).get("truthfulness_consumption", {}).get("count", 0)
-                ),
-                "focus": focus or None,
-            },
-        }

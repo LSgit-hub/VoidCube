@@ -1468,7 +1468,7 @@ async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_gove
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "追踪自主学习证据链路",
             "task_family": "self_learning",
@@ -1570,8 +1570,8 @@ async def test_supervisor_runtime_trace_list_summarizes_known_traces_without_gat
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    first = await supervisor.plan_autonomous_chain_task({"title": "First trace"})
-    second = await supervisor.plan_autonomous_chain_task({"title": "Second trace"})
+    first = await supervisor._autonomous_chain_planning_service.plan({"title": "First trace"})
+    second = await supervisor._autonomous_chain_planning_service.plan({"title": "Second trace"})
 
     async def unavailable_gateway_activity_log(trace_id=None, limit=200):
         raise RuntimeError("gateway unavailable")
@@ -1598,10 +1598,10 @@ async def test_supervisor_runtime_trace_includes_writeback_and_cancelled_chain_r
 
     supervisor._fetch_gateway_activity_log = empty_gateway_activity_log  # type: ignore[method-assign]
 
-    completed = await supervisor.plan_autonomous_chain_task(
+    completed = await supervisor._autonomous_chain_planning_service.plan(
         {"title": "已完成轨迹记录", "trace_id": "trace-runtime-projection-1"}
     )
-    cancelled = await supervisor.plan_autonomous_chain_task(
+    cancelled = await supervisor._autonomous_chain_planning_service.plan(
         {"title": "已取消轨迹记录", "trace_id": "trace-runtime-projection-2"}
     )
 
@@ -1654,7 +1654,7 @@ async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input
 
     supervisor._fetch_gateway_activity_log = empty_gateway_activity_log  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "带旧证据字段的自主交接请求",
             "trace_id": "trace-runtime-execution-request-1",
@@ -1829,7 +1829,7 @@ async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "时间线驱动的界面观察",
             "trace_id": "trace-timeline-1",
@@ -2043,7 +2043,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Run memory continuity sweep",
             "execution_kind": "memory_maintenance",
@@ -2175,7 +2175,7 @@ async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {"title": "Duplicate learning branch"},
@@ -2212,7 +2212,7 @@ async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     await supervisor.review_autonomous_chain_tasks(
         {
@@ -2247,7 +2247,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Underweighted architecture follow-up",
             "priority": "low",
@@ -2278,7 +2278,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     await supervisor.review_autonomous_chain_tasks(
         {
@@ -2311,7 +2311,7 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "根据学习结果改进 shell 替身",
             "task_family": "body_upgrade",
@@ -2363,21 +2363,21 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
         }
     )
 
-    supervisor_task_1 = await supervisor.plan_autonomous_chain_task(
+    supervisor_task_1 = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Supervisor first task",
             "task_family": "memory_maintenance",
             "metadata": {"task_family": "memory_maintenance"},
         }
     )
-    supervisor_task_2 = await supervisor.plan_autonomous_chain_task(
+    supervisor_task_2 = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Supervisor second task",
             "task_family": "general_self_evolution",
             "metadata": {"task_family": "general_self_evolution"},
         }
     )
-    agent_task_1 = await supervisor.plan_autonomous_chain_task(
+    agent_task_1 = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "第一个自主学习链路项",
             "task_type": "self_learning",
@@ -2387,7 +2387,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
             },
         }
     )
-    agent_task_2 = await supervisor.plan_autonomous_chain_task(
+    agent_task_2 = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Agent second creative task",
             "task_family": "body_upgrade",
@@ -2584,7 +2584,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segment(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "运行中的自主学习链路项",
             "task_type": "self_learning",
@@ -2632,7 +2632,7 @@ async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tm
     supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "正在执行的自主学习链路项",
             "task_family": "self_learning",
@@ -2710,7 +2710,7 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
         },
     )
 
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "已被观察到的治理任务",
             "metadata": {
@@ -2764,7 +2764,7 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
         },
     )
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "已完成但仍在快照中的候选",
             "task_family": "self_learning",
@@ -2826,7 +2826,7 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "已完成的自主学习写回",
             "task_family": "self_learning",
@@ -3102,7 +3102,7 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
         }
     )
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Agent waiting creative task",
             "task_family": "self_learning",
@@ -3173,8 +3173,8 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(  # type: ignore[method-assign]
         side_effect=asyncio.CancelledError()
     )
@@ -3211,8 +3211,8 @@ async def test_supervisor_periodic_runtime_does_not_start_autonomous_chain(tmp_p
     supervisor = _make_supervisor(tmp_path)
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
     await supervisor._start_periodic_tasks()
 
     assert supervisor._service_runtime.autonomous_chain_gate_active is False
@@ -3229,8 +3229,8 @@ async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_
     supervisor = _make_supervisor(tmp_path)
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
 
     await supervisor._start_periodic_tasks()
     companion_task = supervisor._companion_observation_task
@@ -3576,7 +3576,7 @@ async def test_stellar_mode_status_route_exposes_canonical_default(tmp_path):
 @pytest.mark.unit
 async def test_supervisor_autonomous_chain_deactivate_closes_running_tasks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Execution interrupted by gate deactivation",
             "task_type": "self_learning",
@@ -3623,7 +3623,7 @@ async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_forma
         return_value={"status": "upgrade_awaiting_user_consent"}
     )
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "自动交接的正式身体切换",
             "metadata": {
@@ -3663,9 +3663,9 @@ async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_forma
             },
         }
     )
-    supervisor._review_task_governance_with_supervisor = AsyncMock(return_value={})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service._review_adviser = AsyncMock(return_value={})
 
-    cycle = await supervisor._run_autonomous_chain_review_cycle()
+    cycle = await supervisor._autonomous_task_review_cycle_service.run()
 
     task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
     assert cycle["reviewed"] == 1
@@ -3686,7 +3686,7 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
 
     supervisor._execution_facade = UnknownStatusFacade()
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Do not complete on unknown executor status",
             "metadata": {
@@ -3726,9 +3726,9 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
             },
         }
     )
-    supervisor._review_task_governance_with_supervisor = AsyncMock(return_value={})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service._review_adviser = AsyncMock(return_value={})
 
-    cycle = await supervisor._run_autonomous_chain_review_cycle()
+    cycle = await supervisor._autonomous_task_review_cycle_service.run()
     task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
 
     assert cycle["handed_off"] == [{"task_id": task_id, "status": "accepted"}]
@@ -3748,8 +3748,8 @@ async def test_supervisor_periodic_autonomous_chain_review_runtime_invokes_cycle
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
 
     config = supervisor.config.model_copy(
         update={
@@ -3766,7 +3766,7 @@ async def test_supervisor_periodic_autonomous_chain_review_runtime_invokes_cycle
     with pytest.raises(asyncio.CancelledError):
         await supervisor._autonomous_chain_review_task
 
-    supervisor._run_autonomous_chain_review_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._autonomous_task_review_cycle_service.run.assert_awaited_once_with()  # type: ignore[attr-defined]
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
@@ -3786,8 +3786,8 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
 
     config = supervisor.config.model_copy(
         update={
@@ -3804,7 +3804,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
 
-    supervisor._run_endogenous_drive_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._autonomous_cycle_service.run_drive_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
@@ -3820,8 +3820,8 @@ async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_activ
     supervisor = _make_supervisor(tmp_path)
     supervisor._service_runtime.autonomous_chain_gate_active = True
     supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock()  # type: ignore[method-assign]
-    supervisor._run_endogenous_drive_cycle = AsyncMock()  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock()  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock()  # type: ignore[method-assign]
 
     await supervisor._start_autonomous_chain_gate()
 
@@ -3856,10 +3856,10 @@ async def test_supervisor_autonomous_chain_review_loop_survives_iteration_except
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(  # type: ignore[method-assign]
         side_effect=[RuntimeError("transient review failure"), asyncio.CancelledError()]
     )
-    supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
 
     config = supervisor.config.model_copy(
         update={
@@ -3876,7 +3876,7 @@ async def test_supervisor_autonomous_chain_review_loop_survives_iteration_except
     with pytest.raises(asyncio.CancelledError):
         await supervisor._autonomous_chain_review_task
 
-    assert supervisor._run_autonomous_chain_review_cycle.await_count == 2  # type: ignore[attr-defined]
+    assert supervisor._autonomous_task_review_cycle_service.run.await_count == 2  # type: ignore[attr-defined]
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
@@ -3915,6 +3915,9 @@ async def test_supervisor_internal_body_upgrade_pipeline_does_not_route_through_
 async def test_supervisor_accepts_self_learning_conclusion_submission_into_backlog(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._autonomous_chain_planning_service._touch_activity = (
+        supervisor._touch_gateway_activity
+    )
     learning = SelfLearningConclusionStore(tmp_path / "self-learning")
 
     topic = learning.create_topic(
@@ -3951,7 +3954,7 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_backl
 
     submission = learning.build_supervisor_payload(conclusion)
     assert "task_type" not in submission["proposals"][0]
-    result = await supervisor.submit_self_learning_conclusion(submission)
+    result = await supervisor._autonomous_chain_planning_service.submit_self_learning_conclusion(submission)
 
     assert result["status"] == "accepted"
     assert result["count"] == 1
@@ -4054,7 +4057,7 @@ async def test_governor_approved_verified_conclusion_creates_consent_candidate(
             }
         ],
     }
-    submitted = await supervisor.submit_self_learning_conclusion(submission)
+    submitted = await supervisor._autonomous_chain_planning_service.submit_self_learning_conclusion(submission)
     task_id = submitted["tasks"][0]["task_id"]
 
     decided = await supervisor.decide_autonomous_chain_task(

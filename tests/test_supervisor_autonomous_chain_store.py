@@ -88,7 +88,7 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
 def _make_supervisor(tmp_path: Path) -> Supervisor:
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._review_task_governance_with_supervisor = AsyncMock(  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service._review_adviser = AsyncMock(
         return_value={}
     )
     return supervisor
@@ -451,7 +451,7 @@ async def _plan_and_write_back_endogenous_cycle(
             **dict(candidate.get("evidence") or {}),
             **auditable["evidence"],
         }
-    planned = await supervisor.plan_autonomous_chain_task(candidate)
+    planned = await supervisor._autonomous_chain_planning_service.plan(candidate)
     task_id = planned["tasks"][0]["task_id"]
 
     if outcome_status == "deferred":
@@ -509,7 +509,7 @@ async def _plan_and_write_back_endogenous_cycle(
 async def test_planning_self_evolution_task_creates_planned_judgement_entry(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    result = await supervisor.plan_autonomous_chain_task(
+    result = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Evaluate memory compaction heuristics",
             "summary": "Review whether current memory compression thresholds should be adjusted.",
@@ -551,8 +551,8 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
-    first = await supervisor._run_endogenous_drive_cycle()
-    second = await supervisor._run_endogenous_drive_cycle()
+    first = await supervisor._autonomous_cycle_service.run_drive_cycle()
+    second = await supervisor._autonomous_cycle_service.run_drive_cycle()
     chain_projection = await supervisor.list_autonomous_chain_tasks()
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
@@ -591,7 +591,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 async def test_api_b_judgement_task_summaries_include_constraints_for_runtime_cooldown_checks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
@@ -620,14 +620,14 @@ async def test_api_b_judgement_task_summaries_include_constraints_for_runtime_co
 async def test_api_b_judgement_task_summaries_keep_api_a_execution_lane_out_of_api_b_judgement(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    governance = await supervisor.plan_autonomous_chain_task(
+    governance = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "仍在 API-B 判断在途的记忆维护",
             "task_family": "memory_maintenance",
             "metadata": {"task_family": "memory_maintenance"},
         }
     )
-    learning = await supervisor.plan_autonomous_chain_task(
+    learning = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "已交给 API-A 的自主学习",
             "task_family": "self_learning",
@@ -698,14 +698,14 @@ async def test_endogenous_drive_api_b_judgement_count_excludes_api_a_execution_l
         )
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理中的记忆维护",
             "task_family": "memory_maintenance",
             "metadata": {"task_family": "memory_maintenance"},
         }
     )
-    learning = await supervisor.plan_autonomous_chain_task(
+    learning = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "运行中的自主学习",
             "task_family": "self_learning",
@@ -807,7 +807,7 @@ async def test_endogenous_drive_suppresses_body_growth_while_api_a_execution_lan
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    running_task = await supervisor.plan_autonomous_chain_task(
+    running_task = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "正在执行的自主学习链路项",
             "task_family": "self_learning",
@@ -943,7 +943,7 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
         )
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Revisit deferred governance note",
             "task_family": "general_self_evolution",
@@ -1240,7 +1240,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Stale endogenous backlog item",
             "task_family": "general_self_evolution",
@@ -1322,7 +1322,7 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
 
     await supervisor.decide_autonomous_chain_task(
@@ -1365,7 +1365,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     final_response = "Findings: prefer lane-specific observation before expanding autonomous tasks."
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Learn lane observation",
             "summary": "Learning result must be visible to the next endogenous drive cycle",
@@ -1448,7 +1448,7 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
         )
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
     task = supervisor._autonomous_chain_store.get_task(task_id)
     assert task is not None
@@ -1567,7 +1567,7 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
     history = _drive_history_service(supervisor).load()
 
     assert cycle["tasks"]
@@ -1983,7 +1983,7 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
+async def test_autonomous_cycle_drive_exposes_drive_posture(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
@@ -2036,7 +2036,7 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     assert cycle["drive_input"]["activity"]["active_sessions"] == 0
     assert cycle["drive_posture"]["signal_type"] == "drive_posture_signal"
@@ -3319,7 +3319,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_consumes_governance_review_events(tmp_path):
+async def test_autonomous_task_review_cycle_consumes_governance_review_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
@@ -3348,10 +3348,10 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     updated_snapshot = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert result["governance_consumption"]["count"] == 1
@@ -3362,7 +3362,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_self_regulation(tmp_path):
+async def test_autonomous_task_review_cycle_consumes_alignment_events_into_self_regulation(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
@@ -3391,10 +3391,10 @@ async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
@@ -3441,10 +3441,10 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
@@ -3597,7 +3597,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
+async def test_autonomous_task_review_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
@@ -3626,10 +3626,10 @@ async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_in
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
@@ -4099,7 +4099,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Stale endogenous backlog item",
             "task_family": "general_self_evolution",
@@ -4722,7 +4722,7 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     }
     _drive_history_service(supervisor).persist(history)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途债务探针",
             "summary": "probe",
@@ -5559,7 +5559,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     async def memory_governance_drive_input(_request=None):
         return _build_drive_input(quality_score=0.46)
 
-    planned = await memory_supervisor.plan_autonomous_chain_task(
+    planned = await memory_supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途债务探针",
             "summary": "probe",
@@ -5999,7 +5999,7 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stability_candidates(tmp_path):
+async def test_autonomous_cycle_drive_observation_posture_defers_non_stability_candidates(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
@@ -6048,9 +6048,9 @@ async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stabili
             ],
         }
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_endogenous_drive  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_endogenous_drive
 
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     assert cycle["planned"] == 1
     assert cycle["tasks"][0]["metadata"]["endogenous_drive_key"] == "truthfulness:review_correction_signals"
@@ -6060,7 +6060,7 @@ async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stabili
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runtime_gate(tmp_path):
+async def test_autonomous_cycle_drive_only_judges_candidates_kept_after_runtime_gate(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     evaluation_requests = []
@@ -6172,9 +6172,9 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
             ],
         }
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_endogenous_drive  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_endogenous_drive
 
-    cycle = await supervisor._run_endogenous_drive_cycle()
+    cycle = await supervisor._autonomous_cycle_service.run_drive_cycle()
     history = _drive_history_service(supervisor).load()
     focus_stats = history["strategy_memory"]["focus_stats"]
     judgement_keys = {
@@ -6238,9 +6238,9 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
-    consumed = await supervisor._run_autonomous_chain_review_cycle()
+    consumed = await supervisor._autonomous_task_review_cycle_service.run()
 
     consumed_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     consumed_actions = {item.get("event_id"): item.get("consumed_action") for item in consumed_events}
@@ -6263,7 +6263,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
         focus="truthfulness",
         self_regulation=current_self_regulation,
     )
-    original_plan = supervisor.plan_autonomous_chain_task
+    original_plan = supervisor._autonomous_cycle_service._plan_autonomous_chain_task
 
     async def fake_evaluate_failed(_request=None):
         return failing_eval
@@ -6271,14 +6271,14 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     async def fail_plan(_request=None):
         raise RuntimeError("plan failed after drive persistence")
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_failed  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = fail_plan  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_failed
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = fail_plan
     history_before_failure = _drive_history_service(supervisor).load()
     events_before_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
     cognition_before_failure = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     with pytest.raises(RuntimeError, match="plan failed after drive persistence"):
-        await supervisor._run_endogenous_drive_cycle()
+        await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     history_after_failure = _drive_history_service(supervisor).load()
     events_after_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
@@ -6294,9 +6294,9 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     async def fake_evaluate_success(_request=None):
         return successful_eval
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_success  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
-    result = await supervisor._run_endogenous_drive_cycle()
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_success
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = original_plan
+    result = await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     history = _drive_history_service(supervisor).load()
     events_after_success = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
@@ -6331,7 +6331,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
             "drive_input": {},
         }
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     first_events = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
@@ -6363,7 +6363,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     ]
     supervisor._endogenous_governance_state_persistence_service.persist_governance_events(first_events)
 
-    first_consumed = await supervisor._run_autonomous_chain_review_cycle()
+    first_consumed = await supervisor._autonomous_task_review_cycle_service.run()
     events_after_first_consumption = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     first_consumed_at = {
         item.get("event_id"): item.get("consumed_at")
@@ -6387,7 +6387,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         focus="truthfulness",
         self_regulation=current_self_regulation,
     )
-    original_plan = supervisor.plan_autonomous_chain_task
+    original_plan = supervisor._autonomous_cycle_service._plan_autonomous_chain_task
 
     async def fake_evaluate_first_failure(_request=None):
         return first_failure_eval
@@ -6395,13 +6395,13 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     async def fail_plan_first(_request=None):
         raise RuntimeError("first drive plan failed")
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_first_failure  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = fail_plan_first  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_first_failure
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = fail_plan_first
     history_before_first_failure = _drive_history_service(supervisor).load()
     events_before_first_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     with pytest.raises(RuntimeError, match="first drive plan failed"):
-        await supervisor._run_endogenous_drive_cycle()
+        await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_first_failure["judgements"]
@@ -6413,9 +6413,9 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     async def fake_evaluate_first_success(_request=None):
         return first_success_eval
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_first_success  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
-    first_drive_result = await supervisor._run_endogenous_drive_cycle()
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_first_success
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = original_plan
+    first_drive_result = await supervisor._autonomous_cycle_service.run_drive_cycle()
     assert first_drive_result["planned"] == 1
 
     second_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
@@ -6449,7 +6449,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     )
     supervisor._endogenous_governance_state_persistence_service.persist_governance_events(second_events)
 
-    second_consumed = await supervisor._run_autonomous_chain_review_cycle()
+    second_consumed = await supervisor._autonomous_task_review_cycle_service.run()
     events_after_second_consumption = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     consumed_by_id = {item.get("event_id"): item for item in events_after_second_consumption}
     assert second_consumed["governance_consumption"]["count"] == 1
@@ -6479,14 +6479,14 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     async def fail_plan_second(_request=None):
         raise RuntimeError("second drive plan failed")
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_second_failure  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = fail_plan_second  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_second_failure
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = fail_plan_second
     history_before_second_failure = _drive_history_service(supervisor).load()
     events_before_second_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
     cognition_before_second_failure = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     with pytest.raises(RuntimeError, match="second drive plan failed"):
-        await supervisor._run_endogenous_drive_cycle()
+        await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_second_failure["judgements"]
@@ -6501,9 +6501,9 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     async def fake_evaluate_second_success(_request=None):
         return second_success_eval
 
-    supervisor.evaluate_endogenous_drive = fake_evaluate_second_success  # type: ignore[method-assign]
-    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
-    second_drive_result = await supervisor._run_endogenous_drive_cycle()
+    supervisor._autonomous_cycle_service._evaluate_drive = fake_evaluate_second_success
+    supervisor._autonomous_cycle_service._plan_autonomous_chain_task = original_plan
+    second_drive_result = await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     history = _drive_history_service(supervisor).load()
     judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
@@ -7720,7 +7720,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_trace(tmp_path):
+async def test_autonomous_cycle_drive_does_not_expose_cognitive_feedback_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -7773,7 +7773,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_tra
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_delta_trace(tmp_path):
+async def test_autonomous_cycle_drive_does_not_expose_cognitive_strategy_delta_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -7828,7 +7828,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_del
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_draft_trace(tmp_path):
+async def test_autonomous_cycle_drive_does_not_expose_cognitive_evolution_draft_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -8138,7 +8138,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
-    existing = await supervisor.plan_autonomous_chain_task(
+    existing = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Existing API-B judgement requiring review",
             "task_family": "memory_maintenance",
@@ -8347,7 +8347,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    existing = await supervisor.plan_autonomous_chain_task(
+    existing = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Existing API-B judgement requiring review",
             "task_family": "memory_maintenance",
@@ -10734,7 +10734,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_path):
+async def test_autonomous_cycle_drive_exposes_stay_switch_trend_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -10809,7 +10809,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tmp_path):
+async def test_autonomous_cycle_drive_exposes_cognitive_assessment_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -10909,7 +10909,7 @@ async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignment_without_lm_state(
+async def test_autonomous_cycle_drive_falls_back_to_history_reference_alignment_without_lm_state(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -10975,7 +10975,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tmp_path):
+async def test_autonomous_cycle_drive_exposes_self_iteration_trend_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -11047,7 +11047,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(tmp_path):
+async def test_autonomous_cycle_drive_exposes_switch_self_regulation_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -11111,7 +11111,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_path):
+async def test_autonomous_cycle_drive_exposes_post_task_effect_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -11176,7 +11176,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_path):
+async def test_autonomous_cycle_drive_exposes_meta_cognition_profile(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     history = _drive_history_service(supervisor).default_snapshot()
@@ -12865,7 +12865,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
     ]
     _drive_history_service(supervisor).persist(history)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途债务探针",
             "summary": "probe",
@@ -12980,7 +12980,7 @@ async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not
     ]
     _drive_history_service(supervisor).persist(history)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途债务探针",
             "summary": "probe",
@@ -15369,7 +15369,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
         },
     ]
     _drive_history_service(supervisor).persist(history)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途卫生债务 A",
             "summary": "复核被推迟的自主改进工作。",
@@ -15560,7 +15560,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
         },
     ]
     _drive_history_service(supervisor).persist(history)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "治理在途复核债务 A",
             "summary": "复核被推迟的自主改进工作。",
@@ -16184,7 +16184,7 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
-    result = await supervisor._run_endogenous_drive_cycle()
+    result = await supervisor._autonomous_cycle_service.run_drive_cycle()
 
     assert result["status"] == "planned"
     learning_task = next(
@@ -16263,7 +16263,7 @@ async def test_completed_learning_structure_mapping_reaches_planned_body_task(tm
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
-    result = await supervisor._run_endogenous_drive_cycle()
+    result = await supervisor._autonomous_cycle_service.run_drive_cycle()
     body_task = next(
         task for task in result["tasks"]
         if task["execution_kind"] == "body_improvement"
@@ -16286,7 +16286,7 @@ async def test_completed_learning_structure_mapping_reaches_planned_body_task(tm
 async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Occupied slot task",
             "scheduled_for": "2026-06-28T00:00:00",
@@ -16319,7 +16319,7 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
 @pytest.mark.unit
 async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Review body upgrade proposal",
             **_auditable_body_task_fields("auto-1"),
@@ -16367,7 +16367,7 @@ async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp
 @pytest.mark.unit
 async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Review body upgrade proposal",
             **_auditable_body_task_fields("auto-2"),
@@ -16393,7 +16393,7 @@ async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp
 @pytest.mark.unit
 async def test_batch_review_defers_tasks_when_drive_input_is_not_ready(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {"title": "Evaluate tool scheduler backpressure"},
@@ -16443,7 +16443,7 @@ async def test_batch_review_defers_tasks_when_drive_input_is_not_ready(tmp_path)
 @pytest.mark.unit
 async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
+    await supervisor._autonomous_chain_planning_service.plan({"title": "Review body upgrade proposal"})
     supervisor.evaluate_drive_input = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
     result = await supervisor.review_autonomous_chain_tasks(
@@ -16466,7 +16466,7 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
 @pytest.mark.unit
 async def test_batch_review_rejects_legacy_activity_guards_alias(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task({"title": "Legacy review request"})
+    await supervisor._autonomous_chain_planning_service.plan({"title": "Legacy review request"})
 
     with pytest.raises(HTTPException) as exc_info:
         await supervisor.review_autonomous_chain_tasks(
@@ -16483,7 +16483,7 @@ async def test_batch_review_rejects_legacy_activity_guards_alias(tmp_path):
 @pytest.mark.unit
 async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {
@@ -16605,7 +16605,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
-    result = await supervisor._run_endogenous_drive_cycle()
+    result = await supervisor._autonomous_cycle_service.run_drive_cycle()
     chain_projection = await supervisor.list_autonomous_chain_tasks()
     keys = {
             task["metadata"]["endogenous_drive_key"]: task for task in chain_projection["tasks"]
@@ -16687,7 +16687,7 @@ def test_annotated_endogenous_judgement_rejects_legacy_context_argument(tmp_path
 @pytest.mark.unit
 async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {
@@ -16731,7 +16731,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16752,7 +16752,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_suggests_defer(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     supervisor._service_runtime.autonomous_chain_gate_active = True
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "探索一个尚未解决的学习线索",
             "task_family": "self_learning",
@@ -16784,7 +16784,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16802,7 +16802,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 @pytest.mark.unit
 async def test_batch_review_preserves_agent_pull_task_approval_without_autonomous_chain_gate(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "探索一个尚未解决的学习线索",
             "task_family": "self_learning",
@@ -16833,7 +16833,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16856,7 +16856,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 @pytest.mark.unit
 async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
@@ -16904,7 +16904,7 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
 @pytest.mark.unit
 async def test_batch_review_cancels_body_improvement_without_learning_evidence(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "缺少学习证据的 shell 替身改进",
             "task_family": "body_upgrade",
@@ -16941,7 +16941,7 @@ async def test_batch_review_preserves_body_improvement_learning_gate_against_lm_
     tmp_path, monkeypatch
 ):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "缺少学习证据的 shell 替身改进",
             "task_family": "body_upgrade",
@@ -16964,7 +16964,7 @@ async def test_batch_review_preserves_body_improvement_learning_gate_against_lm_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16989,14 +16989,14 @@ async def test_batch_review_preserves_body_improvement_learning_gate_against_lm_
 @pytest.mark.unit
 async def test_batch_review_defers_body_improvement_until_self_learning_finishes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Understand current shell body baseline",
             "task_family": "self_learning",
             "source": "self_learning",
         }
     )
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
@@ -17046,14 +17046,14 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 @pytest.mark.unit
 async def test_batch_review_releases_body_improvement_after_one_self_learning_prereq_deferral(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Understand current shell body baseline",
             "task_family": "self_learning",
             "source": "self_learning",
         }
     )
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
@@ -17157,7 +17157,7 @@ async def test_gateway_activity_snapshot_retries_after_transient_failure(tmp_pat
 @pytest.mark.unit
 async def test_batch_review_records_shadow_governance_actions_without_mutating_state(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {
@@ -17214,7 +17214,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             },
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -17237,7 +17237,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 @pytest.mark.unit
 async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Underweighted architecture follow-up",
             "priority": "low",
@@ -17268,7 +17268,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -17288,7 +17288,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "排程治理在途任务",
             "scheduled_for": "2026-06-28T01:00:00",
@@ -17332,7 +17332,7 @@ def test_candidate_schedule_token_reallocates_when_live_backlog_occupies_slot(tm
 async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "First scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
@@ -17340,7 +17340,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
             "source": "self_learning",
         }
     )
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Second scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
@@ -17382,7 +17382,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 @pytest.mark.skip(reason="Boundary violation defer removed — body_upgrade/body_switch no longer driven by autonomous-chain backlog flow")
 async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Reject boundary-violating body candidate during review",
             "metadata": {
@@ -17442,7 +17442,7 @@ async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
 @pytest.mark.skip(reason="Boundary defer removed — body_upgrade/body_switch no longer driven by autonomous-chain backlog flow")
 async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Boundary defer should survive governance log failure",
             "metadata": {
@@ -17492,7 +17492,7 @@ async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(
 @pytest.mark.unit
 async def test_cancelled_task_is_terminal_for_supervisor_decisioning(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task({"title": "Prepare guarded runtime experiment"})
+    planned = await supervisor._autonomous_chain_planning_service.plan({"title": "Prepare guarded runtime experiment"})
     task_id = planned["tasks"][0]["task_id"]
 
     cancel_result = await supervisor.decide_autonomous_chain_task(
@@ -17518,7 +17518,7 @@ async def test_cancelled_task_is_terminal_for_supervisor_decisioning(tmp_path):
 @pytest.mark.unit
 async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Promote cultivated body slot",
             "metadata": {
@@ -17649,7 +17649,7 @@ def test_execution_request_drive_input_evidence_stays_primary():
 @pytest.mark.unit
 async def test_serialized_task_execution_request_exposes_drive_input_evidence(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task({"title": "Promote stabilized shell slot"})
+    planned = await supervisor._autonomous_chain_planning_service.plan({"title": "Promote stabilized shell slot"})
     task_id = planned["tasks"][0]["task_id"]
     execution_request = AutonomousChainExecutionRequest.model_validate(
         {
@@ -17692,7 +17692,7 @@ async def test_serialized_task_execution_request_exposes_drive_input_evidence(tm
 @pytest.mark.skip(reason="evolution_boundary removed — body switching validation no longer sits in the autonomous-chain backlog path")
 async def test_body_self_evolution_task_api_exposes_boundary_summary_before_approval(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Review candidate boundary before approval",
             "metadata": {
@@ -17737,7 +17737,7 @@ async def test_body_self_evolution_task_api_exposes_boundary_summary_before_appr
 @pytest.mark.skip(reason="Body boundary validation removed — body_upgrade not driven by autonomous-chain backlog flow")
 async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Reject mixed mother-system body proposal",
             "metadata": {
@@ -17787,7 +17787,7 @@ async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_pa
 @pytest.mark.unit
 async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Unsafe body switch proposal",
             "metadata": {
@@ -17823,7 +17823,7 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
 @pytest.mark.unit
 async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Unsafe body switch without auditable diff",
             "metadata": {
@@ -17860,7 +17860,7 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
 @pytest.mark.unit
 async def test_self_learning_followup_auto_approval_does_not_build_execution_request(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Review newly collected learning evidence",
             "task_family": "self_learning",
@@ -17918,7 +17918,7 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
 @pytest.mark.unit
 async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_recent(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Run memory compression sweep",
             "execution_kind": "memory_maintenance",
@@ -17973,7 +17973,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
 async def test_body_upgrade_and_body_switch_keep_distinct_task_family_metadata(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    result = await supervisor.plan_autonomous_chain_task(
+    result = await supervisor._autonomous_chain_planning_service.plan(
         {
             "items": [
                 {
@@ -18005,7 +18005,7 @@ async def test_body_upgrade_and_body_switch_keep_distinct_task_family_metadata(t
 async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_type(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Canonical body switch should survive serialization",
             "task_type": "self_evolution",
@@ -18037,7 +18037,7 @@ async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_typ
 async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tasks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_autonomous_chain_task(
+    await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
@@ -18077,9 +18077,9 @@ async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tas
 async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_store(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task({"title": "Projected backlog task"})
-    completed = await supervisor.plan_autonomous_chain_task({"title": "Projected writeback task"})
-    cancelled = await supervisor.plan_autonomous_chain_task({"title": "Projected cancelled task"})
+    planned = await supervisor._autonomous_chain_planning_service.plan({"title": "Projected backlog task"})
+    completed = await supervisor._autonomous_chain_planning_service.plan({"title": "Projected writeback task"})
+    cancelled = await supervisor._autonomous_chain_planning_service.plan({"title": "Projected cancelled task"})
 
     completed_id = completed["tasks"][0]["task_id"]
     supervisor._autonomous_chain_store.update_status(
@@ -18130,10 +18130,10 @@ async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_
 @pytest.mark.asyncio
 @pytest.mark.unit
 @pytest.mark.operational
-async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
+async def test_autonomous_task_review_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Recover abandoned learning task",
             "summary": "Ensure orphaned autonomous tasks return to approved",
@@ -18188,9 +18188,9 @@ async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_ru
         }
 
     supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert result["recovered_orphaned"] == 1
@@ -18210,7 +18210,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     # (which would cause mass false recovery → double execution).
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Running learning task owned by a live CLI",
             "summary": "Must NOT be recovered while gateway is unreachable",
@@ -18257,7 +18257,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
 async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Running learning task owned by deleted CLI",
             "summary": "Should recover when gateway no longer has the owner session",
@@ -18306,7 +18306,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
 @pytest.mark.unit
 async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Running learning task missing owner",
             "summary": "Unknown ownership must not be recovered every cycle",
@@ -18346,7 +18346,7 @@ async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_p
 @pytest.mark.unit
 async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Late learning completion",
             "summary": "Completion should survive approved recovery race",
@@ -18391,7 +18391,7 @@ async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tm
 @pytest.mark.unit
 async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Owned learning task",
             "summary": "Only the owning CLI may refresh a running agent-pull task",
@@ -18819,7 +18819,7 @@ async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(t
     from memai.governance import GovernanceEventType
 
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Recover ordinary agent-pull task",
             "task_type": "self_learning",
@@ -18934,7 +18934,7 @@ async def test_clear_runtime_records_mem_cutoff_and_tasks_do_not_reappear(tmp_pa
     from memai.governance import GovernanceEventType
 
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {"title": "Cleared task must not be recovered"}
     )
     task_id = planned["tasks"][0]["task_id"]
@@ -18959,7 +18959,7 @@ async def test_clear_runtime_keeps_store_when_mem_cutoff_cannot_be_persisted(
     monkeypatch,
 ):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {"title": "Clear requires durable cutoff"}
     )
     task_id = planned["tasks"][0]["task_id"]
@@ -18982,7 +18982,7 @@ async def test_clear_runtime_keeps_store_when_mem_cutoff_cannot_be_persisted(
 @pytest.mark.asyncio
 async def test_governance_persistence_failure_prevents_store_transition(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Do not publish without governance truth",
             "task_type": "self_learning",
@@ -19018,7 +19018,7 @@ async def test_governance_persistence_failure_prevents_store_transition(tmp_path
 @pytest.mark.asyncio
 async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Body candidate awaiting consent",
             "metadata": {
@@ -19086,7 +19086,7 @@ async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tm
 @pytest.mark.asyncio
 async def test_execution_handoff_exception_retries_then_forms_failed_terminal_state(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Executor transport failure",
             "metadata": {
@@ -19158,7 +19158,7 @@ async def test_execution_handoff_exception_retries_then_forms_failed_terminal_st
 @pytest.mark.asyncio
 async def test_body_handoff_user_rejection_cancels_original_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {"title": "Reject body candidate"}
     )
     task_id = planned["tasks"][0]["task_id"]
@@ -19188,16 +19188,16 @@ async def test_body_handoff_user_rejection_cancels_original_task(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_skips_when_cycle_already_running(tmp_path):
+async def test_autonomous_task_review_cycle_skips_when_cycle_already_running(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.review_autonomous_chain_tasks = AsyncMock(  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = AsyncMock(
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
     )
 
     lock = supervisor._autonomous_task_review_cycle_service._cycle_lock
     await lock.acquire()
     try:
-        result = await supervisor._run_autonomous_chain_review_cycle()
+        result = await supervisor._autonomous_task_review_cycle_service.run()
     finally:
         lock.release()
 
@@ -19207,10 +19207,10 @@ async def test_run_autonomous_chain_review_cycle_skips_when_cycle_already_runnin
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_times_out_agent_pull_execution_started_at(tmp_path):
+async def test_autonomous_task_review_cycle_times_out_agent_pull_execution_started_at(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_autonomous_chain_task(
+    planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Timeout stale agent-pull task",
             "summary": "Agent-pull running tasks use execution_started_at",
@@ -19253,11 +19253,11 @@ async def test_run_autonomous_chain_review_cycle_times_out_agent_pull_execution_
             "lease_status": "healthy",
         }
     )
-    supervisor.review_autonomous_chain_tasks = AsyncMock(  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = AsyncMock(
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
     )
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert result["recovered_orphaned"] == 0
@@ -19268,11 +19268,11 @@ async def test_run_autonomous_chain_review_cycle_times_out_agent_pull_execution_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoffs_per_cycle(tmp_path):
+async def test_autonomous_task_review_cycle_limits_formal_execution_handoffs_per_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     task_ids = []
     for idx in range(3):
-        planned = await supervisor.plan_autonomous_chain_task(
+        planned = await supervisor._autonomous_chain_planning_service.plan(
             {
                 "title": f"Autonomous-chain handoff budget task {idx}",
                 **_auditable_body_task_fields(f"budget-{idx}"),
@@ -19307,10 +19307,10 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
         handed_off.append(task.task_id)
         return {"status": "ok"}
 
-    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_service.review = fake_review  # type: ignore[method-assign]
     supervisor._autonomous_chain_execution_handoff_service.handoff = fake_handoff
 
-    result = await supervisor._run_autonomous_chain_review_cycle()
+    result = await supervisor._autonomous_task_review_cycle_service.run()
 
     assert handed_off == [task_ids[0]]
     assert [item["task_id"] for item in result["handed_off"]] == [task_ids[0]]

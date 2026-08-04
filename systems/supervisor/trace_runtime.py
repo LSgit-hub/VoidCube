@@ -157,7 +157,7 @@ class TraceRuntimeMixin:
         ):
             if trace_id and task.trace_id != trace_id:
                 continue
-            serialized = self._serialize_autonomous_chain_task(task)
+            serialized = self._autonomous_chain_planning_service.serialize_task(task)
             profile = self._trace_runtime_profile_from_payload(serialized)
             records.append(
                 self._build_trace_record(

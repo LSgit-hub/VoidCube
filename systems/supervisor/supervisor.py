@@ -133,7 +133,7 @@ class Supervisor(
         self._initialize_supervisor_ui_runtime()
         assemble_supervisor_execution_runtime(self)
         try:
-            self._recover_autonomous_chain_store_from_mem_governance()
+            self._autonomous_chain_recovery_service.recover()
         except Exception:
             logger.debug("Autonomous-chain Mem governance recovery skipped", exc_info=True)
         # Proxy supervisor._watch_window_runtime → adapter._state
@@ -227,7 +227,11 @@ class Supervisor(
         self.app.add_api_route("/runtime/endogenous-drive/cognition", self.get_endogenous_cognition_state, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/state", self.get_endogenous_governance_state, methods=["GET"])
         self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.list_autonomous_chain_tasks, methods=["GET"])
-        self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.plan_autonomous_chain_task, methods=["POST"])
+        self.app.add_api_route(
+            AUTONOMOUS_CHAIN_TASKS_ROUTE,
+            self._autonomous_chain_planning_service.plan,
+            methods=["POST"],
+        )
         self.app.add_api_route(
             AUTONOMOUS_CHAIN_TASK_CLEAR_ROUTE,
             self.clear_autonomous_chain_runtime,
@@ -245,7 +249,7 @@ class Supervisor(
         )
         self.app.add_api_route(
             "/self-learning/conclusions/submit",
-            self.submit_self_learning_conclusion,
+            self._autonomous_chain_planning_service.submit_self_learning_conclusion,
             methods=["POST"],
         )
         self.app.add_api_route(autonomous_chain_task_route("{task_id}"), self.get_autonomous_chain_task, methods=["GET"])
@@ -271,7 +275,7 @@ class Supervisor(
         self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
         self.app.add_api_route(
             AUTONOMOUS_CHAIN_CYCLE_ROUTE,
-            self.run_autonomous_cycle,
+            self._autonomous_cycle_service.run,
             methods=["POST"],
         )
         self.app.add_api_route("/autonomous-chain-gate/activate", self.activate_autonomous_chain_gate, methods=["POST"])

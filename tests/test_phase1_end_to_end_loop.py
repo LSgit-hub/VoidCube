@@ -65,7 +65,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     sv._execution_facade.execute_self_learning_followup = AsyncMock(
         return_value={"status": "learn_only_completed"}
     )
-    sv._review_task_governance_with_supervisor = AsyncMock(return_value={})
+    sv._autonomous_task_review_service._review_adviser = AsyncMock(return_value={})
     # These consumers have dedicated coverage in the autonomous-chain store
     # suite. Keep them neutral here so dynamic regulation cannot rewrite the
     # handoff target while this file is testing the Phase 1 execution path.
@@ -159,7 +159,7 @@ class TestPhase1EndogenousDriveToBacklog:
             return_value=_idle_snapshot()
         )
 
-        result = await sv._run_endogenous_drive_cycle()
+        result = await sv._autonomous_cycle_service.run_drive_cycle()
 
         assert result["status"] == "planned", f"Expected planned, got {result}"
         assert result["planned"] >= 1, f"Expected at least one candidate, got {result['planned']}"
@@ -228,10 +228,10 @@ class TestPhase1EndogenousDriveToBacklog:
             return_value=_idle_snapshot()
         )
 
-        first = await sv._run_endogenous_drive_cycle()
+        first = await sv._autonomous_cycle_service.run_drive_cycle()
         assert first["status"] == "planned"
 
-        second = await sv._run_endogenous_drive_cycle()
+        second = await sv._autonomous_cycle_service.run_drive_cycle()
         assert second["status"] == "idle", f"第二轮应保持 idle，实际得到 {second}"
 
 
@@ -248,7 +248,7 @@ class TestPhase1IdleWindowGovernance:
         )
 
         # 先通过内生驱动生成一条记忆维护链路项。
-        await sv._run_endogenous_drive_cycle()
+        await sv._autonomous_cycle_service.run_drive_cycle()
         tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
@@ -276,7 +276,7 @@ class TestPhase1IdleWindowGovernance:
             return_value=_idle_snapshot()
         )
 
-        await sv._run_endogenous_drive_cycle()
+        await sv._autonomous_cycle_service.run_drive_cycle()
         tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
@@ -365,7 +365,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
 
         # 先生成 4 个候选。
-        await sv._run_endogenous_drive_cycle()
+        await sv._autonomous_cycle_service.run_drive_cycle()
         tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
@@ -416,7 +416,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         sv.evaluate_drive_input = fake_idle_for_handoff  # type: ignore[method-assign]
 
         # 跑完整复核与交接闭环。
-        result = await sv._run_autonomous_chain_review_cycle()
+        result = await sv._autonomous_task_review_cycle_service.run()
         updated = await sv.get_autonomous_chain_task(mem_task["task_id"])
         assert result["handed_off"], (
             f"No tasks handed off: result={result}, task={updated}"
@@ -437,7 +437,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             return_value=_idle_snapshot()
         )
 
-        await sv._run_endogenous_drive_cycle()
+        await sv._autonomous_cycle_service.run_drive_cycle()
         tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
@@ -454,11 +454,11 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
 
         # 第一次交接。
-        await sv._run_autonomous_chain_review_cycle()
+        await sv._autonomous_task_review_cycle_service.run()
         call_count_before = sv._execution_facade.execute_autonomous_chain_request.call_count
 
         # 第二次尝试交接。
-        await sv._run_autonomous_chain_review_cycle()
+        await sv._autonomous_task_review_cycle_service.run()
         call_count_after = sv._execution_facade.execute_autonomous_chain_request.call_count
 
         # 不应新增调用，说明重复交接已被拦住。
@@ -483,7 +483,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
 
         # 先生成 4 个候选。
-        await sv._run_endogenous_drive_cycle()
+        await sv._autonomous_cycle_service.run_drive_cycle()
         tasks = await sv.list_autonomous_chain_tasks()
 
         # 取出当前姿态下形成的记忆连续性链路项。
@@ -519,7 +519,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             }
         sv.evaluate_drive_input = fake_idle  # type: ignore[method-assign]
 
-        await sv._run_autonomous_chain_review_cycle()
+        await sv._autonomous_task_review_cycle_service.run()
 
         updated = await sv.get_autonomous_chain_task(task["task_id"])
         assert updated["status"] in ("running", "completed"), (
@@ -651,8 +651,8 @@ class TestPhase1GovernorMode:
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
-        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
-        sv._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})
+        sv._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
+        sv._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
             "last_agent_work_at": None, "counts": {}, "active_sessions": 0,
         })
@@ -719,7 +719,7 @@ class TestPhase1GovernorMode:
             task.task_id, status="approved", actor="test", reason="测试"
         )
 
-        await sv._run_autonomous_chain_review_cycle()
+        await sv._autonomous_task_review_cycle_service.run()
         # self-learning 不由 supervisor 主动交接，而是等待 Agent 自己来 pull。
         sv._autonomous_chain_execution_handoff_service.handoff.assert_not_awaited()
 
