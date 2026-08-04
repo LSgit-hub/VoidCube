@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import http.server
 import json
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -210,3 +213,65 @@ async def test_semantic_recall_hydrates_nonlexical_match_and_respects_scope(tmp_
         owner_id="owner-a",
         workspace_id="workspace-a",
     )
+
+
+class _EmbeddingsHandler(http.server.BaseHTTPRequestHandler):
+    """Minimal OpenAI-compatible /embeddings endpoint for the HTTP path test."""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length).decode("utf-8"))
+        inputs = body.get("input") or []
+        data = []
+        for index, text in enumerate(inputs):
+            digest = hashlib.blake2b(str(text).encode("utf-8"), digest_size=4).digest()
+            vector = [float(b / 255.0) for b in digest[:4]]
+            data.append({"index": index, "embedding": vector})
+        payload = json.dumps({"data": data}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):  # silence
+        pass
+
+
+def test_semantic_index_real_http_transport_end_to_end(tmp_path):
+    """Prove the external-provider plumbing works over the real HTTP path.
+
+    This is what ``--semantic-base-url/--semantic-model`` on the LongMemEval
+    harness exercises: a real HTTP /embeddings call driving index + search, so
+    pointing config.yaml at a real model (Ollama / any OpenAI-compatible API)
+    works end-to-end.
+    """
+    server = http.server.HTTPServer(("127.0.0.1", 0), _EmbeddingsHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        service = _service(tmp_path)
+        config = SemanticIndexConfig(
+            enabled=True,
+            provider="mock-http",
+            model="mock-embed",
+            base_url=f"http://127.0.0.1:{port}",
+            api_key="mock-key",
+            dimensions=4,
+            timeout_seconds=5.0,
+        )
+        index = SemanticMemoryIndex(service._db_path, config)
+        _insert_turn(service, turn_id="http-turn", text="数据库迁移必须保留备份。")
+        assert index.index_pending(limit=1000) >= 1
+        matches = index.search(
+            "数据库迁移",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+            source_domains=("agent_interaction",),
+        )
+        assert ("turn", "http-turn") in matches
+        assert matches[("turn", "http-turn")] > 0.0
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
