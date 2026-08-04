@@ -368,7 +368,7 @@ class SupervisorUIMixin:
             load_observation_timeline=self._load_ui_observation_timeline,
             load_body_status=self._load_ui_body_status,
             attach_trace_details=self._attach_recent_trace_details_to_observation,
-            load_cognition_state=self._load_endogenous_cognition_state,
+            load_cognition_state=self._endogenous_governance_state_persistence_service.load_cognition_state,
             stellar_mode_status=self._stellar_mode_status,
             voice_status=self._voice_manager.status,
             current_media=lambda: self._current_media,

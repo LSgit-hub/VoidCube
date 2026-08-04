@@ -169,7 +169,7 @@ class VoidCubeExecutionFacade:
         if not self.supervisor:
             return {"status": "error", "reason": "supervisor_not_available"}
         try:
-            return await self.supervisor._planning_runtime._review_body_improvement(request)
+            return await self.supervisor._body_improvement_review_service.review(request)
         except Exception as e:
             return {"status": "error", "reason": str(e)}
 

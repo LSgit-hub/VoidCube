@@ -2885,7 +2885,7 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
             "governance_task_type_decisions": {},
         }
     )
-    supervisor._persist_endogenous_cognition_state(
+    supervisor._endogenous_governance_state_persistence_service.persist_cognition_state(
         {
             "perception": {
                 "system_posture": "truth_guarded",

@@ -98,6 +98,10 @@ def _drive_history_service(supervisor: Supervisor):
     return supervisor._endogenous_drive_history_persistence_service
 
 
+def _cognitive_history_service(supervisor: Supervisor):
+    return supervisor._endogenous_cognitive_history_summary_service
+
+
 def _auditable_body_task_fields(seed: str = "1") -> dict:
     source_commit = f"source-{seed}"
     return {
@@ -884,8 +888,8 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
         {"record_activity": False, "persist_evaluation": False}
     )
     history = _drive_history_service(supervisor).load()
-    governance_events = supervisor._load_endogenous_governance_events()
-    cognition_snapshot = supervisor._load_endogenous_cognition_state()
+    governance_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
+    cognition_snapshot = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     assert result["candidates"]
     assert result["cognition_state"]["identity"]["role"] == "endogenous_supervisory_core"
@@ -913,13 +917,13 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
         raise RuntimeError("cognition persist failed")
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    supervisor._persist_endogenous_cognition_state = fail_cognition_persist  # type: ignore[method-assign]
+    supervisor._endogenous_governance_state_persistence_service.persist_cognition_state = fail_cognition_persist  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="cognition persist failed"):
         await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     history = _drive_history_service(supervisor).load()
-    governance_events = supervisor._load_endogenous_governance_events()
+    governance_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert history["judgements"] == []
     assert history["strategy_memory"]["focus_stats"] == {}
@@ -2123,7 +2127,7 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     events_path = supervisor._endogenous_state_repository.paths.governance_events
-    events_snapshot = supervisor._load_endogenous_governance_events()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert events_path.exists()
     assert result["governance_event_stream"]["events"]
@@ -2220,7 +2224,7 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     path = supervisor._endogenous_state_repository.paths.cognition_state
-    snapshot = supervisor._load_endogenous_cognition_state()
+    snapshot = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     assert path.exists()
     assert snapshot["state"]["identity"]["role"] == "endogenous_supervisory_core"
@@ -3318,7 +3322,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
 async def test_run_autonomous_chain_review_cycle_consumes_governance_review_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": "evt-1",
@@ -3333,7 +3337,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
             "payload": {"governance_load_state": "busy"},
         }
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     async def fake_review(request=None):
         return {
@@ -3348,7 +3352,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     result = await supervisor._run_autonomous_chain_review_cycle()
-    updated_snapshot = supervisor._load_endogenous_governance_events()
+    updated_snapshot = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert result["governance_consumption"]["count"] == 1
     assert result["governance_consumption"]["consumed"][0]["event_id"] == "evt-1"
@@ -3361,7 +3365,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
 async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_self_regulation(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": "evt-align-1",
@@ -3376,7 +3380,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_
             "payload": {"dominant_constraint": "weak_learning_yield"},
         }
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     async def fake_review(request=None):
         return {
@@ -3391,8 +3395,8 @@ async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     result = await supervisor._run_autonomous_chain_review_cycle()
-    regulation = supervisor._load_endogenous_self_regulation()
-    updated_events = supervisor._load_endogenous_governance_events()
+    regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
+    updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert result["alignment_consumption"]["count"] == 1
     assert regulation["dynamic_candidate_throttle_boost"] > 0.0
@@ -3405,7 +3409,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_
 async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     duplicated_event = {
         "event_id": "evt-align-dup",
         "event_type": "autonomy_alignment_request",
@@ -3426,7 +3430,7 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
             "message": "重复的对齐事件不应被重复计数。",
         },
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     async def fake_review(request=None):
         return {
@@ -3441,8 +3445,8 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     result = await supervisor._run_autonomous_chain_review_cycle()
-    regulation = supervisor._load_endogenous_self_regulation()
-    updated_events = supervisor._load_endogenous_governance_events()
+    regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
+    updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert len(updated_events["events"]) == 1
     assert result["alignment_consumption"]["count"] == 1
@@ -3457,7 +3461,7 @@ def test_governance_events_without_event_ids_are_preserved_during_semantic_trim(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     event_without_id = {
         "event_type": "autonomy_alignment_request",
         "channel": "autonomy_alignment_requests",
@@ -3477,8 +3481,8 @@ def test_governance_events_without_event_ids_are_preserved_during_semantic_trim(
         },
     ]
 
-    supervisor._persist_endogenous_governance_events(events_snapshot)
-    updated_events = supervisor._load_endogenous_governance_events()["events"]
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
+    updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
 
     assert len(updated_events) == 2
     assert all("event_id" not in item for item in updated_events)
@@ -3531,7 +3535,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
         governance_channels=governance_channels,
         candidate_items=[],
     )
-    first_events = supervisor._load_endogenous_governance_events()["events"]
+    first_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     first_ids = {
         item.get("event_type"): item.get("event_id")
         for item in first_events
@@ -3542,7 +3546,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
         governance_channels=governance_channels,
         candidate_items=[],
     )
-    second_events = supervisor._load_endogenous_governance_events()["events"]
+    second_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     second_ids = {
         item.get("event_type"): item.get("event_id")
         for item in second_events
@@ -3552,7 +3556,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
     assert len(second_events) == 3
     assert second_ids == first_ids
 
-    consumed_snapshot = supervisor._load_endogenous_governance_events()
+    consumed_snapshot = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
     for row in consumed_snapshot["events"]:
         if row.get("event_type") in {
             "autonomy_alignment_request",
@@ -3560,14 +3564,14 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
         }:
             row["consumed_at"] = "2026-06-28T00:10:00+00:00"
             row["consumed_action"] = "test_consumed"
-    supervisor._persist_endogenous_governance_events(consumed_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(consumed_snapshot)
 
     supervisor._record_endogenous_governance_events(
         deliberation=deliberation,
         governance_channels=governance_channels,
         candidate_items=[],
     )
-    final_events = supervisor._load_endogenous_governance_events()["events"]
+    final_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     alignment_events = [
         item
         for item in final_events
@@ -3596,7 +3600,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
 async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": "evt-truth-1",
@@ -3611,7 +3615,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_in
             "payload": {"observation_target": "truthfulness"},
         }
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     async def fake_review(request=None):
         return {
@@ -3626,8 +3630,8 @@ async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_in
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     result = await supervisor._run_autonomous_chain_review_cycle()
-    regulation = supervisor._load_endogenous_self_regulation()
-    updated_events = supervisor._load_endogenous_governance_events()
+    regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
+    updated_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     assert result["truthfulness_consumption"]["count"] == 1
     assert regulation["dynamic_truthfulness_bias_boost"] > 0.0
@@ -3639,7 +3643,7 @@ async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_in
 def test_repeated_alignment_events_accumulate_self_regulation_but_respect_configured_caps(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": f"evt-align-{idx}",
@@ -3655,10 +3659,10 @@ def test_repeated_alignment_events_accumulate_self_regulation_but_respect_config
         }
         for idx in range(6)
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     result = supervisor._endogenous_governance_event_consumer.consume_alignment_requests()
-    regulation = supervisor._load_endogenous_self_regulation()
+    regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     assert result["count"] == 6
     assert regulation["dynamic_candidate_throttle_boost"] == 0.35
@@ -3669,7 +3673,7 @@ def test_repeated_alignment_events_accumulate_self_regulation_but_respect_config
 def test_repeated_truthfulness_alerts_accumulate_corrective_mode_but_respect_configured_caps(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": f"evt-truth-{idx}",
@@ -3685,10 +3689,10 @@ def test_repeated_truthfulness_alerts_accumulate_corrective_mode_but_respect_con
         }
         for idx in range(6)
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     result = supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts()
-    regulation = supervisor._load_endogenous_self_regulation()
+    regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     assert result["count"] == 6
     assert regulation["dynamic_truthfulness_bias_boost"] == 0.30
@@ -3698,7 +3702,7 @@ def test_repeated_truthfulness_alerts_accumulate_corrective_mode_but_respect_con
 @pytest.mark.unit
 def test_loaded_self_regulation_decay_from_peak_releases_all_boosts_toward_rest_proportionally(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    snapshot = supervisor._endogenous_self_regulation_default()
+    snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     snapshot["dynamic_candidate_throttle_boost"] = 0.35
     snapshot["dynamic_observation_bias_boost"] = 0.30
@@ -3710,7 +3714,7 @@ def test_loaded_self_regulation_decay_from_peak_releases_all_boosts_toward_rest_
         encoding="utf-8",
     )
 
-    loaded = supervisor._load_endogenous_self_regulation()
+    loaded = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     assert loaded["dynamic_candidate_throttle_boost"] == 0.175
     assert loaded["dynamic_observation_bias_boost"] == 0.15
@@ -3771,7 +3775,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
     ]
     _drive_history_service(supervisor).persist(history)
 
-    snapshot = supervisor._endogenous_self_regulation_default()
+    snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     snapshot["dynamic_candidate_throttle_boost"] = 0.35
     snapshot["dynamic_observation_bias_boost"] = 0.30
@@ -3826,7 +3830,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
 @pytest.mark.unit
 def test_endogenous_self_regulation_decays_when_loaded(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    snapshot = supervisor._endogenous_self_regulation_default()
+    snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     snapshot["dynamic_candidate_throttle_boost"] = 0.2
     snapshot["dynamic_observation_bias_boost"] = 0.12
@@ -3836,7 +3840,7 @@ def test_endogenous_self_regulation_decays_when_loaded(tmp_path):
         encoding="utf-8",
     )
 
-    loaded = supervisor._load_endogenous_self_regulation()
+    loaded = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     assert 0.0 < loaded["dynamic_candidate_throttle_boost"] < 0.2
     assert 0.0 < loaded["dynamic_observation_bias_boost"] < 0.12
@@ -3846,7 +3850,7 @@ def test_endogenous_self_regulation_decays_when_loaded(tmp_path):
 @pytest.mark.unit
 def test_endogenous_self_regulation_can_decay_back_to_rest(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    snapshot = supervisor._endogenous_self_regulation_default()
+    snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
     snapshot["dynamic_candidate_throttle_boost"] = 0.05
     snapshot["dynamic_observation_bias_boost"] = 0.04
@@ -3856,7 +3860,7 @@ def test_endogenous_self_regulation_can_decay_back_to_rest(tmp_path):
         encoding="utf-8",
     )
 
-    loaded = supervisor._load_endogenous_self_regulation()
+    loaded = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     assert loaded["dynamic_candidate_throttle_boost"] == 0.0
     assert loaded["dynamic_observation_bias_boost"] == 0.0
@@ -3960,7 +3964,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
         return _formal_endogenous_drive_input_payload()
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-    cognition_state = supervisor._endogenous_cognition_state_default()["state"]
+    cognition_state = supervisor._endogenous_governance_state_persistence_service.default_cognition_state()["state"]
     cognition_state["perception"] = {
         "system_posture": "strained",
         "api_b_judgement_count": 3,
@@ -3990,7 +3994,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
             }
         ]
     }
-    supervisor._persist_endogenous_cognition_state(cognition_state)
+    supervisor._endogenous_governance_state_persistence_service.persist_cognition_state(cognition_state)
 
     ui_state = await supervisor.get_supervisor_ui_state()
 
@@ -4946,7 +4950,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
     }
     _drive_history_service(supervisor).persist(history)
 
-    regulation_snapshot = supervisor._endogenous_self_regulation_default()
+    regulation_snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     regulation_snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     regulation_snapshot["dynamic_candidate_throttle_boost"] = 0.2
     regulation_snapshot["dynamic_observation_bias_boost"] = 0.18
@@ -5531,7 +5535,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     assert observation_stats.get("truthfulness", {}).get("seen", 0) >= 1
     assert len(observation_stats) >= 2
 
-    accumulated_regulation = supervisor._load_endogenous_self_regulation()
+    accumulated_regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
 
     def _make_replay_supervisor(name: str) -> Supervisor:
         replay_root = tmp_path / name
@@ -6196,7 +6200,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     events_snapshot["events"] = [
         {
             "event_id": "evt-align-switch",
@@ -6223,7 +6227,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
             "payload": {"observation_target": "truthfulness"},
         },
     ]
-    supervisor._persist_endogenous_governance_events(events_snapshot)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(events_snapshot)
 
     async def fake_review(_request=None):
         return {
@@ -6238,15 +6242,15 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
     consumed = await supervisor._run_autonomous_chain_review_cycle()
 
-    consumed_events = supervisor._load_endogenous_governance_events()["events"]
+    consumed_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     consumed_actions = {item.get("event_id"): item.get("consumed_action") for item in consumed_events}
     assert consumed["alignment_consumption"]["count"] == 1
     assert consumed["truthfulness_consumption"]["count"] == 1
     assert consumed_actions["evt-align-switch"] == "increase_self_regulation"
     assert consumed_actions["evt-truth-switch"] == "increase_truthfulness_correction"
-    assert supervisor._load_endogenous_self_regulation()["dynamic_truthfulness_bias_boost"] > 0.0
+    assert supervisor._endogenous_governance_state_persistence_service.load_self_regulation()["dynamic_truthfulness_bias_boost"] > 0.0
 
-    current_self_regulation = supervisor._load_endogenous_self_regulation()
+    current_self_regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     failing_eval = _drive_cycle_failure_replay_evaluation(
         context="user_chain_quiet|stable|weak_learning_yield",
         key="continuity:governance_hygiene_review",
@@ -6270,15 +6274,15 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor.evaluate_endogenous_drive = fake_evaluate_failed  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan  # type: ignore[method-assign]
     history_before_failure = _drive_history_service(supervisor).load()
-    events_before_failure = supervisor._load_endogenous_governance_events()
-    cognition_before_failure = supervisor._load_endogenous_cognition_state()
+    events_before_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
+    cognition_before_failure = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     with pytest.raises(RuntimeError, match="plan failed after drive persistence"):
         await supervisor._run_endogenous_drive_cycle()
 
     history_after_failure = _drive_history_service(supervisor).load()
-    events_after_failure = supervisor._load_endogenous_governance_events()
-    cognition_after_failure = supervisor._load_endogenous_cognition_state()
+    events_after_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
+    cognition_after_failure = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
     assert history_after_failure["judgements"] == history_before_failure["judgements"]
     assert history_after_failure["outcomes"] == history_before_failure["outcomes"]
     assert history_after_failure["strategy_memory"]["focus_stats"] == (
@@ -6295,7 +6299,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     result = await supervisor._run_endogenous_drive_cycle()
 
     history = _drive_history_service(supervisor).load()
-    events_after_success = supervisor._load_endogenous_governance_events()["events"]
+    events_after_success = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
 
     assert result["planned"] == 1
@@ -6330,7 +6334,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    first_events = supervisor._endogenous_governance_events_default()
+    first_events = supervisor._endogenous_governance_state_persistence_service.default_governance_events()
     first_events["events"] = [
         {
             "event_id": "evt-align-cycle-a",
@@ -6357,10 +6361,10 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
             "payload": {"observation_target": "truthfulness"},
         },
     ]
-    supervisor._persist_endogenous_governance_events(first_events)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(first_events)
 
     first_consumed = await supervisor._run_autonomous_chain_review_cycle()
-    events_after_first_consumption = supervisor._load_endogenous_governance_events()["events"]
+    events_after_first_consumption = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     first_consumed_at = {
         item.get("event_id"): item.get("consumed_at")
         for item in events_after_first_consumption
@@ -6370,7 +6374,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert first_consumed_at["evt-align-cycle-a"]
     assert first_consumed_at["evt-truth-cycle-a"]
 
-    current_self_regulation = supervisor._load_endogenous_self_regulation()
+    current_self_regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     first_failure_eval = _drive_cycle_failure_replay_evaluation(
         context="user_chain_quiet|stable|weak_learning_yield",
         key="continuity:governance_hygiene_failed_cycle_a",
@@ -6394,7 +6398,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor.evaluate_endogenous_drive = fake_evaluate_first_failure  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan_first  # type: ignore[method-assign]
     history_before_first_failure = _drive_history_service(supervisor).load()
-    events_before_first_failure = supervisor._load_endogenous_governance_events()
+    events_before_first_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
 
     with pytest.raises(RuntimeError, match="first drive plan failed"):
         await supervisor._run_endogenous_drive_cycle()
@@ -6402,7 +6406,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_first_failure["judgements"]
     )
-    assert supervisor._load_endogenous_governance_events()["events"] == (
+    assert supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"] == (
         events_before_first_failure["events"]
     )
 
@@ -6414,7 +6418,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     first_drive_result = await supervisor._run_endogenous_drive_cycle()
     assert first_drive_result["planned"] == 1
 
-    second_events = supervisor._load_endogenous_governance_events()
+    second_events = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
     second_events["events"].extend(
         [
             {
@@ -6443,10 +6447,10 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
             },
         ]
     )
-    supervisor._persist_endogenous_governance_events(second_events)
+    supervisor._endogenous_governance_state_persistence_service.persist_governance_events(second_events)
 
     second_consumed = await supervisor._run_autonomous_chain_review_cycle()
-    events_after_second_consumption = supervisor._load_endogenous_governance_events()["events"]
+    events_after_second_consumption = supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     consumed_by_id = {item.get("event_id"): item for item in events_after_second_consumption}
     assert second_consumed["governance_consumption"]["count"] == 1
     assert second_consumed["alignment_consumption"]["count"] == 1
@@ -6455,7 +6459,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert consumed_by_id["evt-review-cycle-b"]["consumed_action"] == "trigger_review_pass"
     assert consumed_by_id["evt-align-cycle-b"]["consumed_action"] == "increase_self_regulation"
 
-    second_self_regulation = supervisor._load_endogenous_self_regulation()
+    second_self_regulation = supervisor._endogenous_governance_state_persistence_service.load_self_regulation()
     second_failure_eval = _drive_cycle_failure_replay_evaluation(
         context="user_chain_quiet|stable|backlog_debt",
         key="truthfulness:review_failed_cycle_b",
@@ -6478,8 +6482,8 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor.evaluate_endogenous_drive = fake_evaluate_second_failure  # type: ignore[method-assign]
     supervisor.plan_autonomous_chain_task = fail_plan_second  # type: ignore[method-assign]
     history_before_second_failure = _drive_history_service(supervisor).load()
-    events_before_second_failure = supervisor._load_endogenous_governance_events()
-    cognition_before_second_failure = supervisor._load_endogenous_cognition_state()
+    events_before_second_failure = supervisor._endogenous_governance_state_persistence_service.load_governance_events()
+    cognition_before_second_failure = supervisor._endogenous_governance_state_persistence_service.load_cognition_state()
 
     with pytest.raises(RuntimeError, match="second drive plan failed"):
         await supervisor._run_endogenous_drive_cycle()
@@ -6487,10 +6491,10 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert _drive_history_service(supervisor).load()["judgements"] == (
         history_before_second_failure["judgements"]
     )
-    assert supervisor._load_endogenous_governance_events()["events"] == (
+    assert supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"] == (
         events_before_second_failure["events"]
     )
-    assert supervisor._load_endogenous_cognition_state()["state"] == (
+    assert supervisor._endogenous_governance_state_persistence_service.load_cognition_state()["state"] == (
         cognition_before_second_failure["state"]
     )
 
@@ -6507,7 +6511,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     contextual_stats = history["strategy_memory"]["contextual_focus_stats"]
     final_events = {
         item.get("event_id"): item
-        for item in supervisor._load_endogenous_governance_events()["events"]
+        for item in supervisor._endogenous_governance_state_persistence_service.load_governance_events()["events"]
     }
 
     assert second_drive_result["planned"] == 1
@@ -9133,10 +9137,10 @@ def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
         }
     ]
 
-    assessment = supervisor._build_recent_lm_cognitive_assessment_summary(
+    assessment = _cognitive_history_service(supervisor)._build_recent_lm_cognitive_assessment_summary(
         history_snapshot=history
     )
-    trend = supervisor._build_recent_self_iteration_trend_summary(
+    trend = _cognitive_history_service(supervisor)._build_recent_self_iteration_trend_summary(
         history_snapshot=history
     )
 
@@ -10886,7 +10890,7 @@ async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(
     ]
     _drive_history_service(supervisor).persist(history)
 
-    result = supervisor._build_endogenous_proposal_cognition(
+    result = supervisor._endogenous_cognition_state_assembly_service._build_proposal_cognition(
         history_snapshot=history,
         candidate_items=[],
         lm_reasoning_state={},
@@ -11242,7 +11246,7 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
 def test_post_task_effect_memory_ignores_planned_only_outcomes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    effect_memory = supervisor._build_recent_post_task_effect_summary(
+    effect_memory = _cognitive_history_service(supervisor)._build_recent_post_task_effect_summary(
         history_snapshot={
             "outcomes": [
                 {
@@ -11541,7 +11545,7 @@ def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
     assert profile["stay_or_switch_bias"] == "stay"
 
     supervisor = _make_supervisor(tmp_path)
-    runtime_profile = supervisor._build_recent_meta_cognition_profile_summary(
+    runtime_profile = _cognitive_history_service(supervisor)._build_recent_meta_cognition_profile_summary(
         cognitive_assessment_memory={
             "current_judgement": "当前仍应由复核保持主导",
             "self_iteration_target": "grounding",
@@ -11566,7 +11570,7 @@ def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
 def test_recent_meta_cognition_summary_is_unavailable_without_real_signals(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    profile = supervisor._build_recent_meta_cognition_profile_summary(
+    profile = _cognitive_history_service(supervisor)._build_recent_meta_cognition_profile_summary(
         cognitive_assessment_memory={},
         self_iteration_trend_memory={},
         switch_self_regulation_memory={},
@@ -14060,7 +14064,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
     }
     _drive_history_service(supervisor).persist(history)
 
-    regulation_snapshot = supervisor._endogenous_self_regulation_default()
+    regulation_snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
     regulation_snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
     regulation_snapshot["dynamic_candidate_throttle_boost"] = 0.28
     regulation_snapshot["dynamic_observation_bias_boost"] = 0.24
@@ -14113,7 +14117,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         return history
 
     def install_decayed_self_regulation() -> None:
-        regulation_snapshot = supervisor._endogenous_self_regulation_default()
+        regulation_snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
         regulation_snapshot["updated_at"] = (
             datetime.now(timezone.utc) - timedelta(hours=7)
         ).isoformat()
@@ -14296,7 +14300,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
     assert accumulated_strategy["contextual_focus_stats"]
 
     def install_decayed_self_regulation() -> None:
-        regulation_snapshot = supervisor._endogenous_self_regulation_default()
+        regulation_snapshot = supervisor._endogenous_governance_state_persistence_service.default_self_regulation()
         regulation_snapshot["updated_at"] = (
             datetime.now(timezone.utc) - timedelta(hours=9)
         ).isoformat()
@@ -19061,8 +19065,7 @@ async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tm
             )
         },
     )()
-
-    result = await supervisor._handoff_autonomous_chain_execution_request(
+    result = await supervisor._autonomous_chain_execution_handoff_service.handoff(
         supervisor._autonomous_chain_store.get_task(task_id)
     )
     waiting = supervisor._autonomous_chain_store.get_task(task_id)
@@ -19124,8 +19127,7 @@ async def test_execution_handoff_exception_retries_then_forms_failed_terminal_st
             )
         },
     )()
-
-    first = await supervisor._handoff_autonomous_chain_execution_request(
+    first = await supervisor._autonomous_chain_execution_handoff_service.handoff(
         supervisor._autonomous_chain_store.get_task(task_id),
         max_retries=2,
     )
@@ -19136,7 +19138,7 @@ async def test_execution_handoff_exception_retries_then_forms_failed_terminal_st
     assert after_first.status == "approved"
     assert after_first.metadata["execution_failure_count"] == 1
 
-    second = await supervisor._handoff_autonomous_chain_execution_request(
+    second = await supervisor._autonomous_chain_execution_handoff_service.handoff(
         after_first,
         max_retries=2,
     )
@@ -19306,7 +19308,7 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
         return {"status": "ok"}
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
-    supervisor._handoff_autonomous_chain_execution_request = fake_handoff  # type: ignore[method-assign]
+    supervisor._autonomous_chain_execution_handoff_service.handoff = fake_handoff
 
     result = await supervisor._run_autonomous_chain_review_cycle()
 

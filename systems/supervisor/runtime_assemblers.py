@@ -34,6 +34,21 @@ from systems.supervisor.endogenous_state_repository import EndogenousStateReposi
 from systems.supervisor.endogenous_drive_history_persistence_service import (
     EndogenousDriveHistoryPersistenceService,
 )
+from systems.supervisor.autonomous_chain_execution_handoff_service import (
+    AutonomousChainExecutionHandoffService,
+)
+from systems.supervisor.body_improvement_review_service import (
+    BodyImprovementReviewService,
+)
+from systems.supervisor.endogenous_cognitive_history_summary_service import (
+    EndogenousCognitiveHistorySummaryService,
+)
+from systems.supervisor.endogenous_cognition_state_assembly_service import (
+    EndogenousCognitionStateAssemblyService,
+)
+from systems.supervisor.endogenous_governance_state_persistence_service import (
+    EndogenousGovernanceStatePersistenceService,
+)
 from systems.supervisor.endogenous_strategy_memory_service import (
     EndogenousStrategyMemoryService,
 )
@@ -161,19 +176,41 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._endogenous_drive_history_persistence_service = (
         EndogenousDriveHistoryPersistenceService(supervisor._endogenous_state_repository)
     )
+    supervisor._endogenous_governance_state_persistence_service = (
+        EndogenousGovernanceStatePersistenceService(
+            supervisor._endogenous_state_repository,
+            endogenous_drive_enabled=lambda: bool(
+                supervisor.config.service_runtime.endogenous_drive_enabled
+            ),
+        )
+    )
     supervisor._endogenous_governance_event_consumer = EndogenousGovernanceEventConsumer(
-        load_events=lambda: supervisor._load_endogenous_governance_events(),
-        persist_events=lambda snapshot: supervisor._persist_endogenous_governance_events(
-            snapshot
-        ),
-        load_regulation=lambda: supervisor._load_endogenous_self_regulation(),
-        persist_regulation=lambda snapshot: supervisor._persist_endogenous_self_regulation(
-            snapshot
-        ),
+        load_events=supervisor._endogenous_governance_state_persistence_service.load_governance_events,
+        persist_events=supervisor._endogenous_governance_state_persistence_service.persist_governance_events,
+        load_regulation=supervisor._endogenous_governance_state_persistence_service.load_self_regulation,
+        persist_regulation=supervisor._endogenous_governance_state_persistence_service.persist_self_regulation,
     )
     supervisor._endogenous_strategy_memory_service = EndogenousStrategyMemoryService()
+    supervisor._endogenous_cognitive_history_summary_service = (
+        EndogenousCognitiveHistorySummaryService()
+    )
     supervisor._endogenous_cognitive_posture_service = EndogenousCognitivePostureService(
         runtime_config=supervisor.config.service_runtime,
+    )
+    supervisor._endogenous_cognition_state_assembly_service = (
+        EndogenousCognitionStateAssemblyService(
+            load_drive_history=supervisor._endogenous_drive_history_persistence_service.load,
+            enabled=lambda: bool(
+                supervisor.config.service_runtime.endogenous_drive_enabled
+            ),
+            drive_posture_from_deliberation=supervisor._drive_posture_signal_from_deliberation,
+            derive_context_key=supervisor._derive_endogenous_context_key,
+            build_observation_program=supervisor._build_endogenous_observation_program,
+            build_meta_governance=supervisor._build_endogenous_meta_governance,
+            load_reasoning_state=lambda: supervisor._lm_generation_application_state().reasoning_state,
+            posture_service=supervisor._endogenous_cognitive_posture_service,
+            history_summary_service=supervisor._endogenous_cognitive_history_summary_service,
+        )
     )
     supervisor._endogenous_self_regulation_service = EndogenousSelfRegulationService()
     supervisor._task_profile_policy = TaskProfilePolicy()
@@ -245,7 +282,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         consume_governance_events=lambda: supervisor._endogenous_governance_event_consumer.consume_governance_review_requests(),
         consume_alignment_events=lambda: supervisor._endogenous_governance_event_consumer.consume_alignment_requests(),
         consume_truthfulness_alerts=lambda: supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts(),
-        handoff_execution=lambda task: supervisor._handoff_autonomous_chain_execution_request(task),
+        handoff_execution=lambda task: supervisor._autonomous_chain_execution_handoff_service.handoff(task),
         handoff_limit=lambda: supervisor.config.service_runtime.autonomous_chain_handoff_limit_per_cycle,
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
@@ -303,6 +340,24 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         memory_maintenance=supervisor._memory_maintenance_executor,
         governor_review=supervisor._governor_review_executor,
         supervisor=supervisor,
+    )
+    supervisor._body_improvement_review_service = BodyImprovementReviewService(
+        body_registry=supervisor._body_registry,
+        task_store=supervisor._autonomous_chain_store,
+        task_profile_policy=supervisor._task_profile_policy,
+        execution_facade_provider=lambda: supervisor._execution_facade,
+    )
+    supervisor._autonomous_chain_execution_handoff_service = (
+        AutonomousChainExecutionHandoffService(
+            task_state=supervisor._autonomous_task_state,
+            task_store=supervisor._autonomous_chain_store,
+            task_profile_policy=supervisor._task_profile_policy,
+            execution_facade_provider=lambda: supervisor._execution_facade,
+            propose_memory_promotion=supervisor._propose_verified_conclusion_memory_promotion,
+            task_activity_metadata=supervisor._task_activity_metadata,
+            touch_gateway_activity=supervisor._touch_gateway_activity,
+            record_ui_activity=supervisor._record_supervisor_ui_activity,
+        )
     )
     supervisor._execution_service = VoidCubeExecutionService(
         supervisor._execution_facade,

@@ -21,7 +21,7 @@
 | 文件/边界 | 当前规模 | 当前判断 | 优先级 |
 | --- | ---: | --- | --- |
 | `VoidCube_cli/app.py` | 4,827 行 | `run()`、`chat()` 和 command domain 已明显缩小；类仍持有共享业务状态、Agent/session 生命周期和大量 host wiring | P0 |
-| `systems/supervisor/planning_runtime.py` | 约 5,060 行 / 110 个方法 | repository、state projection、task profile、schedule、drive-input evaluation、judgement core、strategy memory mutation、drive history persistence、observation、meta-governance projection、autonomous task review policy、review/recovery service、governance event consumer、task state mutation、cognitive posture/alignment 和 self-regulation 计算已形成独立 owner；`PlanningRuntimeMixin` 仍是认知状态组合、任务流和执行交接的组合中心 | P0，当前第一优先级 |
+| `systems/supervisor/planning_runtime.py` | 约 2,984 行 / 78 个方法 | repository、state projection、task profile、schedule、drive-input evaluation、judgement core、strategy memory mutation、drive history persistence、governance state persistence、observation、meta-governance projection、cognitive history summary、cognition state assembly、autonomous task review policy、review/recovery service、governance event consumer、task state mutation、cognitive posture/alignment、self-regulation、body review 和 execution handoff 已形成独立 owner；`PlanningRuntimeMixin` 仍是任务工作流和跨 service 组合中心 | P0，当前第一优先级 |
 | `systems/supervisor/endogenous_drive.py` | 231 行 | 主流水线已组件化；Engine 仅保留 facade、LM proposal 交接和 latest-generation state 写回 | P0，接近收口 |
 | `systems/supervisor/ui_runtime.py` | 420 行 | 静态资源和主要投影已外移；`SupervisorUIMixin` 仍保留 HTTP/SSE、缓存和生命周期 owner | P0 |
 | `systems/supervisor/supervisor.py` | 600 行 | 组合根仍内联注册全部路由，`_setup_routes()` 尚未成为薄 route adapter | P0 边界 |
@@ -303,16 +303,14 @@ VoidCube_windows/                未来才创建
 
 ### 7.1 当前问题
 
-`PlanningRuntimeMixin` 当前约 5,060 行、110 个方法，仍有多项职责集中在同一隐式 `self` 边界：
+`PlanningRuntimeMixin` 当前约 2,984 行、78 个方法，仍有多项职责集中在同一隐式 `self` 边界：
 
-- 治理事件、认知状态和 self-regulation 的持久化；drive history 已由独立 persistence service 负责；
-- 认知状态、候选注释、策略记忆和观察议程的运行时组合；posture/alignment 与 self-regulation signal 已由显式 service 承担；
+- 任务流、候选注释、策略记忆和观察议程的运行时组合；cognitive history summary、cognition state assembly、posture/alignment 与 self-regulation signal 已由显式 service 承担；
 - task profile、schedule、排序和冲突；
 - Gateway 活动投影和 drive 输入；
-- 自主任务规划、任务结果写回和执行交接编排；
-- body improvement 质量评分和审查。
+- 自主任务规划、任务结果写回和 autonomous cycle 组合。
 
-已有的 repository、纯 projection/policy、task state mutation、batch review、review cycle/recovery、治理事件消费、cognitive posture/alignment、self-regulation service 和 drive history persistence service 已形成明确边界；body improvement review 和 execution handoff 仍由 Mixin 组合。继续增加 Mixin 或只留下大量委托壳都不算完成。
+已有的 repository、治理/认知/self-regulation persistence、纯 projection/policy、task state mutation、batch review、review cycle/recovery、治理事件消费、cognitive history summary、cognition state assembly、cognitive posture/alignment、self-regulation、drive history persistence、body improvement review 和 execution handoff service 已形成明确边界；Planning 仍保留任务工作流和跨 service 组合。继续增加 Mixin 或只留下大量委托壳都不算完成。
 
 ### 7.2 目标责任边界
 
@@ -320,7 +318,7 @@ Planning 只保留组合和跨组件编排。责任边界固定如下：
 
 | 责任 | owner | 约束 |
 | --- | --- | --- |
-| 历史、治理事件、认知与 regulation 持久化 | state repository / persistence service | 只负责读写与生命周期，不负责策略判断 |
+| 历史、治理事件、认知与 regulation 持久化 | 对应 persistence service + state repository | service 负责默认结构、规范化、裁剪、衰减和时间戳；repository 只负责文件边界与原子写入 |
 | 认知、策略、观察和 meta-governance 计算 | pure projector / policy | 只接收快照并返回结构化结果，不产生副作用 |
 | self-regulation boost 计算 | `EndogenousSelfRegulationService` | 只接收 policy、posture、alignment 和 reasoning snapshot，返回有界调节信号 |
 | strategy memory bucket mutation | strategy memory service | 只修改传入 history；持久化由 drive history persistence service 提交 |
@@ -335,8 +333,8 @@ Planning 只保留组合和跨组件编排。责任边界固定如下：
 
 ### 7.3 剩余责任
 
-1. 形成 body improvement review 和 execution handoff 的独立 owner，固定审查、请求、失败回写和执行互斥的责任顺序。
-2. 将 Supervisor 初始化收敛到显式 assembler；相关生产消费者切换后，`PlanningRuntimeMixin` 只保留必要的装配委托，最终删除无业务意义的 Mixin 实现、旧参数和无调用兼容分支。
+1. 将自主任务规划、任务序列化和 autonomous cycle 收敛为显式 runtime/application owner，固定跨 service 的调用顺序。
+2. 将 Supervisor 初始化继续收敛到显式 assembler；相关生产消费者切换后，删除 `PlanningRuntimeMixin` 中剩余的无业务意义组合方法、旧参数和无调用兼容分支。
 
 验收：核心 projector/policy 无需构造完整 Supervisor 即可测试；任务状态仍先写治理事件；Gateway、Memory、Execution 所有权不变。
 
@@ -496,7 +494,7 @@ DrivePerceptionBuilder
 ### Stage 4：Planning repository/policy/task workflow
 
 - 保持 repository、projection/policy、task state、strategy memory mutation、batch review 和治理事件消费的 owner 边界。
-- 固化 cognition posture/alignment/self-regulation 的 service owner 边界；收口 drive history persistence、body review 和 execution handoff，review cycle/recovery 与治理事件消费继续由现有独立 owner 承担。
+- 固化 cognitive history summary、cognition state assembly、cognition posture/alignment/self-regulation、drive history persistence、body review 和 execution handoff 的 service owner 边界；继续收口 Planning 的任务工作流与 autonomous cycle，review cycle/recovery 与治理事件消费继续由现有独立 owner 承担。
 
 验收：Planning 不再是上述责任的业务实现中心；治理事件、任务真相、恢复、body review 和执行交接的调用者都通过显式 owner 运行，关键写入顺序和全链路语义保持一致。
 
@@ -585,7 +583,7 @@ DrivePerceptionBuilder
 | Stage 1 | 已完成 | 根 `cli.py` 已成为薄兼容入口；共享配置、Provider 和 Gateway 基础能力已进入 `VoidCube_app` | 无 |
 | Stage 2 | 已完成 | Supervisor UI 静态资源、主要只读 projector 和 wheel 资源合同已外移 | 无 |
 | Stage 3 | 部分完成 | session、turn、queue/cancel、工具、审批和 clarify 已有无界面基础 contract；CLI command domain 已分组 | 建立共享应用组合根、ApplicationState、稳定事件集合和真正通过公共端口运行的 adapter contract tests |
-| Stage 4 | 部分完成 | repository、projection/policy、task state、strategy memory mutation、drive history persistence、batch review、review cycle/recovery、治理事件消费、cognitive posture/alignment 和 self-regulation 已有独立 owner；Planning 仍是跨责任工作流的组合中心 | 完成 body review、execution handoff，并删除对应 Mixin 实现 |
+| Stage 4 | 部分完成 | repository、governance state persistence、projection/policy、task state、strategy memory mutation、drive history persistence、batch review、review cycle/recovery、治理事件消费、cognitive history summary、cognition state assembly、cognitive posture/alignment、self-regulation、body review 和 execution handoff 已有独立 owner；Planning 仍是任务工作流与 autonomous cycle 的组合中心 | 收口剩余跨 service 组合，删除无业务意义的 Mixin 实现并完成 Stage 4 全链路验收 |
 | Stage 5 | 基本完成 | perception 到 candidate/LM/deliberation 的主要阶段已组件化，Engine 已成为小型 facade 和单一 runtime-state writer | 完成等价全链路验收，确认无旧 helper、旧调用路径和双写入口 |
 | Stage 6 | 部分完成 | TUI、语音、后台任务、自主组件和 UI projection 已形成大量显式 runtime/ports | 收口 CLI 共享业务状态；删除 `SupervisorUIMixin`；拆出薄 UI routes/lifecycle |
 | Stage 7 | 未开始 | focused、架构、退役和 wheel 合同已有持续验证 | 运行全量主项目与 Mem 回归、smoke、发行物验证和性能复测，评估次级巨石 |
@@ -597,9 +595,13 @@ DrivePerceptionBuilder
 - Supervisor UI 资源通过包资源加载，源码与 wheel 使用同一 canonical 文件。
 - session lifecycle、turn 输入/结果、取消/队列、工具事件、审批和 clarify 已有无界面基础 contract。
 - endogenous repository、projection/policy、task state、batch review、review cycle/recovery 和治理事件消费已有直接 owner；纯计算不再依赖完整 Supervisor。
+- `EndogenousGovernanceStatePersistenceService` 独占治理事件、cognition state 和 self-regulation 的默认结构、加载、规范化、裁剪、衰减、时间戳和原子持久化；Planning 与治理事件 consumer 通过该 owner 访问，旧 persistence helper 已删除。
 - cognitive posture/alignment 与 self-regulation（包括 carryover release）由显式 service 承接；runtime assembler 负责实例化，Planning 只组合 policy、posture、alignment 和 reasoning snapshot。
 - task mutation、治理事件消费与写回、review policy、batch review 和周期编排已分离；副作用通过显式 ports 进入 store、Gateway、Memory 和 Execution。
 - strategy memory normalization、bucket mutation、observation resolution 和 meta-governance statistics 已由显式 service 承接；`EndogenousDriveHistoryPersistenceService` 独占 history 默认结构、规范化、裁剪、时间戳和原子提交，Planning 只编排跨快照回滚。
+- body improvement report 的提交验证、评分、health history 写回和 switch suggestion 已由 `BodyImprovementReviewService` 独占；Supervisor API 和 execution facade 只做输入映射。
+- approved autonomous-chain request 的运行前占用、执行调用、consent、成功完成和失败重试已由 `AutonomousChainExecutionHandoffService` 独占；review cycle 只负责筛选、限额和调用。
+- cognitive history summary 与 cognition state assembly 只接收显式 snapshot、projection 和 service ports；Planning 不再实现认知 history 摘要或 cognition proposal read-model。
 - endogenous drive 的主要流水线已组件化，Engine 仍是稳定 facade 和 runtime state 的单一写入 owner。
 - `scripts/performance_baseline.py` 提供版本化 `voidcube.performance-baseline.v1` 基线，覆盖 import graph、CLI help、turn contract、Supervisor 初始化和 UI projection；测量使用冷进程，必要时同时记录无外部副作用的 operation timing。
 - 语音设备实现归 `systems.voice` 与 adapter，退役的 `tools.voice_mode` 不得恢复。
@@ -608,7 +610,7 @@ DrivePerceptionBuilder
 ### 15.3 当前缺口
 
 - `VoidCube_app` 尚无共享应用组合根，也未形成完整的 `SessionEvent`、`TurnEvent`、`MessageDelta`、usage 和 artifact 事件体系。
-- `PlanningRuntimeMixin` 仍约 5,060 行、110 个方法，是认知状态组合、body review 和 execution handoff 的跨责任组合中心；drive history persistence、posture/alignment 与 self-regulation 已外移，但 Stage 4 尚未收口。
+- `PlanningRuntimeMixin` 仍约 2,984 行、78 个方法，是任务工作流和 autonomous cycle 的跨责任组合中心；governance state persistence、cognitive history summary、cognition state assembly、drive history persistence、posture/alignment、self-regulation、body review 与 execution handoff 已外移，但 Stage 4 尚未收口。
 - `VoidcubeCLI` 仍持有跨前端可复用的状态和生命周期，不能仅因 `run()` 已缩短就判定 CLI-1/CLI-2/CLI-5 完成。
 - `SupervisorUIMixin` 和 `supervisor.py::_setup_routes()` 仍承担 route、SSE、缓存和 lifecycle 组合职责。
 - 当前性能基线只用于迁移前后和阶段收口对比，不等同于 Stage 7 全量验收；全量测试、发行物验证和最终性能复测仍未完成，因此不能进入 Windows adapter 实施。
@@ -621,7 +623,7 @@ focused tests 只证明局部边界行为，不代表 Stage 7 全量验收。全
 
 ## 16. 后续实施顺序
 
-1. **Planning orchestration**：完成 body review 和 execution handoff 的显式 owner 边界，并使 Planning 只承担组合与装配。
+1. **Planning orchestration**：收口自主任务规划、任务序列化和 autonomous cycle 的显式 owner 边界，并删除剩余无业务 Mixin 实现。
 2. **共享应用层**：建立最小 `VoidCube_app` 组合根、ApplicationState、稳定事件和 event sink/基础端口，让 CLI contract tests 不依赖 slash command、ANSI 或完整 `VoidcubeCLI`。
 3. **CLI host 收口**：把共享 session/turn/voice/autonomous 生命周期接入应用层；CLI 只保留显示状态、设备 adapter 和 host wiring。
 4. **Supervisor UI 收口**：拆出 `UIRoutes`、`UIEventBroker` 和 lifecycle owner，删除 `SupervisorUIMixin`，缩短 `_setup_routes()`。

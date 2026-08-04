@@ -524,7 +524,7 @@ class Supervisor(
         """Agent 提交替身改进报告 → 监督者审查评分"""
         from systems.body_registry import BodyImprovementReport
         parsed = BodyImprovementReport(**report)
-        result = await self._review_body_improvement(parsed)
+        result = await self._body_improvement_review_service.review(parsed)
         return {"status": "reviewed", **result}
 
     async def rollback_body_improvement(

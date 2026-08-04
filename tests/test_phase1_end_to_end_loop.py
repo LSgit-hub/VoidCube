@@ -681,7 +681,7 @@ class TestPhase1GovernorMode:
             "active_sessions": 0,
         })
         sv._touch_gateway_activity = AsyncMock()
-        sv._handoff_autonomous_chain_execution_request = AsyncMock(
+        sv._autonomous_chain_execution_handoff_service.handoff = AsyncMock(
             return_value={"status": "executed"}
         )
         async def fake_idle(_request=None):
@@ -721,7 +721,7 @@ class TestPhase1GovernorMode:
 
         await sv._run_autonomous_chain_review_cycle()
         # self-learning 不由 supervisor 主动交接，而是等待 Agent 自己来 pull。
-        sv._handoff_autonomous_chain_execution_request.assert_not_awaited()
+        sv._autonomous_chain_execution_handoff_service.handoff.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.unit

@@ -188,7 +188,7 @@ def test_failed_probe_report_contributes_no_shell_health_score(tmp_path):
         ],
     }
 
-    assert supervisor._get_probe_score("slot-B", slot_meta) == 0.0
+    assert supervisor._body_improvement_review_service._get_probe_score("slot-B", slot_meta) == 0.0
 
 
 @pytest.mark.asyncio
@@ -202,14 +202,14 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
     slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
     slot_meta.health_score = 55.0
     supervisor._body_registry.save_slot_meta(slot_meta)
-    supervisor._inspect_body_improvement_commit = Mock(  # type: ignore[method-assign]
+    supervisor._body_improvement_review_service._inspect_body_improvement_commit = Mock(
         return_value={
             "ok": True,
             "changed_files": ["agent/stream_handler.py"],
             "diff_text": "agent/stream_handler.py | 2 +-",
         }
     )
-    supervisor._llm_review_diff = AsyncMock(return_value=20.0)  # type: ignore[method-assign]
+    supervisor._body_improvement_review_service._llm_review_diff = AsyncMock(return_value=20.0)
 
     result = await supervisor.receive_improvement_report(
         {
@@ -429,7 +429,7 @@ def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(
     supervisor_root = tmp_path / "supervisor-runtime"
     supervisor_root.mkdir()
     supervisor = Supervisor(_make_supervisor_config(supervisor_root))
-    inspection = supervisor._inspect_body_improvement_commit(
+    inspection = supervisor._body_improvement_review_service._inspect_body_improvement_commit(
         worktree_path=str(repo),
         baseline_commit=baseline_commit,
         commit_hash=improvement_commit,
@@ -441,7 +441,7 @@ def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(
 
     uncommitted = agent_dir / "uncommitted.py"
     uncommitted.write_text("VALUE = 3\n", encoding="utf-8")
-    dirty = supervisor._inspect_body_improvement_commit(
+    dirty = supervisor._body_improvement_review_service._inspect_body_improvement_commit(
         worktree_path=str(repo),
         baseline_commit=baseline_commit,
         commit_hash=improvement_commit,
@@ -449,7 +449,7 @@ def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(
     assert dirty == {"ok": False, "reject_reason": "worktree_not_clean"}
     uncommitted.unlink()
 
-    stale = supervisor._inspect_body_improvement_commit(
+    stale = supervisor._body_improvement_review_service._inspect_body_improvement_commit(
         worktree_path=str(repo),
         baseline_commit=baseline_commit,
         commit_hash=baseline_commit,
@@ -494,7 +494,7 @@ async def test_body_improvement_report_rejects_untrusted_file_scope(
         supervisor,
         target_paths=approved_targets,
     )
-    supervisor._inspect_body_improvement_commit = Mock(  # type: ignore[method-assign]
+    supervisor._body_improvement_review_service._inspect_body_improvement_commit = Mock(
         return_value={
             "ok": True,
             "changed_files": actual_files,
