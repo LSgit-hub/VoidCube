@@ -3653,7 +3653,7 @@ def test_repeated_alignment_events_accumulate_self_regulation_but_respect_config
     ]
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
-    result = supervisor._consume_endogenous_alignment_events()
+    result = supervisor._endogenous_governance_event_consumer.consume_alignment_requests()
     regulation = supervisor._load_endogenous_self_regulation()
 
     assert result["count"] == 6
@@ -3683,7 +3683,7 @@ def test_repeated_truthfulness_alerts_accumulate_corrective_mode_but_respect_con
     ]
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
-    result = supervisor._consume_endogenous_truthfulness_alerts()
+    result = supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts()
     regulation = supervisor._load_endogenous_self_regulation()
 
     assert result["count"] == 6
@@ -18236,7 +18236,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
 
     supervisor._fetch_gateway_cli_session = failing_owner_session  # type: ignore[method-assign]
 
-    recovered = await supervisor._recover_orphaned_agent_pull_tasks()
+    recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 0
@@ -18286,7 +18286,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
 
     supervisor._fetch_gateway_cli_session = missing_owner_session  # type: ignore[method-assign]
 
-    recovered = await supervisor._recover_orphaned_agent_pull_tasks()
+    recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 1
@@ -18325,7 +18325,7 @@ async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_p
         metadata={"execution_source": "cli_agent_pull"},
     )
 
-    recovered = await supervisor._recover_orphaned_agent_pull_tasks()
+    recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 0
@@ -19188,7 +19188,7 @@ async def test_run_autonomous_chain_review_cycle_skips_when_cycle_already_runnin
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
     )
 
-    lock = supervisor._get_autonomous_chain_cycle_lock()
+    lock = supervisor._autonomous_task_review_cycle_service._cycle_lock
     await lock.acquire()
     try:
         result = await supervisor._run_autonomous_chain_review_cycle()

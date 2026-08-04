@@ -27,9 +27,18 @@ from systems.governor import GovernorDecisionEngine
 from systems.governance_runtime_migration import consolidate_governance_event_logs
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.endogenous_governance_event_consumer import (
+    EndogenousGovernanceEventConsumer,
+)
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
+from systems.supervisor.endogenous_strategy_memory_service import (
+    EndogenousStrategyMemoryService,
+)
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from systems.supervisor.autonomous_task_review import build_autonomous_chain_auto_decision
+from systems.supervisor.autonomous_task_review_cycle_service import (
+    AutonomousTaskReviewCycleService,
+)
 from systems.supervisor.autonomous_task_review_service import AutonomousTaskReviewService
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from systems.supervisor.scheduled_tasks import ScheduledTaskStore
@@ -140,6 +149,17 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         ),
     )
     supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
+    supervisor._endogenous_governance_event_consumer = EndogenousGovernanceEventConsumer(
+        load_events=lambda: supervisor._load_endogenous_governance_events(),
+        persist_events=lambda snapshot: supervisor._persist_endogenous_governance_events(
+            snapshot
+        ),
+        load_regulation=lambda: supervisor._load_endogenous_self_regulation(),
+        persist_regulation=lambda snapshot: supervisor._persist_endogenous_self_regulation(
+            snapshot
+        ),
+    )
+    supervisor._endogenous_strategy_memory_service = EndogenousStrategyMemoryService()
     supervisor._task_profile_policy = TaskProfilePolicy()
     supervisor._schedule_allocator = ScheduleAllocator(
         slot_interval_seconds=int(
@@ -194,6 +214,23 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         touch_activity=supervisor._touch_gateway_activity,
         get_active_tasks=supervisor._active_autonomous_chain_tasks,
         get_review_statuses=lambda: ["planned", "deferred", "paused"],
+    )
+    supervisor._autonomous_task_review_cycle_service = AutonomousTaskReviewCycleService(
+        task_profile_policy=supervisor._task_profile_policy,
+        task_state=supervisor._autonomous_task_state,
+        list_execution_lane_tasks=(
+            lambda status: supervisor._autonomous_chain_store.list_api_a_execution_lane_tasks(
+                status=status
+            )
+        ),
+        get_task=supervisor._autonomous_chain_store.get_task,
+        fetch_cli_session=lambda session_id: supervisor._fetch_gateway_cli_session(session_id),
+        review_tasks=lambda request: supervisor.review_autonomous_chain_tasks(request),
+        consume_governance_events=lambda: supervisor._endogenous_governance_event_consumer.consume_governance_review_requests(),
+        consume_alignment_events=lambda: supervisor._endogenous_governance_event_consumer.consume_alignment_requests(),
+        consume_truthfulness_alerts=lambda: supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts(),
+        handoff_execution=lambda task: supervisor._handoff_autonomous_chain_execution_request(task),
+        handoff_limit=lambda: supervisor.config.service_runtime.autonomous_chain_handoff_limit_per_cycle,
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)

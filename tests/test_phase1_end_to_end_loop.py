@@ -70,13 +70,13 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     # suite. Keep them neutral here so dynamic regulation cannot rewrite the
     # handoff target while this file is testing the Phase 1 execution path.
     empty_consumption = {"count": 0, "consumed": []}
-    sv._consume_endogenous_governance_review_events = Mock(
+    sv._endogenous_governance_event_consumer.consume_governance_review_requests = Mock(
         return_value=dict(empty_consumption)
     )
-    sv._consume_endogenous_alignment_events = Mock(
+    sv._endogenous_governance_event_consumer.consume_alignment_requests = Mock(
         return_value=dict(empty_consumption)
     )
-    sv._consume_endogenous_truthfulness_alerts = Mock(
+    sv._endogenous_governance_event_consumer.consume_truthfulness_alerts = Mock(
         return_value=dict(empty_consumption)
     )
     sv._touch_gateway_activity = AsyncMock()

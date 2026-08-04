@@ -2397,7 +2397,7 @@ class PlanningRuntimeMixin:
             "context_key": context_key,
         }
         recorded_at = datetime.now(timezone.utc).isoformat()
-        self._record_endogenous_meta_governance_memory(
+        self._endogenous_strategy_memory_service.record_meta_governance(
             history,
             mode=meta_mode["mode"],
             priority=meta_mode["confidence"],
@@ -2436,7 +2436,7 @@ class PlanningRuntimeMixin:
 
         recorded_at = datetime.now(timezone.utc).isoformat()
         for entry in entries_seed:
-            self._record_endogenous_observation_memory(
+            self._endogenous_strategy_memory_service.record_observation(
                 history,
                 target=entry.get("target"),
                 priority=entry.get("priority"),
@@ -2451,7 +2451,7 @@ class PlanningRuntimeMixin:
             if str(entry.get("target") or "").strip()
         }
         changed = bool(entries_seed)
-        if self._resolve_cleared_endogenous_observation_targets(
+        if self._endogenous_strategy_memory_service.resolve_cleared_observation_targets(
             history,
             active_targets=active_targets,
             context_key=context_key,
@@ -2469,385 +2469,6 @@ class PlanningRuntimeMixin:
             entries_seed,
             target_stats=refreshed_target_stats,
         )
-
-    def _consume_endogenous_governance_review_events(self) -> Dict[str, Any]:
-        snapshot = self._load_endogenous_governance_events()
-        events = list(snapshot.get("events") or [])
-        consumed: list[Dict[str, Any]] = []
-        updated_events: list[Dict[str, Any]] = []
-
-        for item in events:
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
-            if (
-                str(row.get("event_type") or "").strip() == "governance_review_request"
-                and not row.get("consumed_at")
-            ):
-                row["consumed_at"] = datetime.now(timezone.utc).isoformat()
-                row["consumed_action"] = "trigger_review_pass"
-                consumed.append(
-                    {
-                        "event_id": row.get("event_id"),
-                        "event_type": row.get("event_type"),
-                        "context_key": row.get("context_key"),
-                        "message": row.get("message"),
-                    }
-                )
-            updated_events.append(row)
-
-        if consumed:
-            snapshot["events"] = updated_events
-            self._persist_endogenous_governance_events(snapshot)
-
-        return {
-            "consumed": consumed,
-            "count": len(consumed),
-            "events": updated_events[:36],
-        }
-
-    def _consume_endogenous_alignment_events(self) -> Dict[str, Any]:
-        events_snapshot = self._load_endogenous_governance_events()
-        regulation_snapshot = self._load_endogenous_self_regulation()
-        events = list(events_snapshot.get("events") or [])
-        consumed: list[Dict[str, Any]] = []
-        updated_events: list[Dict[str, Any]] = []
-        applied = False
-
-        for item in events:
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
-            if (
-                str(row.get("event_type") or "").strip() == "autonomy_alignment_request"
-                and not row.get("consumed_at")
-            ):
-                row["consumed_at"] = datetime.now(timezone.utc).isoformat()
-                row["consumed_action"] = "increase_self_regulation"
-                regulation_snapshot["dynamic_candidate_throttle_boost"] = min(
-                    0.35,
-                    float(regulation_snapshot.get("dynamic_candidate_throttle_boost") or 0.0) + 0.08,
-                )
-                regulation_snapshot["dynamic_observation_bias_boost"] = min(
-                    0.30,
-                    float(regulation_snapshot.get("dynamic_observation_bias_boost") or 0.0) + 0.06,
-                )
-                regulation_snapshot["last_reason"] = row.get("message") or row.get("rationale")
-                consumed.append(
-                    {
-                        "event_id": row.get("event_id"),
-                        "event_type": row.get("event_type"),
-                        "context_key": row.get("context_key"),
-                        "message": row.get("message"),
-                    }
-                )
-                applied = True
-            updated_events.append(row)
-
-        if consumed:
-            events_snapshot["events"] = updated_events
-            self._persist_endogenous_governance_events(events_snapshot)
-        if applied:
-            self._persist_endogenous_self_regulation(regulation_snapshot)
-
-        return {
-            "consumed": consumed,
-            "count": len(consumed),
-            "regulation": dict(regulation_snapshot),
-            "events": updated_events[:36],
-        }
-
-    def _consume_endogenous_truthfulness_alerts(self) -> Dict[str, Any]:
-        events_snapshot = self._load_endogenous_governance_events()
-        regulation_snapshot = self._load_endogenous_self_regulation()
-        events = list(events_snapshot.get("events") or [])
-        consumed: list[Dict[str, Any]] = []
-        updated_events: list[Dict[str, Any]] = []
-        applied = False
-
-        for item in events:
-            if not isinstance(item, dict):
-                continue
-            row = dict(item)
-            if (
-                str(row.get("event_type") or "").strip() == "truthfulness_alert"
-                and not row.get("consumed_at")
-            ):
-                row["consumed_at"] = datetime.now(timezone.utc).isoformat()
-                row["consumed_action"] = "increase_truthfulness_correction"
-                regulation_snapshot["dynamic_truthfulness_bias_boost"] = min(
-                    0.30,
-                    float(regulation_snapshot.get("dynamic_truthfulness_bias_boost") or 0.0) + 0.08,
-                )
-                regulation_snapshot["dynamic_learning_expansion_suppression"] = min(
-                    0.25,
-                    float(regulation_snapshot.get("dynamic_learning_expansion_suppression") or 0.0) + 0.06,
-                )
-                regulation_snapshot["last_reason"] = row.get("message") or row.get("rationale")
-                consumed.append(
-                    {
-                        "event_id": row.get("event_id"),
-                        "event_type": row.get("event_type"),
-                        "context_key": row.get("context_key"),
-                        "message": row.get("message"),
-                    }
-                )
-                applied = True
-            updated_events.append(row)
-
-        if consumed:
-            events_snapshot["events"] = updated_events
-            self._persist_endogenous_governance_events(events_snapshot)
-        if applied:
-            self._persist_endogenous_self_regulation(regulation_snapshot)
-
-        return {
-            "consumed": consumed,
-            "count": len(consumed),
-            "regulation": dict(regulation_snapshot),
-            "events": updated_events[:36],
-        }
-
-    def _strategy_agenda_topic_bucket(
-        self,
-        history: Dict[str, Any],
-        topic: Optional[str],
-    ) -> Dict[str, Any]:
-        strategy_memory = normalize_endogenous_strategy_memory(
-            history.get("strategy_memory")
-        )
-        history["strategy_memory"] = strategy_memory
-        topic_name = str(topic or "").strip().lower()
-        if not topic_name:
-            topic_name = "unknown"
-        topic_stats = strategy_memory.setdefault("agenda_topic_stats", {})
-        return topic_stats.setdefault(
-            topic_name,
-            {
-                "seen": 0,
-                "active_cycles": 0,
-                "resolved": 0,
-                "dragging": 0,
-                "last_priority": 0.0,
-                "last_confidence": 0.0,
-                "last_status": "unknown",
-                "last_seen_at": None,
-                "last_resolved_at": None,
-                "last_context_key": None,
-            },
-        )
-
-    def _record_endogenous_agenda_memory(
-        self,
-        history: Dict[str, Any],
-        *,
-        topic: Optional[str],
-        priority: Any,
-        confidence: Any,
-        context_key: Optional[str],
-        recorded_at: str,
-        status: str,
-    ) -> None:
-        bucket = self._strategy_agenda_topic_bucket(history, topic)
-        normalized_status = str(status or "active").strip().lower() or "active"
-        bucket["seen"] = max(0, int(bucket.get("seen") or 0)) + 1
-        if normalized_status == "active":
-            bucket["active_cycles"] = max(0, int(bucket.get("active_cycles") or 0)) + 1
-        elif normalized_status == "resolved":
-            bucket["resolved"] = max(0, int(bucket.get("resolved") or 0)) + 1
-            bucket["last_resolved_at"] = recorded_at
-        elif normalized_status == "dragging":
-            bucket["dragging"] = max(0, int(bucket.get("dragging") or 0)) + 1
-        bucket["last_priority"] = round(self._clamp_endogenous_ratio(priority), 4)
-        bucket["last_confidence"] = round(self._clamp_endogenous_ratio(confidence), 4)
-        bucket["last_status"] = normalized_status
-        bucket["last_seen_at"] = recorded_at
-        bucket["last_context_key"] = (
-            str(context_key or "").strip().lower() or bucket.get("last_context_key")
-        )
-
-    def _strategy_observation_target_bucket(
-        self,
-        history: Dict[str, Any],
-        target: Optional[str],
-    ) -> Dict[str, Any]:
-        strategy_memory = normalize_endogenous_strategy_memory(
-            history.get("strategy_memory")
-        )
-        history["strategy_memory"] = strategy_memory
-        target_name = str(target or "").strip().lower()
-        if not target_name:
-            target_name = "unknown"
-        observation_stats = strategy_memory.setdefault("observation_target_stats", {})
-        return observation_stats.setdefault(
-            target_name,
-            {
-                "seen": 0,
-                "recommended": 0,
-                "resolved": 0,
-                "stalled": 0,
-                "last_priority": 0.0,
-                "last_risk": 0.0,
-                "last_status": "unknown",
-                "last_seen_at": None,
-                "last_resolved_at": None,
-                "last_context_key": None,
-            },
-        )
-
-    def _record_endogenous_observation_memory(
-        self,
-        history: Dict[str, Any],
-        *,
-        target: Optional[str],
-        priority: Any,
-        risk: Any,
-        context_key: Optional[str],
-        recorded_at: str,
-        status: str,
-    ) -> None:
-        bucket = self._strategy_observation_target_bucket(history, target)
-        normalized_status = str(status or "recommended").strip().lower() or "recommended"
-        bucket["seen"] = max(0, int(bucket.get("seen") or 0)) + 1
-        if normalized_status == "recommended":
-            bucket["recommended"] = max(0, int(bucket.get("recommended") or 0)) + 1
-        elif normalized_status == "resolved":
-            bucket["resolved"] = max(0, int(bucket.get("resolved") or 0)) + 1
-            bucket["last_resolved_at"] = recorded_at
-        elif normalized_status == "stalled":
-            bucket["stalled"] = max(0, int(bucket.get("stalled") or 0)) + 1
-        bucket["last_priority"] = round(self._clamp_endogenous_ratio(priority), 4)
-        bucket["last_risk"] = round(self._clamp_endogenous_ratio(risk), 4)
-        bucket["last_status"] = normalized_status
-        bucket["last_seen_at"] = recorded_at
-        bucket["last_context_key"] = (
-            str(context_key or "").strip().lower() or bucket.get("last_context_key")
-        )
-
-    def _resolve_cleared_endogenous_observation_targets(
-        self,
-        history: Dict[str, Any],
-        *,
-        active_targets: set[str],
-        context_key: Optional[str],
-        recorded_at: str,
-    ) -> bool:
-        strategy_memory = normalize_endogenous_strategy_memory(
-            history.get("strategy_memory")
-        )
-        history["strategy_memory"] = strategy_memory
-        observation_stats = dict(strategy_memory.get("observation_target_stats") or {})
-        changed = False
-
-        for target, stats in observation_stats.items():
-            target_name = str(target or "").strip().lower()
-            if not target_name or target_name in active_targets:
-                continue
-            bucket = dict(stats or {})
-            recommended = max(0, int(bucket.get("recommended") or 0))
-            resolved = max(0, int(bucket.get("resolved") or 0))
-            last_status = str(bucket.get("last_status") or "").strip().lower()
-            if recommended <= resolved or last_status == "resolved":
-                continue
-            self._record_endogenous_observation_memory(
-                history,
-                target=target_name,
-                priority=bucket.get("last_priority") or 0.0,
-                risk=bucket.get("last_risk") or 0.0,
-                context_key=context_key,
-                recorded_at=recorded_at,
-                status="resolved",
-            )
-            changed = True
-
-        return changed
-
-    def _strategy_meta_governance_bucket(
-        self,
-        history: Dict[str, Any],
-        mode: Optional[str],
-    ) -> Dict[str, Any]:
-        strategy_memory = normalize_endogenous_strategy_memory(
-            history.get("strategy_memory")
-        )
-        history["strategy_memory"] = strategy_memory
-        mode_name = str(mode or "").strip().lower()
-        if not mode_name:
-            mode_name = "unknown"
-        meta_stats = strategy_memory.setdefault("meta_governance_stats", {})
-        return meta_stats.setdefault(
-            mode_name,
-            {
-                "seen": 0,
-                "active_cycles": 0,
-                "resolved": 0,
-                "stalled": 0,
-                "last_priority": 0.0,
-                "last_confidence": 0.0,
-                "last_status": "unknown",
-                "last_seen_at": None,
-                "last_resolved_at": None,
-                "last_context_key": None,
-            },
-        )
-
-    def _record_endogenous_meta_governance_memory(
-        self,
-        history: Dict[str, Any],
-        *,
-        mode: Optional[str],
-        priority: Any,
-        confidence: Any,
-        context_key: Optional[str],
-        recorded_at: str,
-        status: str,
-    ) -> None:
-        bucket = self._strategy_meta_governance_bucket(history, mode)
-        normalized_status = str(status or "active").strip().lower() or "active"
-        bucket["seen"] = max(0, int(bucket.get("seen") or 0)) + 1
-        if normalized_status == "active":
-            bucket["active_cycles"] = max(0, int(bucket.get("active_cycles") or 0)) + 1
-        elif normalized_status == "resolved":
-            bucket["resolved"] = max(0, int(bucket.get("resolved") or 0)) + 1
-            bucket["last_resolved_at"] = recorded_at
-        elif normalized_status == "stalled":
-            bucket["stalled"] = max(0, int(bucket.get("stalled") or 0)) + 1
-        bucket["last_priority"] = round(self._clamp_endogenous_ratio(priority), 4)
-        bucket["last_confidence"] = round(self._clamp_endogenous_ratio(confidence), 4)
-        bucket["last_status"] = normalized_status
-        bucket["last_seen_at"] = recorded_at
-        bucket["last_context_key"] = (
-            str(context_key or "").strip().lower() or bucket.get("last_context_key")
-        )
-
-    def _strategy_focus_bucket(
-        self,
-        history: Dict[str, Any],
-        focus: Optional[str],
-        context_key: Optional[str] = None,
-    ) -> Dict[str, int]:
-        strategy_memory = normalize_endogenous_strategy_memory(
-            history.get("strategy_memory")
-        )
-        history["strategy_memory"] = strategy_memory
-        focus_name = str(focus or "").strip().lower()
-        if not focus_name:
-            focus_name = "unknown"
-        focus_stats = strategy_memory.setdefault("focus_stats", {})
-        bucket = focus_stats.setdefault(
-            focus_name,
-            {"judged": 0, "completed": 0, "failed": 0, "dragging": 0},
-        )
-        normalized_context = str(context_key or "").strip().lower()
-        if normalized_context:
-            contextual_focus_stats = strategy_memory.setdefault("contextual_focus_stats", {})
-            contextual_bucket = contextual_focus_stats.setdefault(normalized_context, {})
-            contextual_focus_bucket = contextual_bucket.setdefault(
-                focus_name,
-                {"judged": 0, "completed": 0, "failed": 0, "dragging": 0},
-            )
-            return contextual_focus_bucket
-        return bucket
 
     def _derive_endogenous_context_key(
         self,
@@ -3018,9 +2639,11 @@ class PlanningRuntimeMixin:
             focus_key = (preferred_focus, context_key)
             if preferred_focus and focus_key not in recorded_judged_focuses:
                 recorded_judged_focuses.add(focus_key)
-                global_focus_bucket = self._strategy_focus_bucket(history, preferred_focus)
+                global_focus_bucket = self._endogenous_strategy_memory_service.focus_bucket(
+                    history, preferred_focus
+                )
                 global_focus_bucket["judged"] += 1
-                contextual_focus_bucket = self._strategy_focus_bucket(
+                contextual_focus_bucket = self._endogenous_strategy_memory_service.focus_bucket(
                     history,
                     preferred_focus,
                     context_key=context_key,
@@ -3041,7 +2664,7 @@ class PlanningRuntimeMixin:
                     continue
                 recorded_active_topics.add(topic_key)
                 agenda_entry = dict(agenda_map.get(topic) or {})
-                self._record_endogenous_agenda_memory(
+                self._endogenous_strategy_memory_service.record_agenda(
                     history,
                     topic=topic,
                     priority=agenda_entry.get("priority", need.get("severity")),
@@ -3190,9 +2813,11 @@ class PlanningRuntimeMixin:
         context_key = self._derive_endogenous_context_key(task=task)
         outcome_bucket = self._status_to_strategy_outcome_bucket(status)
         if outcome_bucket is not None:
-            global_focus_bucket = self._strategy_focus_bucket(history, preferred_focus)
+            global_focus_bucket = self._endogenous_strategy_memory_service.focus_bucket(
+                history, preferred_focus
+            )
             global_focus_bucket[outcome_bucket] += 1
-            contextual_focus_bucket = self._strategy_focus_bucket(
+            contextual_focus_bucket = self._endogenous_strategy_memory_service.focus_bucket(
                 history,
                 preferred_focus,
                 context_key=context_key,
@@ -3321,7 +2946,7 @@ class PlanningRuntimeMixin:
             agenda_status = "dragging" if outcome_bucket == "dragging" else outcome_bucket
             recorded_at = str(outcome.get("recorded_at") or datetime.now(timezone.utc).isoformat())
             for topic in linked_topics:
-                self._record_endogenous_agenda_memory(
+                self._endogenous_strategy_memory_service.record_agenda(
                     history,
                     topic=topic,
                     priority=metadata.get("utility"),
@@ -4139,77 +3764,6 @@ class PlanningRuntimeMixin:
         payload.setdefault("missing", False)
         return payload
 
-    async def _recover_orphaned_agent_pull_tasks(self) -> int:
-        recovered = 0
-        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="running"):
-            if not is_agent_pull_task(
-                task,
-                task_profile_policy=self._task_profile_policy,
-            ):
-                continue
-            metadata = dict(task.metadata or {})
-            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
-            execution_source = str(metadata.get("execution_source") or "").strip().lower()
-            if execution_source and execution_source != "cli_agent_pull":
-                continue
-            if not owner_session_id:
-                logger.warning(
-                    "跳过运行中 agent-pull 链路项 %s 的孤儿恢复："
-                    "owner_session_id 缺失，当前无法确认归属。",
-                    task.task_id,
-                )
-                self._autonomous_task_state.update_metadata(
-                    task.task_id,
-                    metadata={
-                        "owner_session_missing_seen_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-                continue
-            try:
-                owner_session = await self._fetch_gateway_cli_session(owner_session_id)
-            except Exception as exc:
-                logger.warning(
-                    "跳过链路项 %s 的孤儿恢复：无法从网关确认 "
-                    "owner CLI 会话 %s（%s）；当前保守地不做恢复。",
-                    task.task_id,
-                    owner_session_id,
-                    exc,
-                )
-                continue
-            owner_missing = bool(owner_session.get("missing"))
-            owner_stale = bool(owner_session.get("is_stale")) or str(
-                owner_session.get("lease_status") or ""
-            ).strip().lower() == "stale"
-            if not owner_missing and not owner_stale:
-                continue
-            self._autonomous_task_state.update_status(
-                task.task_id,
-                status="approved",
-                actor="supervisor",
-                reason=(
-                    "Recovered orphaned agent-pull task because its owning autonomous "
-                    "executor session is missing or stale."
-                ),
-                context={
-                    "recovered": True,
-                    "previous_owner_session_id": owner_session_id or None,
-                    "owner_session_missing": owner_missing,
-                    "owner_session_stale": owner_stale,
-                    "owner_lease_status": owner_session.get("lease_status"),
-                    "active_cli_session_id": owner_session.get("active_cli_session_id"),
-                },
-                event_type="recovery",
-            )
-            self._autonomous_task_state.update_metadata(
-                task.task_id,
-                metadata={
-                    "recovered_from_orphaned_running": True,
-                    "last_recovered_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            recovered += 1
-        return recovered
-
     def _request_agent_session_id(self, request: Dict[str, Any]) -> str:
         session_id = str(request.get("session_id") or "").strip()
         if session_id:
@@ -4277,13 +3831,6 @@ class PlanningRuntimeMixin:
                 ),
             )
         return session_id
-
-    def _get_autonomous_chain_cycle_lock(self) -> asyncio.Lock:
-        lock = getattr(self, "_autonomous_chain_cycle_lock", None)
-        if lock is None:
-            lock = asyncio.Lock()
-            setattr(self, "_autonomous_chain_cycle_lock", lock)
-        return lock
 
     def _build_autonomous_chain_execution_request(
         self,
@@ -5571,138 +5118,7 @@ class PlanningRuntimeMixin:
         )
 
     async def _run_autonomous_chain_review_cycle(self) -> Dict[str, Any]:
-        cycle_lock = self._get_autonomous_chain_cycle_lock()
-        if cycle_lock.locked():
-            logger.info("Skipping autonomous-chain review cycle because another cycle is already running.")
-            return {
-                "reviewed": 0,
-                "handed_off": [],
-                "recovered_orphaned": 0,
-                "governance_consumption": {"count": 0, "consumed": []},
-                "alignment_consumption": {"count": 0, "consumed": []},
-                "truthfulness_consumption": {"count": 0, "consumed": []},
-                "skipped": "cycle_already_running",
-            }
-        async with cycle_lock:
-            return await self._run_autonomous_chain_review_cycle_locked()
-
-    async def _run_autonomous_chain_review_cycle_locked(self) -> Dict[str, Any]:
-        recovered_orphaned = await self._recover_orphaned_agent_pull_tasks()
-        governance_consumption = self._consume_endogenous_governance_review_events()
-        alignment_consumption = self._consume_endogenous_alignment_events()
-        truthfulness_consumption = self._consume_endogenous_truthfulness_alerts()
-
-        # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
-        stale_running = 0
-        now = datetime.now(timezone.utc)
-        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="running"):
-            started = task.metadata.get("executed_at") or task.metadata.get("execution_started_at")
-            if started:
-                try:
-                    t = datetime.fromisoformat(str(started))
-                    if t.tzinfo is None:
-                        t = t.replace(tzinfo=timezone.utc)
-                    if (now - t).total_seconds() > 1800:
-                        self._autonomous_task_state.update_status(
-                            task.task_id, status="failed",
-                            reason="timeout: stuck >30min",
-                            event_type="timeout",
-                        )
-                        stale_running += 1
-                except Exception:
-                    pass
-        if stale_running:
-            logger.warning("Auto-failed %d stale running tasks", stale_running)
-
-        review_result = await self.review_autonomous_chain_tasks({})
-        handed_off = []
-        handoff_limit = int(
-            getattr(self.config.service_runtime, "autonomous_chain_handoff_limit_per_cycle", 1)
-            or 0
-        )
-        handoff_budget_exhausted = 0
-
-        def _handoff_budget_available() -> bool:
-            return handoff_limit <= 0 or len(handed_off) < handoff_limit
-
-        # Pass 1: hand off tasks that were just transferred out of API-B
-        # judgement in this review.
-        handoff_considered_ids: set[str] = set()
-        for task_payload in review_result.get("tasks", []):
-            if task_payload.get("status") != "approved":
-                continue
-
-            task_payload_id = str(task_payload.get("task_id", "") or "")
-            task = self._autonomous_chain_store.get_task(task_payload_id)
-            if task is None:
-                continue
-            handoff_considered_ids.add(task.task_id)
-
-            gov_type = self._task_profile_policy.governance_type(task)
-            execution_kind = self._task_profile_policy.execution_kind(task)
-            if gov_type == "self_learning" or execution_kind == "body_improvement":
-                # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
-                continue
-
-            if task.execution_request is None:
-                continue
-
-            if not _handoff_budget_available():
-                handoff_budget_exhausted += 1
-                continue
-
-            result = await self._handoff_autonomous_chain_execution_request(task)
-            if result is not None:
-                handed_off.append(
-                    {
-                        "task_id": task.task_id,
-                        "status": result.get("status"),
-                    }
-                )
-
-        # Pass 2: hand off any previously transferred tasks that were never
-        # consumed, PLUS tasks whose previous handoff failed and were reset to
-        # the handoff-ready `approved` enum for retry (execution_failed=True,
-        # failure_count < max_retries).  Tasks in running state or
-        # permanently failed are skipped here.
-        handed_off_ids = {d["task_id"] for d in handed_off}
-        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="approved"):
-            if task.task_id in handed_off_ids:
-                continue
-            if task.task_id in handoff_considered_ids:
-                continue
-            if task.status == "running":
-                continue  # already running or permanently failed
-
-            execution_kind = self._task_profile_policy.execution_kind(task)
-            if self._task_profile_policy.governance_type(task) == "self_learning" or execution_kind == "body_improvement":
-                # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
-                # The supervisor only approves them; execution is API-A initiated.
-                continue
-
-            if task.execution_request is None:
-                continue
-
-            if not _handoff_budget_available():
-                handoff_budget_exhausted += 1
-                continue
-
-            result = await self._handoff_autonomous_chain_execution_request(task)
-            if result is not None:
-                handed_off.append(
-                    {"task_id": task.task_id, "status": result.get("status")}
-                )
-
-        return {
-            "reviewed": review_result.get("count", 0),
-            "handed_off": handed_off,
-            "recovered_orphaned": recovered_orphaned,
-            "governance_consumption": governance_consumption,
-            "alignment_consumption": alignment_consumption,
-            "truthfulness_consumption": truthfulness_consumption,
-            "handoff_limit": handoff_limit,
-            "handoff_budget_exhausted": handoff_budget_exhausted,
-        }
+        return await self._autonomous_task_review_cycle_service.run()
 
     async def run_autonomous_cycle(self, request: dict | None = None) -> Dict[str, Any]:
         """Execute one full autonomous cycle: drive → plan → review → handoff.

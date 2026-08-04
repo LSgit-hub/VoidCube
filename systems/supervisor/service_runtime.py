@@ -1257,7 +1257,7 @@ class ServiceRuntimeMixin:
         self._service_runtime.next_drive_at = None
 
         for task in self._autonomous_chain_store.list_api_a_running_tasks():
-            self._update_task_status(
+            self._autonomous_task_state.update_status(
                 task.task_id,
                 status="failed",
                 actor="supervisor_gate",
