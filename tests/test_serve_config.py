@@ -24,6 +24,18 @@ def test_serve_supervisor_config_honors_lm_generation_env(monkeypatch):
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is False
 
 
+def test_memory_timing_policy_honors_environment_overrides(monkeypatch):
+    monkeypatch.setenv("MEMORY_TIER1_RETENTION_DAYS", "11")
+    monkeypatch.setenv("MEMORY_LIFECYCLE_CADENCE_DAYS", "9")
+    monkeypatch.setenv("MEMORY_EVENT_TO_SCENE_DAYS", "21")
+
+    config = load_config_from_env().memory
+
+    assert config.tier1_retention_days == 11
+    assert config.lifecycle_cadence_days == 9
+    assert config.lifecycle_event_to_scene_days == 21
+
+
 def test_serve_supervisor_config_copies_system_config_before_port_override():
     system_config = SystemConfig()
     original_port = system_config.supervisor.port

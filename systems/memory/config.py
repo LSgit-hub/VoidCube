@@ -22,8 +22,8 @@ class MemoryServiceConfig(BaseModel):
     gateway_address: str = "http://127.0.0.1:6000"
     gateway_registration_check_interval: int = 30
     decay_interval_hours: int = Field(default=24, gt=0)
-    compression_interval: int = 3600
-    tier1_retention_days: int = 30
+    compression_interval: int = Field(default=3600, ge=60)
+    tier1_retention_days: int = Field(default=7, ge=1, le=365)
     tier1_max_turns: int = 10000
     tier1_decay_rate: float = Field(default=0.99, ge=0.0, le=1.0)
     tier1_min_relevance: float = 0.1
@@ -40,6 +40,12 @@ class MemoryServiceConfig(BaseModel):
     lifecycle_min_identifier_fidelity: float = Field(default=0.8, ge=0.0, le=1.0)
     lifecycle_max_quality_retries: int = Field(default=3, ge=1, le=20)
     lifecycle_retry_base_hours: float = Field(default=1.0, gt=0.0, le=168.0)
+    lifecycle_cadence_days: int = Field(default=7, ge=1, le=365)
+    lifecycle_event_to_scene_days: int = Field(default=14, ge=1, le=3650)
+    lifecycle_scene_to_arc_days: int = Field(default=60, ge=1, le=3650)
+    lifecycle_arc_to_epoch_days: int = Field(default=180, ge=1, le=3650)
+    lifecycle_epoch_to_final_days: int = Field(default=365, ge=1, le=3650)
+    lifecycle_final_review_days: int = Field(default=90, ge=1, le=3650)
     backup_retention_count: int = Field(default=5, ge=1, le=100)
     recall_default_limit: int = Field(default=5, ge=1, le=50)
     recall_candidate_limit: int = Field(default=200, ge=10, le=2000)

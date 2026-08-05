@@ -17,6 +17,17 @@ class LifecycleQuality:
     failed_checks: tuple[str, ...]
 
 
+def lifecycle_age_thresholds(config) -> tuple[tuple[tuple[str, int], int], ...]:
+    """Return the configured Event-to-Final lifecycle thresholds."""
+    return (
+        (("event", 0), int(config.lifecycle_event_to_scene_days)),
+        (("scene", 1), int(config.lifecycle_scene_to_arc_days)),
+        (("arc", 2), int(config.lifecycle_arc_to_epoch_days)),
+        (("epoch", 3), int(config.lifecycle_epoch_to_final_days)),
+        (("epoch", 4), int(config.lifecycle_final_review_days)),
+    )
+
+
 def evaluate_lifecycle_quality(
     *,
     source_title: str,

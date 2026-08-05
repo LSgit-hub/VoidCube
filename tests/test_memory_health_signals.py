@@ -24,7 +24,15 @@ from systems.memory.memory_service import (
     Tier2CompressRequest,
     TurnCreate,
 )
-from systems.memory.lifecycle_policy import evaluate_lifecycle_quality
+from systems.memory.lifecycle_policy import (
+    evaluate_lifecycle_quality,
+    lifecycle_age_thresholds,
+)
+from systems.memory.maintenance_schedule import (
+    claim_rule_execution,
+    get_rule_state,
+    record_rule_result,
+)
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
@@ -42,6 +50,118 @@ def test_memory_service_does_not_own_a_second_tier2_bridge() -> None:
     assert "_bridge_to_tier2" not in source
     assert "_write_compressed_memories" not in source
     assert "_build_stable_cmem_ids" not in source
+
+
+def test_memory_timing_defaults_match_weekly_consolidation_policy(tmp_path):
+    config = MemoryServiceConfig(db_path=str(tmp_path / "mem.db"))
+
+    assert config.tier1_retention_days == 7
+    assert config.lifecycle_cadence_days == 7
+    assert lifecycle_age_thresholds(config) == (
+        (("event", 0), 14),
+        (("scene", 1), 60),
+        (("arc", 2), 180),
+        (("epoch", 3), 365),
+        (("epoch", 4), 90),
+    )
+
+
+def test_scheduled_rule_claim_uses_a_lease_to_prevent_duplicate_work(tmp_path):
+    db_path = tmp_path / "mem.db"
+
+    first = claim_rule_execution(
+        db_path, rule_name="lifecycle_escalation", cadence_days=7
+    )
+    second = claim_rule_execution(
+        db_path, rule_name="lifecycle_escalation", cadence_days=7
+    )
+
+    assert first.due is True
+    assert second.due is False
+    assert second.skip_reason == "in_progress"
+
+    record_rule_result(
+        db_path, rule_name="lifecycle_escalation", succeeded=True
+    )
+    after_success = claim_rule_execution(
+        db_path, rule_name="lifecycle_escalation", cadence_days=7
+    )
+    assert after_success.due is False
+    assert after_success.skip_reason == "cadence"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_lifecycle_cadence_persists_across_restarts(
+    tmp_path, monkeypatch
+):
+    first = _make_service(tmp_path)
+    calls = 0
+
+    async def no_op():
+        return 0
+
+    async def lifecycle():
+        nonlocal calls
+        calls += 1
+        return {"escalated": 0, "purged": 0}
+
+    for service in (first,):
+        monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
+        monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
+        monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
+        monkeypatch.setattr(service, "_apply_compression_lifecycle", lifecycle)
+        monkeypatch.setattr(service, "_purge_expired_memories", no_op)
+
+    initial = await first._run_all_rules_internal(respect_cadence=True)
+    assert initial["lifecycle_escalation"] == {"escalated": 0, "purged": 0}
+    assert calls == 1
+
+    restarted = _make_service(tmp_path)
+    monkeypatch.setattr(restarted, "_identity_experience_cycle", no_op)
+    monkeypatch.setattr(restarted, "_tier1_decay_cycle", no_op)
+    monkeypatch.setattr(restarted, "_tier2_bridge_cycle", no_op)
+    monkeypatch.setattr(restarted, "_apply_compression_lifecycle", lifecycle)
+    monkeypatch.setattr(restarted, "_purge_expired_memories", no_op)
+
+    throttled = await restarted._run_all_rules_internal(respect_cadence=True)
+    assert throttled["lifecycle_escalation"]["skipped"] == "cadence"
+    assert throttled["lifecycle_escalation"]["next_due_at"]
+    assert calls == 1
+    assert get_rule_state(
+        restarted._db_path, "lifecycle_escalation"
+    )["last_succeeded_at"]
+
+
+@pytest.mark.asyncio
+async def test_failed_scheduled_lifecycle_is_retried_before_next_week(
+    tmp_path, monkeypatch
+):
+    service = _make_service(tmp_path)
+    calls = 0
+
+    async def no_op():
+        return 0
+
+    async def failing_lifecycle():
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("temporary lifecycle failure")
+
+    monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
+    monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
+    monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
+    monkeypatch.setattr(service, "_apply_compression_lifecycle", failing_lifecycle)
+    monkeypatch.setattr(service, "_purge_expired_memories", no_op)
+
+    first = await service._run_all_rules_internal(respect_cadence=True)
+    second = await service._run_all_rules_internal(respect_cadence=True)
+
+    assert first["lifecycle_escalation"]["error"] == "temporary lifecycle failure"
+    assert second["lifecycle_escalation"]["error"] == "temporary lifecycle failure"
+    assert calls == 2
+    state = get_rule_state(service._db_path, "lifecycle_escalation")
+    assert state["last_succeeded_at"] is None
+    assert state["last_error"] == "temporary lifecycle failure"
 
 
 def test_memory_sqlite_connections_use_busy_timeout_and_wal(tmp_path):

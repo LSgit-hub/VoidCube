@@ -63,7 +63,13 @@ from systems.memory.http_adapter import build_memory_http_app
 from systems.memory.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
 from systems.memory.lifecycle_policy import (
     evaluate_lifecycle_quality,
+    lifecycle_age_thresholds,
     record_lifecycle_rejection,
+)
+from systems.memory.maintenance_schedule import (
+    claim_rule_execution,
+    get_rule_state,
+    record_rule_result,
 )
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
@@ -458,15 +464,6 @@ class MemoryApplicationService:
     #   Level 4 (Final,  >=730d): weight = 0.05 → purge candidate
     _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
 
-    _LEVEL_MAX_AGE_DAYS = {
-        # (memory_type, compression_level) → max age before escalation
-        ("event", 0): 30,     # Event → escalate to Scene after 30d
-        ("scene", 1): 180,    # Scene → escalate to Arc after 180d
-        ("arc", 2): 365,      # Arc → escalate to Epoch after 365d
-        ("epoch", 3): 730,    # Epoch → escalate to Final after 730d
-        ("epoch", 4): 90,     # Final → purge candidate after 90d audit window
-    }
-
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
         """Cascade compressed memories through compression levels.
 
@@ -481,7 +478,7 @@ class MemoryApplicationService:
         quality_rejected = 0
 
         # ── Escalate: find entries past their level's max age ──
-        for (mem_type, level), max_age_days in self._LEVEL_MAX_AGE_DAYS.items():
+        for (mem_type, level), max_age_days in lifecycle_age_thresholds(self.config):
             cutoff = (now - timedelta(days=max_age_days)).isoformat()
             rows = conn.execute(
                 "SELECT memory_id, title, summary, topics, entities, event_kind, "
@@ -1581,13 +1578,15 @@ class MemoryApplicationService:
                 logger.debug("Periodic LLM health re-check skipped", exc_info=True)
             try:
                 # ── Tier 1 decay + Tier 2 bridge + Lifecycle ─────
-                await self._run_all_rules_internal()
+                await self._run_all_rules_internal(respect_cadence=True)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning("Background compression loop failed", exc_info=True)
 
-    async def _run_all_rules_internal(self) -> Dict[str, Any]:
+    async def _run_all_rules_internal(
+        self, *, respect_cadence: bool = False
+    ) -> Dict[str, Any]:
         """Execute all five memory rules in correct order (internal, track execution)."""
         now = datetime.now().isoformat()
         results: Dict[str, Any] = {}
@@ -1600,15 +1599,39 @@ class MemoryApplicationService:
         ]
         effective_work = 0
         for rule_name, rule_fn in rules:
+            if respect_cadence and rule_name == "lifecycle_escalation":
+                cadence = claim_rule_execution(
+                    self._db_path,
+                    rule_name=rule_name,
+                    cadence_days=self.config.lifecycle_cadence_days,
+                )
+                if not cadence.due:
+                    results[rule_name] = {
+                        "skipped": cadence.skip_reason or "cadence",
+                        "last_succeeded_at": cadence.last_succeeded_at,
+                        "next_due_at": cadence.next_due_at,
+                    }
+                    continue
             try:
                 result = await rule_fn()
                 results[rule_name] = result
                 self._last_rule_run[rule_name] = now
                 self._rule_run_counts[rule_name] = self._rule_run_counts.get(rule_name, 0) + 1
                 effective_work += self._rule_effective_count(result)
+                if rule_name == "lifecycle_escalation":
+                    record_rule_result(
+                        self._db_path, rule_name=rule_name, succeeded=True
+                    )
             except Exception as exc:
                 logger.warning("Memory maintenance rule %s failed: %s", rule_name, exc, exc_info=True)
                 results[rule_name] = {"error": str(exc)}
+                if rule_name == "lifecycle_escalation":
+                    record_rule_result(
+                        self._db_path,
+                        rule_name=rule_name,
+                        succeeded=False,
+                        error=str(exc),
+                    )
         # P0-4 健康信号: only stamp the "effective activity" marker when a rule
         # actually wrote/changed rows this cycle. A no-op cycle (no candidates,
         # nothing to decay) advances last_run but NOT this marker, so the UI no
@@ -1666,6 +1689,7 @@ class MemoryApplicationService:
 
     async def rules_status(self):
         """Return the last execution time and count for each rule."""
+        lifecycle_state = get_rule_state(self._db_path, "lifecycle_escalation")
         return {
             "rules": {
                 name: {
@@ -1676,6 +1700,8 @@ class MemoryApplicationService:
             },
             "compression_interval": self.config.compression_interval,
             "tier1_retention_days": self.config.tier1_retention_days,
+            "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
+            "lifecycle_state": lifecycle_state,
             # P0-4 健康信号: last cycle that performed real write work, and the
             # last time LLM health was actually probed. UI computes memory_active
             # from effective_activity_at (not last_run) so no-op cycles don't

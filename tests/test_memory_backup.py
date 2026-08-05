@@ -20,6 +20,49 @@ def _make_service(tmp_path: Path, *, retention: int = 5) -> MemoryService:
     )
 
 
+def test_empty_obsolete_memories_table_is_backed_up_and_removed(tmp_path):
+    db_path = tmp_path / "memory.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE memories (memory_id TEXT PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    service = _make_service(tmp_path)
+
+    conn = sqlite3.connect(service._db_path)
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert exists is None
+    assert len(list((tmp_path / "backups").glob("memory-*.db"))) == 1
+
+
+def test_nonempty_obsolete_memories_table_is_preserved(tmp_path):
+    db_path = tmp_path / "memory.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE memories (memory_id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO memories VALUES ('legacy-memory')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    service = _make_service(tmp_path)
+
+    conn = sqlite3.connect(service._db_path)
+    try:
+        row = conn.execute("SELECT memory_id FROM memories").fetchone()
+    finally:
+        conn.close()
+    assert row == ("legacy-memory",)
+    assert not (tmp_path / "backups").exists()
+
+
 async def _write_turn(service: MemoryService, marker: str, content: str) -> str:
     session_id = f"backup-{marker}"
     await service.create_session(SessionCreate(session_id=session_id))

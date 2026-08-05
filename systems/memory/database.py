@@ -81,28 +81,40 @@ class MemoryDatabaseBootstrap:
         if not self.db_path.is_file():
             return
         connection = open_memory_sqlite(self.db_path)
+        reasons: list[str] = []
         try:
-            table_exists = connection.execute(
+            compressed_exists = connection.execute(
                 "SELECT 1 FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'compressed_memories'"
             ).fetchone()
-            if not table_exists:
-                return
-            columns = {
-                row[1]
-                for row in connection.execute(
-                    "PRAGMA table_info(compressed_memories)"
-                ).fetchall()
-            }
+            if compressed_exists:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(compressed_memories)"
+                    ).fetchall()
+                }
+                if "embedding" in columns:
+                    reasons.append("compressed_memories.embedding")
+            obsolete_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'memories'"
+            ).fetchone()
+            if obsolete_exists:
+                obsolete_count = int(
+                    connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                )
+                if obsolete_count == 0:
+                    reasons.append("empty obsolete memories table")
         finally:
             connection.close()
-        if "embedding" not in columns:
+        if not reasons:
             return
         backup = self.backup_manager.create_backup()
         logger.info(
-            "Created pre-migration Memory backup %s before removing obsolete "
-            "compressed_memories.embedding",
+            "Created pre-migration Memory backup %s before removing %s",
             backup["backup_id"],
+            ", ".join(reasons),
         )
 
     def _setup_schema(self) -> None:
@@ -110,6 +122,7 @@ class MemoryDatabaseBootstrap:
         connection = open_memory_sqlite(self.db_path)
         try:
             cursor = connection.cursor()
+            self._drop_empty_obsolete_memories_table(cursor)
             self._create_tables(cursor)
             setup_memory_promotion_schema(connection)
             self._migrate_scope_schema(cursor)
@@ -119,6 +132,24 @@ class MemoryDatabaseBootstrap:
             connection.commit()
         finally:
             connection.close()
+
+    @staticmethod
+    def _drop_empty_obsolete_memories_table(cursor: sqlite3.Cursor) -> None:
+        exists = cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories'"
+        ).fetchone()
+        if not exists:
+            return
+        count = int(cursor.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+        if count:
+            logger.warning(
+                "Preserving obsolete memories table because it contains %d rows; "
+                "the table is not part of active Memory recall",
+                count,
+            )
+            return
+        cursor.execute("DROP TABLE memories")
+        logger.info("Removed empty obsolete memories table")
 
     def _create_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute(
@@ -411,10 +442,12 @@ class MemoryDatabaseBootstrap:
             reconcile_released_identity_revisions,
         )
         from systems.memory.llm_cache import setup_llm_cache
+        from systems.memory.maintenance_schedule import setup_memory_rule_state
 
         setup_memory_fts(connection)
         setup_entity_graph(connection)
         setup_llm_cache(connection)
+        setup_memory_rule_state(connection)
         seeded = ensure_founding_memories(connection)
         released = reconcile_released_identity_revisions(connection)
         logger.info(

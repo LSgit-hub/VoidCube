@@ -92,6 +92,8 @@ _PROMOTION_MANAGERS = frozenset(
     {MemoryActor.MEMORY_MAINTENANCE, MemoryActor.GOVERNOR}
 )
 
+# Promotion is intentionally one-way into COMPANION. Private companion memories
+# cannot flow back into agent or evolution domains.
 _ALLOWED_PROMOTION_TARGETS: dict[MemoryDomain, frozenset[MemoryDomain]] = {
     MemoryDomain.AGENT_INTERACTION: frozenset({MemoryDomain.COMPANION}),
     MemoryDomain.COMPANION: frozenset(),
@@ -214,6 +216,7 @@ def source_memory_exists(
     source_domain: MemoryDomain,
     scope: MemoryScope,
 ) -> bool:
+    """Check a private or globally visible source without widening ref scope."""
     table, id_column, active_clause = _SOURCE_TABLES[source_type]
     row = conn.execute(
         f"SELECT 1 FROM {table} WHERE {id_column} = ? "

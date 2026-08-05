@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -428,6 +429,40 @@ async def test_promotion_policy_blocks_private_companion_and_auto_targets(tmp_pa
             )
         )
     assert actor_error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_global_source_can_create_only_a_private_scoped_promotion_reference(tmp_path):
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "compressed_at, status, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES ('global-evolution-source', 'event', 'Global evolution', "
+            "'Globally governed source', ?, ?, ?, 'active', '*', '*', 'evolution', ?)",
+            (now, now, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    created = await service.create_promotion_candidate(
+        MemoryPromotionCandidateCreate(
+            source_memory_id="global-evolution-source",
+            source_type="compressed",
+            source_domain="evolution",
+            target_domain="companion",
+            reason="Project the global conclusion only after local consent.",
+            governance_ref="governor-review:global-source",
+            memory_actor="governor",
+        )
+    )
+
+    assert created["candidate"]["owner_id"] == "local-user"
+    assert created["candidate"]["workspace_id"] == "default"
 
 
 @pytest.mark.asyncio

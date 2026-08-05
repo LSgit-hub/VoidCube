@@ -1,248 +1,132 @@
-# VoidCube 记忆系统 — 第二轮逻辑审查报告
+# VoidCube 记忆系统 — 第二轮逻辑审查最终复核
 
-> 审查日期：2026-08-05
->
-> 基于上一轮 32 个问题的修复验证 + 新引入问题审查
-
----
-
-## 实施复核（2026-08-05 19:44 CST）
-
-本节记录第二轮报告完成后的修复和真实运行态复核，结论优先于下方保留的原始审查快照。
-
-### 第二轮问题处理状态
-
-| 项目 | 当前状态 | 实施结果 |
-|------|----------|----------|
-| NC1 生命周期质量拒绝无限重试 | ✅ 已修复 | 独立 `lifecycle_policy.py`；最多 3 次并指数退避，记录最后错误 |
-| NC2 桥接质量门禁误用于抽象升级 | ✅ 已修复 | 生命周期改用独立的 source support / identifier fidelity 阈值 |
-| NH3 桥接遗漏 `created_at` | ✅ 已修复 | event/scene/arc/epoch INSERT 均显式写入 |
-| NH4 高层 `event_kind` 不一致 | ✅ 已修复 | bridge 与 lifecycle 均继承子层多数类型 |
-| S1 窗口外点记忆获得 temporal boost | ✅ 已修复 | 窗口外明确返回 `0.0` |
-| S2 本地 embedding 线性放大噪声 | ✅ 已修复 | 改为非线性 `20 * raw^2` |
-| S5 tombstone 迁移无事务边界 | ✅ 已修复 | SQLite `SAVEPOINT` 包裹迁移 |
-
-### 补充诊断四项复核
-
-| 诊断主张 | 结论 | 真实证据 |
-|----------|------|----------|
-| Mem LLM 当前被项目策略拦截 | ❌ 当前不成立 | `/llm/health` 返回 `healthy=true`，模型为 `deepseek-v4-flash`；策略仅拒绝仓库明确退役的集成 |
-| `memories=0` 证明 Tier 2 无数据 | ❌ 不成立 | `memories` 是遗留空表；活跃表 `compressed_memories` 有 17 行，`profile_memories` 为 0 |
-| 409 由默认 workspace 常量漂移造成 | ⚠️ 证据不足 | 当前 Gateway registration 健康；409 代码是复用同一 session ID 时的 scope 隔离保护。真实库同时存在 `default` 与 `VoidCube` 历史 scope，但不能据此认定 daemon 仍加载旧代码 |
-| `compressed_memories` 全为 event 说明升级瘫痪 | ❌ 不成立 | 17 行当前确实均为 event，但最旧记录仅 13 天；Event→Scene 阈值为 30 天，手动 lifecycle 结果为 `escalated=0, quality_rejected=0` |
-
-历史日志曾记录策略拦截和远端鉴权失败，但二者是独立状态，不能推导出“解除策略后鉴权必然恢复”。解析器现已输出 `policy_blocked`、`api_key_unavailable`、`client_initialization_failed` 等非敏感原因，避免继续把不同故障合并成 `llm_client_unavailable`。
-
-启发式管道离线样例产出 `2 events / 1 scene / 1 arc / 1 epoch`，因此“无 LLM 必然 0 事件”也不成立。生产桥接在 degraded 状态下会被 `max_degraded_fraction=0.0` 质量策略拒绝提交，这是明确的数据质量保护，而不是提取器无产出。
-
-### 验证记录
-
-- 真实数据库在线备份：`memory-20260805T114404877430Z-23bcdbf9.db`，`integrity_check=ok`
-- 当前 Gateway registration：健康
-- 当前 Mem LLM：健康
-- 定向回归（第二轮修复）：Memory/Mem 223 passed；架构、Gateway、退役集成、打包契约 108 passed
-- 第二轮修改前的最近完整回归：2149 passed, 4 skipped, 1 xfailed；第二轮修改后的完整套件超过 10 分钟后中止，未观察到失败输出，不能记作通过
+> 原始审查日期：2026-08-05  
+> 最终复核日期：2026-08-05  
+> 本文只描述当前实现；旧的“仍存在”和“新增问题”快照已移除，避免后续会话误用。
 
 ---
 
-## 一、修复状态总览
+## 一、最终结论
 
-| 状态 | 数量 | 说明 |
+原报告列出的 12 条当前问题中：
+
+| 分类 | 数量 | 结论 |
 |------|------|------|
-| ✅ 已修复 | 16 | 上一轮 Critical/High 大部分已修复 + 多个 Medium |
-| ⚠️ 仍存在 | 8 | 5 个原始问题 + 3 个由本次修复新引入 |
-| 🔴 新增 | 4 | 本次修复引入的新 Critical/High 问题 |
+| 真实缺陷 | 8 | 已全部修复并有定向测试 |
+| 重复问题 | 2 | 分别与 `created_at` 和生命周期质量门禁重复 |
+| 设计边界 | 2 | `GLOBAL_SCOPE_ID` 可见性与 COMPANION 单向推广均为安全策略，不应修改 |
+
+没有证据支持“当前 Mem LLM 被策略拦截是唯一根因”。历史日志中策略拦截、密钥不可用和远端鉴权失败曾分别发生，但当前运行配置必须通过 `/llm/health` 和结构化解析状态判断，不能互相推导。
 
 ---
 
-## 二、已修复确认 ✅
+## 二、12 条问题逐项复核
 
-| # | 原始编号 | 问题 | 修复方式 |
-|---|---------|------|---------|
-| 1 | C1 | `_cmem_row_to_dict` 迁移DB列索引错位 | 改为按列名访问 + `_CMEM_COLUMNS` 显式列名常量，所有 `SELECT *` 替换为 `SELECT {_CMEM_COLUMNS}` |
-| 2 | C2 | FTS5 丢弃 2-字符 CJK 词 | `len(term) < 3` → `< 2`，2-字符词使用 `LIKE '%term%'` 回退搜索 |
-| 3 | H1 | 生命周期升级无质量门禁 | 新增 `_source_support` + `_identifiers` 双重检查（M11→已升级为 NM1/NM2） |
-| 4 | H2 | 桥接质量门禁拒绝后无限重试 | `_MAX_QUALITY_RETRIES = 3` + 指数退避 (`2^N` 小时) + 永久标记 (`compressed_to_tier2 = -1`) |
-| 5 | H4 | "星子" Identity Query 误判 | 从 `_IDENTITY_TOPIC_MARKERS` 移除，改为多条件判断（长度≤15 + 身份疑问词 + 无功能性动词） |
-| 6 | M4 | 生命周期升级不设置 event_kind | 升级 INSERT 现在从源行继承 `event_kind` |
-| 7 | M6 | `_dynamic_weight` 重复定义 | 提取到 `ranking_policy.py` 的 `compute_dynamic_weight`，recall 和 memory_service 均导入 |
-| 8 | M7 | Feedback 无时间衰减 | `decay = math.exp(-age_days / 90.0)`，90 天半衰期 |
-| 9 | M11 | created_at NULL | escalation 升级 INSERT 显式设置 `created_at = now` |
-| 10 | — | entity_graph 默认 GLOBAL_SCOPE_ID | `rebuild_entity_graph` 默认参数改为 `None` |
-| 11 | — | escalation 质量门禁统计 | `_apply_compression_lifecycle` 返回 `quality_rejected` 计数 |
-| 12 | — | `_CMEM_COLUMNS` 与 `_CMEM_COLUMN_INDEX` 对齐 | 32 列顺序一致，按名称映射索引 |
-| 13 | — | remember API created_at | INSERT 显式设置 `created_at = now` |
-| 14 | — | recall.py 身份查询分类 | 新增功能性动词过滤（"配置"、"做了"、"查看" 等不触发 identity） |
-| 15 | — | 桥接 retry 机制 | `compression_retry_count` + `compression_retry_after` 列 + `_record_quality_rejection` |
-| 16 | — | escalation 升级 SELECT 增加 event_kind | `SELECT ... event_kind ...` 用于质量门禁和继承 |
+| # | 原编号 | 原主张 | 真实性 | 最终处理 |
+|---|--------|--------|--------|----------|
+| 1 | NC1/S8 | 生命周期质量拒绝会无限调用 LLM | 属实 | 增加 `lifecycle_retry_count/retry_after/last_error`，最多 3 次并指数退避 |
+| 2 | NC2 | 桥接质量门禁不适合抽象到抽象升级 | 属实 | 新增独立 `lifecycle_policy.py`，使用可配置的 0.15 source support 与 0.8 identifier fidelity |
+| 3 | NH3/S6 | Bridge INSERT 未显式写 `created_at` | 属实 | event/scene/arc/epoch 四条写入路径均显式设置 |
+| 4 | NH4 | Bridge 与 lifecycle 的 `event_kind` 不一致 | 属实 | 高层记忆统一继承子层多数 `event_kind` |
+| 5 | S1 | 时间窗口外点候选仍获得 temporal boost | 属实 | 窗口外明确返回 `0.0` |
+| 6 | S2 | 本地 embedding 线性乘 3 放大噪声 | 属实 | 改为非线性 `20 * raw^2` 并增加阈值边界测试 |
+| 7 | S3 | `source_memory_exists` 接受全局 scope 是隔离漏洞 | 不属实 | 全局源允许被本地 scope 引用，但 candidate/ref 始终写入请求者私有 scope；新增契约测试 |
+| 8 | S7 | 生命周期 0.35 阈值硬编码 | 属实 | 生命周期阈值已独立配置化，不再复用 bridge 的 0.35 |
+| 9 | S4 | COMPANION 没有出站推广路径 | 不属实 | 这是隐私边界：agent/evolution 可经用户同意投影到 companion，companion 私密记忆不得外流 |
+| 10 | S5 | Tombstone 迁移无事务边界 | 属实 | 使用 SQLite `SAVEPOINT` 包裹完整迁移并支持回滚 |
+| 11 | — | Bridge `created_at` 回退脆弱 | 重复 | 与 #3 相同，已修复 |
+| 12 | — | 生命周期标识符绝对门禁误拒绝 | 重复 | 与 #2 相同，已改为比例式 fidelity |
 
 ---
 
-## 三、仍存在的问题 ⚠️
+## 三、上一轮修复保留情况
 
-### S1. `_temporal_fit_score` 窗口外点候选仍高于窗口内跨段候选
+以下原有修复在当前代码中仍然有效：
 
-**文件：** [recall.py:1822-1838](../systems/memory/recall.py#L1822-L1838)
-
-点候选在窗口外时 cap 在 `min(0.35, ...)`。对于 30 天窗口内仅有 1 天重叠的跨段候选，得分仅为 `1/30 ≈ 0.033`。**0.35 >> 0.033**，窗口内部分覆盖的跨段记忆仍被窗口外的无关点记忆超越。需降低上限或使其与 `query_seconds` 成比例。
-
-### S2. `_LOCAL_SIMILARITY_BOOST = 3.0` 仍存在
-
-**文件：** [semantic_index.py:35](../systems/memory/semantic_index.py#L35)
-
-线性放大 3.0 仍将底层噪声（raw cos < 0.12）映射到刚好超过 0.35 阈值的值，使表面共享字符的无关记忆通过语义通道混入候选。
-
-### S3. `source_memory_exists` 使用 GLOBAL_SCOPE_ID，同模块其他查询不用
-
-**文件：** [promotion.py:218-231](../systems/memory/promotion.py#L218-L231) vs [promotion.py:348](../systems/memory/promotion.py#L348) 等处
-
-`source_memory_exists` 仍使用 `(owner_id = X OR owner_id = '*')` 模式，但 `list_candidates`、`consent`、`revoke` 等只用精确 scope 匹配。不一致性未消除。
-
-### S4. COMPANION 域仍无出站提升路径
-
-**文件：** [promotion.py:97](../systems/memory/promotion.py#L97)
-
-`MemoryDomain.COMPANION: frozenset()` 仍为空。COMPANION 在所有合法路径中为数据汇点。是否是设计意图待确认，但结构上仍无出站路径。
-
-### S5. Profile tombstone 迁移仍无事务包裹
-
-**文件：** [database.py:508-547](../systems/memory/database.py#L508-L547)
-
-CREATE → INSERT SELECT → DROP → RENAME 序列仍无 SAVEPOINT 或显式事务边界。每个 DDL 在 SQLite 中自动提交，中途崩溃可使数据库处于不一致状态。
-
-### S6. 桥接 INSERT 仍省略 `created_at`
-
-**文件：** [tier1_to_tier2_bridge.py:164-242](../systems/memory/tier1_to_tier2_bridge.py#L164-L242)
-
-四个桥接 INSERT（event/scene/arc/epoch）均未显式设置 `created_at`，完全依赖回退 UPDATE。与 escalation（显式设置）和 remember API（显式设置）不一致（原 L3→升级为 NH3）。
-
-### S7. Escalation 质量门禁 0.35 阈值硬编码
-
-**文件：** [memory_service.py:537](../systems/memory/memory_service.py#L537)
-
-`_source_support < 0.35` 硬编码，不可配置。桥接通过 `tier2_min_source_support` 配置项暴露，但 escalation 无对应配置项（原 M6→确认仍存在）。
-
-### S8. Escalation 拒绝后无限 LLM 重试无退避
-
-**文件：** [memory_service.py:535-544](../systems/memory/memory_service.py#L535-L544)
-
-质量门禁拒绝后直接 `continue`，不更新源记忆的 `compressed_at`，下个周期（每小时）重新选择、重新调用 LLM。无重试计数器或退避策略（新发现，详见 NC1）。
+| 项目 | 当前证据 |
+|------|----------|
+| `_cmem_row_to_dict` 列错位 | `_CMEM_COLUMNS` 显式列清单与按名称索引转换 |
+| 两字 CJK FTS 召回 | 两字词使用 `LIKE` fallback，短于两字才丢弃 |
+| Bridge 质量拒绝无限重试 | 最多 3 次、指数退避、终止状态 `compressed_to_tier2=-1` |
+| 身份查询误判 | 功能性动词过滤覆盖“查看星子的配置”“星子昨天做了什么” |
+| 动态权重重复实现 | 统一由 `ranking_policy.compute_dynamic_weight` 提供 |
+| Feedback 永久影响 | 使用 90 天指数衰减 |
+| Entity graph 全局重建误用 | 默认 scope 为 `None`，只有显式请求才全局重建 |
+| Scope 与 domain 隔离 | owner/workspace/domain 均参与查询和写入条件 |
 
 ---
 
-## 四、本次修复引入的新问题 🔴
+## 四、补充诊断四项复核
 
-### NC1 (Critical). Escalation 质量拒绝无重试上限 — 无限 LLM 重调用
+### 1. “Mem LLM 当前被项目策略拦截”
 
-**文件：** [memory_service.py:535-544](../systems/memory/memory_service.py#L535-L544)
+当前不成立。解析器现区分：
 
-```python
-if _source_support(escalated_summary, source_text) < 0.35 or unsupported_identifiers:
-    quality_rejected += 1
-    continue  # ← 仅跳过，不更新 compressed_at
-```
+- `policy_blocked`
+- `api_key_unavailable`
+- `client_initialization_failed`
+- `ready`
 
-源记忆的 `compressed_at` 保持不变，`status` 保持 `'active'`。SELECT 查询要求 `status = 'active' AND compressed_at < cutoff`，因此同一个源行在下个周期（每 3600 秒）再次满足条件。LLM 调用在质量检查**之前**（第 525 行），所以每次重试都会消耗 LLM 费用。缺少桥接已实现的 `_MAX_QUALITY_RETRIES` + 指数退避等价机制。
+项目策略仍必须拒绝仓库明确退役的集成，不应为修复 Memory 而绕过。当前 `deepseek-v4-flash` 的真实健康状态以 `/llm/health` 为准。
 
-**修复方向：** 为 escalation 路径添加 retry 计数列（或复用 `citation_count`），实现类似桥接的重试限制和退避逻辑。
+### 2. “`memories=0` 证明 Tier 2 无数据”
 
----
+不成立。Canonical 长期记忆表是：
 
-### NC2 (Critical). `_source_support`/`_identifiers` 在 escalation 语义上不适用 — 将导致误拒绝
+- `compressed_memories`
+- `profile_memories`
 
-**文件：** [memory_service.py:535-537](../systems/memory/memory_service.py#L535-L537)
+旧 `memories` 表不参与写入或召回。新增迁移会在备份后删除空的旧表；如果旧表含数据则保留并告警，绝不自动丢弃。
 
-```python
-source_text = f"{title} {summary}"  # 旧摘要（已压缩、抽象、短）
-unsupported_identifiers = _identifiers(escalated_summary) - _identifiers(source_text)
-if _source_support(escalated_summary, source_text) < 0.35 or unsupported_identifiers:
-```
+### 3. “409 一定由 workspace 默认值漂移造成”
 
-`_source_support` 和 `_identifiers` 是为桥接设计的——桥接中 `source_text` 是**原始对话 turns**（长、token 丰富、包含用户原话），检查 LLM 摘要是否忠实于原始对话是合理的。
+证据不足。当前 scope 定义明确区分：
 
-但在 escalation 场景中：
-- `source_text` = 旧 `title + summary`，已经是压缩过的、抽象的、短文本
-- 新 escalation 的目的是**进一步提升抽象层次**（Event→Scene→Arc→Epoch）
-- **Token 重叠率**：更高层次的抽象自然会使用不同的、更宏观的语言。50-token 旧摘要与 60-token 新摘要可能仅共享 15 token，得分 0.25，低于 0.35 阈值，即使完全忠实
-- **标识符检查**：LLM 可能合法地引入在旧摘要中隐式存在但在高层次变得显式的实体名、日期或引用。`_identifiers` 是绝对门禁——任何新标识符 = 拒绝
+- 服务默认 workspace：`default`
+- 交互 CLI workspace：`VoidCube`
 
-这两个函数在 escalation 上下文中将导致**合法的升级被错误拒绝**，因为比较的是抽象 vs 抽象，而非桥接的摘要 vs 原始对话。
+复用同一 `session_id` 但提交不同 owner/workspace/domain 时，409 是隔离保护。它不能仅凭状态码被判定为 daemon 加载了旧常量。
 
-**修复方向：** 为 escalation 设计专用的质量检查，或大幅降低阈值（e.g., 0.15），或使用语义相似度（嵌入）而非 token 重叠来检查抽象一致性。
+### 4. “全部为 event 说明生命周期瘫痪”
+
+不成立。原数据最旧记录未达到旧的 30 天 Event→Scene 阈值，因此没有升级候选。启发式管道离线样例也能产生 event/scene/arc/epoch，不能把 LLM 不可用等同于 0 事件。
 
 ---
 
-### NH3 (High). 桥接 INSERT 省略 `created_at` — 与其他路径不一致
+## 五、时序策略改进
 
-**文件：** [tier1_to_tier2_bridge.py:164-242](../systems/memory/tier1_to_tier2_bridge.py#L164-L242)
+原 30/180/365/730 天策略对当前项目节奏过于保守，已改为可配置策略：
 
-四类 INSERT（event/scene/arc/epoch）均省略 `created_at`。代码依赖回退 UPDATE（第 255-258 行）：
-```sql
-UPDATE compressed_memories SET created_at = compressed_at WHERE created_at IS NULL
-```
+| 阶段 | 默认阈值 |
+|------|----------|
+| Tier 1 → Event | 7 天 |
+| Event → Scene | 14 天 |
+| Scene → Arc | 60 天 |
+| Arc → Epoch | 180 天 |
+| Epoch → Final | 365 天 |
+| Final 清理复核 | 90 天 |
 
-Escalation 和 remember API 已在 INSERT 中显式设置 `created_at`。桥接的间接方式脆弱：回退 UPDATE 若被移除、条件化或遗漏，桥接插入的行将产生 NULL `created_at`。
+维护循环仍每小时做轻量检查；昂贵的 lifecycle 聚合使用持久化的 7 天 cadence：
 
-**修复方向：** 在桥接的四类 INSERT 中显式添加 `created_at` 列和值。
+- 首次运行或错过周期后立即补偿；
+- 成功后 7 天内跳过；
+- 失败不进入周级冷却，下一个小时可重试；
+- 数据库 lease 防止并发执行重复调用 LLM；
+- 手动 `run-all-rules` 保留强制执行语义。
 
----
-
-### NH4 (High). `event_kind` 在 escalation 和 bridge 之间不一致 — arc/epoch 级别
-
-**文件：** [memory_service.py:570](../systems/memory/memory_service.py#L570) vs [tier1_to_tier2_bridge.py:222](../systems/memory/tier1_to_tier2_bridge.py#L222)、[tier1_to_tier2_bridge.py:240](../systems/memory/tier1_to_tier2_bridge.py#L240)
-
-- **桥接 arc**：显式设为 `None`
-- **桥接 epoch**：显式设为 `None`
-- **Escalation**：从源行继承 `event_kind`，arc 和 epoch 均继承源值
-
-同一底层数据通过不同生成路径产生不同 `event_kind`。下游消费者（排序、筛选、UI）将因生成路径不同而看到不一致的数据。如果 arcs/epochs 不应携带 `event_kind`（如 bridge 所示），escalation 路径应在 level ≥ 2 时设为 `None`。
-
-**修复方向：** 统一行为——两端均继承、或两端均设为 None。若选择继承（更合理），同步修改 bridge。
+所有时序均可通过 `MemoryServiceConfig` 或对应 `MEMORY_*` 环境变量覆盖。
 
 ---
 
-## 五、完整问题清单
+## 六、最终验收要求
 
-| # | 严重度 | 文件 | 问题 | 状态 |
-|---|--------|------|------|------|
-| 1 | 🔴 Critical | memory_service.py:535-544 | Escalation 质量拒绝无限 LLM 重试 | 🆕 新增 |
-| 2 | 🔴 Critical | memory_service.py:535-537 | Escalation 质量函数语义不匹配（抽象→抽象） | 🆕 新增 |
-| 3 | 🟠 High | tier1_to_tier2_bridge.py:164-242 | 桥接 INSERT 省略 `created_at` | 🆕 新增 |
-| 4 | 🟠 High | escalation vs bridge | `event_kind` 不一致（继承 vs None） | 🆕 新增 |
-| 5 | 🟠 High | recall.py:1822-1838 | `_temporal_fit_score` 窗口外点候选超出窗口内跨段候选 | ⚠️ 仍存在 |
-| 6 | 🟡 Medium | semantic_index.py:35 | `_LOCAL_SIMILARITY_BOOST = 3.0` 放大噪声 | ⚠️ 仍存在 |
-| 7 | 🟡 Medium | promotion.py:218-231 vs 348 | `source_memory_exists` GLOBAL_SCOPE_ID 不一致 | ⚠️ 仍存在 |
-| 8 | 🟡 Medium | memory_service.py:537 | Escalation 质量阈值 0.35 硬编码 | ⚠️ 仍存在 |
-| 9 | 🔵 Low | promotion.py:97 | COMPANION 无出站提升路径 | ⚠️ 仍存在 |
-| 10 | 🔵 Low | database.py:508-547 | Tombstone 迁移无事务包裹 | ⚠️ 仍存在 |
-| 11 | 🔵 Low | tier1_to_tier2_bridge.py:164-242 | 桥接 created_at 脆弱回退 | ⚠️ 仍存在 |
-| 12 | 🔵 Low | escalation vs bridge | `unsupported_identifiers` 绝对门禁 vs 桥接比率 | ⚠️ 仍存在 |
+完成状态必须同时满足：
 
----
+1. Memory/Mem 定向测试通过；
+2. 架构、Gateway、退役集成和打包契约通过；
+3. 真实数据库在线备份且 `integrity_check=ok`；
+4. 服务重启后 Gateway registration 和 Mem LLM health 正常；
+5. 空旧 `memories` 表已安全清理；
+6. 实际规则运行能看到 7 天 Tier 1 候选和持久化 lifecycle cadence 状态。
 
-## 六、修复优先级
-
-| 优先级 | 问题 | 理由 |
-|--------|------|------|
-| 🔴 P0 | NC1 + NC2 escalation 质量门禁 | 无限 LLM 费用 + 误拒绝合法升级 |
-| 🟠 P1 | NH3/NH4 created_at/event_kind 不一致 | 数据完整性 + 下游一致性 |
-| 🟠 P1 | S1 temporal_fit_score | 排序正确性 |
-| 🟡 P2 | S2 _LOCAL_SIMILARITY_BOOST | 召回精度 |
-| 🟡 P2 | S3 source_memory_exists scope | 多用户隔离 |
-| 🟡 P2 | S6/S7 escalation 硬编码阈值 | 可运维性 |
-| 🔵 P3 | S4/S5 COMPANION + tombstone | 长期架构卫生 |
-
----
-
-## 七、与上一轮对比
-
-| 指标 | 上一轮 | 本轮 |
-|------|--------|------|
-| 总问题 | 32 | 12 |
-| Critical | 2 | 2（新） |
-| High | 4 | 2（新）+ 1（留存） |
-| Medium | 11 | 5（留存） |
-| Low | 15 | 4（留存） |
-| 已修复 | — | 16 个 |
-
-**净效果：** 本轮质量门禁修复解决了上轮最多的 Critical/High 问题，但同时引入 2 个新的 Critical（无限 LLM 重试 + 语义不匹配的质量函数），这些需要在下一轮修复中优先处理。
+最终运行结果应记录在本节之后，不得用旧测试结果替代本次修改后的验证。

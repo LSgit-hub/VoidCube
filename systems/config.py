@@ -114,6 +114,17 @@ def load_config_from_env() -> SystemConfig:
         )
     )
     config.memory.decay_interval_hours = int(os.getenv("MEMORY_DECAY_INTERVAL", config.memory.decay_interval_hours))
+    for env_name, field_name in (
+        ("MEMORY_COMPRESSION_INTERVAL", "compression_interval"),
+        ("MEMORY_TIER1_RETENTION_DAYS", "tier1_retention_days"),
+        ("MEMORY_LIFECYCLE_CADENCE_DAYS", "lifecycle_cadence_days"),
+        ("MEMORY_EVENT_TO_SCENE_DAYS", "lifecycle_event_to_scene_days"),
+        ("MEMORY_SCENE_TO_ARC_DAYS", "lifecycle_scene_to_arc_days"),
+        ("MEMORY_ARC_TO_EPOCH_DAYS", "lifecycle_arc_to_epoch_days"),
+        ("MEMORY_EPOCH_TO_FINAL_DAYS", "lifecycle_epoch_to_final_days"),
+        ("MEMORY_FINAL_REVIEW_DAYS", "lifecycle_final_review_days"),
+    ):
+        _apply_int_override(config.memory, env_name, field_name)
     config.memory.recall_default_limit = int(
         os.getenv("MEMORY_RECALL_LIMIT", config.memory.recall_default_limit)
     )
