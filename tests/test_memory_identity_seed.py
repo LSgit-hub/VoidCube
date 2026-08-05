@@ -23,7 +23,7 @@ from systems.memory.memory_service import (
     SessionCreate,
     TurnCreate,
 )
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.database import open_memory_sqlite
 
 
 pytestmark = pytest.mark.unit

@@ -10,7 +10,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from VoidCube_cli.main import cmd_body
+from VoidCube_cli.entrypoint_operations import cmd_body
 from VoidCube_cli.main import main as cli_main
 
 

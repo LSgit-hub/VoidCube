@@ -104,7 +104,7 @@ def open_cached(
     cache_key: str,
 ) -> Any | None:
     """Open a short-lived connection and read one cached result."""
-    from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+    from systems.memory.database import open_memory_sqlite
 
     conn = open_memory_sqlite(db_path)
     try:
@@ -124,7 +124,7 @@ def store_cached(
     result: Any,
 ) -> None:
     """Open a short-lived connection and store one cached result."""
-    from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+    from systems.memory.database import open_memory_sqlite
 
     conn = open_memory_sqlite(db_path)
     try:

@@ -144,6 +144,10 @@ from agent.turn_finalization import (
     finalize_conversation_turn,
 )
 from agent.conversation_turn import ConversationTurnState
+from agent.conversation_runtime import (
+    ConversationTurnPorts,
+    ConversationTurnRuntime,
+)
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
@@ -609,6 +613,19 @@ class AIAgent:
         self.logs_dir = session_initialization.logs_dir
         self._checkpoint_mgr = session_initialization.checkpoint_manager
         self._session_persistence = session_initialization.session_persistence
+        self._conversation_turn_runtime = ConversationTurnRuntime(
+            ConversationTurnPorts(
+                persist_session=self._session_persistence.persist,
+                save_session_log=self._session_persistence.save_log,
+                cleanup_task_resources=self._cleanup_task_resources,
+                clear_interrupt=self.clear_interrupt,
+                emit_status=self._emit_status,
+                emit_verbose=lambda message, force: self._vprint(
+                    message,
+                    force=force,
+                ),
+            )
+        )
         
         # In-memory todo list for task planning (one per agent/session)
         from tools.todo_tool import TodoStore
@@ -2846,24 +2863,6 @@ class AIAgent:
             context_length_changed=context_length_changed,
         )
 
-    def _context_recovery_failure_result(
-        self,
-        *,
-        messages: list,
-        conversation_history: list | None,
-        api_call_count: int,
-        error: str,
-    ) -> dict:
-        """Persist once and build the canonical partial context failure result."""
-        self._session_persistence.persist(messages, conversation_history)
-        return {
-            "messages": messages,
-            "completed": False,
-            "api_calls": api_call_count,
-            "error": error,
-            "partial": True,
-        }
-
     def _execute_tool_calls(
         self,
         assistant_message,
@@ -4011,14 +4010,17 @@ class AIAgent:
                                 continue
                             self._emit_status(f"❌ Max retries ({attempt_state.max_retries}) exceeded for invalid responses. Giving up.")
                             logging.error(f"{self.log_prefix}Invalid API response after {attempt_state.max_retries} retries.")
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": turn_state.api_call_count,
-                                "error": f"Invalid API response after {attempt_state.max_retries} retries: {_failure_hint}",
-                                "failed": True  # Mark as failure for filtering
-                            }
+                            return self._conversation_turn_runtime.terminate(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=turn_state.api_call_count,
+                                error=(
+                                    "Invalid API response after "
+                                    f"{attempt_state.max_retries} retries: "
+                                    f"{_failure_hint}"
+                                ),
+                                failed=True,
+                            )
                         
                         # Backoff before retry — jittered exponential: 5s base, 120s cap
                         wait_time = jittered_backoff(attempt_state.retry_count, base_delay=5.0, max_delay=120.0)
@@ -4034,23 +4036,17 @@ class AIAgent:
                                 "retry wait, aborting.",
                                 force=True,
                             )
-                            self._session_persistence.persist(
-                                messages,
-                                conversation_history,
-                            )
-                            self.clear_interrupt()
-                            return {
-                                "final_response": (
+                            return self._conversation_turn_runtime.interrupted_result(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=turn_state.api_call_count,
+                                final_response=(
                                     "Operation interrupted during retry "
                                     f"({_failure_hint}, attempt "
                                     f"{attempt_state.retry_count}/"
                                     f"{attempt_state.max_retries})."
                                 ),
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "interrupted": True,
-                            }
+                            )
                         continue  # Retry the API call
 
                     # Check finish_reason before proceeding
@@ -4091,16 +4087,14 @@ class AIAgent:
                                 "→ Increase the output token limit: "
                                 "set `model.max_tokens` in config.yaml"
                             )
-                            self._cleanup_task_resources(effective_task_id)
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": _exhaust_response,
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": _exhaust_error,
-                            }
+                            return self._conversation_turn_runtime.partial_failure(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=turn_state.api_call_count,
+                                final_response=_exhaust_response,
+                                error=_exhaust_error,
+                                cleanup_task_id=effective_task_id,
+                            )
 
                         if truncation.action in {
                             TruncationAction.continue_text,
@@ -4131,23 +4125,24 @@ class AIAgent:
                                     ),
                                 }
                                 messages.append(continue_msg)
-                                self._session_persistence.save_log(messages)
+                                self._conversation_turn_runtime.save_progress(messages)
                                 attempt_state.request_length_continuation()
                                 break
 
                             partial_response = strip_thinking_blocks(
                                 turn_state.truncated_response_prefix
                             ).strip()
-                            self._cleanup_task_resources(effective_task_id)
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": partial_response or None,
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": "Response remained truncated after 3 continuation attempts",
-                            }
+                            return self._conversation_turn_runtime.partial_failure(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=turn_state.api_call_count,
+                                final_response=partial_response or None,
+                                error=(
+                                    "Response remained truncated after 3 "
+                                    "continuation attempts"
+                                ),
+                                cleanup_task_id=effective_task_id,
+                            )
 
                         if truncation.action is TruncationAction.retry_tool_call:
                             turn_state.truncated_tool_call_retries = (
@@ -4169,16 +4164,14 @@ class AIAgent:
                                 f"{self.log_prefix}⚠️  Truncated tool call response detected again — refusing to execute incomplete tool arguments.",
                                 force=True,
                             )
-                            self._cleanup_task_resources(effective_task_id)
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": None,
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": "Response truncated due to output length limit",
-                            }
+                            return self._conversation_turn_runtime.partial_failure(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=turn_state.api_call_count,
+                                final_response=None,
+                                error="Response truncated due to output length limit",
+                                cleanup_task_id=effective_task_id,
+                            )
                     
                     # Track actual token usage from response for context management
                     if (
@@ -4288,7 +4281,10 @@ class AIAgent:
                         self.thinking_callback("")
                     api_elapsed = time.time() - attempt_state.started_at
                     self._vprint(f"{self.log_prefix}🔧 Interrupted during API call.", force=True)
-                    self._session_persistence.persist(messages, conversation_history)
+                    self._conversation_turn_runtime.persist(
+                        messages,
+                        conversation_history,
+                    )
                     turn_state.interrupted = True
                     turn_state.final_response = (
                         "Operation interrupted: waiting for model response "
@@ -4439,15 +4435,16 @@ class AIAgent:
                     # Check for interrupt before deciding to retry
                     if self._interrupt_requested:
                         self._vprint(f"{self.log_prefix}🔧 Interrupt detected during error handling, aborting retries.", force=True)
-                        self._session_persistence.persist(messages, conversation_history)
-                        self.clear_interrupt()
-                        return {
-                            "final_response": f"Operation interrupted: handling API error ({error_type}: {clean_error_message(str(api_error))}).",
-                            "messages": messages,
-                            "api_calls": turn_state.api_call_count,
-                            "completed": False,
-                            "interrupted": True,
-                        }
+                        return self._conversation_turn_runtime.interrupted_result(
+                            messages=messages,
+                            conversation_history=conversation_history,
+                            api_call_count=turn_state.api_call_count,
+                            final_response=(
+                                "Operation interrupted: handling API error "
+                                f"({error_type}: "
+                                f"{clean_error_message(str(api_error))})."
+                            ),
+                        )
                     
                     fallback_available = self._fallback_index < len(self._fallback_chain)
                     pool = self._credential_pool
@@ -4588,7 +4585,7 @@ class AIAgent:
                                 force=True,
                             )
                             logging.error("%s%s", self.log_prefix, recovery.error)
-                            return self._context_recovery_failure_result(
+                            return self._conversation_turn_runtime.partial_failure(
                                 messages=messages,
                                 conversation_history=conversation_history,
                                 api_call_count=turn_state.api_call_count,
@@ -4676,22 +4673,24 @@ class AIAgent:
                         # Persisting the failed user message would make the
                         # session even larger, causing the same failure on the
                         # next attempt. (#1630)
-                        if status_code == 400 and (approx_tokens > 50000 or len(api_messages) > 80):
+                        skip_failed_persistence = status_code == 400 and (
+                            approx_tokens > 50000 or len(api_messages) > 80
+                        )
+                        if skip_failed_persistence:
                             self._vprint(
                                 f"{self.log_prefix}⚠️  Skipping session persistence "
                                 f"for large failed session to prevent growth loop.",
                                 force=True,
                             )
-                        else:
-                            self._session_persistence.persist(messages, conversation_history)
-                        return {
-                            "final_response": None,
-                            "messages": messages,
-                            "api_calls": turn_state.api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": str(api_error),
-                        }
+                        return self._conversation_turn_runtime.terminate(
+                            messages=messages,
+                            conversation_history=conversation_history,
+                            api_call_count=turn_state.api_call_count,
+                            final_response=None,
+                            failed=True,
+                            error=str(api_error),
+                            persist=not skip_failed_persistence,
+                        )
 
                     if retry_directive.kind is RetryKind.exhausted:
                         _final_summary = summarize_api_error(api_error)
@@ -4734,7 +4733,6 @@ class AIAgent:
                                 reason="max_retries_exhausted",
                                 error=api_error,
                             )
-                        self._session_persistence.persist(messages, conversation_history)
                         _final_response = f"API call failed after {attempt_state.max_retries} retries: {_final_summary}"
                         if _is_stream_drop:
                             _final_response += (
@@ -4745,14 +4743,14 @@ class AIAgent:
                                 "execute_code with Python's open() for large "
                                 "files, or to write in smaller sections."
                             )
-                        return {
-                            "final_response": _final_response,
-                            "messages": messages,
-                            "api_calls": turn_state.api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": _final_summary,
-                        }
+                        return self._conversation_turn_runtime.terminate(
+                            messages=messages,
+                            conversation_history=conversation_history,
+                            api_call_count=turn_state.api_call_count,
+                            final_response=_final_response,
+                            failed=True,
+                            error=_final_summary,
+                        )
 
                     # For rate limits, respect the Retry-After header if present
                     _retry_after = retry_after_seconds(api_error) if is_rate_limited else None
@@ -4778,22 +4776,16 @@ class AIAgent:
                             "retry wait, aborting.",
                             force=True,
                         )
-                        self._session_persistence.persist(
-                            messages,
-                            conversation_history,
-                        )
-                        self.clear_interrupt()
-                        return {
-                            "final_response": (
+                        return self._conversation_turn_runtime.interrupted_result(
+                            messages=messages,
+                            conversation_history=conversation_history,
+                            api_call_count=turn_state.api_call_count,
+                            final_response=(
                                 "Operation interrupted: retrying API call "
                                 f"after error (retry {attempt_state.retry_count}/"
                                 f"{attempt_state.max_retries})."
                             ),
-                            "messages": messages,
-                            "api_calls": turn_state.api_call_count,
-                            "completed": False,
-                            "interrupted": True,
-                        }
+                        )
             
             # If the API call was interrupted, skip response processing
             if turn_state.interrupted:
@@ -4819,7 +4811,10 @@ class AIAgent:
             ):
                 turn_state.exit_reason = "all_retries_exhausted_no_response"
                 print(f"{self.log_prefix}❌ All API retries exhausted with no successful response.")
-                self._session_persistence.persist(messages, conversation_history)
+                self._conversation_turn_runtime.persist(
+                    messages,
+                    conversation_history,
+                )
                 break
 
             try:
@@ -5092,7 +5087,7 @@ class AIAgent:
         return finalize_conversation_turn(
             TurnFinalizationPorts(
                 cleanup_task_resources=self._cleanup_task_resources,
-                persist_session=self._session_persistence.persist,
+                persist_session=self._conversation_turn_runtime.persist,
                 model=self.model,
                 provider=self.provider,
                 base_url=self.base_url,

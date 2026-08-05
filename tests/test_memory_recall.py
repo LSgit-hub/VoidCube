@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from systems.memory.config import MemoryServiceConfig
+from systems.memory.database import open_memory_sqlite
 from systems.memory.memory_service import (
     DurableMemoryCreate,
     ForgetRequest,
@@ -26,7 +27,6 @@ from systems.memory.recall import (
 )
 from systems.memory.tier1_to_tier2_bridge import (
     _write_compressed_memories_to_db,
-    open_memory_sqlite,
 )
 
 

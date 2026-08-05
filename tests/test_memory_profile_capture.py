@@ -10,7 +10,7 @@ from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import MemoryService, RecallRequest, TurnPairCreate
 from systems.memory.profile_capture import capture_explicit_user_profile
 from systems.memory.profile_store import upsert_profile_memory
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.database import open_memory_sqlite
 
 
 pytestmark = pytest.mark.unit

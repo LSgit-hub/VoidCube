@@ -1,10 +1,19 @@
-"""Versioned embedding index for optional semantic memory recall."""
+"""Versioned embedding index for optional semantic memory recall.
+
+Search is accelerated by ``sqlite-vec`` (vec0 virtual table) when the
+extension is available, falling back to Python cosine distance otherwise.
+The JSON ``vector`` column on ``memory_embeddings`` is kept for backward
+compatibility; vec0 stores the same vectors as compact binary blobs aligned
+by rowid.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,8 +21,9 @@ from typing import Any, Callable, Sequence
 from urllib.request import Request, urlopen
 
 from systems.memory.scope import GLOBAL_SCOPE_ID
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.database import open_memory_sqlite
 
+logger = logging.getLogger(__name__)
 
 EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 
@@ -22,6 +32,10 @@ EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 # trained embedding models. 3.0 maps the observed ~0-0.33 raw range onto the
 # 0-1 scale the recall ranking threshold (0.35) expects.
 _LOCAL_SIMILARITY_BOOST = 3.0
+
+_VEC0_TABLE = "memory_embeddings_vec"
+_vec0_load_attempted = False
+_vec0_loadable = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +88,45 @@ class SemanticIndexConfig:
         )
 
 
+def _ensure_vec0_loaded(conn) -> bool:
+    """Try to load sqlite-vec on *conn*; return True on success.
+
+    Each connection calls ``sqlite_vec.load(conn)`` even after prior
+    successes, because the extension must be initialized per-connection.
+    The global flag records the first failure so we don't keep retrying
+    across connections.
+    """
+    global _vec0_load_attempted, _vec0_loadable  # noqa: PLW0603
+    if not _vec0_loadable and _vec0_load_attempted:
+        return False  # already tried and failed — don't keep retrying
+    try:
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        _vec0_loadable = True
+        _vec0_load_attempted = True
+        return True
+    except Exception:
+        _vec0_loadable = False
+        _vec0_load_attempted = True
+        return False
+
+
+def _vec0_available(conn) -> bool:
+    """Lazy-init vec0 on *conn*; ensure loaded on every connection.
+
+    The native extension load is global, but each SQLite connection must have
+    it initialized separately (``sqlite_vec.load(conn)`` must be called per
+    connection).
+    """
+    return _ensure_vec0_loaded(conn)
+
+
+def _vector_blob(vector: Sequence[float]) -> bytes:
+    return struct.pack(f"{len(vector)}f", *vector)
+
+
 class SemanticMemoryIndex:
     def __init__(
         self,
@@ -91,11 +144,6 @@ class SemanticMemoryIndex:
             and self.config.enabled
             and (not self.config.provider or self.config.provider == "local")
         ):
-            # Default to the zero-dependency local embedder when no external
-            # embedding provider is configured. Its sparse character n-gram
-            # vectors produce lower raw cosine values than trained models, so
-            # search applies a calibration boost to map them onto the same
-            # 0-1 similarity scale used by the recall ranking threshold.
             from systems.memory.local_embedding import CharNgramEmbedder
 
             self._transport = CharNgramEmbedder(
@@ -103,6 +151,7 @@ class SemanticMemoryIndex:
             )
             self._local_fallback = True
         self._last_error = ""
+        self._vec0_ready = False  # set by _setup_table when vec0 loads
         self._setup_table()
 
     @property
@@ -124,6 +173,7 @@ class SemanticMemoryIndex:
             "model": self.config.model,
             "dimensions": self.config.dimensions,
             "indexed_records": int(indexed),
+            "vec0_available": self._vec0_ready,
             "last_error": self._last_error,
         }
 
@@ -142,6 +192,7 @@ class SemanticMemoryIndex:
             conn = open_memory_sqlite(self.db_path)
             try:
                 now = datetime.now(timezone.utc).isoformat()
+                vec0 = _vec0_available(conn)
                 for record, vector in zip(records, vectors):
                     source_type, memory_id, owner_id, workspace_id, memory_domain, content = record
                     self._validate_vector(vector)
@@ -170,6 +221,13 @@ class SemanticMemoryIndex:
                             now,
                         ),
                     )
+                    if vec0:
+                        rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                        conn.execute(
+                            f"INSERT OR REPLACE INTO {_VEC0_TABLE} (rowid, embedding) "
+                            f"VALUES (?, ?)",
+                            (rowid, _vector_blob(vector)),
+                        )
                 conn.commit()
             finally:
                 conn.close()
@@ -193,18 +251,28 @@ class SemanticMemoryIndex:
         try:
             query_vector = self._embed([str(query)])[0]
             self._validate_vector(query_vector)
+            bounded_limit = max(1, min(int(limit), 500))
             conn = open_memory_sqlite(self.db_path)
             try:
                 domains = tuple(dict.fromkeys(str(item) for item in source_domains))
                 if not domains:
                     return {}
-                placeholders = ",".join("?" for _ in domains)
+                if self._vec0_ready:
+                    return self._search_vec0(
+                        conn,
+                        query_vector,
+                        domains,
+                        owner_id,
+                        workspace_id,
+                        bounded_limit,
+                    )
+                domain_placeholders = ",".join("?" for _ in domains)
                 rows = conn.execute(
                     "SELECT source_type, memory_id, vector FROM memory_embeddings "
                     "WHERE provider = ? AND model = ? AND dimensions = ? "
                     "AND ((owner_id = ? AND workspace_id = ?) OR "
                     "(owner_id = ? AND workspace_id = ?)) "
-                    f"AND memory_domain IN ({placeholders})",
+                    f"AND memory_domain IN ({domain_placeholders})",
                     (
                         self.config.provider,
                         self.config.model,
@@ -233,12 +301,66 @@ class SemanticMemoryIndex:
             self._last_error = ""
             return {
                 key: round(max(0.0, min(1.0, score)), 6)
-                for key, score in ranked[: max(1, min(int(limit), 500))]
+                for key, score in ranked[:bounded_limit]
                 if score > 0.0
             }
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             return {}
+
+    def _search_vec0(
+        self,
+        conn,
+        query_vector: Sequence[float],
+        domains: tuple[str, ...],
+        owner_id: str,
+        workspace_id: str,
+        limit: int,
+    ) -> dict[tuple[str, str], float]:
+        """KNN search via vec0 virtual table with scope/domain filtering."""
+        domain_placeholders = ",".join("?" for _ in domains)
+        params: list[Any] = [
+            _vector_blob(query_vector),
+            self.config.provider,
+            self.config.model,
+            owner_id,
+            workspace_id,
+            GLOBAL_SCOPE_ID,
+            GLOBAL_SCOPE_ID,
+            *domains,
+            limit + 10,  # slight overfetch to account for stale/removed refs
+        ]
+        rows = conn.execute(
+            f"SELECT e.source_type, e.memory_id, e.vector, "
+            f"v.distance "
+            f"FROM {_VEC0_TABLE} v "
+            f"JOIN memory_embeddings e ON e.rowid = v.rowid "
+            f"WHERE v.embedding MATCH ? "
+            f"AND e.provider = ? AND e.model = ? "
+            f"AND ((e.owner_id = ? AND e.workspace_id = ?) OR "
+            f"(e.owner_id = ? AND e.workspace_id = ?)) "
+            f"AND e.memory_domain IN ({domain_placeholders}) "
+            f"AND k = ?",
+            params,
+        ).fetchall()
+        boost = _LOCAL_SIMILARITY_BOOST if self._local_fallback else 1.0
+        # sqlite-vec returns L2 distance for vec0 by default; convert to
+        # cosine-distance-like similarity for compatibility with callers.
+        # Use the stored JSON vectors for the final cosine (more precise than
+        # recomputing from distance, and keeps the display score consistent).
+        results: dict[tuple[str, str], float] = {}
+        for source_type, memory_id, vector_json, _vec0_l2_distance in rows:
+            try:
+                similarity = boost * _cosine(
+                    query_vector, json.loads(vector_json)
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if similarity > 0.0 and len(results) < limit:
+                results[(str(source_type), str(memory_id))] = round(
+                    max(0.0, min(1.0, similarity)), 6
+                )
+        return results
 
     def _setup_table(self) -> None:
         conn = open_memory_sqlite(self.db_path)
@@ -278,29 +400,77 @@ class SemanticMemoryIndex:
                 "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_scope_v2 "
                 "ON memory_embeddings(provider, model, owner_id, workspace_id, memory_domain, source_type)"
             )
-            for trigger_name, table, id_column, source_type in (
-                ("memory_embeddings_turn_delete", "turns", "turn_id", "turn"),
-                ("memory_embeddings_archive_delete", "turns_archive", "turn_id", "archive"),
-                (
-                    "memory_embeddings_compressed_delete",
-                    "compressed_memories",
-                    "memory_id",
-                    "compressed",
-                ),
-                (
-                    "memory_embeddings_profile_delete",
-                    "profile_memories",
-                    "memory_id",
-                    "profile",
-                ),
-            ):
-                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
-                conn.execute(
-                    f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
-                    "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
-                    f"'{source_type}' AND memory_id = OLD.{id_column} "
-                    "AND memory_domain = OLD.memory_domain; END"
-                )
+            if _vec0_available(conn):
+                dims = self.config.dimensions or 256
+                try:
+                    # Rebuild the vec0 table on every dimensions change so it
+                    # never drifts from the current config (vectors in
+                    # memory_eddings are the source of truth; they are
+                    # backfilled below).  The CREATE VIRTUAL TABLE is not
+                    # IF NOT EXISTS — the preceding DROP ensures a clean
+                    # schema.
+                    conn.execute(f"DROP TABLE IF EXISTS {_VEC0_TABLE}")
+                    conn.execute(
+                        f"CREATE VIRTUAL TABLE {_VEC0_TABLE} "
+                        f"USING vec0(embedding float[{dims}])"
+                    )
+                    # Cascade DELETE triggers: when a source row is removed,
+                    # clean up both the vec0 entry and the metadata row.
+                    for trigger_name, table, id_column, source_type in (
+                        ("memory_embeddings_turn_delete", "turns", "turn_id", "turn"),
+                        ("memory_embeddings_archive_delete", "turns_archive", "turn_id", "archive"),
+                        ("memory_embeddings_compressed_delete", "compressed_memories", "memory_id", "compressed"),
+                        ("memory_embeddings_profile_delete", "profile_memories", "memory_id", "profile"),
+                    ):
+                        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                        conn.execute(
+                            f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
+                            "BEGIN "
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ("
+                            "SELECT rowid FROM memory_embeddings WHERE source_type = "
+                            f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND memory_domain = OLD.memory_domain); "
+                            "DELETE FROM memory_embeddings WHERE source_type = "
+                            f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND memory_domain = OLD.memory_domain; "
+                            "END"
+                        )
+                    # Backfill existing JSON vectors into vec0 (binary blobs).
+                    existing = conn.execute(
+                        "SELECT rowid, vector FROM memory_embeddings "
+                        "WHERE provider = ? AND model = ? AND typeof(vector) = 'text'",
+                        (self.config.provider, self.config.model),
+                    ).fetchall()
+                    for erowid, evector_json in existing:
+                        try:
+                            evector = json.loads(evector_json)
+                            conn.execute(
+                                f"INSERT OR IGNORE INTO {_VEC0_TABLE} "
+                                f"(rowid, embedding) VALUES (?, ?)",
+                                (int(erowid), _vector_blob(evector)),
+                            )
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            pass
+                    self._vec0_ready = True
+                except Exception:
+                    # vec0 setup failed (e.g. source tables missing in a bare
+                    # test environment) — silently fall back to the Python
+                    # cosine path. The plain DELETE triggers are created below.
+                    self._vec0_ready = False
+            if not self._vec0_ready:
+                for trigger_name, table, id_column, source_type in (
+                    ("memory_embeddings_turn_delete", "turns", "turn_id", "turn"),
+                    ("memory_embeddings_archive_delete", "turns_archive", "turn_id", "archive"),
+                    ("memory_embeddings_compressed_delete", "compressed_memories", "memory_id", "compressed"),
+                    ("memory_embeddings_profile_delete", "profile_memories", "memory_id", "profile"),
+                ):
+                    conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                    conn.execute(
+                        f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
+                        "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
+                        f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND memory_domain = OLD.memory_domain; END"
+                    )
             conn.commit()
         finally:
             conn.close()

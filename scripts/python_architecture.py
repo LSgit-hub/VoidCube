@@ -21,13 +21,19 @@ SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}
 FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 
 P0_LINE_BASELINES = {
+    "run_agent.py": 5_364,
     "VoidCube_cli/app.py": 6_245,
+    "VoidCube_cli/main.py": 15,
+    "systems/memory/memory_service.py": 3_955,
     "systems/supervisor/planning_runtime.py": 8_072,
     "systems/supervisor/endogenous_drive.py": 231,
     "systems/supervisor/ui_runtime.py": 420,
 }
 P0_LARGE_METHOD_BASELINES = {
+    "run_agent.py": {"__init__": 678, "run_conversation": 1_682},
     "VoidCube_cli/app.py": {"__init__": 304, "chat": 505, "run": 1_732},
+    "VoidCube_cli/main.py": {},
+    "systems/memory/memory_service.py": {},
     "systems/supervisor/planning_runtime.py": {
         "_derive_cognitive_self_regulation": 301,
         "evaluate_drive_input": 328,

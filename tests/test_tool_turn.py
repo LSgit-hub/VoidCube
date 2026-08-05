@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.conversation_turn import ConversationTurnState
+from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
 from agent.tool_turn import (
     ContextPressureTracker,
     execute_successful_tool_turn,
@@ -43,6 +44,18 @@ def _owner(events, *, tool_name="terminal", compress=False):
         events.append("compress")
         return messages[-2:], "compressed-policy"
 
+    turn_runtime = ConversationTurnRuntime(
+        ConversationTurnPorts(
+            persist_session=lambda _messages, _history: events.append("persist"),
+            save_session_log=lambda _messages: events.append("save"),
+            cleanup_task_resources=lambda _task_id: events.append("cleanup"),
+            clear_interrupt=lambda: events.append("clear_interrupt"),
+            emit_status=lambda message: events.append(("status", message)),
+            emit_verbose=lambda message, force: events.append(
+                ("print", message, force)
+            ),
+        )
+    )
     return SimpleNamespace(
         quiet_mode=True,
         stream_delta_callback=lambda value: events.append(("stream", value)),
@@ -57,9 +70,7 @@ def _owner(events, *, tool_name="terminal", compress=False):
         _thinking_prefill_retries=1,
         _empty_content_retries=2,
         _stream_needs_break=False,
-        _session_persistence=SimpleNamespace(
-            save_log=lambda _messages: events.append("save")
-        ),
+        _conversation_turn_runtime=turn_runtime,
         _cap_delegate_task_calls=lambda calls: events.append("cap") or calls,
         _deduplicate_tool_calls=lambda calls: events.append("dedupe") or calls,
         _build_assistant_message=lambda message, finish: (

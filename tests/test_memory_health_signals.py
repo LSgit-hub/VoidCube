@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.memory import tier1_to_tier2_bridge as bridge_module
+from systems.memory.database import open_memory_sqlite
 from systems.memory.memory_service import (
     MemoryService,
     MemoryServiceConfig,
@@ -26,7 +27,6 @@ from systems.memory.memory_service import (
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
-    open_memory_sqlite,
 )
 
 

@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from systems.memory.config import MemoryServiceConfig
+from systems.memory.database import open_memory_sqlite
 from systems.memory.memory_service import (
     DurableMemoryCreate,
     ForgetRequest,
@@ -22,7 +23,6 @@ from systems.memory.promotion import (
 )
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
-    open_memory_sqlite,
 )
 
 

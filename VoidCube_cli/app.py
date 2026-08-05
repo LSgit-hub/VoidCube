@@ -2563,7 +2563,7 @@ class VoidcubeCLI:
                 return []
             return session_db.list_sessions_rich(**kwargs)
 
-        from VoidCube_cli.main import _relative_time
+        from VoidCube_cli.entrypoint_session import _relative_time
 
         runtime = CliSessionBrowserRuntime(
             CliSessionBrowserPorts(

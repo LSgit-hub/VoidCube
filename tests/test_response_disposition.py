@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
 from agent.response_disposition import (
     ResponseLoopControl,
     TextResponseAction,
@@ -150,6 +151,24 @@ def _action_owner(events, *, fallback=False):
             ],
         }
 
+    turn_runtime = ConversationTurnRuntime(
+        ConversationTurnPorts(
+            persist_session=lambda messages, history: events.append(
+                ("persist", messages, history)
+            ),
+            save_session_log=lambda messages: events.append(
+                ("save_log", messages)
+            ),
+            cleanup_task_resources=lambda task_id: events.append(
+                ("cleanup", task_id)
+            ),
+            clear_interrupt=lambda: events.append(("clear_interrupt",)),
+            emit_status=lambda message: events.append(("status", message)),
+            emit_verbose=lambda message, force: events.append(
+                ("print", message, {"force": force})
+            ),
+        )
+    )
     return SimpleNamespace(
         model="safe-model",
         provider="test-provider",
@@ -163,20 +182,12 @@ def _action_owner(events, *, fallback=False):
         _last_content_with_tools=None,
         _fallback_chain=[{"model": "fallback"}] if fallback else [],
         _response_was_previewed=False,
-        _session_persistence=SimpleNamespace(
-            persist=lambda messages, history: events.append(
-                ("persist", messages, history)
-            ),
-            save_log=lambda messages: events.append(("save_log", messages)),
-        ),
+        _conversation_turn_runtime=turn_runtime,
         _vprint=lambda message, **kwargs: events.append(
             ("print", message, kwargs)
         ),
         _emit_status=lambda message: events.append(("status", message)),
         _build_assistant_message=build_message,
-        _cleanup_task_resources=lambda task_id: events.append(
-            ("cleanup", task_id)
-        ),
         _try_activate_fallback=lambda: fallback,
     )
 

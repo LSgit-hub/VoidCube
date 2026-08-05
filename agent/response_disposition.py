@@ -14,6 +14,7 @@ from agent.api_response import (
     has_visible_content,
     strip_thinking_blocks,
 )
+from agent.conversation_runtime import ConversationTurnRuntime
 from agent.conversation_turn import ConversationTurnState
 
 
@@ -199,7 +200,7 @@ class ResponseDispositionPort(Protocol):
     _last_content_with_tools: str | None
     _fallback_chain: list[Any]
     _response_was_previewed: bool
-    _session_persistence: Any
+    _conversation_turn_runtime: ConversationTurnRuntime
 
     def _vprint(self, message: str, *, force: bool = False) -> None: ...
 
@@ -210,8 +211,6 @@ class ResponseDispositionPort(Protocol):
         assistant_message: Any,
         finish_reason: str,
     ) -> dict[str, Any]: ...
-
-    def _cleanup_task_resources(self, task_id: str) -> None: ...
 
     def _try_activate_fallback(self) -> bool: ...
 
@@ -267,17 +266,15 @@ def apply_tool_call_inspection(
                 force=True,
             )
             owner._invalid_tool_retries = 0
-            owner._session_persistence.persist(messages, conversation_history)
+            terminal_result = owner._conversation_turn_runtime.partial_failure(
+                messages=messages,
+                conversation_history=conversation_history,
+                api_call_count=api_call_count,
+                error=f"Model generated invalid tool call: {invalid_preview}",
+            )
             return ResponseActionExecution(
                 ResponseLoopControl.terminal,
-                {
-                    "final_response": None,
-                    "messages": messages,
-                    "api_calls": api_call_count,
-                    "completed": False,
-                    "partial": True,
-                    "error": f"Model generated invalid tool call: {invalid_preview}",
-                },
+                {"final_response": None, **terminal_result},
             )
 
         messages.append(
@@ -316,18 +313,17 @@ def apply_tool_call_inspection(
             force=True,
         )
         owner._invalid_json_retries = 0
-        owner._cleanup_task_resources(task_id)
-        owner._session_persistence.persist(messages, conversation_history)
+        terminal_result = owner._conversation_turn_runtime.partial_failure(
+            messages=messages,
+            conversation_history=conversation_history,
+            api_call_count=api_call_count,
+            error="Response truncated due to output length limit",
+            final_response=None,
+            cleanup_task_id=task_id,
+        )
         return ResponseActionExecution(
             ResponseLoopControl.terminal,
-            {
-                "final_response": None,
-                "messages": messages,
-                "api_calls": api_call_count,
-                "completed": False,
-                "partial": True,
-                "error": "Response truncated due to output length limit",
-            },
+            terminal_result,
         )
 
     owner._invalid_json_retries += 1
@@ -429,7 +425,7 @@ def apply_text_response_disposition(
         interim = owner._build_assistant_message(assistant_message, "incomplete")
         interim["_thinking_prefill"] = True
         messages.append(interim)
-        owner._session_persistence.save_log(messages)
+        owner._conversation_turn_runtime.save_progress(messages)
         state.final_response = None
         return ResponseActionExecution(ResponseLoopControl.continue_loop)
 

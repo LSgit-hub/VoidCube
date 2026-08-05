@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from agent.api_response import has_visible_content, strip_thinking_blocks
+from agent.conversation_runtime import ConversationTurnRuntime
 from agent.conversation_turn import ConversationTurnState
 from agent.model_metadata import estimate_messages_tokens_rough
 
@@ -68,7 +69,7 @@ class SuccessfulToolTurnPort(Protocol):
     _thinking_prefill_retries: int
     _empty_content_retries: int
     _stream_needs_break: bool
-    _session_persistence: Any
+    _conversation_turn_runtime: ConversationTurnRuntime
 
     def _cap_delegate_task_calls(self, tool_calls: list[Any]) -> list[Any]: ...
 
@@ -213,7 +214,7 @@ def execute_successful_tool_turn(
         )
         history_reset = True
 
-    owner._session_persistence.save_log(messages)
+    owner._conversation_turn_runtime.save_progress(messages)
     return SuccessfulToolTurnExecution(
         messages=messages,
         system_prompt=active_system_prompt,

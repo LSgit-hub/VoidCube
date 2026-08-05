@@ -56,7 +56,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import MemoryService, RecallRequest
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.database import open_memory_sqlite
 
 
 DEFAULT_DATASET = REPO_ROOT / "Mem" / "benchmarks" / "longmemeval_zh.v1.json"

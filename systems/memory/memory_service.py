@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from agent.redact import redact_sensitive_text
@@ -24,7 +24,6 @@ from systems.memory.domain import (
     authorize_write,
     domain_values,
 )
-from systems.memory.lexical_index import setup_memory_fts
 from systems.memory.profile_capture import (
     ALL_PROFILE_PREDICATES,
     capture_explicit_user_profile,
@@ -50,7 +49,6 @@ from systems.memory.promotion import (
     reject_promotion_candidates_for_source,
     revoke_memory_promotion,
     revoke_promotions_for_source,
-    setup_memory_promotion_schema,
 )
 from systems.memory.recall import (
     build_recall_plan,
@@ -58,7 +56,8 @@ from systems.memory.recall import (
     merge_recall_results,
     recall_memories,
 )
-from systems.memory.runtime_migration import migrate_memory_database
+from systems.memory.database import MemoryDatabaseBootstrap, open_memory_sqlite
+from systems.memory.http_adapter import build_memory_http_app
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -66,10 +65,7 @@ from systems.memory.scope import (
     MemoryScope,
 )
 from systems.memory.semantic_index import SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import (
-    Tier1ToTier2Bridge,
-    open_memory_sqlite,
-)
+from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
@@ -409,7 +405,7 @@ def _turn_row_to_dict(row) -> Dict[str, Any]:
     }
 
 
-class MemoryService:
+class MemoryApplicationService:
     def __init__(self, config: MemoryServiceConfig = None):
         self.config = config or MemoryServiceConfig()
         self._compression_task: asyncio.Task | None = None
@@ -419,13 +415,7 @@ class MemoryService:
         self._gateway_service_id: Optional[str] = None
         self._gateway_registration_healthy = False
         self._last_gateway_registration_check_at: Optional[str] = None
-        self.app = FastAPI(
-            title="VoidCube Memory Service",
-            version="1.0",
-            lifespan=self._app_lifespan,
-        )
         self._db_path = Path(self.config.db_path)
-        self._migrate_legacy_default_database()
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
         self._rule_run_counts: Dict[str, int] = {}
@@ -448,548 +438,12 @@ class MemoryService:
             self._db_path,
             retention_count=self.config.backup_retention_count,
         )
-        self._backup_before_destructive_schema_migration()
-        self._setup_database()
+        self._database_bootstrap = MemoryDatabaseBootstrap(
+            db_path=self._db_path,
+            backup_manager=self._backup_manager,
+        )
+        self._database_bootstrap.initialize()
         self._semantic_index = SemanticMemoryIndex(self._db_path)
-        self._setup_routes()
-
-    def _migrate_legacy_default_database(self) -> None:
-        from VoidCube_core.runtime_paths import (
-            get_legacy_project_runtime_layout,
-            get_runtime_layout,
-        )
-
-        canonical = get_runtime_layout().memory_db
-        if self._db_path.resolve() != canonical.resolve():
-            return
-        result = migrate_memory_database(
-            source=get_legacy_project_runtime_layout(Path.cwd()).memory_db,
-            target=canonical,
-        )
-        if result.status == "migrated":
-            logger.info(
-                "Migrated Memory database from %s to %s (integrity=%s)",
-                result.source,
-                result.target,
-                result.integrity_check,
-            )
-
-    def _backup_before_destructive_schema_migration(self) -> None:
-        if not self._db_path.is_file():
-            return
-        conn = open_memory_sqlite(self._db_path)
-        try:
-            table_exists = conn.execute(
-                "SELECT 1 FROM sqlite_master "
-                "WHERE type = 'table' AND name = 'compressed_memories'"
-            ).fetchone()
-            if not table_exists:
-                return
-            columns = {
-                row[1]
-                for row in conn.execute(
-                    "PRAGMA table_info(compressed_memories)"
-                ).fetchall()
-            }
-        finally:
-            conn.close()
-        if "embedding" not in columns:
-            return
-        backup = self._backup_manager.create_backup()
-        logger.info(
-            "Created pre-migration Memory backup %s before removing obsolete "
-            "compressed_memories.embedding",
-            backup["backup_id"],
-        )
-
-    def _setup_database(self):
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = open_memory_sqlite(self._db_path)
-        cursor = conn.cursor()
-        
-        # ── Tier 1 tables (short-term conversation store) ──────────
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default',
-                created_at TEXT NOT NULL,
-                updated_at TEXT,
-                metadata TEXT
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS turns (
-                turn_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                session_id TEXT NOT NULL,
-                speaker TEXT NOT NULL,
-                text TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                relevance_score REAL DEFAULT 1.0,
-                decay_factor REAL DEFAULT 0.01,
-                tags TEXT,
-                metadata TEXT,
-                dedup_key TEXT,
-                compressed_to_tier2 INTEGER DEFAULT 0,
-                last_decay_at TEXT,
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default',
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            )
-        ''')
-        self._migrate_turns_schema(cursor)
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS turns_archive (
-                turn_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                session_id TEXT NOT NULL,
-                speaker TEXT NOT NULL,
-                text_summary TEXT,
-                original_text TEXT,
-                timestamp TEXT NOT NULL,
-                compressed_at TEXT NOT NULL,
-                event_ids TEXT,
-                scene_ids TEXT,
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default'
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS compression_quality_audit (
-                audit_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                evaluated_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                candidate_count INTEGER NOT NULL,
-                event_count INTEGER NOT NULL,
-                covered_turn_count INTEGER NOT NULL,
-                event_coverage REAL NOT NULL,
-                backlinked_event_count INTEGER NOT NULL,
-                backlink_completeness REAL NOT NULL,
-                source_chars INTEGER NOT NULL,
-                event_summary_chars INTEGER NOT NULL,
-                compression_ratio REAL NOT NULL,
-                degraded_event_count INTEGER NOT NULL,
-                degraded_fraction REAL NOT NULL,
-                source_supported_event_count INTEGER NOT NULL DEFAULT 0,
-                source_support REAL NOT NULL DEFAULT 0,
-                identifier_fidelity REAL NOT NULL DEFAULT 0,
-                polarity_consistency REAL NOT NULL DEFAULT 0,
-                unsupported_identifiers TEXT NOT NULL DEFAULT '[]',
-                thresholds TEXT NOT NULL,
-                failed_checks TEXT NOT NULL,
-                sample_turn_ids TEXT NOT NULL
-            )
-        ''')
-        quality_columns = {
-            row[1]
-            for row in cursor.execute(
-                "PRAGMA table_info(compression_quality_audit)"
-            ).fetchall()
-        }
-        for column, definition in (
-            ("source_supported_event_count", "INTEGER NOT NULL DEFAULT 0"),
-            ("source_support", "REAL NOT NULL DEFAULT 0"),
-            ("identifier_fidelity", "REAL NOT NULL DEFAULT 0"),
-            ("polarity_consistency", "REAL NOT NULL DEFAULT 0"),
-            ("unsupported_identifiers", "TEXT NOT NULL DEFAULT '[]'"),
-        ):
-            if column not in quality_columns:
-                cursor.execute(
-                    f"ALTER TABLE compression_quality_audit ADD COLUMN {column} {definition}"
-                )
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recall_traces (
-                trace_id TEXT PRIMARY KEY,
-                memory_actor TEXT NOT NULL DEFAULT 'api_a',
-                source_domains TEXT NOT NULL DEFAULT '["agent_interaction"]',
-                created_at TEXT NOT NULL,
-                completed_at TEXT NOT NULL,
-                request_source TEXT NOT NULL,
-                session_id TEXT,
-                query TEXT NOT NULL,
-                status TEXT NOT NULL,
-                intent TEXT,
-                query_plan TEXT,
-                candidate_count INTEGER NOT NULL DEFAULT 0,
-                result_count INTEGER NOT NULL DEFAULT 0,
-                selected_results TEXT NOT NULL DEFAULT '[]',
-                context_chars INTEGER NOT NULL DEFAULT 0,
-                latency_ms REAL NOT NULL DEFAULT 0.0,
-                error_type TEXT,
-                error_detail TEXT,
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default'
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recall_feedback (
-                feedback_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                trace_id TEXT NOT NULL,
-                memory_id TEXT NOT NULL,
-                verdict TEXT NOT NULL,
-                reason TEXT,
-                owner_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(trace_id, memory_id, owner_id, workspace_id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS memory_deletion_audit (
-                audit_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                target_kind TEXT NOT NULL,
-                target_hash TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                deleted_counts TEXT NOT NULL,
-                owner_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS profile_memory_tombstones (
-                owner_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                revoked_at TEXT NOT NULL,
-                source_turn_id TEXT NOT NULL,
-                evidence_turns TEXT NOT NULL DEFAULT '[]',
-                reason_hash TEXT NOT NULL,
-                PRIMARY KEY(owner_id, workspace_id, memory_domain, subject, predicate)
-            )
-        ''')
-        tombstone_columns = {
-            row[1]
-            for row in cursor.execute(
-                "PRAGMA table_info(profile_memory_tombstones)"
-            ).fetchall()
-        }
-        if "evidence_turns" not in tombstone_columns:
-            cursor.execute(
-                "ALTER TABLE profile_memory_tombstones "
-                "ADD COLUMN evidence_turns TEXT NOT NULL DEFAULT '[]'"
-            )
-
-        # Tier 2 compressed memories table (structured Event/Scene/Arc summaries)
-        # Lifecycle: Event(level=0) → Scene(level=1) → Arc(level=2) → Epoch(level=3) → purged
-        # Five-dimensional weight model (see §3.4.2 in architecture baseline):
-        #   W_final = W_base(level) + content_bonus + access_bonus + citation_bonus + pin_override
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS compressed_memories (
-                memory_id TEXT PRIMARY KEY,
-                memory_type TEXT NOT NULL,       -- "event" | "scene" | "arc" | "epoch"
-                title TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                timespan_start TEXT NOT NULL,
-                timespan_end TEXT NOT NULL,
-                importance REAL DEFAULT 0.5,
-                confidence REAL DEFAULT 0.5,
-                topics TEXT,                     -- JSON array
-                entities TEXT,                   -- JSON array
-                source_turns TEXT,               -- JSON array of turn_ids
-                parent_id TEXT,                  -- parent memory_id in hierarchy
-                compressed_at TEXT NOT NULL,
-                compression_level INTEGER DEFAULT 0,  -- 0=Event, 1=Scene, 2=Arc, 3=Epoch, 4=FinalSummary
-                status TEXT DEFAULT 'active',         -- 'active' | 'superseded' | 'purged'
-                superseded_by TEXT,                   -- memory_id that replaced this entry
-                weight REAL DEFAULT 1.0,              -- base structural weight
-                -- ── Five-dimensional content-aware weight signals ──
-                event_kind TEXT,                      -- decision|progress|blocker|shift|completion|conflict|correction
-                access_count INTEGER DEFAULT 0,       -- incremented on each query match
-                last_accessed_at TEXT,                -- ISO timestamp of last query hit
-                citation_count INTEGER DEFAULT 0,     -- times referenced by parent arcs/scenes
-                pinned INTEGER DEFAULT 0,             -- 1 = user pinned (weight locked at 1.0)
-                hidden INTEGER DEFAULT 0,             -- 1 = user hidden (excluded from default queries)
-                identity_layer TEXT,                  -- founding | experience | self_narrative
-                evidence_refs TEXT,                   -- JSON references backing identity memory
-                origin_type TEXT,                     -- governance_task | verified_conversation | ...
-                origin_id TEXT,                       -- stable source identity
-                verified_at TEXT,                     -- source verification timestamp
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default',
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                created_at TEXT                  -- immutable transaction-time anchor (when this version became current); COALESCE(created_at, compressed_at)
-            )
-        ''')
-
-        # Migrate existing compressed_memories table (add columns if missing)
-        self._migrate_compressed_memories_schema(cursor)
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS profile_memories (
-                memory_id TEXT PRIMARY KEY,
-                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                memory_kind TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                value TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                confidence REAL NOT NULL DEFAULT 0.5,
-                certainty_state TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                valid_from TEXT NOT NULL,
-                valid_to TEXT,
-                evidence_refs TEXT NOT NULL DEFAULT '[]',
-                source_turns TEXT NOT NULL DEFAULT '[]',
-                supersedes TEXT NOT NULL DEFAULT '[]',
-                conflict_refs TEXT NOT NULL DEFAULT '[]',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default'
-            )
-        ''')
-
-        setup_memory_promotion_schema(conn)
-
-        self._migrate_scope_schema(cursor)
-        self._migrate_domain_schema(cursor)
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS identity_revision_proposals (
-                proposal_id TEXT PRIMARY KEY,
-                target_memory_id TEXT NOT NULL,
-                baseline_version TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                proposed_changes TEXT NOT NULL,
-                evidence TEXT NOT NULL,
-                source_actor TEXT NOT NULL,
-                status TEXT NOT NULL,
-                decision_reason TEXT,
-                decided_by TEXT,
-                created_at TEXT NOT NULL,
-                decided_at TEXT,
-                release_version TEXT,
-                released_at TEXT
-            )
-        ''')
-        revision_columns = {
-            row[1]
-            for row in cursor.execute(
-                "PRAGMA table_info(identity_revision_proposals)"
-            ).fetchall()
-        }
-        if "release_version" not in revision_columns:
-            cursor.execute(
-                "ALTER TABLE identity_revision_proposals ADD COLUMN release_version TEXT"
-            )
-        if "released_at" not in revision_columns:
-            cursor.execute(
-                "ALTER TABLE identity_revision_proposals ADD COLUMN released_at TEXT"
-            )
-
-        # Restore the canonical identity anchor before any runtime service can
-        # answer recall requests. The operation is idempotent and preserves
-        # mutable audit counters while repairing canonical identity fields.
-        from systems.memory.identity_seed import (
-            ensure_founding_memories,
-            reconcile_released_identity_revisions,
-        )
-        setup_memory_fts(conn)
-        from systems.memory.entity_graph import setup_entity_graph
-
-        setup_entity_graph(conn)
-        from systems.memory.llm_cache import setup_llm_cache
-
-        setup_llm_cache(conn)
-        seeded = ensure_founding_memories(conn)
-        released_revisions = reconcile_released_identity_revisions(conn)
-
-        # Tier 1 + Tier 2 indexes
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp)",
-            "CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)",
-            "CREATE INDEX IF NOT EXISTS idx_turns_relevance ON turns(relevance_score)",
-            "CREATE INDEX IF NOT EXISTS idx_turns_compressed ON turns(compressed_to_tier2)",
-            "CREATE INDEX IF NOT EXISTS idx_turns_scope_time "
-            "ON turns(owner_id, workspace_id, memory_domain, compressed_to_tier2, timestamp)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_session_dedup "
-            "ON turns(session_id, dedup_key) WHERE dedup_key IS NOT NULL",
-            "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
-            "CREATE INDEX IF NOT EXISTS idx_archive_session ON turns_archive(session_id)",
-            "CREATE INDEX IF NOT EXISTS idx_compression_quality_evaluated "
-            "ON compression_quality_audit(evaluated_at)",
-            "CREATE INDEX IF NOT EXISTS idx_recall_traces_created "
-            "ON recall_traces(created_at DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_recall_traces_session "
-            "ON recall_traces(session_id, created_at DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_recall_feedback_memory "
-            "ON recall_feedback(owner_id, workspace_id, memory_domain, memory_id, created_at)",
-            "CREATE INDEX IF NOT EXISTS idx_memory_deletion_audit_scope "
-            "ON memory_deletion_audit(owner_id, workspace_id, memory_domain, created_at)",
-            "CREATE INDEX IF NOT EXISTS idx_profile_tombstones_scope "
-            "ON profile_memory_tombstones(owner_id, workspace_id, memory_domain, revoked_at)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_level ON compressed_memories(compression_level)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_identity_layer "
-            "ON compressed_memories(identity_layer, status, timespan_end)",
-            "CREATE INDEX IF NOT EXISTS idx_cmem_scope_status "
-            "ON compressed_memories(owner_id, workspace_id, memory_domain, status, timespan_end)",
-            "CREATE INDEX IF NOT EXISTS idx_profile_scope_status "
-            "ON profile_memories(owner_id, workspace_id, memory_domain, status, valid_from)",
-            "CREATE INDEX IF NOT EXISTS idx_identity_revision_status "
-            "ON identity_revision_proposals(status, created_at)",
-        ]:
-            cursor.execute(idx_sql)
-
-        conn.commit()
-        conn.close()
-        logger.info(
-            "Memory database initialized at %s "
-            "(founding identity rows added: %d, identity revisions released: %d)",
-            self._db_path,
-            seeded,
-            released_revisions,
-        )
-
-    @staticmethod
-    def _migrate_turns_schema(cursor) -> None:
-        existing = {row[1] for row in cursor.execute("PRAGMA table_info(turns)").fetchall()}
-        if "dedup_key" not in existing:
-            cursor.execute("ALTER TABLE turns ADD COLUMN dedup_key TEXT")
-        if "last_decay_at" not in existing:
-            cursor.execute("ALTER TABLE turns ADD COLUMN last_decay_at TEXT")
-
-    @staticmethod
-    def _migrate_scope_schema(cursor) -> None:
-        for table in (
-            "sessions",
-            "turns",
-            "turns_archive",
-            "compressed_memories",
-            "recall_traces",
-        ):
-            columns = {
-                row[1] for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            if "owner_id" not in columns:
-                cursor.execute(
-                    f"ALTER TABLE {table} ADD COLUMN owner_id TEXT NOT NULL "
-                    f"DEFAULT '{DEFAULT_OWNER_ID}'"
-                )
-            if "workspace_id" not in columns:
-                cursor.execute(
-                    f"ALTER TABLE {table} ADD COLUMN workspace_id TEXT NOT NULL "
-                    f"DEFAULT '{DEFAULT_WORKSPACE_ID}'"
-                )
-
-    @staticmethod
-    def _migrate_domain_schema(cursor) -> None:
-        """One-way migration: all historical rows belong to API-A interaction memory."""
-        column_definitions = {
-            "sessions": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "turns": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "turns_archive": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "compressed_memories": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "profile_memories": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "compression_quality_audit": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "recall_traces": ("source_domains", "TEXT NOT NULL DEFAULT '[\"agent_interaction\"]'"),
-            "recall_feedback": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-            "memory_deletion_audit": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
-        }
-        for table, (column, definition) in column_definitions.items():
-            columns = {
-                row[1]
-                for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            if column not in columns:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        trace_columns = {
-            row[1]
-            for row in cursor.execute("PRAGMA table_info(recall_traces)").fetchall()
-        }
-        if "memory_actor" not in trace_columns:
-            cursor.execute(
-                "ALTER TABLE recall_traces ADD COLUMN memory_actor TEXT NOT NULL "
-                "DEFAULT 'api_a'"
-            )
-
-        tombstone_info = cursor.execute(
-            "PRAGMA table_info(profile_memory_tombstones)"
-        ).fetchall()
-        tombstone_pk = [
-            str(row[1])
-            for row in sorted(tombstone_info, key=lambda row: int(row[5] or 0))
-            if int(row[5] or 0) > 0
-        ]
-        expected_pk = [
-            "owner_id", "workspace_id", "memory_domain", "subject", "predicate"
-        ]
-        if tombstone_pk != expected_pk:
-            has_domain = any(str(row[1]) == "memory_domain" for row in tombstone_info)
-            cursor.execute(
-                "CREATE TABLE profile_memory_tombstones_domain_migration ("
-                "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
-                "memory_domain TEXT NOT NULL DEFAULT 'agent_interaction', "
-                "subject TEXT NOT NULL, predicate TEXT NOT NULL, revoked_at TEXT NOT NULL, "
-                "source_turn_id TEXT NOT NULL, evidence_turns TEXT NOT NULL DEFAULT '[]', "
-                "reason_hash TEXT NOT NULL, PRIMARY KEY(owner_id, workspace_id, "
-                "memory_domain, subject, predicate))"
-            )
-            domain_expression = "memory_domain" if has_domain else "'agent_interaction'"
-            cursor.execute(
-                "INSERT INTO profile_memory_tombstones_domain_migration "
-                "(owner_id, workspace_id, memory_domain, subject, predicate, revoked_at, "
-                "source_turn_id, evidence_turns, reason_hash) SELECT owner_id, workspace_id, "
-                f"{domain_expression}, subject, predicate, revoked_at, source_turn_id, "
-                "evidence_turns, reason_hash FROM profile_memory_tombstones"
-            )
-            cursor.execute("DROP TABLE profile_memory_tombstones")
-            cursor.execute(
-                "ALTER TABLE profile_memory_tombstones_domain_migration "
-                "RENAME TO profile_memory_tombstones"
-            )
-
-    @staticmethod
-    def _migrate_compressed_memories_schema(cursor) -> None:
-        """Add lifecycle + content-aware weight columns to existing table if missing."""
-        existing = {row[1] for row in cursor.execute("PRAGMA table_info(compressed_memories)").fetchall()}
-        migrations = [
-            ("compression_level", "INTEGER DEFAULT 0"),
-            ("status", "TEXT DEFAULT 'active'"),
-            ("superseded_by", "TEXT"),
-            ("weight", "REAL DEFAULT 1.0"),
-            ("created_at", "TEXT"),
-            # Five-dimensional content-aware weight signals
-            ("event_kind", "TEXT"),
-            ("access_count", "INTEGER DEFAULT 0"),
-            ("last_accessed_at", "TEXT"),
-            ("citation_count", "INTEGER DEFAULT 0"),
-            ("pinned", "INTEGER DEFAULT 0"),
-            ("hidden", "INTEGER DEFAULT 0"),
-            ("identity_layer", "TEXT"),
-            ("evidence_refs", "TEXT"),
-            ("origin_type", "TEXT"),
-            ("origin_id", "TEXT"),
-            ("verified_at", "TEXT"),
-        ]
-        for col_name, col_def in migrations:
-            if col_name not in existing:
-                cursor.execute(f"ALTER TABLE compressed_memories ADD COLUMN {col_name} {col_def}")
-        # Backfill the transaction-time anchor for any row missing it
-        # (legacy rows and rows written before created_at was populated).
-        cursor.execute(
-            "UPDATE compressed_memories SET created_at = compressed_at "
-            "WHERE created_at IS NULL"
-        )
-        if "embedding" in existing:
-            cursor.execute("ALTER TABLE compressed_memories DROP COLUMN embedding")
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
@@ -1331,96 +785,60 @@ class MemoryService:
             logger.info("Purged %d expired compressed memories", deleted)
         return deleted
 
-    def _setup_routes(self):
-        self.app.add_api_route("/", self.health_check, methods=["GET"])
-        self.app.add_api_route("/mem/usage", self.get_mem_usage, methods=["GET"])
-        # ── Tier 1 routes ──────────────────────────────────────────
-        self.app.add_api_route("/sessions", self.create_session, methods=["POST"])
-        self.app.add_api_route("/sessions", self.list_sessions, methods=["GET"])
-        self.app.add_api_route("/sessions/{session_id}", self.get_session, methods=["GET"])
-        self.app.add_api_route("/sessions/{session_id}/turns", self.add_turn, methods=["POST"])
-        self.app.add_api_route("/sessions/{session_id}/turns", self.get_session_turns, methods=["GET"])
-        self.app.add_api_route("/turn-pairs", self.add_turn_pair, methods=["POST"])
-        self.app.add_api_route("/turns", self.query_turns, methods=["GET"])
-        self.app.add_api_route("/turns/{turn_id}", self.get_turn, methods=["GET"])
-        self.app.add_api_route("/turns/timeline", self.timeline_view, methods=["POST"])
-        self.app.add_api_route("/recall", self.recall, methods=["POST"])
-        self.app.add_api_route("/recall/traces", self.list_recall_traces, methods=["GET"])
-        self.app.add_api_route("/recall/feedback", self.record_recall_feedback, methods=["POST"])
-        self.app.add_api_route(
-            "/promotion-candidates",
-            self.create_promotion_candidate,
-            methods=["POST"],
-        )
-        self.app.add_api_route(
-            "/promotion-candidates",
-            self.list_promotion_candidates,
-            methods=["GET"],
-        )
-        self.app.add_api_route(
-            "/promotion-candidates/{candidate_id}/consent",
-            self.consent_promotion_candidate,
-            methods=["POST"],
-        )
-        self.app.add_api_route("/promotions", self.list_promotions, methods=["GET"])
-        self.app.add_api_route(
-            "/promotions/{promotion_id}/revoke",
-            self.revoke_promotion,
-            methods=["POST"],
-        )
-        self.app.add_api_route("/forget", self.forget_memory, methods=["POST"])
-        self.app.add_api_route("/remember", self.remember, methods=["POST"])
-        self.app.add_api_route("/identity/archive", self.get_identity_archive, methods=["GET"])
-        self.app.add_api_route("/identity/sync", self.sync_identity_archive, methods=["POST"])
-        self.app.add_api_route(
-            "/identity/experiences/verify",
-            self.verify_identity_experience,
-            methods=["POST"],
-        )
-        self.app.add_api_route(
-            "/identity/experiences/settle-interaction",
-            self.settle_interaction_experience,
-            methods=["POST"],
-        )
-        self.app.add_api_route("/identity/revisions", self.list_identity_revisions, methods=["GET"])
-        self.app.add_api_route("/identity/revisions", self.propose_identity_revision, methods=["POST"])
-        self.app.add_api_route(
-            "/identity/revisions/{proposal_id}/decision",
-            self.decide_identity_revision,
-            methods=["POST"],
-        )
-        self.app.add_api_route("/tier2/compress", self.tier2_compress, methods=["POST"])
-        self.app.add_api_route("/tier1/stats", self.tier1_stats, methods=["GET"])
-        self.app.add_api_route("/compressed/search", self.search_compressed, methods=["POST"])
-        self.app.add_api_route("/compressed/trace/{turn_id}", self.trace_compressed_by_turn, methods=["GET"])
-        self.app.add_api_route("/compressed/lifecycle", self.trigger_lifecycle, methods=["POST"])
-        self.app.add_api_route("/compressed/run-all-rules", self.run_all_rules, methods=["POST"])
-        self.app.add_api_route("/compressed/rules-status", self.rules_status, methods=["GET"])
-        self.app.add_api_route("/compressed/{memory_id}", self.get_compressed, methods=["GET"])
-        self.app.add_api_route("/compressed/{memory_id}/pin", self.pin_memory, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}/hide", self.hide_memory, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}/unpin", self.unpin_memory, methods=["POST"])
-        self.app.add_api_route("/llm/health", self.llm_health, methods=["GET"])
-        self.app.add_api_route("/semantic/status", self.semantic_status, methods=["GET"])
-        self.app.add_api_route("/semantic/backfill", self.semantic_backfill, methods=["POST"])
-        self.app.add_api_route("/admin/backups", self.create_backup, methods=["POST"])
-        self.app.add_api_route("/admin/backups", self.list_backups, methods=["GET"])
-        self.app.add_api_route(
-            "/admin/backups/{backup_id}/restore",
-            self.restore_backup,
-            methods=["POST"],
-        )
-        self.app.add_api_route("/admin/exports", self.export_memory, methods=["POST"])
-        # Entity graph introspection + maintenance
-        self.app.add_api_route("/graph/entities", self.list_graph_entities, methods=["GET"])
-        self.app.add_api_route("/graph/rebuild", self.rebuild_entity_graph, methods=["POST"])
-        self.app.add_api_route(
-            "/graph/neighbors/{entity_id}",
-            self.get_graph_neighbors,
-            methods=["GET"],
-        )
-        # Compression quality dashboard
-        self.app.add_api_route("/compressed/quality", self.compression_quality, methods=["GET"])
+    def _http_handlers(self) -> Dict[str, Callable[..., object]]:
+        """Expose only application handlers required by the HTTP adapter."""
+        return {
+            "health_check": self.health_check,
+            "get_mem_usage": self.get_mem_usage,
+            "create_session": self.create_session,
+            "list_sessions": self.list_sessions,
+            "get_session": self.get_session,
+            "add_turn": self.add_turn,
+            "get_session_turns": self.get_session_turns,
+            "add_turn_pair": self.add_turn_pair,
+            "query_turns": self.query_turns,
+            "get_turn": self.get_turn,
+            "timeline_view": self.timeline_view,
+            "recall": self.recall,
+            "list_recall_traces": self.list_recall_traces,
+            "record_recall_feedback": self.record_recall_feedback,
+            "create_promotion_candidate": self.create_promotion_candidate,
+            "list_promotion_candidates": self.list_promotion_candidates,
+            "consent_promotion_candidate": self.consent_promotion_candidate,
+            "list_promotions": self.list_promotions,
+            "revoke_promotion": self.revoke_promotion,
+            "forget_memory": self.forget_memory,
+            "remember": self.remember,
+            "get_identity_archive": self.get_identity_archive,
+            "sync_identity_archive": self.sync_identity_archive,
+            "verify_identity_experience": self.verify_identity_experience,
+            "settle_interaction_experience": self.settle_interaction_experience,
+            "list_identity_revisions": self.list_identity_revisions,
+            "propose_identity_revision": self.propose_identity_revision,
+            "decide_identity_revision": self.decide_identity_revision,
+            "tier2_compress": self.tier2_compress,
+            "tier1_stats": self.tier1_stats,
+            "search_compressed": self.search_compressed,
+            "trace_compressed_by_turn": self.trace_compressed_by_turn,
+            "trigger_lifecycle": self.trigger_lifecycle,
+            "run_all_rules": self.run_all_rules,
+            "rules_status": self.rules_status,
+            "get_compressed": self.get_compressed,
+            "pin_memory": self.pin_memory,
+            "hide_memory": self.hide_memory,
+            "unpin_memory": self.unpin_memory,
+            "llm_health": self.llm_health,
+            "semantic_status": self.semantic_status,
+            "semantic_backfill": self.semantic_backfill,
+            "create_backup": self.create_backup,
+            "list_backups": self.list_backups,
+            "restore_backup": self.restore_backup,
+            "export_memory": self.export_memory,
+            "list_graph_entities": self.list_graph_entities,
+            "rebuild_entity_graph": self.rebuild_entity_graph,
+            "get_graph_neighbors": self.get_graph_neighbors,
+            "compression_quality": self.compression_quality,
+        }
 
     async def create_backup(self):
         result = await asyncio.to_thread(self._backup_manager.create_backup)
@@ -1435,7 +853,7 @@ class MemoryService:
             result = await asyncio.to_thread(
                 self._backup_manager.restore_backup,
                 backup_id,
-                post_restore=self._setup_database,
+                post_restore=self._database_bootstrap.reconcile_schema,
             )
         except MemoryRestoreError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4482,16 +3900,30 @@ class MemoryService:
         logger.warning("Failed to register with gateway after %d attempts", max_retries)
         return None
 
-    async def start(self):
+class MemoryService(MemoryApplicationService):
+    """HTTP composition root for the independently testable Memory use cases."""
+
+    def __init__(self, config: MemoryServiceConfig = None):
+        super().__init__(config)
+        self.app = build_memory_http_app(
+            self._http_handlers(),
+            lifespan=asynccontextmanager(self._app_lifespan),
+        )
+
+    async def start(self) -> None:
         import uvicorn
 
-        logger.info(f"Starting memory service on {self.config.host}:{self.config.port}")
+        logger.info(
+            "Starting memory service on %s:%s",
+            self.config.host,
+            self.config.port,
+        )
         await uvicorn.Server(
             uvicorn.Config(
                 self.app,
                 host=self.config.host,
                 port=self.config.port,
-                log_level="info"
+                log_level="info",
             )
         ).serve()
 

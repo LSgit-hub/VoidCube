@@ -19,7 +19,11 @@ def test_config_command_layer_owns_cli_handlers():
         assert f"def {name}" not in config_source
         assert f"def {name}" in command_source
 
-    main_tree = ast.parse((ROOT / "VoidCube_cli" / "main.py").read_text(encoding="utf-8"))
+    main_tree = ast.parse(
+        (ROOT / "VoidCube_cli" / "entrypoint_operations.py").read_text(
+            encoding="utf-8"
+        )
+    )
     imports = {
         alias.name
         for node in ast.walk(main_tree)

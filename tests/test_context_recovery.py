@@ -13,6 +13,7 @@ from agent.context_compressor import (
     execute_context_recovery,
     next_compression_attempt,
 )
+from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
 from run_agent import AIAgent
 
 
@@ -202,16 +203,24 @@ def test_agent_compression_recovery_returns_named_result():
     ]
 
 
-def test_agent_context_recovery_failure_persists_once_and_is_partial():
-    agent = AIAgent.__new__(AIAgent)
+def test_turn_runtime_context_recovery_failure_persists_once_and_is_partial():
     persisted = []
-    agent._session_persistence = SimpleNamespace(
-        persist=lambda messages, history: persisted.append((messages, history))
+    runtime = ConversationTurnRuntime(
+        ConversationTurnPorts(
+            persist_session=lambda messages, history: persisted.append(
+                (messages, history)
+            ),
+            save_session_log=lambda _messages: None,
+            cleanup_task_resources=lambda _task_id: None,
+            clear_interrupt=lambda: None,
+            emit_status=lambda _message: None,
+            emit_verbose=lambda _message, _force: None,
+        )
     )
     messages = [{"role": "user", "content": "current"}]
     history = [{"role": "user", "content": "old"}]
 
-    result = agent._context_recovery_failure_result(
+    result = runtime.partial_failure(
         messages=messages,
         conversation_history=history,
         api_call_count=4,

@@ -10,7 +10,7 @@ import pytest
 
 from systems.memory.memory_service import MemoryService, RecallRequest
 from systems.memory.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.database import open_memory_sqlite
 from systems.memory.config import MemoryServiceConfig
 
 

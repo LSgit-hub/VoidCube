@@ -37,6 +37,7 @@ dependencies = [
     "fastapi>=0.115.0,<1",
     "uvicorn>=0.32.0,<1",
     "psutil>=6.1.0,<8",
+    "sqlite-vec>=0.1,<1",
 ]
 
 [project.optional-dependencies]

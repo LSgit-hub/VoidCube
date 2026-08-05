@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from systems.memory.database import open_memory_sqlite
 from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 from systems.memory.profile_store import upsert_profile_memory
 
@@ -77,17 +78,6 @@ def _identifiers(value: object) -> set[str]:
 def _has_explicit_negation(value: object) -> bool:
     normalized = " ".join(str(value or "").lower().split())
     return any(marker in normalized for marker in _NEGATION_MARKERS)
-
-
-def open_memory_sqlite(db_path: str | Path, *, timeout: float = 30.0) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=timeout)
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.DatabaseError as exc:
-        logger.debug("SQLite WAL pragma was not applied for %s: %s", db_path, exc)
-    return conn
 
 
 def _iso_value(value: Any) -> str:

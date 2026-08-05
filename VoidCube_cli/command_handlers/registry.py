@@ -763,7 +763,7 @@ def force_quit_autonomous_gate_for_host(
 
 
 def _resolve_named_session(value: str) -> str | None:
-    from VoidCube_cli.main import _resolve_session_by_name_or_id
+    from VoidCube_cli.entrypoint_session import _resolve_session_by_name_or_id
 
     return _resolve_session_by_name_or_id(value)
 
