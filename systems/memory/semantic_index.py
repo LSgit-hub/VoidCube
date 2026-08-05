@@ -208,6 +208,8 @@ class SemanticMemoryIndex:
                         conn,
                         source_type,
                         memory_id,
+                        owner_id,
+                        workspace_id,
                         memory_domain,
                     )
                     if current_hash != _content_hash(content):
@@ -218,9 +220,8 @@ class SemanticMemoryIndex:
                         "(source_type, memory_id, owner_id, workspace_id, memory_domain, content_hash, "
                         "provider, model, dimensions, vector, updated_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(source_type, memory_id, memory_domain, provider, model) DO UPDATE SET "
-                        "owner_id = excluded.owner_id, workspace_id = excluded.workspace_id, "
-                        "memory_domain = excluded.memory_domain, "
+                        "ON CONFLICT(source_type, memory_id, owner_id, workspace_id, "
+                        "memory_domain, provider, model) DO UPDATE SET "
                         "content_hash = excluded.content_hash, provider = excluded.provider, "
                         "dimensions = excluded.dimensions, vector = excluded.vector, "
                         "updated_at = excluded.updated_at",
@@ -241,11 +242,14 @@ class SemanticMemoryIndex:
                     if vec0:
                         rowid = conn.execute(
                             "SELECT rowid FROM memory_embeddings WHERE "
-                            "source_type = ? AND memory_id = ? AND memory_domain = ? "
+                            "source_type = ? AND memory_id = ? AND owner_id = ? "
+                            "AND workspace_id = ? AND memory_domain = ? "
                             "AND provider = ? AND model = ?",
                             (
                                 source_type,
                                 memory_id,
+                                owner_id,
+                                workspace_id,
                                 memory_domain,
                                 self.config.provider,
                                 self.config.model,
@@ -271,34 +275,43 @@ class SemanticMemoryIndex:
         conn,
         source_type: str,
         memory_id: str,
+        owner_id: str,
+        workspace_id: str,
         memory_domain: str,
     ) -> str | None:
         source_queries = {
             "turn": (
                 "SELECT COALESCE(text, '') FROM turns "
-                "WHERE turn_id = ? AND memory_domain = ? AND compressed_to_tier2 = 0"
+                "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND compressed_to_tier2 = 0"
             ),
             "archive": (
                 "SELECT COALESCE(original_text, text_summary, '') FROM turns_archive "
-                "WHERE turn_id = ? AND memory_domain = ?"
+                "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?"
             ),
             "compressed": (
                 "SELECT COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
                 "COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
-                "FROM compressed_memories WHERE memory_id = ? AND memory_domain = ? "
+                "FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ? "
                 "AND status = 'active' AND hidden = 0"
             ),
             "profile": (
                 "SELECT COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
                 "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
-                "FROM profile_memories WHERE memory_id = ? AND memory_domain = ? "
+                "FROM profile_memories WHERE memory_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ? "
                 "AND status = 'active'"
             ),
         }
         query = source_queries.get(source_type)
         if query is None:
             return None
-        row = conn.execute(query, (memory_id, memory_domain)).fetchone()
+        row = conn.execute(
+            query,
+            (memory_id, owner_id, workspace_id, memory_domain),
+        ).fetchone()
         return _content_hash(str(row[0] or "")) if row is not None else None
 
     def search(
@@ -444,9 +457,17 @@ class SemanticMemoryIndex:
                 ]
                 columns = {str(row[1]) for row in table_info}
                 if (
-                    "memory_domain" not in columns
+                    {"owner_id", "workspace_id", "memory_domain"} - columns
                     or primary_key
-                    != ["source_type", "memory_id", "memory_domain", "provider", "model"]
+                    != [
+                        "source_type",
+                        "memory_id",
+                        "owner_id",
+                        "workspace_id",
+                        "memory_domain",
+                        "provider",
+                        "model",
+                    ]
                 ):
                     # Embeddings are derived data. Rebuild instead of preserving an
                     # ambiguous provider-less uniqueness contract.
@@ -458,11 +479,20 @@ class SemanticMemoryIndex:
                 "content_hash TEXT NOT NULL, "
                 "provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, "
                 "vector TEXT NOT NULL, updated_at TEXT NOT NULL, "
-                "PRIMARY KEY(source_type, memory_id, memory_domain, provider, model))"
+                "PRIMARY KEY(source_type, memory_id, owner_id, workspace_id, "
+                "memory_domain, provider, model))"
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_scope_v2 "
+                "DROP INDEX IF EXISTS idx_memory_embeddings_scope_v2"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_scope_v3 "
                 "ON memory_embeddings(provider, model, owner_id, workspace_id, memory_domain, source_type)"
+            )
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
+                "AND memory_id IN (SELECT memory_id FROM compressed_memories "
+                "WHERE identity_layer = 'founding')"
             )
             if _vec0_available(conn):
                 dims = self.config.dimensions or 256
@@ -493,11 +523,32 @@ class SemanticMemoryIndex:
                             f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ("
                             "SELECT rowid FROM memory_embeddings WHERE source_type = "
                             f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
                             "AND memory_domain = OLD.memory_domain); "
                             "DELETE FROM memory_embeddings WHERE source_type = "
                             f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
                             "AND memory_domain = OLD.memory_domain; "
                             "END"
+                        )
+                        scope_trigger = f"{trigger_name}_scope_update"
+                        conn.execute(f"DROP TRIGGER IF EXISTS {scope_trigger}")
+                        conn.execute(
+                            f"CREATE TRIGGER IF NOT EXISTS {scope_trigger} "
+                            f"AFTER UPDATE OF owner_id, workspace_id, memory_domain ON {table} "
+                            "WHEN OLD.owner_id IS NOT NEW.owner_id "
+                            "OR OLD.workspace_id IS NOT NEW.workspace_id "
+                            "OR OLD.memory_domain IS NOT NEW.memory_domain "
+                            "BEGIN "
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ("
+                            "SELECT rowid FROM memory_embeddings WHERE source_type = "
+                            f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                            "AND memory_domain = OLD.memory_domain); "
+                            "DELETE FROM memory_embeddings WHERE source_type = "
+                            f"'{source_type}' AND memory_id = OLD.{id_column} "
+                            "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                            "AND memory_domain = OLD.memory_domain; END"
                         )
                     # Backfill existing JSON vectors into vec0 (binary blobs).
                     existing = conn.execute(
@@ -533,6 +584,20 @@ class SemanticMemoryIndex:
                         f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
                         "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
                         f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                        "AND memory_domain = OLD.memory_domain; END"
+                    )
+                    scope_trigger = f"{trigger_name}_scope_update"
+                    conn.execute(f"DROP TRIGGER IF EXISTS {scope_trigger}")
+                    conn.execute(
+                        f"CREATE TRIGGER IF NOT EXISTS {scope_trigger} "
+                        f"AFTER UPDATE OF owner_id, workspace_id, memory_domain ON {table} "
+                        "WHEN OLD.owner_id IS NOT NEW.owner_id "
+                        "OR OLD.workspace_id IS NOT NEW.workspace_id "
+                        "OR OLD.memory_domain IS NOT NEW.memory_domain "
+                        "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
+                        f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
                         "AND memory_domain = OLD.memory_domain; END"
                     )
             conn.commit()
@@ -564,6 +629,7 @@ class SemanticMemoryIndex:
                 "COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
                 "COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
                 "FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                "AND COALESCE(identity_layer, '') != 'founding' "
                 "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
                 "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
@@ -572,13 +638,13 @@ class SemanticMemoryIndex:
                 "source.workspace_id, source.memory_domain, source.content FROM source_records AS source "
                 "LEFT JOIN memory_embeddings AS embedding ON "
                 "embedding.source_type = source.source_type AND "
-                "embedding.memory_id = source.memory_id AND embedding.provider = ? AND "
-                "embedding.model = ? AND embedding.memory_domain = source.memory_domain "
+                "embedding.memory_id = source.memory_id AND "
+                "embedding.owner_id = source.owner_id AND "
+                "embedding.workspace_id = source.workspace_id AND "
+                "embedding.memory_domain = source.memory_domain AND "
+                "embedding.provider = ? AND embedding.model = ? "
                 "WHERE embedding.memory_id IS NULL OR "
-                "embedding.content_hash != memory_content_hash(source.content) OR "
-                "embedding.owner_id != source.owner_id OR "
-                "embedding.workspace_id != source.workspace_id"
-                " OR embedding.memory_domain != source.memory_domain"
+                "embedding.content_hash != memory_content_hash(source.content)"
                 + dimension_clause
                 + " ORDER BY source.source_type, source.memory_id LIMIT ?",
                 params,

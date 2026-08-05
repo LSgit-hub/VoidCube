@@ -118,3 +118,12 @@ def test_http_service_is_only_the_composition_root(tmp_path: Path):
 
     assert service.app is not None
     assert isinstance(service, MemoryApplicationService)
+
+
+def test_memory_service_rejects_non_loopback_bindings_and_assignment():
+    with pytest.raises(ValueError, match="loopback"):
+        MemoryServiceConfig(host="0.0.0.0")
+
+    config = MemoryServiceConfig()
+    with pytest.raises(ValueError, match="loopback"):
+        config.host = "192.168.1.10"

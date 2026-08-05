@@ -83,6 +83,23 @@ def _index(service: MemoryService) -> SemanticMemoryIndex:
     )
 
 
+def test_semantic_index_excludes_founding_identity(tmp_path):
+    service = _service(tmp_path)
+    index = _index(service)
+
+    assert index.index_pending() == 0
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        indexed = conn.execute(
+            "SELECT COUNT(*) FROM memory_embeddings WHERE source_type = 'compressed' "
+            "AND memory_id LIKE 'identity-founding-%'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert indexed == 0
+
+
 def test_semantic_index_persists_version_dimensions_and_rebuilds_changed_content(
     tmp_path,
 ):

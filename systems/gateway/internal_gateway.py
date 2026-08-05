@@ -86,6 +86,8 @@ class SessionRegisterRequest(BaseModel):
     model: Optional[str] = None
     provider: Optional[str] = None
     source: str = "cli"
+    owner_id: str = "local-user"
+    workspace_id: str = "default"
 
 
 class InternalGateway:
@@ -343,6 +345,17 @@ class InternalGateway:
             detail="Authenticated service or session identity is required for Memory",
         )
 
+    def _session_memory_scope(self, request: Request) -> dict[str, str] | None:
+        """Return the scope bound during session registration, if session-authenticated."""
+        session_id = str(request.headers.get(self.SESSION_ID_HEADER) or "").strip()
+        if not session_id or session_id not in self._agent_session_cache:
+            return None
+        session = self._agent_session_cache[session_id]
+        return {
+            "owner_id": str(session.get("owner_id") or "local-user"),
+            "workspace_id": str(session.get("workspace_id") or "default"),
+        }
+
     @staticmethod
     def _inject_memory_actor(
         body: bytes,
@@ -350,13 +363,17 @@ class InternalGateway:
         *,
         method: str,
         memory_actor: str,
+        memory_scope: dict[str, str] | None = None,
     ) -> tuple[bytes, list[tuple[str, str]]]:
         query_params = [
             (key, value)
             for key, value in query_params
-            if str(key).lower() != "memory_actor"
+            if str(key).lower()
+            not in {"memory_actor", "owner_id", "workspace_id"}
         ]
         query_params.append(("memory_actor", memory_actor))
+        if memory_scope:
+            query_params.extend(memory_scope.items())
 
         if body:
             try:
@@ -372,9 +389,13 @@ class InternalGateway:
                     detail="Memory request JSON must be an object",
                 )
             payload["memory_actor"] = memory_actor
+            if memory_scope:
+                payload.update(memory_scope)
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         elif method.upper() in {"POST", "PUT", "PATCH"}:
-            body = json.dumps({"memory_actor": memory_actor}).encode("utf-8")
+            body = json.dumps(
+                {"memory_actor": memory_actor, **(memory_scope or {})}
+            ).encode("utf-8")
         return body, query_params
 
     def _setup_routes(self):
@@ -1230,6 +1251,20 @@ class InternalGateway:
         try:
             self._authorize_registration(request)
             payload = SessionRegisterRequest.model_validate(await request.json())
+            existing = dict(self._agent_session_cache.get(payload.session_id) or {})
+            existing_owner = existing.get("owner_id")
+            existing_workspace = existing.get("workspace_id")
+            if (
+                existing_owner is not None
+                and str(existing_owner) != payload.owner_id
+            ) or (
+                existing_workspace is not None
+                and str(existing_workspace) != payload.workspace_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Gateway session scope cannot be changed",
+                )
             self._touch_session(payload.session_id, source=payload.source)
             existing = dict(self._agent_session_cache.get(payload.session_id) or {})
             self._agent_session_cache[payload.session_id] = {
@@ -1237,6 +1272,8 @@ class InternalGateway:
                 "model": payload.model,
                 "provider": payload.provider,
                 "source": payload.source,
+                "owner_id": payload.owner_id,
+                "workspace_id": payload.workspace_id,
             }
             if payload.source == "cli" and not self._active_cli_session_id:
                 self._active_cli_session_id = payload.session_id
@@ -1704,11 +1741,13 @@ class InternalGateway:
                 and upstream_path.rstrip("/") != ""
             ):
                 memory_actor = self._authenticate_memory_caller(request)
+                memory_scope = self._session_memory_scope(request)
                 body, query_params = self._inject_memory_actor(
                     body,
                     query_params,
                     method=request.method,
                     memory_actor=memory_actor,
+                    memory_scope=memory_scope,
                 )
                 stripped_headers = {
                     self.SERVICE_ID_HEADER,

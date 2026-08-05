@@ -180,6 +180,8 @@ class Tier2CompressRequest(BaseModel):
     force_oldest: bool = False
     memory_actor: MemoryActor = MemoryActor.MEMORY_MAINTENANCE
     memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
 
 
 class RecallRequest(BaseModel):
@@ -506,14 +508,16 @@ class MemoryApplicationService:
                         conn.execute(
                             "UPDATE compressed_memories SET compression_level = 3, "
                             "status = 'active', weight = 0.15, compressed_at = ? "
-                            "WHERE memory_id = ?",
-                            (now.isoformat(), mem_id),
+                            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                            "AND memory_domain = ?",
+                            (now.isoformat(), mem_id, owner_id, workspace_id, memory_domain),
                         )
                     else:
                         conn.execute(
                             "UPDATE compressed_memories SET status = 'purged', "
-                            "weight = 0.0, compressed_at = ? WHERE memory_id = ?",
-                            (now.isoformat(), mem_id),
+                            "weight = 0.0, compressed_at = ? WHERE memory_id = ? "
+                            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                            (now.isoformat(), mem_id, owner_id, workspace_id, memory_domain),
                         )
                         purged += 1
                     continue
@@ -536,9 +540,10 @@ class MemoryApplicationService:
                 )
 
                 parent_id = str(
-                    uuid.uuid5(
+                        uuid.uuid5(
                         uuid.NAMESPACE_URL,
-                        f"voidcube-memory-lifecycle:{mem_id}:{next_level}",
+                        "voidcube-memory-lifecycle:"
+                        f"{owner_id}:{workspace_id}:{memory_domain}:{mem_id}:{next_level}",
                     )
                 )
                 source_turns = json.loads(source_turns_json) if source_turns_json else []
@@ -565,14 +570,16 @@ class MemoryApplicationService:
                 # Mark old entry as superseded
                 conn.execute(
                     "UPDATE compressed_memories SET status = 'superseded', "
-                    "superseded_by = ?, weight = weight * 0.3 WHERE memory_id = ?",
-                    (parent_id, mem_id),
+                    "superseded_by = ?, weight = weight * 0.3 WHERE memory_id = ? "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (parent_id, mem_id, owner_id, workspace_id, memory_domain),
                 )
                 # Increment citation_count on the new parent (Dimension 3)
                 conn.execute(
                     "UPDATE compressed_memories SET citation_count = citation_count + 1 "
-                    "WHERE memory_id = ?",
-                    (parent_id,),
+                    "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ?",
+                    (parent_id, owner_id, workspace_id, memory_domain),
                 )
                 # Record the new parent's entities in the entity graph.
                 from systems.memory.entity_graph import update_entity_graph
@@ -1093,6 +1100,9 @@ class MemoryApplicationService:
     async def verify_identity_experience(self, request: IdentityExperienceVerification):
         """Mark one existing Tier 1 turn as a verified identity experience."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        authorized_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         evidence_refs = list(
             dict.fromkeys(str(item).strip() for item in request.evidence_refs)
         )
@@ -1103,14 +1113,24 @@ class MemoryApplicationService:
         try:
             row = conn.execute(
                 "SELECT metadata FROM turns WHERE turn_id = ? AND owner_id = ? "
-                "AND workspace_id = ?",
-                (request.turn_id.strip(), scope.owner_id, scope.workspace_id),
+                "AND workspace_id = ? AND memory_domain = ?",
+                (
+                    request.turn_id.strip(),
+                    scope.owner_id,
+                    scope.workspace_id,
+                    authorized_domain,
+                ),
             ).fetchone()
             if not row:
                 archived = conn.execute(
                     "SELECT turn_id FROM turns_archive WHERE turn_id = ? AND owner_id = ? "
-                    "AND workspace_id = ?",
-                    (request.turn_id.strip(), scope.owner_id, scope.workspace_id),
+                    "AND workspace_id = ? AND memory_domain = ?",
+                    (
+                        request.turn_id.strip(),
+                        scope.owner_id,
+                        scope.workspace_id,
+                        authorized_domain,
+                    ),
                 ).fetchone()
                 if archived:
                     raise HTTPException(
@@ -1143,12 +1163,13 @@ class MemoryApplicationService:
                 metadata["verified_at"] = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 "UPDATE turns SET metadata = ? WHERE turn_id = ? AND owner_id = ? "
-                "AND workspace_id = ?",
+                "AND workspace_id = ? AND memory_domain = ?",
                 (
                     json.dumps(metadata, ensure_ascii=False),
                     request.turn_id.strip(),
                     scope.owner_id,
                     scope.workspace_id,
+                    authorized_domain,
                 ),
             )
             conn.commit()
@@ -1165,8 +1186,8 @@ class MemoryApplicationService:
         try:
             experience_row = conn.execute(
                 "SELECT * FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
-                "AND workspace_id = ?",
-                (memory_id, scope.owner_id, scope.workspace_id),
+                "AND workspace_id = ? AND memory_domain = ?",
+                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
             ).fetchone()
         finally:
             conn.close()
@@ -1188,19 +1209,32 @@ class MemoryApplicationService:
         )
 
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        authorized_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         conn = open_memory_sqlite(self._db_path)
         try:
             user_row = conn.execute(
                 "SELECT session_id, speaker, text FROM turns WHERE turn_id = ? "
-                "AND owner_id = ? AND workspace_id = ?",
-                (request.user_turn_id.strip(), scope.owner_id, scope.workspace_id),
+                "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                (
+                    request.user_turn_id.strip(),
+                    scope.owner_id,
+                    scope.workspace_id,
+                    authorized_domain,
+                ),
             ).fetchone()
             agent_row = None
             if request.agent_turn_id:
                 agent_row = conn.execute(
                     "SELECT session_id, speaker, text FROM turns WHERE turn_id = ? "
-                    "AND owner_id = ? AND workspace_id = ?",
-                    (request.agent_turn_id.strip(), scope.owner_id, scope.workspace_id),
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (
+                        request.agent_turn_id.strip(),
+                        scope.owner_id,
+                        scope.workspace_id,
+                        authorized_domain,
+                    ),
                 ).fetchone()
         finally:
             conn.close()
@@ -1246,6 +1280,8 @@ class MemoryApplicationService:
                 importance=float(classification["importance"]),
                 owner_id=scope.owner_id,
                 workspace_id=scope.workspace_id,
+                memory_actor=request.memory_actor,
+                memory_domain=authorized_domain,
             )
         )
         return {
@@ -1628,15 +1664,24 @@ class MemoryApplicationService:
             reference_time = reference_time.replace(tzinfo=local_timezone)
         reference_utc = reference_time.astimezone(timezone.utc)
         reference_iso = reference_time.isoformat()
-        updates: list[tuple[float, str, str]] = []
+        updates: list[tuple[float, str, str, str, str, str]] = []
 
         try:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                "SELECT turn_id, relevance_score, timestamp, last_decay_at "
+                "SELECT turn_id, relevance_score, timestamp, last_decay_at, "
+                "owner_id, workspace_id, memory_domain "
                 "FROM turns WHERE compressed_to_tier2 = 0"
             ).fetchall()
-            for turn_id, relevance_score, timestamp, last_decay_at in rows:
+            for (
+                turn_id,
+                relevance_score,
+                timestamp,
+                last_decay_at,
+                owner_id,
+                workspace_id,
+                memory_domain,
+            ) in rows:
                 anchor_value = last_decay_at or timestamp
                 try:
                     anchor = datetime.fromisoformat(anchor_value)
@@ -1658,12 +1703,22 @@ class MemoryApplicationService:
                 decayed_score = float(relevance_score or 0.0) * (
                     rate ** elapsed_intervals
                 )
-                updates.append((decayed_score, reference_iso, turn_id))
+                updates.append(
+                    (
+                        decayed_score,
+                        reference_iso,
+                        turn_id,
+                        owner_id,
+                        workspace_id,
+                        memory_domain,
+                    )
+                )
 
             if updates:
                 conn.executemany(
                     "UPDATE turns SET relevance_score = ?, last_decay_at = ? "
-                    "WHERE turn_id = ? AND compressed_to_tier2 = 0",
+                    "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ? AND compressed_to_tier2 = 0",
                     updates,
                 )
             conn.commit()
@@ -1684,7 +1739,7 @@ class MemoryApplicationService:
         return updated
 
     async def _tier2_bridge_cycle(self) -> int:
-        """Auto-trigger Tier 1→Tier 2 compression for expired turns.
+        """Auto-trigger fair Tier 1→Tier 2 compression for every active scope.
 
         Returns the number of turns actually processed into Tier 2 (0 on a
         no-candidate no-op), so the caller can distinguish real compression
@@ -1692,44 +1747,61 @@ class MemoryApplicationService:
         """
         conn = open_memory_sqlite(self._db_path)
         cutoff = (
-            datetime.now() - timedelta(days=self.config.tier1_retention_days)
+            datetime.now(timezone.utc)
+            - timedelta(days=self.config.tier1_retention_days)
         ).isoformat()
-        # Also check max_turns threshold
-        total_active = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
-        ).fetchone()[0]
-        force_oldest = total_active >= self.config.tier1_max_turns
-        if not force_oldest:
-            # Only compress by age
-            candidate = conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0",
-                (cutoff,),
-            ).fetchone()[0]
-            conn.close()
-            if candidate == 0:
-                return 0
-        else:
-            conn.close()
-        # Run compression with small batch
-        req = Tier2CompressRequest(
-            retention_days=self.config.tier1_retention_days,
-            batch_size=50,
-            min_relevance=self.config.tier1_min_relevance,
-            force_oldest=force_oldest,
-        )
         try:
-            result = await self.tier2_compress(req)
+            scopes = conn.execute(
+                "SELECT memory_domain, owner_id, workspace_id, COUNT(*), "
+                "SUM(CASE WHEN timestamp < ? THEN 1 ELSE 0 END) "
+                "FROM turns WHERE compressed_to_tier2 = 0 "
+                "GROUP BY memory_domain, owner_id, workspace_id "
+                "ORDER BY memory_domain, owner_id, workspace_id",
+                (cutoff,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        processed = 0
+        for domain, owner_id, workspace_id, active_count, expired_count in scopes:
+            force_oldest = int(active_count or 0) >= self.config.tier1_max_turns
+            if not force_oldest and int(expired_count or 0) == 0:
+                continue
+            req = Tier2CompressRequest(
+                retention_days=self.config.tier1_retention_days,
+                batch_size=50,
+                min_relevance=self.config.tier1_min_relevance,
+                force_oldest=force_oldest,
+                memory_actor=MemoryActor.MEMORY_MAINTENANCE,
+                memory_domain=str(domain),
+                owner_id=str(owner_id),
+                workspace_id=str(workspace_id),
+            )
+            try:
+                result = await self.tier2_compress(req)
+            except Exception:
+                logger.warning(
+                    "Tier 2 bridge scope failed: domain=%s owner=%s workspace=%s",
+                    domain,
+                    owner_id,
+                    workspace_id,
+                    exc_info=True,
+                )
+                continue
+            scope_processed = int(result.get("turns_processed", 0) or 0)
+            processed += scope_processed
             if result.get("status") != "no_candidates":
                 logger.info(
-                    "Tier 2 bridge cycle: %s — %s turns → %s events",
+                    "Tier 2 bridge scope: %s - %s turns -> %s events "
+                    "(domain=%s owner=%s workspace=%s)",
                     result.get("status"),
-                    result.get("turns_processed", 0),
+                    scope_processed,
                     result.get("events_generated", 0),
+                    domain,
+                    owner_id,
+                    workspace_id,
                 )
-                return int(result.get("turns_processed", 0) or 0)
-        except Exception:
-            logger.warning("Tier 2 bridge cycle failed", exc_info=True)
-        return 0
+        return processed
 
     async def health_check(self):
         return {
@@ -2560,6 +2632,8 @@ class MemoryApplicationService:
             min_identifier_fidelity=self.config.tier2_min_identifier_fidelity,
             min_polarity_consistency=self.config.tier2_min_polarity_consistency,
             memory_domain=memory_domain,
+            owner_id=req.owner_id,
+            workspace_id=req.workspace_id,
         )
         result = await asyncio.to_thread(
             bridge.run_cycle,

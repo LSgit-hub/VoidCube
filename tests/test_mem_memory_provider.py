@@ -205,6 +205,12 @@ def test_mem_provider_uses_gateway_issued_session_credential(monkeypatch):
     registration_request = requests[0][0]
     memory_request = requests[1][0]
     assert registration_request.get_header("Authorization") == "Bearer root-secret"
+    assert json.loads(registration_request.data) == {
+        "session_id": "session-1",
+        "source": "agent_memory_provider",
+        "owner_id": "local-user",
+        "workspace_id": "default",
+    }
     assert memory_request.get_header("X-voidcube-session-id") == "session-1"
     assert memory_request.get_header("X-voidcube-session-token") == "session-secret"
 

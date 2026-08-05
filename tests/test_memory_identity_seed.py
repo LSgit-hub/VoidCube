@@ -364,6 +364,76 @@ def test_identity_experience_verification_rejects_missing_turn_and_empty_evidenc
     assert blank.status_code == 400
 
 
+def test_identity_experience_verification_enforces_memory_domain(tmp_path) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    with TestClient(service.app) as client:
+        session = client.post(
+            "/sessions",
+            json={
+                "session_id": "companion-identity",
+                "memory_actor": "stellar_companion",
+                "memory_domain": "companion",
+            },
+        )
+        assert session.status_code == 200
+        turn = client.post(
+            "/sessions/companion-identity/turns",
+            json={
+                "speaker": "user",
+                "text": "确认这段 companion 领域经历。",
+                "memory_actor": "stellar_companion",
+                "memory_domain": "companion",
+            },
+        ).json()
+        forbidden = client.post(
+            "/identity/experiences/verify",
+            json={
+                "turn_id": turn["turn_id"],
+                "title": "越域经历",
+                "summary": "API-A 不应验证 companion 领域 turn。",
+                "evidence_refs": ["turn:companion-identity"],
+                "memory_actor": "api_a",
+                "memory_domain": "companion",
+            },
+        )
+
+    assert forbidden.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_identity_experience_projection_preserves_domain(tmp_path) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    await service.create_session(
+        SessionCreate(
+            session_id="companion-settlement",
+            memory_actor="stellar_companion",
+            memory_domain="companion",
+        )
+    )
+    user_turn = await service.add_turn(
+        "companion-settlement",
+        TurnCreate(
+            speaker="user",
+            text="请记住这段 companion 领域经历。",
+            memory_actor="stellar_companion",
+            memory_domain="companion",
+        ),
+    )
+    settled = await service.settle_interaction_experience(
+        InteractionExperienceSettlement(
+            user_turn_id=user_turn["turn_id"],
+            memory_actor="stellar_companion",
+            memory_domain="companion",
+        )
+    )
+
+    assert settled["experience"]["memory_domain"] == "companion"
+
+
 @pytest.mark.asyncio
 async def test_explicit_user_memory_signal_settles_interaction_automatically(
     tmp_path,

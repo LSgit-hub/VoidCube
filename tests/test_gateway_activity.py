@@ -14,6 +14,54 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from systems.gateway.internal_gateway import GatewayConfig, InternalGateway, ServiceInfo
 
 
+def test_gateway_binds_memory_scope_to_registered_session():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    first = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "scoped-session",
+            "owner_id": "owner-a",
+            "workspace_id": "workspace-a",
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "scoped-session",
+            "owner_id": "owner-b",
+            "workspace_id": "workspace-b",
+        },
+    )
+    assert second.status_code == 409
+    assert gateway._agent_session_cache["scoped-session"]["owner_id"] == "owner-a"
+
+    body, query = gateway._inject_memory_actor(
+        json.dumps(
+            {
+                "owner_id": "attacker-owner",
+                "workspace_id": "attacker-workspace",
+            }
+        ).encode("utf-8"),
+        [("owner_id", "attacker-owner"), ("workspace_id", "attacker-workspace")],
+        method="POST",
+        memory_actor="api_a",
+        memory_scope={"owner_id": "owner-a", "workspace_id": "workspace-a"},
+    )
+    assert json.loads(body) == {
+        "owner_id": "owner-a",
+        "workspace_id": "workspace-a",
+        "memory_actor": "api_a",
+    }
+    assert query == [
+        ("memory_actor", "api_a"),
+        ("owner_id", "owner-a"),
+        ("workspace_id", "workspace-a"),
+    ]
+
+
 def _register_memory_target(client: TestClient) -> None:
     response = client.post(
         "/register",

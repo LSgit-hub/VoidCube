@@ -59,6 +59,8 @@ def test_semantic_index_defaults_to_local_fallback(tmp_path):
 
 
 def test_local_embedding_normalizes_dimensions_to_supported_minimum(tmp_path):
+    from systems.memory.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
+
     service = _service(tmp_path)
     index = SemanticMemoryIndex(
         service._db_path,

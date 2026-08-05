@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from ipaddress import ip_address
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from VoidCube_core.runtime_paths import get_runtime_layout
 
@@ -11,6 +13,8 @@ def _default_memory_db_path() -> str:
 
 class MemoryServiceConfig(BaseModel):
     """Single runtime configuration model for the Memory Service."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     host: str = "127.0.0.1"
     port: int = 6001
@@ -36,3 +40,22 @@ class MemoryServiceConfig(BaseModel):
     recall_candidate_limit: int = Field(default=200, ge=10, le=2000)
     recall_max_context_chars: int = Field(default=3500, ge=256, le=20000)
     recall_min_score: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    @field_validator("host")
+    @classmethod
+    def _require_loopback_host(cls, value: str) -> str:
+        host = str(value or "").strip().strip("[]").lower()
+        if host == "localhost":
+            return host
+        try:
+            address = ip_address(host)
+        except ValueError as exc:
+            raise ValueError(
+                "Memory Service host must be localhost or a loopback address"
+            ) from exc
+        if not address.is_loopback:
+            raise ValueError(
+                "Memory Service must remain loopback-only; configure a private "
+                "authenticated proxy instead of exposing port 6001"
+            )
+        return host

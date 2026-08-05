@@ -501,6 +501,8 @@ class MemMemoryProvider(MemoryProvider):
                 {
                     "session_id": resolved_session_id,
                     "source": "agent_memory_provider",
+                    "owner_id": self._owner_id,
+                    "workspace_id": self._workspace_id,
                 }
             ).encode("utf-8")
             headers = {"Content-Type": "application/json"}

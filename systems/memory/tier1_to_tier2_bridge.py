@@ -373,6 +373,8 @@ class Tier1ToTier2Bridge:
         min_identifier_fidelity: float = 1.0,
         min_polarity_consistency: float = 1.0,
         memory_domain: str = "agent_interaction",
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
     ) -> None:
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -381,6 +383,8 @@ class Tier1ToTier2Bridge:
         self.archive_keep_original = archive_keep_original
         self.max_turns = max_turns
         self.memory_domain = str(memory_domain)
+        self.owner_id = str(owner_id)
+        self.workspace_id = str(workspace_id)
         self.pipeline_factory = pipeline_factory
         self.compression_degraded = compression_degraded
         self.quality_thresholds = {
@@ -399,46 +403,43 @@ class Tier1ToTier2Bridge:
         """Select one deterministic candidate batch and report fallback semantics."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
-        time_clause = "" if force_oldest else "timestamp < ? AND "
-        params: tuple[Any, ...] = (
-            (self.min_relevance, self.batch_size)
-            if force_oldest
-            else (cutoff, self.min_relevance, self.batch_size)
-        )
+        base_conditions = [
+            "compressed_to_tier2 = 0",
+            "memory_domain = ?",
+        ]
+        base_params: list[Any] = [self.memory_domain]
+        if self.owner_id is not None:
+            base_conditions.append("owner_id = ?")
+            base_params.append(self.owner_id)
+        if self.workspace_id is not None:
+            base_conditions.append("workspace_id = ?")
+            base_params.append(self.workspace_id)
+        time_clause = [] if force_oldest else ["timestamp < ?"]
+        time_params: list[Any] = [] if force_oldest else [cutoff]
+        eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
+        eligible_params = [*time_params, *base_params, self.min_relevance]
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "owner_id, workspace_id "
             ", memory_domain FROM turns WHERE "
-            f"{time_clause}compressed_to_tier2 = 0 AND memory_domain = ? "
-            "AND relevance_score >= ? ORDER BY timestamp ASC LIMIT ?",
-            (*params[:-2], self.memory_domain, *params[-2:]),
+            + " AND ".join(eligible_conditions)
+            + " ORDER BY timestamp ASC LIMIT ?",
+            [*eligible_params, self.batch_size],
         ).fetchall()
         low_relevance_fallback = False
         if not rows:
-            fallback_params: tuple[Any, ...] = (
-                (self.batch_size,)
-                if force_oldest
-                else (cutoff, self.batch_size)
-            )
             rows = conn.execute(
                 "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
                 "owner_id, workspace_id "
                 ", memory_domain FROM turns WHERE "
-                f"{time_clause}compressed_to_tier2 = 0 AND memory_domain = ? "
-                "ORDER BY timestamp ASC LIMIT ?",
-                (*fallback_params[:-1], self.memory_domain, fallback_params[-1]),
+                + " AND ".join([*time_clause, *base_conditions])
+                + " ORDER BY timestamp ASC LIMIT ?",
+                [*time_params, *base_params, self.batch_size],
             ).fetchall()
             low_relevance_fallback = bool(rows)
         owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
         workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
         memory_domain = str(rows[0][8]) if rows else self.memory_domain
-        rows = [
-            row
-            for row in rows
-            if str(row[6]) == owner_id
-            and str(row[7]) == workspace_id
-            and str(row[8]) == memory_domain
-        ]
         conn.close()
         turns = [
             {
@@ -472,8 +473,9 @@ class Tier1ToTier2Bridge:
     def _active_turn_count(self) -> int:
         conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND memory_domain = ?",
-            (self.memory_domain,),
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND memory_domain = ?"
+            + self._scope_sql_suffix(),
+            [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         conn.close()
         return int(count)
@@ -483,12 +485,15 @@ class Tier1ToTier2Bridge:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0",
-            (cutoff,),
+            "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+            "AND memory_domain = ?" + self._scope_sql_suffix(),
+            [cutoff, self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         if count == 0:
             total = conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
+                "AND memory_domain = ?" + self._scope_sql_suffix(),
+                [self.memory_domain, *self._scope_params()],
             ).fetchone()[0]
             if total >= self.max_turns:
                 count = total
@@ -501,10 +506,28 @@ class Tier1ToTier2Bridge:
             return True
         conn = open_memory_sqlite(self.db_path)
         total = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
+            "AND memory_domain = ?" + self._scope_sql_suffix(),
+            [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         conn.close()
         return total >= self.max_turns
+
+    def _scope_sql_suffix(self) -> str:
+        conditions = []
+        if self.owner_id is not None:
+            conditions.append(" AND owner_id = ?")
+        if self.workspace_id is not None:
+            conditions.append(" AND workspace_id = ?")
+        return "".join(conditions)
+
+    def _scope_params(self) -> list[str]:
+        params: list[str] = []
+        if self.owner_id is not None:
+            params.append(self.owner_id)
+        if self.workspace_id is not None:
+            params.append(self.workspace_id)
+        return params
 
     # ── Bridge to Tier 2 ──────────────────────────────────────────
 
