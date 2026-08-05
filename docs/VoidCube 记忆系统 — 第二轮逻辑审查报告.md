@@ -6,6 +6,45 @@
 
 ---
 
+## 实施复核（2026-08-05 19:44 CST）
+
+本节记录第二轮报告完成后的修复和真实运行态复核，结论优先于下方保留的原始审查快照。
+
+### 第二轮问题处理状态
+
+| 项目 | 当前状态 | 实施结果 |
+|------|----------|----------|
+| NC1 生命周期质量拒绝无限重试 | ✅ 已修复 | 独立 `lifecycle_policy.py`；最多 3 次并指数退避，记录最后错误 |
+| NC2 桥接质量门禁误用于抽象升级 | ✅ 已修复 | 生命周期改用独立的 source support / identifier fidelity 阈值 |
+| NH3 桥接遗漏 `created_at` | ✅ 已修复 | event/scene/arc/epoch INSERT 均显式写入 |
+| NH4 高层 `event_kind` 不一致 | ✅ 已修复 | bridge 与 lifecycle 均继承子层多数类型 |
+| S1 窗口外点记忆获得 temporal boost | ✅ 已修复 | 窗口外明确返回 `0.0` |
+| S2 本地 embedding 线性放大噪声 | ✅ 已修复 | 改为非线性 `20 * raw^2` |
+| S5 tombstone 迁移无事务边界 | ✅ 已修复 | SQLite `SAVEPOINT` 包裹迁移 |
+
+### 补充诊断四项复核
+
+| 诊断主张 | 结论 | 真实证据 |
+|----------|------|----------|
+| Mem LLM 当前被项目策略拦截 | ❌ 当前不成立 | `/llm/health` 返回 `healthy=true`，模型为 `deepseek-v4-flash`；策略仅拒绝仓库明确退役的集成 |
+| `memories=0` 证明 Tier 2 无数据 | ❌ 不成立 | `memories` 是遗留空表；活跃表 `compressed_memories` 有 17 行，`profile_memories` 为 0 |
+| 409 由默认 workspace 常量漂移造成 | ⚠️ 证据不足 | 当前 Gateway registration 健康；409 代码是复用同一 session ID 时的 scope 隔离保护。真实库同时存在 `default` 与 `VoidCube` 历史 scope，但不能据此认定 daemon 仍加载旧代码 |
+| `compressed_memories` 全为 event 说明升级瘫痪 | ❌ 不成立 | 17 行当前确实均为 event，但最旧记录仅 13 天；Event→Scene 阈值为 30 天，手动 lifecycle 结果为 `escalated=0, quality_rejected=0` |
+
+历史日志曾记录策略拦截和远端鉴权失败，但二者是独立状态，不能推导出“解除策略后鉴权必然恢复”。解析器现已输出 `policy_blocked`、`api_key_unavailable`、`client_initialization_failed` 等非敏感原因，避免继续把不同故障合并成 `llm_client_unavailable`。
+
+启发式管道离线样例产出 `2 events / 1 scene / 1 arc / 1 epoch`，因此“无 LLM 必然 0 事件”也不成立。生产桥接在 degraded 状态下会被 `max_degraded_fraction=0.0` 质量策略拒绝提交，这是明确的数据质量保护，而不是提取器无产出。
+
+### 验证记录
+
+- 真实数据库在线备份：`memory-20260805T114404877430Z-23bcdbf9.db`，`integrity_check=ok`
+- 当前 Gateway registration：健康
+- 当前 Mem LLM：健康
+- 定向回归（第二轮修复）：Memory/Mem 223 passed；架构、Gateway、退役集成、打包契约 108 passed
+- 第二轮修改前的最近完整回归：2149 passed, 4 skipped, 1 xfailed；第二轮修改后的完整套件超过 10 分钟后中止，未观察到失败输出，不能记作通过
+
+---
+
 ## 一、修复状态总览
 
 | 状态 | 数量 | 说明 |

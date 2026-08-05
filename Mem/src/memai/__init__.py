@@ -65,10 +65,12 @@ from .llm_client import (
 from .llm_protocol import PROTOCOL_VERSION
 from .model_config import (
     MEM_MODEL_ROLES,
+    MemLLMResolution,
     MemModelConfig,
     MemModelConfigSet,
     load_voidcube_mem_model_config,
     load_voidcube_mem_model_config_set,
+    resolve_mem_llm,
 )
 from .modalities import (
     AudioSegmentAdapter,

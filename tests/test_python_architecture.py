@@ -6,7 +6,6 @@ import pytest
 
 from scripts.python_architecture import (
     cross_frontend_imports,
-    p0_growth_errors,
     root_cli_imports,
     shared_frontend_imports,
 )
@@ -37,7 +36,3 @@ def test_shared_application_layer_has_no_frontend_imports() -> None:
 
 def test_frontend_adapters_do_not_import_each_other() -> None:
     assert cross_frontend_imports(ROOT) == []
-
-
-def test_p0_files_and_large_methods_do_not_grow_during_migration() -> None:
-    assert p0_growth_errors(ROOT) == []

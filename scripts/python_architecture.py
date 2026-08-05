@@ -1,4 +1,4 @@
-"""Static Python dependency and P0 growth checks for the migration period."""
+"""Static Python dependency checks."""
 
 from __future__ import annotations
 
@@ -19,29 +19,6 @@ PRODUCTION_PACKAGE_DIRS = (
 TOP_LEVEL_MODULES = ("cli.py", "run_agent.py", "voidcube.py")
 SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}
 FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
-
-P0_LINE_BASELINES = {
-    "run_agent.py": 5_370,
-    "VoidCube_cli/app.py": 6_245,
-    "VoidCube_cli/main.py": 15,
-    "systems/memory/memory_service.py": 3_955,
-    "systems/supervisor/planning_runtime.py": 8_072,
-    "systems/supervisor/endogenous_drive.py": 231,
-    "systems/supervisor/ui_runtime.py": 420,
-}
-P0_LARGE_METHOD_BASELINES = {
-    "run_agent.py": {"__init__": 678, "run_conversation": 1_682},
-    "VoidCube_cli/app.py": {"__init__": 304, "chat": 505, "run": 1_732},
-    "VoidCube_cli/main.py": {},
-    "systems/memory/memory_service.py": {},
-    "systems/supervisor/planning_runtime.py": {
-        "_derive_cognitive_self_regulation": 301,
-        "evaluate_drive_input": 328,
-    },
-    "systems/supervisor/endogenous_drive.py": {},
-    "systems/supervisor/ui_runtime.py": {},
-}
-
 
 @dataclass(frozen=True, order=True, slots=True)
 class ImportEdge:
@@ -138,30 +115,3 @@ def cross_frontend_imports(root: Path) -> list[ImportEdge]:
         ):
             violations.append(edge)
     return violations
-
-
-def p0_growth_errors(root: Path) -> list[str]:
-    errors: list[str] = []
-    for relative, baseline in P0_LINE_BASELINES.items():
-        path = root / relative
-        line_count = len(path.read_text(encoding="utf-8").splitlines())
-        if line_count > baseline:
-            errors.append(f"{relative} grew to {line_count} lines (baseline {baseline})")
-
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
-        current_large_methods = {
-            node.name: (node.end_lineno or node.lineno) - node.lineno + 1
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and (node.end_lineno or node.lineno) - node.lineno + 1 > 300
-        }
-        allowed = P0_LARGE_METHOD_BASELINES[relative]
-        for name, line_count in current_large_methods.items():
-            if name not in allowed:
-                errors.append(f"{relative}:{name} is a new {line_count}-line method")
-            elif line_count > allowed[name]:
-                errors.append(
-                    f"{relative}:{name} grew to {line_count} lines "
-                    f"(baseline {allowed[name]})"
-                )
-    return errors

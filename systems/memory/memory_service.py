@@ -61,6 +61,10 @@ from systems.memory.recall import (
 from systems.memory.database import MemoryDatabaseBootstrap, open_memory_sqlite
 from systems.memory.http_adapter import build_memory_http_app
 from systems.memory.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
+from systems.memory.lifecycle_policy import (
+    evaluate_lifecycle_quality,
+    record_lifecycle_rejection,
+)
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -68,11 +72,7 @@ from systems.memory.scope import (
     MemoryScope,
 )
 from systems.memory.semantic_index import SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import (
-    Tier1ToTier2Bridge,
-    _identifiers,
-    _source_support,
-)
+from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
@@ -83,7 +83,8 @@ _CMEM_COLUMNS = (
     "compressed_at, compression_level, status, superseded_by, weight, event_kind, "
     "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
     "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
-    "memory_domain, created_at"
+    "memory_domain, created_at, lifecycle_retry_count, lifecycle_retry_after, "
+    "lifecycle_last_error"
 )
 
 
@@ -332,6 +333,8 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
             "origin_id": 26, "verified_at": 27,
             "owner_id": 28, "workspace_id": 29,
             "memory_domain": 30, "created_at": 31,
+            "lifecycle_retry_count": 32, "lifecycle_retry_after": 33,
+            "lifecycle_last_error": 34,
         }
         position = index.get(name)
         return row[position] if position is not None and len(row) > position else default
@@ -370,6 +373,9 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "workspace_id": value("workspace_id", DEFAULT_WORKSPACE_ID),
         "memory_domain": value("memory_domain", DEFAULT_MEMORY_DOMAIN.value),
         "created_at": value("created_at"),
+        "lifecycle_retry_count": value("lifecycle_retry_count", 0),
+        "lifecycle_retry_after": value("lifecycle_retry_after"),
+        "lifecycle_last_error": value("lifecycle_last_error"),
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
@@ -420,6 +426,8 @@ class MemoryApplicationService:
         self._llm_healthy: bool = False
         self._llm_model: str = ""
         self._llm_error: str = ""
+        self._llm_resolution_status: str = ""
+        self._llm_resolution_detail: str = ""
         self._last_llm_health_check_at: Optional[str] = None
         self._recall_requests = 0
         self._recall_hits = 0
@@ -466,7 +474,7 @@ class MemoryApplicationService:
         it gets superseded by a higher-level summary. Eventually, level-4
         (FinalSummary) entries are purged.
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         conn = open_memory_sqlite(self._db_path)
         escalated = 0
         purged = 0
@@ -483,8 +491,16 @@ class MemoryApplicationService:
                 "WHERE memory_type = ? AND compression_level = ? "
                 "AND status = 'active' AND pinned = 0 "
                 "AND identity_layer IS NULL "
-                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
-                (mem_type, level, cutoff),
+                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ? "
+                "AND lifecycle_retry_count < ? "
+                "AND (lifecycle_retry_after IS NULL OR lifecycle_retry_after <= ?)",
+                (
+                    mem_type,
+                    level,
+                    cutoff,
+                    self.config.lifecycle_max_quality_retries,
+                    now.isoformat(),
+                ),
             ).fetchall()
 
             for row in rows:
@@ -532,14 +548,34 @@ class MemoryApplicationService:
                     to_level=next_level,
                     topics=json.loads(topics_json) if topics_json else [],
                 )
-                source_text = f"{title} {summary}"
-                unsupported_identifiers = _identifiers(escalated_summary) - _identifiers(source_text)
-                if _source_support(escalated_summary, source_text) < 0.35 or unsupported_identifiers:
+                quality = evaluate_lifecycle_quality(
+                    source_title=str(title or ""),
+                    source_summary=str(summary or ""),
+                    proposed_title=str(escalated_title or ""),
+                    proposed_summary=str(escalated_summary or ""),
+                    min_source_support=self.config.lifecycle_min_source_support,
+                    min_identifier_fidelity=self.config.lifecycle_min_identifier_fidelity,
+                )
+                if not quality.passed:
                     quality_rejected += 1
+                    retry_count = record_lifecycle_rejection(
+                        conn,
+                        memory_id=str(mem_id),
+                        owner_id=str(owner_id),
+                        workspace_id=str(workspace_id),
+                        memory_domain=str(memory_domain),
+                        reason=",".join(quality.failed_checks),
+                        now=now,
+                        max_retries=self.config.lifecycle_max_quality_retries,
+                        retry_base_hours=self.config.lifecycle_retry_base_hours,
+                    )
                     logger.warning(
-                        "Compression lifecycle rejected escalation for %s: "
-                        "source support or identifier fidelity failed",
+                        "Compression lifecycle rejected escalation for %s "
+                        "(attempt %d/%d): %s",
                         mem_id,
+                        retry_count,
+                        self.config.lifecycle_max_quality_retries,
+                        ", ".join(quality.failed_checks),
                     )
                     continue
 
@@ -1399,27 +1435,17 @@ class MemoryApplicationService:
         }
 
     def _resolve_mem_llm_client(self, *, role: str = "default"):
-        """Resolve a configured Mem LLM client for a Mem role.
-
-        Thin pass-through to the canonical resolver at
-        ``memai.model_config.resolve_mem_llm_client``.  All resolution
-        logic (memory.llm.* priority, role overrides,
-        provider credential lookup, OpenAICompatibleLLMClient construction) lives in
-        one place inside the memai package; this method is just a
-        convenient accessor.
-
-        ``role`` picks the ``memory.llm.roles.*`` override (extraction,
-        summarization, ...) and falls back to the default config when the role
-        has no override.
-
-        Returns ``(client, model_name)``.  ``client`` is ``None`` when
-        no API key is available; callers must degrade to heuristic /
-        mechanical paths in that case.
-        """
+        """Resolve one Mem role and retain its non-secret failure diagnostics."""
         try:
-            from memai.model_config import resolve_mem_llm_client
-            return resolve_mem_llm_client(role=role)
-        except Exception:
+            from memai.model_config import resolve_mem_llm
+
+            resolution = resolve_mem_llm(role=role)
+            self._llm_resolution_status = resolution.status
+            self._llm_resolution_detail = resolution.detail
+            return resolution.client, resolution.model
+        except Exception as exc:
+            self._llm_resolution_status = "resolution_failed"
+            self._llm_resolution_detail = type(exc).__name__
             return None, ""
 
     async def _app_lifespan(self, app: FastAPI):
@@ -2541,7 +2567,12 @@ class MemoryApplicationService:
         self._llm_error = ""
         if client is None:
             self._llm_healthy = False
-            self._llm_error = "llm_client_unavailable"
+            if self._llm_resolution_status:
+                self._llm_error = self._llm_resolution_status
+                if self._llm_resolution_detail:
+                    self._llm_error += f": {self._llm_resolution_detail}"
+            else:
+                self._llm_error = "llm_client_unavailable"
             return False
         try:
             import asyncio as _asyncio

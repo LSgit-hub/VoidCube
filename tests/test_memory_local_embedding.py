@@ -45,6 +45,13 @@ def test_char_ngram_similarity_ranks_related_above_unrelated():
     assert related > unrelated
 
 
+def test_local_similarity_calibration_suppresses_weak_noise_non_linearly():
+    from systems.memory.semantic_index import _calibrate_local_similarity
+
+    assert _calibrate_local_similarity(0.12) < 0.35
+    assert _calibrate_local_similarity(0.145) > 0.35
+
+
 def test_semantic_index_defaults_to_local_fallback(tmp_path):
     from systems.memory.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
 

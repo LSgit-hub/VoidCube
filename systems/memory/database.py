@@ -339,7 +339,10 @@ class MemoryDatabaseBootstrap:
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
                 workspace_id TEXT NOT NULL DEFAULT 'default',
                 memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
-                created_at TEXT
+                created_at TEXT,
+                lifecycle_retry_count INTEGER NOT NULL DEFAULT 0,
+                lifecycle_retry_after TEXT,
+                lifecycle_last_error TEXT
             )
             """
         )
@@ -523,28 +526,35 @@ class MemoryDatabaseBootstrap:
         if tombstone_pk == expected_pk:
             return
         has_domain = any(str(row[1]) == "memory_domain" for row in tombstone_info)
-        cursor.execute(
-            "CREATE TABLE profile_memory_tombstones_domain_migration ("
-            "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
-            "memory_domain TEXT NOT NULL DEFAULT 'agent_interaction', "
-            "subject TEXT NOT NULL, predicate TEXT NOT NULL, revoked_at TEXT NOT NULL, "
-            "source_turn_id TEXT NOT NULL, evidence_turns TEXT NOT NULL DEFAULT '[]', "
-            "reason_hash TEXT NOT NULL, PRIMARY KEY(owner_id, workspace_id, "
-            "memory_domain, subject, predicate))"
-        )
-        domain_expression = "memory_domain" if has_domain else "'agent_interaction'"
-        cursor.execute(
-            "INSERT INTO profile_memory_tombstones_domain_migration "
-            "(owner_id, workspace_id, memory_domain, subject, predicate, revoked_at, "
-            "source_turn_id, evidence_turns, reason_hash) SELECT owner_id, workspace_id, "
-            f"{domain_expression}, subject, predicate, revoked_at, source_turn_id, "
-            "evidence_turns, reason_hash FROM profile_memory_tombstones"
-        )
-        cursor.execute("DROP TABLE profile_memory_tombstones")
-        cursor.execute(
-            "ALTER TABLE profile_memory_tombstones_domain_migration "
-            "RENAME TO profile_memory_tombstones"
-        )
+        cursor.execute("SAVEPOINT profile_tombstone_domain_migration")
+        try:
+            cursor.execute(
+                "CREATE TABLE profile_memory_tombstones_domain_migration ("
+                "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
+                "memory_domain TEXT NOT NULL DEFAULT 'agent_interaction', "
+                "subject TEXT NOT NULL, predicate TEXT NOT NULL, revoked_at TEXT NOT NULL, "
+                "source_turn_id TEXT NOT NULL, evidence_turns TEXT NOT NULL DEFAULT '[]', "
+                "reason_hash TEXT NOT NULL, PRIMARY KEY(owner_id, workspace_id, "
+                "memory_domain, subject, predicate))"
+            )
+            domain_expression = "memory_domain" if has_domain else "'agent_interaction'"
+            cursor.execute(
+                "INSERT INTO profile_memory_tombstones_domain_migration "
+                "(owner_id, workspace_id, memory_domain, subject, predicate, revoked_at, "
+                "source_turn_id, evidence_turns, reason_hash) SELECT owner_id, workspace_id, "
+                f"{domain_expression}, subject, predicate, revoked_at, source_turn_id, "
+                "evidence_turns, reason_hash FROM profile_memory_tombstones"
+            )
+            cursor.execute("DROP TABLE profile_memory_tombstones")
+            cursor.execute(
+                "ALTER TABLE profile_memory_tombstones_domain_migration "
+                "RENAME TO profile_memory_tombstones"
+            )
+        except Exception:
+            cursor.execute("ROLLBACK TO profile_tombstone_domain_migration")
+            cursor.execute("RELEASE profile_tombstone_domain_migration")
+            raise
+        cursor.execute("RELEASE profile_tombstone_domain_migration")
 
     def _migrate_compressed_memories_schema(self, cursor: sqlite3.Cursor) -> None:
         existing = self._column_names(cursor, "compressed_memories")
@@ -565,6 +575,9 @@ class MemoryDatabaseBootstrap:
             ("origin_type", "TEXT"),
             ("origin_id", "TEXT"),
             ("verified_at", "TEXT"),
+            ("lifecycle_retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("lifecycle_retry_after", "TEXT"),
+            ("lifecycle_last_error", "TEXT"),
         )
         for column, definition in migrations:
             if column not in existing:

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
 import hashlib
 from dataclasses import dataclass
@@ -25,60 +24,15 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from systems.memory.database import open_memory_sqlite
 from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 from systems.memory.profile_store import upsert_profile_memory
+from systems.memory.quality_signals import (
+    has_explicit_negation as _has_explicit_negation,
+    identifiers as _identifiers,
+    source_support as _source_support,
+)
 
 logger = logging.getLogger(__name__)
 
-_LATIN_QUALITY_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.:/-]{2,}", re.IGNORECASE)
-_CJK_QUALITY_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
-_IDENTIFIER_RE = re.compile(
-    r"(?<![\w])(?:https?://[^\s]+|[a-z][a-z0-9._:/-]*\d[a-z0-9._:/-]*|"
-    r"\d+(?:\.\d+)+(?:[a-z0-9._-]*)?|\d{2,})(?![\w])",
-    re.IGNORECASE,
-)
-_QUALITY_STOP_WORDS = {
-    "about", "after", "also", "and", "are", "been", "before", "being",
-    "from", "into", "that", "the", "then", "this", "was", "were", "with",
-}
-_NEGATION_MARKERS = (
-    "must not", "do not", "does not", "did not", "should not", "cannot",
-    "can't", "never", "forbid", "forbidden", "prohibit", "prohibited", "avoid",
-    "不得", "不要", "不能", "不允许", "禁止", "严禁", "从未", "没有", "未能",
-)
 _MAX_QUALITY_RETRIES = 3
-
-
-def _quality_tokens(value: object) -> set[str]:
-    text = str(value or "").lower()
-    tokens = {
-        token for token in _LATIN_QUALITY_TOKEN_RE.findall(text)
-        if token not in _QUALITY_STOP_WORDS
-    }
-    for run in _CJK_QUALITY_RUN_RE.findall(text):
-        if len(run) == 1:
-            tokens.add(run)
-            continue
-        tokens.update(run[index:index + 2] for index in range(len(run) - 1))
-    return tokens
-
-
-def _source_support(summary: str, source_text: str) -> float:
-    summary_tokens = _quality_tokens(summary)
-    if not summary_tokens:
-        return 0.0
-    source_tokens = _quality_tokens(source_text)
-    return len(summary_tokens & source_tokens) / len(summary_tokens)
-
-
-def _identifiers(value: object) -> set[str]:
-    return {
-        match.rstrip(".,;:!?)]}").lower()
-        for match in _IDENTIFIER_RE.findall(str(value or ""))
-    }
-
-
-def _has_explicit_negation(value: object) -> bool:
-    normalized = " ".join(str(value or "").lower().split())
-    return any(marker in normalized for marker in _NEGATION_MARKERS)
 
 
 def _iso_value(value: Any) -> str:
@@ -158,6 +112,17 @@ def _write_compressed_memories_to_db(
     )
     scope_key = f"{owner_id}\0{workspace_id}\0{memory_domain}"
     stable_ids = _build_stable_cmem_ids(pipeline_result, scope_key=scope_key)
+    event_kind_by_id = {
+        str(event.id): (
+            event.event_kind.value
+            if hasattr(event.event_kind, "value")
+            else str(event.event_kind)
+        )
+        for event in pipeline_result.events
+        if getattr(event, "event_kind", None)
+    }
+    scene_kind_by_id: dict[str, str | None] = {}
+    arc_kind_by_id: dict[str, str | None] = {}
     for event in pipeline_result.events:
         parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
@@ -166,15 +131,15 @@ def _write_compressed_memories_to_db(
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
                 json.dumps(event.source_turns), parent_id, now,
-                0, "active", 1.0, ek, owner_id, workspace_id, memory_domain,
+                0, "active", 1.0, ek, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
@@ -182,62 +147,76 @@ def _write_compressed_memories_to_db(
         parent_id = stable_ids.get(scene.parent_ids[0], scene.parent_ids[0]) if scene.parent_ids else None
         child_ids = set(getattr(scene, "child_ids", []) or [])
         child_kinds = [
-            event.event_kind.value if hasattr(event.event_kind, "value") else str(event.event_kind)
-            for event in pipeline_result.events
-            if event.id in child_ids
+            event_kind_by_id[str(item)]
+            for item in child_ids
+            if str(item) in event_kind_by_id
         ]
         scene_kind = max(set(child_kinds), key=child_kinds.count) if child_kinds else None
+        scene_kind_by_id[str(scene.id)] = scene_kind
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
                 json.dumps(scene.evidence_refs), parent_id, now,
-                1, "active", 0.7, scene_kind, owner_id, workspace_id, memory_domain,
+                1, "active", 0.7, scene_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
     for arc in pipeline_result.arcs:
         parent_id = stable_ids.get(arc.parent_ids[0], arc.parent_ids[0]) if arc.parent_ids else None
+        arc_child_kinds = [
+            scene_kind_by_id[str(item)]
+            for item in (getattr(arc, "child_ids", []) or [])
+            if scene_kind_by_id.get(str(item))
+        ]
+        arc_kind = max(set(arc_child_kinds), key=arc_child_kinds.count) if arc_child_kinds else None
+        arc_kind_by_id[str(arc.id)] = arc_kind
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
                 json.dumps(arc.evidence_refs), parent_id, now,
-                2, "active", 0.4, None, owner_id, workspace_id, memory_domain,
+                2, "active", 0.4, arc_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
     for epoch in pipeline_result.epochs:
+        epoch_child_kinds = [
+            arc_kind_by_id[str(item)]
+            for item in (getattr(epoch, "child_ids", []) or [])
+            if arc_kind_by_id.get(str(item))
+        ]
+        epoch_kind = max(set(epoch_child_kinds), key=epoch_child_kinds.count) if epoch_child_kinds else None
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
                 epoch.importance, epoch.confidence,
                 json.dumps(epoch.topics), json.dumps(epoch.entities),
                 json.dumps(epoch.evidence_refs), None, now,
-                3, "active", 0.2, None, owner_id, workspace_id, memory_domain,
+                3, "active", 0.2, epoch_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1

@@ -1823,13 +1823,11 @@ def _temporal_fit_score(
         # Point candidate.
         if q_start <= c_start <= q_end:
             return 1.0
-        distance_seconds = min(
-            abs((c_start - q_start).total_seconds()),
-            abs((c_start - q_end).total_seconds()),
-        )
-        # Outside-window points must not outrank an in-window span merely
-        # because the span covers only part of a wide query window.
-        return max(0.0, min(0.35, 1.0 - distance_seconds / max(query_seconds, 1.0)))
+        # An explicit window is a hard relevance boundary for point events.
+        # Recency and lexical/semantic signals may still surface the record,
+        # but temporal fit must not reward an out-of-window point above any
+        # candidate with positive overlap.
+        return 0.0
 
     # Span candidate: overlap ratio over the query window.
     overlap_start = max(c_start, q_start)

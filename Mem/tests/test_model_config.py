@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from memai import MEM_MODEL_ROLES, MemModelConfig, MemModelConfigSet
-from memai.model_config import _resolve_mem_api_key, resolve_mem_llm_client
+from memai.model_config import (
+    _resolve_mem_api_key,
+    resolve_mem_llm,
+    resolve_mem_llm_client,
+)
 
 
 def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
@@ -202,6 +206,54 @@ def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(mo
 
     assert client is None
     assert model == "deepseek-v4-flash"
+
+
+def test_resolve_mem_llm_reports_policy_block_reason(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "memai.model_config.load_voidcube_mem_model_config_set",
+        lambda: MemModelConfigSet(
+            default=MemModelConfig(
+                provider="blocked-provider",
+                model="blocked-model",
+                api_key_env="BLOCKED_API_KEY",
+                base_url="https://blocked.example/v1",
+            ),
+            roles={},
+        ),
+    )
+    monkeypatch.setattr(
+        "agent.integration_policy.require_active_integration",
+        lambda *_values: (_ for _ in ()).throw(ValueError("retired integration")),
+    )
+
+    resolution = resolve_mem_llm()
+
+    assert resolution.client is None
+    assert resolution.model == "blocked-model"
+    assert resolution.status == "policy_blocked"
+    assert resolution.detail == "retired integration"
+
+
+def test_resolve_mem_llm_reports_missing_credential_source(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "memai.model_config.load_voidcube_mem_model_config_set",
+        lambda: MemModelConfigSet(
+            default=MemModelConfig(
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                api_key_env="DEEPSEEK_API_KEY",
+                base_url="https://api.deepseek.com/v1",
+            ),
+            roles={},
+        ),
+    )
+    monkeypatch.setattr("memai.model_config._resolve_mem_api_key", lambda _config: "")
+
+    resolution = resolve_mem_llm()
+
+    assert resolution.client is None
+    assert resolution.status == "api_key_unavailable"
+    assert resolution.detail == "no usable credential found via DEEPSEEK_API_KEY"
 
 
 def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> None:

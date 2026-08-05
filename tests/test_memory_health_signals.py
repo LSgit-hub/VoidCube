@@ -24,6 +24,7 @@ from systems.memory.memory_service import (
     Tier2CompressRequest,
     TurnCreate,
 )
+from systems.memory.lifecycle_policy import evaluate_lifecycle_quality
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
@@ -302,6 +303,25 @@ async def test_llm_health_records_configured_model_when_key_missing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_llm_health_exposes_resolution_failure_reason(tmp_path):
+    svc = _make_service(tmp_path)
+    svc._llm_resolution_status = "api_key_unavailable"
+    svc._llm_resolution_detail = "no usable credential found via DEEPSEEK_API_KEY"
+    svc._resolve_mem_llm_client = lambda: (None, "deepseek-v4-flash")  # type: ignore[method-assign]
+
+    ok = await svc._check_llm_health()
+
+    assert ok is False
+    assert await svc.llm_health() == {
+        "healthy": False,
+        "model": "deepseek-v4-flash",
+        "error": (
+            "api_key_unavailable: no usable credential found via DEEPSEEK_API_KEY"
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_llm_health_preserves_model_when_probe_fails(tmp_path, caplog):
     svc = _make_service(tmp_path)
 
@@ -428,13 +448,80 @@ async def test_lifecycle_rejects_summary_with_unsupported_identifier(tmp_path):
     result = await svc._apply_compression_lifecycle()
     conn = open_memory_sqlite(svc._db_path)
     try:
-        status = conn.execute(
-            "SELECT status FROM compressed_memories WHERE memory_id = 'event-hallucination'"
-        ).fetchone()[0]
+        status, retry_count, retry_after = conn.execute(
+            "SELECT status, lifecycle_retry_count, lifecycle_retry_after "
+            "FROM compressed_memories WHERE memory_id = 'event-hallucination'"
+        ).fetchone()
     finally:
         conn.close()
     assert result["quality_rejected"] == 1
     assert status == "active"
+    assert retry_count == 1
+    assert retry_after is not None
+
+
+def test_lifecycle_quality_uses_abstraction_specific_configurable_thresholds():
+    quality = evaluate_lifecycle_quality(
+        source_title="API migration 2026",
+        source_summary="The database migration completed after staged validation.",
+        proposed_title="Migration era",
+        proposed_summary="A validated transition established the next operational era for API migration 2026.",
+        min_source_support=0.15,
+        min_identifier_fidelity=0.8,
+    )
+    assert quality.passed is True
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_quality_rejection_stops_after_configured_attempts(tmp_path):
+    svc = _make_service(tmp_path)
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "compressed_at, compression_level, status, source_turns) "
+            "VALUES ('event-retry-limit', 'event', 'Release', 'Release completed', "
+            "?, ?, ?, 0, 'active', '[]')",
+            (old, old, old),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    calls = 0
+
+    async def hallucinate(**kwargs):
+        nonlocal calls
+        calls += 1
+        return "Release", "Release completed with invented ticket ZX-9999."
+
+    svc._llm_escalate_summary = hallucinate  # type: ignore[method-assign]
+    for attempt in range(svc.config.lifecycle_max_quality_retries):
+        await svc._apply_compression_lifecycle()
+        if attempt + 1 < svc.config.lifecycle_max_quality_retries:
+            conn = open_memory_sqlite(svc._db_path)
+            try:
+                conn.execute(
+                    "UPDATE compressed_memories SET lifecycle_retry_after = ? "
+                    "WHERE memory_id = 'event-retry-limit'",
+                    (old,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    await svc._apply_compression_lifecycle()
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        retry_count, retry_after = conn.execute(
+            "SELECT lifecycle_retry_count, lifecycle_retry_after FROM compressed_memories "
+            "WHERE memory_id = 'event-retry-limit'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert calls == svc.config.lifecycle_max_quality_retries
+    assert retry_count == svc.config.lifecycle_max_quality_retries
+    assert retry_after is None
 
 
 @pytest.mark.asyncio
@@ -1292,3 +1379,44 @@ def test_compressed_memory_write_uses_stable_ids_for_duplicate_events(tmp_path):
     assert rows[0][0].startswith("event_")
     assert rows[1][0].startswith("scene_")
     assert [row[2] for row in rows] == ["decision", "decision"]
+
+
+def test_bridge_sets_created_at_and_propagates_event_kind_to_all_levels(tmp_path):
+    svc = _make_service(tmp_path)
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+
+    def item(item_id, **values):
+        defaults = {
+            "id": item_id, "parent_ids": [], "child_ids": [], "evidence_refs": [],
+            "title": item_id, "summary": f"summary {item_id}",
+            "timespan_start": now_dt, "timespan_end": now_dt,
+            "importance": 0.8, "confidence": 0.9,
+            "topics": ["memory"], "entities": ["VoidCube"],
+        }
+        defaults.update(values)
+        return SimpleNamespace(**defaults)
+
+    event = item(
+        "event-1", event_kind="decision", source_turns=["turn-1"]
+    )
+    scene = item("scene-1", child_ids=[event.id], evidence_refs=[event.id])
+    arc = item("arc-1", child_ids=[scene.id], evidence_refs=[scene.id])
+    epoch = item("epoch-1", child_ids=[arc.id], evidence_refs=[arc.id])
+    result = SimpleNamespace(
+        events=[event], scenes=[scene], arcs=[arc], epochs=[epoch], profile_memories=[]
+    )
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        _write_compressed_memories_to_db(conn, result, now_dt.isoformat())
+        conn.commit()
+        rows = conn.execute(
+            "SELECT memory_type, event_kind, created_at FROM compressed_memories "
+            "WHERE memory_id NOT LIKE 'identity-founding-%' ORDER BY compression_level"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(row[0], row[1]) for row in rows] == [
+        ("event", "decision"), ("scene", "decision"),
+        ("arc", "decision"), ("epoch", "decision"),
+    ]
+    assert all(row[2] == now_dt.isoformat() for row in rows)

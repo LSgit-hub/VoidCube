@@ -28,11 +28,10 @@ logger = logging.getLogger(__name__)
 
 EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 
-# Calibration factor applied to raw cosine similarities from the local
-# CharNgramEmbedder, whose sparse character n-gram vectors cluster lower than
-# trained embedding models. 3.0 maps the observed ~0-0.33 raw range onto the
-# 0-1 scale the recall ranking threshold (0.35) expects.
-_LOCAL_SIMILARITY_BOOST = 3.0
+def _calibrate_local_similarity(raw_similarity: float) -> float:
+    """Map sparse local cosine scores without linearly promoting weak noise."""
+    positive = max(0.0, float(raw_similarity))
+    return min(1.0, 20.0 * positive * positive)
 
 _VEC0_TABLE = "memory_embeddings_vec"
 _vec0_load_attempted = False
@@ -369,12 +368,17 @@ class SemanticMemoryIndex:
                 ).fetchall()
             finally:
                 conn.close()
-            boost = _LOCAL_SIMILARITY_BOOST if self._local_fallback else 1.0
             ranked = sorted(
                 (
                     (
                         (str(row[0]), str(row[1])),
-                        _cosine(query_vector, json.loads(row[2])) * boost,
+                        (
+                            _calibrate_local_similarity(
+                                _cosine(query_vector, json.loads(row[2]))
+                            )
+                            if self._local_fallback
+                            else _cosine(query_vector, json.loads(row[2]))
+                        ),
                     )
                     for row in rows
                 ),
@@ -426,7 +430,6 @@ class SemanticMemoryIndex:
             f"AND k = ?",
             params,
         ).fetchall()
-        boost = _LOCAL_SIMILARITY_BOOST if self._local_fallback else 1.0
         # sqlite-vec returns L2 distance for vec0 by default; convert to
         # cosine-distance-like similarity for compatibility with callers.
         # Use the stored JSON vectors for the final cosine (more precise than
@@ -434,8 +437,11 @@ class SemanticMemoryIndex:
         results: dict[tuple[str, str], float] = {}
         for source_type, memory_id, vector_json, _vec0_l2_distance in rows:
             try:
-                similarity = boost * _cosine(
-                    query_vector, json.loads(vector_json)
+                raw_similarity = _cosine(query_vector, json.loads(vector_json))
+                similarity = (
+                    _calibrate_local_similarity(raw_similarity)
+                    if self._local_fallback
+                    else raw_similarity
                 )
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue

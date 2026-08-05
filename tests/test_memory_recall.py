@@ -1239,6 +1239,7 @@ def test_temporal_fit_outside_point_does_not_outrank_inside_span():
     inside_span = _temporal_fit_score(
         "2026-08-01T00:00:00Z", "2026-08-21T00:00:00Z", start, end
     )
+    assert outside_point == 0.0
     assert inside_span > outside_point
 
 

@@ -181,6 +181,16 @@ class MemModelConfigSet:
         return self.roles.get(role, self.default)
 
 
+@dataclass(frozen=True, slots=True)
+class MemLLMResolution:
+    """Non-secret outcome of resolving a Mem LLM client."""
+
+    client: Any | None
+    model: str
+    status: str
+    detail: str = ""
+
+
 def load_voidcube_mem_model_config() -> MemModelConfig:
     return load_voidcube_mem_model_config_set().default
 
@@ -192,6 +202,74 @@ def load_voidcube_mem_model_config_set() -> MemModelConfigSet:
         return MemModelConfigSet.from_voidcube_config(load_config())
     except Exception:
         return MemModelConfigSet(default=MemModelConfig(), roles={})
+
+
+def resolve_mem_llm(role: str = "default") -> MemLLMResolution:
+    """Resolve a Mem LLM client and retain an actionable failure reason."""
+    import logging
+
+    logger = logging.getLogger("memai.resolver")
+
+    try:
+        config_set = load_voidcube_mem_model_config_set()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Failed to load MemModelConfigSet: %s", exc)
+        config_set = MemModelConfigSet(default=MemModelConfig(), roles={})
+
+    mem_cfg = config_set.for_role(role) if role else config_set.default
+    model = mem_cfg.model or "deepseek-chat"
+    base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
+    config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
+
+    try:
+        from agent.integration_policy import require_active_integration
+
+        require_active_integration(mem_cfg.provider, model, base_url)
+    except ImportError:
+        pass
+    except ValueError as exc:
+        detail = str(exc) or "blocked by project integration policy"
+        logger.warning(
+            "Mem LLM configuration is blocked by project integration policy "
+            "(%s, model=%s, base_url=%s): %s",
+            config_source,
+            model,
+            base_url,
+            detail,
+        )
+        return MemLLMResolution(None, model, "policy_blocked", detail)
+
+    api_key = _resolve_mem_api_key(mem_cfg)
+
+    if not api_key and mem_cfg.provider == "ollama":
+        api_key = "no-key-required"
+    if not api_key:
+        detail = f"no usable credential found via {mem_cfg.api_key_env or 'provider store'}"
+        logger.warning("Mem LLM credential unavailable (%s): %s", config_source, detail)
+        return MemLLMResolution(None, model, "api_key_unavailable", detail)
+
+    try:
+        # Imported lazily so callers that don't need the LLM don't have
+        # to pay for the openai/httpx import chain.
+        from memai.llm_client import OpenAICompatibleLLMClient
+
+        client = OpenAICompatibleLLMClient(
+            model=model, api_key=api_key, base_url=base_url
+        )
+        logger.debug(
+            "Mem LLM client resolved via %s (role=%s, model=%s)",
+            config_source, role or "default", model,
+        )
+        return MemLLMResolution(client, model, "ready")
+    except Exception as exc:  # pragma: no cover - defensive
+        detail = type(exc).__name__
+        logger.warning(
+            "Failed to build Mem LLM client via %s (model=%s): %s",
+            config_source,
+            model,
+            detail,
+        )
+        return MemLLMResolution(None, model, "client_initialization_failed", detail)
 
 
 def resolve_mem_llm_client(role: str = "default"):
@@ -214,53 +292,8 @@ def resolve_mem_llm_client(role: str = "default"):
         mechanical path).  ``model_name`` is always populated so the
         caller can log which model was selected.
     """
-    import logging
-    logger = logging.getLogger("memai.resolver")
-
-    try:
-        config_set = load_voidcube_mem_model_config_set()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Failed to load MemModelConfigSet: %s", exc)
-        config_set = MemModelConfigSet(default=MemModelConfig(), roles={})
-
-    mem_cfg = config_set.for_role(role) if role else config_set.default
-    model = mem_cfg.model or "deepseek-chat"
-    base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
-    config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
-
-    try:
-        from agent.integration_policy import require_active_integration
-
-        require_active_integration(mem_cfg.provider, model, base_url)
-    except ImportError:
-        pass
-    except ValueError:
-        logger.warning("Mem LLM configuration is blocked by project integration policy")
-        return None, model
-
-    api_key = _resolve_mem_api_key(mem_cfg)
-
-    if not api_key and mem_cfg.provider == "ollama":
-        api_key = "no-key-required"
-    if not api_key:
-        return None, model
-
-    try:
-        # Imported lazily so callers that don't need the LLM don't have
-        # to pay for the openai/httpx import chain.
-        from memai.llm_client import OpenAICompatibleLLMClient
-
-        client = OpenAICompatibleLLMClient(
-            model=model, api_key=api_key, base_url=base_url
-        )
-        logger.debug(
-            "Mem LLM client resolved via %s (role=%s, model=%s)",
-            config_source, role or "default", model,
-        )
-        return client, model
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Failed to build Mem LLM client: %s", exc)
-        return None, model
+    resolution = resolve_mem_llm(role=role)
+    return resolution.client, resolution.model
 
 
 def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
