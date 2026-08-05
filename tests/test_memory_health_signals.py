@@ -375,7 +375,7 @@ async def test_lifecycle_escalation_preserves_original_source_turns_and_parent_l
         conn.close()
 
     async def fake_escalate_summary(**kwargs):
-        return "Parent scene", "Escalated scene summary"
+        return "Parent scene", "Original event summary escalated into a scene."
 
     svc._llm_escalate_summary = fake_escalate_summary  # type: ignore[method-assign]
 
@@ -401,6 +401,40 @@ async def test_lifecycle_escalation_preserves_original_source_turns_and_parent_l
     assert parent[4] == 1
     assert child[0] == "superseded"
     assert child[1] == parent[0]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_rejects_summary_with_unsupported_identifier(tmp_path):
+    svc = _make_service(tmp_path)
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "compressed_at, compression_level, status, source_turns) "
+            "VALUES ('event-hallucination', 'event', 'Release', 'Release completed', "
+            "?, ?, ?, 0, 'active', '[]')",
+            (old, old, old),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def hallucinate(**kwargs):
+        return "Release", "Release completed with invented ticket ZX-9999."
+
+    svc._llm_escalate_summary = hallucinate  # type: ignore[method-assign]
+    result = await svc._apply_compression_lifecycle()
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        status = conn.execute(
+            "SELECT status FROM compressed_memories WHERE memory_id = 'event-hallucination'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert result["quality_rejected"] == 1
+    assert status == "active"
 
 
 @pytest.mark.asyncio
@@ -813,6 +847,42 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_aud
     assert audit_status == "rejected"
     assert event_coverage == pytest.approx(0.5)
     assert json.loads(failed_checks) == ["event_coverage"]
+
+
+def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
+    svc = _make_service(tmp_path)
+    conn = open_memory_sqlite(svc._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (session_id, created_at, updated_at, metadata) "
+            "VALUES ('retry-session', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp) "
+            "VALUES ('retry-turn', 'retry-session', 'user', 'source', ?)",
+            (now,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    bridge = Tier1ToTier2Bridge(db_path=svc._db_path)
+    turn = {
+        "turn_id": "retry-turn", "owner_id": "local-user",
+        "workspace_id": "default", "memory_domain": "agent_interaction",
+    }
+    for _ in range(3):
+        bridge._record_quality_rejection([turn])
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        state = conn.execute(
+            "SELECT compression_retry_count, compression_retry_after, compressed_to_tier2 "
+            "FROM turns WHERE turn_id = 'retry-turn'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert state == (3, None, -1)
 
 
 @pytest.mark.asyncio

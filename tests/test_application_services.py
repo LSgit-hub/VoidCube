@@ -107,6 +107,54 @@ def test_gateway_registration_uses_configured_address_and_auth() -> None:
     }
 
 
+def test_gateway_registration_can_forward_memory_scope() -> None:
+    requests = []
+
+    def opener(request, *, timeout):
+        requests.append((request, timeout))
+
+    client = GatewayPresenceClient("http://gateway.example:6000")
+    assert client.register_session(
+        "session-scoped",
+        "model-1",
+        "provider-1",
+        source="cli",
+        owner_id="local-user",
+        workspace_id="VoidCube",
+        opener=opener,
+    )
+
+    payload = json.loads(requests[0][0].data)
+    assert payload["owner_id"] == "local-user"
+    assert payload["workspace_id"] == "VoidCube"
+
+
+def test_cli_gateway_registration_uses_mem_provider_scope(monkeypatch) -> None:
+    cli_app = importlib.import_module("VoidCube_cli.app")
+    captured = {}
+
+    def register(session_id, model, provider, **kwargs):
+        captured.update(
+            session_id=session_id,
+            model=model,
+            provider=provider,
+            **kwargs,
+        )
+        return True
+
+    monkeypatch.setattr(cli_app, "_register_gateway_session", register)
+
+    assert cli_app._register_with_gateway("session-1", "model-1", "provider-1")
+    assert captured == {
+        "session_id": "session-1",
+        "model": "model-1",
+        "provider": "provider-1",
+        "source": "cli",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+    }
+
+
 def test_gateway_scene_projection_preserves_lane_metadata() -> None:
     requests = []
 

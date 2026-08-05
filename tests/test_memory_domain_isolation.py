@@ -431,6 +431,27 @@ async def test_promotion_policy_blocks_private_companion_and_auto_targets(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_governor_cannot_probe_agent_interaction_promotion_sources(tmp_path):
+    service = _service(tmp_path)
+    source = await service.remember(
+        DurableMemoryCreate(title="Private API-A fact", summary="Not governor-readable.")
+    )
+    with pytest.raises(HTTPException) as denied:
+        await service.create_promotion_candidate(
+            MemoryPromotionCandidateCreate(
+                source_memory_id=source["memory"]["memory_id"],
+                source_type="compressed",
+                source_domain="agent_interaction",
+                target_domain="companion",
+                reason="Attempted metadata probe.",
+                governance_ref="governor-review:probe",
+                memory_actor="governor",
+            )
+        )
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_forgetting_source_revokes_cross_domain_promotion(tmp_path):
     service = _service(tmp_path)
     source = await service.remember(

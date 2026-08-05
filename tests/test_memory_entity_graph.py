@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from systems.memory.config import MemoryServiceConfig
-from systems.memory.memory_service import MemoryService, RecallRequest
+from systems.memory.memory_service import DurableMemoryCreate, MemoryService, RecallRequest
 from systems.memory.database import open_memory_sqlite
 
 
@@ -79,11 +79,35 @@ def _rebuild_graph(service: MemoryService) -> int:
 
     conn = open_memory_sqlite(service._db_path)
     try:
-        linked = rebuild_entity_graph(conn)
+        linked = rebuild_entity_graph(conn, owner_id="*", workspace_id="*")
         conn.commit()
     finally:
         conn.close()
     return linked
+
+
+def test_scoped_graph_rebuild_does_not_delete_other_scopes(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_compressed(
+        service, memory_id="scope-a", title="A", summary="A",
+        timestamp=now, entities=["alpha"], owner_id="owner-a", workspace_id="ws-a",
+    )
+    _insert_compressed(
+        service, memory_id="scope-b", title="B", summary="B",
+        timestamp=now, entities=["beta"], owner_id="owner-b", workspace_id="ws-b",
+    )
+    from systems.memory.entity_graph import rebuild_entity_graph
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        rebuild_entity_graph(conn, owner_id="*", workspace_id="*")
+        conn.commit()
+        rebuild_entity_graph(conn, owner_id="owner-a", workspace_id="ws-a")
+        conn.commit()
+        linked = {row[0] for row in conn.execute("SELECT memory_id FROM entity_memory_links")}
+    finally:
+        conn.close()
+    assert {"scope-a", "scope-b"} <= linked
 
 
 @pytest.mark.asyncio
@@ -128,6 +152,50 @@ async def test_graph_build_creates_nodes_edges_and_links(tmp_path):
         assert {row[0] for row in links} >= {"mem-a"}
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_remember_updates_entity_graph_in_same_write(tmp_path):
+    service = _service(tmp_path)
+
+    result = await service.remember(
+        DurableMemoryCreate(
+            title="作用域修复",
+            summary="CLI 与 Mem 使用同一工作区。",
+            entities=["CLI", "Mem"],
+            evidence_refs=["code:scope-contract"],
+            event_kind="correction",
+            owner_id="local-user",
+            workspace_id="VoidCube",
+        )
+    )
+
+    memory_id = result["memory"]["memory_id"]
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        nodes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT entity_id FROM entity_nodes WHERE owner_id = ? AND workspace_id = ?",
+                ("local-user", "VoidCube"),
+            )
+        }
+        links = {
+            row[0]
+            for row in conn.execute(
+                "SELECT entity_id FROM entity_memory_links WHERE memory_id = ?",
+                (memory_id,),
+            )
+        }
+        created_at = conn.execute(
+            "SELECT created_at FROM compressed_memories WHERE memory_id = ?", (memory_id,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert {"cli", "mem"} <= nodes
+    assert links == {"cli", "mem"}
+    assert created_at
 
 
 @pytest.mark.asyncio

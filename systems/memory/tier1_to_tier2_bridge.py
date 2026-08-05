@@ -44,6 +44,7 @@ _NEGATION_MARKERS = (
     "can't", "never", "forbid", "forbidden", "prohibit", "prohibited", "avoid",
     "不得", "不要", "不能", "不允许", "禁止", "严禁", "从未", "没有", "未能",
 )
+_MAX_QUALITY_RETRIES = 3
 
 
 def _quality_tokens(value: object) -> set[str]:
@@ -421,9 +422,15 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         base_conditions = [
             "compressed_to_tier2 = 0",
+            "compression_retry_count < ?",
+            "(compression_retry_after IS NULL OR compression_retry_after <= ?)",
             "memory_domain = ?",
         ]
-        base_params: list[Any] = [self.memory_domain]
+        base_params: list[Any] = [
+            _MAX_QUALITY_RETRIES,
+            datetime.now(timezone.utc).isoformat(),
+            self.memory_domain,
+        ]
         if self.owner_id is not None:
             base_conditions.append("owner_id = ?")
             base_params.append(self.owner_id)
@@ -724,6 +731,14 @@ class Tier1ToTier2Bridge:
                 if turns
                 else self.memory_domain
             ),
+            "owner_id": (
+                str(turns[0].get("owner_id") or DEFAULT_OWNER_ID)
+                if turns else (self.owner_id or DEFAULT_OWNER_ID)
+            ),
+            "workspace_id": (
+                str(turns[0].get("workspace_id") or DEFAULT_WORKSPACE_ID)
+                if turns else (self.workspace_id or DEFAULT_WORKSPACE_ID)
+            ),
         }
         audit_seed = json.dumps(audit_payload, ensure_ascii=False, sort_keys=True)
         audit_payload["audit_id"] = "cqa_" + hashlib.sha1(
@@ -740,17 +755,19 @@ class Tier1ToTier2Bridge:
     ) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO compression_quality_audit "
-            "(audit_id, memory_domain, evaluated_at, status, candidate_count, event_count, "
+            "(audit_id, memory_domain, owner_id, workspace_id, evaluated_at, status, candidate_count, event_count, "
             "covered_turn_count, event_coverage, backlinked_event_count, "
             "backlink_completeness, source_chars, event_summary_chars, "
             "compression_ratio, degraded_event_count, degraded_fraction, "
             "source_supported_event_count, source_support, identifier_fidelity, "
             "polarity_consistency, unsupported_identifiers, thresholds, failed_checks, "
             "sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?)",
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 quality_evidence["audit_id"],
                 quality_evidence["memory_domain"],
+                quality_evidence["owner_id"],
+                quality_evidence["workspace_id"],
                 quality_evidence["evaluated_at"],
                 status,
                 quality_evidence["candidate_count"],
@@ -783,6 +800,42 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         try:
             self._write_quality_audit(conn, quality_evidence, status)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _record_quality_rejection(self, turns: Sequence[Dict[str, Any]]) -> None:
+        """Bound retries without accepting a summary that failed its gate."""
+        if not turns:
+            return
+        conn = open_memory_sqlite(self.db_path)
+        try:
+            for turn in turns:
+                row = conn.execute(
+                    "SELECT compression_retry_count FROM turns WHERE turn_id = ? "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (turn["turn_id"], turn["owner_id"], turn["workspace_id"], turn["memory_domain"]),
+                ).fetchone()
+                retry_count = int(row[0] or 0) + 1 if row else 1
+                if retry_count >= _MAX_QUALITY_RETRIES:
+                    state = -1
+                    retry_after = None
+                else:
+                    state = 0
+                    retry_after = (
+                        datetime.now(timezone.utc) + timedelta(hours=2 ** (retry_count - 1))
+                    ).isoformat()
+                conn.execute(
+                    "UPDATE turns SET compression_retry_count = ?, "
+                    "compression_retry_after = ?, compressed_to_tier2 = ? "
+                    "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ?",
+                    (retry_count, retry_after, state, turn["turn_id"], turn["owner_id"],
+                     turn["workspace_id"], turn["memory_domain"]),
+                )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -951,6 +1004,7 @@ class Tier1ToTier2Bridge:
                 ", ".join(quality_evidence["failed_checks"]),
             )
             self._persist_quality_audit(quality_evidence, "rejected")
+            self._record_quality_rejection(candidates)
             return BridgeResult(
                 turns_processed=0,
                 events_generated=len(tier2_output.get("events", [])),

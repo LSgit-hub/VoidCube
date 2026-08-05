@@ -14,7 +14,12 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
-from systems.memory.domain import MemoryActor, MemoryDomain
+from systems.memory.domain import (
+    MemoryActor,
+    MemoryDomain,
+    MemoryDomainAccessError,
+    authorize_read,
+)
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -238,6 +243,10 @@ def create_memory_promotion_candidate(
         request.source_domain,
         request.target_domain,
     )
+    try:
+        authorize_read(actor, [source_domain])
+    except MemoryDomainAccessError as exc:
+        raise MemoryPromotionAccessError(str(exc)) from exc
     scope = MemoryScope.create(request.owner_id, request.workspace_id)
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     expire_memory_promotions(conn, now=current)

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from systems.memory.lexical_index import search_memory_fts
+from systems.memory.ranking_policy import compute_dynamic_weight
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -83,8 +84,6 @@ _IDENTITY_QUERY_PATTERNS = (
     "do you remember yourself",
 )
 _IDENTITY_TOPIC_MARKERS = (
-    "星子",
-    "小星",
     "你的身份",
     "自身身份",
     "身份连续",
@@ -690,11 +689,19 @@ def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
 
 def _is_identity_query(normalized_query: str) -> bool:
     compact = re.sub(r"[\s?？。.!！,，'’]+", "", normalized_query)
-    return any(marker in normalized_query for marker in _IDENTITY_TOPIC_MARKERS) or any(
-        pattern in normalized_query
-        or re.sub(r"[\s'’]+", "", pattern) in compact
-        for pattern in _IDENTITY_QUERY_PATTERNS
-    )
+    if any(pattern in normalized_query for pattern in _IDENTITY_QUERY_PATTERNS):
+        return True
+    if any(marker in normalized_query for marker in _IDENTITY_TOPIC_MARKERS):
+        return True
+    # A bare identity noun is not enough: "查看星子的配置" and
+    # "星子昨天做了什么" are ordinary memory queries. Require a short
+    # identity-focused phrase with no operational/temporal verb.
+    identity_terms = ("星子", "小星", "锚点")
+    functional_terms = ("配置", "做了", "做什么", "昨天", "今天", "如何", "什么", "查看", "查找")
+    identity_question = ("是谁", "叫什么", "什么身份", "who is", "what is", "信任", "身份")
+    return len(compact) <= 15 and any(term in normalized_query for term in identity_terms) and not any(
+        term in normalized_query for term in functional_terms
+    ) and any(term in normalized_query for term in identity_question)
 
 
 def _expand_concepts(normalized_query: str, terms: Sequence[str]) -> list[str]:
@@ -1725,15 +1732,22 @@ def _apply_feedback_scores(
     placeholders = ",".join("?" for _ in ids)
     domain_placeholders = ",".join("?" for _ in source_domains)
     rows = conn.execute(
-        "SELECT memory_id, verdict, COUNT(*) FROM recall_feedback "
+        "SELECT memory_id, verdict, created_at FROM recall_feedback "
         f"WHERE owner_id = ? AND workspace_id = ? AND memory_domain IN ({domain_placeholders}) "
-        f"AND memory_id IN ({placeholders}) "
-        "GROUP BY memory_id, verdict",
+        f"AND memory_id IN ({placeholders})",
         [owner_id, workspace_id, *source_domains, *ids],
     ).fetchall()
-    counts: dict[str, dict[str, int]] = {}
-    for memory_id, verdict, count in rows:
-        counts.setdefault(str(memory_id), {})[str(verdict)] = int(count)
+    counts: dict[str, dict[str, float]] = {}
+    now = datetime.now(timezone.utc)
+    for memory_id, verdict, created_at in rows:
+        try:
+            stamp = _aware_datetime(datetime.fromisoformat(str(created_at)))
+            age_days = max(0.0, (now - stamp).total_seconds() / 86400.0)
+            decay = math.exp(-age_days / 90.0)
+        except (TypeError, ValueError):
+            decay = 1.0
+        bucket = counts.setdefault(str(memory_id), {})
+        bucket[str(verdict)] = bucket.get(str(verdict), 0.0) + decay
     adjusted: list[dict[str, Any]] = []
     verdict_weights = {
         "relevant": 0.08,
@@ -1766,22 +1780,13 @@ def _dynamic_weight(
     citation_count: int,
     pinned: bool,
 ) -> float:
-    if pinned:
-        return 1.0
-    content_bonus = {
-        "decision": 0.15,
-        "correction": 0.12,
-        "shift": 0.12,
-        "completion": 0.08,
-        "conflict": 0.08,
-        "blocker": 0.06,
-        "progress": 0.04,
-    }.get(str(event_kind or ""), 0.0)
-    citation_bonus = min(citation_count / 5.0, 1.0) * 0.10
-    # Retrieval count is observability, not relevance feedback. Boosting on
-    # access alone creates a self-reinforcing ranking loop.
-    del access_count
-    return max(0.0, min(1.0, base_weight + content_bonus + citation_bonus))
+    return compute_dynamic_weight(
+        base_weight,
+        event_kind=event_kind,
+        access_count=access_count,
+        citation_count=citation_count,
+        pinned=pinned,
+    )
 
 
 def _temporal_fit_score(
@@ -1822,7 +1827,9 @@ def _temporal_fit_score(
             abs((c_start - q_start).total_seconds()),
             abs((c_start - q_end).total_seconds()),
         )
-        return max(0.0, min(1.0, 1.0 - distance_seconds / max(query_seconds * 4, 1.0)))
+        # Outside-window points must not outrank an in-window span merely
+        # because the span covers only part of a wide query window.
+        return max(0.0, min(0.35, 1.0 - distance_seconds / max(query_seconds, 1.0)))
 
     # Span candidate: overlap ratio over the query window.
     overlap_start = max(c_start, q_start)

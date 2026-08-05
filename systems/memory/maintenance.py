@@ -99,7 +99,8 @@ async def run_tier2_bridge_cycle(
         if not force_oldest and int(expired_count or 0) == 0:
             continue
         request = request_factory(
-            retention_days=config.tier1_retention_days, batch_size=50,
+            retention_days=config.tier1_retention_days,
+            batch_size=int(getattr(config, "tier2_batch_size", 100)),
             min_relevance=config.tier1_min_relevance, force_oldest=force_oldest,
             memory_actor=maintenance_actor, memory_domain=str(domain),
             owner_id=str(owner_id), workspace_id=str(workspace_id),

@@ -72,7 +72,14 @@ def run_autonomous_component_debug(
     )
 
     has_rendered = False
-    register_with_gateway = partial(register_session, source="cli")
+    from systems.memory.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
+
+    register_with_gateway = partial(
+        register_session,
+        source="cli",
+        owner_id=DEFAULT_OWNER_ID,
+        workspace_id=CLI_WORKSPACE_ID,
+    )
     if show_idle:
         print("\n  VoidCube API-A 自主执行组件调试面")
         print("  正常使用请在主 CLI 内执行 /auto；此入口只用于隔离诊断。")

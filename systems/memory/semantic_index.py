@@ -255,8 +255,14 @@ class SemanticMemoryIndex:
                                 self.config.model,
                             ),
                         ).fetchone()[0]
+                        # sqlite-vec exposes rowid as a strict primary key and
+                        # does not implement SQLite's REPLACE semantics. Remove
+                        # the previous vector explicitly before refreshing it.
                         conn.execute(
-                            f"INSERT OR REPLACE INTO {_VEC0_TABLE} (rowid, embedding) "
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ?", (rowid,)
+                        )
+                        conn.execute(
+                            f"INSERT INTO {_VEC0_TABLE} (rowid, embedding) "
                             f"VALUES (?, ?)",
                             (rowid, _vector_blob(vector)),
                         )

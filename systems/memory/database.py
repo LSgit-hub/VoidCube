@@ -149,6 +149,8 @@ class MemoryDatabaseBootstrap:
                 metadata TEXT,
                 dedup_key TEXT,
                 compressed_to_tier2 INTEGER DEFAULT 0,
+                compression_retry_count INTEGER NOT NULL DEFAULT 0,
+                compression_retry_after TEXT,
                 last_decay_at TEXT,
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
                 workspace_id TEXT NOT NULL DEFAULT 'default',
@@ -180,6 +182,8 @@ class MemoryDatabaseBootstrap:
             CREATE TABLE IF NOT EXISTS compression_quality_audit (
                 audit_id TEXT PRIMARY KEY,
                 memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
+                owner_id TEXT NOT NULL DEFAULT 'local-user',
+                workspace_id TEXT NOT NULL DEFAULT 'default',
                 evaluated_at TEXT NOT NULL,
                 status TEXT NOT NULL,
                 candidate_count INTEGER NOT NULL,
@@ -211,6 +215,8 @@ class MemoryDatabaseBootstrap:
             ("identifier_fidelity", "REAL NOT NULL DEFAULT 0"),
             ("polarity_consistency", "REAL NOT NULL DEFAULT 0"),
             ("unsupported_identifiers", "TEXT NOT NULL DEFAULT '[]'"),
+            ("owner_id", "TEXT NOT NULL DEFAULT 'local-user'"),
+            ("workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
         ):
             if column not in quality_columns:
                 cursor.execute(
@@ -429,6 +435,13 @@ class MemoryDatabaseBootstrap:
             cursor.execute("ALTER TABLE turns ADD COLUMN dedup_key TEXT")
         if "last_decay_at" not in existing:
             cursor.execute("ALTER TABLE turns ADD COLUMN last_decay_at TEXT")
+        if "compression_retry_count" not in existing:
+            cursor.execute(
+                "ALTER TABLE turns ADD COLUMN compression_retry_count "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        if "compression_retry_after" not in existing:
+            cursor.execute("ALTER TABLE turns ADD COLUMN compression_retry_after TEXT")
 
     def _migrate_scope_schema(self, cursor: sqlite3.Cursor) -> None:
         for table in (

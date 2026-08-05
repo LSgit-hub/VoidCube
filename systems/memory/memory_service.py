@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,7 @@ from systems.memory.profile_store import (
     revoke_profile_predicates,
     upsert_profile_memory,
 )
+from systems.memory.ranking_policy import compute_dynamic_weight
 from systems.memory.promotion import (
     MemoryPromotionAccessError,
     MemoryPromotionCandidateCreate,
@@ -66,10 +68,23 @@ from systems.memory.scope import (
     MemoryScope,
 )
 from systems.memory.semantic_index import SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
+from systems.memory.tier1_to_tier2_bridge import (
+    Tier1ToTier2Bridge,
+    _identifiers,
+    _source_support,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
+
+_CMEM_COLUMNS = (
+    "memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+    "importance, confidence, topics, entities, source_turns, parent_id, "
+    "compressed_at, compression_level, status, superseded_by, weight, event_kind, "
+    "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
+    "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
+    "memory_domain, created_at"
+)
 
 
 def _redact_for_memory_storage(value: Any) -> Any:
@@ -297,87 +312,64 @@ class ForgetRequest(BaseModel):
 # Then: if pinned → W=1.0; if hidden → W=0.0
 
 # Dimension 1: Content importance — derived from EventKind
-_CONTENT_IMPORTANCE_BONUS = {
-    "decision":   0.15,   # 决定 → 最高
-    "correction": 0.12,   # 更正 → 很高
-    "shift":      0.12,   # 转向 → 很高
-    "completion": 0.08,   # 完成
-    "conflict":   0.08,   # 冲突
-    "blocker":    0.06,   # 阻塞
-    "progress":   0.04,   # 进展
-    None:         0.00,   # 无分类 → 不加分
-}
-
-
-def compute_dynamic_weight(
-    base_weight: float,
-    *,
-    event_kind: str | None = None,
-    access_count: int = 0,
-    citation_count: int = 0,
-    pinned: bool = False,
-    hidden: bool = False,
-) -> float:
-    """Compute query weight without treating retrieval count as approval.
-
-    Formula:
-        W = clamp(W_base + content_bonus + citation_bonus, 0.0, 1.0)
-        W = 1.0 if pinned
-        W = 0.0 if hidden
-
-    Access count is retained for observability only. Citation count reflects
-    actual structural reuse and remains a bounded ranking signal.
-    """
-    if hidden:
-        return 0.0
-    if pinned:
-        return 1.0
-
-    content_bonus = _CONTENT_IMPORTANCE_BONUS.get(event_kind, 0.0)
-
-    del access_count
-
-    # citation_count / 5, capped at 0.10
-    citation_bonus = min(citation_count / 5.0, 1.0) * 0.10
-
-    return max(0.0, min(1.0, base_weight + content_bonus + citation_bonus))
-
-
 def _cmem_row_to_dict(row) -> Dict[str, Any]:
     """Convert a compressed_memories table row to a public record."""
+    def value(name: str, default: Any = None) -> Any:
+        if isinstance(row, sqlite3.Row):
+            return row[name] if name in row.keys() else default
+        # Compatibility for callers that construct tuple rows in isolation.
+        index = {
+            "memory_id": 0, "memory_type": 1, "title": 2,
+            "summary": 3, "timespan_start": 4, "timespan_end": 5,
+            "importance": 6, "confidence": 7, "topics": 8,
+            "entities": 9, "source_turns": 10, "parent_id": 11,
+            "compressed_at": 12, "compression_level": 13,
+            "status": 14, "superseded_by": 15, "weight": 16,
+            "event_kind": 17, "access_count": 18,
+            "last_accessed_at": 19, "citation_count": 20,
+            "pinned": 21, "hidden": 22, "identity_layer": 23,
+            "evidence_refs": 24, "origin_type": 25,
+            "origin_id": 26, "verified_at": 27,
+            "owner_id": 28, "workspace_id": 29,
+            "memory_domain": 30, "created_at": 31,
+        }
+        position = index.get(name)
+        return row[position] if position is not None and len(row) > position else default
+
+    def json_value(name: str, default: Any) -> Any:
+        raw = value(name)
+        if not raw:
+            return default
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default
+
     base = {
-        "memory_id": row[0],
-        "memory_type": row[1],
-        "title": row[2],
-        "summary": row[3],
-        "timespan_start": row[4],
-        "timespan_end": row[5],
-        "importance": row[6],
-        "confidence": row[7],
-        "topics": json.loads(row[8]) if row[8] else [],
-        "entities": json.loads(row[9]) if row[9] else [],
-        "source_turns": json.loads(row[10]) if row[10] else [],
-        "parent_id": row[11],
-        "compressed_at": row[12],
-        "compression_level": row[13] if len(row) > 13 else 0,
-        "status": row[14] if len(row) > 14 else "active",
-        "superseded_by": row[15] if len(row) > 15 else None,
-        "weight": row[16] if len(row) > 16 else 1.0,
+        "memory_id": value("memory_id"), "memory_type": value("memory_type"),
+        "title": value("title"), "summary": value("summary"),
+        "timespan_start": value("timespan_start"), "timespan_end": value("timespan_end"),
+        "importance": value("importance"), "confidence": value("confidence"),
+        "topics": json_value("topics", []), "entities": json_value("entities", []),
+        "source_turns": json_value("source_turns", []),
+        "parent_id": value("parent_id"), "compressed_at": value("compressed_at"),
+        "compression_level": value("compression_level", 0),
+        "status": value("status", "active"),
+        "superseded_by": value("superseded_by"),
+        "weight": value("weight", 1.0),
         # Five-dimensional content-aware fields (cols 17-22)
-        "event_kind": row[17] if len(row) > 17 else None,
-        "access_count": row[18] if len(row) > 18 else 0,
-        "last_accessed_at": row[19] if len(row) > 19 else None,
-        "citation_count": row[20] if len(row) > 20 else 0,
-        "pinned": bool(row[21]) if len(row) > 21 else False,
-        "hidden": bool(row[22]) if len(row) > 22 else False,
-        "identity_layer": row[23] if len(row) > 23 else None,
-        "evidence_refs": (
-            json.loads(row[24]) if len(row) > 24 and row[24] else []
-        ),
-        "origin_type": row[25] if len(row) > 25 else None,
-        "origin_id": row[26] if len(row) > 26 else None,
-        "verified_at": row[27] if len(row) > 27 else None,
-        "memory_domain": row[30] if len(row) > 30 else DEFAULT_MEMORY_DOMAIN.value,
+        "event_kind": value("event_kind"), "access_count": value("access_count", 0),
+        "last_accessed_at": value("last_accessed_at"),
+        "citation_count": value("citation_count", 0),
+        "pinned": bool(value("pinned", 0)), "hidden": bool(value("hidden", 0)),
+        "identity_layer": value("identity_layer"),
+        "evidence_refs": json_value("evidence_refs", []),
+        "origin_type": value("origin_type"), "origin_id": value("origin_id"),
+        "verified_at": value("verified_at"),
+        "owner_id": value("owner_id", DEFAULT_OWNER_ID),
+        "workspace_id": value("workspace_id", DEFAULT_WORKSPACE_ID),
+        "memory_domain": value("memory_domain", DEFAULT_MEMORY_DOMAIN.value),
+        "created_at": value("created_at"),
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
@@ -478,12 +470,13 @@ class MemoryApplicationService:
         conn = open_memory_sqlite(self._db_path)
         escalated = 0
         purged = 0
+        quality_rejected = 0
 
         # ── Escalate: find entries past their level's max age ──
         for (mem_type, level), max_age_days in self._LEVEL_MAX_AGE_DAYS.items():
             cutoff = (now - timedelta(days=max_age_days)).isoformat()
             rows = conn.execute(
-                "SELECT memory_id, title, summary, topics, entities, "
+                "SELECT memory_id, title, summary, topics, entities, event_kind, "
                 "timespan_start, timespan_end, importance, confidence, source_turns, "
                 "owner_id, workspace_id, memory_domain "
                 "FROM compressed_memories "
@@ -495,7 +488,7 @@ class MemoryApplicationService:
             ).fetchall()
 
             for row in rows:
-                mem_id, title, summary, topics_json, entities_json, \
+                mem_id, title, summary, topics_json, entities_json, event_kind, \
                     ts_start, ts_end, importance, confidence, source_turns_json, \
                     owner_id, workspace_id, memory_domain = row
 
@@ -539,6 +532,16 @@ class MemoryApplicationService:
                     to_level=next_level,
                     topics=json.loads(topics_json) if topics_json else [],
                 )
+                source_text = f"{title} {summary}"
+                unsupported_identifiers = _identifiers(escalated_summary) - _identifiers(source_text)
+                if _source_support(escalated_summary, source_text) < 0.35 or unsupported_identifiers:
+                    quality_rejected += 1
+                    logger.warning(
+                        "Compression lifecycle rejected escalation for %s: "
+                        "source support or identifier fidelity failed",
+                        mem_id,
+                    )
+                    continue
 
                 parent_id = str(
                     uuid.uuid5(
@@ -555,8 +558,8 @@ class MemoryApplicationService:
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
                     "parent_id, compressed_at, compression_level, status, weight, "
-                    "owner_id, workspace_id, memory_domain) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "owner_id, workspace_id, memory_domain, event_kind, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         parent_id, next_type, escalated_title, escalated_summary,
                         ts_start, ts_end,
@@ -564,7 +567,7 @@ class MemoryApplicationService:
                         topics_json, entities_json,
                         json.dumps(source_turns),
                         mem_id, now.isoformat(), next_level, "active", next_weight,
-                        owner_id, workspace_id, memory_domain,
+                        owner_id, workspace_id, memory_domain, event_kind, now.isoformat(),
                     ),
                 )
 
@@ -614,7 +617,11 @@ class MemoryApplicationService:
             logger.info(
                 "Compression lifecycle: %d escalated, %d purged", escalated, purged
             )
-        return {"escalated": escalated, "purged": purged}
+        return {
+            "escalated": escalated,
+            "purged": purged,
+            "quality_rejected": quality_rejected,
+        }
 
     async def _llm_escalate_summary(
         self, *, mem_id: str, title: str, summary: str,
@@ -937,20 +944,15 @@ class MemoryApplicationService:
 
     async def rebuild_entity_graph(
         self,
-        owner_id: str = GLOBAL_SCOPE_ID,
-        workspace_id: str = GLOBAL_SCOPE_ID,
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
         memory_domain: str | None = None,
     ):
         from systems.memory.entity_graph import rebuild_entity_graph as _rebuild
 
         conn = open_memory_sqlite(self._db_path)
         try:
-            linked = _rebuild(
-                conn,
-                owner_id=owner_id,
-                workspace_id=workspace_id,
-                memory_domain=memory_domain,
-            )
+            linked = _rebuild(conn, owner_id=owner_id, workspace_id=workspace_id, memory_domain=memory_domain)
             conn.commit()
         finally:
             conn.close()
@@ -958,17 +960,32 @@ class MemoryApplicationService:
 
     # ── Compression quality dashboard ─────────────────────────────────────
 
-    async def compression_quality(self, limit: int = 20):
+    async def compression_quality(
+        self,
+        limit: int = 20,
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
+    ):
         bounded = max(1, min(int(limit), 200))
         conn = open_memory_sqlite(self._db_path)
         try:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if owner_id is not None:
+                clauses.append("owner_id = ?")
+                params.append(str(owner_id))
+            if workspace_id is not None:
+                clauses.append("workspace_id = ?")
+                params.append(str(workspace_id))
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
             rows = conn.execute(
                 "SELECT evaluated_at, status, candidate_count, event_count, "
                 "covered_turn_count, event_coverage, backlink_completeness, "
                 "compression_ratio, degraded_fraction, source_support, "
-                "identifier_fidelity, polarity_consistency, thresholds, failed_checks "
-                "FROM compression_quality_audit ORDER BY evaluated_at DESC LIMIT ?",
-                (bounded,),
+                "identifier_fidelity, polarity_consistency, thresholds, failed_checks, "
+                "owner_id, workspace_id FROM compression_quality_audit"
+                + where + " ORDER BY evaluated_at DESC LIMIT ?",
+                [*params, bounded],
             ).fetchall()
         finally:
             conn.close()
@@ -988,6 +1005,8 @@ class MemoryApplicationService:
                 "polarity_consistency": float(row[11] or 0.0),
                 "thresholds": row[12],
                 "failed_checks": row[13],
+                "owner_id": str(row[14] or DEFAULT_OWNER_ID),
+                "workspace_id": str(row[15] or DEFAULT_WORKSPACE_ID),
             }
             for row in rows
         ]
@@ -1037,11 +1056,11 @@ class MemoryApplicationService:
         conn = open_memory_sqlite(self._db_path)
         try:
             anchors = conn.execute(
-                "SELECT * FROM compressed_memories "
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories "
                 "WHERE memory_id LIKE 'identity-founding-%' ORDER BY memory_id"
             ).fetchall()
             evolving = conn.execute(
-                "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
                 "AND identity_layer = 'self_narrative' "
                 "AND ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = '*' AND workspace_id = '*')) "
@@ -1049,7 +1068,7 @@ class MemoryApplicationService:
                 (scope.owner_id, scope.workspace_id),
             ).fetchall()
             experiences = conn.execute(
-                "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
                 "AND identity_layer = 'experience' "
                 "AND ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = '*' AND workspace_id = '*')) "
@@ -1186,7 +1205,7 @@ class MemoryApplicationService:
         conn = open_memory_sqlite(self._db_path)
         try:
             experience_row = conn.execute(
-                "SELECT * FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
                 "AND workspace_id = ? AND memory_domain = ?",
                 (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
             ).fetchone()
@@ -2691,7 +2710,7 @@ class MemoryApplicationService:
         )
 
         sql = (
-            "SELECT * FROM compressed_memories WHERE "
+            f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE "
             "((owner_id = ? AND workspace_id = ?) OR "
             "(owner_id = ? AND workspace_id = ?))"
         )
@@ -3511,6 +3530,8 @@ class MemoryApplicationService:
             dict.fromkeys(str(item).strip() for item in request.evidence_refs)
         )
         evidence_refs = [item for item in evidence_refs if item]
+        topics = list(dict.fromkeys(_redact_for_memory_storage(request.topics)))
+        entities = list(dict.fromkeys(_redact_for_memory_storage(request.entities)))
         identity = json.dumps(
             {
                 "title": title,
@@ -3539,9 +3560,9 @@ class MemoryApplicationService:
                 "(memory_id, memory_domain, memory_type, title, summary, timespan_start, timespan_end, "
                 "importance, confidence, topics, entities, source_turns, compressed_at, "
                 "compression_level, status, weight, event_kind, pinned, hidden, "
-                "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id) "
+                "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, created_at) "
                 "VALUES (?, ?, 'event', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?, 0, 'active', "
-                "0.8, ?, 0, 0, ?, 'agent_explicit_memory', ?, ?, ?, ?) "
+                "0.8, ?, 0, 0, ?, 'agent_explicit_memory', ?, ?, ?, ?, ?) "
                 "ON CONFLICT(memory_id) DO UPDATE SET "
                 "title = excluded.title, summary = excluded.summary, "
                 "importance = excluded.importance, topics = excluded.topics, "
@@ -3556,14 +3577,8 @@ class MemoryApplicationService:
                     now,
                     now,
                     request.importance,
-                    json.dumps(
-                        list(dict.fromkeys(_redact_for_memory_storage(request.topics))),
-                        ensure_ascii=False,
-                    ),
-                    json.dumps(
-                        list(dict.fromkeys(_redact_for_memory_storage(request.entities))),
-                        ensure_ascii=False,
-                    ),
+                    json.dumps(topics, ensure_ascii=False),
+                    json.dumps(entities, ensure_ascii=False),
                     json.dumps(source_turns, ensure_ascii=False),
                     now,
                     request.event_kind.strip(),
@@ -3572,11 +3587,24 @@ class MemoryApplicationService:
                     now,
                     scope.owner_id,
                     scope.workspace_id,
+                    now,
                 ),
+            )
+            from systems.memory.entity_graph import update_entity_graph
+
+            update_entity_graph(
+                conn,
+                memory_id=memory_id,
+                memory_type="event",
+                entities=entities,
+                owner_id=scope.owner_id,
+                workspace_id=scope.workspace_id,
+                memory_domain=memory_domain,
+                now=now,
             )
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM compressed_memories WHERE memory_id = ? "
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? "
                 "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
                 (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
             ).fetchone()
@@ -3601,7 +3629,7 @@ class MemoryApplicationService:
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
-            "SELECT * FROM compressed_memories WHERE memory_id = ? AND "
+            f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND "
             "((owner_id = ? AND workspace_id = ?) OR "
             "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ?",
             (

@@ -182,17 +182,28 @@ def update_entity_graph(
 def rebuild_entity_graph(
     conn,
     *,
-    owner_id: str = GLOBAL_SCOPE_ID,
-    workspace_id: str = GLOBAL_SCOPE_ID,
+    owner_id: str | None = None,
+    workspace_id: str | None = None,
     memory_domain: str | None = None,
 ) -> int:
     """Drop and rebuild the graph from current active compressed memories.
 
     Returns the number of memory records linked into the graph.
     """
-    conn.execute("DELETE FROM entity_memory_links")
-    conn.execute("DELETE FROM entity_edges")
-    conn.execute("DELETE FROM entity_nodes")
+    if (owner_id is None) != (workspace_id is None):
+        raise ValueError("owner_id and workspace_id must be provided together")
+    scoped = owner_id is not None and workspace_id is not None
+    all_scopes = scoped and owner_id == GLOBAL_SCOPE_ID and workspace_id == GLOBAL_SCOPE_ID
+    delete_scope = ""
+    delete_params: list[Any] = []
+    if scoped and not all_scopes:
+        delete_scope = " WHERE owner_id = ? AND workspace_id = ?"
+        delete_params = [owner_id, workspace_id]
+        if memory_domain:
+            delete_scope += " AND memory_domain = ?"
+            delete_params.append(memory_domain)
+    for table in ("entity_memory_links", "entity_edges", "entity_nodes"):
+        conn.execute(f"DELETE FROM {table}{delete_scope}", delete_params)
 
     now = datetime.now(timezone.utc).isoformat()
     clauses = ["status = 'active'"]
@@ -200,7 +211,7 @@ def rebuild_entity_graph(
     if memory_domain:
         clauses.append("memory_domain = ?")
         params.append(memory_domain)
-    elif not (owner_id == GLOBAL_SCOPE_ID and workspace_id == GLOBAL_SCOPE_ID):
+    elif scoped and not all_scopes:
         clauses.append("owner_id = ?")
         clauses.append("workspace_id = ?")
         params.extend([owner_id, workspace_id])

@@ -145,3 +145,20 @@ def test_fts_triggers_track_updates_deletes_and_keep_private_scopes_separate(tmp
         ) == {}
     finally:
         conn.close()
+
+
+def test_fts_fallback_matches_two_character_cjk_terms(tmp_path):
+    service = _service(tmp_path)
+    _insert_turns(service)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET text = text || ' 配置' WHERE turn_id = 'fts-old-target'"
+        )
+        conn.commit()
+        result = search_memory_fts(
+            conn, ["配置"], owner_id="owner-a", workspace_id="workspace-a", limit=20
+        )
+        assert "fts-old-target" in result["turn"]
+    finally:
+        conn.close()

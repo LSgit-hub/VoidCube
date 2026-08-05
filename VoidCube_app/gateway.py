@@ -66,6 +66,8 @@ class GatewayPresenceClient:
         provider: str,
         *,
         source: str,
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
         opener: Callable[..., Any] | None = None,
     ) -> bool:
         payload = {
@@ -74,6 +76,10 @@ class GatewayPresenceClient:
             "provider": provider,
             "source": str(source or "").strip(),
         }
+        if owner_id is not None:
+            payload["owner_id"] = str(owner_id)
+        if workspace_id is not None:
+            payload["workspace_id"] = str(workspace_id)
         return self._post_json(
             "/v1/sessions/register",
             payload,
@@ -186,12 +192,16 @@ def register_session(
     provider: str,
     *,
     source: str,
+    owner_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> bool:
     return gateway_presence.register_session(
         session_id,
         model,
         provider,
         source=source,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
     )
 
 

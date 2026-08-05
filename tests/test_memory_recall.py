@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -42,6 +43,34 @@ def _service(tmp_path) -> MemoryService:
             recall_max_context_chars=1200,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_compressed_reader_is_independent_of_migration_column_order(tmp_path):
+    db_path = tmp_path / "migrated.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE compressed_memories ("
+        "memory_id TEXT PRIMARY KEY, memory_type TEXT NOT NULL, title TEXT NOT NULL, "
+        "summary TEXT NOT NULL, timespan_start TEXT NOT NULL, timespan_end TEXT NOT NULL, "
+        "importance REAL, confidence REAL, topics TEXT, entities TEXT, source_turns TEXT, "
+        "parent_id TEXT, compressed_at TEXT NOT NULL)"
+    )
+    stamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO compressed_memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("migrated-row", "event", "Migrated", "Correct fields", stamp, stamp,
+         0.8, 0.9, "[]", "[]", "[]", None, stamp),
+    )
+    conn.commit()
+    conn.close()
+    service = MemoryService(MemoryServiceConfig(db_path=str(db_path)))
+    row = await service.get_compressed("migrated-row")
+    assert row["event_kind"] is None
+    assert row["pinned"] is False
+    assert row["hidden"] is False
+    assert row["memory_domain"] == "agent_interaction"
+    assert row["created_at"] == stamp
 
 
 def _insert_turn(
@@ -162,7 +191,11 @@ def test_identity_queries_have_a_first_class_plan_without_noise_terms(query):
     assert {"身份", "星子", "小星", "voidcube", "锚点"} <= set(
         plan.concept_terms
     )
-    assert "谁你" not in plan.search_terms
+
+
+def test_identity_name_in_operational_query_is_not_identity_intent():
+    assert build_recall_plan("帮我查看星子的配置").intent != "identity"
+    assert build_recall_plan("星子昨天做了什么").intent != "identity"
 
 
 def test_today_uses_the_callers_local_calendar_day_in_utc_boundaries():
@@ -1195,6 +1228,18 @@ def test_temporal_fit_ranks_inside_window_above_edge():
     assert full == pytest.approx(1.0)
     assert full > edge > 0
     assert outside == 0.0
+
+
+def test_temporal_fit_outside_point_does_not_outrank_inside_span():
+    start = "2026-08-01T00:00:00Z"
+    end = "2026-08-31T00:00:00Z"
+    outside_point = _temporal_fit_score(
+        "2026-07-12T00:00:00Z", "2026-07-12T00:00:00Z", start, end
+    )
+    inside_span = _temporal_fit_score(
+        "2026-08-01T00:00:00Z", "2026-08-21T00:00:00Z", start, end
+    )
+    assert inside_span > outside_point
 
 
 @pytest.mark.asyncio

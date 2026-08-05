@@ -177,36 +177,44 @@ def search_memory_fts(
 ) -> dict[str, tuple[str, ...]]:
     """Return bounded source IDs matching any safe trigram query term."""
     eligible = []
+    short_terms = []
     for raw_term in terms:
         term = str(raw_term or "").strip().lower()
-        if len(term) < 3 or term in eligible:
+        if len(term) < 2 or term in eligible or term in short_terms:
             continue
-        eligible.append(term)
-    if not eligible or not _fts_table_exists(conn):
+        if len(term) == 2:
+            short_terms.append(term)
+        else:
+            eligible.append(term)
+    if not (eligible or short_terms) or not _fts_table_exists(conn):
         return {}
-    match_query = " OR ".join(
-        f'"{term.replace(chr(34), chr(34) * 2)}"' for term in eligible[:32]
-    )
     domains = tuple(dict.fromkeys(str(item) for item in source_domains))
     if not domains:
         return {}
     placeholders = ",".join("?" for _ in domains)
-    rows = conn.execute(
-        "SELECT source_type, memory_id FROM memory_fts WHERE memory_fts MATCH ? "
-        "AND ((owner_id = ? AND workspace_id = ?) OR "
-        "(owner_id = ? AND workspace_id = ?)) "
-        f"AND memory_domain IN ({placeholders}) "
-        "ORDER BY bm25(memory_fts) LIMIT ?",
-        (
-            match_query,
-            owner_id,
-            workspace_id,
-            GLOBAL_SCOPE_ID,
-            GLOBAL_SCOPE_ID,
-            *domains,
-            max(1, min(int(limit), 4000)),
-        ),
-    ).fetchall()
+    rows = []
+    if eligible:
+        match_query = " OR ".join(
+            f'"{term.replace(chr(34), chr(34) * 2)}"' for term in eligible[:32]
+        )
+        rows.extend(conn.execute(
+            "SELECT source_type, memory_id FROM memory_fts WHERE memory_fts MATCH ? "
+            "AND ((owner_id = ? AND workspace_id = ?) OR "
+            "(owner_id = ? AND workspace_id = ?)) "
+            f"AND memory_domain IN ({placeholders}) ORDER BY bm25(memory_fts) LIMIT ?",
+            (match_query, owner_id, workspace_id, GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID,
+             *domains, max(1, min(int(limit), 4000))),
+        ).fetchall())
+    if short_terms:
+        short_clauses = " OR ".join("content LIKE ?" for _ in short_terms)
+        rows.extend(conn.execute(
+            "SELECT source_type, memory_id FROM memory_fts WHERE (" + short_clauses + ") "
+            "AND ((owner_id = ? AND workspace_id = ?) OR "
+            "(owner_id = ? AND workspace_id = ?)) "
+            f"AND memory_domain IN ({placeholders}) LIMIT ?",
+            [*(f"%{term}%" for term in short_terms), owner_id, workspace_id,
+             GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID, *domains, max(1, min(int(limit), 4000))],
+        ).fetchall())
     grouped: dict[str, list[str]] = {}
     for source_type, memory_id in rows:
         grouped.setdefault(str(source_type), []).append(str(memory_id))

@@ -7,6 +7,10 @@ from dataclasses import dataclass
 
 DEFAULT_OWNER_ID = "local-user"
 DEFAULT_WORKSPACE_ID = "default"
+# The interactive CLI and its Mem provider share this workspace.  Keep the
+# integration value separate from the service-wide default used by other
+# memory domains.
+CLI_WORKSPACE_ID = "VoidCube"
 GLOBAL_SCOPE_ID = "*"
 
 

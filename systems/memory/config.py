@@ -28,6 +28,7 @@ class MemoryServiceConfig(BaseModel):
     tier1_decay_rate: float = Field(default=0.99, ge=0.0, le=1.0)
     tier1_min_relevance: float = 0.1
     tier1_archive_keep_original: bool = True
+    tier2_batch_size: int = Field(default=100, ge=1, le=1000)
     tier2_min_event_coverage: float = Field(default=0.8, ge=0.0, le=1.0)
     tier2_min_backlink_completeness: float = Field(default=1.0, ge=0.0, le=1.0)
     tier2_max_compression_ratio: float = Field(default=1.0, gt=0.0)

@@ -661,13 +661,15 @@ class AIAgent:
                     "VoidCube_home": str(_ghh()),
                     "agent_context": "primary",
                 }
+                from systems.memory.scope import CLI_WORKSPACE_ID
+
+                _init_kwargs["agent_workspace"] = CLI_WORKSPACE_ID
                 if self._user_id:
                     _init_kwargs["user_id"] = self._user_id
                 try:
                     from VoidCube_cli.profiles import get_active_profile_name
                     _profile = get_active_profile_name()
                     _init_kwargs["agent_identity"] = _profile
-                    _init_kwargs["agent_workspace"] = "VoidCube"
                 except Exception:
                     pass
                 self._memory_manager.initialize_all(**_init_kwargs)

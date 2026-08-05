@@ -62,6 +62,28 @@ def test_gateway_binds_memory_scope_to_registered_session():
     ]
 
 
+def test_gateway_allows_cli_and_memory_provider_to_share_scope():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    payload = {
+        "session_id": "shared-scope-session",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+    }
+
+    cli_registration = client.post(
+        "/v1/sessions/register",
+        json={**payload, "source": "cli"},
+    )
+    memory_registration = client.post(
+        "/v1/sessions/register",
+        json={**payload, "source": "agent_memory_provider"},
+    )
+
+    assert cli_registration.status_code == 200
+    assert memory_registration.status_code == 200
+
+
 def _register_memory_target(client: TestClient) -> None:
     response = client.post(
         "/register",
