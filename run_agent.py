@@ -77,9 +77,6 @@ from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_bu
 from tools.interrupt import set_interrupt as _set_interrupt
 
 
-from VoidCube_core.constants import OPENROUTER_BASE_URL
-
-
 def get_active_env(task_id: str):
     """Return the task environment without loading terminal backends at import time."""
     from tools.terminal_tool import get_active_env as _get_active_env
@@ -122,7 +119,14 @@ from agent.context_compressor import (
     execute_context_recovery,
 )
 from agent.api_attempt import ApiAttemptState
+from agent.auxiliary_client import resolve_provider_client
 from agent.client_lifecycle import ChatClientLifecycle
+from agent.client_initialization import (
+    AgentClientInitializationPorts,
+    AgentClientInitializationRuntime,
+    build_client_kwargs_for_credentials,
+    build_qwen_portal_headers,
+)
 from agent.chat_transport import ChatTransport
 from agent.stream_response import StreamChunkUpdate
 from agent.tool_execution import (
@@ -135,7 +139,10 @@ from agent.tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
 )
-from agent.turn_finalization import finalize_conversation_turn
+from agent.turn_finalization import (
+    TurnFinalizationPorts,
+    finalize_conversation_turn,
+)
 from agent.conversation_turn import ConversationTurnState
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
@@ -176,8 +183,9 @@ from agent.message_sanitizer import (
     sanitize_messages_surrogates,
     sanitize_surrogates,
 )
-from agent.session_persistence import (
-    SessionPersistence,
+from agent.session_initialization import (
+    AgentSessionInitializationPorts,
+    AgentSessionInitializationRuntime,
 )
 from agent.tool_schema import normalize_tool_definitions
 from VoidCube_core.utils import env_var_enabled
@@ -204,27 +212,6 @@ def _install_safe_stdio() -> None:
 # =========================================================================
 # Large tool result handler — save oversized output to temp file
 # =========================================================================
-
-
-# =========================================================================
-# Qwen Portal headers — mimics QwenCode CLI for portal.qwen.ai compatibility.
-# Extracted as a module-level helper so both __init__ and
-# _apply_client_headers_for_base_url can share it.
-# =========================================================================
-_QWEN_CODE_VERSION = "0.14.1"
-
-
-def _qwen_portal_headers() -> dict:
-    """Return default HTTP headers required by Qwen Portal API."""
-    import platform as _plat
-
-    _ua = f"QwenCode/{_QWEN_CODE_VERSION} ({_plat.system().lower()}; {_plat.machine()})"
-    return {
-        "User-Agent": _ua,
-        "X-DashScope-CacheControl": "enable",
-        "X-DashScope-UserAgent": _ua,
-        "X-DashScope-AuthType": "qwen-oauth",
-    }
 
 
 class AIAgent:
@@ -488,78 +475,37 @@ class AIAgent:
         self._persist_user_message_idx = None
         self._persist_user_message_override = None
 
-        # Initialize the sole OpenAI-compatible chat-completions client.
-        if api_key and base_url:
-            # Explicit credentials from CLI/gateway — construct directly.
-            # The runtime provider resolver already handled auth for us.
-            client_kwargs = {"api_key": api_key, "base_url": base_url}
-            if self.provider == "copilot-acp":
-                client_kwargs["command"] = self.acp_command
-                client_kwargs["args"] = self.acp_args
-            effective_base = base_url
-            if "openrouter" in effective_base.lower():
-                client_kwargs["default_headers"] = {
-                    "HTTP-Referer": "https://VoidCube-agent.nousresearch.com",
-                    "X-OpenRouter-Title": "Voidcube Agent",
-                    "X-OpenRouter-Categories": "productivity,cli-agent",
-                }
-            elif "api.kimi.com" in effective_base.lower():
-                client_kwargs["default_headers"] = {
-                    "User-Agent": "KimiCLI/1.30.0",
-                }
-            elif "portal.qwen.ai" in effective_base.lower():
-                client_kwargs["default_headers"] = _qwen_portal_headers()
-        else:
-            # No explicit creds — use the centralized provider router.
-            from agent.auxiliary_client import resolve_provider_client
-            _routed_client, _ = resolve_provider_client(
-                self.provider or "auto", model=self.model)
-            if _routed_client is not None:
-                client_kwargs = {
-                    "api_key": _routed_client.api_key,
-                    "base_url": str(_routed_client.base_url),
-                }
-                if hasattr(_routed_client, '_default_headers') and _routed_client._default_headers:
-                    client_kwargs["default_headers"] = dict(_routed_client._default_headers)
+        # Client resolution and primary lifecycle ownership live in the
+        # explicit bootstrap runtime; AIAgent only wires live state readers
+        # and retains the user-facing initialization output.
+        client_initialization = AgentClientInitializationRuntime(
+            AgentClientInitializationPorts(
+                requested_api_key=api_key,
+                requested_base_url=base_url,
+                provider=self.provider,
+                model=self.model,
+                acp_command=self.acp_command,
+                acp_args=self.acp_args,
+                provider_client_resolver=resolve_provider_client,
+                lifecycle_factory=ChatClientLifecycle,
+                provider_reader=lambda: self.provider or "",
+                model_reader=lambda: self.model or "",
+                base_url_reader=lambda: self.base_url or "",
+            )
+        ).initialize()
+        client_kwargs = dict(client_initialization.client_kwargs)
+        self.api_key = client_initialization.api_key
+        self.base_url = client_initialization.base_url
+        self._client_lifecycle = client_initialization.lifecycle
+        if not self.quiet_mode:
+            print(f"🤖 AI Agent initialized with model: {self.model}")
+            if base_url:
+                print(f"🔗 Using custom base URL: {base_url}")
+            key_used = client_kwargs.get("api_key", "none")
+            if key_used and key_used != "dummy-key" and len(key_used) > 12:
+                print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
             else:
-                _explicit = (self.provider or "").strip().lower()
-                if _explicit and _explicit not in ("auto", "openrouter", "custom"):
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                        f"variable, or switch to a different provider with `VoidCube model`."
-                    )
-                client_kwargs = {
-                    "api_key": os.getenv("OPENROUTER_API_KEY", ""),
-                    "base_url": OPENROUTER_BASE_URL,
-                    "default_headers": {
-                        "HTTP-Referer": "https://VoidCube-agent.nousresearch.com",
-                        "X-OpenRouter-Title": "Voidcube Agent",
-                        "X-OpenRouter-Categories": "productivity,cli-agent",
-                    },
-                }
-
-        self.api_key = client_kwargs.get("api_key", "")
-        self.base_url = client_kwargs.get("base_url", self.base_url)
-        self._client_lifecycle = ChatClientLifecycle(
-            client_kwargs=client_kwargs,
-            provider=lambda: self.provider or "",
-            model=lambda: self.model or "",
-            base_url=lambda: self.base_url or "",
-        )
-        try:
-            self._client_lifecycle.initialize_primary(reason="agent_init")
-            if not self.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {self.model}")
-                if base_url:
-                    print(f"🔗 Using custom base URL: {base_url}")
-                key_used = client_kwargs.get("api_key", "none")
-                if key_used and key_used != "dummy-key" and len(key_used) > 12:
-                    print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-                else:
-                    print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize OpenAI-compatible client: {e}")
+                print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
         self._chat_transport = ChatTransport(
             client_lifecycle=self._client_lifecycle,
             base_url=lambda: self.base_url or "",
@@ -627,76 +573,42 @@ class AIAgent:
         
         # Prompt caching is disabled
         
-        # Session logging setup - auto-save conversation trajectories for debugging
-        self.session_start = datetime.now()
-        if session_id:
-            # Use provided session ID (e.g., from CLI)
-            self.session_id = session_id
-        else:
-            # Generate a new session ID
-            timestamp_str = self.session_start.strftime("%Y%m%d_%H%M%S")
-            short_uuid = uuid.uuid4().hex[:6]
-            self.session_id = f"{timestamp_str}_{short_uuid}"
-        
-        # Session logs go into ~/.VoidCube/sessions/ alongside gateway sessions
-        VoidCube_home = get_VoidCube_home()
-        self.logs_dir = VoidCube_home / "sessions"
-        
         # Cached system prompt -- built once per session, only rebuilt on compression
         self._cached_system_prompt: Optional[str] = None
-        
-        # Filesystem checkpoint manager (transparent — not a tool)
-        from tools.checkpoint_manager import CheckpointManager
-        self._checkpoint_mgr = CheckpointManager(
-            enabled=checkpoints_enabled,
-            max_snapshots=checkpoint_max_snapshots,
-        )
-        
-        # SQLite session store (optional -- provided by CLI or gateway)
+
+        # Session identity, DB registration, checkpointing and persistence are
+        # initialized by one explicit runtime; the Agent keeps the resulting
+        # owners and supplies only live state readers.
         self._session_db = session_db
         self._parent_session_id = parent_session_id
-        if self._session_db:
-            try:
-                self._session_db.create_session(
-                    session_id=self.session_id,
-                    source=self.platform or os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
-                    model=self.model,
-                    model_config={
-                        "max_iterations": self.max_iterations,
-                        "reasoning_config": reasoning_config,
-                        "max_tokens": max_tokens,
-                    },
-                    user_id=None,
-                    parent_session_id=self._parent_session_id,
-                )
-            except Exception as e:
-                # Transient SQLite lock contention (e.g. CLI and gateway writing
-                # concurrently) must NOT permanently disable session_search for
-                # this agent.  Keep _session_db alive — subsequent message
-                # flushes and session_search calls will still work once the
-                # lock clears.  The session row may be missing from the index
-                # for this run, but that is recoverable (flushes upsert rows).
-                logger.warning(
-                    "Session DB create_session failed (session_search still available): %s", e
-                )
-
-        self._session_persistence = SessionPersistence(
-            enabled=persist_session,
-            logs_dir=self.logs_dir,
-            session_db=self._session_db,
-            session_start=self.session_start,
-            session_id=lambda: self.session_id,
-            model=lambda: self.model,
-            base_url=lambda: self.base_url,
-            platform=lambda: self.platform,
-            system_prompt=lambda: self._cached_system_prompt,
-            tools=lambda: self.tools,
-            user_message_override=lambda: (
-                self._persist_user_message_idx,
-                self._persist_user_message_override,
-            ),
-            verbose_logging=self.verbose_logging,
-        )
+        session_initialization = AgentSessionInitializationRuntime(
+            AgentSessionInitializationPorts(
+                requested_session_id=session_id,
+                platform=self.platform,
+                model_reader=lambda: self.model,
+                base_url_reader=lambda: self.base_url,
+                system_prompt_reader=lambda: self._cached_system_prompt,
+                tools_reader=lambda: self.tools,
+                user_message_override_reader=lambda: (
+                    self._persist_user_message_idx,
+                    self._persist_user_message_override,
+                ),
+                session_db=self._session_db,
+                parent_session_id=self._parent_session_id,
+                max_iterations=self.max_iterations,
+                reasoning_config=reasoning_config,
+                max_tokens=max_tokens,
+                persist_session=persist_session,
+                verbose_logging=self.verbose_logging,
+                checkpoints_enabled=checkpoints_enabled,
+                checkpoint_max_snapshots=checkpoint_max_snapshots,
+            )
+        ).initialize()
+        self.session_start = session_initialization.session_start
+        self.session_id = session_initialization.session_id
+        self.logs_dir = session_initialization.logs_dir
+        self._checkpoint_mgr = session_initialization.checkpoint_manager
+        self._session_persistence = session_initialization.session_persistence
         
         # In-memory todo list for task planning (one per agent/session)
         from tools.todo_tool import TodoStore
@@ -2317,26 +2229,12 @@ class AIAgent:
         self.base_url = next_base_url
         return True
 
-    @staticmethod
-    def _client_kwargs_for_credentials(api_key: str, base_url: str) -> dict:
-        from agent.auxiliary_client import _OR_HEADERS
-
-        client_kwargs = {"api_key": api_key, "base_url": base_url}
-        normalized = (base_url or "").lower()
-        if "openrouter" in normalized:
-            client_kwargs["default_headers"] = dict(_OR_HEADERS)
-        elif "api.kimi.com" in normalized:
-            client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
-        elif "portal.qwen.ai" in normalized:
-            client_kwargs["default_headers"] = _qwen_portal_headers()
-        return client_kwargs
-
     def _swap_credential(self, entry) -> bool:
         runtime_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
         runtime_base = getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or self.base_url
 
         next_base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
-        client_kwargs = self._client_kwargs_for_credentials(runtime_key, next_base_url)
+        client_kwargs = build_client_kwargs_for_credentials(runtime_key, next_base_url)
         if not self._client_lifecycle.configure(
             client_kwargs,
             reason="credential_rotation",
@@ -5192,7 +5090,54 @@ class AIAgent:
             )
 
         return finalize_conversation_turn(
-            self,
+            TurnFinalizationPorts(
+                cleanup_task_resources=self._cleanup_task_resources,
+                persist_session=self._session_persistence.persist,
+                model=self.model,
+                provider=self.provider,
+                base_url=self.base_url,
+                session_id=self.session_id,
+                platform=self.platform,
+                max_iterations=self.max_iterations,
+                iteration_budget=self.iteration_budget,
+                context_compressor=self.context_compressor,
+                valid_tool_names=self.valid_tool_names,
+                usage_snapshot=lambda: {
+                    "input_tokens": self.session_input_tokens,
+                    "output_tokens": self.session_output_tokens,
+                    "cache_read_tokens": self.session_cache_read_tokens,
+                    "cache_write_tokens": self.session_cache_write_tokens,
+                    "reasoning_tokens": self.session_reasoning_tokens,
+                    "prompt_tokens": self.session_prompt_tokens,
+                    "completion_tokens": self.session_completion_tokens,
+                    "total_tokens": self.session_total_tokens,
+                    "estimated_cost_usd": self.session_estimated_cost_usd,
+                    "cost_status": self.session_cost_status,
+                    "cost_source": self.session_cost_source,
+                },
+                response_was_previewed=lambda: self._response_was_previewed,
+                clear_response_preview=lambda: setattr(
+                    self, "_response_was_previewed", False
+                ),
+                interrupt_message=lambda: self._interrupt_message,
+                clear_interrupt=self.clear_interrupt,
+                clear_stream_callback=lambda: setattr(
+                    self, "_stream_callback", None
+                ),
+                skill_nudge_interval=self._skill_nudge_interval,
+                iterations_since_skill=lambda: self._iters_since_skill,
+                clear_skill_nudge=lambda: setattr(self, "_iters_since_skill", 0),
+                sync_memory=(
+                    lambda user_message, response, session_id: self._memory_manager.sync_all(
+                        user_message,
+                        response,
+                        session_id=session_id,
+                    )
+                    if self._memory_manager
+                    else None
+                ),
+                spawn_background_review=self._spawn_background_review,
+            ),
             state=turn_state,
             messages=messages,
             conversation_history=conversation_history,

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from agent.conversation_turn import ConversationTurnState
 
@@ -13,44 +13,34 @@ from agent.conversation_turn import ConversationTurnState
 logger = logging.getLogger(__name__)
 
 
-class TurnFinalizationPort(Protocol):
-    max_iterations: int
+@dataclass(frozen=True, slots=True)
+class TurnFinalizationPorts:
+    """Explicit inputs and side-effect ports for one completed turn."""
+
+    cleanup_task_resources: Callable[[str], None]
+    persist_session: Callable[
+        [list[dict[str, Any]], Sequence[Mapping[str, Any]] | None], None
+    ]
     model: str
     provider: str
     base_url: str
     session_id: str | None
     platform: str | None
+    max_iterations: int
     iteration_budget: Any
     context_compressor: Any
-    valid_tool_names: list[str]
-    session_input_tokens: int
-    session_output_tokens: int
-    session_cache_read_tokens: int
-    session_cache_write_tokens: int
-    session_reasoning_tokens: int
-    session_prompt_tokens: int
-    session_completion_tokens: int
-    session_total_tokens: int
-    session_estimated_cost_usd: float
-    session_cost_status: str
-    session_cost_source: str
-    _session_persistence: Any
-    _response_was_previewed: bool
-    _interrupt_message: Any
-    _stream_callback: Any
-    _skill_nudge_interval: int
-    _iters_since_skill: int
-    _memory_manager: Any
-
-    def _cleanup_task_resources(self, task_id: str) -> None: ...
-
-    def clear_interrupt(self) -> None: ...
-
-    def _spawn_background_review(
-        self,
-        *,
-        messages_snapshot: list[dict[str, Any]],
-    ) -> None: ...
+    valid_tool_names: Collection[str]
+    usage_snapshot: Callable[[], Mapping[str, Any]]
+    response_was_previewed: Callable[[], bool]
+    clear_response_preview: Callable[[], None]
+    interrupt_message: Callable[[], Any]
+    clear_interrupt: Callable[[], None]
+    clear_stream_callback: Callable[[], None]
+    skill_nudge_interval: int
+    iterations_since_skill: Callable[[], int]
+    clear_skill_nudge: Callable[[], None]
+    sync_memory: Callable[[Any, str, str], None] | None
+    spawn_background_review: Callable[..., None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +150,7 @@ def _default_hook_invoker(name: str, **kwargs: Any) -> Any:
 
 
 def finalize_conversation_turn(
-    owner: TurnFinalizationPort,
+    ports: TurnFinalizationPorts,
     *,
     state: ConversationTurnState,
     messages: list[dict[str, Any]],
@@ -173,18 +163,18 @@ def finalize_conversation_turn(
     hook = invoke_hook or _default_hook_invoker
     completed = state.completed()
 
-    owner._cleanup_task_resources(task_id)
-    owner._session_persistence.persist(messages, conversation_history)
+    ports.cleanup_task_resources(task_id)
+    ports.persist_session(messages, conversation_history)
 
-    budget = owner.iteration_budget
+    budget = ports.iteration_budget
     diagnostics = derive_turn_diagnostics(
         messages,
         state,
-        model=owner.model,
-        max_iterations=owner.max_iterations,
+        model=ports.model,
+        max_iterations=ports.max_iterations,
         budget_used=budget.used if budget else 0,
         budget_max=budget.max_total if budget else 0,
-        session_id=owner.session_id or "none",
+        session_id=ports.session_id or "none",
     )
     emit_turn_diagnostics(diagnostics)
 
@@ -192,16 +182,18 @@ def finalize_conversation_turn(
         try:
             hook(
                 "post_llm_call",
-                session_id=owner.session_id,
+                session_id=ports.session_id,
                 user_message=original_user_message,
                 assistant_response=state.final_response,
                 conversation_history=list(messages),
-                model=owner.model,
-                platform=owner.platform or "",
+                model=ports.model,
+                platform=ports.platform or "",
             )
         except Exception as exc:
             logger.warning("post_llm_call hook failed: %s", exc)
 
+    usage = ports.usage_snapshot()
+    response_previewed = bool(ports.response_was_previewed())
     result = {
         "final_response": state.final_response,
         "last_reasoning": last_assistant_reasoning(messages),
@@ -210,54 +202,53 @@ def finalize_conversation_turn(
         "completed": completed,
         "partial": False,
         "interrupted": state.interrupted,
-        "response_previewed": bool(
-            getattr(owner, "_response_was_previewed", False)
-        ),
-        "model": owner.model,
-        "provider": owner.provider,
-        "base_url": owner.base_url,
-        "input_tokens": owner.session_input_tokens,
-        "output_tokens": owner.session_output_tokens,
-        "cache_read_tokens": owner.session_cache_read_tokens,
-        "cache_write_tokens": owner.session_cache_write_tokens,
-        "reasoning_tokens": owner.session_reasoning_tokens,
-        "prompt_tokens": owner.session_prompt_tokens,
-        "completion_tokens": owner.session_completion_tokens,
-        "total_tokens": owner.session_total_tokens,
+        "response_previewed": response_previewed,
+        "model": ports.model,
+        "provider": ports.provider,
+        "base_url": ports.base_url,
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cache_read_tokens": usage.get("cache_read_tokens", 0),
+        "cache_write_tokens": usage.get("cache_write_tokens", 0),
+        "reasoning_tokens": usage.get("reasoning_tokens", 0),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
         "last_prompt_tokens": (
-            getattr(owner.context_compressor, "last_prompt_tokens", 0) or 0
+            getattr(ports.context_compressor, "last_prompt_tokens", 0) or 0
         ),
-        "estimated_cost_usd": owner.session_estimated_cost_usd,
-        "cost_status": owner.session_cost_status,
-        "cost_source": owner.session_cost_source,
+        "estimated_cost_usd": usage.get("estimated_cost_usd", 0.0),
+        "cost_status": usage.get("cost_status", "unknown"),
+        "cost_source": usage.get("cost_source", "none"),
     }
-    owner._response_was_previewed = False
-    if state.interrupted and owner._interrupt_message:
-        result["interrupt_message"] = owner._interrupt_message
+    ports.clear_response_preview()
+    interrupt_message = ports.interrupt_message()
+    if state.interrupted and interrupt_message:
+        result["interrupt_message"] = interrupt_message
 
-    owner.clear_interrupt()
-    owner._stream_callback = None
+    ports.clear_interrupt()
+    ports.clear_stream_callback()
 
     review_skills = False
     if (
-        owner._skill_nudge_interval > 0
-        and owner._iters_since_skill >= owner._skill_nudge_interval
-        and "skill_manage" in owner.valid_tool_names
+        ports.skill_nudge_interval > 0
+        and ports.iterations_since_skill() >= ports.skill_nudge_interval
+        and "skill_manage" in ports.valid_tool_names
     ):
         review_skills = True
-        owner._iters_since_skill = 0
+        ports.clear_skill_nudge()
 
     if (
-        owner._memory_manager
+        ports.sync_memory
         and state.final_response
         and not state.interrupted
         and original_user_message
     ):
         try:
-            owner._memory_manager.sync_all(
+            ports.sync_memory(
                 original_user_message,
                 state.final_response,
-                session_id=owner.session_id or "",
+                ports.session_id or "",
             )
         except Exception:
             pass
@@ -268,7 +259,7 @@ def finalize_conversation_turn(
         and review_skills
     ):
         try:
-            owner._spawn_background_review(
+            ports.spawn_background_review(
                 messages_snapshot=list(messages),
             )
         except Exception:
@@ -277,11 +268,11 @@ def finalize_conversation_turn(
     try:
         hook(
             "on_session_end",
-            session_id=owner.session_id,
+            session_id=ports.session_id,
             completed=completed,
             interrupted=state.interrupted,
-            model=owner.model,
-            platform=owner.platform or "",
+            model=ports.model,
+            platform=ports.platform or "",
         )
     except Exception as exc:
         logger.warning("on_session_end hook failed: %s", exc)

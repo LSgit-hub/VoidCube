@@ -6,6 +6,7 @@ import pytest
 
 from agent.conversation_turn import ConversationTurnState
 from agent.turn_finalization import (
+    TurnFinalizationPorts,
     derive_turn_diagnostics,
     finalize_conversation_turn,
     last_assistant_reasoning,
@@ -62,6 +63,51 @@ def _owner(events):
         ),
     )
     return owner
+
+
+def _ports(owner):
+    return TurnFinalizationPorts(
+        cleanup_task_resources=owner._cleanup_task_resources,
+        persist_session=owner._session_persistence.persist,
+        model=owner.model,
+        provider=owner.provider,
+        base_url=owner.base_url,
+        session_id=owner.session_id,
+        platform=owner.platform,
+        max_iterations=owner.max_iterations,
+        iteration_budget=owner.iteration_budget,
+        context_compressor=owner.context_compressor,
+        valid_tool_names=owner.valid_tool_names,
+        usage_snapshot=lambda: {
+            "input_tokens": owner.session_input_tokens,
+            "output_tokens": owner.session_output_tokens,
+            "cache_read_tokens": owner.session_cache_read_tokens,
+            "cache_write_tokens": owner.session_cache_write_tokens,
+            "reasoning_tokens": owner.session_reasoning_tokens,
+            "prompt_tokens": owner.session_prompt_tokens,
+            "completion_tokens": owner.session_completion_tokens,
+            "total_tokens": owner.session_total_tokens,
+            "estimated_cost_usd": owner.session_estimated_cost_usd,
+            "cost_status": owner.session_cost_status,
+            "cost_source": owner.session_cost_source,
+        },
+        response_was_previewed=lambda: owner._response_was_previewed,
+        clear_response_preview=lambda: setattr(
+            owner, "_response_was_previewed", False
+        ),
+        interrupt_message=lambda: owner._interrupt_message,
+        clear_interrupt=owner.clear_interrupt,
+        clear_stream_callback=lambda: setattr(owner, "_stream_callback", None),
+        skill_nudge_interval=owner._skill_nudge_interval,
+        iterations_since_skill=lambda: owner._iters_since_skill,
+        clear_skill_nudge=lambda: setattr(owner, "_iters_since_skill", 0),
+        sync_memory=lambda user, response, session_id: owner._memory_manager.sync_all(
+            user,
+            response,
+            session_id=session_id,
+        ),
+        spawn_background_review=owner._spawn_background_review,
+    )
 
 
 def test_turn_diagnostics_identifies_pending_tool_result():
@@ -126,7 +172,7 @@ def test_finalizer_runs_one_ordered_success_sequence():
         events.append(("hook", name, kwargs))
 
     result = finalize_conversation_turn(
-        owner,
+        _ports(owner),
         state=state,
         messages=messages,
         conversation_history=None,
@@ -169,7 +215,7 @@ def test_interrupted_finalization_skips_success_side_effects():
     )
 
     result = finalize_conversation_turn(
-        owner,
+        _ports(owner),
         state=state,
         messages=[{"role": "assistant", "content": "partial"}],
         conversation_history=None,
