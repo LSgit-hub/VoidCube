@@ -117,6 +117,8 @@ def load_config_from_env() -> SystemConfig:
     for env_name, field_name in (
         ("MEMORY_COMPRESSION_INTERVAL", "compression_interval"),
         ("MEMORY_TIER1_RETENTION_DAYS", "tier1_retention_days"),
+        ("MEMORY_TIER2_BATCH_SIZE", "tier2_batch_size"),
+        ("MEMORY_TIER2_SCOPE_TIMEOUT_SECONDS", "tier2_scope_timeout_seconds"),
         ("MEMORY_LIFECYCLE_CADENCE_DAYS", "lifecycle_cadence_days"),
         ("MEMORY_EVENT_TO_SCENE_DAYS", "lifecycle_event_to_scene_days"),
         ("MEMORY_SCENE_TO_ARC_DAYS", "lifecycle_scene_to_arc_days"),

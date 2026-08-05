@@ -130,3 +130,38 @@
 6. 实际规则运行能看到 7 天 Tier 1 候选和持久化 lifecycle cadence 状态。
 
 最终运行结果应记录在本节之后，不得用旧测试结果替代本次修改后的验证。
+
+---
+
+## 七、真实运行复核结果
+
+首次对真实数据库执行规则时，进一步确认 Tier 2 的剩余阻塞并非 LLM 不可用，而是批次级质量策略：
+
+- `event_coverage >= 0.8` 强迫模型覆盖普通说明性对话，与“只提取值得长期保存的事件”冲突；
+- source support、identifier fidelity、polarity consistency 取全批最小值，任一坏事件会拒绝整批；
+- 默认批次 100 导致单 scope 调用过长，companion scope 曾触发 60 秒远端读取超时；
+- scope 失败只写日志，`run-all-rules` 无法指出具体失败域和原因。
+
+最终实现改为：
+
+1. `event_coverage` 仅保留为审计指标，不再作为写入门禁；
+2. 每条 event 独立检查 backlink、source support、identifier fidelity 和 polarity；
+3. 只要存在至少一条完全通过的 event，就过滤坏 event、修剪孤立 scene/arc/epoch 后提交可信结果；
+4. 无任何可信 event、压缩比超限或使用退化管道时，仍拒绝整批并执行有限重试；
+5. 默认批次从 100 降为 25，可用 `MEMORY_TIER2_BATCH_SIZE` 覆盖；
+6. `run-all-rules` 返回每个 scope 的状态、耗时、事件数、错误、质量证据和超时预算信号。
+
+真实数据库最终验证：
+
+| 验证项 | 结果 |
+|--------|------|
+| VoidCube 第一批 25 turns | 9 个原始 event 中提交 7 个，隔离 2 个标识符不可信 event；产生 1 scene / 1 arc / 1 epoch / 10 profiles |
+| VoidCube 第二批 25 turns | 10 个原始 event 中提交 2 个，隔离 8 个不可信 event；产生 1 scene / 1 arc / 1 epoch / 16 profiles |
+| Companion 第一批 25 turns | 3 个 event 全部通过并提交；耗时 25.494 秒，未再超时 |
+| 当前 VoidCube 长期记忆 | 15 event / 2 scene / 2 arc / 2 epoch |
+| Mem LLM | `deepseek-v4-flash`，healthy |
+| Gateway registration | healthy |
+| SQLite | `PRAGMA integrity_check = ok` |
+| 成功后备份 | `memory-20260805T204600-tier2-success.db` |
+
+剩余 Tier 1 记录继续按 25 条批次和退避策略在后台处理，不需要合并 `default` 与 `VoidCube` scope，也不需要绕过任何退役集成策略。

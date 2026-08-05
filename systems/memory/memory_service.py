@@ -426,6 +426,7 @@ class MemoryApplicationService:
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
         self._rule_run_counts: Dict[str, int] = {}
+        self._last_tier2_bridge_result: Dict[str, Any] | None = None
         # P0-4 健康信号: last cycle that did real write work (not just "ran").
         self._last_effective_activity_at: Optional[str] = None
         # LLM status (re-verified each compression cycle, recovers after outage)
@@ -1702,6 +1703,7 @@ class MemoryApplicationService:
             "tier1_retention_days": self.config.tier1_retention_days,
             "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
             "lifecycle_state": lifecycle_state,
+            "tier2_bridge_last_result": self._last_tier2_bridge_result,
             # P0-4 健康信号: last cycle that performed real write work, and the
             # last time LLM health was actually probed. UI computes memory_active
             # from effective_activity_at (not last_run) so no-op cycles don't
@@ -1718,12 +1720,14 @@ class MemoryApplicationService:
             self._db_path, self.config, now=now, logger=logger
         )
 
-    async def _tier2_bridge_cycle(self) -> int:
-        return await run_tier2_bridge_cycle(
+    async def _tier2_bridge_cycle(self) -> Dict[str, Any]:
+        result = await run_tier2_bridge_cycle(
             self._db_path, self.config, request_factory=Tier2CompressRequest,
             compress=self.tier2_compress,
             maintenance_actor=MemoryActor.MEMORY_MAINTENANCE, logger=logger,
         )
+        self._last_tier2_bridge_result = result
+        return result
 
     async def health_check(self):
         return {
@@ -2551,7 +2555,6 @@ class MemoryApplicationService:
             max_turns=self.config.tier1_max_turns,
             pipeline_factory=self._build_compression_pipeline,
             compression_degraded=not self._llm_healthy,
-            min_event_coverage=self.config.tier2_min_event_coverage,
             min_backlink_completeness=self.config.tier2_min_backlink_completeness,
             max_compression_ratio=self.config.tier2_max_compression_ratio,
             max_degraded_fraction=self.config.tier2_max_degraded_fraction,

@@ -355,13 +355,12 @@ class Tier1ToTier2Bridge:
         db_path: str | Path,
         *,
         retention_days: int = 30,
-        batch_size: int = 100,
+        batch_size: int = 25,
         min_relevance: float = 0.1,
         archive_keep_original: bool = True,
         max_turns: int = 10000,
         pipeline_factory: Callable[[], Any] | None = None,
         compression_degraded: bool | None = None,
-        min_event_coverage: float = 0.8,
         min_backlink_completeness: float = 1.0,
         max_compression_ratio: float = 1.0,
         max_degraded_fraction: float = 0.0,
@@ -384,7 +383,6 @@ class Tier1ToTier2Bridge:
         self.pipeline_factory = pipeline_factory
         self.compression_degraded = compression_degraded
         self.quality_thresholds = {
-            "min_event_coverage": min_event_coverage,
             "min_backlink_completeness": min_backlink_completeness,
             "max_compression_ratio": max_compression_ratio,
             "max_degraded_fraction": max_degraded_fraction,
@@ -600,6 +598,8 @@ class Tier1ToTier2Bridge:
         source_support_scores: list[float] = []
         identifier_fidelity_scores: list[float] = []
         polarity_consistency_scores: list[float] = []
+        accepted_event_ids: list[str] = []
+        rejected_event_reasons: dict[str, list[str]] = {}
         unsupported_identifiers: set[str] = set()
         turn_index = {str(turn["turn_id"]): turn for turn in turns}
 
@@ -648,6 +648,23 @@ class Tier1ToTier2Bridge:
                 or _has_explicit_negation(summary) in source_polarities
                 else 0.0
             )
+            event_reasons: list[str] = []
+            event_backlink_completeness = (
+                1.0 if source_turns and source_turns == valid_source_turns else 0.0
+            )
+            if event_backlink_completeness < self.quality_thresholds["min_backlink_completeness"]:
+                event_reasons.append("backlink_completeness")
+            if source_support_scores[-1] < self.quality_thresholds["min_source_support"]:
+                event_reasons.append("source_support")
+            if identifier_fidelity_scores[-1] < self.quality_thresholds["min_identifier_fidelity"]:
+                event_reasons.append("identifier_fidelity")
+            if polarity_consistency_scores[-1] < self.quality_thresholds["min_polarity_consistency"]:
+                event_reasons.append("polarity_consistency")
+            event_id = str(getattr(event, "id", ""))
+            if not event_reasons and event_id:
+                accepted_event_ids.append(event_id)
+            elif event_id:
+                rejected_event_reasons[event_id] = event_reasons
 
         candidate_count = len(turns)
         event_count = len(events)
@@ -659,29 +676,31 @@ class Tier1ToTier2Bridge:
             event_count if tier2_output.get("_compression_degraded") else 0
         )
         degraded_fraction = degraded_event_count / event_count if event_count else 0.0
-        source_support = min(source_support_scores, default=0.0)
-        identifier_fidelity = min(identifier_fidelity_scores, default=0.0)
-        polarity_consistency = min(polarity_consistency_scores, default=0.0)
+        source_support = (
+            sum(source_support_scores) / len(source_support_scores)
+            if source_support_scores else 0.0
+        )
+        identifier_fidelity = (
+            sum(identifier_fidelity_scores) / len(identifier_fidelity_scores)
+            if identifier_fidelity_scores else 0.0
+        )
+        polarity_consistency = (
+            sum(polarity_consistency_scores) / len(polarity_consistency_scores)
+            if polarity_consistency_scores else 0.0
+        )
+        valid_event_fraction = len(accepted_event_ids) / event_count if event_count else 0.0
         source_supported_event_count = sum(
             score >= self.quality_thresholds["min_source_support"]
             for score in source_support_scores
         )
 
         failed_checks: list[str] = []
-        if event_coverage < self.quality_thresholds["min_event_coverage"]:
-            failed_checks.append("event_coverage")
-        if backlink_completeness < self.quality_thresholds["min_backlink_completeness"]:
-            failed_checks.append("backlink_completeness")
         if compression_ratio > self.quality_thresholds["max_compression_ratio"]:
             failed_checks.append("compression_ratio")
         if degraded_fraction > self.quality_thresholds["max_degraded_fraction"]:
             failed_checks.append("degraded_fraction")
-        if source_support < self.quality_thresholds["min_source_support"]:
-            failed_checks.append("source_support")
-        if identifier_fidelity < self.quality_thresholds["min_identifier_fidelity"]:
-            failed_checks.append("identifier_fidelity")
-        if polarity_consistency < self.quality_thresholds["min_polarity_consistency"]:
-            failed_checks.append("polarity_consistency")
+        if not accepted_event_ids:
+            failed_checks.append("no_valid_events")
 
         evaluated_at = datetime.now(timezone.utc).isoformat()
         audit_payload = {
@@ -690,6 +709,10 @@ class Tier1ToTier2Bridge:
             "event_count": event_count,
             "covered_turn_count": len(covered_turn_ids),
             "event_coverage": round(event_coverage, 6),
+            "valid_event_count": len(accepted_event_ids),
+            "valid_event_fraction": round(valid_event_fraction, 6),
+            "accepted_event_ids": accepted_event_ids,
+            "rejected_event_reasons": rejected_event_reasons,
             "backlinked_event_count": backlinked_events,
             "backlink_completeness": round(backlink_completeness, 6),
             "source_chars": source_chars,
@@ -725,6 +748,69 @@ class Tier1ToTier2Bridge:
         ).hexdigest()[:20]
         audit_payload["passed"] = not failed_checks
         return audit_payload
+
+    @staticmethod
+    def _filter_invalid_events(
+        tier2_output: Dict[str, Any],
+        accepted_event_ids: Sequence[str],
+    ) -> None:
+        """Remove bad events and every higher summary they may have influenced."""
+        result = tier2_output.get("_pipeline_result")
+        if result is None:
+            return
+        accepted = {str(item) for item in accepted_event_ids}
+        events = [
+            event
+            for event in getattr(result, "events", [])
+            if str(getattr(event, "id", "")) in accepted
+        ]
+        event_ids = {str(getattr(event, "id", "")) for event in events}
+        original_scene_ids = {
+            str(getattr(scene, "id", ""))
+            for scene in getattr(result, "scenes", [])
+        }
+        scenes = []
+        for scene in getattr(result, "scenes", []):
+            children = {
+                str(item) for item in (getattr(scene, "child_ids", []) or [])
+            }
+            if not children or not children <= event_ids:
+                continue
+            scenes.append(scene)
+        scene_ids = {str(getattr(scene, "id", "")) for scene in scenes}
+        arcs = []
+        for arc in getattr(result, "arcs", []):
+            children = {
+                str(item) for item in (getattr(arc, "child_ids", []) or [])
+            }
+            if not children or not children <= scene_ids:
+                continue
+            arcs.append(arc)
+        arc_ids = {str(getattr(arc, "id", "")) for arc in arcs}
+        epochs = []
+        for epoch in getattr(result, "epochs", []):
+            children = {
+                str(item) for item in (getattr(epoch, "child_ids", []) or [])
+            }
+            if not children or not children <= arc_ids:
+                continue
+            epochs.append(epoch)
+        for profile in getattr(result, "profile_memories", []):
+            profile.parent_timeline_refs = [
+                str(item)
+                for item in (getattr(profile, "parent_timeline_refs", []) or [])
+                if str(item) not in original_scene_ids or str(item) in scene_ids
+            ]
+            profile.evidence_refs = [
+                str(item)
+                for item in (getattr(profile, "evidence_refs", []) or [])
+                if str(item) not in original_scene_ids or str(item) in scene_ids
+            ]
+        result.events, result.scenes, result.arcs, result.epochs = events, scenes, arcs, epochs
+        tier2_output["events"] = [event.to_dict() for event in events]
+        tier2_output["scenes"] = [scene.to_dict() for scene in scenes]
+        tier2_output["arcs"] = [arc.to_dict() for arc in arcs]
+        tier2_output["epochs"] = [epoch.to_dict() for epoch in epochs]
 
     @staticmethod
     def _write_quality_audit(
@@ -996,6 +1082,10 @@ class Tier1ToTier2Bridge:
                 **metadata,
             )
 
+        self._filter_invalid_events(
+            tier2_output,
+            quality_evidence["accepted_event_ids"],
+        )
         try:
             self._commit_tier2_output(candidates, tier2_output, quality_evidence)
         except Exception as exc:
@@ -1066,7 +1156,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tier 1 → Tier 2 Bridge")
     parser.add_argument("--db-path", default=str(get_runtime_layout().memory_db))
     parser.add_argument("--retention-days", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stats", action="store_true")
     args = parser.parse_args()

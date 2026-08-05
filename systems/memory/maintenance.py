@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from systems.memory.database import open_memory_sqlite
@@ -78,7 +79,7 @@ async def run_tier2_bridge_cycle(
     db_path, config: Any, *, request_factory: Callable[..., Any],
     compress: Callable[[Any], Awaitable[dict[str, Any]]], maintenance_actor: Any,
     logger: logging.Logger,
-) -> int:
+) -> dict[str, Any]:
     """Schedule independent Tier 1 to Tier 2 work for every active scope."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=config.tier1_retention_days)).isoformat()
     conn = open_memory_sqlite(db_path)
@@ -94,6 +95,7 @@ async def run_tier2_bridge_cycle(
     finally:
         conn.close()
     processed = 0
+    scope_results: list[dict[str, Any]] = []
     for domain, owner_id, workspace_id, active_count, expired_count in scopes:
         force_oldest = int(active_count or 0) >= config.tier1_max_turns
         if not force_oldest and int(expired_count or 0) == 0:
@@ -105,9 +107,22 @@ async def run_tier2_bridge_cycle(
             memory_actor=maintenance_actor, memory_domain=str(domain),
             owner_id=str(owner_id), workspace_id=str(workspace_id),
         )
+        started = monotonic()
         try:
             result = await compress(request)
-        except Exception:
+        except Exception as exc:
+            elapsed = round(monotonic() - started, 3)
+            scope_results.append({
+                "memory_domain": str(domain),
+                "owner_id": str(owner_id),
+                "workspace_id": str(workspace_id),
+                "status": "failed",
+                "turns_processed": 0,
+                "events_generated": 0,
+                "elapsed_seconds": elapsed,
+                "deadline_exceeded": elapsed > config.tier2_scope_timeout_seconds,
+                "errors": [str(exc)],
+            })
             logger.warning(
                 "Tier 2 bridge scope failed: domain=%s owner=%s workspace=%s",
                 domain, owner_id, workspace_id, exc_info=True,
@@ -115,6 +130,19 @@ async def run_tier2_bridge_cycle(
             continue
         scope_processed = int(result.get("turns_processed", 0) or 0)
         processed += scope_processed
+        elapsed = round(monotonic() - started, 3)
+        scope_results.append({
+            "memory_domain": str(domain),
+            "owner_id": str(owner_id),
+            "workspace_id": str(workspace_id),
+            "status": str(result.get("status") or "unknown"),
+            "turns_processed": scope_processed,
+            "events_generated": int(result.get("events_generated", 0) or 0),
+            "elapsed_seconds": elapsed,
+            "deadline_exceeded": elapsed > config.tier2_scope_timeout_seconds,
+            "errors": list(result.get("errors") or []),
+            "quality_evidence": result.get("quality_evidence"),
+        })
         if result.get("status") != "no_candidates":
             logger.info(
                 "Tier 2 bridge scope: %s - %s turns -> %s events "
@@ -122,4 +150,12 @@ async def run_tier2_bridge_cycle(
                 result.get("status"), scope_processed, result.get("events_generated", 0),
                 domain, owner_id, workspace_id,
             )
-    return processed
+    return {
+        "turns_processed": processed,
+        "scope_count": len(scope_results),
+        "failed_scope_count": sum(
+            item["status"] in {"failed", "quality_rejected", "no_events_generated"}
+            for item in scope_results
+        ),
+        "scopes": scope_results,
+    }

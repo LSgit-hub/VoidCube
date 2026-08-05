@@ -268,7 +268,8 @@ async def test_automatic_compression_schedules_every_scope_and_domain(tmp_path):
     service.tier2_compress = fake_compress  # type: ignore[method-assign]
     processed = await service._tier2_bridge_cycle()
 
-    assert processed == 3
+    assert processed["turns_processed"] == 3
+    assert processed["scope_count"] == 3
     assert set(scheduled) == {
         (domain, owner_id, workspace_id)
         for _, domain, owner_id, workspace_id in scopes

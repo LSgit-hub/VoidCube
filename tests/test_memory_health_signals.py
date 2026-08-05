@@ -56,6 +56,7 @@ def test_memory_timing_defaults_match_weekly_consolidation_policy(tmp_path):
     config = MemoryServiceConfig(db_path=str(tmp_path / "mem.db"))
 
     assert config.tier1_retention_days == 7
+    assert config.tier2_batch_size == 25
     assert config.lifecycle_cadence_days == 7
     assert lifecycle_age_thresholds(config) == (
         (("event", 0), 14),
@@ -854,8 +855,35 @@ async def test_tier2_bridge_cycle_uses_force_oldest_when_max_turns_exceeded(tmp_
 
     processed = await svc._tier2_bridge_cycle()
 
-    assert processed == 2
+    assert processed["turns_processed"] == 2
+    assert processed["scope_count"] == 1
+    assert processed["failed_scope_count"] == 0
     assert captured["force_oldest"] is True
+
+
+@pytest.mark.asyncio
+async def test_tier2_bridge_cycle_surfaces_scope_timeout_error(tmp_path):
+    cfg = MemoryServiceConfig(db_path=str(tmp_path / "mem.db"), tier1_max_turns=1)
+    svc = MemoryService(cfg)
+    await svc.create_session(SessionCreate(session_id="timeout", metadata={}))
+    await svc.add_turn("timeout", TurnCreate(speaker="user", text="durable turn", metadata={}))
+
+    async def fake_tier2_compress(request):
+        return {
+            "status": "failed",
+            "turns_processed": 0,
+            "events_generated": 0,
+            "errors": ["The read operation timed out"],
+        }
+
+    svc.tier2_compress = fake_tier2_compress  # type: ignore[method-assign]
+    result = await svc._tier2_bridge_cycle()
+    status = await svc.rules_status()
+
+    assert result["failed_scope_count"] == 1
+    assert result["scopes"][0]["status"] == "failed"
+    assert result["scopes"][0]["errors"] == ["The read operation timed out"]
+    assert status["tier2_bridge_last_result"] == result
 
 
 @pytest.mark.asyncio
@@ -988,7 +1016,7 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
 @pytest.mark.asyncio
 @pytest.mark.operational
-async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_audits(tmp_path):
+async def test_compression_quality_gate_audits_incomplete_turn_coverage_without_rejecting(tmp_path):
     svc = _make_service(tmp_path)
     svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
@@ -1045,15 +1073,15 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_aud
     finally:
         conn.close()
 
-    assert result["status"] == "quality_rejected"
-    assert result["turns_processed"] == 0
+    assert result["status"] == "compressed"
+    assert result["turns_processed"] == 2
     assert result["quality_evidence"]["event_coverage"] == pytest.approx(0.5)
-    assert result["quality_evidence"]["failed_checks"] == ["event_coverage"]
-    assert active_count == 2
-    assert archive_count == 0
-    assert audit_status == "rejected"
+    assert result["quality_evidence"]["failed_checks"] == []
+    assert active_count == 0
+    assert archive_count == 2
+    assert audit_status == "passed"
     assert event_coverage == pytest.approx(0.5)
-    assert json.loads(failed_checks) == ["event_coverage"]
+    assert json.loads(failed_checks) == []
 
 
 def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
@@ -1225,15 +1253,116 @@ async def test_compression_quality_gate_rejects_semantically_unsupported_summary
         conn.close()
 
     assert result["status"] == "quality_rejected"
-    assert result["quality_evidence"]["failed_checks"] == [
-        "source_support",
-        "identifier_fidelity",
-        "polarity_consistency",
-    ]
+    assert result["quality_evidence"]["failed_checks"] == ["no_valid_events"]
     assert audit[0] == "rejected"
     assert audit[1] < svc.config.tier2_min_source_support
     assert audit[2:4] == (0.0, 0.0)
     assert json.loads(audit[4]) == ["9999"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.operational
+async def test_quality_gate_filters_one_bad_event_and_commits_valid_event(tmp_path):
+    svc = _make_service(tmp_path)
+    svc.config.tier2_max_compression_ratio = 10.0
+    svc._llm_healthy = True
+    await svc.create_session(SessionCreate(session_id="quality-filter", metadata={}))
+    turn = await svc.add_turn(
+        "quality-filter",
+        TurnCreate(
+            speaker="user",
+            text="Deployment decision: use PostgreSQL for the memory database.",
+            metadata={},
+        ),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+
+    def make_event(event_id, title, summary):
+        event = SimpleNamespace(
+            id=event_id,
+            parent_ids=[],
+            event_kind="decision",
+            title=title,
+            summary=summary,
+            timespan_start=now_dt,
+            timespan_end=now_dt,
+            importance=0.8,
+            confidence=0.9,
+            topics=["memory"],
+            entities=["PostgreSQL"],
+            source_turns=[turn["turn_id"]],
+        )
+        event.to_dict = lambda: {
+            "id": event.id,
+            "title": event.title,
+            "summary": event.summary,
+            "source_turns": list(event.source_turns),
+        }
+        return event
+
+    valid = make_event(
+        "event-valid",
+        "Deployment decision",
+        "Use PostgreSQL for the memory database.",
+    )
+    invalid = make_event(
+        "event-invalid",
+        "Fabricated release",
+        "The lunar orchard approved release 9999.",
+    )
+    scene = SimpleNamespace(
+        id="scene-mixed",
+        child_ids=[valid.id, invalid.id],
+        key_events=[valid.id, invalid.id],
+        evidence_refs=[valid.id, invalid.id],
+    )
+    scene.to_dict = lambda: {"id": scene.id, "child_ids": list(scene.child_ids)}
+    arc = SimpleNamespace(
+        id="arc-mixed",
+        child_ids=[scene.id],
+        evidence_refs=[scene.id],
+    )
+    arc.to_dict = lambda: {"id": arc.id, "child_ids": list(arc.child_ids)}
+    epoch = SimpleNamespace(
+        id="epoch-mixed",
+        child_ids=[arc.id],
+        evidence_refs=[arc.id],
+    )
+    epoch.to_dict = lambda: {"id": epoch.id, "child_ids": list(epoch.child_ids)}
+
+    class _MixedPipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[valid, invalid],
+                scenes=[scene],
+                arcs=[arc],
+                epochs=[epoch],
+                profile_memories=[],
+            )
+
+    svc._build_compression_pipeline = lambda: _MixedPipeline()  # type: ignore[method-assign]
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        memories = conn.execute(
+            "SELECT summary FROM compressed_memories WHERE memory_domain = 'agent_interaction'"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert result["status"] == "compressed"
+    assert result["events_generated"] == 1
+    assert result["scenes_generated"] == 0
+    assert result["arcs_generated"] == 0
+    assert result["epochs_generated"] == 0
+    assert result["quality_evidence"]["valid_event_fraction"] == pytest.approx(0.5)
+    assert result["quality_evidence"]["rejected_event_reasons"]["event-invalid"]
+    summaries = [summary for (summary,) in memories]
+    assert "Use PostgreSQL for the memory database." in summaries
+    assert all("lunar orchard" not in summary for summary in summaries)
 
 
 @pytest.mark.asyncio
