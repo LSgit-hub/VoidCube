@@ -42,6 +42,7 @@ from VoidCube_core.constants import get_VoidCube_home
 from VoidCube_app.environment import load_VoidCube_dotenv
 from VoidCube_app.interaction_contract import ClarificationSink
 from VoidCube_app.tool_events import ToolEvent, ToolEventSink
+from systems.memory.scope import CLI_WORKSPACE_ID
 
 _VoidCube_home = get_VoidCube_home()
 _project_env = Path(__file__).parent / '.env'
@@ -661,8 +662,6 @@ class AIAgent:
                     "VoidCube_home": str(_ghh()),
                     "agent_context": "primary",
                 }
-                from systems.memory.scope import CLI_WORKSPACE_ID
-
                 _init_kwargs["agent_workspace"] = CLI_WORKSPACE_ID
                 if self._user_id:
                     _init_kwargs["user_id"] = self._user_id
