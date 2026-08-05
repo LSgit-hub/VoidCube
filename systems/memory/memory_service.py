@@ -617,11 +617,10 @@ class MemoryApplicationService:
             logger.info(
                 "Compression lifecycle: %d escalated, %d purged", escalated, purged
             )
-        return {
-            "escalated": escalated,
-            "purged": purged,
-            "quality_rejected": quality_rejected,
-        }
+        result = {"escalated": escalated, "purged": purged}
+        if quality_rejected:
+            result["quality_rejected"] = quality_rejected
+        return result
 
     async def _llm_escalate_summary(
         self, *, mem_id: str, title: str, summary: str,
