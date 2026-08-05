@@ -232,6 +232,17 @@ def normalize_text(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
 
 
+def _contains_current_state_marker(normalized: str) -> bool:
+    """Match Chinese markers as phrases and English markers as whole words."""
+    for marker in _CURRENT_STATE_MARKERS:
+        if re.search(r"[a-z]", marker):
+            if re.search(rf"\b{re.escape(marker)}\b", normalized):
+                return True
+        elif marker in normalized:
+            return True
+    return False
+
+
 def build_recall_plan(
     query: str,
     *,
@@ -306,9 +317,7 @@ def build_recall_plan(
         intent=intent,
         temporal_intent=temporal_intent,
         as_of=_optional_text(as_of),
-        current_state_intent=any(
-            marker in normalized for marker in _CURRENT_STATE_MARKERS
-        ),
+        current_state_intent=_contains_current_state_marker(normalized),
     )
 
 

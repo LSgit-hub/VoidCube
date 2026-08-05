@@ -178,6 +178,124 @@ def test_semantic_index_rebuilds_scope_without_content_change(tmp_path):
     )
 
 
+def test_semantic_index_skips_embedding_for_stale_snapshot(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(service, turn_id="stale", text="old database migration")
+
+    def transport(texts):
+        conn = open_memory_sqlite(service._db_path)
+        try:
+            conn.execute(
+                "UPDATE turns SET text = ? WHERE turn_id = ?",
+                ("new unrelated content", "stale"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return _vectors(texts)
+
+    index = SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(
+            enabled=True,
+            provider="test-provider",
+            model="test-embedding-v2",
+            dimensions=3,
+        ),
+        transport=transport,
+    )
+
+    assert index.index_pending() == 0
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM memory_embeddings").fetchone()[0] == 0
+    finally:
+        conn.close()
+    assert index.index_pending() == 1
+
+
+def test_semantic_index_serializes_concurrent_backfills(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(service, turn_id="concurrent", text="database migration")
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def transport(texts):
+        calls.append(list(texts))
+        entered.set()
+        release.wait(timeout=2)
+        return _vectors(texts)
+
+    index = SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(
+            enabled=True,
+            provider="test-provider",
+            model="test-embedding-v2",
+            dimensions=3,
+        ),
+        transport=transport,
+    )
+    results = []
+    first = threading.Thread(target=lambda: results.append(index.index_pending()))
+    second = threading.Thread(target=lambda: results.append(index.index_pending()))
+    first.start()
+    assert entered.wait(timeout=2)
+    second.start()
+    release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert sorted(results) == [0, 1]
+    assert len(calls) == 1
+
+
+def test_native_vec0_refresh_uses_existing_embedding_rowid(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(service, turn_id="vec0-refresh", text="database migration")
+    index = _index(service)
+    if not index._vec0_ready:
+        pytest.skip("sqlite-vec extension is not available")
+
+    assert index.index_pending() == 1
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        metadata_rowid = conn.execute(
+            "SELECT rowid FROM memory_embeddings WHERE memory_id = ?",
+            ("vec0-refresh",),
+        ).fetchone()[0]
+        vec_rowid = conn.execute(
+            "SELECT rowid FROM memory_embeddings_vec WHERE rowid = ?",
+            (metadata_rowid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert vec_rowid == metadata_rowid
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET text = ? WHERE turn_id = ?",
+            ("private-b", "vec0-refresh"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert index.index_pending() == 1
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        refreshed_rowid = conn.execute(
+            "SELECT rowid FROM memory_embeddings_vec WHERE rowid = ?",
+            (metadata_rowid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert refreshed_rowid == metadata_rowid
+
+
 @pytest.mark.asyncio
 async def test_semantic_recall_hydrates_nonlexical_match_and_respects_scope(tmp_path):
     service = _service(tmp_path)

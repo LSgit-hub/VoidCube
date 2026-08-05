@@ -187,7 +187,7 @@ def load_voidcube_mem_model_config() -> MemModelConfig:
 
 def load_voidcube_mem_model_config_set() -> MemModelConfigSet:
     try:
-        from VoidCube_cli.config import load_config
+        from VoidCube_app.config import load_config
 
         return MemModelConfigSet.from_voidcube_config(load_config())
     except Exception:
@@ -266,7 +266,7 @@ def resolve_mem_llm_client(role: str = "default"):
 def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
     if mem_cfg.api_key_env:
         try:
-            from VoidCube_cli.config import get_env_value
+            from VoidCube_app.config import get_env_value
 
             raw_api_key = get_env_value(mem_cfg.api_key_env) or ""
         except Exception:
@@ -282,7 +282,7 @@ def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
         return ""
 
     try:
-        from VoidCube_cli.auth import resolve_api_key_provider_credentials
+        from VoidCube_app.provider_auth import resolve_api_key_provider_credentials
 
         creds = resolve_api_key_provider_credentials(provider) or {}
         api_key = _first_usable_secret(str(creds.get("api_key") or ""))
@@ -309,7 +309,7 @@ def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
 
 def _first_usable_secret(*values: object) -> str:
     try:
-        from VoidCube_cli.auth import has_usable_secret
+        from VoidCube_app.provider_auth import has_usable_secret
     except Exception:
         def has_usable_secret(value: str) -> bool:  # type: ignore[no-redef]
             return bool(str(value or "").strip())

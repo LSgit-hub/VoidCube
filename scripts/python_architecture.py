@@ -21,7 +21,7 @@ SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}
 FRONTEND_PACKAGE_NAMES = {"VoidCube_cli", "VoidCube_windows"}
 
 P0_LINE_BASELINES = {
-    "run_agent.py": 5_364,
+    "run_agent.py": 5_370,
     "VoidCube_cli/app.py": 6_245,
     "VoidCube_cli/main.py": 15,
     "systems/memory/memory_service.py": 3_955,

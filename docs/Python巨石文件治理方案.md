@@ -1,6 +1,6 @@
 # VoidCube Python 巨石文件治理方案
 
-> 当前状态：Stage 0 至 Stage 7 已完成，Stage 8 进行中；Stage 8-A 已形成客户端启动、session persistence bootstrap 和 turn finalization ports，Windows adapter 继续保持 No-Go。
+> 当前状态：Stage 0 至 Stage 8 已完成；三个 P0 边界已完成 owner 收口、生产调用者切换、旧逻辑清理和总验收，Windows adapter 继续保持 No-Go。
 > 当前快照：2026-08-05。
 > 文档定位：治理基线、目标边界、阶段退出条件和当前状态快照；不记录实施日志。
 
@@ -77,9 +77,9 @@ CLI 的 slash command 只是输入映射，不是共享 API；Windows 控件直�
 
 | 边界 | 当前判断 | 阶段 |
 | --- | --- | --- |
-| `run_agent.py` | 客户端启动和 session persistence bootstrap 已有显式 owner；会话循环与输出协调仍有跨责任聚合 | P0，Stage 8-A |
-| `systems/memory/memory_service.py` | 数据库装配、schema/migration、服务入口和 use case 边界仍需收口 | P0，Stage 8-B |
-| `VoidCube_cli/main.py` | 参数解析、命令注册、配置初始化和 dispatch 仍聚合在入口 | P0，Stage 8-C |
+| `run_agent.py` | 客户端启动、session persistence bootstrap 和 turn 内输出/持久化协调已由显式 runtime 与 ports 承担；会话循环保留为编排根并受增长护栏约束 | 已收口，Stage 8-A |
+| `systems/memory/memory_service.py` | 数据库装配/schema/migration、Memory use case 和 HTTP adapter 已分离，服务类仅作 FastAPI/uvicorn 组合根 | 已收口，Stage 8-B |
+| `VoidCube_cli/main.py` | 参数解析、命令注册、配置初始化和 dispatch 已拆为独立 entrypoint owner，入口仅作组合根 | 已收口，Stage 8-C |
 | `systems/gateway/internal_gateway.py` | registry、auth、session lease、projection 和 route 边界可观察，尚未达到升级条件 | P1，观察 |
 | `VoidCube_cli/app.py`、Planning、Endogenous | 主要 owner 已收口，维持防回迁护栏 | 已收口 |
 | Supervisor UI runtime 与静态资源 | UI 状态、SSE、身份代理、媒体生命周期和资源加载已有明确 owner | 已收口 |
@@ -127,7 +127,7 @@ Stage 8 只处理三个当前 P0 边界，顺序固定为 A → B → C。每个
 
 目标是形成可独立测试的 Agent 初始化/客户端生命周期或会话准备责任边界，并使会话循环通过显式 runtime、输出和持久化 ports 协作。不得把整个 `AIAgent` 原样搬到另一个聚合文件，也不得复制已有 `VoidCube_app` turn contract。
 
-当前状态：进行中。客户端凭证解析、primary client bootstrap、会话 ID、session DB 初始登记、checkpoint 和 `SessionPersistence` 组合已由显式 runtime 承担；turn finalization 已通过显式输出/持久化 ports 调用，循环内的中间恢复写入仍未收口。
+当前状态：已完成。客户端凭证解析、primary client bootstrap、会话 ID、session DB 初始登记、checkpoint、turn 内中间持久化、截断/失败/中断结果和 `SessionPersistence` 组合均由显式 runtime 或 ports 承担；会话循环只保留生命周期编排。
 
 必须满足：
 
@@ -139,6 +139,8 @@ Stage 8 只处理三个当前 P0 边界，顺序固定为 A → B → C。每个
 退出条件：Agent 生命周期或会话准备可脱离完整 CLI 测试；turn、工具事件、取消、恢复、输出和持久化语义无变化；依赖图没有新增反向边或聚合巨石。
 
 ### Stage 8-B：Memory Service
+
+当前状态：已完成。`MemoryDatabaseBootstrap` 统一连接、schema、legacy migration、备份和 subsystem setup；`MemoryApplicationService` 持有可脱离 HTTP 的 use case，`http_adapter.py` 持有路由组合，`MemoryService` 仅作 FastAPI/uvicorn 组合根。
 
 目标是分离数据库连接/装配、schema 与 migration owner，使 HTTP route 和 memory use case 只通过明确服务或 repository 调用，同时保持 recall、governance、backup、maintenance 和现有 Memory 真相边界。
 
@@ -153,6 +155,8 @@ Stage 8 只处理三个当前 P0 边界，顺序固定为 A → B → C。每个
 
 ### Stage 8-C：`VoidCube_cli/main.py`
 
+当前状态：已完成。parser 注册、启动初始化、provider/session/operation/management handler 和 dispatch 已迁移到独立 entrypoint 模块，`main.py` 只保留 parser/dispatch 组合入口。
+
 目标是将入口收口为参数解析、命令注册、配置/环境初始化、dispatch 和退出码映射的薄组合根。
 
 必须满足：
@@ -166,7 +170,7 @@ Stage 8 只处理三个当前 P0 边界，顺序固定为 A → B → C。每个
 
 ### Stage 8 总验收
 
-三个子阶段全部满足退出条件后，重新执行 Stage 7 的验证门槛并更新本方案的当前快照。只有总验收通过，Stage 8 才能标记为已完成；在此之前不得启动 Windows adapter。
+状态：已完成。三个子阶段均已满足退出条件；相关回归、架构依赖检查、生产编译、Gateway/Memory/Supervisor smoke、wheel 契约、source-to-artifact parity 和退役集成扫描均已纳入验收。Windows adapter 仍不在本阶段范围内。
 
 ## 8. 每个阶段的固定工作方式
 
@@ -193,14 +197,10 @@ CLI 和未来 Windows 应用共享版本、配置 schema、数据迁移、reposi
 - 静态资源、wheel、平台依赖和共享事件契约满足双发行约束；
 - 退役集成在活跃代码、可加载技能和 wheel 中保持零入口，且没有迁移遗留的大规模双路径兼容层。
 
-当前判定：**No-Go**。Stage 8 未完成前，不实现 `VoidCube_windows`，不引入桌面依赖，不重新决定后台传输或进程模型。
+当前判定：**No-Go**。Stage 8 已完成，但 Windows adapter 仍需单独完成 ADR、共享应用层 contract 和平台边界评审；在该评审通过前不实现 `VoidCube_windows`，不引入桌面依赖，不重新决定后台传输或进程模型。
 
 ## 10. 当前快照与下一步
 
-当前缺口只有三项：
+当前快照：Stage 8 总验收已完成。`run_agent.py`、Memory Service 和 `VoidCube_cli/main.py` 的生产调用者已切换到明确 owner，旧初始化、迁移、路由和入口聚合逻辑已清理；P0 增长护栏冻结当前编排根规模并禁止新增超大方法。
 
-- `run_agent.py` 的循环内中间恢复写入与会话协调仍需形成显式 owner；客户端启动、session persistence bootstrap 和 turn finalization ports 已收口；
-- Memory Service 的 schema/migration 与 HTTP/use case 边界仍需收口；
-- `VoidCube_cli/main.py` 的命令注册、参数解析和 dispatch 仍需拆离入口。
-
-下一步继续 Stage 8-A：收口会话循环中的输出/持久化协调，定义不依赖完整 `AIAgent` 的显式 ports 和结构化结果，再切换生产调用者并清理旧路径。
+下一步：重新评审 Windows adapter 的 ADR、共享 `VoidCube_app` contract、平台资源/依赖隔离和进程边界。评审通过前保持 No-Go，不实现 `VoidCube_windows`。

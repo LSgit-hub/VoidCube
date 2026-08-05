@@ -1111,6 +1111,15 @@ def test_build_recall_plan_detects_current_state_intent():
     assert past.current_state_intent is False
 
 
+@pytest.mark.parametrize(
+    "query",
+    ["unknown provider", "knowledge update", "nowadays settings"],
+)
+def test_build_recall_plan_does_not_match_current_state_substrings(query):
+    plan = build_recall_plan(query)
+    assert plan.current_state_intent is (query == "nowadays settings")
+
+
 @pytest.mark.asyncio
 async def test_explicit_month_window_filters_to_in_window_memory(tmp_path):
     service = _service(tmp_path)

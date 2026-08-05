@@ -14,7 +14,8 @@ import json
 import logging
 import math
 import struct
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -146,12 +147,15 @@ class SemanticMemoryIndex:
         ):
             from systems.memory.local_embedding import CharNgramEmbedder
 
+            if self.config.dimensions is not None and self.config.dimensions < 64:
+                self.config = replace(self.config, dimensions=64)
             self._transport = CharNgramEmbedder(
                 dimensions=self.config.dimensions or 256
             )
             self._local_fallback = True
         self._last_error = ""
         self._vec0_ready = False  # set by _setup_table when vec0 loads
+        self._index_lock = threading.Lock()
         self._setup_table()
 
     @property
@@ -178,6 +182,10 @@ class SemanticMemoryIndex:
         }
 
     def index_pending(self, limit: int | None = None) -> int:
+        with self._index_lock:
+            return self._index_pending_locked(limit)
+
+    def _index_pending_locked(self, limit: int | None) -> int:
         if not self.enabled:
             return 0
         records = self._pending_records(
@@ -190,11 +198,20 @@ class SemanticMemoryIndex:
             if len(vectors) != len(records):
                 raise ValueError("Embedding response count does not match input count")
             conn = open_memory_sqlite(self.db_path)
+            indexed = 0
             try:
                 now = datetime.now(timezone.utc).isoformat()
                 vec0 = _vec0_available(conn)
                 for record, vector in zip(records, vectors):
                     source_type, memory_id, owner_id, workspace_id, memory_domain, content = record
+                    current_hash = self._source_content_hash(
+                        conn,
+                        source_type,
+                        memory_id,
+                        memory_domain,
+                    )
+                    if current_hash != _content_hash(content):
+                        continue
                     self._validate_vector(vector)
                     conn.execute(
                         "INSERT INTO memory_embeddings "
@@ -222,20 +239,67 @@ class SemanticMemoryIndex:
                         ),
                     )
                     if vec0:
-                        rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                        rowid = conn.execute(
+                            "SELECT rowid FROM memory_embeddings WHERE "
+                            "source_type = ? AND memory_id = ? AND memory_domain = ? "
+                            "AND provider = ? AND model = ?",
+                            (
+                                source_type,
+                                memory_id,
+                                memory_domain,
+                                self.config.provider,
+                                self.config.model,
+                            ),
+                        ).fetchone()[0]
                         conn.execute(
                             f"INSERT OR REPLACE INTO {_VEC0_TABLE} (rowid, embedding) "
                             f"VALUES (?, ?)",
                             (rowid, _vector_blob(vector)),
                         )
+                    indexed += 1
                 conn.commit()
             finally:
                 conn.close()
             self._last_error = ""
-            return len(records)
+            return indexed
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             return 0
+
+    @staticmethod
+    def _source_content_hash(
+        conn,
+        source_type: str,
+        memory_id: str,
+        memory_domain: str,
+    ) -> str | None:
+        source_queries = {
+            "turn": (
+                "SELECT COALESCE(text, '') FROM turns "
+                "WHERE turn_id = ? AND memory_domain = ? AND compressed_to_tier2 = 0"
+            ),
+            "archive": (
+                "SELECT COALESCE(original_text, text_summary, '') FROM turns_archive "
+                "WHERE turn_id = ? AND memory_domain = ?"
+            ),
+            "compressed": (
+                "SELECT COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
+                "COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
+                "FROM compressed_memories WHERE memory_id = ? AND memory_domain = ? "
+                "AND status = 'active' AND hidden = 0"
+            ),
+            "profile": (
+                "SELECT COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
+                "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
+                "FROM profile_memories WHERE memory_id = ? AND memory_domain = ? "
+                "AND status = 'active'"
+            ),
+        }
+        query = source_queries.get(source_type)
+        if query is None:
+            return None
+        row = conn.execute(query, (memory_id, memory_domain)).fetchone()
+        return _content_hash(str(row[0] or "")) if row is not None else None
 
     def search(
         self,

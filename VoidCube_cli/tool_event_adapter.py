@@ -46,6 +46,7 @@ def _project_completed(
 ) -> None:
     host._tool_start_time = 0.0
     host._current_tool_name = ""
+    host._spinner_text = ""
     if (
         getattr(host, "_autonomous_gate_active", False)
         and getattr(host, "_current_autonomous_task", None)

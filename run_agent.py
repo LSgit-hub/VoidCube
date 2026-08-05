@@ -119,7 +119,6 @@ from agent.context_compressor import (
     execute_context_recovery,
 )
 from agent.api_attempt import ApiAttemptState
-from agent.auxiliary_client import resolve_provider_client
 from agent.client_lifecycle import ChatClientLifecycle
 from agent.client_initialization import (
     AgentClientInitializationPorts,
@@ -197,6 +196,13 @@ from VoidCube_core.utils import env_var_enabled
 
 
 from agent.stream_handler import _SafeWriter
+
+
+def _resolve_provider_client(*args: Any, **kwargs: Any) -> Any:
+    """Load the auxiliary provider router only when an agent is constructed."""
+    from agent.auxiliary_client import resolve_provider_client
+
+    return resolve_provider_client(*args, **kwargs)
 
 
 def _install_safe_stdio() -> None:
@@ -490,7 +496,7 @@ class AIAgent:
                 model=self.model,
                 acp_command=self.acp_command,
                 acp_args=self.acp_args,
-                provider_client_resolver=resolve_provider_client,
+                provider_client_resolver=_resolve_provider_client,
                 lifecycle_factory=ChatClientLifecycle,
                 provider_reader=lambda: self.provider or "",
                 model_reader=lambda: self.model or "",

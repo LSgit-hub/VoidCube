@@ -175,9 +175,9 @@ def test_mem_model_config_repairs_stale_openai_key_env_when_provider_changed() -
 def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda _key: "")
+    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
     monkeypatch.setattr(
-        "VoidCube_cli.auth.resolve_api_key_provider_credentials",
+        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
         lambda _provider: {},
     )
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda _provider: None)
@@ -206,9 +206,9 @@ def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(mo
 
 def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda _key: "")
+    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
     monkeypatch.setattr(
-        "VoidCube_cli.auth._load_auth_store",
+        "VoidCube_app.provider_auth._load_auth_store",
         lambda: {"deepseek": {"api_key": "sk-deepseek-auth-store-token-123456"}},
     )
 
@@ -227,7 +227,7 @@ def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> N
 def test_resolve_mem_api_key_reads_selected_voidcube_env_value(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(
-        "VoidCube_cli.config.get_env_value",
+        "VoidCube_app.config.get_env_value",
         lambda key: "sk-deepseek-dotenv-token-123456789" if key == "DEEPSEEK_API_KEY" else "",
     )
 
@@ -245,10 +245,10 @@ def test_resolve_mem_api_key_reads_selected_voidcube_env_value(monkeypatch) -> N
 
 def test_resolve_mem_api_key_does_not_read_user_chat_provider(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda _key: "")
+    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda _provider: None)
     monkeypatch.setattr(
-        "VoidCube_cli.auth._load_auth_store",
+        "VoidCube_app.provider_auth._load_auth_store",
         lambda: {"agnes-ai": {"api_key": "sk-agnes-user-chat-token-123456"}},
     )
 
@@ -267,7 +267,7 @@ def test_resolve_mem_api_key_does_not_read_user_chat_provider(monkeypatch) -> No
 def test_resolve_mem_api_key_ignores_placeholder_env(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-your-key-here")
     monkeypatch.setattr(
-        "VoidCube_cli.auth._load_auth_store",
+        "VoidCube_app.provider_auth._load_auth_store",
         lambda: {"deepseek": {"api_key": "sk-real-deepseek-token-123456789"}},
     )
 

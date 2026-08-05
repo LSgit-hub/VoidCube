@@ -58,6 +58,17 @@ def test_semantic_index_defaults_to_local_fallback(tmp_path):
     assert index.config.provider == ""
 
 
+def test_local_embedding_normalizes_dimensions_to_supported_minimum(tmp_path):
+    service = _service(tmp_path)
+    index = SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(enabled=True, provider="local", dimensions=32),
+    )
+
+    assert index.config.dimensions == 64
+    assert len(index._embed(["dimension check"])[0]) == 64
+
+
 def _service(tmp_path) -> MemoryService:
     return MemoryService(
         MemoryServiceConfig(
