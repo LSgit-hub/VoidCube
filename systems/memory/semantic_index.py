@@ -520,7 +520,7 @@ class SemanticMemoryIndex:
                         conn.execute(
                             f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
                             "BEGIN "
-                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ("
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ("
                             "SELECT rowid FROM memory_embeddings WHERE source_type = "
                             f"'{source_type}' AND memory_id = OLD.{id_column} "
                             "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
@@ -540,7 +540,7 @@ class SemanticMemoryIndex:
                             "OR OLD.workspace_id IS NOT NEW.workspace_id "
                             "OR OLD.memory_domain IS NOT NEW.memory_domain "
                             "BEGIN "
-                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid = ("
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ("
                             "SELECT rowid FROM memory_embeddings WHERE source_type = "
                             f"'{source_type}' AND memory_id = OLD.{id_column} "
                             "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "

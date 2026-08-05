@@ -158,6 +158,8 @@ def _discover_tools():
         "tools.media_generation_tool",
         # Ops: Server operations tools (registered via ops_register)
         "tools.ops_register",
+        # Bootstrap / environment dependency checker
+        "tools.dependency_checker",
     ]
     import importlib
     for mod_name in _modules:

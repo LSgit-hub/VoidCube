@@ -58,6 +58,7 @@ from systems.memory.recall import (
 )
 from systems.memory.database import MemoryDatabaseBootstrap, open_memory_sqlite
 from systems.memory.http_adapter import build_memory_http_app
+from systems.memory.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -540,7 +541,7 @@ class MemoryApplicationService:
                 )
 
                 parent_id = str(
-                        uuid.uuid5(
+                    uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         "voidcube-memory-lifecycle:"
                         f"{owner_id}:{workspace_id}:{memory_domain}:{mem_id}:{next_level}",
@@ -1643,165 +1644,16 @@ class MemoryApplicationService:
         }
 
     async def _tier1_decay_cycle(self, *, now: datetime | None = None) -> int:
-        """Apply elapsed-time-based exponential decay to Tier 1 turns.
-
-        Returns the number of turns actually updated, so the caller can tell a
-        real maintenance write apart from a no-op cycle (P0-4 健康信号).
-        """
-        conn = open_memory_sqlite(self._db_path)
-        rate = float(self.config.tier1_decay_rate)
-        interval_seconds = float(self.config.decay_interval_hours) * 3600.0
-        if interval_seconds <= 0:
-            conn.close()
-            raise ValueError("decay_interval_hours must be greater than zero")
-        if not 0.0 <= rate <= 1.0:
-            conn.close()
-            raise ValueError("tier1_decay_rate must be between zero and one")
-
-        local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
-        reference_time = now or datetime.now().astimezone()
-        if reference_time.tzinfo is None:
-            reference_time = reference_time.replace(tzinfo=local_timezone)
-        reference_utc = reference_time.astimezone(timezone.utc)
-        reference_iso = reference_time.isoformat()
-        updates: list[tuple[float, str, str, str, str, str]] = []
-
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                "SELECT turn_id, relevance_score, timestamp, last_decay_at, "
-                "owner_id, workspace_id, memory_domain "
-                "FROM turns WHERE compressed_to_tier2 = 0"
-            ).fetchall()
-            for (
-                turn_id,
-                relevance_score,
-                timestamp,
-                last_decay_at,
-                owner_id,
-                workspace_id,
-                memory_domain,
-            ) in rows:
-                anchor_value = last_decay_at or timestamp
-                try:
-                    anchor = datetime.fromisoformat(anchor_value)
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Skipping Tier 1 decay for turn %s: invalid decay anchor %r",
-                        turn_id,
-                        anchor_value,
-                    )
-                    continue
-                if anchor.tzinfo is None:
-                    anchor = anchor.replace(tzinfo=local_timezone)
-                elapsed_seconds = (
-                    reference_utc - anchor.astimezone(timezone.utc)
-                ).total_seconds()
-                if elapsed_seconds <= 0:
-                    continue
-                elapsed_intervals = elapsed_seconds / interval_seconds
-                decayed_score = float(relevance_score or 0.0) * (
-                    rate ** elapsed_intervals
-                )
-                updates.append(
-                    (
-                        decayed_score,
-                        reference_iso,
-                        turn_id,
-                        owner_id,
-                        workspace_id,
-                        memory_domain,
-                    )
-                )
-
-            if updates:
-                conn.executemany(
-                    "UPDATE turns SET relevance_score = ?, last_decay_at = ? "
-                    "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
-                    "AND memory_domain = ? AND compressed_to_tier2 = 0",
-                    updates,
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-        updated = len(updates)
-        if updated:
-            logger.debug(
-                "Tier 1 decay applied to %d turns (rate=%.3f per %.1f hours)",
-                updated,
-                rate,
-                self.config.decay_interval_hours,
-            )
-        return updated
+        return await run_tier1_decay_cycle(
+            self._db_path, self.config, now=now, logger=logger
+        )
 
     async def _tier2_bridge_cycle(self) -> int:
-        """Auto-trigger fair Tier 1→Tier 2 compression for every active scope.
-
-        Returns the number of turns actually processed into Tier 2 (0 on a
-        no-candidate no-op), so the caller can distinguish real compression
-        work from an idle cycle (P0-4 健康信号).
-        """
-        conn = open_memory_sqlite(self._db_path)
-        cutoff = (
-            datetime.now(timezone.utc)
-            - timedelta(days=self.config.tier1_retention_days)
-        ).isoformat()
-        try:
-            scopes = conn.execute(
-                "SELECT memory_domain, owner_id, workspace_id, COUNT(*), "
-                "SUM(CASE WHEN timestamp < ? THEN 1 ELSE 0 END) "
-                "FROM turns WHERE compressed_to_tier2 = 0 "
-                "GROUP BY memory_domain, owner_id, workspace_id "
-                "ORDER BY memory_domain, owner_id, workspace_id",
-                (cutoff,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-        processed = 0
-        for domain, owner_id, workspace_id, active_count, expired_count in scopes:
-            force_oldest = int(active_count or 0) >= self.config.tier1_max_turns
-            if not force_oldest and int(expired_count or 0) == 0:
-                continue
-            req = Tier2CompressRequest(
-                retention_days=self.config.tier1_retention_days,
-                batch_size=50,
-                min_relevance=self.config.tier1_min_relevance,
-                force_oldest=force_oldest,
-                memory_actor=MemoryActor.MEMORY_MAINTENANCE,
-                memory_domain=str(domain),
-                owner_id=str(owner_id),
-                workspace_id=str(workspace_id),
-            )
-            try:
-                result = await self.tier2_compress(req)
-            except Exception:
-                logger.warning(
-                    "Tier 2 bridge scope failed: domain=%s owner=%s workspace=%s",
-                    domain,
-                    owner_id,
-                    workspace_id,
-                    exc_info=True,
-                )
-                continue
-            scope_processed = int(result.get("turns_processed", 0) or 0)
-            processed += scope_processed
-            if result.get("status") != "no_candidates":
-                logger.info(
-                    "Tier 2 bridge scope: %s - %s turns -> %s events "
-                    "(domain=%s owner=%s workspace=%s)",
-                    result.get("status"),
-                    scope_processed,
-                    result.get("events_generated", 0),
-                    domain,
-                    owner_id,
-                    workspace_id,
-                )
-        return processed
+        return await run_tier2_bridge_cycle(
+            self._db_path, self.config, request_factory=Tier2CompressRequest,
+            compress=self.tier2_compress,
+            maintenance_actor=MemoryActor.MEMORY_MAINTENANCE, logger=logger,
+        )
 
     async def health_check(self):
         return {
@@ -2195,8 +2047,13 @@ class MemoryApplicationService:
             if turn_ids.get("user"):
                 user_turn = conn.execute(
                     "SELECT text, timestamp FROM turns WHERE turn_id = ? "
-                    "AND owner_id = ? AND workspace_id = ?",
-                    (turn_ids["user"], scope.owner_id, scope.workspace_id),
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (
+                        turn_ids["user"],
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                    ),
                 ).fetchone()
                 if user_turn:
                     capture = capture_explicit_user_profile(
@@ -3719,8 +3576,9 @@ class MemoryApplicationService:
             )
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM compressed_memories WHERE memory_id = ?",
-                (memory_id,),
+                "SELECT * FROM compressed_memories WHERE memory_id = ? "
+                "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
             ).fetchone()
         finally:
             conn.close()

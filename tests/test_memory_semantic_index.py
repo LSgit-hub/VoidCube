@@ -100,6 +100,79 @@ def test_semantic_index_excludes_founding_identity(tmp_path):
     assert indexed == 0
 
 
+def test_semantic_index_primary_key_contains_full_scope(tmp_path):
+    service = _service(tmp_path)
+    _index(service)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        table_info = conn.execute("PRAGMA table_info(memory_embeddings)").fetchall()
+    finally:
+        conn.close()
+
+    primary_key = [
+        str(row[1])
+        for row in sorted(table_info, key=lambda item: int(item[5] or 0))
+        if int(row[5] or 0) > 0
+    ]
+    assert primary_key == [
+        "source_type",
+        "memory_id",
+        "owner_id",
+        "workspace_id",
+        "memory_domain",
+        "provider",
+        "model",
+    ]
+
+
+def test_semantic_index_rebuilds_legacy_scope_primary_key(tmp_path):
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute("DROP TABLE memory_embeddings")
+        conn.execute(
+            "CREATE TABLE memory_embeddings ("
+            "source_type TEXT NOT NULL, memory_id TEXT NOT NULL, "
+            "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
+            "memory_domain TEXT NOT NULL, content_hash TEXT NOT NULL, "
+            "provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, "
+            "vector TEXT NOT NULL, updated_at TEXT NOT NULL, "
+            "PRIMARY KEY(source_type, memory_id, memory_domain, provider, model))"
+        )
+        conn.execute(
+            "INSERT INTO memory_embeddings VALUES "
+            "('turn', 'legacy', 'owner-a', 'workspace-a', 'agent_interaction', "
+            "'hash', 'test-provider', 'test-model', 3, '[1,0,0]', 'now')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _index(service)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        table_info = conn.execute("PRAGMA table_info(memory_embeddings)").fetchall()
+        row_count = conn.execute("SELECT COUNT(*) FROM memory_embeddings").fetchone()[0]
+    finally:
+        conn.close()
+
+    primary_key = [
+        str(row[1])
+        for row in sorted(table_info, key=lambda item: int(item[5] or 0))
+        if int(row[5] or 0) > 0
+    ]
+    assert primary_key == [
+        "source_type",
+        "memory_id",
+        "owner_id",
+        "workspace_id",
+        "memory_domain",
+        "provider",
+        "model",
+    ]
+    assert row_count == 0
+
+
 def test_semantic_index_persists_version_dimensions_and_rebuilds_changed_content(
     tmp_path,
 ):
@@ -311,6 +384,54 @@ def test_native_vec0_refresh_uses_existing_embedding_rowid(tmp_path):
     finally:
         conn.close()
     assert refreshed_rowid == metadata_rowid
+
+
+def test_native_vec0_scope_update_removes_all_source_versions(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(service, turn_id="vec0-scope", text="database migration")
+    index = _index(service)
+    if not index._vec0_ready:
+        pytest.skip("sqlite-vec extension is not available")
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO memory_embeddings "
+            "(source_type, memory_id, owner_id, workspace_id, memory_domain, "
+            "content_hash, provider, model, dimensions, vector, updated_at) "
+            "VALUES ('turn', 'vec0-scope', 'owner-a', 'workspace-a', "
+            "'agent_interaction', 'alternate', 'alternate-provider', "
+            "'alternate-model', 3, '[0,0,1]', 'now')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert index.index_pending() == 1
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        indexed_rowid = conn.execute(
+            "SELECT rowid FROM memory_embeddings WHERE source_type = 'turn' "
+            "AND memory_id = 'vec0-scope' AND provider = 'test-provider'"
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE turns SET owner_id = 'owner-b', workspace_id = 'workspace-b' "
+            "WHERE turn_id = 'vec0-scope'"
+        )
+        conn.commit()
+        metadata_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_embeddings WHERE source_type = 'turn' "
+            "AND memory_id = 'vec0-scope'"
+        ).fetchone()[0]
+        vec_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_embeddings_vec WHERE rowid = ?",
+            (indexed_rowid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert metadata_count == 0
+    assert vec_count == 0
 
 
 @pytest.mark.asyncio

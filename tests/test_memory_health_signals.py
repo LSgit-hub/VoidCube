@@ -1049,7 +1049,7 @@ async def test_tier2_compress_rolls_back_archive_when_compressed_write_fails(tmp
             event.source_turns = [turns[0].turn_id]
             return SimpleNamespace(events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[])
 
-    def fail_write(conn, pipeline_result, now):
+    def fail_write(conn, pipeline_result, now, **kwargs):
         raise RuntimeError("compressed write failed")
 
     svc._build_compression_pipeline = lambda: _Pipeline()  # type: ignore[method-assign]
@@ -1129,7 +1129,7 @@ async def test_standalone_bridge_rolls_back_archive_when_compressed_write_fails(
             event.source_turns = [turns[0].turn_id]
             return SimpleNamespace(events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[])
 
-    def fail_write(conn, pipeline_result, now):
+    def fail_write(conn, pipeline_result, now, **kwargs):
         raise RuntimeError("compressed write failed")
 
     bridge = Tier1ToTier2Bridge(

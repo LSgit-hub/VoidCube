@@ -462,7 +462,13 @@ def recall_memories(
         limit=bounded_limit,
         max_chars=bounded_chars,
     )
-    _record_tier2_accesses(conn, selected, reference)
+    _record_tier2_accesses(
+        conn,
+        selected,
+        reference,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+    )
     return {
         "results": selected,
         "count": len(selected),
@@ -1674,15 +1680,31 @@ def _record_tier2_accesses(
     conn: sqlite3.Connection,
     selected: Sequence[dict[str, Any]],
     now: datetime,
+    *,
+    owner_id: str,
+    workspace_id: str,
 ) -> None:
-    ids = [str(item["id"]) for item in selected if item.get("tier") == "tier2"]
-    if not ids:
+    records = [item for item in selected if item.get("tier") == "tier2"]
+    if not records:
         return
     try:
         conn.executemany(
             "UPDATE compressed_memories SET access_count = access_count + 1, "
-            "last_accessed_at = ? WHERE memory_id = ?",
-            [(now.isoformat(), memory_id) for memory_id in ids],
+            "last_accessed_at = ? WHERE memory_id = ? AND memory_domain = ? "
+            "AND ((owner_id = ? AND workspace_id = ?) OR "
+            "(owner_id = ? AND workspace_id = ?))",
+            [
+                (
+                    now.isoformat(),
+                    str(item["id"]),
+                    str(item.get("memory_domain") or "agent_interaction"),
+                    owner_id,
+                    workspace_id,
+                    GLOBAL_SCOPE_ID,
+                    GLOBAL_SCOPE_ID,
+                )
+                for item in records
+            ],
         )
         conn.commit()
     except Exception:

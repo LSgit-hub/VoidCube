@@ -467,9 +467,8 @@ class AIAgent:
                 ]:
                     logging.getLogger(quiet_logger).setLevel(logging.ERROR)
         
-        # Internal stream callback (set during streaming TTS).
-        # Initialized here so _vprint can reference it before run_conversation.
-        self._stream_callback = None
+        # Streaming state is initialized before _vprint can observe it.
+        self._stream_callback, self._response_was_previewed = None, False
         # Deferred paragraph break flag — set after tool iterations so a
         # single "\n\n" is prepended to the next real text delta.
         self._stream_needs_break = False

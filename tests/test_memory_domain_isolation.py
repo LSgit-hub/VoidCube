@@ -203,7 +203,7 @@ async def test_compression_candidate_batch_is_single_domain(tmp_path):
 
     bridge = Tier1ToTier2Bridge(
         service._db_path,
-        retention_days=0,
+        retention_days=-1,
         min_relevance=0,
         memory_domain="companion",
     )
@@ -213,6 +213,65 @@ async def test_compression_candidate_batch_is_single_domain(tmp_path):
     assert batch.turns
     assert {turn["memory_domain"] for turn in batch.turns} == {"companion"}
     assert {turn["session_id"] for turn in batch.turns} == {"companion-session"}
+    assert bridge.count_candidates() == 1
+
+
+@pytest.mark.asyncio
+async def test_automatic_compression_schedules_every_scope_and_domain(tmp_path):
+    service = MemoryService(
+        MemoryServiceConfig(
+            db_path=str(tmp_path / "memory.db"),
+            tier1_max_turns=1,
+        )
+    )
+    scopes = (
+        ("api_a", "agent_interaction", "owner-a", "workspace-a"),
+        ("api_a", "agent_interaction", "owner-b", "workspace-b"),
+        ("stellar_companion", "companion", "owner-a", "workspace-a"),
+    )
+    for index, (actor, domain, owner_id, workspace_id) in enumerate(scopes):
+        session_id = f"scope-{index}"
+        await service.create_session(
+            SessionCreate(
+                session_id=session_id,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_actor=actor,
+                memory_domain=domain,
+            )
+        )
+        await service.add_turn(
+            session_id,
+            TurnCreate(
+                speaker="user",
+                text=f"ordinary scoped turn {index}",
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_actor=actor,
+                memory_domain=domain,
+            ),
+        )
+
+    scheduled = []
+
+    async def fake_compress(request):
+        scheduled.append(
+            (request.memory_domain.value, request.owner_id, request.workspace_id)
+        )
+        return {
+            "status": "compressed",
+            "turns_processed": 1,
+            "events_generated": 1,
+        }
+
+    service.tier2_compress = fake_compress  # type: ignore[method-assign]
+    processed = await service._tier2_bridge_cycle()
+
+    assert processed == 3
+    assert set(scheduled) == {
+        (domain, owner_id, workspace_id)
+        for _, domain, owner_id, workspace_id in scopes
+    }
 
 
 @pytest.mark.asyncio

@@ -48,8 +48,9 @@ def upsert_profile_memory(
     if existing and str(existing[1]) != str(profile.value):
         conn.execute(
             "UPDATE profile_memories SET status = 'superseded', valid_to = ?, "
-            "updated_at = ? WHERE memory_id = ?",
-            (valid_from, now, existing[0]),
+            "updated_at = ? WHERE memory_id = ? AND owner_id = ? "
+            "AND workspace_id = ? AND memory_domain = ?",
+            (valid_from, now, existing[0], owner_id, workspace_id, memory_domain),
         )
         supersedes.append(str(existing[0]))
     elif existing:
@@ -64,7 +65,8 @@ def upsert_profile_memory(
         conn.execute(
             "UPDATE profile_memories SET summary = ?, confidence = ?, "
             "certainty_state = ?, evidence_refs = ?, source_turns = ?, updated_at = ? "
-            "WHERE memory_id = ?",
+            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
             (
                 profile.summary,
                 confidence,
@@ -73,6 +75,9 @@ def upsert_profile_memory(
                 json.dumps(source_turns, ensure_ascii=False),
                 now,
                 existing[0],
+                owner_id,
+                workspace_id,
+                memory_domain,
             ),
         )
         return 0

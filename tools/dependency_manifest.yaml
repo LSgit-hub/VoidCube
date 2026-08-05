@@ -1,0 +1,171 @@
+# VoidCube Runtime Dependency Manifest
+# =====================================
+# Declarative registry of all external runtime dependencies required by
+# VoidCube tools and subsystems.  The bootstrap skill + dependency_checker
+# tool use this manifest to:
+#
+#   1. Detect which dependencies are missing
+#   2. Provide platform-specific install instructions
+#   3. Verify installs succeeded
+#
+# Conventions
+# -----------
+#   commands:      list of executable names checked via shutil.which()
+#   version_check: shell one-liner — stdout is parsed for a semver-ish string
+#   min_version:   optional PEP 440 version specifier (e.g. ">=2.30")
+#   install:       platform-keyed maps of install commands (run in a terminal)
+#   critical:      if true, agent should refuse to proceed until this is fixed
+#   related_toolsets: which VoidCube toolsets depend on this dep
+
+dependencies:
+  git:
+    description: "Version control — required by terminal, checkpoints, and body runtime"
+    commands: [git]
+    version_check: "git --version"
+    min_version: ">=2.30"
+    critical: true
+    related_toolsets: [terminal, checkpoints]
+    install:
+      windows: "winget install --id Git.Git -e --source winget"
+      windows_alt: "choco install git -y"
+      macos: "brew install git"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y git"
+      linux_rpm: "sudo dnf install -y git"
+
+  bash:
+    description: "Unix shell — required for terminal tool on all platforms, especially Git Bash on Windows"
+    commands: [bash]
+    version_check: "bash --version"
+    min_version: ">=4.0"
+    critical: true
+    related_toolsets: [terminal, file]
+    notes: |
+      On Windows the VoidCube terminal tool auto-detects Git Bash at
+      standard install locations.  If you installed Git to a custom
+      directory set VOIDCUBE_GIT_BASH_PATH.
+    install:
+      windows: "winget install --id Git.Git -e --source winget"
+      macos: "brew install bash"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y bash"
+
+  node:
+    description: "JavaScript runtime — required for MCP servers, browser automation agent, and some skills"
+    commands: [node, npm, npx]
+    version_check: "node --version"
+    min_version: ">=18.0"
+    critical: false
+    related_toolsets: [browser, mcp, skills]
+    notes: |
+      The browser tool needs `npx` (bundled with Node.js) to launch agent-browser.
+      MCP servers often ship as npm packages.
+    install:
+      windows: "winget install OpenJS.NodeJS.LTS"
+      windows_alt: "choco install nodejs-lts -y"
+      macos: "brew install node"
+      linux_deb: "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs"
+      linux_rpm: "curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo -E bash - && sudo dnf install -y nodejs"
+
+  docker:
+    description: "Container runtime — optional backend for isolated terminal execution"
+    commands: [docker]
+    version_check: "docker --version"
+    min_version: ">=20.0"
+    critical: false
+    related_toolsets: [terminal]
+    notes: |
+      Docker is only needed when terminal_backend is set to "docker".
+      Install Docker Desktop on Windows/macOS; docker-ce on Linux.
+    install:
+      windows: "winget install Docker.DockerDesktop"
+      macos: "brew install --cask docker"
+      linux_deb: "curl -fsSL https://get.docker.com | sudo sh"
+
+  podman:
+    description: "Podman container runtime — optional Docker-compatible backend"
+    commands: [podman]
+    version_check: "podman --version"
+    min_version: ">=4.0"
+    critical: false
+    related_toolsets: [terminal]
+    install:
+      windows: "winget install RedHat.Podman"
+      macos: "brew install podman"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y podman"
+      linux_rpm: "sudo dnf install -y podman"
+
+  ssh:
+    description: "Secure shell — required for remote terminal backends"
+    commands: [ssh]
+    version_check: "ssh -V"
+    critical: false
+    related_toolsets: [terminal]
+    install:
+      windows: "winget install Microsoft.OpenSSH.Beta"
+      macos: "brew install openssh"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y openssh-client"
+
+  ripgrep:
+    description: "Fast recursive grep — used by file search tools for large codebases"
+    commands: [rg]
+    version_check: "rg --version"
+    min_version: ">=13.0"
+    critical: false
+    related_toolsets: [file]
+    notes: |
+      If not found, the file search tool falls back to Python's slower
+      built-in search.  Install for better perf on repos > 100 MB.
+    install:
+      windows: "winget install BurntSushi.ripgrep.MSVC"
+      macos: "brew install ripgrep"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y ripgrep"
+      linux_rpm: "sudo dnf install -y ripgrep"
+
+  python:
+    description: "Python 3 interpreter — the agent itself requires Python >=3.14"
+    commands: [python3, python]
+    version_check: "python3 --version 2>/dev/null || python --version"
+    min_version: ">=3.14"
+    critical: true
+    related_toolsets: [code_execution, terminal]
+    notes: |
+      The VoidCube package itself requires Python >= 3.14.
+      This check verifies the runtime python satisfies that constraint.
+    install:
+      windows: "winget install Python.Python.3.14"
+      macos: "brew install python@3.14"
+      linux_deb: "sudo apt-get update && sudo apt-get install -y python3.14"
+      linux_rpm: "sudo dnf install -y python3.14"
+
+  agent_browser:
+    description: "Headful browser CLI — required for the browser tool in local mode"
+    commands: [agent-browser]
+    version_check: "agent-browser --version 2>/dev/null || npx agent-browser --version"
+    critical: false
+    related_toolsets: [browser]
+    notes: |
+      The browser tool auto-installs agent-browser via npx on first use.
+      Only check this if browser tools are reporting issues.
+    install:
+      all: "npm install -g agent-browser"
+
+  cosign:
+    description: "Container signing verification — used by Tirith security policy engine"
+    commands: [cosign]
+    version_check: "cosign version"
+    critical: false
+    related_toolsets: [security]
+    install:
+      windows: "winget install sigstore.cosign"
+      macos: "brew install cosign"
+      linux_deb: "curl -fsSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 | sudo tee /usr/local/bin/cosign > /dev/null && sudo chmod +x /usr/local/bin/cosign"
+      linux_rpm: "sudo dnf install -y cosign"
+
+  apptainer:
+    description: "HPC container runtime — optional backend for HPC terminal execution"
+    commands: [apptainer, singularity]
+    version_check: "apptainer --version 2>/dev/null || singularity --version"
+    critical: false
+    related_toolsets: [terminal]
+    install:
+      linux_deb: "sudo apt-get update && sudo apt-get install -y apptainer"
+      linux_rpm: "sudo dnf install -y apptainer"

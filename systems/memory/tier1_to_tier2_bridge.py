@@ -100,6 +100,7 @@ def _stable_compressed_memory_id(
     memory_type: str,
     item: Any,
     stable_ids: Dict[str, str] | None = None,
+    scope_key: str = "",
 ) -> str:
     payload = {
         "memory_type": memory_type,
@@ -108,13 +109,18 @@ def _stable_compressed_memory_id(
         "refs": _stable_refs(item, stable_ids),
         "timespan_start": _iso_value(getattr(item, "timespan_start", "")),
         "timespan_end": _iso_value(getattr(item, "timespan_end", "")),
+        "scope": scope_key,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
     return f"{memory_type}_{digest}"
 
 
-def _build_stable_cmem_ids(pipeline_result) -> Dict[str, str]:
+def _build_stable_cmem_ids(
+    pipeline_result,
+    *,
+    scope_key: str = "",
+) -> Dict[str, str]:
     stable_ids: Dict[str, str] = {}
     for memory_type, items in (
         ("event", getattr(pipeline_result, "events", [])),
@@ -129,18 +135,28 @@ def _build_stable_cmem_ids(pipeline_result) -> Dict[str, str]:
                     memory_type,
                     item,
                     stable_ids,
+                    scope_key,
                 )
     return stable_ids
 
 
-def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
+def _write_compressed_memories_to_db(
+    conn,
+    pipeline_result,
+    now: str,
+    *,
+    scope: tuple[str, str, str] | None = None,
+) -> int:
     """Write the complete pipeline result into the canonical scoped tables.
 
     Lifecycle: Event(L0,w=1.0) → Scene(L1,w=0.7) → Arc(L2,w=0.4) → Epoch(L3,w=0.2).
     """
     written = 0
-    stable_ids = _build_stable_cmem_ids(pipeline_result)
-    owner_id, workspace_id, memory_domain = _pipeline_scope(conn, pipeline_result)
+    owner_id, workspace_id, memory_domain = scope or _pipeline_scope(
+        conn, pipeline_result
+    )
+    scope_key = f"{owner_id}\0{workspace_id}\0{memory_domain}"
+    stable_ids = _build_stable_cmem_ids(pipeline_result, scope_key=scope_key)
     for event in pipeline_result.events:
         parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
@@ -794,7 +810,14 @@ class Tier1ToTier2Bridge:
             return
 
         # Build turn_id → event_ids / scene_ids mappings
-        stable_ids = _build_stable_cmem_ids(result)
+        first_turn = turns[0]
+        scope = (
+            str(first_turn["owner_id"]),
+            str(first_turn["workspace_id"]),
+            str(first_turn["memory_domain"]),
+        )
+        scope_key = "\0".join(scope)
+        stable_ids = _build_stable_cmem_ids(result, scope_key=scope_key)
         turn_to_events: Dict[str, List[str]] = {}
         for event in result.events:
             for src_turn_id in event.source_turns:
@@ -835,12 +858,13 @@ class Tier1ToTier2Bridge:
                         ),
                     )
                     conn.execute(
-                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
-                        (turn_id,),
+                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ? "
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                        (turn_id, t["owner_id"], t["workspace_id"], t["memory_domain"]),
                     )
 
                 # ── Write compressed memories back to SQLite ─────────────
-                _write_compressed_memories_to_db(conn, result, now)
+                _write_compressed_memories_to_db(conn, result, now, scope=scope)
                 self._write_quality_audit(conn, quality_evidence, "passed")
 
                 conn.commit()
