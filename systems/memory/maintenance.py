@@ -102,7 +102,7 @@ async def run_tier2_bridge_cycle(
             continue
         request = request_factory(
             retention_days=config.tier1_retention_days,
-            batch_size=int(getattr(config, "tier2_batch_size", 100)),
+            batch_size=int(getattr(config, "tier2_batch_size", 25)),
             min_relevance=config.tier1_min_relevance, force_oldest=force_oldest,
             memory_actor=maintenance_actor, memory_domain=str(domain),
             owner_id=str(owner_id), workspace_id=str(workspace_id),

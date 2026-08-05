@@ -1651,8 +1651,31 @@ def test_bridge_sets_created_at_and_propagates_event_kind_to_all_levels(tmp_path
     scene = item("scene-1", child_ids=[event.id], evidence_refs=[event.id])
     arc = item("arc-1", child_ids=[scene.id], evidence_refs=[scene.id])
     epoch = item("epoch-1", child_ids=[arc.id], evidence_refs=[arc.id])
+    profile = SimpleNamespace(
+        id="profile-1",
+        memory_kind="fact",
+        subject="project",
+        predicate="uses",
+        value="stable references",
+        summary="The project uses stable references.",
+        confidence=0.9,
+        certainty_state="observed",
+        status="active",
+        valid_from=now_dt,
+        valid_to=None,
+        evidence_refs=["turn-1", scene.id],
+        source_turns=["turn-1"],
+        parent_timeline_refs=[scene.id],
+        supersedes=[],
+        conflict_refs=[],
+        created_at=now_dt,
+    )
     result = SimpleNamespace(
-        events=[event], scenes=[scene], arcs=[arc], epochs=[epoch], profile_memories=[]
+        events=[event],
+        scenes=[scene],
+        arcs=[arc],
+        epochs=[epoch],
+        profile_memories=[profile],
     )
     conn = open_memory_sqlite(svc._db_path)
     try:
@@ -1662,10 +1685,20 @@ def test_bridge_sets_created_at_and_propagates_event_kind_to_all_levels(tmp_path
             "SELECT memory_type, event_kind, created_at FROM compressed_memories "
             "WHERE memory_id NOT LIKE 'identity-founding-%' ORDER BY compression_level"
         ).fetchall()
+        profile_refs = json.loads(
+            conn.execute(
+                "SELECT evidence_refs FROM profile_memories WHERE memory_id = 'profile-1'"
+            ).fetchone()[0]
+        )
+        stable_scene_id = conn.execute(
+            "SELECT memory_id FROM compressed_memories WHERE memory_type = 'scene'"
+        ).fetchone()[0]
     finally:
         conn.close()
     assert [(row[0], row[1]) for row in rows] == [
         ("event", "decision"), ("scene", "decision"),
         ("arc", "decision"), ("epoch", "decision"),
     ]
+    assert scene.id not in profile_refs
+    assert stable_scene_id in profile_refs
     assert all(row[2] == now_dt.isoformat() for row in rows)

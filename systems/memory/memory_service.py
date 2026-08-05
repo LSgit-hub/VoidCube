@@ -197,7 +197,7 @@ class TimelineQuery(BaseModel):
 
 class Tier2CompressRequest(BaseModel):
     retention_days: int = 30
-    batch_size: int = 100
+    batch_size: int = 25
     min_relevance: float = 0.1
     dry_run: bool = False
     force_oldest: bool = False

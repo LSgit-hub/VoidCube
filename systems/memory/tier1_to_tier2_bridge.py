@@ -221,6 +221,14 @@ def _write_compressed_memories_to_db(
         )
         written += 1
     for profile in getattr(pipeline_result, "profile_memories", []) or []:
+        profile.evidence_refs = [
+            stable_ids.get(str(item), str(item))
+            for item in (getattr(profile, "evidence_refs", []) or [])
+        ]
+        profile.parent_timeline_refs = [
+            stable_ids.get(str(item), str(item))
+            for item in (getattr(profile, "parent_timeline_refs", []) or [])
+        ]
         written += upsert_profile_memory(
             conn,
             profile,
