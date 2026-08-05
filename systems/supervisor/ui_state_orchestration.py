@@ -46,7 +46,13 @@ class SupervisorUIStateContext:
 
 
 def load_ui_memory_token_usage() -> JsonDict:
-    """Read optional memory token telemetry without making it a UI state owner."""
+    """Read optional memory token telemetry without making it a UI state owner.
+
+    Returns per-request context utilisation (last call's prompt_tokens vs the
+    model's context window) together with cumulative totals.  The cumulative
+    total divided by context_length is intentionally NOT exposed as a
+    percentage — it's an odometer reading, not a tank-level gauge.
+    """
 
     try:
         from memai.llm_client import get_memory_token_usage
@@ -54,15 +60,19 @@ def load_ui_memory_token_usage() -> JsonDict:
         raw = get_memory_token_usage()
         context_length = raw.get("context_length", 65536)
         total = raw.get("total_tokens", 0)
+        last_prompt = raw.get("last_prompt_tokens", 0)
         return {
             "total_tokens": total,
             "prompt_tokens": raw.get("prompt_tokens", 0),
             "completion_tokens": raw.get("completion_tokens", 0),
             "request_count": raw.get("request_count", 0),
             "context_length": context_length,
-            "context_percent": (
-                round((total / context_length) * 100)
-                if context_length > 0
+            "last_prompt_tokens": last_prompt,
+            # Per-request context utilisation — how full the window was for the
+            # most recent API-B call.  Falls back to 0 when no calls have run.
+            "last_request_usage_percent": (
+                round((last_prompt / context_length) * 100)
+                if context_length > 0 and last_prompt > 0
                 else 0
             ),
         }

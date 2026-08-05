@@ -154,7 +154,10 @@ class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
 
 
 class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
-    max_chars: int = 11500
+    # When 0 or unset, resolve_cognition_charter() derives this from the
+    # memory LLM's context window (50 % × 2.5 chars/token).  The 11500
+    # default is a safe floor for models with tiny context windows.
+    max_chars: int = 0
     priority_order: list[str] = [
         "identity",
         "decision_core",

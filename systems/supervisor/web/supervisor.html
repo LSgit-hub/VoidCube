@@ -5919,7 +5919,8 @@ function renderStatsPanel(state) {
     {icon:'📦', label:'压缩块', value: ts.compressed_blocks || '—'},
     {icon:'✅', label:'判断模型健康', value: ts.llm_healthy ? '✅ 正常' : '⚠️ 异常'},
     {icon:'🧠', label:'记忆活跃', value: ts.memory_active ? '✅ 是' : '💤 否'},
-    {icon:'📐', label:'上下文用量', value: (mem.context_percent || 0) + '% (' + (mem.total_tokens || 0).toLocaleString() + ' tokens)'},
+    {icon:'📐', label:'API-B 最近请求', value: (mem.last_request_usage_percent || 0) + '% 窗口 (' + (mem.last_prompt_tokens || 0).toLocaleString() + ' / ' + (mem.context_length || 0).toLocaleString() + ' tokens)'},
+{icon:'🧮', label:'API-B 累计用量', value: (mem.total_tokens || 0).toLocaleString() + ' tokens · ' + (mem.request_count || 0) + ' 次调用'},
   ].forEach(s => {
     const row = document.createElement('div');
     row.className = 'lm-stat-row';

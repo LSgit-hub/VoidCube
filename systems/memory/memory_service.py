@@ -1784,15 +1784,24 @@ class MemoryApplicationService:
                 "total_tokens": 0,
                 "request_count": 0,
                 "context_length": 65536,
+                "last_prompt_tokens": 0,
             }
         context_length = usage.get("context_length", 65536)
-        total_tokens = usage.get("total_tokens", 0)
-        percent = round((total_tokens / context_length) * 100) if context_length > 0 else None
+        last_prompt = usage.get("last_prompt_tokens", 0)
+        # Per-request utilisation: last call's prompt_tokens vs the model's
+        # context window.  The cumulative total_tokens is an odometer, not a
+        # tank-level gauge — dividing it by context_length yields a
+        # meaningless number that always grows past 100%.
+        last_request_usage_percent = (
+            round((last_prompt / context_length) * 100)
+            if context_length > 0 and last_prompt > 0
+            else None
+        )
         return {
             "status": "ok",
             "usage": usage,
-            "context_percent": percent,
             "context_length": context_length,
+            "last_request_usage_percent": last_request_usage_percent,
         }
 
     # ── Tier 1: Short-term Conversation Store ──────────────────────

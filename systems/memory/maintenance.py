@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 from time import monotonic
@@ -108,8 +109,33 @@ async def run_tier2_bridge_cycle(
             owner_id=str(owner_id), workspace_id=str(workspace_id),
         )
         started = monotonic()
+        timeout_seconds = float(config.tier2_scope_timeout_seconds)
         try:
-            result = await compress(request)
+            result = await asyncio.wait_for(
+                compress(request), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            elapsed = round(monotonic() - started, 3)
+            timeout_message = (
+                f"scope compression timed out after {timeout_seconds:g} seconds"
+            )
+            scope_results.append({
+                "memory_domain": str(domain),
+                "owner_id": str(owner_id),
+                "workspace_id": str(workspace_id),
+                "status": "failed",
+                "turns_processed": 0,
+                "events_generated": 0,
+                "elapsed_seconds": elapsed,
+                "deadline_exceeded": True,
+                "errors": [timeout_message],
+            })
+            logger.warning(
+                "Tier 2 bridge scope timed out after %.3fs: "
+                "domain=%s owner=%s workspace=%s",
+                elapsed, domain, owner_id, workspace_id,
+            )
+            continue
         except Exception as exc:
             elapsed = round(monotonic() - started, 3)
             scope_results.append({
@@ -120,7 +146,7 @@ async def run_tier2_bridge_cycle(
                 "turns_processed": 0,
                 "events_generated": 0,
                 "elapsed_seconds": elapsed,
-                "deadline_exceeded": elapsed > config.tier2_scope_timeout_seconds,
+                "deadline_exceeded": elapsed > timeout_seconds,
                 "errors": [str(exc)],
             })
             logger.warning(
@@ -139,7 +165,7 @@ async def run_tier2_bridge_cycle(
             "turns_processed": scope_processed,
             "events_generated": int(result.get("events_generated", 0) or 0),
             "elapsed_seconds": elapsed,
-            "deadline_exceeded": elapsed > config.tier2_scope_timeout_seconds,
+            "deadline_exceeded": elapsed > timeout_seconds,
             "errors": list(result.get("errors") or []),
             "quality_evidence": result.get("quality_evidence"),
         })

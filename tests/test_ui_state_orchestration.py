@@ -34,7 +34,7 @@ async def test_ui_state_owner_assembles_explicit_runtime_snapshot(monkeypatch):
     monkeypatch.setattr(
         owner,
         "load_ui_memory_token_usage",
-        lambda: {"total_tokens": 12, "context_percent": 1},
+        lambda: {"total_tokens": 12, "last_request_usage_percent": 1},
     )
 
     async def load_observation_input_snapshot():

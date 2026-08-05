@@ -1,3 +1,4 @@
+from memai.llm_client import get_memory_context_max_chars
 from systems.supervisor.config_models import EndogenousDriveCognitionCharterConfig
 from systems.supervisor.endogenous_cognition_charter import resolve_cognition_charter
 
@@ -14,7 +15,7 @@ def test_charter_resolution_fills_runtime_fallbacks_and_prompt_defaults():
     assert result["task_generation_focus"]
     assert result["prompt_output_requirements"]
     assert result["context_layering_policy"]["decision_core_fields"]
-    assert result["prompt_attention_policy"]["max_chars"] == 11500
+    assert result["prompt_attention_policy"]["max_chars"] == get_memory_context_max_chars()
     assert result["prompt_attention_policy"]["structure_keys"]
 
 

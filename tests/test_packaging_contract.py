@@ -145,7 +145,8 @@ def test_optional_dependency_ranges_support_python_314_wheels():
 
     assert Version("6.1.1") in local["lxml"].specifier
     assert Version("5.4.0") not in local["lxml"].specifier
-    assert Version("12.2.0") in image["pillow"].specifier
+    assert Version("12.3.0") in image["pillow"].specifier
+    assert Version("12.2.0") not in image["pillow"].specifier
     assert Version("10.4.0") not in image["pillow"].specifier
 
 

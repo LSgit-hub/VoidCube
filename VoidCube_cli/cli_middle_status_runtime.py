@@ -65,7 +65,7 @@ class CliMiddleStatusRuntime:
             else:
                 fragments.append((f"{self._BACKGROUND} #7CC9A0 bold", memory_model))
 
-            percent = memory_usage.get("context_percent")
+            percent = memory_usage.get("last_request_usage_percent")
             if percent is not None and percent > 0:
                 if percent >= 80:
                     color = "#FF6B6B"

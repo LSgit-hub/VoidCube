@@ -33,7 +33,7 @@ dependencies = [
     "requests>=2.31.0,<3",
     "fire>=0.5.0,<1",
     # The unified launcher starts these local services by default.
-    "aiohttp>=3.9.0,<4",
+    "aiohttp>=3.14.3,<4",
     "fastapi>=0.115.0,<1",
     "uvicorn>=0.32.0,<1",
     "psutil>=6.1.0,<8",
@@ -48,7 +48,7 @@ local = [
 ]
 # 图像生成 (可选)
 image = [
-    "pillow>=12.0.0,<13",
+    "pillow>=12.3.0,<13",
 ]
 # 语音 (可选)
 voice = [
@@ -67,8 +67,11 @@ web = [
 ]
 dev = [
     "build>=1.2.0,<2",
-    "pytest>=8.0.0,<10",
+    "pip-audit>=2.9.0,<3",
+    "pytest>=9.0.3,<10",
     "pytest-asyncio>=1.0.0,<2",
+    "pytest-cov>=6.0.0,<8",
+    "ruff>=0.12.0,<1",
 ]
 # 完整安装（兼容两种命名习惯）
 full = [
@@ -102,3 +105,35 @@ memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]
 systems = ["supervisor/web/*.html"]
 tools = ["presets/*.yaml"]
+
+[tool.ruff]
+target-version = "py314"
+exclude = [".test-tmp", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Start with deterministic parser/control-flow failures. F821 is reported
+# separately in CI until the existing undefined-name baseline is retired.
+select = ["E9", "F63", "F7"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "agent",
+    "tools",
+    "systems",
+    "VoidCube_app",
+    "VoidCube_cli",
+    "VoidCube_core",
+    "plugins",
+    "memai",
+    "run_agent",
+    "voidcube",
+    "cli",
+]
+omit = ["tests/*", "Mem/tests/*"]
+
+[tool.coverage.report]
+fail_under = 50.0
+precision = 1
+show_missing = true
+skip_covered = true

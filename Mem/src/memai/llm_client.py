@@ -22,51 +22,200 @@ RESPONSE_CONTENT_STYLES = frozenset(
 
 # ── Token usage tracking (module-level, shared across LLMClient instances) ──
 # Exposed so the Supervisor can report live context usage via /ui/state.
-_memory_token_usage: dict[str, int] = {
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
-    "total_tokens": 0,
-    "request_count": 0,
-    "context_length": 65536,  # updated by _set_memory_context_length when LLMClient inits
-}
 _memory_token_lock = threading.Lock()
 
-# ── Context-length lookup (best-effort; model names change over time) ──
+# ── Context-length lookup ──
+# Priority: VOIDCUBE_MEMORY_CONTEXT_LENGTH env var > API query > static list > default.
+#
+# The static list is a last-resort fallback.  Models change too often to
+# maintain accurately — we try to fetch the real value from the API when
+# a client is created so the user doesn't have to edit code every time a
+# new model ships with a different context window.
+
+# (base_url, model) → context_length  (immutable after write)
+_context_length_cache: dict[tuple[str, str], int] = {}
+_context_length_cache_lock = threading.Lock()
+
+# Env-var override: set VOIDCUBE_MEMORY_CONTEXT_LENGTH=1048576 to bypass
+# all auto-detection and static lookups.
+_ENV_CONTEXT_LENGTH: int | None = None
+_env_raw = os.getenv("VOIDCUBE_MEMORY_CONTEXT_LENGTH", "").strip()
+if _env_raw:
+    try:
+        _ENV_CONTEXT_LENGTH = int(_env_raw)
+    except ValueError:
+        pass  # invalid → treated as unset
+
+# ── Static fallback (best-effort; models change over time) ──
 _MODEL_CONTEXT_LENGTHS: dict[str, int] = {
     # DeepSeek family
-    "deepseek-chat": 65536,
-    "deepseek-v4": 65536,
-    "deepseek-v4-flash": 65536,
-    "deepseek-reasoner": 65536,
+    "deepseek-chat": 131072,
+    "deepseek-v4": 1048576,          # 1M
+    "deepseek-v4-pro": 1048576,      # 1M
+    "deepseek-v4-flash": 1048576,    # 1M
+    "deepseek-reasoner": 131072,
     # Agnes AI family
     "agnes-2.0-flash": 131072,
     "agnes-2.0-pro": 131072,
     # OpenAI family
     "gpt-4o": 128000,
-    "gpt-4o-mini": 128000,
+    "gpt-4o-mini": 200000,
     "gpt-4-turbo": 128000,
     "gpt-4": 8192,
     "gpt-3.5-turbo": 16385,
     # Open-source / local
     "llama-3": 8192,
     "llama-3.1": 131072,
+    "llama-3.2": 131072,
+    "llama-3.3": 131072,
     "mixtral": 32768,
     "qwen": 32768,
+    "qwen-2.5": 131072,
 }
-_DEFAULT_CONTEXT_LENGTH = 65536
+_DEFAULT_CONTEXT_LENGTH = 131072
+
+_memory_token_usage: dict[str, int] = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "request_count": 0,
+    "context_length": _DEFAULT_CONTEXT_LENGTH,  # updated by _set_memory_context_length when LLMClient inits
+    "last_prompt_tokens": 0,  # prompt_tokens of the most recent call (for per-request context utilisation)
+}
 
 
-def _set_memory_context_length(model_name: str) -> None:
-    """Update the global context-length estimate based on the model name.
+def _try_fetch_context_length_from_api(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    timeout: float = 5.0,
+) -> int | None:
+    """Query the provider's /models/{model} endpoint for the real context length.
 
-    Called by ``OpenAICompatibleLLMClient.__init__`` so the accumulator
-    reflects the actual model's context window.  Falls back to 65536 for
-    unknown models.
+    Returns None when the provider doesn't expose context-length metadata
+    or the request fails (timeout, auth error, etc.).
     """
-    with _memory_token_lock:
-        _memory_token_usage["context_length"] = _MODEL_CONTEXT_LENGTHS.get(
-            model_name, _DEFAULT_CONTEXT_LENGTH
+    import socket
+    url = f"{base_url.rstrip('/')}/models/{model}"
+    req = request.Request(url, headers={
+        "Authorization": f"Bearer {api_key}",
+    })
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # Try common top-level field names
+    for field in (
+        "context_length", "context_window", "max_context_length",
+        "max_input_tokens", "max_tokens",
+    ):
+        value = data.get(field)
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+    # Try nested containers (some APIs wrap model info)
+    for container_key in ("data", "model", "model_info", "metadata"):
+        container = data.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for field in (
+            "context_length", "context_window", "max_context_length",
+            "max_input_tokens",
+        ):
+            value = container.get(field)
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    return None
+
+
+def _resolve_model_context_length(
+    *,
+    model_name: str,
+    base_url: str = "",
+    api_key: str = "",
+) -> int:
+    """Resolve context length in priority order.
+
+    Env var > cached API fetch > live API query > static list > DEFAULT.
+    """
+    # 1. Env-var override (process-wide, trumps everything)
+    if _ENV_CONTEXT_LENGTH is not None:
+        return _ENV_CONTEXT_LENGTH
+
+    # 2. Cache hit (keyed by base_url + model to distinguish providers)
+    cache_key = (base_url.rstrip("/"), model_name)
+    with _context_length_cache_lock:
+        cached = _context_length_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    # 3. Live API query
+    if base_url and api_key:
+        fetched = _try_fetch_context_length_from_api(
+            base_url=base_url, api_key=api_key, model=model_name,
         )
+        if fetched is not None:
+            with _context_length_cache_lock:
+                _context_length_cache[cache_key] = fetched
+            return fetched
+
+    # 4. Static list fallback
+    static = _MODEL_CONTEXT_LENGTHS.get(model_name)
+    if static is not None:
+        return static
+
+    # 5. Default
+    return _DEFAULT_CONTEXT_LENGTH
+
+
+def _set_memory_context_length(
+    model_name: str,
+    *,
+    base_url: str = "",
+    api_key: str = "",
+) -> None:
+    """Update the global context-length estimate.
+
+    Called by ``OpenAICompatibleLLMClient.__init__``.
+    """
+    resolved = _resolve_model_context_length(
+        model_name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+    )
+    with _memory_token_lock:
+        _memory_token_usage["context_length"] = resolved
+
+
+def get_memory_context_length() -> int:
+    """Return the current memory LLM's context length (thread-safe)."""
+    with _memory_token_lock:
+        return _memory_token_usage.get("context_length", _DEFAULT_CONTEXT_LENGTH)
+
+
+def get_memory_context_max_chars(
+    *,
+    context_percent: float = 0.50,
+    chars_per_token: float = 2.5,
+) -> int:
+    """Return the recommended max prompt chars for the current memory LLM.
+
+    Derives a character budget from the model's context window so the prompt
+    packet doesn't overflow.  The default 50% leaves ample headroom for the
+    system prompt, response, and overhead.
+
+    ``chars_per_token`` defaults to 2.5 to be conservative for mixed
+    Chinese/English/code content (pure ASCII ≈ 4, Chinese ≈ 1.5–2).
+    """
+    context_tokens = get_memory_context_length()
+    budget_tokens = int(context_tokens * context_percent)
+    max_chars = int(budget_tokens * chars_per_token)
+    # Floor: never drop below 8000 chars — smaller budgets break cognitive
+    # packet structure and would make API-B useless on tiny models anyway.
+    return max(8000, max_chars)
 
 
 def get_memory_token_usage() -> dict[str, int]:
@@ -88,6 +237,12 @@ def _accumulate_memory_usage(usage: dict[str, Any]) -> None:
             if isinstance(value, (int, float)):
                 _memory_token_usage[key] += int(value)
         _memory_token_usage["request_count"] += 1
+        # Track the last call's prompt_tokens for per-request context utilisation display.
+        # The cumulative total_tokens / context_length is meaningless — it's an odometer
+        # divided by a tank size.  See ui_state_orchestration.load_ui_memory_token_usage().
+        prompt = usage.get("prompt_tokens")
+        if isinstance(prompt, (int, float)):
+            _memory_token_usage["last_prompt_tokens"] = int(prompt)
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,9 +606,10 @@ class OpenAICompatibleLLMClient:
         self.prompt_registry = prompt_registry or PromptRegistry.default()
         self.temperature = temperature
         self.transport = transport or _default_transport
-        # Update the global context-length estimate so the accumulator
-        # (and therefore the UI percentage) reflects this model's window.
-        _set_memory_context_length(model)
+        # Update the global context-length estimate.  Pass base_url and
+        # api_key so we can try to fetch the real value from the API
+        # instead of relying on the static fallback list.
+        _set_memory_context_length(model, base_url=self.base_url, api_key=self.api_key)
 
     @classmethod
     def from_env(
@@ -590,6 +746,38 @@ class OpenAICompatibleLLMClient:
             system_prompt=resolved_prompt,
             user_content=user_content,
         )
+        # ── Pre-flight context-window safety check ──
+        # Estimate prompt tokens to avoid sending a request that will
+        # fail with a context-overflow error.  Uses a conservative
+        # 2.0 chars/token so we stay well under the real limit even for
+        # mixed Chinese/English/code content.
+        _prompt_chars = sum(
+            len(str(msg.get("content", "")))
+            for msg in messages
+        )
+        _estimated_tokens = int(_prompt_chars / 2.0)
+        _context_limit = get_memory_context_length()
+        if _estimated_tokens > _context_limit:
+            raise ValueError(
+                f"API-B prompt exceeds model context window: "
+                f"~{_estimated_tokens:,} estimated tokens > "
+                f"{_context_limit:,} token limit "
+                f"(model={self.model}, prompt_chars={_prompt_chars:,}). "
+                f"Reduce the cognitive packet budget in the cognition charter "
+                f"(prompt_attention_policy.max_chars)."
+            )
+        _usage_pct = _estimated_tokens / _context_limit if _context_limit else 0
+        if _usage_pct >= 0.80:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "API-B prompt using ~%.0f%% of context window "
+                "(%s / %s tokens, model=%s)",
+                _usage_pct * 100,
+                f"{_estimated_tokens:,}",
+                f"{_context_limit:,}",
+                self.model,
+            )
         payload = {
             "model": self.model,
             "temperature": self.temperature,

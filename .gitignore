@@ -175,6 +175,8 @@ compile_commands.json
 .tmp-pytest*/
 tmp-pytest-*/
 .pytest_cache/
+.coverage
+coverage.xml
 .tmp*/
 tmp_*/
 .tmp_voidcube*/

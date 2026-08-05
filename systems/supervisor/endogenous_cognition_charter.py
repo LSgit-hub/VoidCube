@@ -73,7 +73,14 @@ def resolve_cognition_charter(
     cognition_charter["context_layering_policy"] = context_layering_policy
     prompt_attention_policy = dict(cognition_charter.get("prompt_attention_policy") or {})
     if not int(prompt_attention_policy.get("max_chars") or 0):
-        prompt_attention_policy["max_chars"] = 11500
+        # Derive from the model's actual context window when not explicitly
+        # configured.  Uses 50% of context window × 2.5 chars/token so the
+        # packet fits comfortably with headroom for system prompt + response.
+        try:
+            from memai.llm_client import get_memory_context_max_chars
+            prompt_attention_policy["max_chars"] = get_memory_context_max_chars()
+        except Exception:
+            prompt_attention_policy["max_chars"] = 11500
     if not list(prompt_attention_policy.get("priority_order") or []):
         prompt_attention_policy["priority_order"] = [
             "identity",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import json
 import sqlite3
@@ -33,6 +34,8 @@ from systems.memory.maintenance_schedule import (
     get_rule_state,
     record_rule_result,
 )
+from systems.memory.maintenance import run_tier2_bridge_cycle
+from systems.memory.domain import MemoryActor, MemoryDomain
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
@@ -887,6 +890,94 @@ async def test_tier2_bridge_cycle_surfaces_scope_timeout_error(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tier2_bridge_timeout_cancels_scope_and_continues_with_next_scope(tmp_path):
+    svc = _make_service(tmp_path)
+    await svc.create_session(
+        SessionCreate(
+            session_id="slow-scope",
+            memory_domain=MemoryDomain.AGENT_INTERACTION,
+            metadata={},
+        )
+    )
+    await svc.add_turn(
+        "slow-scope",
+        TurnCreate(
+            speaker="user",
+            text="slow scope turn",
+            memory_domain=MemoryDomain.AGENT_INTERACTION,
+            metadata={},
+        ),
+    )
+    await svc.create_session(
+        SessionCreate(
+            session_id="fast-scope",
+            memory_actor=MemoryActor.STELLAR_AUTO,
+            memory_domain=MemoryDomain.EVOLUTION,
+            metadata={},
+        )
+    )
+    await svc.add_turn(
+        "fast-scope",
+        TurnCreate(
+            speaker="user",
+            text="fast scope turn",
+            memory_actor=MemoryActor.STELLAR_AUTO,
+            memory_domain=MemoryDomain.EVOLUTION,
+            metadata={},
+        ),
+    )
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET timestamp = ? WHERE session_id IN (?, ?)",
+            (old_timestamp, "slow-scope", "fast-scope"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    calls: list[str] = []
+
+    async def compress(request):
+        calls.append(str(request.memory_domain))
+        if request.memory_domain == MemoryDomain.AGENT_INTERACTION.value:
+            await asyncio.sleep(0.05)
+        return {
+            "status": "compressed",
+            "turns_processed": 1,
+            "events_generated": 1,
+        }
+
+    config = SimpleNamespace(
+        tier1_retention_days=7,
+        tier1_max_turns=100,
+        tier1_min_relevance=0.1,
+        tier2_batch_size=25,
+        tier2_scope_timeout_seconds=0.01,
+    )
+    result = await run_tier2_bridge_cycle(
+        svc._db_path,
+        config,
+        request_factory=lambda **kwargs: SimpleNamespace(**kwargs),
+        compress=compress,
+        maintenance_actor="memory-maintenance",
+        logger=logging.getLogger(__name__),
+    )
+
+    assert calls == [
+        MemoryDomain.AGENT_INTERACTION.value,
+        MemoryDomain.EVOLUTION.value,
+    ]
+    assert result["failed_scope_count"] == 1
+    assert result["turns_processed"] == 1
+    assert result["scopes"][0]["status"] == "failed"
+    assert result["scopes"][0]["deadline_exceeded"] is True
+    assert "timed out after 0.01 seconds" in result["scopes"][0]["errors"][0]
+    assert result["scopes"][1]["status"] == "compressed"
+
+
+@pytest.mark.asyncio
 async def test_standalone_tier2_bridge_finds_recent_overflow_candidates(tmp_path):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="overflow", metadata={}))
@@ -1617,8 +1708,8 @@ def test_compressed_memory_write_uses_stable_ids_for_duplicate_events(tmp_path):
         conn.commit()
         rows = conn.execute(
             "SELECT memory_id, memory_type, event_kind FROM compressed_memories "
-            "WHERE memory_id LIKE 'event\_%' ESCAPE '\\' "
-            "OR memory_id LIKE 'scene\_%' ESCAPE '\\' ORDER BY memory_type"
+            "WHERE memory_id LIKE 'event\\_%' ESCAPE '\\' "
+            "OR memory_id LIKE 'scene\\_%' ESCAPE '\\' ORDER BY memory_type"
         ).fetchall()
     finally:
         conn.close()
