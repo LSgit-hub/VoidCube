@@ -28,6 +28,7 @@ from VoidCube_app.config import (
     redact_key,
     save_config,
     save_env_value,
+    remove_env_value,
 )
 from VoidCube_core.constants import get_config_path, get_env_path
 
@@ -313,7 +314,7 @@ def set_config_value(key: str, value: str) -> None:
 
     atomic_yaml_write(config_path, user_config, sort_keys=False)
 
-    config_to_env_sync = {
+    legacy_terminal_env = {
         "terminal.backend": "TERMINAL_ENV",
         "terminal.modal_mode": "TERMINAL_MODAL_MODE",
         "terminal.docker_image": "TERMINAL_DOCKER_IMAGE",
@@ -332,8 +333,8 @@ def set_config_value(key: str, value: str) -> None:
         "terminal.container_disk": "TERMINAL_CONTAINER_DISK",
         "terminal.container_persistent": "TERMINAL_CONTAINER_PERSISTENT",
     }
-    if key in config_to_env_sync:
-        save_env_value(config_to_env_sync[key], str(coerced_value))
+    if key in legacy_terminal_env:
+        remove_env_value(legacy_terminal_env[key])
 
     print(f"Set {key} = {coerced_value} in {config_path}")
 

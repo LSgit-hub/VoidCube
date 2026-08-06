@@ -200,6 +200,50 @@ def test_start_service_adopts_existing_voidcube_process_when_pid_file_is_missing
     assert pid_file.read_text(encoding="utf-8") == "8924"
 
 
+def test_port_owner_pid_uses_windows_netstat_without_psutil(monkeypatch):
+    from VoidCube_cli.ops import serve
+
+    monkeypatch.setattr(serve.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(
+        serve.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=(
+                "  TCP    127.0.0.1:6002    0.0.0.0:0    LISTENING    23156\n"
+            )
+        ),
+    )
+
+    assert serve._port_owner_pid(6002) == 23156
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        ("gateway", {"gateway_id": "voidcube-internal-gateway"}),
+        ("memory", {"service": "memory-service"}),
+        ("supervisor", {"service": "supervisor"}),
+    ],
+)
+def test_health_endpoint_identifies_voidcube_service(monkeypatch, name, payload):
+    from VoidCube_cli.ops import serve
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return __import__("json").dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: Response())
+
+    assert serve._health_endpoint_is_service(6002, name) is True
+
+
 def test_canonical_mem_import_source_matches_repository_source(tmp_path, monkeypatch):
     source = tmp_path / "Mem" / "src"
     expected = source / "memai" / "model_config.py"

@@ -6321,12 +6321,32 @@ async function runVoiceSession() {
   if (!result) {
     showVoiceNotice('语音请求失败', 'error');
   } else if (result.status === 'complete') {
-    showVoiceNotice('语音回复完成', 'ok');
+    const transcript = String(result.transcript || '').trim();
+    showVoiceNotice(
+      transcript ? `已识别：${transcript}` : '语音回复完成',
+      'ok',
+      6000
+    );
   } else if (result.status === 'rejected') {
     const voiceState = ((lastState || {}).voice || {});
     showVoiceNotice(fingerprintResultText(voiceState) || '声纹未通过', 'error', 6000);
   } else if (result.status === 'reply_ready_tts_unavailable') {
-    showVoiceNotice('已生成回复，但语音播放失败', 'error', 6000);
+    const transcript = String(result.transcript || '').trim();
+    showVoiceNotice(
+      transcript
+        ? `已识别：${transcript}；星子已文字回复，但语音播放失败`
+        : '已生成回复，但语音播放失败',
+      'error',
+      8000
+    );
+  } else if (result.status === 'companion_unavailable') {
+    const transcript = String(result.transcript || '').trim();
+    const reason = String(result.reason || '星子回复服务不可用');
+    showVoiceNotice(
+      transcript ? `已识别：${transcript}；未获得回复：${reason}` : `未获得回复：${reason}`,
+      'error',
+      8000
+    );
   } else if (result.reason === 'speech_start_timeout') {
     showVoiceNotice('未检测到语音', 'warn');
   } else if (result.status === 'interrupted') {

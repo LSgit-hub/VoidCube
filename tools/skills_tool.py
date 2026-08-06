@@ -338,7 +338,9 @@ def _is_gateway_surface() -> bool:
 
 
 def _get_terminal_backend_name() -> str:
-    return str(os.getenv("TERMINAL_ENV", "local")).strip().lower() or "local"
+    from tools.tool_backend_helpers import get_terminal_backend
+
+    return get_terminal_backend()
 
 
 def _is_env_var_persisted(

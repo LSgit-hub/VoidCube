@@ -18,14 +18,14 @@ agent:
   gateway_timeout_warning: 900
   gateway_notify_interval: 600
 terminal:
-  backend: local
-  fallback_to_local: true
+  backend: podman
+  fallback_to_local: false
   modal_mode: auto
   cwd: .
   timeout: 180
   env_passthrough: []
   docker_image: nikolaik/python-nodejs:python3.14-nodejs20
-  podman_image: nikolaik/python-nodejs:python3.14-nodejs20
+  podman_image: localhost/voidcube-podman-local:latest
   docker_forward_env: []
   docker_env: {}
   singularity_image: docker://nikolaik/python-nodejs:python3.14-nodejs20
@@ -36,7 +36,7 @@ terminal:
   container_disk: 51200
   container_persistent: true
   docker_volumes: []
-  docker_mount_cwd_to_workspace: false
+  docker_mount_cwd_to_workspace: true
   persistent_shell: true
 browser:
   inactivity_timeout: 120

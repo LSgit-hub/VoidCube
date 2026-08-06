@@ -1,9 +1,53 @@
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
 import tools.terminal_tool as terminal_tool_module
+
+
+@pytest.mark.unit
+def test_terminal_runtime_reads_canonical_config_when_env_is_absent(monkeypatch):
+    for name in (
+        "TERMINAL_ENV",
+        "TERMINAL_PODMAN_IMAGE",
+        "TERMINAL_FALLBACK_TO_LOCAL",
+        "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
+        "TERMINAL_CWD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        "VoidCube_app.config.load_config",
+        lambda: {
+            "terminal": {
+                "backend": "podman",
+                "podman_image": "localhost/test-sandbox:latest",
+                "fallback_to_local": False,
+                "docker_mount_cwd_to_workspace": True,
+                "cwd": ".",
+            }
+        },
+    )
+
+    config = terminal_tool_module._get_env_config()
+
+    assert config["env_type"] == "podman"
+    assert config["podman_image"] == "localhost/test-sandbox:latest"
+    assert config["fallback_to_local"] is False
+    assert config["host_cwd"] == os.getcwd()
+    assert config["cwd"] == "/workspace"
+
+
+@pytest.mark.unit
+def test_terminal_process_env_overrides_canonical_config(monkeypatch):
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setattr(
+        "VoidCube_app.config.load_config",
+        lambda: {"terminal": {"backend": "podman"}},
+    )
+
+    assert terminal_tool_module._get_env_config()["env_type"] == "local"
 
 
 @pytest.mark.unit

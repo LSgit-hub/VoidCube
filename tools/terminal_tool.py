@@ -5,8 +5,8 @@ Terminal Tool Module
 A terminal tool that executes commands in local, Docker, Podman, Modal, SSH, Singularity, and Daytona environments.
 Supports local execution, containerized backends, and Modal cloud sandboxes, including managed gateway mode.
 
-Environment Selection (via TERMINAL_ENV environment variable):
-- "local": Execute directly on the host machine (default, fastest)
+Environment Selection (standard terminal config, optionally overridden by TERMINAL_ENV):
+- "local": Execute directly on the host machine
 - "docker": Execute in Docker containers (isolated, requires Docker)
 - "podman": Execute in Podman containers (isolated, requires Podman)
 - "modal": Execute in Modal cloud sandboxes (direct Modal or managed gateway)
@@ -587,12 +587,46 @@ def _parse_env_var(name: str, default: str, converter=int, type_label: str = "in
 
 
 def _get_env_config() -> Dict[str, Any]:
-    """Get terminal environment configuration from environment variables."""
+    """Resolve canonical terminal config with process-env overrides."""
+    try:
+        from VoidCube_app.config import load_config
+
+        terminal_config = load_config().get("terminal") or {}
+        if not isinstance(terminal_config, dict):
+            terminal_config = {}
+    except Exception:
+        terminal_config = {}
+
+    def setting(env_name: str, config_name: str, default: Any) -> Any:
+        if env_name in os.environ:
+            return os.environ[env_name]
+        return terminal_config.get(config_name, default)
+
+    def bool_setting(env_name: str, config_name: str, default: bool) -> bool:
+        value = setting(env_name, config_name, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+    def structured_setting(env_name: str, config_name: str, default: Any) -> Any:
+        value = setting(env_name, config_name, default)
+        if env_name not in os.environ:
+            return value
+        try:
+            return json.loads(str(value))
+        except (TypeError, ValueError):
+            logger.warning("Invalid JSON in %s; using canonical config value", env_name)
+            return terminal_config.get(config_name, default)
+
     # Default image with Python and Node.js for maximum compatibility
     default_image = "nikolaik/python-nodejs:python3.14-nodejs20"
-    env_type = os.getenv("TERMINAL_ENV", "local")
+    env_type = str(setting("TERMINAL_ENV", "backend", "podman")).strip().lower()
     
-    mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in ("true", "1", "yes")
+    mount_docker_cwd = bool_setting(
+        "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE",
+        "docker_mount_cwd_to_workspace",
+        True,
+    )
 
     # Default cwd: local uses the host's current directory, everything
     # else starts in the user's home (~ resolves to whatever account
@@ -608,11 +642,17 @@ def _get_env_config() -> Dict[str, Any]:
     # If Docker cwd passthrough is explicitly enabled, remap the host path to
     # /workspace and track the original host path separately. Otherwise keep the
     # normal sandbox behavior and discard host paths.
-    cwd = os.getenv("TERMINAL_CWD", default_cwd)
+    cwd = str(setting("TERMINAL_CWD", "cwd", default_cwd) or default_cwd)
     host_cwd = None
     host_prefixes = ("/Users/", "/home/", "C:\\", "C:/")
     if env_type in ("docker", "podman") and mount_docker_cwd:
-        docker_cwd_source = os.getenv("TERMINAL_CWD") or os.getcwd()
+        docker_cwd_source = (
+            os.getenv("TERMINAL_CWD")
+            or terminal_config.get("cwd")
+            or os.getcwd()
+        )
+        if str(docker_cwd_source).strip() in {"", "."}:
+            docker_cwd_source = os.getcwd()
         candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
         if (
             any(candidate.startswith(p) for p in host_prefixes)
@@ -632,18 +672,45 @@ def _get_env_config() -> Dict[str, Any]:
 
     return {
         "env_type": env_type,
-        "fallback_to_local": os.getenv("TERMINAL_FALLBACK_TO_LOCAL", "true").lower() in ("true", "1", "yes"),
-        "modal_mode": coerce_modal_mode(os.getenv("TERMINAL_MODAL_MODE", "auto")),
-        "docker_image": os.getenv("TERMINAL_DOCKER_IMAGE", default_image),
-        "podman_image": os.getenv("TERMINAL_PODMAN_IMAGE", default_image),
-        "docker_forward_env": _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON"),
-        "singularity_image": os.getenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
-        "modal_image": os.getenv("TERMINAL_MODAL_IMAGE", default_image),
-        "daytona_image": os.getenv("TERMINAL_DAYTONA_IMAGE", default_image),
+        "fallback_to_local": bool_setting(
+            "TERMINAL_FALLBACK_TO_LOCAL", "fallback_to_local", False
+        ),
+        "modal_mode": coerce_modal_mode(
+            str(setting("TERMINAL_MODAL_MODE", "modal_mode", "auto"))
+        ),
+        "docker_image": str(
+            setting("TERMINAL_DOCKER_IMAGE", "docker_image", default_image)
+        ),
+        "podman_image": str(
+            setting(
+                "TERMINAL_PODMAN_IMAGE",
+                "podman_image",
+                "localhost/voidcube-podman-local:latest",
+            )
+        ),
+        "docker_forward_env": structured_setting(
+            "TERMINAL_DOCKER_FORWARD_ENV", "docker_forward_env", []
+        ),
+        "docker_env": structured_setting(
+            "TERMINAL_DOCKER_ENV", "docker_env", {}
+        ),
+        "singularity_image": str(
+            setting(
+                "TERMINAL_SINGULARITY_IMAGE",
+                "singularity_image",
+                f"docker://{default_image}",
+            )
+        ),
+        "modal_image": str(
+            setting("TERMINAL_MODAL_IMAGE", "modal_image", default_image)
+        ),
+        "daytona_image": str(
+            setting("TERMINAL_DAYTONA_IMAGE", "daytona_image", default_image)
+        ),
         "cwd": cwd,
         "host_cwd": host_cwd,
         "docker_mount_cwd_to_workspace": mount_docker_cwd,
-        "timeout": _parse_env_var("TERMINAL_TIMEOUT", "180"),
+        "timeout": int(setting("TERMINAL_TIMEOUT", "timeout", 180)),
         "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "300"),
         # SSH-specific config
         "ssh_host": os.getenv("TERMINAL_SSH_HOST", ""),
@@ -660,11 +727,21 @@ def _get_env_config() -> Dict[str, Any]:
             os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
         ).lower() in ("true", "1", "yes"),
         # Container resource config (applies to docker, singularity, modal, daytona -- ignored for local/ssh)
-        "container_cpu": _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number"),
-        "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),     # MB (default 5GB)
-        "container_disk": _parse_env_var("TERMINAL_CONTAINER_DISK", "51200"),        # MB (default 50GB)
-        "container_persistent": os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in ("true", "1", "yes"),
-        "docker_volumes": _parse_env_var("TERMINAL_DOCKER_VOLUMES", "[]", json.loads, "valid JSON"),
+        "container_cpu": float(
+            setting("TERMINAL_CONTAINER_CPU", "container_cpu", 1)
+        ),
+        "container_memory": int(
+            setting("TERMINAL_CONTAINER_MEMORY", "container_memory", 5120)
+        ),
+        "container_disk": int(
+            setting("TERMINAL_CONTAINER_DISK", "container_disk", 51200)
+        ),
+        "container_persistent": bool_setting(
+            "TERMINAL_CONTAINER_PERSISTENT", "container_persistent", True
+        ),
+        "docker_volumes": structured_setting(
+            "TERMINAL_DOCKER_VOLUMES", "docker_volumes", []
+        ),
     }
 
 

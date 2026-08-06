@@ -379,8 +379,8 @@ DEFAULT_CONFIG = {
     },
     
     "terminal": {
-        "backend": "local",
-        "fallback_to_local": True,
+        "backend": "podman",
+        "fallback_to_local": False,
         "modal_mode": "auto",
         "cwd": ".",  # Use current directory
         "timeout": 180,
@@ -389,7 +389,7 @@ DEFAULT_CONFIG = {
         # are passed through automatically; this list is for non-skill use cases.
         "env_passthrough": [],
         "docker_image": "nikolaik/python-nodejs:python3.14-nodejs20",
-        "podman_image": "nikolaik/python-nodejs:python3.14-nodejs20",
+        "podman_image": "localhost/voidcube-podman-local:latest",
         "docker_forward_env": [],
         # Explicit environment variables to set inside Docker containers.
         # Unlike docker_forward_env (which reads values from the host process),
@@ -411,7 +411,7 @@ DEFAULT_CONFIG = {
         "docker_volumes": [],
         # Explicit opt-in: mount the host cwd into /workspace for Docker sessions.
         # Default off because passing host directories into a sandbox weakens isolation.
-        "docker_mount_cwd_to_workspace": False,
+        "docker_mount_cwd_to_workspace": True,
         # Persistent shell — keep a long-lived bash shell across execute() calls
         # so cwd/env vars/shell variables survive between commands. Backend-specific
         # TERMINAL_LOCAL_PERSISTENT / TERMINAL_SSH_PERSISTENT values can override it.

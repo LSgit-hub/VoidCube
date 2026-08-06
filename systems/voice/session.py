@@ -831,6 +831,7 @@ class VoiceSessionManager:
                 await self.player.play(speech_path, stop_event=stop_event)
             except Exception as exc:
                 self.state.last_error = f"tts:{type(exc).__name__}: {exc}"
+                self.state.last_status = "error"
                 return {
                     "status": "reply_ready_tts_unavailable",
                     "transcript": transcript,
@@ -838,6 +839,7 @@ class VoiceSessionManager:
                     "reason": self.state.last_error,
                 }
             if stop_event.is_set():
+                self.state.last_status = "interrupted"
                 return {
                     "status": "interrupted",
                     "transcript": transcript,

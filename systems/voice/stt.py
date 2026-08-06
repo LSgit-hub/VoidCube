@@ -85,7 +85,6 @@ class SpeechToText:
             str(audio_path),
             language=self.language,
             beam_size=3,
-            vad_filter=True,
             hotwords=self.hotwords,
         )
         text = "".join(str(segment.text) for segment in segments).strip()

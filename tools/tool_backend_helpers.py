@@ -45,7 +45,17 @@ def resolve_modal_backend_state() -> Dict[str, Any]:
 # 其他可能需要的辅助函数
 def get_terminal_backend() -> str:
     """获取终端后端"""
-    return os.getenv("TERMINAL_ENV", "local")
+    if "TERMINAL_ENV" in os.environ:
+        return str(os.environ["TERMINAL_ENV"]).strip().lower() or "podman"
+    try:
+        from VoidCube_app.config import load_config
+
+        terminal = load_config().get("terminal") or {}
+        if isinstance(terminal, dict):
+            return str(terminal.get("backend") or "podman").strip().lower()
+    except Exception:
+        pass
+    return "podman"
 
 def is_local_terminal() -> bool:
     """检查是否为本地终端"""

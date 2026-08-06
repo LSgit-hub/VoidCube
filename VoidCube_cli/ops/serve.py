@@ -183,7 +183,28 @@ def _port_owner_pid(port: int) -> Optional[int]:
             ):
                 return int(connection.pid)
     except Exception:
-        return None
+        pass
+
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for raw_line in result.stdout.splitlines():
+                columns = raw_line.split()
+                if len(columns) < 5 or columns[0].upper() != "TCP":
+                    continue
+                local_address, state, pid_text = columns[1], columns[3], columns[4]
+                if state.upper() != "LISTENING":
+                    continue
+                if local_address.rsplit(":", 1)[-1] != str(int(port)):
+                    continue
+                return int(pid_text)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
     return None
 
 
@@ -201,6 +222,26 @@ def _process_is_service(pid: int, name: str) -> bool:
         "supervisor": ("systems.supervisor.supervisor", "supervisor"),
     }.get(name, ())
     return "voidcube" in command_line and any(marker in command_line for marker in markers)
+
+
+def _health_endpoint_is_service(port: int, name: str) -> bool:
+    """Verify an occupied port from the service's own health identity."""
+    try:
+        from urllib.request import urlopen
+
+        with urlopen(f"http://127.0.0.1:{port}/", timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if name == "gateway":
+        return payload.get("gateway_id") == "voidcube-internal-gateway"
+    expected_service = {
+        "memory": "memory-service",
+        "supervisor": "supervisor",
+    }.get(name)
+    return bool(expected_service and payload.get("service") == expected_service)
 
 
 def _health_check(port: int, timeout: float = 2.0) -> bool:
@@ -442,7 +483,10 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
     # Check if port is occupied by an unknown/stale process
     if _port_listening(svc.port) and not (existing_pid and _pid_alive(existing_pid)):
         owner_pid = _port_owner_pid(svc.port)
-        if owner_pid and _process_is_service(owner_pid, svc.name):
+        if owner_pid and (
+            _process_is_service(owner_pid, svc.name)
+            or _health_endpoint_is_service(svc.port, svc.name)
+        ):
             svc.pid = owner_pid
             _write_pid(svc.pid_file, owner_pid)
             _safe_print(

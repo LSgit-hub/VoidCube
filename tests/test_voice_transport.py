@@ -383,6 +383,7 @@ async def test_local_stt_lazily_loads_faster_whisper(tmp_path, monkeypatch):
 
         def transcribe(self, path, **kwargs):
             assert kwargs["hotwords"] == "星子 西子 VoidCube 语音系统"
+            assert "vad_filter" not in kwargs
             return iter([SimpleNamespace(text=" 本地转写成功。")]), SimpleNamespace()
 
     monkeypatch.setitem(
@@ -711,6 +712,43 @@ async def test_voice_session_matches_owner_transcribes_calls_companion_and_clean
     ]
     assert not (tmp_path / "utterance.wav").exists()
     assert not (tmp_path / "reply.mp3").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_voice_session_keeps_transcript_and_reply_when_tts_fails(tmp_path):
+    manager = VoiceSessionManager(
+        VoiceConfig(
+            enabled=True,
+            fingerprint_path=tmp_path / "fingerprint.json",
+            retain_raw_audio=False,
+        ),
+        companion_callback=companion,
+    )
+    _install_single_utterance_stream(manager)
+    manager.fingerprint.verify = lambda path: {  # type: ignore[method-assign]
+        "owner_voice_matched": True,
+        "similarity": 1.0,
+    }
+    manager.stt.transcribe = fake_transcribe  # type: ignore[method-assign]
+
+    async def fail_tts(text, path):
+        raise RuntimeError("synthesis unavailable")
+
+    manager.tts.synthesize = fail_tts  # type: ignore[method-assign]
+    manager._temporary_audio_path = (  # type: ignore[method-assign]
+        lambda prefix, suffix=".wav": tmp_path / f"{prefix}{suffix}"
+    )
+
+    result = await manager.run_once(session_id="voice-test")
+
+    assert result["status"] == "reply_ready_tts_unavailable"
+    assert result["transcript"] == "当前任务是什么"
+    assert result["reply_text"] == "当前正在处理记忆隔离。"
+    assert manager.status()["last_transcript"] == "当前任务是什么"
+    assert manager.status()["last_reply"] == "当前正在处理记忆隔离。"
+    assert manager.status()["last_status"] == "error"
+    assert "synthesis unavailable" in manager.status()["last_error"]
 
 
 @pytest.mark.asyncio

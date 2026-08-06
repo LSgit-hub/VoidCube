@@ -34,7 +34,7 @@ def test_config_command_layer_owns_cli_handlers():
     assert "config_command" in imports
 
 
-def test_set_config_value_writes_raw_config_and_syncs_terminal_env(tmp_path, monkeypatch):
+def test_set_config_value_writes_terminal_config_and_removes_legacy_env(tmp_path, monkeypatch):
     home = tmp_path / ".VoidCube"
     home.mkdir()
     (home / "config.yaml").write_text(
@@ -43,7 +43,7 @@ def test_set_config_value_writes_raw_config_and_syncs_terminal_env(tmp_path, mon
     )
     monkeypatch.setenv("VOIDCUBE_HOME", str(home))
     monkeypatch.delenv("VOIDCUBE_MANAGED", raising=False)
-    monkeypatch.delenv("TERMINAL_TIMEOUT", raising=False)
+    (home / ".env").write_text("TERMINAL_TIMEOUT=30\n", encoding="utf-8")
 
     from VoidCube_cli.config_commands import set_config_value
 
@@ -55,7 +55,7 @@ def test_set_config_value_writes_raw_config_and_syncs_terminal_env(tmp_path, mon
         "providers": {},
         "terminal": {"timeout": 75},
     }
-    assert "TERMINAL_TIMEOUT=75" in (home / ".env").read_text(encoding="utf-8")
+    assert "TERMINAL_TIMEOUT" not in (home / ".env").read_text(encoding="utf-8")
 
 
 def test_set_config_value_routes_secret_keys_only_to_env(tmp_path, monkeypatch):
