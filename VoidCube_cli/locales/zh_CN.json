@@ -276,7 +276,8 @@
       "服务器管理": "服务器管理",
       "帮助信息": "帮助信息",
       "诊断": "诊断",
-      "API配置": "API配置"
+      "API配置": "API配置",
+      "退出": "退出"
     },
     "banner": {
       "available_tools": "可用工具",
@@ -3137,7 +3138,6 @@
       "use_auth_instead": "使用 'VoidCube auth' 管理凭据，",
       "use_model_or_setup": "'VoidCube model' 选择提供商，或 '/api' 完整设置。",
       "VoidCube_will_continue": "Voidcube 将继续使用自己的会话独立工作。",
-      "run_auth_add": "",
       "whatsapp_paired": "WhatsApp 配对成功！",
       "next_steps": "下一步："
     },

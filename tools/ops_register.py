@@ -13,8 +13,17 @@ from tools.registry import registry
 
 
 def system_info_tool(args=None):
-    """获取系统信息"""
+    """Return host and configured execution-environment information."""
     try:
+        from tools.terminal_tool import _get_env_config
+
+        terminal = _get_env_config()
+        backend = str(terminal.get("env_type") or "local")
+        backend_cwd = str(terminal.get("cwd") or "")
+        host_process_cwd = os.getcwd()
+        mapped_host_workspace = terminal.get("host_cwd")
+        if backend == "local":
+            mapped_host_workspace = backend_cwd or host_process_cwd
         info = {
             "success": True,
             "os": platform.system(),
@@ -24,6 +33,18 @@ def system_info_tool(args=None):
             "processor": platform.processor(),
             "python_version": platform.python_version(),
             "hostname": platform.node(),
+            "terminal_backend": backend,
+            "terminal_cwd": backend_cwd,
+            "host_process_cwd": host_process_cwd,
+            "host_workspace": (
+                str(mapped_host_workspace) if mapped_host_workspace else None
+            ),
+            "workspace_mounted": bool(
+                backend in {"docker", "podman"}
+                and terminal.get("docker_mount_cwd_to_workspace")
+                and terminal.get("host_cwd")
+            ),
+            "fallback_to_local": bool(terminal.get("fallback_to_local", False)),
         }
         return json.dumps(info, ensure_ascii=False)
     except (RuntimeError, OSError) as e:
@@ -291,7 +312,11 @@ def register_ops_tools() -> List[str]:
     registered_tools = []
     
     system_info_schema = {
-        "description": "获取系统信息",
+        "description": (
+            "Get host OS/Python details and the effective terminal execution "
+            "backend, backend working directory, host workspace mapping, and "
+            "sandbox fallback policy."
+        ),
         "parameters": {}
     }
     registry.register(

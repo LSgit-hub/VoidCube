@@ -35,7 +35,6 @@ DELEGATE_BLOCKED_TOOLS = frozenset([
     "delegate_task",   # no recursive delegation
     "clarify",         # no user interaction
     "mem_remember",    # no durable writes from delegated agents
-    "send_message",    # no cross-platform side effects
     "execute_code",    # children should reason step-by-step, not write scripts
 ])
 
@@ -1208,7 +1207,7 @@ DELEGATE_TASK_SCHEMA = {
         "IMPORTANT:\n"
         "- Subagents have NO memory of your conversation. Pass all relevant "
         "info (file paths, error messages, constraints) via the 'context' field.\n"
-        "- Subagents CANNOT call: delegate_task, clarify, memory, send_message, "
+        "- Subagents CANNOT call: delegate_task, clarify, memory, "
         "execute_code.\n"
         "- Each subagent gets its own terminal session (separate working directory and state).\n"
         "- Results are always returned as an array, one entry per task."

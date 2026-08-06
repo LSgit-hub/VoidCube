@@ -156,13 +156,6 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
             return f"-{target}: \"{_oneline(args.get('old_text', '')[:20])}\""
         return action
 
-    if tool_name == "send_message":
-        target = args.get("target", "?")
-        msg = _oneline(args.get("message", ""))
-        if len(msg) > 20:
-            msg = msg[:17] + "..."
-        return f"to {target}: \"{msg}\""
-
     if tool_name.startswith("rl_"):
         rl_previews = {
             "rl_list_environments": "listing envs",
@@ -851,8 +844,6 @@ def get_cute_tool_message(
         return _wrap(f"┊ 👁️  {_pad('视觉分析', 8)}{_trunc(args.get('question', ''), 30)}  {dur}")
     if tool_name == "mixture_of_agents":
         return _wrap(f"┊ 🧠 {_pad('深度推理', 8)}{_trunc(args.get('user_prompt', ''), 30)}  {dur}")
-    if tool_name == "send_message":
-        return _wrap(f"┊ 📨 {_pad('发送', 8)}{args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
     if tool_name == "scheduled_task":
         action_labels = {
             "list": "查看", "create": "创建", "update": "修改",

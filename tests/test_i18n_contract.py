@@ -6,11 +6,37 @@ from pathlib import Path
 import pytest
 
 import VoidCube_core
+from scripts.compare_locales import audit_files, compare_catalogs
 from VoidCube_cli.i18n import get_i18n, init_i18n, set_locale, t
 
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.unit
+
+
+def test_canonical_chinese_catalog_covers_nonempty_english_structure():
+    issues = audit_files(
+        ROOT / "VoidCube_cli" / "locales" / "en_US.json",
+        ROOT / "VoidCube_cli" / "locales" / "zh_CN.json",
+    )
+
+    assert issues == {
+        "missing": [],
+        "empty_reference": [],
+        "empty_translation": [],
+        "type_mismatch": [],
+    }
+
+
+def test_locale_audit_reports_missing_empty_and_type_drift():
+    issues = compare_catalogs(
+        {"missing": "source", "empty": "source", "group": {"key": "value"}},
+        {"empty": "", "group": "not-an-object"},
+    )
+
+    assert issues["missing"] == [("missing", "source")]
+    assert issues["empty_translation"] == [("empty", "source")]
+    assert issues["type_mismatch"][0][0] == "group"
 
 
 def test_browser_tip_uses_the_canonical_json_locales():

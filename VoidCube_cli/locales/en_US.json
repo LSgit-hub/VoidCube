@@ -318,7 +318,6 @@
       "use_auth_instead": "Use 'VoidCube auth' to manage credentials,",
       "use_model_or_setup": "'VoidCube model' to select a provider, or '/api' for full setup.",
       "VoidCube_will_continue": "Voidcube will keep working independently with its own session.",
-      "run_auth_add": "",
       "whatsapp_paired": "WhatsApp paired successfully!",
       "next_steps": "Next steps:"
     },
