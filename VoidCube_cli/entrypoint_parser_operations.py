@@ -119,7 +119,7 @@ def register_operations_commands(subparsers: argparse._SubParsersAction) -> None
             "tools",
             help="Configure which tools are enabled per platform",
             description=(
-                "Enable, disable, or list tools for CLI, Telegram, Discord, etc.\n\n"
+                "Enable, disable, or list tools.\n\n"
                 "Built-in toolsets use plain names (e.g. web, memory).\n"
                 "MCP tools use server:tool notation (e.g. github:create_issue).\n\n"
                 "Run 'VoidCube tools' with no subcommand for the interactive configuration UI."

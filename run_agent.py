@@ -327,7 +327,7 @@ class AIAgent:
             prefill_messages (List[Dict]): Messages to prepend to conversation history as prefilled context.
                 Useful for injecting a few-shot example or priming the model's response style.
                 Example: [{"role": "user", "content": "Hi!"}, {"role": "assistant", "content": "Hello!"}]
-            platform (str): The interface platform the user is on (e.g. "cli", "telegram", "discord", "whatsapp").
+            platform (str): The interface platform the user is on (e.g. "cli").
                 Used to inject platform-specific formatting hints into the system prompt.
             skip_context_files (bool): If True, skip auto-injection of SOUL.md, AGENTS.md, and .cursorrules
                 into the system prompt. Use this for batch processing and data generation to avoid
@@ -344,7 +344,7 @@ class AIAgent:
         self.verbose_logging = verbose_logging
         self.quiet_mode = quiet_mode
         self.ephemeral_system_prompt = ephemeral_system_prompt
-        self.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
+        self.platform = platform  # Platform identifier for the session
         self._user_id = user_id  # Platform user identifier (gateway sessions)
         # Pluggable print function — CLI replaces this with _cprint so that
         # raw ANSI status lines are routed through prompt_toolkit's renderer
@@ -1298,7 +1298,7 @@ class AIAgent:
         wired, so ``_emit_status`` only reaches ``_vprint`` (CLI).  This
         method is called once at the start of the first
         ``run_conversation()`` — by then the gateway has set the callback,
-        so every platform (Telegram, Discord, Slack, etc.) receives the
+        so every platform receives the
         warning.
         """
         msg = getattr(self, "_compression_warning", None)

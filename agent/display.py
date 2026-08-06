@@ -1013,7 +1013,7 @@ def format_context_pressure_gateway(
 ) -> str:
     """Build a plain-text context pressure notification for messaging platforms.
 
-    No ANSI — just Unicode and plain text suitable for Telegram/Discord/etc.
+    No ANSI — just Unicode and plain text suitable for messaging platforms.
     The percentage shows progress toward the compaction threshold.
     """
     pct_int = min(int(compaction_progress * 100), 100)

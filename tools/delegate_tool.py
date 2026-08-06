@@ -1302,7 +1302,7 @@ DELEGATE_TASK_SCHEMA = {
                     "Override the ACP command for child agents. "
                     "When set, children use ACP subprocess transport instead of inheriting "
                     "the parent's transport. This supports ACP-capable agents from any parent, "
-                    "including Discord/Telegram/CLI."
+                    "including any supported platform."
                 ),
             },
             "acp_args": {

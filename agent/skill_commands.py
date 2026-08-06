@@ -274,8 +274,8 @@ def resolve_skill_command_key(command: str) -> Optional[str]:
 
     Skills are always stored with hyphens — ``scan_skill_commands`` normalizes
     spaces and underscores to hyphens when building the key. Hyphens and
-    underscores are treated interchangeably in user input: this matches
-    ``_check_unavailable_skill`` and accommodates Telegram bot-command names
+    underscores are treated interchangeably in user input. This matches
+    ``_check_unavailable_skill`` and accommodates platform bot-command names
     (which disallow hyphens, so ``/code-review`` is registered as
     ``/code_review`` and comes back in the underscored form).
 

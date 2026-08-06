@@ -309,7 +309,7 @@ def get_tool_definitions(
     # Rebuild execute_code schema to only list sandbox tools that are actually
     # available.  Without this, the model sees "web_search is available in
     # execute_code" even when the API key isn't configured or the toolset is
-    # disabled (#560-discord).
+    # disabled.
     if "execute_code" in available_tool_names:
         from tools.code_execution_tool import SANDBOX_ALLOWED_TOOLS, build_execute_code_schema
         sandbox_enabled = set(SANDBOX_ALLOWED_TOOLS) & available_tool_names

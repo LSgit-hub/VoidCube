@@ -77,10 +77,9 @@ display:
   future_display_option: retained
   {unused_key}: true
   {retired_key}:
-    telegram: all
-    slack: verbose
+    cli: all
   platforms:
-    telegram:
+    cli:
       tool_progress: 'off'
 """,
         encoding="utf-8",
@@ -95,8 +94,7 @@ display:
     assert unused_key not in loaded["display"]
     assert "skin" not in loaded["display"]
     assert loaded["display"]["future_display_option"] == "retained"
-    assert loaded["display"]["platforms"]["telegram"]["tool_progress"] == "off"
-    assert loaded["display"]["platforms"]["slack"]["tool_progress"] == "verbose"
+    assert loaded["display"]["platforms"]["cli"]["tool_progress"] == "off"
 
     first_result = migrate_config(interactive=False, quiet=True)
 
@@ -255,10 +253,8 @@ def test_retired_messaging_env_is_removed_without_rewriting_config(
     original_config = "_config_version: 20\n"
     (home / "config.yaml").write_text(original_config, encoding="utf-8")
     retired_values = {
-        "TELEGRAM_BOT_TOKEN": "telegram-secret",
-        "WHATSAPP_ENABLED": "true",
-        "MATRIX_ACCESS_TOKEN": "matrix-secret",
         "API_SERVER_ENABLED": "true",
+        "API_SERVER_KEY": "legacy-key",
         "WEBHOOK_SECRET": "webhook-secret",
         "MESSAGING_CWD": "/old/workspace",
     }
@@ -330,8 +326,8 @@ def test_unused_optional_env_registrations_are_removed(tmp_path, monkeypatch):
 
 
 def test_tool_config_platforms_ignore_retired_messaging_env(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "legacy-token")
-    monkeypatch.setenv("WHATSAPP_ENABLED", "true")
+    monkeypatch.setenv("API_SERVER_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_SECRET", "legacy-secret")
 
     from VoidCube_cli.tools_config import _get_enabled_platforms
 

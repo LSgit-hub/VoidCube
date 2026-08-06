@@ -60,7 +60,7 @@ class MemoryProvider(ABC):
         kwargs always include:
           - VoidCube_home (str): The active VOIDCUBE_HOME directory path. Use this
             for profile-scoped storage instead of hardcoding ``~/.VoidCube``.
-          - platform (str): "cli", "telegram", "discord", etc.
+          - platform (str): Platform identifier for the session.
 
         kwargs may also include:
           - agent_context (str): "primary", "subagent", or "flush".

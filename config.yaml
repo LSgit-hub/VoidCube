@@ -205,13 +205,6 @@ prefill_messages_file: ''
 skills:
   external_dirs: []
 timezone: ''
-discord:
-  require_mention: true
-  free_response_channels: ''
-  allowed_channels: ''
-  auto_thread: true
-  reactions: true
-whatsapp: {}
 approvals:
   mode: manual
   timeout: 60

@@ -11,7 +11,7 @@ Key design decisions:
 - FTS5 virtual table for fast text search across all session messages
 - Compression-triggered session splitting via parent_session_id chains
 - Batch runner and RL trajectories are NOT stored here (separate systems)
-- Session source tagging ('cli', 'telegram', 'discord', etc.) for filtering
+- Session source tagging for filtering
 """
 
 import json

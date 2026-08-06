@@ -530,7 +530,7 @@ DEFAULT_CONFIG = {
         "interim_assistant_messages": True,  # Gateway: show natural mid-turn assistant status messages
         "tool_progress": "all",  # off | new | all | verbose
         "tool_preview_length": 0,  # Max chars for tool call previews (0 = no limit, show full paths/commands)
-        "platforms": {},  # Per-platform display overrides: {"telegram": {"tool_progress": "all"}, "slack": {"tool_progress": "off"}}
+        "platforms": {},  # Per-platform display overrides
     },
 
     "clarify": {
@@ -693,23 +693,6 @@ DEFAULT_CONFIG = {
     # IANA timezone (e.g. "Asia/Kolkata", "America/New_York").
     # Empty string means use server-local time.
     "timezone": "",
-
-    # Discord platform settings (gateway mode)
-    "discord": {
-        "require_mention": True,       # Require @mention to respond in server channels
-        "free_response_channels": "",  # Comma-separated channel IDs where bot responds without mention
-        "allowed_channels": "",        # If set, bot ONLY responds in these channel IDs (whitelist)
-        "auto_thread": True,           # Auto-create threads on @mention in channels (like Slack)
-        "reactions": True,             # Add 👀/✅/❌ reactions to messages during processing
-    },
-
-    # WhatsApp platform settings (gateway mode)
-    "whatsapp": {
-        # Reply prefix prepended to every outgoing WhatsApp message.
-        # Default (None) uses the built-in "> *Voidcube Agent*" header.
-        # Set to "" (empty string) to disable the header entirely.
-        # Supports \n for newlines, e.g. "🤖 *My Bot*\n──────\n"
-    },
 
     # Approval mode for dangerous commands:
     #   manual — always prompt the user (default)

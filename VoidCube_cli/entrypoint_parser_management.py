@@ -67,7 +67,7 @@ def register_management_commands(subparsers: argparse._SubParsersAction) -> None
         sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
 
         sessions_list = sessions_subparsers.add_parser("list", help="List recent sessions")
-        sessions_list.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
+        sessions_list.add_argument("--source", help="Filter by source (cli, etc.)")
         sessions_list.add_argument("--limit", type=int, default=20, help="Max sessions to show")
 
         sessions_export = sessions_subparsers.add_parser("export", help="Export sessions to a JSONL file")
@@ -94,7 +94,7 @@ def register_management_commands(subparsers: argparse._SubParsersAction) -> None
             "browse",
             help="Interactive session picker — browse, search, and resume sessions",
         )
-        sessions_browse.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
+        sessions_browse.add_argument("--source", help="Filter by source (cli, etc.)")
         sessions_browse.add_argument("--limit", type=int, default=50, help="Max sessions to load (default: 50)")
 
 

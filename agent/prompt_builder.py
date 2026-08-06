@@ -295,56 +295,6 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
 DEVELOPER_ROLE_MODELS = ("gpt-5",)
 
 PLATFORM_HINTS = {
-    "whatsapp": (
-        "You are on a text messaging communication platform, WhatsApp. "
-        "Please do not use markdown as it does not render. "
-        "You can send media files natively: to deliver a file to the user, "
-        "include MEDIA:/absolute/path/to/file in your response. The file "
-        "will be sent as a native WhatsApp attachment — images (.jpg, .png, "
-        ".webp) appear as photos, videos (.mp4, .mov) play inline, and other "
-        "files arrive as downloadable documents. You can also include image "
-        "URLs in markdown format ![alt](url) and they will be sent as photos."
-    ),
-    "telegram": (
-        "You are on a text messaging communication platform, Telegram. "
-        "Please do not use markdown as it does not render. "
-        "You can send media files natively: to deliver a file to the user, "
-        "include MEDIA:/absolute/path/to/file in your response. Images "
-        "(.png, .jpg, .webp) appear as photos, audio (.ogg) sends as voice "
-        "bubbles, and videos (.mp4) play inline. You can also include image "
-        "URLs in markdown format ![alt](url) and they will be sent as native photos."
-    ),
-    "discord": (
-        "You are in a Discord server or group chat communicating with your user. "
-        "You can send media files natively: include MEDIA:/absolute/path/to/file "
-        "in your response. Images (.png, .jpg, .webp) are sent as photo "
-        "attachments, audio as file attachments. You can also include image URLs "
-        "in markdown format ![alt](url) and they will be sent as attachments."
-    ),
-    "slack": (
-        "You are in a Slack workspace communicating with your user. "
-        "You can send media files natively: include MEDIA:/absolute/path/to/file "
-        "in your response. Images (.png, .jpg, .webp) are uploaded as photo "
-        "attachments, audio as file attachments. You can also include image URLs "
-        "in markdown format ![alt](url) and they will be uploaded as attachments."
-    ),
-    "signal": (
-        "You are on a text messaging communication platform, Signal. "
-        "Please do not use markdown as it does not render. "
-        "You can send media files natively: to deliver a file to the user, "
-        "include MEDIA:/absolute/path/to/file in your response. Images "
-        "(.png, .jpg, .webp) appear as photos, audio as attachments, and other "
-        "files arrive as downloadable documents. You can also include image "
-        "URLs in markdown format ![alt](url) and they will be sent as photos."
-    ),
-    "email": (
-        "You are communicating via email. Write clear, well-structured responses "
-        "suitable for email. Use plain text formatting (no markdown). "
-        "Keep responses concise but complete. You can send file attachments — "
-        "include MEDIA:/absolute/path/to/file in your response. The subject line "
-        "is preserved for threading. Do not include greetings or sign-offs unless "
-        "contextually appropriate."
-    ),
     "cli": (
         "You are a CLI AI Agent. Try not to use markdown but simple text "
         "renderable inside a terminal."

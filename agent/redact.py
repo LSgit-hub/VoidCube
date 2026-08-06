@@ -26,7 +26,6 @@ _PREFIX_PATTERNS = [
     r"ghu_[A-Za-z0-9]{10,}",            # GitHub user-to-server token
     r"ghs_[A-Za-z0-9]{10,}",            # GitHub server-to-server token
     r"ghr_[A-Za-z0-9]{10,}",            # GitHub refresh token
-    r"xox[baprs]-[A-Za-z0-9-]{10,}",    # Slack tokens
     r"AIza[A-Za-z0-9_-]{30,}",          # Google API keys
     r"pplx-[A-Za-z0-9]{10,}",           # Perplexity
     r"fal_[A-Za-z0-9_-]{10,}",          # Fal.ai
@@ -38,7 +37,6 @@ _PREFIX_PATTERNS = [
     r"rk_live_[A-Za-z0-9]{10,}",        # Stripe restricted key
     r"SG\.[A-Za-z0-9_-]{10,}",          # SendGrid API key
     r"hf_[A-Za-z0-9]{10,}",             # HuggingFace token
-    r"r8_[A-Za-z0-9]{10,}",             # Replicate API token
     r"npm_[A-Za-z0-9]{10,}",            # npm access token
     r"pypi-[A-Za-z0-9_-]{10,}",         # PyPI API token
     r"dop_v1_[A-Za-z0-9]{10,}",         # DigitalOcean PAT
@@ -72,12 +70,6 @@ _AUTH_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Telegram bot tokens: bot<digits>:<token> or <digits>:<token>,
-# where token part is restricted to [-A-Za-z0-9_] and length >= 30
-_TELEGRAM_RE = re.compile(
-    r"(bot)?(\d{8,}):([-A-Za-z0-9_]{30,})",
-)
-
 # Private key blocks: -----BEGIN RSA PRIVATE KEY----- ... -----END RSA PRIVATE KEY-----
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"
@@ -91,7 +83,6 @@ _DB_CONNSTR_RE = re.compile(
 )
 
 # E.164 phone numbers: +<country><number>, 7-15 digits
-# Negative lookahead prevents matching hex strings or identifiers
 _SIGNAL_PHONE_RE = re.compile(r"(\+[1-9]\d{6,14})(?![A-Za-z0-9])")
 
 # Compile known prefix patterns into one alternation
@@ -143,20 +134,13 @@ def redact_sensitive_text(text: str, *, force: bool = False) -> str:
         text,
     )
 
-    # Telegram bot tokens
-    def _redact_telegram(m):
-        prefix = m.group(1) or ""
-        digits = m.group(2)
-        return f"{prefix}{digits}:***"
-    text = _TELEGRAM_RE.sub(_redact_telegram, text)
-
     # Private key blocks
     text = _PRIVATE_KEY_RE.sub("[REDACTED PRIVATE KEY]", text)
 
     # Database connection string passwords
     text = _DB_CONNSTR_RE.sub(lambda m: f"{m.group(1)}***{m.group(3)}", text)
 
-    # E.164 phone numbers (Signal, WhatsApp)
+    # E.164 phone numbers
     def _redact_phone(m):
         phone = m.group(1)
         if len(phone) <= 8:
