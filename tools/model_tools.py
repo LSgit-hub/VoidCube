@@ -151,7 +151,6 @@ def _discover_tools():
         "tools.code_execution_tool",
         "tools.delegate_tool",
         "tools.process_registry",
-        "tools.sandbox_executor",
         # UI Automation tools for Windows desktop applications
         "tools.uiautomation_tool",
         # Media generation tools (image/video)
