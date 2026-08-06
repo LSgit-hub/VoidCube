@@ -168,15 +168,15 @@ MCP（Model Context Protocol）工具由外部 MCP 服务器动态注册，数�
 
 | Toolset | 包含工具 |
 |---------|----------|
-| `core` | terminal, read_file, write_file, patch, search_files, web_search, web_extract, browser_navigate, browser_snapshot |
-| `extended` | memory_load, memory_persist, delegate_task, execute_code |
+| `voidcube` | API-A 默认组合，递归包含 web、playback、browser、vision、terminal、file、skills、scheduling、code_execution、ops、media、assistant、delegation、todo |
+| `full` | `voidcube` 默认组合加 `session_search` |
 | `web` | web_search, web_extract, media_play, media_control |
 | `playback` | media_play, media_control（B站和直链音视频播放及控制） |
 | `file` | read_file, write_file, patch, search_files |
 | `terminal` | terminal, process |
 | `code_execution` | execute_code |
 | `skills` | skills_list, skill_view, skill_manage |
-| `system` | system_info, cpu_stats, memory_stats, disk_usage, top_processes |
+| `system` | system_info, cpu_stats, memory_stats, disk_usage, top_processes, check_dependencies |
 | `network` | ping, check_port, dns_lookup, curl_check |
 | `logs` | read_log, log_errors, analyze_log |
 | `browser` | browser_navigate, browser_snapshot, browser_click, browser_type, browser_scroll, browser_back, browser_press, browser_get_images, browser_vision, browser_console |

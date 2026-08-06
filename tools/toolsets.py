@@ -6,20 +6,6 @@ Toolsets Module - Server Management Focused (精简版)
 from typing import List, Dict, Any, Set, Optional
 
 
-_VOIDCUBE_CORE_TOOLS = [
-    "web_search", "web_extract",
-    "terminal", "process",
-    "read_file", "write_file", "patch", "search_files",
-    "skills_list", "skill_view", "skill_manage",
-    "execute_code",
-    "session_search",
-    "clarify",
-    "system_info", "cpu_stats", "memory_stats", "disk_usage", "top_processes",
-    "ping", "check_port", "dns_lookup", "curl_check",
-    "read_log", "log_errors", "analyze_log",
-]
-
-
 TOOLSETS = {
     "web": {
         "description": "Web research, content extraction, and Web UI media playback tools",

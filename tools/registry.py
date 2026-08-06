@@ -470,12 +470,3 @@ class ToolRegistry:
 
 # 全局注册表实例
 registry = ToolRegistry()
-
-# 注册默认工具集
-registry.register_toolset("core", [
-    "terminal", "read_file", "write_file", "patch", "search_files",
-    "web_search", "web_extract", "browser_navigate", "browser_snapshot",
-])
-registry.register_toolset("extended", [
-    "memory_load", "memory_persist", "delegate", "execute_code",
-])

@@ -94,6 +94,23 @@ def test_static_toolsets_only_reference_registered_tools():
     assert missing == {}
 
 
+def test_registry_has_no_legacy_default_toolset_aliases():
+    from tools.model_tools import get_available_toolsets
+    from tools.toolsets import resolve_toolset
+
+    available = get_available_toolsets()
+
+    assert "core" not in available
+    assert "extended" not in available
+    assert {
+        "terminal",
+        "read_file",
+        "execute_code",
+        "delegate_task",
+        "check_dependencies",
+    } <= set(resolve_toolset("voidcube"))
+
+
 def test_windows_uiautomation_toolset_exposes_all_registered_tools():
     if sys.platform != "win32":
         return
