@@ -168,6 +168,41 @@ def _port_listening(port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def _port_owner_pid(port: int) -> Optional[int]:
+    """Return the owning process for a listening port when the OS exposes it."""
+    try:
+        import psutil
+
+        for connection in psutil.net_connections(kind="tcp"):
+            address = connection.laddr
+            if (
+                connection.status == "LISTEN"
+                and address
+                and int(getattr(address, "port", 0)) == int(port)
+                and connection.pid
+            ):
+                return int(connection.pid)
+    except Exception:
+        return None
+    return None
+
+
+def _process_is_service(pid: int, name: str) -> bool:
+    """Recognize a VoidCube service process so a lost PID file can be adopted."""
+    try:
+        import psutil
+
+        command_line = " ".join(psutil.Process(pid).cmdline()).lower()
+    except Exception:
+        return False
+    markers = {
+        "gateway": ("internal_gateway", "gateway"),
+        "memory": ("memory_service",),
+        "supervisor": ("systems.supervisor.supervisor", "supervisor"),
+    }.get(name, ())
+    return "voidcube" in command_line and any(marker in command_line for marker in markers)
+
+
 def _health_check(port: int, timeout: float = 2.0) -> bool:
     """Check if a service is responding on its health endpoint.
 
@@ -295,6 +330,58 @@ def _service_python_path_entries() -> list[str]:
     return [str(repo_root), str(repo_root / "Mem" / "src")]
 
 
+def _service_python_executable(
+    repo_root: Path | None = None,
+    *,
+    current_executable: str | None = None,
+    platform: str | None = None,
+) -> str:
+    """Use the repository virtual environment for service subprocesses.
+
+    The CLI may itself be launched by a system Python that lacks optional
+    runtime dependencies such as microphone capture.  Repository services
+    must therefore use the project's canonical environment when it exists.
+    Installed distributions without a repository ``.venv`` keep using the
+    interpreter that launched the CLI.
+    """
+    root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+    active_platform = platform or sys.platform
+    relative_path = (
+        Path("Scripts") / "python.exe"
+        if active_platform == "win32"
+        else Path("bin") / "python"
+    )
+    project_python = root / ".venv" / relative_path
+    if project_python.is_file():
+        return str(project_python.resolve())
+    return str(Path(current_executable or sys.executable).resolve())
+
+
+def _running_with_service_python() -> bool:
+    expected = os.path.normcase(_service_python_executable())
+    current = os.path.normcase(str(Path(sys.executable).resolve()))
+    return current == expected
+
+
+def _restart_foreground_with_service_python() -> None:
+    service_python = _service_python_executable()
+    _safe_print(
+        "  Restarting foreground services with the project Python: "
+        f"{service_python}"
+    )
+    os.execv(
+        service_python,
+        [
+            service_python,
+            "-m",
+            "VoidCube_cli.main",
+            "serve",
+            "start",
+            "--foreground",
+        ],
+    )
+
+
 def _verify_canonical_mem_import_source() -> Dict[str, str]:
     """Fail startup when Python resolves memai outside the shared source."""
     from systems.config import get_config
@@ -354,6 +441,15 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
 
     # Check if port is occupied by an unknown/stale process
     if _port_listening(svc.port) and not (existing_pid and _pid_alive(existing_pid)):
+        owner_pid = _port_owner_pid(svc.port)
+        if owner_pid and _process_is_service(owner_pid, svc.name):
+            svc.pid = owner_pid
+            _write_pid(svc.pid_file, owner_pid)
+            _safe_print(
+                f"  {svc.name:12s} reused existing VoidCube process "
+                f"(pid {owner_pid}, port {svc.port})"
+            )
+            return None
         _safe_print(f"  ⚠ {svc.name:12s} port {svc.port} is occupied by an unknown process")
         _safe_print(f"     Use 'netstat -ano | findstr :{svc.port}' to find and kill it")
         return None
@@ -379,7 +475,7 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
     log_dir = Path(svc.log_file).parent
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    venv_python = sys.executable  # use the same Python that's running the CLI
+    service_python = _service_python_executable()
     log_path = json.dumps(str(Path(svc.log_file).resolve()))
     path_entries = json.dumps(_service_python_path_entries())
     project_env_path = json.dumps(str(Path(__file__).resolve().parents[2] / ".env"))
@@ -403,7 +499,7 @@ uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
 """
 
     proc = subprocess.Popen(
-        [venv_python, "-c", script],
+        [service_python, "-c", script],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
@@ -515,6 +611,10 @@ def start_all(foreground: bool = False) -> None:
     Body/agent subprocesses are not part of the default startup path.
     They should only be started by an explicit body-runtime operation.
     """
+    if foreground and not _running_with_service_python():
+        _restart_foreground_with_service_python()
+        return
+
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
     _sync_canonical_mem_binding_before_start()

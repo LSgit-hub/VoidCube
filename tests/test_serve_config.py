@@ -10,6 +10,7 @@ from systems.config import SystemConfig, load_config_from_env
 
 from VoidCube_cli.ops.serve import (
     _build_service_config,
+    _service_python_executable,
     _service_python_path_entries,
     _verify_canonical_mem_import_source,
 )
@@ -101,6 +102,102 @@ def test_service_subprocess_python_path_includes_canonical_mem_source():
 
     assert len(entries) == 2
     assert entries[1].endswith("Mem\\src") or entries[1].endswith("Mem/src")
+
+
+def test_service_python_prefers_repository_venv_on_windows(tmp_path):
+    project_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    project_python.parent.mkdir(parents=True)
+    project_python.touch()
+
+    resolved = _service_python_executable(
+        tmp_path,
+        current_executable=str(tmp_path / "system-python.exe"),
+        platform="win32",
+    )
+
+    assert resolved == str(project_python.resolve())
+
+
+def test_service_python_falls_back_to_current_interpreter_without_repository_venv(
+    tmp_path,
+):
+    current_python = tmp_path / "installed-python.exe"
+
+    resolved = _service_python_executable(
+        tmp_path,
+        current_executable=str(current_python),
+        platform="win32",
+    )
+
+    assert resolved == str(current_python.resolve())
+
+
+def test_background_service_uses_resolved_service_python(monkeypatch, tmp_path):
+    from VoidCube_cli.ops import serve
+
+    service = serve.SERVICES["supervisor"]
+    selected_python = str(tmp_path / ".venv" / "Scripts" / "python.exe")
+    popen_calls = []
+
+    monkeypatch.setattr(service, "pid_file", str(tmp_path / "supervisor.pid"))
+    monkeypatch.setattr(service, "log_file", str(tmp_path / "supervisor.log"))
+    monkeypatch.setattr(serve, "_read_pid", lambda path: None)
+    monkeypatch.setattr(serve, "_port_listening", lambda port: False)
+    monkeypatch.setattr(serve, "_service_python_executable", lambda: selected_python)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        serve.subprocess,
+        "Popen",
+        lambda args, **kwargs: popen_calls.append((args, kwargs))
+        or SimpleNamespace(pid=4321),
+    )
+
+    process = serve.start_service("supervisor", foreground=False)
+
+    assert process.pid == 4321
+    assert popen_calls[0][0][0] == selected_python
+    assert (tmp_path / "supervisor.pid").read_text() == "4321"
+
+
+def test_foreground_start_reexecs_with_service_python(monkeypatch):
+    from VoidCube_cli.ops import serve
+
+    calls = []
+    monkeypatch.setattr(serve, "_running_with_service_python", lambda: False)
+    monkeypatch.setattr(
+        serve,
+        "_restart_foreground_with_service_python",
+        lambda: calls.append("restart"),
+    )
+    monkeypatch.setattr(
+        serve,
+        "_sync_canonical_mem_binding_before_start",
+        lambda: calls.append("sync"),
+    )
+
+    serve.start_all(foreground=True)
+
+    assert calls == ["restart"]
+
+
+def test_start_service_adopts_existing_voidcube_process_when_pid_file_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    from VoidCube_cli.ops import serve
+
+    service = serve.SERVICES["supervisor"]
+    pid_file = tmp_path / "supervisor.pid"
+    monkeypatch.setattr(service, "pid_file", str(pid_file))
+    monkeypatch.setattr(serve, "_read_pid", lambda path: None)
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(serve, "_port_listening", lambda port: True)
+    monkeypatch.setattr(serve, "_port_owner_pid", lambda port: 8924)
+    monkeypatch.setattr(serve, "_process_is_service", lambda pid, name: True)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    assert serve.start_service("supervisor", foreground=False) is None
+    assert pid_file.read_text(encoding="utf-8") == "8924"
 
 
 def test_canonical_mem_import_source_matches_repository_source(tmp_path, monkeypatch):

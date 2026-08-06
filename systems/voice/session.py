@@ -809,8 +809,19 @@ class VoiceSessionManager:
         self.state.last_status = "thinking"
         reply = await self.companion_callback(text=transcript, session_id=session_id)
         if str(reply.get("status") or "") != "ok":
+            reason = str(reply.get("reason") or "companion_unavailable").strip()
+            self.state.last_status = "error"
+            self.state.last_error = reason[:1000]
             return {"status": "companion_unavailable", "transcript": transcript, **reply}
         reply_text = str(reply.get("reply_text") or "").strip()
+        if not reply_text:
+            self.state.last_status = "error"
+            self.state.last_error = "companion_reply_empty"
+            return {
+                "status": "companion_unavailable",
+                "transcript": transcript,
+                "reason": self.state.last_error,
+            }
         self.state.last_reply = reply_text
         self.state.last_status = "speaking"
         speech_path = self._temporary_audio_path("reply", suffix=".mp3")

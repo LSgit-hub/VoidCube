@@ -57,6 +57,17 @@ def test_media_play_is_available_to_web_and_playback_agents() -> None:
     assert playback_names == {"media_play", "media_control"}
 
 
+def test_default_toolset_exposes_reconnected_core_tools() -> None:
+    from tools.model_tools import get_tool_definitions
+
+    names = {
+        item["function"]["name"]
+        for item in get_tool_definitions(["voidcube"], quiet_mode=True)
+    }
+
+    assert {"delegate_task", "todo", "clarify", "check_dependencies"} <= names
+
+
 def test_media_play_can_request_queue_mode(monkeypatch) -> None:
     monkeypatch.setenv("SUPERVISOR_MEDIA_URL", "http://127.0.0.1:6002")
     response = Mock()

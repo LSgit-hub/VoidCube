@@ -65,6 +65,10 @@ web = [
     "firecrawl-py>=0.1.0",
     "parallel-web>=0.4.2",
 ]
+# Windows desktop automation
+desktop = [
+    "uiautomation>=2.0.29,<3; platform_system == 'Windows'",
+]
 dev = [
     "build>=1.2.0,<2",
     "pip-audit>=2.9.0,<3",
@@ -75,7 +79,7 @@ dev = [
 ]
 # 完整安装（兼容两种命名习惯）
 full = [
-    "voidcube-agent[local,image,voice,web]",
+    "voidcube-agent[local,image,voice,web,desktop]",
 ]
 all = [
     "voidcube-agent[full]",

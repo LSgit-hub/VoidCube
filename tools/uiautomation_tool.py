@@ -881,108 +881,127 @@ TOOL_SCHEMAS = {
 
 def register_tools():
     from tools.registry import registry
+
+    availability = lambda: AUTO_AVAILABLE
     
     registry.register(
         name="uia_find_window",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_find_window"],
-        handler=uia_find_window
+        handler=uia_find_window,
+        check_fn=availability,
     )
     registry.register(
         name="uia_wait_for_window",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_wait_for_window"],
-        handler=uia_wait_for_window
+        handler=uia_wait_for_window,
+        check_fn=availability,
     )
     registry.register(
         name="uia_search_controls",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_search_controls"],
-        handler=uia_search_controls
+        handler=uia_search_controls,
+        check_fn=availability,
     )
     registry.register(
         name="uia_click_button",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_click_button"],
-        handler=uia_click_button
+        handler=uia_click_button,
+        check_fn=availability,
     )
     registry.register(
         name="uia_set_text",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_set_text"],
-        handler=uia_set_text
+        handler=uia_set_text,
+        check_fn=availability,
     )
     registry.register(
         name="uia_get_text",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_get_text"],
-        handler=uia_get_text
+        handler=uia_get_text,
+        check_fn=availability,
     )
     registry.register(
         name="uia_list_controls",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_list_controls"],
-        handler=uia_list_controls
+        handler=uia_list_controls,
+        check_fn=availability,
     )
     registry.register(
         name="uia_select_combo_item",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_select_combo_item"],
-        handler=uia_select_combo_item
+        handler=uia_select_combo_item,
+        check_fn=availability,
     )
     registry.register(
         name="uia_toggle_checkbox",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_toggle_checkbox"],
-        handler=uia_toggle_checkbox
+        handler=uia_toggle_checkbox,
+        check_fn=availability,
     )
     registry.register(
         name="uia_send_keys",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_send_keys"],
-        handler=uia_send_keys
+        handler=uia_send_keys,
+        check_fn=availability,
     )
     registry.register(
         name="uia_window_action",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_window_action"],
-        handler=uia_window_action
+        handler=uia_window_action,
+        check_fn=availability,
     )
     registry.register(
         name="uia_mouse_click",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_mouse_click"],
-        handler=uia_mouse_click
+        handler=uia_mouse_click,
+        check_fn=availability,
     )
     registry.register(
         name="uia_mouse_move",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_mouse_move"],
-        handler=uia_mouse_move
+        handler=uia_mouse_move,
+        check_fn=availability,
     )
     registry.register(
         name="uia_start_process",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_start_process"],
-        handler=uia_start_process
+        handler=uia_start_process,
+        check_fn=availability,
     )
     registry.register(
         name="uia_wait",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_wait"],
-        handler=uia_wait
+        handler=uia_wait,
+        check_fn=availability,
     )
     registry.register(
         name="uia_get_control_info",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_get_control_info"],
-        handler=uia_get_control_info
+        handler=uia_get_control_info,
+        check_fn=availability,
     )
     registry.register(
         name="uia_scroll",
         toolset="uiautomation",
         schema=TOOL_SCHEMAS["uia_scroll"],
-        handler=uia_scroll
+        handler=uia_scroll,
+        check_fn=availability,
     )
 
 

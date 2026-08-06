@@ -1837,8 +1837,15 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             tools=registered_names,
         )
         # Inject into VoidCube-* umbrella toolsets for default behavior
-        for ts_name, ts in TOOLSETS.items():
-            if ts_name.startswith("VoidCube-"):
+        for ts_name in ("voidcube", "voidcube-cli"):
+            ts = TOOLSETS.get(ts_name)
+            if ts is None:
+                continue
+            if "tools" not in ts:
+                ts["tools"] = []
+            if "includes" not in ts:
+                ts["includes"] = []
+            if ts_name.startswith("voidcube"):
                 for tool_name in registered_names:
                     if tool_name not in ts["tools"]:
                         ts["tools"].append(tool_name)

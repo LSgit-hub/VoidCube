@@ -63,6 +63,24 @@ TOOLSETS = {
         "includes": []
     },
 
+    "assistant": {
+        "description": "Interactive assistance and clarification tools",
+        "tools": ["clarify"],
+        "includes": [],
+    },
+
+    "delegation": {
+        "description": "Delegate bounded work to a child agent",
+        "tools": ["delegate_task"],
+        "includes": [],
+    },
+
+    "todo": {
+        "description": "Track the current agent's task list",
+        "tools": ["todo"],
+        "includes": [],
+    },
+
     "scheduling": {
         "description": "Manage scheduled tasks executed later by the main CLI API-A agent",
         "tools": ["scheduled_task"],
@@ -77,7 +95,7 @@ TOOLSETS = {
     
     "system": {
         "description": "System monitoring and info tools",
-        "tools": ["system_info", "cpu_stats", "memory_stats", "disk_usage", "top_processes"],
+        "tools": ["system_info", "cpu_stats", "memory_stats", "disk_usage", "top_processes", "check_dependencies"],
         "includes": []
     },
     
@@ -104,6 +122,20 @@ TOOLSETS = {
         "includes": []
     },
 
+    "uiautomation": {
+        "description": "Windows desktop UI automation tools",
+        "tools": [
+            "uia_find_window", "uia_wait_for_window",
+            "uia_search_controls", "uia_click_button",
+            "uia_set_text", "uia_get_text", "uia_list_controls",
+            "uia_select_combo_item", "uia_toggle_checkbox",
+            "uia_send_keys", "uia_window_action", "uia_mouse_click",
+            "uia_mouse_move", "uia_start_process", "uia_wait",
+            "uia_get_control_info", "uia_scroll",
+        ],
+        "includes": [],
+    },
+
     "ops": {
         "description": "All server operations tools",
         "tools": [],
@@ -113,13 +145,13 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "playback", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
+        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
     },
 
     "voidcube-cli": {
         "description": "Core tools for server management (alias)",
         "tools": [],
-        "includes": ["web", "playback", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
+        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
     },
     
     "mini": {
@@ -145,8 +177,8 @@ TOOLSETS = {
             "terminal",
             "execute_code",
             "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll", "browser_extract",
-            "browser_wait", "browser_close", "browser_screenshot",
+            "browser_type", "browser_scroll",
+            "browser_back", "browser_press",
         ],
         "includes": [],
     },
@@ -156,7 +188,30 @@ TOOLSETS = {
         "tools": ["image_generate", "image_edit", "video_generate"],
         "includes": [],
     },
+
+    "vision": {
+        "description": "Analyze images through the configured vision model",
+        "tools": ["vision_analyze"],
+        "includes": [],
+    },
 }
+
+
+def create_custom_toolset(
+    name: str,
+    description: str,
+    tools: List[str],
+) -> Dict[str, Any]:
+    """Register or replace a runtime toolset, such as an MCP server."""
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        raise ValueError("toolset name is required")
+    TOOLSETS[normalized] = {
+        "description": str(description or "").strip(),
+        "tools": list(dict.fromkeys(str(tool).strip() for tool in tools if str(tool).strip())),
+        "includes": [],
+    }
+    return TOOLSETS[normalized]
 
 
 def get_toolset(name: str) -> Optional[Dict[str, Any]]:

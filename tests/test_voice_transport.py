@@ -42,6 +42,61 @@ def test_voice_config_uses_hello_stellar_as_default_wake_phrase(monkeypatch):
 
 
 @pytest.mark.unit
+def test_voice_config_reads_canonical_local_stt_settings(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "stt:\n  provider: local\n  local:\n    model: base\n    language: zh\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "VoidCube_core.constants.get_config_path",
+        lambda: config_path,
+    )
+    monkeypatch.delenv("VOIDCUBE_STT_PROVIDER", raising=False)
+    monkeypatch.delenv("VOIDCUBE_STT_MODEL", raising=False)
+    monkeypatch.delenv("VOIDCUBE_STT_LANGUAGE", raising=False)
+
+    config = VoiceConfig.from_env()
+
+    assert config.stt_provider == "local"
+    assert config.stt_model == "base"
+    assert config.stt_language == "zh"
+
+
+@pytest.mark.unit
+def test_voice_config_keeps_chinese_default_when_canonical_language_is_empty(
+    monkeypatch, tmp_path
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "stt:\n  provider: local\n  local:\n    model: base\n    language: ''\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "VoidCube_core.constants.get_config_path",
+        lambda: config_path,
+    )
+    monkeypatch.delenv("VOIDCUBE_STT_LANGUAGE", raising=False)
+
+    assert VoiceConfig.from_env().stt_language == "zh"
+
+
+@pytest.mark.unit
+def test_voice_config_uses_canonical_stt_enabled_when_voice_override_is_absent(
+    monkeypatch, tmp_path
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("stt:\n  enabled: true\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "VoidCube_core.constants.get_config_path",
+        lambda: config_path,
+    )
+    monkeypatch.delenv("VOIDCUBE_VOICE_ENABLED", raising=False)
+
+    assert VoiceConfig.from_env().enabled is True
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("transcript", "expected_query"),
     [

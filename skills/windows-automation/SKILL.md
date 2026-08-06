@@ -1,3 +1,8 @@
+---
+name: windows-automation
+description: Automate Windows desktop applications through the uiautomation toolset, including launching processes, finding windows, inspecting controls, entering text, clicking buttons, sending keys, and verifying results. Use only on Windows when desktop UI interaction is required.
+---
+
 # Windows应用自动化控制技能
 
 ## 技能概述

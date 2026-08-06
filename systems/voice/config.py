@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from typing import Any
+import yaml
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -10,6 +12,22 @@ def _env_bool(name: str, default: bool) -> bool:
     if not value:
         return default
     return value in {"1", "true", "yes", "on"}
+
+
+def _canonical_stt_config() -> dict[str, Any]:
+    """Read the canonical user config without making it a hard dependency."""
+    try:
+        from VoidCube_core.constants import get_config_path
+
+        path = get_config_path()
+        if path.is_file():
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            stt = raw.get("stt") or {}
+            if isinstance(stt, dict):
+                return stt
+    except Exception:
+        pass
+    return {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,13 +72,20 @@ class VoiceConfig:
 
     @classmethod
     def from_env(cls) -> "VoiceConfig":
+        canonical_stt = _canonical_stt_config()
+        canonical_local = canonical_stt.get("local") or {}
+        if not isinstance(canonical_local, dict):
+            canonical_local = {}
+        canonical_enabled = bool(canonical_stt.get("enabled", False))
         stt_base_url = str(os.getenv("VOIDCUBE_STT_BASE_URL", "")).rstrip("/")
-        stt_provider = str(os.getenv("VOIDCUBE_STT_PROVIDER", "auto")).strip().lower()
+        stt_provider = str(
+            os.getenv("VOIDCUBE_STT_PROVIDER", canonical_stt.get("provider", "auto"))
+        ).strip().lower()
         remote_stt = stt_provider in {"remote", "openai", "openai_compatible"} or (
             stt_provider == "auto" and bool(stt_base_url)
         )
         return cls(
-            enabled=_env_bool("VOIDCUBE_VOICE_ENABLED", False),
+            enabled=_env_bool("VOIDCUBE_VOICE_ENABLED", canonical_enabled),
             sample_rate=max(8000, int(os.getenv("VOIDCUBE_VOICE_SAMPLE_RATE", "16000"))),
             channels=1,
             max_record_seconds=max(
@@ -171,10 +196,14 @@ class VoiceConfig:
             stt_model=str(
                 os.getenv(
                     "VOIDCUBE_STT_MODEL",
-                    "whisper-1" if remote_stt else "base",
+                    canonical_local.get("model")
+                    if not remote_stt and canonical_local.get("model")
+                    else "whisper-1" if remote_stt else "base",
                 )
             ),
-            stt_language=str(os.getenv("VOIDCUBE_STT_LANGUAGE", "zh")).strip(),
+            stt_language=str(
+                os.getenv("VOIDCUBE_STT_LANGUAGE", canonical_local.get("language", "zh"))
+            ).strip() or "zh",
             stt_hotwords=str(
                 os.getenv(
                     "VOIDCUBE_STT_HOTWORDS",
