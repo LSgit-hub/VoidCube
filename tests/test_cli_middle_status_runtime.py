@@ -20,7 +20,7 @@ def test_middle_status_renders_memory_scene_context_and_errors():
         supervisor={
             "scene": "planning",
             "is_active": False,
-            "mem_usage": {"last_request_usage_percent": 72},
+            "mem_usage": {"last_request_usage_percent": 72, "request_count": 1},
             "error_count": 2,
         },
         memory={"model": "local/demo.gguf"},
