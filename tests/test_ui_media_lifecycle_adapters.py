@@ -1,9 +1,11 @@
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
 
 from systems.supervisor.ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
+    control_media_state,
     enqueue_media_state,
 )
 from systems.supervisor.ui_open_lifecycle_adapters import (
@@ -14,9 +16,12 @@ from systems.supervisor.ui_open_lifecycle_adapters import (
 
 def test_media_state_owner_updates_revision_and_current_payload():
     state = {"revision": 4, "current": None}
+    queue = deque()
     current = enqueue_media_state(
         context=SupervisorUIMediaStateContext(
             current_revision=state["revision"],
+            current_media=state["current"],
+            media_queue=queue,
             set_revision=lambda value: state.update(revision=value),
             set_current_media=lambda value: state.update(current=value),
         ),
@@ -28,7 +33,50 @@ def test_media_state_owner_updates_revision_and_current_payload():
     assert current["title"] == "https://example.com/a.mp3"
     assert current["type"] == "auto"
     assert current["auto_play"] is True
+    assert current["media_id"]
+    assert current["playback"] == "playing"
     assert current["_revision"] == 5
+
+
+def test_media_state_queue_and_controls_share_one_canonical_state():
+    state = {"revision": 0, "current": None}
+    queue = deque()
+
+    def context():
+        return SupervisorUIMediaStateContext(
+            current_revision=state["revision"],
+            current_media=state["current"],
+            media_queue=queue,
+            set_revision=lambda value: state.update(revision=value),
+            set_current_media=lambda value: state.update(current=value),
+        )
+
+    first = enqueue_media_state(
+        context=context(),
+        media={"url": "https://example.com/a.mp3", "title": "A"},
+    )
+    second = enqueue_media_state(
+        context=context(),
+        media={"url": "https://example.com/b.mp3", "title": "B"},
+        queue_mode="enqueue",
+    )
+
+    assert state["current"]["media_id"] == first["media_id"]
+    assert [item["media_id"] for item in queue] == [second["media_id"]]
+
+    paused = control_media_state(context=context(), action="pause")
+    assert paused["playback"] == "paused"
+    resumed = control_media_state(context=context(), action="resume")
+    assert resumed["playback"] == "playing"
+
+    advanced = control_media_state(
+        context=context(), action="ended", media_id=first["media_id"]
+    )
+    assert advanced["media_id"] == second["media_id"]
+    assert not queue
+
+    assert control_media_state(context=context(), action="stop") is None
+    assert state["current"] is None
 
 
 @pytest.mark.parametrize(

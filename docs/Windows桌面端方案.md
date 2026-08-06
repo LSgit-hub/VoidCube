@@ -424,7 +424,7 @@ Phase 1 在开放桌面写操作前必须完成：
 ### 8.3 Web 内容安全
 
 - 完成资源拆分后配置严格 CSP，默认禁止远程脚本、内联脚本、内联事件处理器和不必要的网络目标。
-- 现有 YouTube/Bilibili 媒体 iframe 只允许明确的 `frame-src` 来源；普通外链和未知媒体 URL 不在 WebView 内嵌入。
+- B站媒体 iframe 只允许明确的 `player.bilibili.com` 来源；直链音视频交给 WebView 原生媒体元素，普通网页和未知 URL 不在 WebView 内嵌入。
 - Markdown、HTML、diff、工具输出和文件名均按不可信输入处理。
 - 外链仅允许明确协议，并由系统浏览器打开。
 - 文件选择结果只提交用户明确选择的路径，不给页面目录遍历能力。

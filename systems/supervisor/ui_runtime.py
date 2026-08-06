@@ -37,6 +37,7 @@ from systems.supervisor.ui_identity_proxy_adapters import (
 )
 from systems.supervisor.ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
+    control_media_state,
     enqueue_media_state,
 )
 from systems.supervisor.ui_memory_status_adapters import (
@@ -59,6 +60,7 @@ from systems.supervisor.ui_state_orchestration import (
     build_supervisor_ui_state,
 )
 from systems.supervisor.ui_stream_adapters import (
+    control_media_request,
     enqueue_media_request,
     media_events,
     supervisor_state_events,
@@ -124,26 +126,38 @@ class SupervisorUIRuntime:
         self.observation_input_cache: JsonDict = {}
         self.memory_stats_cache: JsonDict = {}
         self.current_media: JsonDict | None = None
+        self.media_queue: deque[JsonDict] = deque()
         self.media_revision = 0
 
-    def enqueue_media(self, media: JsonDict) -> None:
+    def _media_context(self) -> SupervisorUIMediaStateContext:
+        return SupervisorUIMediaStateContext(
+            current_revision=self.media_revision,
+            current_media=self.current_media,
+            media_queue=self.media_queue,
+            set_revision=lambda revision: setattr(self, "media_revision", revision),
+            set_current_media=lambda value: setattr(self, "current_media", value),
+        )
+
+    def enqueue_media(self, media: JsonDict) -> JsonDict:
         current = enqueue_media_state(
-            context=SupervisorUIMediaStateContext(
-                current_revision=self.media_revision,
-                set_revision=lambda revision: setattr(
-                    self,
-                    "media_revision",
-                    revision,
-                ),
-                set_current_media=lambda value: setattr(
-                    self,
-                    "current_media",
-                    value,
-                ),
-            ),
+            context=self._media_context(),
             media=media,
+            queue_mode=str(media.get("queue_mode") or "replace"),
         )
         logger.info("Media enqueued: %s (%s)", current.get("title"), current.get("type"))
+        return current
+
+    def control_media(self, action: str, media_id: str = "") -> JsonDict | None:
+        current = control_media_state(
+            context=self._media_context(),
+            action=action,
+            media_id=media_id,
+        )
+        logger.info("Media control: %s (current=%s)", action, (current or {}).get("title"))
+        return current
+
+    def media_queue_length(self) -> int:
+        return len(self.media_queue)
 
     def record_activity(
         self,
@@ -242,13 +256,28 @@ class SupervisorUIRuntime:
         )
 
     async def get_media_events(self, request: Request) -> StreamingResponse:
-        return media_events(request, current_media=lambda: self.current_media)
+        return media_events(
+            request,
+            current_media=lambda: self.current_media,
+            current_revision=lambda: self.media_revision,
+            queue_length=self.media_queue_length,
+        )
 
     async def enqueue_media_endpoint(self, request: Request) -> JsonDict:
         return await enqueue_media_request(
             request,
             enqueue_media=self.enqueue_media,
             current_revision=lambda: self.media_revision,
+            queue_length=self.media_queue_length,
+            current_media=lambda: self.current_media,
+        )
+
+    async def control_media_endpoint(self, request: Request) -> JsonDict:
+        return await control_media_request(
+            request,
+            control_media=self.control_media,
+            current_revision=lambda: self.media_revision,
+            queue_length=self.media_queue_length,
         )
 
     async def _load_observation_input_snapshot(
@@ -354,6 +383,7 @@ class SupervisorUIRuntime:
                 stellar_mode_status=self.ports.stellar_mode_status,
                 voice_status=self.ports.voice_status,
                 current_media=lambda: self.current_media,
+                media_queue_length=self.media_queue_length,
             )
         )
 

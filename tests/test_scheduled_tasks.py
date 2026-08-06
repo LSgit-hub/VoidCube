@@ -378,6 +378,30 @@ async def test_explicit_media_request_is_delegated_when_api_b_omits_media_action
     assert "帮我播放周杰伦的晴天" in tasks[0]["instruction"]
 
 
+@pytest.mark.asyncio
+async def test_companion_media_controls_use_the_web_ui_player_state(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._ui_runtime.enqueue_media(
+        {"url": "https://example.com/current.mp3", "title": "当前音频"}
+    )
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "",
+            "schedule_action": {"action": "none"},
+        }
+    )
+
+    paused = await supervisor.handle_companion_message(text="暂停播放")
+
+    assert paused["media_action_result"]["ok"] is True
+    assert paused["media_action_result"]["action"] == "pause"
+    assert supervisor._ui_runtime.current_media["playback"] == "paused"
+    assert paused["reply_text"] == "已暂停当前播放。"
+    assert supervisor._scheduled_task_store.list(include_completed=True) == []
+
+
 def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(

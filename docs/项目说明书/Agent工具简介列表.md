@@ -110,11 +110,12 @@
 | **clarify** | 请求用户澄清模糊或不完整的请求 | `question`（必填） |
 
 
-## 十二、媒体播放（1 个）
+## 十二、媒体播放（2 个）
 
 | 工具名 | 描述 | 关键参数 |
 |--------|------|----------|
-| **media_play** | 将音乐/视频加入 VoidCube Web UI 播放队列。支持 YouTube、B站、直链 mp3/mp4 | `url`（必填）, `title`, `media_type`, `auto_play` |
+| **media_play** | 将音乐/视频推送到 VoidCube Web UI。支持 B站和直链 mp3/mp4，可立即替换或加入队列 | `url`（必填）, `title`, `media_type`, `auto_play`, `queue_mode` |
+| **media_control** | 控制 Web UI 当前播放器，支持暂停、继续、下一项和停止 | `action`（必填） |
 
 
 ## 十三、AI 协作（1 个）
@@ -169,7 +170,8 @@ MCP（Model Context Protocol）工具由外部 MCP 服务器动态注册，数�
 |---------|----------|
 | `core` | terminal, read_file, write_file, patch, search_files, web_search, web_extract, browser_navigate, browser_snapshot |
 | `extended` | memory_load, memory_persist, delegate_task, execute_code |
-| `web` | web_search, web_extract, media_play |
+| `web` | web_search, web_extract, media_play, media_control |
+| `playback` | media_play, media_control（B站和直链音视频播放及控制） |
 | `file` | read_file, write_file, patch, search_files |
 | `terminal` | terminal, process |
 | `code_execution` | execute_code |
@@ -185,7 +187,7 @@ MCP（Model Context Protocol）工具由外部 MCP 服务器动态注册，数�
 | `moa` | mixture_of_agents |
 | `uiautomation` | uia_find_window ~ uia_scroll（17 个 Windows UI 工具） |
 | `ops` | system + network + logs 的全部工具 |
-| `voidcube` | web + browser + terminal + file + skills + scheduling + code_execution + ops（综合工具集，默认） |
+| `voidcube` | web + playback + browser + terminal + file + skills + scheduling + code_execution + ops（综合工具集，默认） |
 | `full` | voidcube + session_search（全工具集） |
 | `learn` | web_search, web_extract, read_file, search_files, terminal, execute_code, browser_*（自学习子代理专用，无写入能力） |
 | `mini` | web_search, terminal, read_file, write_file（最小工具集） |
@@ -208,8 +210,8 @@ MCP（Model Context Protocol）工具由外部 MCP 服务器动态注册，数�
 | 技能管理 | 3 |
 | 任务与委托 | 3 |
 | 会话与交互 | 2 |
-| 媒体播放 | 1 |
+| 媒体播放 | 2 |
 | AI 协作 | 1 |
 | Windows UI 自动化 | 17 |
-| **内置工具合计** | **58** |
+| **内置工具合计** | **59** |
 | MCP 动态工具 | 不固定 |

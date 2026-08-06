@@ -3182,11 +3182,15 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .media-bar .mb-icon {
   font-size: 18px; flex-shrink: 0; opacity: .85;
 }
-.media-bar .mb-title {
+ .media-bar .mb-title {
   font-size: 12px; font-weight: 600; line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 320px;
-}
+ }
+ .media-bar .mb-status {
+   font-size: 11px; color: #a99b87; white-space: nowrap;
+   margin-left: 4px;
+ }
 .media-bar .mb-actions {
   display: flex; align-items: center; gap: 2px; flex-shrink: 0;
   padding-right: 8px;
@@ -3198,7 +3202,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   line-height: 1;
 }
 .media-bar button:hover { background: rgba(226,176,74,.18); }
-.media-bar button.mb-close { font-size: 18px; opacity: .6; }
+  .media-bar button.mb-close { font-size: 18px; opacity: .6; }
 .media-bar button.mb-close:hover { opacity: 1; background: rgba(220,80,60,.25); }
 
 /* 展开面板 (iframe / video) */
@@ -3221,7 +3225,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   font-size: 22px; padding: 10px 14px; cursor: pointer;
   border-radius: 8px; transition: background .2s;
 }
-.media-panel .mp-close:hover { background: rgba(220,60,50,.7); }
+  .media-panel .mp-close:hover { background: rgba(220,60,50,.7); }
+ .media-panel .mp-message {
+   max-width: min(620px, 88vw); padding: 22px 26px; text-align: center;
+   color: #e6ddcf; background: #211c17; border: 1px solid rgba(226,176,74,.28);
+   border-radius: 10px; line-height: 1.6;
+ }
+ .media-panel .mp-message a { color: #e2b04a; }
 
 @media (max-width: 640px) {
   .media-bar .mb-title { max-width: 160px; }
@@ -3689,9 +3699,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   <div class="mb-info">
     <span class="mb-icon" id="mbIcon">🎵</span>
     <span class="mb-title" id="mbTitle"></span>
+    <span class="mb-status" id="mbStatus"></span>
   </div>
   <div class="mb-actions">
     <button id="mbPlayToggle" title="播放/暂停">⏯</button>
+    <button id="mbNext" title="下一项">⏭</button>
     <button id="mbExpand" title="展开播放窗口">⛶</button>
     <button class="mb-close" id="mbClose" title="关闭">✕</button>
   </div>
@@ -6536,56 +6548,65 @@ const mediaPanel = document.getElementById('mediaPanel');
 const mpContent = document.getElementById('mpContent');
 const mbTitle = document.getElementById('mbTitle');
 const mbIcon = document.getElementById('mbIcon');
+const mbStatus = document.getElementById('mbStatus');
 let currentMedia = null;
-let embeddedPlayer = null;  // YouTube iframe or <video>/<audio> element
+let embeddedPlayer = null;
 
 function mediaTypeIcon(t) {
-  const map = { youtube: '▶', bilibili: '▶', video: '🎬', audio: '🎵' };
+  const map = { bilibili: '▶', video: '🎬', audio: '🎵' };
   return map[t] || '🎵';
 }
 
 function classifyMedia(url) {
   if (!url) return 'auto';
-  const u = url.toLowerCase();
-  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
-  if (u.includes('bilibili.com')) return 'bilibili';
-  if (/\.(mp3|m4a|ogg|wav|flac|aac|opus)(\?|$)/.test(u)) return 'audio';
-  if (/\.(mp4|webm|mkv|mov|avi)(\?|$)/.test(u)) return 'video';
-  return 'youtube'; // 未知 URL 默认尝试 iframe
+  let parsed;
+  try { parsed = new URL(url, window.location.href); } catch(e) { return 'unsupported'; }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  if (host === 'bilibili.com' || host.endsWith('.bilibili.com') || host === 'b23.tv') return 'bilibili';
+  if (/\.(mp3|m4a|ogg|wav|flac|aac|opus)$/.test(path)) return 'audio';
+  if (/\.(mp4|webm|mkv|mov|avi|m4v)$/.test(path)) return 'video';
+  return 'unsupported';
 }
 
 function resolveMediaType(media) {
   const requested = String((media || {}).type || 'auto').toLowerCase();
-  if (['youtube', 'bilibili', 'audio', 'video'].includes(requested)) return requested;
+  if (['bilibili', 'audio', 'video'].includes(requested)) return requested;
   return classifyMedia((media || {}).url || '');
 }
 
-function youtubeEmbedId(url) {
-  const m = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})(?:[&?#]|$)/);
-  return m ? m[1] : null;
-}
-
 function bilibiliEmbedUrl(url) {
-  const m = url.match(/\/video\/(BV[a-zA-Z0-9]+)/);
+  const m = url.match(/\/video\/(BV[a-zA-Z0-9]+)/i);
   if (m) return 'https://player.bilibili.com/player.html?bvid=' + m[1] + '&autoplay=1';
-  const m2 = url.match(/\/video\/av(\d+)/);
+  const m2 = url.match(/\/video\/av(\d+)/i);
   if (m2) return 'https://player.bilibili.com/player.html?aid=' + m2[1] + '&autoplay=1';
-  return url;
+  return null;
 }
 
 function showMediaBar(media) {
+  const sameMedia = currentMedia && currentMedia.media_id && currentMedia.media_id === media.media_id;
+  const previousPlayback = currentMedia && currentMedia.playback;
   currentMedia = media;
   const type = resolveMediaType(media);
   mbIcon.textContent = mediaTypeIcon(type);
   mbTitle.textContent = media.title || media.url;
+  mbStatus.textContent = media.queue_remaining ? `队列 ${media.queue_remaining}` : (media.playback === 'paused' ? '已暂停' : '');
   mediaBar.classList.add('visible');
+  if (sameMedia) {
+    if (previousPlayback === 'paused' && media.playback === 'playing' && !embeddedPlayer) {
+      openMediaPanel();
+    } else {
+      applyPlaybackState();
+    }
+  }
+  return sameMedia;
 }
 
 function hideMediaBar() {
   mediaBar.classList.remove('visible');
   closeMediaPanel();
   currentMedia = null;
-  embeddedPlayer = null;
+  mbStatus.textContent = '';
 }
 
 function closeMediaPanel() {
@@ -6597,74 +6618,135 @@ function closeMediaPanel() {
   }
 }
 
+function setMediaMessage(message, link) {
+  const box = document.createElement('div');
+  box.className = 'mp-message';
+  box.textContent = message;
+  if (link) {
+    box.appendChild(document.createElement('br'));
+    const anchor = document.createElement('a');
+    anchor.href = link; anchor.target = '_blank'; anchor.rel = 'noopener';
+    anchor.textContent = '打开来源链接';
+    box.appendChild(anchor);
+  }
+  mpContent.appendChild(box);
+}
+
+function applyPlaybackState() {
+  if (!embeddedPlayer || !currentMedia) return;
+  const paused = currentMedia.playback === 'paused';
+  if (embeddedPlayer.tagName === 'IFRAME') {
+    if (paused) {
+      embeddedPlayer.remove();
+      embeddedPlayer = null;
+      mpContent.innerHTML = '';
+      setMediaMessage('B 站播放已暂停；继续播放时会重新载入视频。');
+    }
+    return;
+  }
+  if (paused) {
+    embeddedPlayer.pause();
+  } else {
+    embeddedPlayer.play().catch(() => {
+      mbStatus.textContent = '点击播放';
+    });
+  }
+}
+
+async function requestMediaControl(action, mediaId) {
+  try {
+    const response = await fetch('/ui/media/control', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, media_id: mediaId || (currentMedia && currentMedia.media_id) || ''})
+    });
+    if (!response.ok) throw new Error('media control failed');
+  } catch(e) {
+    mbStatus.textContent = '控制失败';
+  }
+}
+
 function openMediaPanel() {
   if (!currentMedia) return;
   const type = resolveMediaType(currentMedia);
   mpContent.innerHTML = '';
   embeddedPlayer = null;
 
-  if (type === 'youtube') {
-    const vid = youtubeEmbedId(currentMedia.url);
-    if (vid) {
-      const iframe = document.createElement('iframe');
-      iframe.src = 'https://www.youtube.com/embed/' + vid + '?autoplay=1';
-      iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
-      iframe.allowFullscreen = true;
-      iframe.style.width = '854px'; iframe.style.height = '480px';
-      mpContent.appendChild(iframe);
-      embeddedPlayer = iframe;
-    }
-  } else if (type === 'bilibili') {
+  if (type === 'bilibili') {
+    const embedUrl = bilibiliEmbedUrl(currentMedia.url);
+    if (!embedUrl) {
+      setMediaMessage('需要完整的 B 站视频链接（BV 号或 av 号）。', currentMedia.url);
+    } else {
     const iframe = document.createElement('iframe');
-    iframe.src = bilibiliEmbedUrl(currentMedia.url);
+    iframe.src = embedUrl;
     iframe.allow = 'autoplay';
     iframe.allowFullscreen = true;
-    iframe.style.width = '854px'; iframe.style.height = '480px';
+    iframe.referrerPolicy = 'no-referrer-when-downgrade';
     mpContent.appendChild(iframe);
     embeddedPlayer = iframe;
+    }
   } else if (type === 'video') {
     const video = document.createElement('video');
+    const mediaId = currentMedia.media_id;
     video.src = currentMedia.url;
     video.controls = true;
     video.autoplay = true;
+    video.preload = 'metadata';
     video.style.maxWidth = '90vw'; video.style.maxHeight = '85vh';
+    video.addEventListener('ended', () => requestMediaControl('ended', mediaId));
+    video.addEventListener('error', () => { mbStatus.textContent = '视频无法播放'; });
     mpContent.appendChild(video);
     embeddedPlayer = video;
   } else if (type === 'audio') {
     const audio = document.createElement('audio');
+    const mediaId = currentMedia.media_id;
     audio.src = currentMedia.url;
     audio.controls = true;
     audio.autoplay = true;
+    audio.preload = 'metadata';
     audio.style.width = '420px';
+    audio.addEventListener('ended', () => requestMediaControl('ended', mediaId));
+    audio.addEventListener('error', () => { mbStatus.textContent = '音频无法播放'; });
     mpContent.appendChild(audio);
     embeddedPlayer = audio;
+  } else {
+    setMediaMessage('这个链接不是可识别的 B 站视频或直链音视频。', currentMedia.url);
   }
 
   mediaPanel.classList.add('open');
+  applyPlaybackState();
 }
 
 function togglePlayPause() {
-  if (!embeddedPlayer) { openMediaPanel(); return; }
+  if (!embeddedPlayer) {
+    if (currentMedia && currentMedia.playback === 'paused') {
+      requestMediaControl('resume');
+    } else {
+      openMediaPanel();
+    }
+    return;
+  }
   try {
     if (embeddedPlayer.tagName === 'IFRAME') {
-      // YouTube/B站 iframe: 通过 postMessage 控制
-      const cmd = embeddedPlayer.paused !== false ? 'playVideo' : 'pauseVideo';
-      embeddedPlayer.contentWindow && embeddedPlayer.contentWindow.postMessage(
-        '{"event":"command","func":"' + cmd + '","args":""}', '*'
-      );
+      requestMediaControl('pause');
     } else if (embeddedPlayer.paused) {
       embeddedPlayer.play();
+      requestMediaControl('resume');
     } else {
       embeddedPlayer.pause();
+      requestMediaControl('pause');
     }
   } catch(e) {}
 }
 
 document.getElementById('mbPlayToggle').addEventListener('click', togglePlayPause);
+document.getElementById('mbNext').addEventListener('click', () => requestMediaControl('next'));
 document.getElementById('mbExpand').addEventListener('click', function() {
   mediaPanel.classList.contains('open') ? closeMediaPanel() : openMediaPanel();
 });
-document.getElementById('mbClose').addEventListener('click', hideMediaBar);
+document.getElementById('mbClose').addEventListener('click', () => {
+  requestMediaControl('stop');
+  hideMediaBar();
+});
 document.getElementById('mpClose').addEventListener('click', closeMediaPanel);
 
 mediaPanel.addEventListener('click', function(e) {
@@ -6677,10 +6759,11 @@ if ('EventSource' in window) {
   mediaES.addEventListener('play', function(ev) {
     const media = JSON.parse(ev.data);
     if (media && media.url) {
-      showMediaBar(media);
-      if (media.auto_play !== false) openMediaPanel();
+      const sameMedia = showMediaBar(media);
+      if (!sameMedia && media.auto_play !== false) openMediaPanel();
     }
   });
+  mediaES.addEventListener('stop', function() { hideMediaBar(); });
 }
 
 /* ── 键盘快捷键 ── */

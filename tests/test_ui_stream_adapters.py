@@ -71,3 +71,5 @@ async def test_media_sse_adapter_emits_revision_and_enqueue_body_is_normalized()
     }
     with pytest.raises(HTTPException):
         normalize_media_enqueue_body({"title": "missing"})
+    with pytest.raises(HTTPException):
+        normalize_media_enqueue_body({"url": "file:///tmp/song.mp3"})

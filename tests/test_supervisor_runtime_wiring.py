@@ -3537,6 +3537,55 @@ def test_media_enqueue_replaces_current_item_and_revisions_repeat_url(tmp_path):
     assert supervisor._ui_runtime.media_revision == first_revision + 1
 
 
+@pytest.mark.unit
+def test_media_http_api_supports_queue_and_control_actions(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    first = client.post(
+        "/ui/media/enqueue",
+        json={
+            "url": "https://example.com/first.mp3",
+            "title": "第一首",
+            "type": "audio",
+        },
+    )
+    assert first.status_code == 200
+    first_media = first.json()["current"]
+    assert first_media["title"] == "第一首"
+
+    queued = client.post(
+        "/ui/media/enqueue",
+        json={
+            "url": "https://example.com/second.mp4",
+            "title": "第二项",
+            "type": "video",
+            "queue_mode": "enqueue",
+        },
+    )
+    assert queued.status_code == 200
+    assert queued.json()["queue_length"] == 1
+    assert queued.json()["current"]["media_id"] == first_media["media_id"]
+
+    paused = client.post(
+        "/ui/media/control",
+        json={"action": "pause", "media_id": first_media["media_id"]},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["current"]["playback"] == "paused"
+
+    advanced = client.post(
+        "/ui/media/control",
+        json={"action": "next", "media_id": first_media["media_id"]},
+    )
+    assert advanced.status_code == 200
+    assert advanced.json()["current"]["title"] == "第二项"
+
+    stopped = client.post("/ui/media/control", json={"action": "stop"})
+    assert stopped.status_code == 200
+    assert stopped.json()["current"] is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_daily_mode_microphone_toggle_returns_confirmed_voice_state(tmp_path):

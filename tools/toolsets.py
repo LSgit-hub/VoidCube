@@ -22,9 +22,15 @@ _VOIDCUBE_CORE_TOOLS = [
 
 TOOLSETS = {
     "web": {
-        "description": "Web research and content extraction tools",
-        "tools": ["web_search", "web_extract"],
+        "description": "Web research, content extraction, and Web UI media playback tools",
+        "tools": ["web_search", "web_extract", "media_play", "media_control"],
         "includes": []
+    },
+
+    "playback": {
+        "description": "Play Bilibili videos and direct audio/video URLs in the VoidCube Web UI",
+        "tools": ["media_play", "media_control"],
+        "includes": [],
     },
     
     "search": {
@@ -107,13 +113,13 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
+        "includes": ["web", "playback", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
     },
 
     "voidcube-cli": {
         "description": "Core tools for server management (alias)",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
+        "includes": ["web", "playback", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media"]
     },
     
     "mini": {

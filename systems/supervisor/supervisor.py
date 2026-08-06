@@ -180,6 +180,7 @@ class Supervisor(
                 get_voice_levels=self._ui_runtime.get_voice_levels,
                 get_media_events=self._ui_runtime.get_media_events,
                 enqueue_media=self._ui_runtime.enqueue_media_endpoint,
+                control_media=self._ui_runtime.control_media_endpoint,
                 get_identity_archive=self._ui_runtime.get_identity_archive,
                 get_identity_turns=self._ui_runtime.get_identity_turns,
                 get_evolution_audit=self._ui_runtime.get_evolution_promotion_audit,

@@ -43,6 +43,7 @@ class SupervisorUIStateContext:
     stellar_mode_status: Callable[[], JsonDict]
     voice_status: Callable[[], JsonDict]
     current_media: Callable[[], Any]
+    media_queue_length: Callable[[], int] = lambda: 0
 
 
 def load_ui_memory_token_usage() -> JsonDict:
@@ -318,6 +319,6 @@ async def build_supervisor_ui_state(
         "cognition": cognition,
         "media": {
             "current": current_media,
-            "queue_length": 1 if current_media else 0,
+            "queue_length": context.media_queue_length(),
         },
     }

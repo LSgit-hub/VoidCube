@@ -24,6 +24,7 @@ def _ports(app: FastAPI, *, enabled: bool) -> SupervisorUIRoutePorts:
         get_evolution_candidates=callback,
         consent_evolution_candidate=callback,
         verify_identity_experience=callback,
+        control_media=callback,
     )
 
 
@@ -38,4 +39,5 @@ def test_ui_routes_mount_only_when_enabled() -> None:
     assert "/ui/state" in paths
     assert "/ui/events" in paths
     assert "/ui/media/enqueue" in paths
+    assert "/ui/media/control" in paths
     assert "/ui/evolution-promotion-candidates/{candidate_id}/consent" in paths
