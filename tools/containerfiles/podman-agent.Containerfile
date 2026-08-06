@@ -1,8 +1,7 @@
 FROM docker.io/library/python:3.14-alpine
 
-# Minimal runtime for VoidCube terminal/file tools on Podman in constrained
-# networks. Keep the base small and rely on Alpine packages that are reachable
-# from this machine.
+# Runtime for VoidCube terminal and file tools. Keep package verification
+# enabled while using the mirror that is reachable in the primary region.
 RUN sed -i 's#https://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghua.edu.cn/alpine#g' /etc/apk/repositories \
     && apk add --no-cache \
     bash \
@@ -19,5 +18,4 @@ RUN sed -i 's#https://dl-cdn.alpinelinux.org/alpine#https://mirrors.tuna.tsinghu
 
 WORKDIR /root
 
-# Keep behavior consistent with the existing terminal backend assumptions.
 CMD ["sleep", "infinity"]

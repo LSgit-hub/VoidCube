@@ -88,6 +88,55 @@ def test_cli_doctor_command_invokes_print_diagnosis(monkeypatch):
     printer.assert_called_once_with()
 
 
+@pytest.mark.unit
+def test_doctor_requires_podman_when_it_is_the_non_fallback_backend(monkeypatch):
+    monkeypatch.setattr(config_validator.shutil, "which", lambda name: None)
+
+    check = config_validator._diagnose_podman(
+        {"terminal": {"backend": "podman", "fallback_to_local": False}}
+    )
+
+    assert check.severity == Severity.ERROR
+    assert "未检测到 podman" in check.message
+
+
+@pytest.mark.unit
+def test_doctor_does_not_warn_for_an_unused_container_runtime(monkeypatch):
+    monkeypatch.setattr(config_validator.shutil, "which", lambda name: None)
+    cfg = {"terminal": {"backend": "local", "fallback_to_local": False}}
+
+    docker_check = config_validator._diagnose_docker(cfg)
+    podman_check = config_validator._diagnose_podman(cfg)
+
+    assert docker_check.severity == Severity.INFO
+    assert podman_check.severity == Severity.INFO
+
+
+@pytest.mark.unit
+def test_doctor_requires_the_configured_podman_image(monkeypatch):
+    calls = []
+    monkeypatch.setattr(config_validator.shutil, "which", lambda name: "podman")
+
+    def fake_run(command, timeout=5):
+        calls.append(command)
+        return (True, "ok") if command[-1] == "version" else (False, "missing")
+
+    monkeypatch.setattr(config_validator, "_run_command", fake_run)
+    check = config_validator._diagnose_podman(
+        {
+            "terminal": {
+                "backend": "podman",
+                "fallback_to_local": False,
+                "podman_image": "localhost/test-sandbox:latest",
+            }
+        }
+    )
+
+    assert check.severity == Severity.ERROR
+    assert check.data["podman_image"] == "localhost/test-sandbox:latest"
+    assert calls[-1] == ["podman", "image", "exists", "localhost/test-sandbox:latest"]
+
+
 def _stub_body_system_config(monkeypatch, tmp_path: Path) -> None:
     supervisor = SimpleNamespace(
         execution=SimpleNamespace(git_repo_path=str(tmp_path)),

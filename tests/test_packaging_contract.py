@@ -73,6 +73,7 @@ def test_distribution_includes_runtime_subpackages_and_mem_resources():
     assert "identity/*.md" in setuptools["package-data"]["memai"]
     assert "locales/*.json" in setuptools["package-data"]["VoidCube_cli"]
     assert "supervisor/web/*.html" in setuptools["package-data"]["systems"]
+    assert "containerfiles/*.Containerfile" in setuptools["package-data"]["tools"]
 
 
 @pytest.mark.unit
@@ -349,6 +350,13 @@ def test_wheel_contract_tracks_supervisor_ui_resource():
     assert "systems/supervisor/ui_state_projection.py" in expected
     assert "systems/supervisor/ui_body_projection.py" in expected
     assert "systems/supervisor/ui_autonomous_projection.py" in expected
+
+
+@pytest.mark.unit
+def test_wheel_contract_tracks_podman_containerfile():
+    expected = expected_wheel_files(ROOT)
+
+    assert "tools/containerfiles/podman-agent.Containerfile" in expected
 
 
 @pytest.mark.unit

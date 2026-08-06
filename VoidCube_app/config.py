@@ -409,8 +409,8 @@ DEFAULT_CONFIG = {
         # Each entry is "host_path:container_path" (standard Docker -v syntax).
         # Example: ["/home/user/projects:/workspace/projects", "/data:/data"]
         "docker_volumes": [],
-        # Explicit opt-in: mount the host cwd into /workspace for Docker sessions.
-        # Default off because passing host directories into a sandbox weakens isolation.
+        # Mount the selected project into /workspace for agent terminal/file work.
+        # execute_code remains a separate, unmounted, network-disabled sandbox.
         "docker_mount_cwd_to_workspace": True,
         # Persistent shell — keep a long-lived bash shell across execute() calls
         # so cwd/env vars/shell variables survive between commands. Backend-specific

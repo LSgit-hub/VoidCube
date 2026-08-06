@@ -24,8 +24,13 @@ dependencies:
     version_check: "git --version"
     min_version: ">=2.30"
     critical: true
+    terminal_blocking: true  # Windows: the terminal tool needs bash.exe from Git, so git cannot be auto-installed if missing
     related_toolsets: [terminal, checkpoints]
     install:
+      windows_manual: |
+        Git for Windows must be installed manually before VoidCube can auto-install anything else.
+        Download: https://git-scm.com/download/win
+        After install, RESTART your terminal/VoidCube session for PATH to take effect.
       windows: "winget install --id Git.Git -e --source winget"
       windows_alt: "choco install git -y"
       macos: "brew install git"
@@ -38,12 +43,17 @@ dependencies:
     version_check: "bash --version"
     min_version: ">=4.0"
     critical: true
+    terminal_blocking: true  # Windows: bash.exe IS the terminal runtime — without it nothing executes
     related_toolsets: [terminal, file]
     notes: |
       On Windows the VoidCube terminal tool auto-detects Git Bash at
       standard install locations.  If you installed Git to a custom
       directory set VOIDCUBE_GIT_BASH_PATH.
     install:
+      windows_manual: |
+        Git for Windows provides bash.exe. Install Git manually:
+        https://git-scm.com/download/win
+        After install, RESTART your terminal session for PATH to take effect.
       windows: "winget install --id Git.Git -e --source winget"
       macos: "brew install bash"
       linux_deb: "sudo apt-get update && sudo apt-get install -y bash"

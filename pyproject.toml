@@ -108,7 +108,7 @@ include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*
 memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]
 systems = ["supervisor/web/*.html"]
-tools = ["presets/*.yaml"]
+tools = ["presets/*.yaml", "containerfiles/*.Containerfile"]
 
 [tool.ruff]
 target-version = "py314"

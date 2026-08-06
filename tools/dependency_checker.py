@@ -185,6 +185,13 @@ def check_dependency_status(name: str) -> Dict[str, Any]:
     platform_key = _get_platform()
     install_map = dep.get("install", {})
     install_cmd = install_map.get(platform_key) or install_map.get("all")
+    terminal_blocking = dep.get("terminal_blocking", False)
+
+    # On Windows, when a terminal_blocking dependency is missing, provide
+    # manual install instructions since the terminal tool cannot start.
+    manual_install = None
+    if terminal_blocking and not found and platform_key == "windows":
+        manual_install = install_map.get("windows_manual") or dep.get("notes")
 
     return {
         "name": name,
@@ -196,6 +203,8 @@ def check_dependency_status(name: str) -> Dict[str, Any]:
         "min_version": min_version,
         "version_ok": v_ok if found else None,
         "critical": dep.get("critical", False),
+        "terminal_blocking": terminal_blocking,
+        "manual_install": manual_install,
         "related_toolsets": dep.get("related_toolsets", []),
         "install_command": install_cmd,
         "notes": dep.get("notes"),
@@ -247,9 +256,16 @@ def format_dependency_report(deps: List[Dict[str, Any]]) -> str:
         for d in critical:
             desc = d.get("description", "")
             lines.append(f"- **{d['name']}** — {desc}")
-            install = d.get("install_command")
-            if install:
-                lines.append(f"  Install: `{install}`")
+            manual = d.get("manual_install")
+            if manual:
+                # Terminal-blocking dep — show manual steps prominently
+                lines.append(f"  ⚠️  **Manual install required** (terminal tool cannot start without this):")
+                for line in str(manual).strip().split("\n"):
+                    lines.append(f"  {line.strip()}")
+            else:
+                install = d.get("install_command")
+                if install:
+                    lines.append(f"  Install: `{install}`")
             notes = d.get("notes")
             if notes:
                 lines.append(f"  Note: {notes.strip()}")
@@ -296,7 +312,14 @@ def format_bootstrap_summary() -> str:
 
     status = "✓ Ready"
     if critical_missing:
-        status = "✗ Missing critical dependencies"
+        terminal_blocked = any(
+            d.get("terminal_blocking", False)
+            for d in critical_missing
+        )
+        if terminal_blocked and _get_platform() == "windows":
+            status = "✗ Manual install required (Git Bash missing — terminal blocked)"
+        else:
+            status = "✗ Missing critical dependencies"
     elif missing:
         status = "⚠ Some optional tools missing"
 
@@ -398,10 +421,15 @@ def check_dependencies(action: str = "summary", name: str = "") -> str:
 
     if action == "missing":
         deps = get_missing_dependencies()
+        terminal_blocked = any(
+            d.get("terminal_blocking") and not d.get("found")
+            for d in deps
+        )
         return json.dumps({
             "success": True,
             "missing_count": len(deps),
             "critical_count": len([d for d in deps if d.get("critical")]),
+            "terminal_blocked": terminal_blocked,
             "dependencies": deps,
             "report": format_dependency_report(deps),
         }, ensure_ascii=False, default=str)
@@ -417,11 +445,16 @@ def check_dependencies(action: str = "summary", name: str = "") -> str:
     # default: summary
     report = format_bootstrap_summary()
     missing = get_missing_dependencies()
+    terminal_blocked = any(
+        d.get("terminal_blocking") and not d.get("found")
+        for d in missing
+    )
     return json.dumps({
         "success": True,
         "report": report,
         "missing_dependencies": missing,
         "all_ok": len(missing) == 0,
+        "terminal_blocked": terminal_blocked,
     }, ensure_ascii=False, default=str)
 
 

@@ -458,6 +458,7 @@ def _diagnose_docker(cfg: dict) -> AgentCheck:
         "TERMINAL_FALLBACK_TO_LOCAL",
         bool(configured.get("fallback_to_local", True)),
     )
+    requested = requested_backend == "docker"
 
     try:
         from tools.environments.docker import find_docker
@@ -470,14 +471,20 @@ def _diagnose_docker(cfg: dict) -> AgentCheck:
         docker_find_error = ""
 
     if not docker_exe:
-        severity = Severity.ERROR if requested_backend == "docker" and not fallback_to_local else Severity.WARNING
-        suggestion = "安装并启动 Docker Desktop，或切回 local backend。"
-        if requested_backend == "docker" and fallback_to_local:
+        severity = (
+            Severity.ERROR if requested and not fallback_to_local
+            else Severity.WARNING if requested
+            else Severity.INFO
+        )
+        suggestion = ""
+        if requested and not fallback_to_local:
+            suggestion = "安装并启动 Docker Desktop，或切回 local backend。"
+        elif requested:
             suggestion = "Docker 不可用时当前会自动回退到 local；若想恢复容器沙箱，请先启动 Docker。"
         return AgentCheck(
             severity=severity,
             name="docker_runtime",
-            message="未找到 docker 可执行文件",
+            message="未找到 docker 可执行文件" if requested else "未检测到 docker（当前未使用）",
             suggestion=suggestion,
             details=docker_find_error or "docker not found in PATH/common install locations",
             data={"requested_backend": requested_backend, "fallback_to_local": fallback_to_local},
@@ -493,7 +500,11 @@ def _diagnose_docker(cfg: dict) -> AgentCheck:
             data={"docker_executable": docker_exe},
         )
 
-    severity = Severity.ERROR if requested_backend == "docker" and not fallback_to_local else Severity.WARNING
+    severity = (
+        Severity.ERROR if requested and not fallback_to_local
+        else Severity.WARNING if requested
+        else Severity.INFO
+    )
     suggestion = _suggest_docker_fix(
         detail,
         requested_backend=requested_backend,
@@ -509,32 +520,68 @@ def _diagnose_docker(cfg: dict) -> AgentCheck:
     )
 
 
-def _diagnose_podman() -> AgentCheck:
+def _diagnose_podman(cfg: dict) -> AgentCheck:
+    configured = _configured_terminal_config(cfg)
+    requested_backend = str(
+        os.getenv("TERMINAL_ENV") or configured.get("backend") or "local"
+    ).strip().lower()
+    fallback_to_local = _env_bool(
+        "TERMINAL_FALLBACK_TO_LOCAL",
+        bool(configured.get("fallback_to_local", True)),
+    )
+    image = str(
+        os.getenv("TERMINAL_PODMAN_IMAGE")
+        or configured.get("podman_image")
+        or "localhost/voidcube-podman-local:latest"
+    ).strip()
+    requested = requested_backend == "podman"
+    required = requested and not fallback_to_local
+    unavailable_severity = (
+        Severity.ERROR if required
+        else Severity.WARNING if requested
+        else Severity.INFO
+    )
     podman_exe = shutil.which("podman")
     if not podman_exe:
         return AgentCheck(
-            severity=Severity.INFO,
+            severity=unavailable_severity,
             name="podman_runtime",
-            message="未检测到 podman，可忽略",
+            message="当前 terminal 使用 Podman，但未检测到 podman" if required else "未检测到 podman，可忽略",
+            suggestion=(
+                "安装并启动 Podman machine，然后重新运行 `VoidCube doctor`。"
+                if requested else ""
+            ),
+            data={"requested_backend": requested_backend, "fallback_to_local": fallback_to_local},
         )
 
     ok, detail = _run_command([podman_exe, "version"])
-    if ok:
+    if not ok:
         return AgentCheck(
-            severity=Severity.INFO,
+            severity=unavailable_severity,
             name="podman_runtime",
-            message="podman 响应正常",
-            details=podman_exe,
-            data={"podman_executable": podman_exe},
+            message="podman 命令存在，但 `podman version` 失败",
+            suggestion=_suggest_podman_fix(detail),
+            details=detail,
+            data={"podman_executable": podman_exe, "requested_backend": requested_backend},
+        )
+
+    image_ok, image_detail = _run_command([podman_exe, "image", "exists", image])
+    if not image_ok:
+        return AgentCheck(
+            severity=unavailable_severity,
+            name="podman_runtime",
+            message=f"Podman 沙箱镜像不存在: {image}",
+            suggestion=f"运行 `python -m tools.podman_sandbox build --image {image}` 构建正式沙箱镜像。",
+            details=image_detail,
+            data={"podman_executable": podman_exe, "podman_image": image},
         )
 
     return AgentCheck(
-        severity=Severity.WARNING,
+        severity=Severity.INFO,
         name="podman_runtime",
-        message="podman 命令存在，但 `podman version` 失败",
-        suggestion=_suggest_podman_fix(detail),
-        details=detail,
-        data={"podman_executable": podman_exe},
+        message=f"podman 运行时与沙箱镜像均可用: {image}",
+        details=podman_exe,
+        data={"podman_executable": podman_exe, "podman_image": image},
     )
 
 
@@ -863,7 +910,7 @@ def collect_agent_diagnostics(cfg: Optional[dict] = None) -> List[AgentCheck]:
         _diagnose_terminal_backend(cfg),
         _diagnose_git_bash(),
         _diagnose_docker(cfg),
-        _diagnose_podman(),
+        _diagnose_podman(cfg),
         _diagnose_tool_registration(),
         _diagnose_body_registry(),
         _diagnose_terminal_cwd(cfg),
