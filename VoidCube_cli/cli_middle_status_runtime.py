@@ -18,6 +18,7 @@ class CliMiddleStatusPorts:
     memory_llm: Callable[[], Mapping[str, Any]]
     ascii_mode: Callable[[], bool]
     subagent_snapshot: Callable[[], Mapping[str, Any]]
+    scheduler_snapshot: Callable[[], Any] | None = None
 
 
 class CliMiddleStatusRuntime:
@@ -44,6 +45,23 @@ class CliMiddleStatusRuntime:
             memory_usage = dict(supervisor.get("mem_usage") or {})
         except Exception:
             pass
+
+        if ports.scheduler_snapshot is not None:
+            try:
+                snapshot = ports.scheduler_snapshot()
+                active = getattr(snapshot, "active", None)
+                queued = tuple(getattr(snapshot, "queued", ()) or ())
+                if active is not None or queued:
+                    if fragments:
+                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    lane = getattr(getattr(active, "lane", None), "value", "queued")
+                    label = "用户" if lane == "user_chat" else "自主"
+                    state = getattr(getattr(active, "state", None), "value", "排队")
+                    fragments.append((f"{self._BACKGROUND} #60A5FA", f"{label}:{state}"))
+                    if queued:
+                        fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{len(queued)}"))
+            except Exception:
+                pass
 
         try:
             memory_config = ports.memory_llm()

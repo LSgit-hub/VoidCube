@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import threading
 
 from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
 from VoidCube_app.turn_scheduler import TurnScheduler
@@ -53,3 +54,40 @@ def test_runtime_cancel_user_does_not_cancel_autonomous_lane() -> None:
     )
     scheduler.start_next()
     assert runtime.cancel_user() is False
+
+
+def test_async_runtime_returns_before_active_turn_finishes() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def execute(_host, payload, _token):
+        calls.append(payload)
+        entered.set()
+        release.wait(1)
+
+    scheduler = TurnScheduler()
+    runtime = CliTurnSchedulerRuntime(
+        scheduler,
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            execute_user=execute,
+            execute_autonomous=execute,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+        asynchronous=True,
+    )
+    host = type("Host", (), {})()
+
+    assert runtime.submit_user(host, "hello") is True
+    assert entered.wait(1)
+    assert scheduler.snapshot().active is not None
+    assert runtime.cancel_user() is True
+    release.set()
+    for _ in range(100):
+        if scheduler.snapshot().active is None:
+            break
+        threading.Event().wait(0.01)
+    assert scheduler.snapshot().active is None
+    assert calls == ["hello"]

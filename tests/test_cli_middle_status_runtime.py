@@ -56,3 +56,27 @@ def test_middle_status_isolates_failed_ports():
 
     rendered = "".join(text for _, text in runtime.build())
     assert "辅助" in rendered
+
+
+def test_middle_status_projects_scheduler_snapshot_without_reading_host_state():
+    snapshot = type(
+        "Snapshot",
+        (),
+        {
+            "active": type("Active", (), {"lane": type("Lane", (), {"value": "user_chat"})(), "state": type("State", (), {"value": "running"})()})(),
+            "queued": (object(), object()),
+        },
+    )()
+    runtime = CliMiddleStatusRuntime(
+        CliMiddleStatusPorts(
+            supervisor_snapshot=lambda: {"scene": "idle"},
+            memory_llm=lambda: {"provider": "mem"},
+            ascii_mode=lambda: True,
+            subagent_snapshot=lambda: {"active": False},
+            scheduler_snapshot=lambda: snapshot,
+        )
+    )
+
+    rendered = "".join(text for _, text in runtime.build())
+    assert "用户:running" in rendered
+    assert "+2" in rendered

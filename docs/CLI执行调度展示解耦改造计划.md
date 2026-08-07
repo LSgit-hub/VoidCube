@@ -113,12 +113,12 @@ TUI / Supervisor adapter
 ### P2：接入现有 CLI 输入链路（进行中）
 
 - [x] 将 `PendingInputRuntime` 的用户输入转换为 `TurnRequest`，由 Scheduler admission。
-- [ ] 将 autonomous polling 的认领结果转换为 `supervisor_task` request。
-- [x] 用 Scheduler 的 admission/dispatch 替换 `_api_a_execution_gate` 的直接锁等待。
+- [x] 将 autonomous polling 的认领结果转换为 `supervisor_task` request（component host pending input 统一经 Scheduler adapter admission）。
+- [x] 用 Scheduler 的 admission/dispatch 替换旧用户/自主 turn 锁的直接等待。
 - [x] 保留现有 `/auto`、`/auto-q` 命令入口，并同步 Scheduler autonomous gate。
-- [ ] TUI 在输入被延迟时显示可解释状态，不改变输入内容和 session 归属。
+- [x] TUI 中间状态栏通过只读 snapshot 显示活动 lane 和排队数量，不改变输入内容和 session 归属。
 
-**退出条件**：用户/自主两条链路的现有回归测试通过；用户/自主旧锁不再作为业务调度入口；scheduled-task 专用锁仍属于独立任务域，待后续明确迁移。
+**退出条件**：用户/自主两条链路的现有回归测试通过；用户/自主旧锁不再作为业务调度入口；scheduled-task 专用锁仍属于独立任务域，待后续明确迁移。P2 核心接入已满足，待 independent adapter/快照验收记录后关闭阶段。
 
 ### P3：抽取 `AgentExecutor`（未开始）
 
@@ -130,9 +130,9 @@ TUI / Supervisor adapter
 
 **退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。
 
-### P4：统一事件投影与 TUI 状态（未开始）
+### P4：统一事件投影与 TUI 状态（进行中）
 
-- [ ] TUI 只订阅 Scheduler/Executor 事件和快照，不读取 component host 私有字段。
+- [x] TUI 中间状态栏通过 Scheduler snapshot 读取活动 lane/排队数量，不读取 component host 私有字段。
 - [ ] 合并自主面板与状态栏的宽度计算、截断和 spinner 投影。
 - [ ] 补窄终端、退出中、取消中、队列等待和自主执行中的渲染测试。
 - [ ] 将日志标记统一为 `user_chat` / `supervisor_task`，保留可检索的 request id。

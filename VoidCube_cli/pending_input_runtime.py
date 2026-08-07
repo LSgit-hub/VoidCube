@@ -90,7 +90,9 @@ class PendingInputRuntime:
                 f"  {_DIM}📎 {count} image{'s' if count > 1 else ''} attached{_RST}"
             )
 
-        self.ports.set_agent_running(True)
+        deferred_turn = self.ports.submit_turn is not None
+        if not deferred_turn:
+            self.ports.set_agent_running(True)
         self.ports.invalidate_app(app)
         sanitized = str(user_input).encode("ascii", errors="replace").decode("ascii")
         logger.info(
@@ -105,7 +107,8 @@ class PendingInputRuntime:
             else:
                 self.ports.chat(user_input, submit_images or None)
         finally:
-            self.ports.set_agent_running(False)
+            if not deferred_turn:
+                self.ports.set_agent_running(False)
             self.ports.reset_turn_state()
             self.ports.invalidate_app(app)
             self._restart_continuous_voice_if_needed(app)

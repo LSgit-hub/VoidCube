@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 from threading import RLock
+from threading import Thread
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -23,19 +24,28 @@ class CliTurnSchedulerPorts:
 class CliTurnSchedulerRuntime:
     """Translate CLI host payloads into shared scheduler requests."""
 
-    def __init__(self, scheduler: TurnScheduler, ports: CliTurnSchedulerPorts) -> None:
+    def __init__(
+        self,
+        scheduler: TurnScheduler,
+        ports: CliTurnSchedulerPorts,
+        *,
+        asynchronous: bool = False,
+        thread_factory: Callable[..., Thread] = Thread,
+    ) -> None:
         self.scheduler = scheduler
         self.ports = ports
         self._ids = itertools.count(1)
         self._active_hosts: dict[str, Any] = {}
         self._active_lanes: dict[str, TurnLane] = {}
         self._lock = RLock()
+        self._asynchronous = asynchronous
+        self._thread_factory = thread_factory
 
     def submit_user(self, host: Any, payload: Any) -> bool:
-        return self._run(host, payload, self._request(host, payload, TurnLane.USER_CHAT, "cli"))
+        return self._submit(host, payload, TurnLane.USER_CHAT, "cli")
 
     def submit_autonomous(self, host: Any, payload: Any) -> bool:
-        return self._run(host, payload, self._request(host, payload, TurnLane.SUPERVISOR_TASK, "autonomous"))
+        return self._submit(host, payload, TurnLane.SUPERVISOR_TASK, "autonomous")
 
     def cancel_user(self) -> bool:
         active = self.scheduler.snapshot().active
@@ -70,6 +80,20 @@ class CliTurnSchedulerRuntime:
             prompt=payload,
             source=source,
         )
+
+    def _submit(self, host: Any, payload: Any, lane: TurnLane, source: str) -> bool:
+        request = self._request(host, payload, lane, source)
+        if lane is TurnLane.SUPERVISOR_TASK and not self.scheduler.snapshot().autonomous_gate:
+            raise RuntimeError("autonomous gate is closed")
+        if not self._asynchronous:
+            return self._run(host, payload, request)
+        thread = self._thread_factory(
+            target=lambda: self._run(host, payload, request),
+            daemon=True,
+            name=f"turn-scheduler-{lane.value}",
+        )
+        thread.start()
+        return True
 
     def _run(self, host: Any, payload: Any, request: TurnRequest) -> bool:
         with self._lock:

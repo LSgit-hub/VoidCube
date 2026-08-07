@@ -1097,6 +1097,7 @@ class VoidcubeCLI:
         checkpoints: bool = False,
         pass_session_id: bool = False,
         embedded_role: Optional[str] = None,
+        turn_scheduler_runtime: CliTurnSchedulerRuntime | None = None,
     ):
         """
         Initialize the Voidcube CLI.
@@ -1376,7 +1377,9 @@ class VoidcubeCLI:
         self._autonomous_component_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
-        self._turn_scheduler_runtime = self._build_turn_scheduler_runtime()
+        self._turn_scheduler_runtime = (
+            turn_scheduler_runtime or self._build_turn_scheduler_runtime()
+        )
         self._scheduled_parent_host = None
         self._scheduled_component_host = None
         self._scheduled_execution_gate = threading.Lock()
@@ -1399,7 +1402,11 @@ class VoidcubeCLI:
             if token.cancelled:
                 return None
             message, images = payload
-            return host.chat(message, images=images)
+            host._agent_running = True
+            try:
+                return host.chat(message, images=images)
+            finally:
+                host._agent_running = False
 
         runtime = CliTurnSchedulerRuntime(
             scheduler,
@@ -1410,6 +1417,8 @@ class VoidcubeCLI:
                 cancel_user=lambda host, _request_id: host.agent.interrupt(None),
                 cancel_autonomous=lambda host, _request_id: host.agent.interrupt(None),
             ),
+            asynchronous=True,
+            thread_factory=threading.Thread,
         )
         scheduler.set_executor(runtime)
         return runtime
@@ -1477,8 +1486,10 @@ class VoidcubeCLI:
             checkpoints=False,
             pass_session_id=True,
             embedded_role="scheduled",
+            turn_scheduler_runtime=self._scheduler_runtime(),
         )
         component_host._scheduled_parent_host = self
+        component_host._turn_scheduler_runtime = self._scheduler_runtime()
         self._scheduled_component_host = component_host
         return component_host
 
@@ -1503,6 +1514,7 @@ class VoidcubeCLI:
                 checkpoints=getattr(self, "checkpoints_enabled", False),
                 pass_session_id=True,
                 embedded_role="autonomous",
+                turn_scheduler_runtime=self._scheduler_runtime(),
             )
 
         def bind_component_parent(host: Any) -> None:
@@ -2035,6 +2047,7 @@ class VoidcubeCLI:
                 ),
                 ascii_mode=self._use_ascii_fallback_cached,
                 subagent_snapshot=self._get_subagent_observability_snapshot,
+                scheduler_snapshot=lambda: self._scheduler_runtime().scheduler.snapshot(),
             )
         ).build()
 
