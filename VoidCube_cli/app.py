@@ -325,6 +325,7 @@ if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
 from VoidCube_cli.autonomous_executor import (
+    autonomous_task_toolsets,
     autonomous_task_run_id_for_message,
 )
 from VoidCube_cli.autonomous_events import (
@@ -1087,6 +1088,7 @@ class VoidcubeCLI:
         resume: Optional[str] = None,
         checkpoints: bool = False,
         pass_session_id: bool = False,
+        embedded_role: Optional[str] = None,
     ):
         """
         Initialize the Voidcube CLI.
@@ -1102,9 +1104,11 @@ class VoidcubeCLI:
             compact: Use compact display mode
             resume: Session ID to resume (restores conversation history from SQLite)
             pass_session_id: Include the session ID in the agent's system prompt
+            embedded_role: Internal background-only Host role, when applicable
         """
         # Initialize Rich console
         self.console = Console()
+        self._embedded_component_role = str(embedded_role or "").strip().lower()
         self.config = CLI_CONFIG
         display_config = CLI_CONFIG.get("display") or {}
         self.compact = compact if compact is not None else display_config.get("compact", False)
@@ -1254,13 +1258,15 @@ class VoidcubeCLI:
         # Conversation state
         self.conversation_history: List[Dict[str, Any]] = []
         self.session_start = datetime.now()
-        # Initialize SQLite session store early so /title works before first message
+        # Interactive and autonomous Hosts index sessions. Scheduled work is
+        # deliberately ephemeral and does not need session search or /title.
         self._session_db = None
-        try:
-            from VoidCube_core.state import SessionDB
-            self._session_db = SessionDB()
-        except Exception as e:
-            logger.warning("Failed to initialize SessionDB — session will NOT be indexed for search: %s", e)
+        if self._embedded_component_role != "scheduled":
+            try:
+                from VoidCube_core.state import SessionDB
+                self._session_db = SessionDB()
+            except Exception as e:
+                logger.warning("Failed to initialize SessionDB — session will NOT be indexed for search: %s", e)
         
         session_identity = resolve_session_identity(
             requested_session_id=resume,
@@ -1361,6 +1367,9 @@ class VoidcubeCLI:
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
         self._api_a_execution_gate = threading.Lock()
+        self._scheduled_parent_host = None
+        self._scheduled_component_host = None
+        self._scheduled_execution_gate = threading.Lock()
         self._scheduled_execution_active = False
         self._scheduled_executor_runtime = self._create_scheduled_executor_runtime()
         _initialize_autonomous_status_caches_view(self)
@@ -1371,13 +1380,23 @@ class VoidcubeCLI:
 
     def _is_embedded_autonomous_component(self) -> bool:
         """Return True when this host only exists for the embedded mini CLI."""
-        return getattr(self, "_autonomous_parent_host", None) is not None
+        return getattr(self, "_embedded_component_role", "") == "autonomous" or getattr(
+            self, "_autonomous_parent_host", None
+        ) is not None
+
+    def _is_embedded_component(self) -> bool:
+        """Return True for any background-only embedded CLI Host."""
+        return bool(
+            getattr(self, "_embedded_component_role", "")
+            or getattr(self, "_autonomous_parent_host", None) is not None
+            or getattr(self, "_scheduled_parent_host", None) is not None
+        )
 
     def _create_scheduled_executor_runtime(self) -> ScheduledTaskExecutorRuntime:
         """Assemble scheduled execution from explicit CLI-owned state ports."""
         return ScheduledTaskExecutorRuntime(
             ScheduledTaskExecutorPorts(
-                is_embedded_component=self._is_embedded_autonomous_component,
+                is_embedded_component=self._is_embedded_component,
                 auto_task_running=lambda: bool(
                     getattr(
                         getattr(self, "_autonomous_component_host", None),
@@ -1385,21 +1404,47 @@ class VoidcubeCLI:
                         False,
                     )
                 ),
-                manual_background_task_running=self._has_running_background_tasks,
-                agent_running=lambda: bool(self._agent_running),
-                command_running=lambda: bool(self._command_running),
-                execution_gate=self._api_a_execution_gate,
+                execution_gate=self._scheduled_execution_gate,
                 get_session_id=lambda: str(self.session_id or ""),
                 set_execution_active=lambda active: setattr(
                     self, "_scheduled_execution_active", bool(active)
                 ),
-                start_background_task=self._start_background_agent_task,
+                start_background_task=self._start_scheduled_component_task,
             )
         )
 
     def _should_emit_scrollback_output(self) -> bool:
         """Return whether this host may write into the user's main CLI transcript."""
-        return not self._is_embedded_autonomous_component()
+        return not self._is_embedded_component()
+
+    def _ensure_scheduled_component_host(self):
+        """Lazily create the isolated Host used by scheduled and media work."""
+        component_host = getattr(self, "_scheduled_component_host", None)
+        if component_host is not None:
+            return component_host
+        component_host = type(self)(
+            model=getattr(self, "model", None),
+            toolsets=getattr(self, "enabled_toolsets", None),
+            provider=getattr(self, "requested_provider", None) or getattr(self, "provider", None),
+            api_key=getattr(self, "_explicit_api_key", None),
+            base_url=getattr(self, "_explicit_base_url", None),
+            max_turns=getattr(self, "max_turns", None),
+            verbose=False,
+            compact=True,
+            checkpoints=False,
+            pass_session_id=True,
+            embedded_role="scheduled",
+        )
+        component_host._scheduled_parent_host = self
+        self._scheduled_component_host = component_host
+        return component_host
+
+    def _start_scheduled_component_task(self, prompt: str, **kwargs: Any) -> bool:
+        """Run scheduled work through the isolated scheduled Host runtime."""
+        return self._ensure_scheduled_component_host()._start_background_agent_task(
+            prompt,
+            **kwargs,
+        )
 
     def _ensure_autonomous_component_host(self):
         def create_component_host():
@@ -1414,6 +1459,7 @@ class VoidcubeCLI:
                 compact=True,
                 checkpoints=getattr(self, "checkpoints_enabled", False),
                 pass_session_id=True,
+                embedded_role="autonomous",
             )
 
         return ensure_autonomous_component_host(
@@ -2114,7 +2160,15 @@ class VoidcubeCLI:
             )
         ).resolve(user_message)
 
-    def _init_agent(self, *, model_override: Optional[str] = None, runtime_override: Optional[dict] = None, route_label: Optional[str] = None, request_overrides: dict | None = None) -> bool:
+    def _init_agent(
+        self,
+        *,
+        model_override: Optional[str] = None,
+        runtime_override: Optional[dict] = None,
+        route_label: Optional[str] = None,
+        request_overrides: dict | None = None,
+        enabled_toolsets_override: Optional[list[str]] = None,
+    ) -> bool:
         """
         Initialize the agent on first use.
         When resuming a session, restores conversation history from SQLite.
@@ -2170,7 +2224,11 @@ class VoidcubeCLI:
                     runtime=runtime,
                     model=effective_model,
                     max_iterations=self.max_turns,
-                    enabled_toolsets=self.enabled_toolsets,
+                    enabled_toolsets=(
+                        self.enabled_toolsets
+                        if enabled_toolsets_override is None
+                        else enabled_toolsets_override
+                    ),
                     verbose_logging=self.verbose,
                     quiet_mode=not self.verbose,
                     ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
@@ -2212,7 +2270,7 @@ class VoidcubeCLI:
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
             self.agent._print_fn = (  # type: ignore[assignment]
                 self._quiet_autonomous_component_cprint
-                if self._is_embedded_autonomous_component()
+                if self._is_embedded_component()
                 else _cprint
             )
             self._active_agent_route_signature = (
@@ -2895,6 +2953,9 @@ class VoidcubeCLI:
         persist_session: bool,
     ) -> Any:
         runtime = turn_route["runtime"]
+        minimal_scheduled_host = (
+            getattr(self, "_embedded_component_role", "") == "scheduled"
+        )
         return CliAgentInitializationRuntime(
             CliAgentInitializationPorts(
                 agent_factory=_get_AIAgent(),
@@ -2917,7 +2978,7 @@ class VoidcubeCLI:
                 provider_data_collection=self._provider_data_collection,
                 session_id=task_id,
                 platform="cli",
-                session_db=self._session_db,
+                session_db=None if minimal_scheduled_host else self._session_db,
                 clarification_sink=None,
                 reasoning_callback=None,
                 fallback_model=self._fallback_model,
@@ -2929,16 +2990,20 @@ class VoidcubeCLI:
                 stream_delta_callback=None,
                 tool_gen_callback=None,
                 persist_session=persist_session,
+                skip_memory=True if minimal_scheduled_host else None,
+                skip_context_files=True if minimal_scheduled_host else None,
             )
         ).create()
 
-    @staticmethod
     def _announce_background_start(
+        self,
         task_num: int,
         task_id: str,
         prompt: str,
         task_label: str,
     ) -> None:
+        if self._is_embedded_component():
+            return
         _cprint(
             f"  🔄 {task_label} #{task_num} started: \"{prompt[:60]}"
             f"{'...' if len(prompt) > 60 else ''}\""
@@ -2962,6 +3027,8 @@ class VoidcubeCLI:
         response_title: str | None,
         prompt: str,
     ) -> None:
+        if self._is_embedded_component():
+            return
         CliBackgroundResponseRuntime(
             CliBackgroundResponsePorts(
                 invalidate=lambda: self._app.invalidate() if self._app else None,
@@ -2982,7 +3049,7 @@ class VoidcubeCLI:
         )
 
     def _bell_background_completion(self) -> None:
-        if self.bell_on_complete:
+        if self.bell_on_complete and not self._is_embedded_component():
             sys.stdout.write("\a")
             sys.stdout.flush()
 
@@ -3584,6 +3651,13 @@ class VoidcubeCLI:
             current_autonomous_task,
             message,
         )
+        autonomous_toolsets = (
+            autonomous_task_toolsets(current_autonomous_task)
+            if autonomous_task_run_id
+            else None
+        )
+        if autonomous_toolsets is not None and self.agent is not None:
+            self.agent = None
         if autonomous_task_run_id or current_autonomous_task is None:
             autonomous_runtime.set_last_agent_turn_result(None)
 
@@ -3599,6 +3673,7 @@ class VoidcubeCLI:
             runtime_override=turn_route["runtime"],
             route_label=turn_route["label"],
             request_overrides=turn_route.get("request_overrides"),
+            enabled_toolsets_override=autonomous_toolsets,
         ):
             return None
         
@@ -3835,6 +3910,8 @@ class VoidcubeCLI:
             ).handle(e)
             return None
         finally:
+            if autonomous_toolsets is not None:
+                self.agent = None
             self._active_chat_agent_role = previous_active_role
     
     def _print_exit_summary(self):

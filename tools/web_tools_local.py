@@ -273,12 +273,14 @@ def local_web_extract(
             if extract_links:
                 links = []
                 for link in soup.find_all('a', href=True):
-                    href = link['href']
-                    if href.startswith('http'):
-                        links.append({
-                            'url': urljoin(url, href),
-                            'text': link.get_text(strip=True)[:100],
-                        })
+                    link_url = urljoin(url, link['href'])
+                    parsed_link = urlparse(link_url)
+                    if parsed_link.scheme not in {'http', 'https'}:
+                        continue
+                    links.append({
+                        'url': link_url,
+                        'text': link.get_text(strip=True)[:100],
+                    })
                 result['links'] = links[:50]
             
             logger.info(f"成功提取 {url}，内容长度: {len(content)}")

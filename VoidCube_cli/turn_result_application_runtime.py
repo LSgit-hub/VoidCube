@@ -40,12 +40,17 @@ class TurnResultApplicationRuntime:
         autonomous_timeout_reported: bool,
         autonomous_timeout_writeback_succeeded: bool,
     ) -> AppliedTurnResult:
+        prior_history = tuple(self.ports.conversation_history())
         outcome = normalize_turn_outcome(
             result,
-            fallback_history=self.ports.conversation_history(),
+            fallback_history=prior_history,
         )
         self.ports.set_conversation_history(list(outcome.conversation_history))
-        turn_result = outcome.observation()
+        if outcome.conversation_history[: len(prior_history)] == prior_history:
+            evidence_messages = outcome.conversation_history[len(prior_history) :]
+        else:
+            evidence_messages = outcome.conversation_history
+        turn_result = outcome.observation(evidence_messages=evidence_messages)
         if autonomous_timeout_reported:
             turn_result.update(
                 {

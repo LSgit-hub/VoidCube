@@ -5,6 +5,7 @@ import pytest
 from VoidCube_app.provider_auth import (
     PROVIDER_REGISTRY,
     RUNTIME_PROVIDER_IDS,
+    normalize_openai_compatible_base_url,
     resolve_api_key_provider_credentials,
 )
 from VoidCube_app.models import (
@@ -25,6 +26,7 @@ _EXPECTED_RUNTIME_PROVIDERS = (
     "nous",
     "openai",
     "deepseek",
+    "agnes-ai",
     "zai",
     "kimi-coding",
     "minimax",
@@ -226,3 +228,39 @@ def test_named_custom_provider_remains_runtime_resolvable(monkeypatch):
     assert runtime["base_url"] == "https://models.example/v1"
     assert runtime["api_key"] == "sk-research-token"
     assert runtime["model"] == "research-model"
+
+
+def test_named_custom_provider_normalizes_legacy_completion_endpoint(monkeypatch):
+    config = {
+        "providers": {
+            "agnes-ai": {
+                "label": "Agnes-AI",
+                "base_url": "https://api.agnes-ai.cn/v1/chat/completions",
+                "api_key": "sk-research-token",
+                "selected_model": "agnes-2.5-flash",
+            }
+        },
+        "runtime": {},
+        "agent": {},
+    }
+    monkeypatch.setattr("VoidCube_app.runtime_provider.load_config", lambda: config)
+
+    runtime = resolve_runtime_provider(requested="agnes-ai")
+
+    assert runtime["base_url"] == "https://api.agnes-ai.cn/v1"
+
+
+def test_openai_compatible_url_normalizer_uses_v1_for_host_root():
+    assert normalize_openai_compatible_base_url("https://example.test") == "https://example.test/v1"
+
+
+def test_api_key_provider_reads_persisted_voidcube_environment(monkeypatch):
+    monkeypatch.delenv("AGNES_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "VoidCube_app.config.get_env_value",
+        lambda name: "sk-persisted-agnes-token-123456789" if name == "AGNES_API_KEY" else None,
+    )
+
+    credentials = resolve_api_key_provider_credentials("agnes-ai")
+
+    assert credentials["api_key"] == "sk-persisted-agnes-token-123456789"

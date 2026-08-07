@@ -24,6 +24,7 @@ from VoidCube_app.provider_auth import (
     resolve_api_key_provider_credentials,
     resolve_external_process_provider_credentials,
     has_usable_secret,
+    normalize_openai_compatible_base_url,
 )
 from VoidCube_app.config import load_config
 from VoidCube_app.config import get_active_model_config
@@ -211,7 +212,8 @@ def _resolve_named_custom_runtime(
     base_url = (
         (explicit_base_url or "").strip()
         or custom_provider.get("base_url", "")
-    ).rstrip("/")
+    )
+    base_url = normalize_openai_compatible_base_url(base_url)
     if not base_url:
         return None
 
@@ -331,7 +333,11 @@ def _resolve_openrouter_runtime(
 
     return {
         "provider": effective_provider,
-        "base_url": base_url,
+        "base_url": (
+            normalize_openai_compatible_base_url(base_url)
+            if effective_provider == "custom"
+            else base_url
+        ),
         "api_key": api_key,
         "source": source,
     }

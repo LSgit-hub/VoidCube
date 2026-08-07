@@ -1631,6 +1631,87 @@ async def web_extract_tool(
         return tool_error(error_msg)
 
 
+async def _finalize_crawl_response(
+    response: Dict[str, Any],
+    *,
+    debug_call_data: Dict[str, Any],
+    use_llm_processing: bool,
+    auxiliary_available: bool,
+    effective_model: str,
+    min_length: int,
+    main_runtime: Optional[Dict[str, Any]],
+) -> str:
+    results = list(response.get("results") or [])
+    debug_call_data["pages_crawled"] = len(results)
+    debug_call_data["original_response_size"] = len(json.dumps(response))
+
+    if use_llm_processing and auxiliary_available:
+        debug_call_data["processing_applied"].append("llm_processing")
+
+        async def process_result(result: Dict[str, Any]):
+            page_url = result.get("url", "Unknown URL")
+            title = result.get("title", "")
+            content = result.get("content", "")
+            if not content:
+                return result, None
+            processed = await process_content_with_llm(
+                content,
+                page_url,
+                title,
+                effective_model,
+                min_length,
+                main_runtime=main_runtime,
+            )
+            if not processed:
+                return result, {
+                    "url": page_url,
+                    "original_size": len(content),
+                    "processed_size": len(content),
+                    "compression_ratio": 1.0,
+                    "model_used": None,
+                    "reason": "content_too_short",
+                }
+            result["content"] = processed
+            return result, {
+                "url": page_url,
+                "original_size": len(content),
+                "processed_size": len(processed),
+                "compression_ratio": len(processed) / len(content) if content else 1.0,
+                "model_used": effective_model,
+            }
+
+        processed_results = await asyncio.gather(*(process_result(result) for result in results))
+        for result, metrics in processed_results:
+            if metrics:
+                debug_call_data["compression_metrics"].append(metrics)
+                if metrics.get("model_used"):
+                    debug_call_data["pages_processed_with_llm"] += 1
+    elif use_llm_processing:
+        debug_call_data["processing_applied"].append("llm_processing_unavailable")
+
+    trimmed_results = [
+        {
+            "url": result.get("url", ""),
+            "title": result.get("title", ""),
+            "content": result.get("content", ""),
+            "error": result.get("error"),
+            **(
+                {"blocked_by_policy": result["blocked_by_policy"]}
+                if "blocked_by_policy" in result
+                else {}
+            ),
+        }
+        for result in results
+    ]
+    cleaned_result = clean_base64_images(
+        json.dumps({"results": trimmed_results}, indent=2, ensure_ascii=False)
+    )
+    debug_call_data["final_response_size"] = len(cleaned_result)
+    _debug.log_call("web_crawl_tool", debug_call_data)
+    _debug.save()
+    return cleaned_result
+
+
 async def web_crawl_tool(
     url: str, 
     instructions: str = None, 
@@ -1684,25 +1765,63 @@ async def web_crawl_tool(
         effective_model = model or _get_default_summarizer_model(main_runtime=main_runtime)
         auxiliary_available = check_auxiliary_model(main_runtime=main_runtime)
         backend = _get_backend()
+        if backend in {"exa", "parallel"}:
+            logger.info("%s has no crawl API; using the local crawler", backend)
+            debug_call_data["processing_applied"].append(
+                f"{backend}_crawl_fallback_to_local"
+            )
+            backend = "local"
+
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+
+        if not is_safe_url(url):
+            return json.dumps({"results": [{"url": url, "title": "", "content": "",
+                "error": "Blocked: URL targets a private or internal network address"}]}, ensure_ascii=False)
+
+        blocked = check_website_access(url)
+        if blocked:
+            logger.info("Blocked web_crawl for %s by rule %s", blocked["host"], blocked["rule"])
+            return json.dumps({"results": [{"url": url, "title": "", "content": "", "error": blocked["message"],
+                "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]}}]}, ensure_ascii=False)
+
+        if backend == "local":
+            from tools.web_tools_local import local_web_crawl
+
+            max_depth = 2 if depth == "advanced" else 1
+            local_result = local_web_crawl(
+                url,
+                max_depth=max_depth,
+                max_pages=20 if depth == "advanced" else 10,
+            )
+            if not local_result.get("success"):
+                return tool_error(
+                    str(local_result.get("error") or "Local crawl failed"),
+                    url=url,
+                )
+            response = {
+                "results": [
+                    {
+                        "url": page.get("url", ""),
+                        "title": page.get("title", ""),
+                        "content": page.get("content", ""),
+                        "error": page.get("error"),
+                    }
+                    for page in list(local_result.get("pages") or [])
+                ]
+            }
+            return await _finalize_crawl_response(
+                response,
+                debug_call_data=debug_call_data,
+                use_llm_processing=use_llm_processing,
+                auxiliary_available=auxiliary_available,
+                effective_model=effective_model,
+                min_length=min_length,
+                main_runtime=main_runtime,
+            )
 
         # Tavily supports crawl via its /crawl endpoint
         if backend == "tavily":
-            # Ensure URL has protocol
-            if not url.startswith(('http://', 'https://')):
-                url = f'https://{url}'
-
-            # SSRF protection — block private/internal addresses
-            if not is_safe_url(url):
-                return json.dumps({"results": [{"url": url, "title": "", "content": "",
-                    "error": "Blocked: URL targets a private or internal network address"}]}, ensure_ascii=False)
-
-            # Website policy check
-            blocked = check_website_access(url)
-            if blocked:
-                logger.info("Blocked web_crawl for %s by rule %s", blocked["host"], blocked["rule"])
-                return json.dumps({"results": [{"url": url, "title": "", "content": "", "error": blocked["message"],
-                    "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]}}]}, ensure_ascii=False)
-
             from tools.interrupt import is_interrupted as _is_int
             if _is_int():
                 return tool_error("Interrupted", success=False)
@@ -1718,63 +1837,15 @@ async def web_crawl_tool(
             raw = _tavily_request("crawl", payload)
             results = _normalize_tavily_documents(raw, fallback_url=url)
 
-            response = {"results": results}
-            # Fall through to the shared LLM processing and trimming below
-            # (skip the Firecrawl-specific crawl logic)
-            pages_crawled = len(response.get('results', []))
-            logger.info("Crawled %d pages", pages_crawled)
-            debug_call_data["pages_crawled"] = pages_crawled
-            debug_call_data["original_response_size"] = len(json.dumps(response))
-
-            # Process each result with LLM if enabled
-            if use_llm_processing and auxiliary_available:
-                logger.info("Processing crawled content with LLM (parallel)...")
-                debug_call_data["processing_applied"].append("llm_processing")
-
-                async def _process_tavily_crawl(result):
-                    page_url = result.get('url', 'Unknown URL')
-                    title = result.get('title', '')
-                    content = result.get('content', '')
-                    if not content:
-                        return result, None, "no_content"
-                    original_size = len(content)
-                    processed = await process_content_with_llm(
-                        content,
-                        page_url,
-                        title,
-                        effective_model,
-                        min_length,
-                        main_runtime=main_runtime,
-                    )
-                    if processed:
-                        result['raw_content'] = content
-                        result['content'] = processed
-                        metrics = {"url": page_url, "original_size": original_size, "processed_size": len(processed),
-                                   "compression_ratio": len(processed) / original_size if original_size else 1.0, "model_used": effective_model}
-                        return result, metrics, "processed"
-                    metrics = {"url": page_url, "original_size": original_size, "processed_size": original_size,
-                               "compression_ratio": 1.0, "model_used": None, "reason": "content_too_short"}
-                    return result, metrics, "too_short"
-
-                tasks = [_process_tavily_crawl(r) for r in response.get('results', [])]
-                processed_results = await asyncio.gather(*tasks)
-                for result, metrics, status in processed_results:
-                    if status == "processed":
-                        debug_call_data["compression_metrics"].append(metrics)
-                        debug_call_data["pages_processed_with_llm"] += 1
-
-            if use_llm_processing and not auxiliary_available:
-                logger.warning("LLM processing requested but no auxiliary model available, returning raw content")
-                debug_call_data["processing_applied"].append("llm_processing_unavailable")
-
-            trimmed_results = [{"url": r.get("url", ""), "title": r.get("title", ""), "content": r.get("content", ""), "error": r.get("error"),
-                **({  "blocked_by_policy": r["blocked_by_policy"]} if "blocked_by_policy" in r else {})} for r in response.get("results", [])]
-            result_json = json.dumps({"results": trimmed_results}, indent=2, ensure_ascii=False)
-            cleaned_result = clean_base64_images(result_json)
-            debug_call_data["final_response_size"] = len(cleaned_result)
-            _debug.log_call("web_crawl_tool", debug_call_data)
-            _debug.save()
-            return cleaned_result
+            return await _finalize_crawl_response(
+                {"results": results},
+                debug_call_data=debug_call_data,
+                use_llm_processing=use_llm_processing,
+                auxiliary_available=auxiliary_available,
+                effective_model=effective_model,
+                min_length=min_length,
+                main_runtime=main_runtime,
+            )
 
         # web_crawl requires Firecrawl or the Firecrawl tool-gateway — Parallel has no crawl API
         if not check_firecrawl_api_key():
@@ -1784,25 +1855,8 @@ async def web_crawl_tool(
                 "success": False,
             }, ensure_ascii=False)
 
-        # Ensure URL has protocol
-        if not url.startswith(('http://', 'https://')):
-            url = f'https://{url}'
-            logger.info("Added https:// prefix to URL: %s", url)
-        
         instructions_text = f" with instructions: '{instructions}'" if instructions else ""
         logger.info("Crawling %s%s", url, instructions_text)
-        
-        # SSRF protection — block private/internal addresses
-        if not is_safe_url(url):
-            return json.dumps({"results": [{"url": url, "title": "", "content": "",
-                "error": "Blocked: URL targets a private or internal network address"}]}, ensure_ascii=False)
-
-        # Website policy check — block before crawling
-        blocked = check_website_access(url)
-        if blocked:
-            logger.info("Blocked web_crawl for %s by rule %s", blocked["host"], blocked["rule"])
-            return json.dumps({"results": [{"url": url, "title": "", "content": "", "error": blocked["message"],
-                "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]}}]}, ensure_ascii=False)
 
         # Use Firecrawl's v2 crawl functionality
         # Docs: https://docs.firecrawl.dev/features/crawl
@@ -2231,6 +2285,35 @@ WEB_EXTRACT_SCHEMA = {
     }
 }
 
+WEB_CRAWL_SCHEMA = {
+    "name": "web_crawl",
+    "description": (
+        "Crawl multiple pages on one website and return URL, title, and page content. "
+        "Use basic depth for normal documentation research and advanced only when linked "
+        "subpages are required. The configured local, Tavily, or Firecrawl backend is used."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Starting website URL",
+            },
+            "instructions": {
+                "type": "string",
+                "description": "Optional focus for selecting and summarizing relevant content",
+                "maxLength": 2000,
+            },
+            "depth": {
+                "type": "string",
+                "enum": ["basic", "advanced"],
+                "description": "Crawl depth; basic is the default and lower cost",
+            },
+        },
+        "required": ["url"],
+    },
+}
+
 registry.register(
     name="web_search",
     toolset="web",
@@ -2254,5 +2337,21 @@ registry.register(
     requires_env=_web_requires_env(),
     is_async=True,
     emoji="📄",
+    max_result_size_chars=100_000,
+)
+registry.register(
+    name="web_crawl",
+    toolset="web",
+    schema=WEB_CRAWL_SCHEMA,
+    handler=lambda args, **kw: web_crawl_tool(
+        str(args.get("url") or "").strip(),
+        str(args.get("instructions") or "").strip() or None,
+        args.get("depth") if args.get("depth") in {"basic", "advanced"} else "basic",
+        main_runtime=kw.get("main_runtime"),
+    ),
+    check_fn=check_web_api_key,
+    requires_env=_web_requires_env(),
+    is_async=True,
+    emoji="🕸️",
     max_result_size_chars=100_000,
 )

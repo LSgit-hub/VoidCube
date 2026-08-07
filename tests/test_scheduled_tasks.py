@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from VoidCube_cli.scheduled_executor import (
     ScheduledWritebackOutbox,
 )
 from VoidCube_cli.background_task_runtime import BackgroundTaskState
+from VoidCube_cli.input_process_loop import run_input_process_loop
 
 
 def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
@@ -30,21 +32,23 @@ def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
         component = getattr(host, "_autonomous_component_host", None)
         return bool(component is not None and getattr(component, "_agent_running", False))
 
-    def manual_background_task_running() -> bool:
-        return host._background_task_state.has_running_tasks()
-
     return ScheduledTaskExecutorPorts(
-        is_embedded_component=host._is_embedded_autonomous_component,
+        is_embedded_component=getattr(
+            host,
+            "_is_embedded_component",
+            host._is_embedded_autonomous_component,
+        ),
         auto_task_running=auto_task_running,
-        manual_background_task_running=manual_background_task_running,
-        agent_running=lambda: bool(getattr(host, "_agent_running", False)),
-        command_running=lambda: bool(getattr(host, "_command_running", False)),
-        execution_gate=getattr(host, "_api_a_execution_gate", None),
+        execution_gate=getattr(host, "_scheduled_execution_gate", None),
         get_session_id=lambda: str(getattr(host, "session_id", "") or ""),
         set_execution_active=lambda active: setattr(
             host, "_scheduled_execution_active", bool(active)
         ),
-        start_background_task=host._start_background_agent_task,
+        start_background_task=getattr(
+            host,
+            "_start_scheduled_component_task",
+            host._start_background_agent_task,
+        ),
     )
 
 
@@ -626,28 +630,35 @@ def test_scheduled_writeback_outbox_survives_reopen(tmp_path) -> None:
     assert reopened.pending_count() == 0
 
 
-def test_scheduled_executor_waits_for_foreground_api_a_and_execution_gate(tmp_path) -> None:
+def test_scheduled_executor_does_not_wait_for_foreground_api_a(tmp_path) -> None:
+    callbacks = []
     host = SimpleNamespace(
         session_id="main-cli",
         _scheduled_execution_active=False,
         _agent_running=True,
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
-        _api_a_execution_gate=threading.Lock(),
+        _scheduled_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
-        _start_background_agent_task=Mock(),
     )
+    host._start_background_agent_task = lambda _prompt, **kwargs: callbacks.append(
+        kwargs["on_complete"]
+    ) or True
     runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
-    runtime._post = Mock()  # type: ignore[method-assign]
+    runtime._post = Mock(
+        side_effect=[
+            {"claim": {"task": {"title": "计划", "instruction": "执行"}, "run": {"run_id": "run-1"}}},
+        ]
+    )  # type: ignore[method-assign]
 
     runtime.poll_workflow()
 
-    runtime._post.assert_not_called()
-    host._start_background_agent_task.assert_not_called()
+    runtime._post.assert_called_once()
+    assert callbacks
 
 
-def test_scheduled_executor_waits_for_manual_background_api_a(tmp_path) -> None:
+def test_scheduled_executor_does_not_wait_for_manual_background_api_a(tmp_path) -> None:
     background_thread = Mock()
     background_thread.is_alive.return_value = True
     host = SimpleNamespace(
@@ -656,25 +667,32 @@ def test_scheduled_executor_waits_for_manual_background_api_a(tmp_path) -> None:
         _agent_running=False,
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
-        _api_a_execution_gate=threading.Lock(),
+        _scheduled_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
-        _start_background_agent_task=Mock(),
     )
+    callbacks = []
+    host._start_background_agent_task = lambda _prompt, **kwargs: callbacks.append(
+        kwargs["on_complete"]
+    ) or True
     host._background_task_state.register_thread(
         "manual-background",
         background_thread,
     )
     runtime = ScheduledTaskExecutorRuntime(_executor_ports(host), outbox_path=tmp_path / "writebacks.db")
-    runtime._post = Mock()  # type: ignore[method-assign]
+    runtime._post = Mock(
+        return_value={
+            "claim": {"task": {"title": "计划", "instruction": "执行"}, "run": {"run_id": "run-1"}}
+        }
+    )  # type: ignore[method-assign]
 
     runtime.poll_workflow()
 
-    runtime._post.assert_not_called()
-    host._start_background_agent_task.assert_not_called()
+    runtime._post.assert_called_once()
+    assert callbacks
 
 
-def test_scheduled_executor_holds_api_a_gate_until_writeback(tmp_path) -> None:
+def test_scheduled_executor_holds_scheduled_gate_until_writeback(tmp_path) -> None:
     callbacks = []
     gate = threading.Lock()
     host = SimpleNamespace(
@@ -683,7 +701,7 @@ def test_scheduled_executor_holds_api_a_gate_until_writeback(tmp_path) -> None:
         _agent_running=False,
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
-        _api_a_execution_gate=gate,
+        _scheduled_execution_gate=gate,
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
     )
@@ -726,7 +744,7 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
         _agent_running=False,
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
-        _api_a_execution_gate=threading.Lock(),
+        _scheduled_execution_gate=threading.Lock(),
         _autonomous_component_host=SimpleNamespace(_agent_running=False),
         _is_embedded_autonomous_component=lambda: False,
     )
@@ -757,3 +775,136 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
     finish_payload = runtime._post.call_args_list[-1].args[1]
     assert finish_payload["success"] is False
     assert "timed out after 45 seconds" in finish_payload["error"]
+
+
+def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._scheduled_execution_gate = threading.Lock()
+    cli._api_a_execution_gate = threading.Lock()
+    cli._scheduled_execution_active = False
+    cli._autonomous_component_host = SimpleNamespace(_agent_running=False)
+    cli._scheduled_component_host = None
+    cli.session_id = "main-cli"
+    cli._start_scheduled_component_task = Mock()
+
+    runtime = cli._create_scheduled_executor_runtime()
+
+    assert runtime.ports.execution_gate is cli._scheduled_execution_gate
+    assert runtime.ports.execution_gate is not cli._api_a_execution_gate
+    assert runtime.ports.start_background_task is cli._start_scheduled_component_task
+
+
+def test_scheduled_gate_does_not_stop_foreground_input_loop():
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._api_a_execution_gate = threading.Lock()
+    cli._scheduled_execution_gate = threading.Lock()
+    cli._scheduled_execution_gate.acquire()
+    processed: list[object] = []
+    stopped = False
+
+    def execute(value: object) -> None:
+        nonlocal stopped
+        processed.append(value)
+        stopped = True
+
+    run_input_process_loop(
+        stop_requested=lambda: stopped,
+        execution_gate=cli._api_a_execution_gate,
+        get_pending_input=lambda _timeout: "foreground input",
+        empty_input=queue.Empty,
+        requeue_input=lambda _value: None,
+        perform_idle_maintenance=lambda: None,
+        execute_input=execute,
+        sleep=lambda _seconds: None,
+        report_error=lambda error: (_ for _ in ()).throw(error),
+    )
+
+    assert processed == ["foreground input"]
+    cli._scheduled_execution_gate.release()
+
+
+def test_scheduled_task_routes_to_isolated_host_without_parent_transcript():
+    from VoidCube_cli.app import VoidcubeCLI
+
+    class TrackingCLI(VoidcubeCLI):
+        created: list["TrackingCLI"] = []
+
+        def __init__(self, **kwargs):
+            self.created.append(self)
+            self.creation_kwargs = kwargs
+            self._embedded_component_role = kwargs.get("embedded_role", "")
+            self.conversation_history = []
+            self._scheduled_component_host = None
+
+        def _start_background_agent_task(self, prompt, **kwargs):
+            self.started = (prompt, kwargs)
+            return True
+
+    parent = TrackingCLI.__new__(TrackingCLI)
+    parent.model = "model"
+    parent.enabled_toolsets = ["media"]
+    parent.requested_provider = "agnes-ai"
+    parent.provider = "agnes-ai"
+    parent._explicit_api_key = None
+    parent._explicit_base_url = None
+    parent.max_turns = 4
+    parent.verbose = False
+    parent.checkpoints_enabled = False
+    parent.conversation_history = [{"role": "user", "content": "parent"}]
+    parent._scheduled_component_host = None
+
+    component = parent._ensure_scheduled_component_host()
+    assert component is not parent
+    assert component._scheduled_parent_host is parent
+    assert component._should_emit_scrollback_output() is False
+    assert component.creation_kwargs["embedded_role"] == "scheduled"
+
+    parent._start_scheduled_component_task("run media", task_id="run-1")
+
+    assert component.started[0] == "run media"
+    assert parent.conversation_history == [{"role": "user", "content": "parent"}]
+
+
+def test_scheduled_host_creates_minimal_nonpersistent_agent():
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._embedded_component_role = "scheduled"
+    cli.max_turns = 3
+    cli.enabled_toolsets = ["media"]
+    cli.reasoning_config = None
+    cli.service_tier = None
+    cli._providers_only = None
+    cli._providers_ignore = None
+    cli._providers_order = None
+    cli._provider_sort = None
+    cli._provider_require_params = False
+    cli._provider_data_collection = None
+    cli._session_db = object()
+    cli._fallback_model = None
+    captured = {}
+
+    with patch("VoidCube_cli.app._get_AIAgent", return_value=lambda **kwargs: captured.update(kwargs) or object()):
+        cli._create_background_agent(
+            {
+                "model": "agnes-2.5-flash",
+                "runtime": {
+                    "provider": "custom",
+                    "base_url": "https://api.agnes-ai.cn/v1",
+                    "api_key": "test-key",
+                    "args": [],
+                },
+            },
+            "scheduled-run",
+            {},
+            False,
+        )
+
+    assert captured["session_db"] is None
+    assert captured["persist_session"] is False
+    assert captured["skip_memory"] is True
+    assert captured["skip_context_files"] is True

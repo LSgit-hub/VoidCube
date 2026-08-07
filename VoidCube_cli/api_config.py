@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import re
+import getpass
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -13,14 +14,19 @@ from typing import Any, Callable
 API_A_ENV_VAR_MAP = {
     "openai": "OPENAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
+    "agnes-ai": "AGNES_API_KEY",
 }
 
 API_A_PROVIDER_LABELS = {
     "openai": "OpenAI",
     "deepseek": "DeepSeek",
+    "agnes-ai": "Agnes-AI",
     "openrouter": "OpenRouter",
     "ollama": "Ollama",
 }
+
+MULTIMODAL_PROVIDER_LABEL = "Agnes-AI"
+API_B_CUSTOM_API_KEY_ENV = "VOIDCUBE_MEMORY_CUSTOM_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +106,7 @@ def persist_api_a_config(
 ) -> dict[str, Any]:
     """Return config with only API-A/user-interaction provider fields updated."""
     from VoidCube_app.config import set_active_provider, upsert_provider
+    from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
 
     cfg = upsert_provider(
         dict(config or {}),
@@ -107,7 +114,7 @@ def persist_api_a_config(
         {
             "label": label,
             "type": provider_type,
-            "base_url": base_url,
+            "base_url": normalize_openai_compatible_base_url(base_url),
             "selected_model": selected_model,
             "api_key_env": api_key_env,
             "api_key": api_key,
@@ -146,11 +153,13 @@ def memory_llm_provider_options() -> list[tuple[str, str]]:
         "ollama": "Ollama",
     }
     preferred_order = ["openrouter", "deepseek", "openai", "ollama"]
-    return [
+    options = [
         (provider, labels.get(provider, provider.title()))
         for provider in preferred_order
         if provider in PROVIDER_DEFAULTS
     ]
+    options.append(("custom", "自定义 Provider（OpenAI 兼容）"))
+    return options
 
 
 def persist_api_b_config(
@@ -158,11 +167,43 @@ def persist_api_b_config(
     *,
     provider: str,
     model: str,
+    base_url: str = "",
+    api_key_env: str = "",
+    provider_profile: str = "",
 ) -> dict[str, Any]:
     """Return config with only API-B/Mem ``memory.llm.*`` fields updated."""
+    from urllib.parse import urlsplit
+
+    from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
+
+    provider = str(provider or "").strip().lower()
     defaults = memory_llm_provider_defaults(provider)
-    if not defaults.get("api_key_env") and provider != "ollama":
+    is_custom = provider == "custom"
+    if not is_custom and not defaults.get("api_key_env") and provider != "ollama":
         raise ValueError(f"Unsupported API-B provider: {provider}")
+
+    resolved_base_url = normalize_openai_compatible_base_url(
+        base_url if is_custom else defaults.get("base_url", "")
+    )
+    resolved_api_key_env = str(
+        api_key_env if is_custom else defaults.get("api_key_env", "")
+    ).strip()
+    if is_custom:
+        parsed_base_url = urlsplit(resolved_base_url)
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.netloc
+            or not resolved_api_key_env
+        ):
+            raise ValueError(
+                "Custom API-B provider requires a valid http(s) base_url and api_key_env"
+            )
+
+    resolved_provider_profile = (
+        str(provider_profile or "openai").strip() or "openai"
+        if is_custom
+        else defaults.get("provider_profile", "openai")
+    )
 
     cfg = dict(config or {})
     memory = dict(cfg.get("memory") or {})
@@ -171,9 +212,9 @@ def persist_api_b_config(
         {
             "provider": provider,
             "model": str(model or "").strip(),
-            "api_key_env": defaults.get("api_key_env", ""),
-            "base_url": defaults.get("base_url", ""),
-            "provider_profile": defaults.get("provider_profile", "openai"),
+            "api_key_env": resolved_api_key_env,
+            "base_url": resolved_base_url,
+            "provider_profile": resolved_provider_profile,
         }
     )
     memory["llm"] = llm
@@ -181,12 +222,87 @@ def persist_api_b_config(
     return cfg
 
 
-def save_memory_llm_config(provider: str, model: str) -> bool:
+def persist_multimodal_config(
+    config: dict[str, Any],
+    *,
+    provider: str = "agnes-ai",
+    base_url: str = "https://api.agnes-ai.cn/v1",
+    api_key_env: str = "AGNES_API_KEY",
+    language_model: str = "agnes-2.5-flash",
+    image_model: str = "agnes-image-2.1-flash",
+    video_model: str = "agnes-video-v2.0",
+) -> dict[str, Any]:
+    """Return config with only the dedicated multimodal route updated."""
+    from VoidCube_app.multimodal_provider import default_multimodal_config
+    from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
+
+    cfg = dict(config or {})
+    multimodal = default_multimodal_config()
+    existing = cfg.get("multimodal")
+    if isinstance(existing, dict):
+        multimodal.update(existing)
+    multimodal.update(
+        {
+            "provider": str(provider or "agnes-ai").strip().lower(),
+            "base_url": normalize_openai_compatible_base_url(base_url),
+            "api_key_env": str(api_key_env or "AGNES_API_KEY").strip(),
+            "language_model": str(language_model or "").strip(),
+            "image_model": str(image_model or "").strip(),
+            "video_model": str(video_model or "").strip(),
+        }
+    )
+    cfg["multimodal"] = multimodal
+    return cfg
+
+
+def save_multimodal_config(
+    *,
+    provider: str = "agnes-ai",
+    base_url: str = "https://api.agnes-ai.cn/v1",
+    api_key_env: str = "AGNES_API_KEY",
+    language_model: str = "agnes-2.5-flash",
+    image_model: str = "agnes-image-2.1-flash",
+    video_model: str = "agnes-video-v2.0",
+) -> bool:
+    try:
+        from VoidCube_app.config import load_config, save_config
+
+        save_config(
+            persist_multimodal_config(
+                load_config(),
+                provider=provider,
+                base_url=base_url,
+                api_key_env=api_key_env,
+                language_model=language_model,
+                image_model=image_model,
+                video_model=video_model,
+            )
+        )
+        return True
+    except Exception:
+        return False
+
+
+def save_memory_llm_config(
+    provider: str,
+    model: str,
+    *,
+    base_url: str = "",
+    api_key_env: str = "",
+    provider_profile: str = "",
+) -> bool:
     """Persist API-B/Mem model config without touching API-A."""
     try:
         from VoidCube_app.config import load_config, save_config
 
-        cfg = persist_api_b_config(load_config(), provider=provider, model=model)
+        cfg = persist_api_b_config(
+            load_config(),
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            provider_profile=provider_profile,
+        )
         save_config(cfg)
         return True
     except Exception:
@@ -444,7 +560,7 @@ def api_b_key_configured(memory_llm_cfg: dict[str, Any]) -> bool:
 
 
 def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a secret-free API-A/API-B configuration summary."""
+    """Return a secret-free API-A/API-B/multimodal configuration summary."""
     cfg = dict(config or {})
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
     providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
@@ -460,6 +576,7 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     api_b_key_env = str(
         llm.get("api_key_env") or api_b_defaults.get("api_key_env") or ""
     ).strip()
+    multimodal = cfg.get("multimodal") if isinstance(cfg.get("multimodal"), dict) else {}
 
     retired_fields = [
         key
@@ -486,6 +603,17 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "key_configured": api_b_key_configured(llm),
             "credential_sources": provider_credential_sources(api_b_provider, api_b_key_env),
         },
+        "multimodal": {
+            "provider": str(multimodal.get("provider") or "未设置").strip(),
+            "base_url": str(multimodal.get("base_url") or "未设置").strip(),
+            "api_key_env": str(multimodal.get("api_key_env") or "AGNES_API_KEY").strip(),
+            "language_model": str(multimodal.get("language_model") or "未设置").strip(),
+            "image_model": str(multimodal.get("image_model") or "未设置").strip(),
+            "video_model": str(multimodal.get("video_model") or "未设置").strip(),
+            "key_configured": bool(
+                has_configured_api_key(str(multimodal.get("api_key_env") or "AGNES_API_KEY"))
+            ),
+        },
         "retired_fields_present": retired_fields,
     }
 
@@ -510,6 +638,7 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
     summary = api_config_summary(config)
     api_a = summary["api_a"]
     api_b = summary["api_b"]
+    multimodal = summary["multimodal"]
     retired = summary["retired_fields_present"]
     return [
         "API-A（用户交互 / 主 CLI）",
@@ -526,6 +655,14 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
         f"  Provider profile: {api_b['provider_profile']}",
         "  Credential sources:",
         *_render_credential_sources(api_b.get("credential_sources") or []),
+        "",
+        "多模态 Provider（独立于 API-A/API-B）",
+        f"  Provider: {multimodal['provider']}",
+        f"  Key: {'已配置' if multimodal['key_configured'] else '未配置'} ({multimodal['api_key_env']})",
+        f"  Base URL: {multimodal['base_url']}",
+        f"  Language: {multimodal['language_model']}",
+        f"  Image: {multimodal['image_model']}",
+        f"  Video: {multimodal['video_model']}",
         "",
         "废弃字段",
         f"  {'无' if not retired else ', '.join(retired)}",
@@ -1199,6 +1336,14 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         except (KeyboardInterrupt, EOFError):
             return default
 
+    def secret_inp(prompt, default=""):
+        """Read a secret without echoing it; retain the default on blank input."""
+        try:
+            value = getpass.getpass(f"{prompt}: ")
+            return value if value else default
+        except (KeyboardInterrupt, EOFError):
+            return default
+
     def apply_runtime_updates(selected_model: str, provider_key: str) -> None:
         if runtime is None:
             return
@@ -1246,6 +1391,15 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     p(f"   API-B Provider: {memory_provider}")
     p(f"   API-B Model: {memory_model}")
     p(f"   API-B Key: {memory_key_state} ({memory_key_env})")
+    multimodal_config = current_config.get("multimodal", {})
+    if not isinstance(multimodal_config, dict):
+        multimodal_config = {}
+    multimodal_key_env = str(multimodal_config.get("api_key_env") or "AGNES_API_KEY")
+    multimodal_key_state = (
+        "已配置" if has_configured_api_key(multimodal_key_env) else "未配置"
+    )
+    p(f"   多模态 Provider: {multimodal_config.get('provider', 'agnes-ai')}")
+    p(f"   多模态 Key: {multimodal_key_state} ({multimodal_key_env})")
     p("")
     
     # 主菜单循环
@@ -1254,7 +1408,8 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         p("   [1] 快速配置 (推荐) - 使用 OpenRouter")
         p("   [2] 自定义配置 - 添加其他 Provider")
         p("   [3] 记忆系统模型配置")
-        p("   [4] 查看当前配置")
+        p("   [4] Agnes-AI 多模态 Provider")
+        p("   [5] 查看当前配置")
         p("   [0] 退出")
         
         choice = inp("\n请选择")
@@ -1369,6 +1524,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 providers = [
                     ("openai", "OpenAI (GPT)"),
                     ("deepseek", "DeepSeek"),
+                    ("agnes-ai", "Agnes-AI"),
                     ("ollama", "Ollama (本地)"),
                     ("custom", "自定义 Provider"),
                 ]
@@ -1412,7 +1568,11 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                         continue
                     selected_model = model_name
                 else:
-                    base_url = ""
+                    base_url = (
+                        "https://api.agnes-ai.cn/v1"
+                        if selected_provider == "agnes-ai"
+                        else ""
+                    )
                     api_key = inp("API Key")
                     
                     if not api_key:
@@ -1569,6 +1729,72 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                     mem_provider = "openrouter"
                 
                 p(f"\n选择的 Provider: {mem_provider}")
+
+                if mem_provider == "custom":
+                    current_custom = (
+                        memory_llm_config
+                        if str(current_memory_provider).strip().lower() == "custom"
+                        else {}
+                    )
+                    custom_base_url = inp(
+                        "OpenAI 兼容 Base URL",
+                        str(current_custom.get("base_url") or ""),
+                    )
+                    if not custom_base_url:
+                        pe("Base URL 不能为空")
+                        continue
+                    memory_model = inp(
+                        "模型名称",
+                        str(current_custom.get("model") or ""),
+                    )
+                    if not memory_model:
+                        pe("模型名称不能为空")
+                        continue
+
+                    custom_key_env = str(
+                        current_custom.get("api_key_env") or API_B_CUSTOM_API_KEY_ENV
+                    ).strip()
+                    existing_custom_key = ""
+                    try:
+                        from VoidCube_app.config import get_env_value
+
+                        existing_custom_key = str(get_env_value(custom_key_env) or "").strip()
+                    except Exception:
+                        existing_custom_key = ""
+                    p(
+                        f"\nAPI Key 将保存到 {custom_key_env}"
+                        "（输入时不回显，留空保留已有 Key）"
+                    )
+                    custom_api_key = secret_inp(
+                        "请输入自定义 API-B Key",
+                        existing_custom_key,
+                    )
+
+                    p("\n💾 保存配置...")
+                    if not save_memory_llm_config(
+                        mem_provider,
+                        memory_model,
+                        base_url=custom_base_url,
+                        api_key_env=custom_key_env,
+                        provider_profile="openai",
+                    ):
+                        pe("保存 API-B / memory.llm 自定义配置失败")
+                        continue
+                    ps("记忆系统自定义 Provider 保存成功")
+                    ps(f"记忆系统模型保存成功: {memory_model}")
+
+                    if custom_api_key:
+                        if save_env_value(custom_key_env, custom_api_key):
+                            ps(f"{custom_key_env} 保存成功")
+                        else:
+                            pe(f"保存 {custom_key_env} 失败")
+                    else:
+                        pi("已跳过 API-B key 保存；自主链路会显示 LLM 未启用")
+
+                    current_config = load_current_config()
+                    ph("配置完成")
+                    ps("记忆系统自定义模型配置完成！")
+                    break
                 
                 # 从API获取模型列表
                 p("\n📦 正在获取可用模型...")
@@ -1647,6 +1873,57 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 break
         
         elif choice == "4":
+            ph("Agnes-AI 多模态 Provider 配置")
+            from VoidCube_app.multimodal_provider import default_multimodal_config
+
+            existing = dict(current_config.get("multimodal") or {})
+            defaults = default_multimodal_config()
+            base_url = inp(
+                "Base URL",
+                str(existing.get("base_url") or defaults["base_url"]),
+            ).rstrip("/")
+            language_model = inp(
+                "语言模型",
+                str(existing.get("language_model") or defaults["language_model"]),
+            )
+            image_model = inp(
+                "图像模型",
+                str(existing.get("image_model") or defaults["image_model"]),
+            )
+            video_model = inp(
+                "视频模型",
+                str(existing.get("video_model") or defaults["video_model"]),
+            )
+            key_env = str(existing.get("api_key_env") or "AGNES_API_KEY").strip()
+            current_key = ""
+            try:
+                from VoidCube_app.config import get_env_value
+
+                current_key = str(get_env_value(key_env) or "").strip()
+            except Exception:
+                current_key = ""
+            p(f"\nAPI Key 将保存到 {key_env}（输入时不回显，留空保留已有 Key）")
+            api_key = secret_inp("请输入 Agnes-AI API Key", current_key)
+            if not api_key:
+                pe("API Key 不能为空；如需清除请使用 `voidcube config unset AGNES_API_KEY`")
+                continue
+
+            if save_multimodal_config(
+                provider="agnes-ai",
+                base_url=base_url,
+                api_key_env=key_env,
+                language_model=language_model,
+                image_model=image_model,
+                video_model=video_model,
+            ) and save_env_value(key_env, api_key):
+                ps("Agnes-AI 多模态 Provider 配置保存成功")
+                ps("图像和视频工具已使用该独立配置")
+            else:
+                pe("保存 Agnes-AI 多模态配置失败")
+            current_config = load_current_config()
+            continue
+
+        elif choice == "5":
             ph("当前配置")
 
             current_config = load_current_config()

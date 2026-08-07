@@ -104,3 +104,52 @@ def test_result_application_runtime_publishes_canonical_usage_fields():
         "cost_source": "pricing_table",
         "api_calls": 2,
     }]
+
+
+def test_result_application_records_current_turn_web_tool_evidence_only():
+    history = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "old", "function": {"name": "terminal", "arguments": "{}"}}
+            ],
+        },
+    ]
+    calls = []
+
+    applied = _runtime(history, calls).apply(
+        {
+            "final_response": "evidence-backed answer",
+            "messages": history
+            + [
+                {"role": "user", "content": "research this"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "search-1",
+                            "function": {"name": "web_search", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "search-1",
+                    "content": '{"results":[{"url":"https://example.com/source"}]}',
+                },
+                {
+                    "role": "assistant",
+                    "content": "See https://untrusted.example/self-reported",
+                },
+            ],
+        },
+        autonomous_task_run_id="run-web",
+        autonomous_timeout_reported=False,
+        autonomous_timeout_writeback_succeeded=False,
+    )
+
+    assert applied.turn_result["tools_used"] == ["web_search"]
+    assert applied.turn_result["source_urls"] == ["https://example.com/source"]
+    assert "terminal" not in applied.turn_result["tools_used"]

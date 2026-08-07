@@ -8,8 +8,8 @@ from typing import List, Dict, Any, Set, Optional
 
 TOOLSETS = {
     "web": {
-        "description": "Web research, content extraction, and Web UI media playback tools",
-        "tools": ["web_search", "web_extract", "media_play", "media_control"],
+        "description": "Web research, content extraction, site crawling, and Web UI media playback tools",
+        "tools": ["web_search", "web_extract", "web_crawl", "media_play", "media_control"],
         "includes": []
     },
 
@@ -92,8 +92,8 @@ TOOLSETS = {
     },
     
     "logs": {
-        "description": "Log analysis and viewing tools",
-        "tools": ["read_log", "log_errors", "analyze_log"],
+        "description": "Log analysis and viewing tools (use analyze_log mode='errors' for error extraction)",
+        "tools": ["read_log", "analyze_log"],
         "includes": []
     },
     
@@ -135,9 +135,9 @@ TOOLSETS = {
     },
 
     "voidcube-cli": {
-        "description": "Core tools for server management (alias)",
+        "description": "Core tools for server management (alias for voidcube)",
         "tools": [],
-        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
+        "includes": ["voidcube"]
     },
     
     "mini": {
@@ -154,17 +154,14 @@ TOOLSETS = {
     "learn": {
         "description": (
             "Research-only tools for self-learning subagents: web search, "
-            "file reading, terminal, code execution, and browser automation. "
-            "No file writes, no skill mutations, no memory writes, no delegation."
+            "read-only file inspection, and non-mutating browser observation. "
+            "No terminal or code execution, file writes, skill mutations, memory writes, "
+            "state-changing browser input, or delegation."
         ),
         "tools": [
-            "web_search", "web_extract",
+            "web_search", "web_extract", "web_crawl",
             "read_file", "search_files",
-            "terminal",
-            "execute_code",
-            "browser_navigate", "browser_snapshot", "browser_click",
-            "browser_type", "browser_scroll",
-            "browser_back", "browser_press",
+            "browser_navigate", "browser_snapshot", "browser_scroll", "browser_back",
         ],
         "includes": [],
     },

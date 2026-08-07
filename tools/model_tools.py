@@ -132,8 +132,8 @@ def _run_async(coro):
 def _discover_tools():
     """Import all tool modules to trigger their registry.register() calls.
 
-    Wrapped in a function so import errors in optional tools (e.g., fal_client
-    not installed) don't prevent the rest from loading.
+    Wrapped in a function so import errors in optional tools don't prevent the
+    rest from loading.
     """
     _modules = [
         "tools.web_tools",
@@ -208,7 +208,7 @@ _last_resolved_tool_names: List[str] = []
 # =============================================================================
 
 _LEGACY_TOOLSET_MAP = {
-    "web_tools": ["web_search", "web_extract"],
+    "web_tools": ["web_search", "web_extract", "web_crawl"],
     "terminal_tools": ["terminal"],
     "moa_tools": ["mixture_of_agents"],
     "image_tools": ["image_generate"],

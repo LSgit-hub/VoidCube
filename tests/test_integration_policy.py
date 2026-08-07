@@ -200,3 +200,25 @@ def test_mem_resolver_blocks_retired_model_before_credentials(monkeypatch):
 
     assert client is None
     assert model == blocked.model
+
+
+@pytest.mark.unit
+def test_mem_model_config_accepts_explicit_custom_endpoint():
+    configured = MemModelConfig.from_voidcube_config(
+        {
+            "memory": {
+                "llm": {
+                    "provider": "custom",
+                    "model": "memory-reasoner",
+                    "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+                    "base_url": "https://memory.example/v1",
+                    "provider_profile": "openai",
+                }
+            }
+        }
+    )
+
+    assert configured.provider == "custom"
+    assert configured.model == "memory-reasoner"
+    assert configured.api_key_env == "VOIDCUBE_MEMORY_CUSTOM_API_KEY"
+    assert configured.base_url == "https://memory.example/v1"

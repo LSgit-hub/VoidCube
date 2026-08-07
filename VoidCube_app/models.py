@@ -159,6 +159,7 @@ _PROVIDER_LABELS = {
     "minimax": "MiniMax",
     "minimax-cn": "MiniMax (China)",
     "deepseek": "DeepSeek",
+    "agnes-ai": "Agnes-AI",
     "qwen-oauth": "Qwen OAuth (Portal)",
     "custom": "Custom endpoint",
 }
@@ -183,6 +184,7 @@ _PROVIDER_ORDER = (
     "nous",
     "openai",
     "deepseek",
+    "agnes-ai",
     "zai",
     "kimi-coding",
     "minimax",

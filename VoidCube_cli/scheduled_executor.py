@@ -27,9 +27,6 @@ class ScheduledTaskExecutorPorts:
 
     is_embedded_component: Callable[[], bool]
     auto_task_running: Callable[[], bool]
-    manual_background_task_running: Callable[[], bool]
-    agent_running: Callable[[], bool]
-    command_running: Callable[[], bool]
     execution_gate: Any | None
     get_session_id: Callable[[], str]
     set_execution_active: Callable[[bool], None]
@@ -200,17 +197,6 @@ class ScheduledTaskExecutorRuntime:
     def _auto_task_is_running(self) -> bool:
         return bool(self.ports.auto_task_running())
 
-    def _manual_background_task_is_running(self) -> bool:
-        return bool(self.ports.manual_background_task_running())
-
-    def _api_a_is_busy(self) -> bool:
-        return bool(
-            self._auto_task_is_running()
-            or self.ports.agent_running()
-            or self.ports.command_running()
-            or self._manual_background_task_is_running()
-        )
-
     def _acquire_execution_gate(self) -> bool:
         gate = self.ports.execution_gate
         if gate is None:
@@ -297,7 +283,10 @@ class ScheduledTaskExecutorRuntime:
         if now - self._last_poll_at < self.poll_interval_seconds:
             return
         self._last_poll_at = now
-        if self._api_a_is_busy() or not self._poll_lock.acquire(blocking=False):
+        # The scheduled Host owns its own Agent and execution gate.  Foreground
+        # chat, commands, and manual background work live on another Host and
+        # must never delay this poller or vice versa.
+        if self._auto_task_is_running() or not self._poll_lock.acquire(blocking=False):
             return
 
         execution_started = False
@@ -306,7 +295,7 @@ class ScheduledTaskExecutorRuntime:
             if not self._acquire_execution_gate():
                 return
             self.ports.set_execution_active(True)
-            if self._api_a_is_busy():
+            if self._auto_task_is_running():
                 self._release_execution_slot()
                 return
             owner_session_id = str(self.ports.get_session_id() or "").strip()

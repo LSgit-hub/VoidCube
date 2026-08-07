@@ -915,7 +915,6 @@ def get_cute_tool_message(
         "docker_compose_down": lambda a: "┊ 🐳 Compose   停止",
         "read_log": lambda a: f"┊ 📜 日志       读取 {_path(a.get('path', ''))}",
         "journalctl": lambda a: f"┊ 📜 系统日志    {_trunc(a.get('unit', 'all'), 25)}",
-        "log_errors": lambda a: f"┊ ❌ 错误日志    {_path(a.get('path', ''))}",
         "analyze_log": lambda a: f"┊ 📊 日志分析    {_path(a.get('path', ''))}",
         "firewall_status": lambda a: "┊ 🛡️  防火墙     状态",
         "firewall_allow": lambda a: f"┊ 🛡️  防火墙     允许 {a.get('port', '?')}/{a.get('protocol', 'tcp')}",

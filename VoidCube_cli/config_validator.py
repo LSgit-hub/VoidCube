@@ -171,7 +171,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
         supported_providers = {key for key, _label in memory_llm_provider_options()}
         defaults = memory_llm_provider_defaults(provider)
     except Exception:
-        supported_providers = {"openrouter", "deepseek", "openai", "ollama"}
+        supported_providers = {"openrouter", "deepseek", "openai", "ollama", "custom"}
         defaults = {}
 
     if provider not in supported_providers:
@@ -180,7 +180,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.provider",
                 message=f"API-B Provider '{provider}' 不在 Mem 支持列表中",
-                suggestion="运行 /api -> 3 记忆系统模型配置，选择 openrouter/deepseek/openai/ollama",
+                suggestion="运行 /api -> 3 记忆系统模型配置，选择内置或自定义 Provider",
             )
         )
         return issues
@@ -197,7 +197,17 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
         )
 
     base_url = str(llm_cfg.get("base_url") or defaults.get("base_url") or "").strip()
-    if _is_local_gateway_loop_base_url(base_url):
+    parsed_base_url = urlparse(base_url)
+    if not base_url or parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.base_url",
+                message=f"API-B Provider '{provider}' 缺少有效的 http(s) Base URL",
+                suggestion="运行 /api -> 3 记忆系统模型配置，填写 OpenAI 兼容 API 根地址",
+            )
+        )
+    elif _is_local_gateway_loop_base_url(base_url):
         issues.append(
             ConfigIssue(
                 severity=Severity.ERROR,

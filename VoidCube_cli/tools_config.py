@@ -206,27 +206,6 @@ TOOL_CATEGORIES = {
             },
         ],
     },
-    "image_gen": {
-        "name": "Image Generation",
-        "icon": "🎨",
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "tag": "Managed FAL image generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "image_gen",
-                "override_env_vars": ["FAL_KEY"],
-            },
-            {
-                "name": "FAL.ai",
-                "tag": "FLUX 2 Pro with auto-upscaling",
-                "env_vars": [
-                    {"key": "FAL_KEY", "prompt": "FAL API key", "url": "https://fal.ai/dashboard/keys"},
-                ],
-            },
-        ],
-    },
     "browser": {
         "name": "Browser Automation",
         "icon": "🌐",
@@ -607,7 +586,7 @@ def _toolset_has_keys(ts_key: str, config: dict = None) -> bool:
         except Exception:
             return False
 
-    if ts_key in {"web", "image_gen", "tts", "browser"}:
+    if ts_key in {"web", "tts", "browser"}:
         features = get_nous_subscription_features(config)
         feature = features.features.get(ts_key)
         if feature and (feature.available or feature.managed_by_nous):
@@ -779,9 +758,6 @@ def _toolset_needs_configuration_prompt(ts_key: str, config: dict) -> bool:
     if ts_key == "browser":
         browser_cfg = config.get("browser", {})
         return not isinstance(browser_cfg, dict) or "cloud_provider" not in browser_cfg
-    if ts_key == "image_gen":
-        return not get_env_value("FAL_KEY")
-
     return not _toolset_has_keys(ts_key, config)
 
 
@@ -860,8 +836,6 @@ def _is_provider_active(provider: dict, config: dict) -> bool:
         feature = features.features.get(managed_feature)
         if feature is None:
             return False
-        if managed_feature == "image_gen":
-            return feature.managed_by_nous
         if provider.get("tts_provider"):
             return (
                 feature.managed_by_nous

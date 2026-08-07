@@ -275,6 +275,44 @@ def test_validate_config_accepts_valid_api_b_env_key(monkeypatch):
 
 
 @pytest.mark.unit
+def test_validate_config_accepts_custom_api_b_provider(monkeypatch):
+    cfg = _valid_api_a_api_b_config()
+    cfg["memory"]["llm"].update(
+        {
+            "provider": "custom",
+            "model": "memory-reasoner",
+            "base_url": "https://memory.example/v1",
+            "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        }
+    )
+    monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-memory-token-123456789")
+
+    issues = config_validator.validate_config()
+
+    assert not [issue for issue in issues if issue.key_path.startswith("memory.llm.")]
+
+
+@pytest.mark.unit
+def test_validate_config_rejects_custom_api_b_without_valid_base_url(monkeypatch):
+    cfg = _valid_api_a_api_b_config()
+    cfg["memory"]["llm"].update(
+        {
+            "provider": "custom",
+            "model": "memory-reasoner",
+            "base_url": "memory.example/v1",
+            "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        }
+    )
+    monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-memory-token-123456789")
+
+    issues = config_validator.validate_config()
+
+    assert any(issue.key_path == "memory.llm.base_url" for issue in issues)
+
+
+@pytest.mark.unit
 def test_validate_config_rejects_unsupported_api_b_provider(monkeypatch):
     cfg = _valid_api_a_api_b_config()
     cfg["memory"]["llm"]["provider"] = "retired-provider"

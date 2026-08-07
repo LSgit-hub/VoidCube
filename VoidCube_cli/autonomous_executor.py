@@ -41,6 +41,45 @@ def autonomous_task_label(execution_kind: str) -> str:
     return "改进链路项" if execution_kind == "body_improvement" else "学习链路项"
 
 
+def autonomous_task_toolsets(task: Dict[str, Any] | None) -> list[str] | None:
+    """Return the toolsets allowed for one autonomous task, if restricted."""
+    if not isinstance(task, dict):
+        return None
+    if autonomous_task_execution_kind(task) == "self_learning":
+        return ["learn"]
+    return None
+
+
+def autonomous_learning_branch(task: Dict[str, Any] | None) -> str:
+    if not isinstance(task, dict):
+        return ""
+    metadata = dict(task.get("metadata") or {})
+    evidence = dict(task.get("evidence") or {})
+    return str(
+        metadata.get("learning_branch") or evidence.get("learning_branch") or ""
+    ).strip().lower()
+
+
+def autonomous_learning_evidence_error(
+    task: Dict[str, Any] | None,
+    turn_result: Dict[str, Any] | None,
+) -> str:
+    """Return a deterministic completion failure for unsupported research evidence."""
+    if autonomous_learning_branch(task) != "exploratory":
+        return ""
+    result = turn_result if isinstance(turn_result, dict) else {}
+    tools_used = {
+        str(name).strip()
+        for name in list(result.get("tools_used") or [])
+        if str(name).strip()
+    }
+    if "web_search" not in tools_used:
+        return "exploratory learning requires a recorded web_search call"
+    if not list(result.get("source_urls") or []):
+        return "exploratory learning requires at least one URL from web research"
+    return ""
+
+
 def build_autonomous_task_prompt(
     task: Dict[str, Any],
     execution_kind: str,
@@ -135,8 +174,20 @@ def build_autonomous_task_prompt(
     if baseline_worktree:
         prompt_parts.append(f"Shell worktree baseline: {baseline_worktree}")
     prompt_parts.append(
-        "Execute this research task thoroughly. Produce structured findings and conclusions."
+        "This is a read-only research run. Do not write files, modify skills or memory, "
+        "delegate work, commit changes, or claim completion of implementation work."
     )
+    if learning_branch == "exploratory":
+        prompt_parts.append(
+            "For exploratory research, call web_search first, then use web_extract on the "
+            "most relevant primary sources. Base the conclusion on the returned evidence and "
+            "include source URLs plus any material uncertainty in the final response."
+        )
+    else:
+        prompt_parts.append(
+            "Inspect the available read-only sources and produce structured findings, "
+            "conclusions, and explicit uncertainty."
+        )
     return "\n\n".join(part for part in prompt_parts if part)
 
 
@@ -504,6 +555,13 @@ class AutonomousExecutorRuntime:
                     if decision == "failed"
                     else f"API-A 自主执行面已完成{task_label}。"
                 )
+                if decision == "completed" and execution_kind == "self_learning":
+                    evidence_error = autonomous_learning_evidence_error(current, turn_result)
+                    if evidence_error:
+                        decision = "failed"
+                        reason = f"API-A 自主学习证据不足：{evidence_error}。"
+                        turn_result["failed"] = True
+                        turn_result["error"] = evidence_error
                 if decision == "completed" and execution_kind == "body_improvement":
                     if not self.submit_body_improvement_report(
                         current,
@@ -531,6 +589,8 @@ class AutonomousExecutorRuntime:
                         "partial": bool(turn_result.get("partial")),
                         "interrupted": bool(turn_result.get("interrupted")),
                         "error": str(turn_result.get("error", "") or "")[:200],
+                        "tools_used": list(turn_result.get("tools_used") or []),
+                        "source_urls": list(turn_result.get("source_urls") or [])[:20],
                     },
                     timeout=15,
                     gateway_base=gateway_base,

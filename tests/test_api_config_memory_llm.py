@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from VoidCube_cli.api_config import (
     api_a_key_configured,
     api_b_key_configured,
@@ -179,6 +181,20 @@ def test_persist_api_a_config_does_not_touch_memory_llm():
     assert updated["memory"]["llm"]["model"] == "deepseek-v4-flash"
 
 
+def test_persist_api_a_config_normalizes_chat_completions_url():
+    updated = persist_api_a_config(
+        {},
+        provider_key="agnes-ai",
+        label="Agnes-AI",
+        selected_model="agnes-2.5-flash",
+        provider_type="custom",
+        base_url="https://api.agnes-ai.cn/v1/chat/completions",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    assert updated["providers"]["agnes-ai"]["base_url"] == "https://api.agnes-ai.cn/v1"
+
+
 def test_persist_api_b_config_does_not_touch_api_a_provider():
     cfg = {
         "runtime": {"active_provider": "agnes-ai"},
@@ -208,6 +224,45 @@ def test_persist_api_b_config_does_not_touch_api_a_provider():
         "base_url": "https://api.deepseek.com/v1",
         "provider_profile": "openai",
     }
+
+
+def test_persist_custom_api_b_config_is_isolated_and_normalizes_url():
+    cfg = {
+        "runtime": {"active_provider": "agnes-ai"},
+        "providers": {"agnes-ai": {"selected_model": "agnes-2.5-flash"}},
+        "memory": {"provider": "mem", "llm": {}},
+    }
+
+    updated = persist_api_b_config(
+        cfg,
+        provider="custom",
+        model="memory-reasoner",
+        base_url="https://memory.example/v1/chat/completions",
+        api_key_env="VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        provider_profile="openai",
+    )
+
+    assert updated["runtime"] == cfg["runtime"]
+    assert updated["providers"] == cfg["providers"]
+    assert updated["memory"]["llm"] == {
+        "provider": "custom",
+        "model": "memory-reasoner",
+        "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        "base_url": "https://memory.example/v1",
+        "provider_profile": "openai",
+    }
+
+
+@pytest.mark.parametrize("base_url", ["", "memory.example/v1"])
+def test_persist_custom_api_b_config_requires_endpoint_and_key_env(base_url):
+    with pytest.raises(ValueError, match=r"requires a valid http\(s\) base_url"):
+        persist_api_b_config(
+            {},
+            provider="custom",
+            model="memory-reasoner",
+            base_url=base_url,
+            api_key_env="VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        )
 
 
 def test_api_config_summary_redacts_secret_values(monkeypatch):
@@ -248,7 +303,7 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
 def test_memory_llm_provider_options_only_lists_supported_mem_providers():
     provider_ids = [provider for provider, _ in memory_llm_provider_options()]
 
-    assert provider_ids == ["openrouter", "deepseek", "openai", "ollama"]
+    assert provider_ids == ["openrouter", "deepseek", "openai", "ollama", "custom"]
 
 
 def test_normalized_runtime_config_drops_old_model_mirror_without_migration():

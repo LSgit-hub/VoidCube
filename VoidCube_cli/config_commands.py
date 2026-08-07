@@ -66,7 +66,7 @@ def show_config() -> None:
         ("TAVILY_API_KEY", "Tavily"),
         ("BROWSERBASE_API_KEY", "Browserbase"),
         ("BROWSER_USE_API_KEY", "Browser Use"),
-        ("FAL_KEY", "FAL"),
+        ("AGNES_API_KEY", "Agnes-AI"),
     ]
     for env_key, name in keys:
         print(f"  {name:<14} {redact_key(get_env_value(env_key))}")
@@ -272,7 +272,7 @@ def set_config_value(key: str, value: str) -> None:
         "BROWSERBASE_API_KEY",
         "BROWSERBASE_PROJECT_ID",
         "BROWSER_USE_API_KEY",
-        "FAL_KEY",
+        "AGNES_API_KEY",
         "TERMINAL_SSH_HOST",
         "TERMINAL_SSH_USER",
         "TERMINAL_SSH_KEY",

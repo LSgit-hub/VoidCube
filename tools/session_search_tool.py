@@ -33,4 +33,4 @@ def search_sessions(query: str) -> List[Dict[str, Any]]:
 def _handle_session_search(args, **kw):
     return session_search_tool(query=args.get("query", ""), limit=args.get("limit", 10))
 
-registry.register(name="session_search", toolset="assistant", schema=SESSION_SEARCH_SCHEMA, handler=_handle_session_search)
+registry.register(name="session_search", toolset="session_search", schema=SESSION_SEARCH_SCHEMA, handler=_handle_session_search)

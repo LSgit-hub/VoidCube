@@ -218,7 +218,7 @@ def build_execute_code_schema(tools: Optional[List[Any]] = None) -> Dict[str, An
 
 registry.register(
     name="execute_code",
-    toolset="code",
+    toolset="code_execution",
     schema=EXECUTE_CODE_SCHEMA,
     handler=_handle_execute_code,
 )

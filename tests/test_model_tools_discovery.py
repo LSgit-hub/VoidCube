@@ -94,6 +94,42 @@ def test_static_toolsets_only_reference_registered_tools():
     assert missing == {}
 
 
+def test_learn_toolset_has_no_mutating_or_code_execution_entry_points():
+    from tools.toolsets import resolve_toolset
+
+    learn_tools = set(resolve_toolset("learn"))
+
+    assert {
+        "web_search",
+        "web_extract",
+        "web_crawl",
+        "read_file",
+        "search_files",
+    } <= learn_tools
+    assert learn_tools.isdisjoint(
+        {
+            "terminal",
+            "execute_code",
+            "write_file",
+            "skill_manage",
+            "delegate_task",
+            "browser_click",
+            "browser_type",
+            "browser_press",
+        }
+    )
+
+
+def test_web_toolset_exposes_registered_crawl_definition():
+    from tools.model_tools import get_tool_definitions
+
+    definitions = get_tool_definitions(enabled_toolsets=["web"], quiet_mode=True)
+    by_name = {item["function"]["name"]: item for item in definitions}
+
+    assert "web_crawl" in by_name
+    assert by_name["web_crawl"]["function"]["parameters"]["required"] == ["url"]
+
+
 def test_registry_has_no_legacy_default_toolset_aliases():
     from tools.model_tools import get_available_toolsets
     from tools.toolsets import resolve_toolset

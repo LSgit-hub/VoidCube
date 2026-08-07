@@ -1,6 +1,6 @@
 ---
 name: guidance
-description: 使用正则表达式和语法控制LLM输出，保证有效的JSON/XML/代码生成，强制结构化格式，使用Guidance构建多步工作流 - Microsoft Research的约束生成框架
+description: 【多步工作流】使用正则表达式和语法控制LLM输出，保证有效的JSON/XML/代码生成，强制结构化格式，使用Guidance构建多步工作流 - Microsoft Research的约束生成框架。适用：需要Python控制流的多步推理/ReAct代理/逐步生成。对比：单次类型安全输出请用outlines技能。
 version: 1.0.0
 author: Orchestra Research
 license: MIT

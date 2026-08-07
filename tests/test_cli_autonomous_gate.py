@@ -186,6 +186,7 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     class _FakeAgent:
         def __init__(self, **kwargs):
             self.base_url = kwargs["base_url"]
+            self.enabled_toolsets = kwargs["enabled_toolsets"]
             self._print_fn = None
 
     monkeypatch.setattr("cli._get_AIAgent", lambda: _FakeAgent)
@@ -198,10 +199,11 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     cli._clarification_sink = None
     cli._pending_title = None
 
-    ok = cli._init_agent()
+    ok = cli._init_agent(enabled_toolsets_override=["learn"])
 
     assert ok is True
     assert cli.agent.base_url == "https://runtime-base.example/v1"
+    assert cli.agent.enabled_toolsets == ["learn"]
 
 
 def test_main_cli_does_not_mount_autonomous_execution_panel_in_default_tui_widgets():
@@ -249,6 +251,54 @@ def test_cli_autonomous_gate_marks_learning_task_failed_after_agent_error(monkey
     assert requests[0]["data"]["context"]["error"] == "LLM upstream error: 502"
     assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
+
+
+def test_cli_autonomous_gate_rejects_exploratory_completion_without_web_evidence(
+    monkeypatch,
+):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_autonomous_task = {
+        "task_id": "learn-no-web-evidence",
+        "task_type": "self_learning",
+        "metadata": {"learning_branch": "exploratory"},
+    }
+    cli._current_autonomous_task_started_at = 1.0
+    cli._last_agent_turn_result = {
+        "failed": False,
+        "partial": False,
+        "interrupted": False,
+        "error": "",
+        "response": "Unsupported research summary",
+    }
+    cli._agent_running = False
+    cli._autonomous_execution_events = []
+    cli.session_id = "cli-owner-no-web"
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            requests.append(
+                {
+                    "url": request.full_url,
+                    "data": json.loads((request.data or b"{}").decode("utf-8")),
+                }
+            )
+        return _FakeUrlopenResponse({})
+
+    monkeypatch.setattr("time.time", lambda: 31.0)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    _autonomous_runtime(cli).poll_workflow()
+
+    decision = next(
+        item
+        for item in requests
+        if item["url"].endswith("/v1/tasks/learn-no-web-evidence/decision")
+    )
+    assert decision["data"]["decision"] == "failed"
+    assert "web_search" in decision["data"]["context"]["error"]
+    assert cli._current_autonomous_task is None
 
 
 def test_cli_autonomous_gate_keeps_completed_task_when_writeback_fails(monkeypatch):

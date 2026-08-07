@@ -237,3 +237,114 @@ async def test_web_extract_firecrawl_falls_back_to_local_when_unavailable(monkey
     assert "fell back to local extraction" in payload["_warning"]
     assert payload["results"][0]["title"] == "Fallback Page"
     assert payload["results"][0]["content"] == "Fallback content"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_web_crawl_local_backend_uses_local_crawler(monkeypatch):
+    monkeypatch.setattr(web_tools, "_get_backend", lambda: "local")
+    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda **_: False)
+    monkeypatch.setattr(web_tools, "is_safe_url", lambda _url: True)
+    monkeypatch.setattr(web_tools, "check_website_access", lambda _url: None)
+
+    def fake_local_web_crawl(url: str, max_depth: int, max_pages: int):
+        assert url == "https://example.com/docs"
+        assert max_depth == 2
+        assert max_pages == 20
+        return {
+            "success": True,
+            "pages": [
+                {
+                    "url": url,
+                    "title": "Documentation",
+                    "content": "Crawled locally",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "tools.web_tools_local.local_web_crawl",
+        fake_local_web_crawl,
+    )
+
+    payload = json.loads(
+        await web_tools.web_crawl_tool(
+            "example.com/docs",
+            depth="advanced",
+            use_llm_processing=False,
+        )
+    )
+
+    assert payload["results"] == [
+        {
+            "url": "https://example.com/docs",
+            "title": "Documentation",
+            "content": "Crawled locally",
+            "error": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_web_crawl_blocks_private_url_before_local_crawler(monkeypatch):
+    monkeypatch.setattr(web_tools, "_get_backend", lambda: "local")
+    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda **_: False)
+    monkeypatch.setattr(web_tools, "is_safe_url", lambda _url: False)
+
+    def unexpected_crawl(*_args, **_kwargs):
+        raise AssertionError("private URL must not reach the local crawler")
+
+    monkeypatch.setattr(
+        "tools.web_tools_local.local_web_crawl",
+        unexpected_crawl,
+    )
+
+    payload = json.loads(
+        await web_tools.web_crawl_tool(
+            "http://127.0.0.1/private",
+            use_llm_processing=False,
+        )
+    )
+
+    assert "private or internal" in payload["results"][0]["error"]
+
+
+@pytest.mark.unit
+def test_local_web_extract_resolves_relative_links(monkeypatch):
+    class FakeResponse:
+        text = (
+            "<html><head><title>Docs</title></head><body><main>"
+            '<a href="/guide/start">Start</a>'
+            '<a href="mailto:test@example.com">Mail</a>'
+            "</main></body></html>"
+        )
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url, headers):
+            assert headers["User-Agent"]
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        web_tools_local.httpx,
+        "Client",
+        lambda **_kwargs: FakeClient(),
+    )
+
+    result = web_tools_local.local_web_extract(
+        "https://example.com/docs/",
+        extract_links=True,
+    )
+
+    assert result["links"] == [
+        {"url": "https://example.com/guide/start", "text": "Start"}
+    ]

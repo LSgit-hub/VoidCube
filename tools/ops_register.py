@@ -257,43 +257,32 @@ def read_log_tool(args):
         return json.dumps({"success": False, "error": str(e)})
 
 
-def log_errors_tool(args):
-    """读取日志中的错误"""
-    try:
-        file_path = args.get("file_path", "")
-        
-        if file_path and os.path.exists(file_path):
-            import re
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.readlines()
-                error_lines = [line for line in content if re.search(r'error|ERROR|Error', line)]
-            
-            return json.dumps({
-                "success": True,
-                "file_path": file_path,
-                "error_count": len(error_lines),
-                "error_lines": "".join(error_lines[-50:])
-            }, ensure_ascii=False)
-        
-        return json.dumps({"success": False, "error": "File not found"}, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
-
-
 def analyze_log_tool(args):
-    """分析日志文件"""
+    """分析日志文件 — summary 模式统计，errors 模式提取错误行"""
     try:
         file_path = args.get("file_path", "")
-        
+        mode = args.get("mode", "summary")
+
         if file_path and os.path.exists(file_path):
             import re
+            if mode == "errors":
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    error_lines = [line for line in lines if re.search(r'error|ERROR|Error', line)]
+                return json.dumps({
+                    "success": True,
+                    "file_path": file_path,
+                    "error_count": len(error_lines),
+                    "error_lines": "".join(error_lines[-50:]),
+                }, ensure_ascii=False)
+
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            
+
             total_lines = len(content.splitlines())
             error_count = len(re.findall(r'error|ERROR|Error', content))
             warning_count = len(re.findall(r'warning|WARNING|Warning', content))
-            
+
             return json.dumps({
                 "success": True,
                 "file_path": file_path,
@@ -301,7 +290,7 @@ def analyze_log_tool(args):
                 "error_count": error_count,
                 "warning_count": warning_count,
             }, ensure_ascii=False)
-        
+
         return json.dumps({"success": False, "error": "File not found"}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
@@ -450,25 +439,20 @@ def register_ops_tools() -> List[str]:
     )
     registered_tools.append("read_log")
     
-    log_errors_schema = {
-        "description": "查找日志中的错误",
-        "parameters": {
-            "file_path": {"type": "string", "description": "Path to log file"}
-        },
-        "required": ["file_path"]
-    }
-    registry.register(
-        name="log_errors",
-        toolset="logs",
-        schema=log_errors_schema,
-        handler=log_errors_tool,
-    )
-    registered_tools.append("log_errors")
-    
+    # log_errors merged into analyze_log (mode="errors") — see above
     analyze_log_schema = {
-        "description": "分析日志文件",
+        "description": (
+            "分析日志文件。mode='summary' 返回总行数/错误数/警告数统计；"
+            "mode='errors' 提取包含 error/ERROR/Error 的行内容（等价于原 log_errors）。"
+        ),
         "parameters": {
-            "file_path": {"type": "string", "description": "Path to log file"}
+            "file_path": {"type": "string", "description": "Path to log file"},
+            "mode": {
+                "type": "string",
+                "enum": ["summary", "errors"],
+                "description": "分析模式: summary=统计概览(默认), errors=提取错误行",
+                "default": "summary",
+            },
         },
         "required": ["file_path"]
     }

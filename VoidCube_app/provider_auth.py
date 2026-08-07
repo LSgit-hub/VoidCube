@@ -8,8 +8,28 @@ from typing import Optional, Dict, Any, List
 import os
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from VoidCube_app.environment import is_placeholder_secret
+
+
+def normalize_openai_compatible_base_url(value: str) -> str:
+    """Normalize an OpenAI-compatible endpoint to its API root."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return raw.rstrip("/")
+    path = parsed.path.rstrip("/")
+    for suffix in ("/chat/completions", "/completions"):
+        if path.lower().endswith(suffix):
+            path = path[: -len(suffix)].rstrip("/")
+            break
+    if not path:
+        path = "/v1"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, "")).rstrip("/")
+
 
 class ProviderConfig(dict):
     """提供者配置类，支持字典和属性访问"""
@@ -22,6 +42,23 @@ class ProviderConfig(dict):
     
     def __setattr__(self, key, value):
         self[key] = value
+
+
+def _configured_env_value(name: str) -> str:
+    """Read a process override, then the persisted VoidCube environment."""
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    process_value = os.getenv(name, "").strip()
+    if process_value:
+        return process_value
+    try:
+        from VoidCube_app.config import get_env_value
+
+        return str(get_env_value(name) or "").strip()
+    except Exception:
+        return ""
+
 
 # 提供者注册表 (，包含api_key_env_vars)
 PROVIDER_REGISTRY = {
@@ -96,6 +133,14 @@ PROVIDER_REGISTRY = {
         "base_url_env_var": "MINIMAX_CN_BASE_URL",
         "auth_type": "api_key",
         "inference_base_url": "https://api.minimaxi.com/v1",
+    }),
+    "agnes-ai": ProviderConfig({
+        "name": "Agnes-AI",
+        "base_url": "https://api.agnes-ai.cn/v1",
+        "api_key_env_vars": ["AGNES_API_KEY"],
+        "base_url_env_var": "AGNES_BASE_URL",
+        "auth_type": "api_key",
+        "inference_base_url": "https://api.agnes-ai.cn/v1",
     }),
 }
 
@@ -242,7 +287,7 @@ def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, An
     # 查找API密钥
     api_key = None
     for env_var in api_key_env_vars:
-        candidate = os.getenv(env_var, "").strip()
+        candidate = _configured_env_value(env_var)
         if has_usable_secret(candidate):
             api_key = candidate
             break
@@ -259,7 +304,7 @@ def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, An
     
     base_url_env_var = str(pconfig.get("base_url_env_var") or "").strip()
     base_url = (
-        os.getenv(base_url_env_var, "").strip()
+        _configured_env_value(base_url_env_var)
         if base_url_env_var
         else ""
     ) or pconfig.get("base_url", "")

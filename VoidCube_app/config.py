@@ -348,6 +348,22 @@ DEFAULT_CONFIG = {
     "providers": {},
     "fallback_providers": [],
     "credential_pool_strategies": {},
+    "multimodal": {
+        "provider": "agnes-ai",
+        "api_key_env": "AGNES_API_KEY",
+        "base_url": "https://api.agnes-ai.cn/v1",
+        "language_model": "agnes-2.5-flash",
+        "image_model": "agnes-image-2.1-flash",
+        "video_model": "agnes-video-v2.0",
+        "chat_completions_path": "/chat/completions",
+        "image_generations_path": "/images/generations",
+        "image_edits_path": "/images/edits",
+        "videos_path": "/videos",
+        "video_result_path": "/agnesapi",
+        "request_timeout_seconds": 120,
+        "video_poll_interval_seconds": 3,
+        "video_timeout_seconds": 600,
+    },
     "toolsets": ["VoidCube-cli"],
     "agent": {
         "max_turns": 90,
@@ -743,7 +759,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 20,
+    "_config_version": 21,
 }
 
 # =============================================================================
@@ -753,10 +769,11 @@ DEFAULT_CONFIG = {
 # Track which env vars were introduced in each config version.
 # Migration only mentions vars new since the user's previous version.
 ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
-    3: ["FIRECRAWL_API_KEY", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "FAL_KEY"],
+    3: ["FIRECRAWL_API_KEY", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"],
     4: ["VOICE_TOOLS_OPENAI_KEY", "ELEVENLABS_API_KEY"],
     10: ["TAVILY_API_KEY"],
     11: ["TERMINAL_MODAL_MODE"],
+    21: ["AGNES_API_KEY"],
 }
 
 _LEGACY_CACHE_DIRS = {
@@ -1063,13 +1080,14 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "tool",
     },
-    "FAL_KEY": {
-        "description": "FAL API key for image generation",
-        "prompt": "FAL API key",
-        "url": "https://fal.ai/",
-        "tools": ["image_generate"],
+    "AGNES_API_KEY": {
+        "description": "Agnes-AI key for the dedicated multimodal provider",
+        "prompt": "Agnes-AI API key",
+        "url": "https://api.agnes-ai.cn/",
+        "tools": ["image_generate", "image_edit", "video_generate"],
         "password": True,
-        "category": "tool",
+        "category": "provider",
+        "advanced": True,
     },
     "TINKER_API_KEY": {
         "description": "Tinker API key for RL training",
@@ -1272,7 +1290,7 @@ def check_config_version() -> Tuple[int, int]:
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "runtime", "providers", "fallback_model",
-    "fallback_providers", "credential_pool_strategies", "toolsets",
+    "fallback_providers", "credential_pool_strategies", "multimodal", "toolsets",
     "agent", "terminal", "display", "clarify", "compression", "delegation",
     "auxiliary", "context", "memory", "gateway", "supervisor",
 }
@@ -1895,6 +1913,7 @@ def _expand_env_vars(obj):
 _RUNTIME_MAPPING_SECTIONS = (
     "runtime",
     "providers",
+    "multimodal",
     "agent",
     "display",
     "terminal",
