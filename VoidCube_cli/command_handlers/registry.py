@@ -73,6 +73,10 @@ from VoidCube_cli.command_handlers.fast import (
     FastCommandPorts,
     handle_fast_command,
 )
+from VoidCube_cli.command_handlers.goal import (
+    GoalCommandPorts,
+    handle_goal_command,
+)
 from VoidCube_cli.command_handlers.compression import (
     CompressionCommandPorts,
     handle_compression_command,
@@ -328,6 +332,10 @@ def install_cli_command_execution(
                     chat_console_factory=chat_console_factory,
                     skill_commands=skill_commands,
                 ),
+            ),
+            "goal": lambda request: handle_goal_command(
+                request,
+                ports=_goal_command_ports(host, emit=emit, translate=translate),
             ),
             "new": lambda request: handle_new_session_command(
                 request,
@@ -935,6 +943,32 @@ def _plan_command_ports(
         enqueue=pending_input.put if pending_input is not None else None,
         emit=emit,
         render_error=lambda message: ChatConsole().print(f"[bold red]{message}[/]"),
+    )
+
+
+def _goal_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+    translate: Callable[..., str],
+) -> GoalCommandPorts:
+    from VoidCube_cli.session_goal_runtime import (
+        clear_goal,
+        create_goal,
+        get_goal,
+        update_goal,
+    )
+
+    pending_input = getattr(host, "_pending_input", None)
+    return GoalCommandPorts(
+        get_goal=lambda: get_goal(host),
+        create_goal=lambda objective: create_goal(host, objective),
+        update_goal=lambda status, reason: update_goal(host, status, reason),
+        clear_goal=lambda: clear_goal(host),
+        start_goal=pending_input.put if pending_input is not None else None,
+        reset_agent=lambda: setattr(host, "agent", None),
+        emit=emit,
+        translate=translate,
     )
 
 
@@ -1698,6 +1732,7 @@ def _session_status_display_ports(host: Any) -> SessionStatusDisplayPorts:
         subagent_snapshot=host._get_subagent_observability_snapshot,
         autonomous_sections=lambda: _autonomous_observation_summary_sections(host),
         emit=emit,
+        goal_snapshot=lambda: _session_goal_snapshot(host),
     )
 
 
@@ -1705,6 +1740,12 @@ def _autonomous_observation_summary_sections(host: Any) -> Sequence[str]:
     from VoidCube_cli.autonomous_status_host import autonomous_observation_summary_sections
 
     return autonomous_observation_summary_sections(host)
+
+
+def _session_goal_snapshot(host: Any) -> Mapping[str, Any]:
+    from VoidCube_cli.session_goal_runtime import get_goal
+
+    return get_goal(host) or {}
 
 
 def _localized_toolsets() -> tuple[tuple[str, int, str], ...]:

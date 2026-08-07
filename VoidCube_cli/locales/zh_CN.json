@@ -18,6 +18,10 @@
         "description": "显示对话历史",
         "usage": "用法: /history"
       },
+      "goal": {
+        "description": "管理当前会话目标",
+        "usage": "用法: /goal [目标|status|complete|blocked|clear]"
+      },
       "find": {
         "description": "搜索当前会话的结构化记录",
         "usage": "用法: /find <关键词>"
@@ -279,6 +283,24 @@
         "description": "配置API设置",
         "usage": "用法: /api"
       }
+    },
+    "goal_command": {
+      "none": "当前会话尚未设置目标。",
+      "no_active": "当前没有可更新的活动目标。",
+      "header": "会话目标",
+      "status_active": "状态：进行中",
+      "status_completed": "状态：已完成",
+      "status_blocked": "状态：受阻",
+      "objective": "目标：{objective}",
+      "reason": "原因：{reason}",
+      "created": "目标已创建并加入执行队列：{objective}",
+      "completed": "目标已标记为完成。",
+      "blocked": "目标已标记为受阻：{reason}",
+      "blocked_usage": "用法：/goal blocked <原因>",
+      "clear_active": "请先完成目标或将其标记为受阻，再清除目标。",
+      "cleared": "目标已清除。",
+      "already_active": "当前已有活动目标，请先完成或标记为受阻。",
+      "too_long": "目标内容过长（最多 {limit} 个字符）。"
     },
     "categories": {
       "Session": "会话",

@@ -14,6 +14,9 @@
       "history": {
         "description": "Show conversation history"
       },
+      "goal": {
+        "description": "Manage the current session goal"
+      },
       "find": {
         "description": "Search structured records in the current session"
       },
@@ -176,6 +179,24 @@
       "api": {
         "description": "Configure API settings"
       }
+    },
+    "goal_command": {
+      "none": "No goal is set for this session.",
+      "no_active": "There is no active goal to update.",
+      "header": "Session Goal",
+      "status_active": "Status: active",
+      "status_completed": "Status: completed",
+      "status_blocked": "Status: blocked",
+      "objective": "Objective: {objective}",
+      "reason": "Reason: {reason}",
+      "created": "Goal created and queued: {objective}",
+      "completed": "Goal marked completed.",
+      "blocked": "Goal marked blocked: {reason}",
+      "blocked_usage": "Usage: /goal blocked <reason>",
+      "clear_active": "Finish or block the active goal before clearing it.",
+      "cleared": "Goal cleared.",
+      "already_active": "An active goal already exists. Complete or block it first.",
+      "too_long": "Goal is too long (maximum {limit} characters)."
     },
     "categories": {
       "Session": "Session",

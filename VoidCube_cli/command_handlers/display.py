@@ -89,6 +89,7 @@ class SessionStatusDisplayPorts:
     subagent_snapshot: Callable[[], Mapping[str, Any]]
     autonomous_sections: Callable[[], Sequence[str]]
     emit: Callable[[str], None]
+    goal_snapshot: Callable[[], Mapping[str, Any]] = lambda: {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +340,15 @@ def handle_session_status_command(
             lines.append(f"Subagent Focus: {focus_preview}")
     else:
         lines.append("Subagents: idle")
+    goal = ports.goal_snapshot()
+    if goal:
+        objective = str(goal.get("objective") or "").strip()
+        status = str(goal.get("status") or "active")
+        if objective:
+            lines.append(f"Goal: {status} — {objective}")
+        reason = str(goal.get("reason") or "").strip()
+        if reason:
+            lines.append(f"Goal Reason: {reason}")
     lines.extend(ports.autonomous_sections())
     ports.emit("\n".join(lines))
 

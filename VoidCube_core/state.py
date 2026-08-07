@@ -31,7 +31,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -87,6 +87,17 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS session_goals (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    reason TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_goals_status ON session_goals(status);
 """
 
 FTS_SQL = """
@@ -327,6 +338,22 @@ class SessionDB:
                     except sqlite3.OperationalError:
                         pass  # Column already exists
                 cursor.execute("UPDATE schema_version SET version = 6")
+            if current_version < 7:
+                cursor.execute(
+                    """CREATE TABLE IF NOT EXISTS session_goals (
+                        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+                        objective TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        reason TEXT,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )"""
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_goals_status "
+                    "ON session_goals(status)"
+                )
+                cursor.execute("UPDATE schema_version SET version = 7")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
@@ -526,6 +553,67 @@ class SessionDB:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    def get_session_goal(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the one goal owned by a session, if present."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT session_id, objective, status, reason, created_at, updated_at "
+                "FROM session_goals WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_session_goal(self, session_id: str, objective: str) -> Dict[str, Any]:
+        """Create an active goal for a session that does not already have one."""
+        now = time.time()
+
+        def _do(conn):
+            conn.execute(
+                "INSERT OR IGNORE INTO sessions (id, source, started_at) VALUES (?, ?, ?)",
+                (session_id, "cli", now),
+            )
+            conn.execute(
+                "INSERT INTO session_goals "
+                "(session_id, objective, status, reason, created_at, updated_at) "
+                "VALUES (?, ?, 'active', NULL, ?, ?)",
+                (session_id, objective, now, now),
+            )
+
+        self._execute_write(_do)
+        return self.get_session_goal(session_id) or {}
+
+    def update_session_goal(
+        self,
+        session_id: str,
+        status: str,
+        reason: str | None = None,
+    ) -> bool:
+        """Update a goal terminal status and optional explanation."""
+        if status not in {"completed", "blocked"}:
+            raise ValueError(f"Unsupported goal status: {status}")
+        now = time.time()
+
+        def _do(conn):
+            cursor = conn.execute(
+                "UPDATE session_goals SET status = ?, reason = ?, updated_at = ? "
+                "WHERE session_id = ? AND status = 'active'",
+                (status, reason, now, session_id),
+            )
+            return cursor.rowcount
+
+        return bool(self._execute_write(_do))
+
+    def clear_session_goal(self, session_id: str) -> bool:
+        """Delete a non-active goal from a session."""
+        def _do(conn):
+            cursor = conn.execute(
+                "DELETE FROM session_goals WHERE session_id = ? AND status != 'active'",
+                (session_id,),
+            )
+            return cursor.rowcount
+
+        return bool(self._execute_write(_do))
 
     def resolve_session_id(self, session_id_or_prefix: str) -> Optional[str]:
         """Resolve an exact or uniquely prefixed session ID to the full ID.

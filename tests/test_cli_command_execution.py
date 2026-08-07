@@ -83,6 +83,7 @@ EXPECTED_BUILTINS = {
     "export",
     "fast",
     "find",
+    "goal",
     "help",
     "history",
     "image",

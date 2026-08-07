@@ -2175,6 +2175,14 @@ class VoidcubeCLI:
             )
         ).resolve(user_message)
 
+    def _effective_system_prompt(self) -> str | None:
+        """Combine the configured prompt with the current session goal."""
+        from VoidCube_cli.session_goal_runtime import get_goal, goal_prompt
+
+        parts = [self.system_prompt or "", goal_prompt(get_goal(self))]
+        prompt = "\n\n".join(part for part in parts if part).strip()
+        return prompt or None
+
     def _init_agent(
         self,
         *,
@@ -2246,7 +2254,7 @@ class VoidcubeCLI:
                     ),
                     verbose_logging=self.verbose,
                     quiet_mode=not self.verbose,
-                    ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
+                    ephemeral_system_prompt=self._effective_system_prompt(),
                     prefill_messages=self.prefill_messages or None,
                     reasoning_config=self.reasoning_config,
                     service_tier=self.service_tier,

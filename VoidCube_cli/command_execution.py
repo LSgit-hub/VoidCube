@@ -35,6 +35,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "config": BuiltinCommandSpec(handler_key="config"),
         "clear": BuiltinCommandSpec(handler_key="clear"),
         "history": BuiltinCommandSpec(handler_key="history"),
+        "goal": BuiltinCommandSpec(handler_key="goal"),
         "find": BuiltinCommandSpec(handler_key="find"),
         "export": BuiltinCommandSpec(handler_key="export"),
         "title": BuiltinCommandSpec(handler_key="title"),
