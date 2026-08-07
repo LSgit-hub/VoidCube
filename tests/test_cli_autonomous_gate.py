@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.request import Request
@@ -2383,9 +2384,12 @@ def test_activate_autonomous_execution_component_reports_start_failure():
     assert "未启动" in message
 
 
-def test_start_embedded_autonomous_component_processes_child_prompt_without_touching_parent_history(monkeypatch):
+def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(monkeypatch):
     parent = VoidcubeCLI.__new__(VoidcubeCLI)
     parent._autonomous_gate_active = True
+    parent._agent_running = True
+    parent._api_a_execution_gate = threading.Lock()
+    parent._api_a_execution_gate.acquire()
     parent.conversation_history = [{"role": "user", "content": "parent turn"}]
     parent._autonomous_component_thread = None
     parent._invalidate = lambda *args, **kwargs: None
@@ -2478,6 +2482,8 @@ def test_start_embedded_autonomous_component_processes_child_prompt_without_touc
     assert component._autonomous_parent_host is parent
     assert component._should_emit_scrollback_output() is False
     assert any(item[0] == "idle" for item in pushed if isinstance(item, tuple))
+    assert parent._api_a_execution_gate.locked()
+    parent._api_a_execution_gate.release()
 
 
 def test_autonomous_component_panel_stays_hidden_when_idle():

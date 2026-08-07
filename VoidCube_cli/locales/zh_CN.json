@@ -316,9 +316,7 @@
       "skills": "访问、创建、编辑和管理技能文档",
       "full": "所有可用工具",
       "mini": "精简工具集，适用于快速任务",
-      "voidcube": "服务器管理核心工具",
-      "uiautomation": "Windows UI自动化工具"
-    },
+      "voidcube": "服务器管理核心工具",    },
     "errors": {
       "no_tty": "Voidcube CLI 需要交互式终端 (TTY)。请勿通过管道或重定向输入。",
       "no_session": "无法加载会话: {session_id}",

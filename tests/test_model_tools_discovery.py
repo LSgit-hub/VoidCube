@@ -147,16 +147,5 @@ def test_registry_has_no_legacy_default_toolset_aliases():
     } <= set(resolve_toolset("voidcube"))
 
 
-def test_windows_uiautomation_toolset_exposes_all_registered_tools():
-    if sys.platform != "win32":
-        return
 
-    from tools.model_tools import get_tool_definitions
 
-    names = {
-        item["function"]["name"]
-        for item in get_tool_definitions(["uiautomation"], quiet_mode=True)
-    }
-
-    assert len(names) == 17
-    assert {"uia_find_window", "uia_click_button", "uia_scroll"} <= names

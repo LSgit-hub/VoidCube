@@ -151,8 +151,7 @@ def _discover_tools():
         "tools.code_execution_tool",
         "tools.delegate_tool",
         "tools.process_registry",
-        # UI Automation tools for Windows desktop applications
-        "tools.uiautomation_tool",
+
         # Media generation tools (image/video)
         "tools.media_generation_tool",
         # Ops: Server operations tools (registered via ops_register)

@@ -108,19 +108,6 @@ TOOLSETS = {
         "includes": []
     },
 
-    "uiautomation": {
-        "description": "Windows desktop UI automation tools",
-        "tools": [
-            "uia_find_window", "uia_wait_for_window",
-            "uia_search_controls", "uia_click_button",
-            "uia_set_text", "uia_get_text", "uia_list_controls",
-            "uia_select_combo_item", "uia_toggle_checkbox",
-            "uia_send_keys", "uia_window_action", "uia_mouse_click",
-            "uia_mouse_move", "uia_start_process", "uia_wait",
-            "uia_get_control_info", "uia_scroll",
-        ],
-        "includes": [],
-    },
 
     "ops": {
         "description": "All server operations tools",
