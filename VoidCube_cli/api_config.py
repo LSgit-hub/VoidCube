@@ -25,7 +25,6 @@ API_A_PROVIDER_LABELS = {
     "ollama": "Ollama",
 }
 
-MULTIMODAL_PROVIDER_LABEL = "Agnes-AI"
 API_B_CUSTOM_API_KEY_ENV = "VOIDCUBE_MEMORY_CUSTOM_API_KEY"
 
 
@@ -222,60 +221,113 @@ def persist_api_b_config(
     return cfg
 
 
-def persist_multimodal_config(
+def persist_image_generation_config(
     config: dict[str, Any],
     *,
     provider: str = "agnes-ai",
-    base_url: str = "https://api.agnes-ai.cn/v1",
     api_key_env: str = "AGNES_API_KEY",
-    language_model: str = "agnes-2.5-flash",
-    image_model: str = "agnes-image-2.1-flash",
-    video_model: str = "agnes-video-v2.0",
+    endpoint: str = "https://api.agnes-ai.cn/v1/images/generations",
+    edit_endpoint: str = "https://api.agnes-ai.cn/v1/images/edits",
+    model: str = "agnes-image-2.1-flash",
 ) -> dict[str, Any]:
-    """Return config with only the dedicated multimodal route updated."""
-    from VoidCube_app.multimodal_provider import default_multimodal_config
-    from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
+    """Return config with only the dedicated image generation route updated."""
+    from VoidCube_app.media_generation_provider import default_image_generation_config
 
     cfg = dict(config or {})
-    multimodal = default_multimodal_config()
-    existing = cfg.get("multimodal")
+    image_generation = default_image_generation_config()
+    existing = cfg.get("image_generation")
     if isinstance(existing, dict):
-        multimodal.update(existing)
-    multimodal.update(
+        image_generation.update(existing)
+    image_generation.update(
         {
             "provider": str(provider or "agnes-ai").strip().lower(),
-            "base_url": normalize_openai_compatible_base_url(base_url),
             "api_key_env": str(api_key_env or "AGNES_API_KEY").strip(),
-            "language_model": str(language_model or "").strip(),
-            "image_model": str(image_model or "").strip(),
-            "video_model": str(video_model or "").strip(),
+            "endpoint": str(endpoint or "").strip().rstrip("/"),
+            "edit_endpoint": str(edit_endpoint or "").strip().rstrip("/"),
+            "model": str(model or "").strip(),
         }
     )
-    cfg["multimodal"] = multimodal
+    cfg.pop("multimodal", None)
+    cfg["image_generation"] = image_generation
     return cfg
 
 
-def save_multimodal_config(
+def persist_video_generation_config(
+    config: dict[str, Any],
     *,
     provider: str = "agnes-ai",
-    base_url: str = "https://api.agnes-ai.cn/v1",
     api_key_env: str = "AGNES_API_KEY",
-    language_model: str = "agnes-2.5-flash",
-    image_model: str = "agnes-image-2.1-flash",
-    video_model: str = "agnes-video-v2.0",
+    endpoint: str = "https://api.agnes-ai.cn/v1/videos",
+    result_endpoint: str = "https://api.agnes-ai.cn/agnesapi",
+    model: str = "agnes-video-v2.0",
+) -> dict[str, Any]:
+    """Return config with only the dedicated video generation route updated."""
+    from VoidCube_app.media_generation_provider import default_video_generation_config
+
+    cfg = dict(config or {})
+    video_generation = default_video_generation_config()
+    existing = cfg.get("video_generation")
+    if isinstance(existing, dict):
+        video_generation.update(existing)
+    video_generation.update(
+        {
+            "provider": str(provider or "agnes-ai").strip().lower(),
+            "api_key_env": str(api_key_env or "AGNES_API_KEY").strip(),
+            "endpoint": str(endpoint or "").strip().rstrip("/"),
+            "result_endpoint": str(result_endpoint or "").strip().rstrip("/"),
+            "model": str(model or "").strip(),
+        }
+    )
+    cfg.pop("multimodal", None)
+    cfg["video_generation"] = video_generation
+    return cfg
+
+
+def save_image_generation_config(
+    *,
+    provider: str = "agnes-ai",
+    api_key_env: str = "AGNES_API_KEY",
+    endpoint: str = "https://api.agnes-ai.cn/v1/images/generations",
+    edit_endpoint: str = "https://api.agnes-ai.cn/v1/images/edits",
+    model: str = "agnes-image-2.1-flash",
 ) -> bool:
     try:
         from VoidCube_app.config import load_config, save_config
 
         save_config(
-            persist_multimodal_config(
+            persist_image_generation_config(
                 load_config(),
                 provider=provider,
-                base_url=base_url,
                 api_key_env=api_key_env,
-                language_model=language_model,
-                image_model=image_model,
-                video_model=video_model,
+                endpoint=endpoint,
+                edit_endpoint=edit_endpoint,
+                model=model,
+            )
+        )
+        return True
+    except Exception:
+        return False
+
+
+def save_video_generation_config(
+    *,
+    provider: str = "agnes-ai",
+    api_key_env: str = "AGNES_API_KEY",
+    endpoint: str = "https://api.agnes-ai.cn/v1/videos",
+    result_endpoint: str = "https://api.agnes-ai.cn/agnesapi",
+    model: str = "agnes-video-v2.0",
+) -> bool:
+    try:
+        from VoidCube_app.config import load_config, save_config
+
+        save_config(
+            persist_video_generation_config(
+                load_config(),
+                provider=provider,
+                api_key_env=api_key_env,
+                endpoint=endpoint,
+                result_endpoint=result_endpoint,
+                model=model,
             )
         )
         return True
@@ -560,7 +612,7 @@ def api_b_key_configured(memory_llm_cfg: dict[str, Any]) -> bool:
 
 
 def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a secret-free API-A/API-B/multimodal configuration summary."""
+    """Return a secret-free API-A/API-B/media generation summary."""
     cfg = dict(config or {})
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
     providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
@@ -576,7 +628,16 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     api_b_key_env = str(
         llm.get("api_key_env") or api_b_defaults.get("api_key_env") or ""
     ).strip()
-    multimodal = cfg.get("multimodal") if isinstance(cfg.get("multimodal"), dict) else {}
+    image_generation = (
+        cfg.get("image_generation")
+        if isinstance(cfg.get("image_generation"), dict)
+        else {}
+    )
+    video_generation = (
+        cfg.get("video_generation")
+        if isinstance(cfg.get("video_generation"), dict)
+        else {}
+    )
 
     retired_fields = [
         key
@@ -603,15 +664,25 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "key_configured": api_b_key_configured(llm),
             "credential_sources": provider_credential_sources(api_b_provider, api_b_key_env),
         },
-        "multimodal": {
-            "provider": str(multimodal.get("provider") or "未设置").strip(),
-            "base_url": str(multimodal.get("base_url") or "未设置").strip(),
-            "api_key_env": str(multimodal.get("api_key_env") or "AGNES_API_KEY").strip(),
-            "language_model": str(multimodal.get("language_model") or "未设置").strip(),
-            "image_model": str(multimodal.get("image_model") or "未设置").strip(),
-            "video_model": str(multimodal.get("video_model") or "未设置").strip(),
+        "image_generation": {
+            "provider": str(image_generation.get("provider") or "未设置").strip(),
+            "endpoint": str(image_generation.get("endpoint") or "未设置").strip(),
+            "api_key_env": str(image_generation.get("api_key_env") or "AGNES_API_KEY").strip(),
+            "model": str(image_generation.get("model") or "未设置").strip(),
             "key_configured": bool(
-                has_configured_api_key(str(multimodal.get("api_key_env") or "AGNES_API_KEY"))
+                has_configured_api_key(str(image_generation.get("api_key_env") or "AGNES_API_KEY"))
+            ),
+        },
+        "video_generation": {
+            "provider": str(video_generation.get("provider") or "未设置").strip(),
+            "endpoint": str(video_generation.get("endpoint") or "未设置").strip(),
+            "result_endpoint": str(
+                video_generation.get("result_endpoint") or "未设置"
+            ).strip(),
+            "api_key_env": str(video_generation.get("api_key_env") or "AGNES_API_KEY").strip(),
+            "model": str(video_generation.get("model") or "未设置").strip(),
+            "key_configured": bool(
+                has_configured_api_key(str(video_generation.get("api_key_env") or "AGNES_API_KEY"))
             ),
         },
         "retired_fields_present": retired_fields,
@@ -638,7 +709,8 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
     summary = api_config_summary(config)
     api_a = summary["api_a"]
     api_b = summary["api_b"]
-    multimodal = summary["multimodal"]
+    image_generation = summary["image_generation"]
+    video_generation = summary["video_generation"]
     retired = summary["retired_fields_present"]
     return [
         "API-A（用户交互 / 主 CLI）",
@@ -656,13 +728,18 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
         "  Credential sources:",
         *_render_credential_sources(api_b.get("credential_sources") or []),
         "",
-        "多模态 Provider（独立于 API-A/API-B）",
-        f"  Provider: {multimodal['provider']}",
-        f"  Key: {'已配置' if multimodal['key_configured'] else '未配置'} ({multimodal['api_key_env']})",
-        f"  Base URL: {multimodal['base_url']}",
-        f"  Language: {multimodal['language_model']}",
-        f"  Image: {multimodal['image_model']}",
-        f"  Video: {multimodal['video_model']}",
+        "图像生成（独立于 API-A/API-B）",
+        f"  Provider: {image_generation['provider']}",
+        f"  Key: {'已配置' if image_generation['key_configured'] else '未配置'} ({image_generation['api_key_env']})",
+        f"  Endpoint: {image_generation['endpoint']}",
+        f"  Model: {image_generation['model']}",
+        "",
+        "视频生成（独立于 API-A/API-B）",
+        f"  Provider: {video_generation['provider']}",
+        f"  Key: {'已配置' if video_generation['key_configured'] else '未配置'} ({video_generation['api_key_env']})",
+        f"  Submit endpoint: {video_generation['endpoint']}",
+        f"  Result endpoint: {video_generation['result_endpoint']}",
+        f"  Model: {video_generation['model']}",
         "",
         "废弃字段",
         f"  {'无' if not retired else ', '.join(retired)}",
@@ -1391,15 +1468,21 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     p(f"   API-B Provider: {memory_provider}")
     p(f"   API-B Model: {memory_model}")
     p(f"   API-B Key: {memory_key_state} ({memory_key_env})")
-    multimodal_config = current_config.get("multimodal", {})
-    if not isinstance(multimodal_config, dict):
-        multimodal_config = {}
-    multimodal_key_env = str(multimodal_config.get("api_key_env") or "AGNES_API_KEY")
-    multimodal_key_state = (
-        "已配置" if has_configured_api_key(multimodal_key_env) else "未配置"
+    image_config = current_config.get("image_generation", {})
+    video_config = current_config.get("video_generation", {})
+    if not isinstance(image_config, dict):
+        image_config = {}
+    if not isinstance(video_config, dict):
+        video_config = {}
+    media_key_env = str(
+        image_config.get("api_key_env")
+        or video_config.get("api_key_env")
+        or "AGNES_API_KEY"
     )
-    p(f"   多模态 Provider: {multimodal_config.get('provider', 'agnes-ai')}")
-    p(f"   多模态 Key: {multimodal_key_state} ({multimodal_key_env})")
+    media_key_state = "已配置" if has_configured_api_key(media_key_env) else "未配置"
+    p(f"   图像模型: {image_config.get('model', 'agnes-image-2.1-flash')}")
+    p(f"   视频模型: {video_config.get('model', 'agnes-video-v2.0')}")
+    p(f"   图像/视频 Key: {media_key_state} ({media_key_env})")
     p("")
     
     # 主菜单循环
@@ -1408,8 +1491,9 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         p("   [1] 快速配置 (推荐) - 使用 OpenRouter")
         p("   [2] 自定义配置 - 添加其他 Provider")
         p("   [3] 记忆系统模型配置")
-        p("   [4] Agnes-AI 多模态 Provider")
-        p("   [5] 查看当前配置")
+        p("   [4] 图像模型配置")
+        p("   [5] 视频模型配置")
+        p("   [6] 查看当前配置")
         p("   [0] 退出")
         
         choice = inp("\n请选择")
@@ -1873,26 +1957,20 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 break
         
         elif choice == "4":
-            ph("Agnes-AI 多模态 Provider 配置")
-            from VoidCube_app.multimodal_provider import default_multimodal_config
+            ph("Agnes-AI 图像模型配置")
+            from VoidCube_app.media_generation_provider import (
+                default_image_generation_config,
+            )
 
-            existing = dict(current_config.get("multimodal") or {})
-            defaults = default_multimodal_config()
-            base_url = inp(
-                "Base URL",
-                str(existing.get("base_url") or defaults["base_url"]),
+            existing = dict(current_config.get("image_generation") or {})
+            defaults = default_image_generation_config()
+            endpoint = inp(
+                "图像生成 Endpoint",
+                str(existing.get("endpoint") or defaults["endpoint"]),
             ).rstrip("/")
-            language_model = inp(
-                "语言模型",
-                str(existing.get("language_model") or defaults["language_model"]),
-            )
-            image_model = inp(
+            model = inp(
                 "图像模型",
-                str(existing.get("image_model") or defaults["image_model"]),
-            )
-            video_model = inp(
-                "视频模型",
-                str(existing.get("video_model") or defaults["video_model"]),
+                str(existing.get("model") or defaults["model"]),
             )
             key_env = str(existing.get("api_key_env") or "AGNES_API_KEY").strip()
             current_key = ""
@@ -1902,28 +1980,72 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 current_key = str(get_env_value(key_env) or "").strip()
             except Exception:
                 current_key = ""
-            p(f"\nAPI Key 将保存到 {key_env}（输入时不回显，留空保留已有 Key）")
+            p(f"\n图像和视频统一使用 {key_env}（输入时不回显，留空保留已有 Key）")
             api_key = secret_inp("请输入 Agnes-AI API Key", current_key)
             if not api_key:
                 pe("API Key 不能为空；如需清除请使用 `voidcube config unset AGNES_API_KEY`")
                 continue
 
-            if save_multimodal_config(
+            if save_image_generation_config(
                 provider="agnes-ai",
-                base_url=base_url,
                 api_key_env=key_env,
-                language_model=language_model,
-                image_model=image_model,
-                video_model=video_model,
+                endpoint=endpoint,
+                model=model,
             ) and save_env_value(key_env, api_key):
-                ps("Agnes-AI 多模态 Provider 配置保存成功")
-                ps("图像和视频工具已使用该独立配置")
+                ps("Agnes-AI 图像模型配置保存成功")
             else:
-                pe("保存 Agnes-AI 多模态配置失败")
+                pe("保存 Agnes-AI 图像模型配置失败")
             current_config = load_current_config()
             continue
 
         elif choice == "5":
+            ph("Agnes-AI 视频模型配置")
+            from VoidCube_app.media_generation_provider import (
+                default_video_generation_config,
+            )
+
+            existing = dict(current_config.get("video_generation") or {})
+            defaults = default_video_generation_config()
+            endpoint = inp(
+                "视频提交 Endpoint",
+                str(existing.get("endpoint") or defaults["endpoint"]),
+            ).rstrip("/")
+            result_endpoint = inp(
+                "视频结果查询 Endpoint",
+                str(existing.get("result_endpoint") or defaults["result_endpoint"]),
+            ).rstrip("/")
+            model = inp(
+                "视频模型",
+                str(existing.get("model") or defaults["model"]),
+            )
+            key_env = str(existing.get("api_key_env") or "AGNES_API_KEY").strip()
+            current_key = ""
+            try:
+                from VoidCube_app.config import get_env_value
+
+                current_key = str(get_env_value(key_env) or "").strip()
+            except Exception:
+                current_key = ""
+            p(f"\n图像和视频统一使用 {key_env}（输入时不回显，留空保留已有 Key）")
+            api_key = secret_inp("请输入 Agnes-AI API Key", current_key)
+            if not api_key:
+                pe("API Key 不能为空；如需清除请使用 `voidcube config unset AGNES_API_KEY`")
+                continue
+
+            if save_video_generation_config(
+                provider="agnes-ai",
+                api_key_env=key_env,
+                endpoint=endpoint,
+                result_endpoint=result_endpoint,
+                model=model,
+            ) and save_env_value(key_env, api_key):
+                ps("Agnes-AI 视频模型配置保存成功")
+            else:
+                pe("保存 Agnes-AI 视频模型配置失败")
+            current_config = load_current_config()
+            continue
+
+        elif choice == "6":
             ph("当前配置")
 
             current_config = load_current_config()

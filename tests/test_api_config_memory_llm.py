@@ -11,6 +11,8 @@ from VoidCube_cli.api_config import (
     memory_llm_provider_options,
     persist_api_a_config,
     persist_api_b_config,
+    persist_image_generation_config,
+    persist_video_generation_config,
     provider_credential_sources,
     provider_has_usable_credential,
     render_api_config_summary,
@@ -253,6 +255,48 @@ def test_persist_custom_api_b_config_is_isolated_and_normalizes_url():
     }
 
 
+def test_image_and_video_generation_config_updates_are_isolated():
+    original = {
+        "runtime": {"active_provider": "openrouter"},
+        "providers": {"openrouter": {"selected_model": "chat-model"}},
+        "memory": {"llm": {"provider": "deepseek", "model": "memory-model"}},
+        "multimodal": {"base_url": "https://legacy.example/v1"},
+        "video_generation": {
+            "endpoint": "https://video.example/v1/videos",
+            "result_endpoint": "https://video.example/result",
+            "model": "existing-video-model",
+        },
+    }
+
+    with_image = persist_image_generation_config(
+        original,
+        endpoint="https://image.example/v1/images/generations/",
+        model="new-image-model",
+    )
+    with_video = persist_video_generation_config(
+        with_image,
+        endpoint="https://new-video.example/v1/videos/",
+        result_endpoint="https://new-video.example/result/",
+        model="new-video-model",
+    )
+
+    assert "multimodal" not in with_image
+    assert with_image["video_generation"] == original["video_generation"]
+    assert with_image["image_generation"]["endpoint"] == (
+        "https://image.example/v1/images/generations"
+    )
+    assert with_video["image_generation"] == with_image["image_generation"]
+    assert with_video["video_generation"]["endpoint"] == (
+        "https://new-video.example/v1/videos"
+    )
+    assert with_video["video_generation"]["result_endpoint"] == (
+        "https://new-video.example/result"
+    )
+    assert with_video["runtime"] == original["runtime"]
+    assert with_video["providers"] == original["providers"]
+    assert with_video["memory"] == original["memory"]
+
+
 @pytest.mark.parametrize("base_url", ["", "memory.example/v1"])
 def test_persist_custom_api_b_config_requires_endpoint_and_key_env(base_url):
     with pytest.raises(ValueError, match=r"requires a valid http\(s\) base_url"):
@@ -287,6 +331,21 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
         },
         "model": {"api_key": "sk-old-model-token-123456"},
         "custom_providers": [{"api_key": "sk-old-custom-token-123456"}],
+        "image_generation": {
+            "provider": "agnes-ai",
+            "api_key_env": "AGNES_API_KEY",
+            "endpoint": "https://image.example/v1/images/generations",
+            "model": "image-model",
+            "api_key": "sk-image-secret-token-123456",
+        },
+        "video_generation": {
+            "provider": "agnes-ai",
+            "api_key_env": "AGNES_API_KEY",
+            "endpoint": "https://video.example/v1/videos",
+            "result_endpoint": "https://video.example/result",
+            "model": "video-model",
+            "api_key": "sk-video-secret-token-123456",
+        },
     }
 
     summary = api_config_summary(cfg)
@@ -297,6 +356,10 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
     assert summary["api_a"]["provider"] == "agnes-ai"
     assert summary["api_b"]["provider"] == "deepseek"
     assert summary["api_b"]["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert summary["image_generation"]["model"] == "image-model"
+    assert summary["video_generation"]["model"] == "video-model"
+    assert "language_model" not in combined
+    assert "multimodal" not in summary
     assert summary["retired_fields_present"] == ["model", "custom_providers"]
 
 

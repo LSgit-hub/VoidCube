@@ -13,11 +13,13 @@ import httpx
 
 from agent.tool_execution import ToolExecutionResult
 from VoidCube_app.contracts.artifacts import Artifact
-from VoidCube_app.multimodal_provider import (
+from VoidCube_app.media_generation_provider import (
     AGNES_IMAGE_MODEL,
     AGNES_VIDEO_MODEL,
-    multimodal_provider_configured,
-    resolve_multimodal_provider,
+    image_generation_configured,
+    resolve_image_generation_config,
+    resolve_video_generation_config,
+    video_generation_configured,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,17 +33,34 @@ def _error(message: str) -> str:
     return _json({"success": False, "error": str(message)})
 
 
-def _provider():
-    provider = resolve_multimodal_provider()
+def _image_provider():
+    provider = resolve_image_generation_config()
     if not provider.configured:
         raise RuntimeError(
-            "未配置 Agnes-AI 多模态 Provider，请运行 /api 选择 Agnes-AI 多模态 Provider"
+            "未配置 Agnes-AI 图像模型，请运行 /api 选择图像模型配置"
+        )
+    return provider
+
+
+def _video_provider():
+    provider = resolve_video_generation_config()
+    if not provider.configured:
+        raise RuntimeError(
+            "未配置 Agnes-AI 视频模型，请运行 /api 选择视频模型配置"
         )
     return provider
 
 
 def _headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+def _effective_model(requested: str, configured: str) -> str:
+    """Resolve generic Agent placeholders to the model selected in /api."""
+    value = str(requested or "").strip()
+    if not value or value.lower() in {"default", "auto", "configured"}:
+        return configured
+    return value
 
 
 def _response_error(response: httpx.Response) -> str:
@@ -125,11 +144,11 @@ def image_generate(
 ) -> str | ToolExecutionResult:
     """Generate one or more images with the configured Agnes-AI provider."""
     try:
-        provider = _provider()
-        model = str(model or provider.image_model).strip()
+        provider = _image_provider()
+        model = _effective_model(model, provider.model)
         payload = {"model": model, "prompt": prompt, "n": n, "size": size, "quality": quality, **kwargs}
         response = httpx.post(
-            provider.endpoint(provider.image_generations_path),
+            provider.endpoint,
             json=payload,
             headers=_headers(provider.api_key),
             timeout=provider.request_timeout_seconds,
@@ -162,8 +181,8 @@ def image_edit(
 ) -> str | ToolExecutionResult:
     """Edit an image through the provider's configured image edit endpoint."""
     try:
-        provider = _provider()
-        model = str(model or provider.image_model).strip()
+        provider = _image_provider()
+        model = _effective_model(model, provider.model)
         payload = {
             "model": model,
             "prompt": prompt,
@@ -175,7 +194,7 @@ def image_edit(
         if mask_path:
             payload["mask"] = _read_image(mask_path)
         response = httpx.post(
-            provider.endpoint(provider.image_edits_path),
+            provider.edit_endpoint,
             json=payload,
             headers=_headers(provider.api_key),
             timeout=provider.request_timeout_seconds,
@@ -200,11 +219,11 @@ def _video_status(payload: Any) -> str:
 
 
 def _poll_video(provider: Any, video_id: str) -> tuple[str, Any | None, str]:
-    deadline = time.monotonic() + max(0.0, provider.video_timeout_seconds)
+    deadline = time.monotonic() + max(0.0, provider.timeout_seconds)
     latest: Any = None
     while True:
         response = httpx.get(
-            provider.origin_endpoint(provider.video_result_path),
+            provider.result_endpoint,
             params={"video_id": video_id},
             headers=_headers(provider.api_key),
             timeout=provider.request_timeout_seconds,
@@ -222,7 +241,7 @@ def _poll_video(provider: Any, video_id: str) -> tuple[str, Any | None, str]:
             return "failed", latest, "视频任务完成但响应中没有视频 URL"
         if time.monotonic() >= deadline:
             return "timeout", latest, "视频生成轮询超时"
-        interval = max(0.0, provider.video_poll_interval_seconds)
+        interval = max(0.0, provider.poll_interval_seconds)
         if interval:
             time.sleep(interval)
 
@@ -237,8 +256,8 @@ def video_generate(
 ) -> str | ToolExecutionResult:
     """Submit a video job and poll Agnes-AI until a playable URL is available."""
     try:
-        provider = _provider()
-        model = str(model or provider.video_model).strip()
+        provider = _video_provider()
+        model = _effective_model(model, provider.model)
         payload = {
             "model": model,
             "prompt": prompt,
@@ -248,7 +267,7 @@ def video_generate(
             **kwargs,
         }
         response = httpx.post(
-            provider.endpoint(provider.videos_path),
+            provider.endpoint,
             json=payload,
             headers=_headers(provider.api_key),
             timeout=max(provider.request_timeout_seconds, 300.0),
@@ -291,7 +310,6 @@ IMAGE_GENERATE_SCHEMA = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "图像描述提示词"},
-            "model": {"type": "string", "description": "可选模型名称"},
             "size": {"type": "string", "description": "图像尺寸"},
             "quality": {"type": "string", "description": "质量等级"},
             "n": {"type": "integer", "minimum": 1, "maximum": 4},
@@ -310,7 +328,6 @@ IMAGE_EDIT_SCHEMA = {
             "image_path": {"type": "string", "description": "输入图像路径或 URL"},
             "prompt": {"type": "string", "description": "编辑提示词"},
             "mask_path": {"type": "string", "description": "可选遮罩路径"},
-            "model": {"type": "string", "description": "可选模型名称"},
             "size": {"type": "string", "description": "输出尺寸"},
             "n": {"type": "integer", "minimum": 1, "maximum": 4},
         },
@@ -325,7 +342,6 @@ VIDEO_GENERATE_SCHEMA = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "视频描述提示词"},
-            "model": {"type": "string", "description": "可选模型名称"},
             "duration": {"type": "integer", "default": 5},
             "resolution": {"type": "string", "default": "720p"},
             "fps": {"type": "integer", "default": 24},
@@ -340,7 +356,7 @@ registry.register(
     toolset="media",
     schema=IMAGE_GENERATE_SCHEMA,
     handler=lambda args, **kw: image_generate(**dict(args or {})),
-    check_fn=multimodal_provider_configured,
+    check_fn=image_generation_configured,
     emoji="🎨",
 )
 registry.register(
@@ -348,7 +364,7 @@ registry.register(
     toolset="media",
     schema=IMAGE_EDIT_SCHEMA,
     handler=lambda args, **kw: image_edit(**dict(args or {})),
-    check_fn=multimodal_provider_configured,
+    check_fn=image_generation_configured,
     emoji="🖼️",
 )
 registry.register(
@@ -356,7 +372,7 @@ registry.register(
     toolset="media",
     schema=VIDEO_GENERATE_SCHEMA,
     handler=lambda args, **kw: video_generate(**dict(args or {})),
-    check_fn=multimodal_provider_configured,
+    check_fn=video_generation_configured,
     emoji="🎬",
 )
 

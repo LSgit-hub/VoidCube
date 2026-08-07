@@ -348,21 +348,23 @@ DEFAULT_CONFIG = {
     "providers": {},
     "fallback_providers": [],
     "credential_pool_strategies": {},
-    "multimodal": {
+    "image_generation": {
         "provider": "agnes-ai",
         "api_key_env": "AGNES_API_KEY",
-        "base_url": "https://api.agnes-ai.cn/v1",
-        "language_model": "agnes-2.5-flash",
-        "image_model": "agnes-image-2.1-flash",
-        "video_model": "agnes-video-v2.0",
-        "chat_completions_path": "/chat/completions",
-        "image_generations_path": "/images/generations",
-        "image_edits_path": "/images/edits",
-        "videos_path": "/videos",
-        "video_result_path": "/agnesapi",
+        "endpoint": "https://api.agnes-ai.cn/v1/images/generations",
+        "edit_endpoint": "https://api.agnes-ai.cn/v1/images/edits",
+        "model": "agnes-image-2.1-flash",
         "request_timeout_seconds": 120,
-        "video_poll_interval_seconds": 3,
-        "video_timeout_seconds": 600,
+    },
+    "video_generation": {
+        "provider": "agnes-ai",
+        "api_key_env": "AGNES_API_KEY",
+        "endpoint": "https://api.agnes-ai.cn/v1/videos",
+        "result_endpoint": "https://api.agnes-ai.cn/agnesapi",
+        "model": "agnes-video-v2.0",
+        "request_timeout_seconds": 120,
+        "poll_interval_seconds": 3,
+        "timeout_seconds": 600,
     },
     "toolsets": ["VoidCube-cli"],
     "agent": {
@@ -1081,7 +1083,7 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
     "AGNES_API_KEY": {
-        "description": "Agnes-AI key for the dedicated multimodal provider",
+        "description": "Shared Agnes-AI key for image and video generation",
         "prompt": "Agnes-AI API key",
         "url": "https://api.agnes-ai.cn/",
         "tools": ["image_generate", "image_edit", "video_generate"],
@@ -1290,7 +1292,8 @@ def check_config_version() -> Tuple[int, int]:
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "runtime", "providers", "fallback_model",
-    "fallback_providers", "credential_pool_strategies", "multimodal", "toolsets",
+    "fallback_providers", "credential_pool_strategies", "image_generation",
+    "video_generation", "toolsets",
     "agent", "terminal", "display", "clarify", "compression", "delegation",
     "auxiliary", "context", "memory", "gateway", "supervisor",
 }
@@ -1913,7 +1916,8 @@ def _expand_env_vars(obj):
 _RUNTIME_MAPPING_SECTIONS = (
     "runtime",
     "providers",
-    "multimodal",
+    "image_generation",
+    "video_generation",
     "agent",
     "display",
     "terminal",
@@ -1930,6 +1934,7 @@ _UNUSED_DISPLAY_COMMAND_KEY = "tool_progress_" + "command"
 def _normalize_runtime_mapping_sections(config: Dict[str, Any]) -> Dict[str, Any]:
     """Restore required mapping sections when user YAML gives them another type."""
     normalized = dict(config or {})
+    normalized.pop("multimodal", None)
     for section in _RUNTIME_MAPPING_SECTIONS:
         if isinstance(normalized.get(section), dict):
             continue
