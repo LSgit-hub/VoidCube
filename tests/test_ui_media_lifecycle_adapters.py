@@ -64,13 +64,24 @@ def test_media_state_queue_and_controls_share_one_canonical_state():
     assert state["current"]["media_id"] == first["media_id"]
     assert [item["media_id"] for item in queue] == [second["media_id"]]
 
+    third = enqueue_media_state(
+        context=context(),
+        media={"url": "https://example.com/c.mp3", "title": "C"},
+        queue_mode="enqueue",
+    )
+    selected = control_media_state(
+        context=context(), action="select", media_id=third["media_id"]
+    )
+    assert selected["media_id"] == third["media_id"]
+    assert [item["media_id"] for item in queue] == [second["media_id"]]
+
     paused = control_media_state(context=context(), action="pause")
     assert paused["playback"] == "paused"
     resumed = control_media_state(context=context(), action="resume")
     assert resumed["playback"] == "playing"
 
     advanced = control_media_state(
-        context=context(), action="ended", media_id=first["media_id"]
+        context=context(), action="ended", media_id=third["media_id"]
     )
     assert advanced["media_id"] == second["media_id"]
     assert not queue

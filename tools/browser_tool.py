@@ -408,6 +408,70 @@ def _get_chrome_install_hint() -> str:
     )
 
 
+def _install_chrome() -> bool:
+    """Auto-install Chrome for Testing into ``~/.VoidCube/chrome/``.
+
+    Blocks until the download completes (typically 30–120 seconds).  After a
+    successful install the ``_resolve_chrome_executable`` cache is invalidated
+    so the next lookup picks up the new binary.
+
+    Returns:
+        ``True`` when Chrome was installed and is now resolvable.
+    """
+    global _chrome_path_resolved, _cached_chrome_path
+
+    chrome_dir = Path.home() / ".VoidCube" / "chrome"
+    chrome_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve npx — prefer VoidCube-managed Node when available
+    npx = shutil.which("npx")
+    if not npx:
+        VoidCube_home = get_VoidCube_home()
+        managed_npx = VoidCube_home / "node" / "bin" / ("npx.cmd" if sys.platform == "win32" else "npx")
+        if managed_npx.exists():
+            npx = str(managed_npx)
+
+    if not npx:
+        logger.warning("Cannot auto-install Chrome: npx not found")
+        return False
+
+    logger.info(
+        "Chrome for Testing not found — installing to %s (428 MB, may take 1–2 min)...",
+        chrome_dir,
+    )
+    try:
+        result = subprocess.run(
+            [
+                npx, "--yes", "@puppeteer/browsers",
+                "install", "chrome@stable",
+                "--path", str(chrome_dir.parent),
+            ],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            stderr_tail = (result.stderr or "")[-300:]
+            logger.warning("Chrome install failed (rc=%d): %s", result.returncode, stderr_tail)
+            return False
+
+        # Invalidate cache so the resolver re-scans
+        _chrome_path_resolved = False
+        _cached_chrome_path = None
+
+        chrome_exe = _resolve_chrome_executable()
+        if chrome_exe:
+            logger.info("Chrome installed: %s", chrome_exe)
+            return True
+
+        logger.warning("Chrome installed but resolver could not find the executable at %s", chrome_dir)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("Chrome auto-install timed out after 5 min")
+        return False
+    except Exception as exc:
+        logger.warning("Chrome auto-install error: %s", exc)
+        return False
+
+
 def _is_chrome_missing() -> bool:
     """Return True when no Chrome executable can be found."""
     return _resolve_chrome_executable() is None
@@ -1073,20 +1137,21 @@ def _run_browser_command(
         logger.warning("browser command blocked on Termux: %s", error)
         return {"success": False, "error": error}
 
-    # ── Chrome availability check ──
+    # ── Chrome auto-install (local mode, first-use only) ──
     if _is_local_mode() and _is_chrome_missing():
-        install_hint = _get_chrome_install_hint()
-        chrome_dir = Path.home() / ".VoidCube" / "chrome"
-        return {
-            "success": False,
-            "error": (
-                "Chrome/Chromium 未安装。请用终端工具运行以下命令安装（约 428MB）：\n"
-                f"  {install_hint}\n"
-                f"安装后 Chrome 将位于 {chrome_dir}，browser 工具会自动找到它。"
-            ),
-            "_chrome_missing": True,
-            "_install_hint": install_hint,
-        }
+        if not _install_chrome():
+            install_hint = _get_chrome_install_hint()
+            chrome_dir = Path.home() / ".VoidCube" / "chrome"
+            return {
+                "success": False,
+                "error": (
+                    "Chrome/Chromium 未安装且自动安装失败。请用终端工具运行：\n"
+                    f"  {install_hint}\n"
+                    f"安装后 Chrome 将位于 {chrome_dir}，browser 工具会自动找到它。"
+                ),
+                "_chrome_missing": True,
+                "_install_hint": install_hint,
+            }
 
     from tools.interrupt import is_interrupted
     if is_interrupted():

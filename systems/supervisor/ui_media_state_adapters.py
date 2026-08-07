@@ -78,7 +78,12 @@ def control_media_state(
     current = context.current_media
     normalized_action = str(action or "").strip().lower()
     requested_id = str(media_id or "").strip()
-    if requested_id and current and requested_id != current.get("media_id"):
+    if (
+        normalized_action != "select"
+        and requested_id
+        and current
+        and requested_id != current.get("media_id")
+    ):
         return current
     if normalized_action in {"stop", "clear"}:
         context.media_queue.clear()
@@ -92,4 +97,13 @@ def control_media_state(
     if normalized_action in {"next", "ended"}:
         next_item = context.media_queue.popleft() if context.media_queue else None
         return _stamp_current(context=context, current=next_item)
+    if normalized_action == "select":
+        selected = next(
+            (item for item in context.media_queue if item.get("media_id") == requested_id),
+            None,
+        )
+        if selected is None:
+            return current
+        context.media_queue.remove(selected)
+        return _stamp_current(context=context, current=selected)
     raise ValueError(f"unsupported media action: {normalized_action}")

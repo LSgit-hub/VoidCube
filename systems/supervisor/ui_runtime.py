@@ -159,6 +159,9 @@ class SupervisorUIRuntime:
     def media_queue_length(self) -> int:
         return len(self.media_queue)
 
+    def media_queue_items(self) -> list[JsonDict]:
+        return [dict(item) for item in self.media_queue]
+
     def record_activity(
         self,
         event_type: str,
@@ -261,6 +264,7 @@ class SupervisorUIRuntime:
             current_media=lambda: self.current_media,
             current_revision=lambda: self.media_revision,
             queue_length=self.media_queue_length,
+            queue_items=self.media_queue_items,
         )
 
     async def enqueue_media_endpoint(self, request: Request) -> JsonDict:
@@ -270,6 +274,7 @@ class SupervisorUIRuntime:
             current_revision=lambda: self.media_revision,
             queue_length=self.media_queue_length,
             current_media=lambda: self.current_media,
+            queue_items=self.media_queue_items,
         )
 
     async def control_media_endpoint(self, request: Request) -> JsonDict:
@@ -278,6 +283,7 @@ class SupervisorUIRuntime:
             control_media=self.control_media,
             current_revision=lambda: self.media_revision,
             queue_length=self.media_queue_length,
+            queue_items=self.media_queue_items,
         )
 
     async def _load_observation_input_snapshot(

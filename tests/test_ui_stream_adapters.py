@@ -53,6 +53,7 @@ async def test_media_sse_adapter_emits_revision_and_enqueue_body_is_normalized()
             "title": "Audio",
             "_revision": 3,
         },
+        queue_items=lambda: [{"media_id": "next-1", "title": "Next"}],
         interval_seconds=0,
     )
     chunk = await media_response.body_iterator.__anext__()
@@ -60,6 +61,7 @@ async def test_media_sse_adapter_emits_revision_and_enqueue_body_is_normalized()
     assert "event: play" in payload
     assert '"revision":3' in payload
     assert '"auto_play":true' in payload
+    assert '"queue":[{"media_id":"next-1","title":"Next"}]' in payload
 
     assert normalize_media_enqueue_body(
         {"url": "  https://example.com/a.mp3  ", "type": "audio"}

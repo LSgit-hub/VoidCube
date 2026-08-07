@@ -714,7 +714,13 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert "const panel = dockPanelFor(panelOpen);" in UI_HTML
     assert "name.charAt(0).toUpperCase()" not in UI_HTML
     assert "failed:'执行失败'" in UI_HTML
-    assert UI_HTML.index('id="mediaBar"') < UI_HTML.index("<script>")
+    assert UI_HTML.index('id="panelMedia"') < UI_HTML.index("<script>")
+    assert 'id="mediaQueueList"' in UI_HTML
+    assert 'data-panel="media"' in UI_HTML
+    assert '.dock-btn.media-dock-btn {' in UI_HTML
+    assert 'left: 50%;' in UI_HTML
+    assert 'position: absolute;' in UI_HTML
+    assert 'class="dock-sep media-sep"' in UI_HTML
     assert 'data-panel="schedules"' in UI_HTML
     assert "fetch('/scheduled-tasks?include_completed=true'" in UI_HTML
     assert "openPanel('schedules')" in UI_HTML
@@ -3565,7 +3571,21 @@ def test_media_http_api_supports_queue_and_control_actions(tmp_path):
     )
     assert queued.status_code == 200
     assert queued.json()["queue_length"] == 1
+    assert queued.json()["queue"][0]["title"] == "第二项"
     assert queued.json()["current"]["media_id"] == first_media["media_id"]
+
+    selected = client.post(
+        "/ui/media/control",
+        json={
+            "action": "select",
+            "media_id": queued.json()["queue"][0]["media_id"],
+        },
+    )
+    assert selected.status_code == 200
+    assert selected.json()["current"]["title"] == "第二项"
+    assert selected.json()["queue"] == []
+
+    first_media = selected.json()["current"]
 
     paused = client.post(
         "/ui/media/control",
@@ -3579,7 +3599,7 @@ def test_media_http_api_supports_queue_and_control_actions(tmp_path):
         json={"action": "next", "media_id": first_media["media_id"]},
     )
     assert advanced.status_code == 200
-    assert advanced.json()["current"]["title"] == "第二项"
+    assert advanced.json()["current"] is None
 
     stopped = client.post("/ui/media/control", json={"action": "stop"})
     assert stopped.status_code == 200

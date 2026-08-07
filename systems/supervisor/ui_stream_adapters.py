@@ -65,6 +65,7 @@ def media_events(
     current_media: Callable[[], Optional[Dict[str, Any]]],
     current_revision: Callable[[], int] = lambda: 0,
     queue_length: Callable[[], int] = lambda: 0,
+    queue_items: Callable[[], list[Dict[str, Any]]] = lambda: [],
     interval_seconds: float = 0.5,
 ) -> StreamingResponse:
     last_revision = -1
@@ -93,12 +94,17 @@ def media_events(
                             "enqueued_at": current.get("_enqueued_at", ""),
                             "revision": revision,
                             "queue_remaining": queue_length(),
+                            "queue": queue_items(),
                         },
                     )
                 else:
                     yield format_supervisor_ui_event(
                         "stop",
-                        {"revision": revision, "queue_remaining": 0},
+                        {
+                            "revision": revision,
+                            "queue_remaining": queue_length(),
+                            "queue": queue_items(),
+                        },
                     )
             await asyncio.sleep(interval_seconds)
 
@@ -141,6 +147,7 @@ async def enqueue_media_request(
     current_revision: Callable[[], int],
     queue_length: Callable[[], int] = lambda: 0,
     current_media: Callable[[], Optional[Dict[str, Any]]] = lambda: None,
+    queue_items: Callable[[], list[Dict[str, Any]]] = lambda: [],
 ) -> Dict[str, Any]:
     try:
         body = await request.json()
@@ -153,6 +160,7 @@ async def enqueue_media_request(
         "status": "ok",
         "queued": pending_count + (1 if current else 0),
         "queue_length": pending_count,
+        "queue": queue_items(),
         "current": current,
         "revision": current_revision(),
     }
@@ -164,6 +172,7 @@ async def control_media_request(
     control_media: Callable[..., Optional[Dict[str, Any]]],
     current_revision: Callable[[], int],
     queue_length: Callable[[], int],
+    queue_items: Callable[[], list[Dict[str, Any]]] = lambda: [],
 ) -> Dict[str, Any]:
     try:
         body = await request.json()
@@ -172,7 +181,7 @@ async def control_media_request(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
     action = str(body.get("action") or "").strip().lower()
-    if action not in {"pause", "resume", "next", "ended", "stop", "clear"}:
+    if action not in {"pause", "resume", "next", "ended", "select", "stop", "clear"}:
         raise HTTPException(status_code=400, detail="不支持的媒体控制动作")
     current = control_media(action, str(body.get("media_id") or "").strip())
     return {
@@ -180,5 +189,6 @@ async def control_media_request(
         "action": action,
         "current": current,
         "queue_length": queue_length(),
+        "queue": queue_items(),
         "revision": current_revision(),
     }

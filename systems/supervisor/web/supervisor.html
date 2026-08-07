@@ -1945,6 +1945,32 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .dock-btn.active .db-label {
   color: var(--gold);
 }
+/* 播放器是动作条的独立中心控件，不参与两侧按钮排布 */
+.dock-btn.media-dock-btn {
+  position: absolute;
+  left: 50%;
+  top: -14px;
+  transform: translateX(-50%);
+  width: 72px;
+  height: 62px;
+  flex: none;
+  border: 1px solid rgba(226,176,74,.22);
+  border-radius: 10px 10px 7px 7px;
+  background: linear-gradient(180deg, rgba(48,34,24,.98), rgba(27,18,13,.98));
+  box-shadow: 0 -4px 16px rgba(0,0,0,.34), 0 0 0 3px rgba(20,12,8,.76);
+  z-index: 4;
+}
+.dock-btn.media-dock-btn:hover {
+  transform: translateX(-50%) translateY(-2px);
+  background: linear-gradient(180deg, rgba(65,45,28,.99), rgba(34,22,15,.99));
+}
+.dock-btn.media-dock-btn.active {
+  background: linear-gradient(180deg, rgba(75,53,31,.99), rgba(38,25,16,.99));
+  box-shadow: 0 -4px 18px rgba(0,0,0,.4), 0 0 0 3px rgba(20,12,8,.82), 0 0 16px rgba(226,176,74,.2);
+}
+.dock-btn.media-dock-btn .db-icon { font-size: 22px; }
+.dock-btn.media-dock-btn .db-label { color: rgba(244,228,188,.72); font-size: 9px; }
+.dock-sep.media-sep { display: none; }
 /* 分隔线 */
 .dock-sep {
   width: 1px; height: 22px;
@@ -3160,83 +3186,68 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .drill-link:hover { background: rgba(226,176,74,.24); }
 
-/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  媒体播放器  ——  底部滑入条
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
-.media-bar {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 9000;
-  background: linear-gradient(180deg, #1e1a16f2 0%, #15120e 100%);
-  border-top: 1px solid rgba(226,176,74,.3);
-  display: flex; align-items: stretch; gap: 0;
-  height: 52px;
-  transform: translateY(100%);
-  transition: transform .35s cubic-bezier(.4,0,.2,1);
-  font-family: inherit; color: #dad0c0;
+/* ── Dock 媒体展板 ── */
+.dock-btn.media-dock-btn::after {
+  content: ""; position: absolute; right: 12px; top: 8px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--mint); box-shadow: 0 0 8px rgba(111,198,160,.7);
+  opacity: 0; transform: scale(.6); transition: opacity .2s, transform .2s;
 }
-.media-bar.visible { transform: translateY(0); }
-.media-bar .mb-info {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 14px;
+.dock-btn.media-dock-btn.has-media::after { opacity: 1; transform: scale(1); }
+#panelMedia { max-width: 1080px; max-height: min(620px, calc(100vh - 64px)); }
+.media-board {
+  display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .8fr);
+  min-height: 360px; overflow: hidden;
 }
-.media-bar .mb-icon {
-  font-size: 18px; flex-shrink: 0; opacity: .85;
+.media-stage {
+  min-width: 0; padding: 14px; display: grid; grid-template-rows: minmax(220px, 1fr) auto; gap: 12px;
+  background: #100f0d; border-right: 1px solid rgba(255,255,255,.07);
 }
- .media-bar .mb-title {
-  font-size: 12px; font-weight: 600; line-height: 1.3;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 320px;
- }
- .media-bar .mb-status {
-   font-size: 11px; color: #a99b87; white-space: nowrap;
-   margin-left: 4px;
- }
-.media-bar .mb-actions {
-  display: flex; align-items: center; gap: 2px; flex-shrink: 0;
-  padding-right: 8px;
+.media-viewport {
+  display: flex; align-items: center; justify-content: center; min-height: 220px;
+  background: #080808; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; overflow: hidden;
 }
-.media-bar button {
-  background: none; border: none; color: #dad0c0;
-  font-size: 16px; padding: 8px 12px; cursor: pointer;
-  border-radius: 6px; transition: background .2s;
-  line-height: 1;
+.media-viewport iframe, .media-viewport video { width: 100%; height: 100%; min-height: 300px; border: 0; background: #000; }
+.media-viewport audio { width: min(480px, 90%); }
+.media-empty { color: var(--text-muted); text-align: center; font-size: 11px; line-height: 1.6; padding: 24px; }
+.media-empty strong { display: block; color: var(--text-primary); font-size: 13px; margin-bottom: 4px; }
+.media-now { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.media-now-icon { font-size: 20px; flex: 0 0 auto; }
+.media-now-copy { min-width: 0; flex: 1; }
+.media-now-title { color: var(--text-primary); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-now-meta { color: var(--text-muted); font-size: 9.5px; margin-top: 3px; }
+.media-controls { display: flex; align-items: center; gap: 4px; }
+.media-control {
+  width: 34px; height: 32px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
+  background: rgba(255,255,255,.05); color: var(--text-primary); cursor: pointer; font-size: 15px;
 }
-.media-bar button:hover { background: rgba(226,176,74,.18); }
-  .media-bar button.mb-close { font-size: 18px; opacity: .6; }
-.media-bar button.mb-close:hover { opacity: 1; background: rgba(220,80,60,.25); }
-
-/* 展开面板 (iframe / video) */
-.media-panel {
-  position: fixed; inset: 0; z-index: 8999;
-  background: rgba(0,0,0,.88);
-  display: none; align-items: center; justify-content: center;
+.media-control:hover { background: rgba(226,176,74,.15); border-color: rgba(226,176,74,.3); }
+.media-control.danger:hover { background: rgba(232,130,110,.18); border-color: rgba(232,130,110,.4); }
+.media-queue-pane { min-width: 0; display: grid; grid-template-rows: auto 1fr; background: rgba(255,255,255,.018); }
+.media-queue-head { padding: 13px 14px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.media-queue-title { color: var(--text-primary); font-size: 11px; font-weight: 700; }
+.media-queue-count { color: var(--text-muted); font-size: 9.5px; margin-top: 3px; }
+.media-queue-list { overflow-y: auto; padding: 8px; display: grid; align-content: start; gap: 6px; }
+.media-queue-item {
+  width: 100%; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  padding: 9px; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; background: rgba(255,255,255,.03);
+  color: inherit; text-align: left; font-family: inherit; cursor: pointer;
 }
-.media-panel.open { display: flex; }
-.media-panel iframe, .media-panel video, .media-panel audio {
-  max-width: 92vw; max-height: 86vh; border-radius: 10px;
-  border: none; background: #000;
-}
-.media-panel iframe { width: 854px; height: 480px; }
-.media-panel video { max-width: 90vw; max-height: 85vh; }
-.media-panel audio { width: 420px; height: 54px; background: #1a1714; border-radius: 8px; }
-.media-panel .mp-close {
-  position: absolute; top: 18px; right: 22px;
-  background: rgba(255,255,255,.08); border: none; color: #fff;
-  font-size: 22px; padding: 10px 14px; cursor: pointer;
-  border-radius: 8px; transition: background .2s;
-}
-  .media-panel .mp-close:hover { background: rgba(220,60,50,.7); }
- .media-panel .mp-message {
-   max-width: min(620px, 88vw); padding: 22px 26px; text-align: center;
-   color: #e6ddcf; background: #211c17; border: 1px solid rgba(226,176,74,.28);
-   border-radius: 10px; line-height: 1.6;
- }
- .media-panel .mp-message a { color: #e2b04a; }
-
-@media (max-width: 640px) {
-  .media-bar .mb-title { max-width: 160px; }
-  .media-panel iframe { width: 100vw; height: 56vw; }
-  .media-panel audio { width: 88vw; }
+.media-queue-item.current { border-color: rgba(111,198,160,.35); background: rgba(111,198,160,.08); cursor: default; }
+.media-queue-item:not(.current):hover { background: rgba(255,255,255,.065); border-color: rgba(226,176,74,.25); }
+.media-queue-item-icon { font-size: 15px; text-align: center; }
+.media-queue-item-copy { min-width: 0; }
+.media-queue-item-title { font-size: 10.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media-queue-item-meta { color: var(--text-muted); font-size: 8.5px; margin-top: 2px; }
+.media-queue-item-state { color: var(--mint); font-size: 8.5px; white-space: nowrap; }
+@media (max-width: 720px) {
+  #panelMedia { max-height: calc(100vh - 54px); }
+  .media-board { grid-template-columns: 1fr; grid-template-rows: auto minmax(130px, 1fr); min-height: 0; }
+  .media-stage { min-height: 280px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); padding: 10px; }
+  .media-viewport iframe, .media-viewport video { min-height: 210px; }
+  .media-now { display: flex; flex-wrap: wrap; }
+  .media-now-copy { flex: 1 1 calc(100% - 40px); }
+  .media-controls { flex: 0 0 100%; width: 100%; justify-content: flex-end; }
 }
 </style>
 </head>
@@ -3546,6 +3557,38 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         </div>
       </div>
 
+      <!-- 播放器与播放列表 -->
+      <div class="dock-panel" id="panelMedia">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">▶</span>播放器</div>
+          <button class="panel-close" data-panel="media" title="关闭">×</button>
+        </div>
+        <div class="media-board">
+          <section class="media-stage" aria-label="媒体播放区域">
+            <div class="media-viewport" id="mediaViewport"></div>
+            <div class="media-now">
+              <span class="media-now-icon" id="mediaNowIcon">▶</span>
+              <div class="media-now-copy">
+                <div class="media-now-title" id="mediaNowTitle">没有正在播放的内容</div>
+                <div class="media-now-meta" id="mediaNowMeta">支持 B 站视频和直链音频、视频</div>
+              </div>
+              <div class="media-controls">
+                <button class="media-control" id="mediaPlayToggle" title="播放或暂停">⏯</button>
+                <button class="media-control" id="mediaNext" title="下一项">⏭</button>
+                <button class="media-control danger" id="mediaStop" title="停止并清空列表">■</button>
+              </div>
+            </div>
+          </section>
+          <aside class="media-queue-pane" aria-label="播放列表">
+            <div class="media-queue-head">
+              <div class="media-queue-title">播放列表</div>
+              <div class="media-queue-count" id="mediaQueueCount">0 项</div>
+            </div>
+            <div class="media-queue-list" id="mediaQueueList"></div>
+          </aside>
+        </div>
+      </div>
+
       <!-- ⚙️ 观察面板 -->
       <div class="dock-panel" id="panelObservation">
         <div class="panel-header">
@@ -3657,7 +3700,12 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-icon">📊</span>
         <span class="db-label">判断</span>
       </button>
-      <span class="dock-sep"></span>
+      <span class="dock-sep media-sep"></span>
+      <button class="dock-btn media-dock-btn" id="mediaDockButton" data-panel="media" title="播放器和播放列表">
+        <span class="db-icon">▶</span>
+        <span class="db-label">播放</span>
+      </button>
+      <span class="dock-sep media-sep"></span>
       <button class="dock-btn" data-panel="observation" title="观察">
         <span class="db-icon">⚙️</span>
         <span class="db-label">观察</span>
@@ -3692,26 +3740,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
   </main>
-</div>
-
-<!-- ── 媒体播放器 ── -->
-<div class="media-bar" id="mediaBar">
-  <div class="mb-info">
-    <span class="mb-icon" id="mbIcon">🎵</span>
-    <span class="mb-title" id="mbTitle"></span>
-    <span class="mb-status" id="mbStatus"></span>
-  </div>
-  <div class="mb-actions">
-    <button id="mbPlayToggle" title="播放/暂停">⏯</button>
-    <button id="mbNext" title="下一项">⏭</button>
-    <button id="mbExpand" title="展开播放窗口">⛶</button>
-    <button class="mb-close" id="mbClose" title="关闭">✕</button>
-  </div>
-</div>
-
-<div class="media-panel" id="mediaPanel">
-  <button class="mp-close" id="mpClose" title="关闭">✕</button>
-  <div id="mpContent"></div>
 </div>
 
 <script>
@@ -3975,6 +4003,10 @@ function openPanel(name) {
     loadEvolutionPromotionAudit();
   }
   if (name === 'settings') loadReminderPolicy();
+  if (name === 'media') {
+    renderMediaBoard();
+    mountCurrentMedia();
+  }
 }
 
 let scheduledTaskSnapshot = null;
@@ -6562,15 +6594,18 @@ function syncClock() {
 syncClock();
 setInterval(syncClock, 1000);
 
-/* ── 媒体播放器 ── */
-const mediaBar = document.getElementById('mediaBar');
-const mediaPanel = document.getElementById('mediaPanel');
-const mpContent = document.getElementById('mpContent');
-const mbTitle = document.getElementById('mbTitle');
-const mbIcon = document.getElementById('mbIcon');
-const mbStatus = document.getElementById('mbStatus');
+/* ── Dock 媒体播放器 ── */
+const mediaViewport = document.getElementById('mediaViewport');
+const mediaNowTitle = document.getElementById('mediaNowTitle');
+const mediaNowMeta = document.getElementById('mediaNowMeta');
+const mediaNowIcon = document.getElementById('mediaNowIcon');
+const mediaQueueList = document.getElementById('mediaQueueList');
+const mediaQueueCount = document.getElementById('mediaQueueCount');
+const mediaDockButton = document.getElementById('mediaDockButton');
 let currentMedia = null;
+let mediaQueue = [];
 let embeddedPlayer = null;
+let mountedMediaId = '';
 
 function mediaTypeIcon(t) {
   const map = { bilibili: '▶', video: '🎬', audio: '🎵' };
@@ -6603,45 +6638,26 @@ function bilibiliEmbedUrl(url) {
   return null;
 }
 
-function showMediaBar(media) {
-  const sameMedia = currentMedia && currentMedia.media_id && currentMedia.media_id === media.media_id;
-  const previousPlayback = currentMedia && currentMedia.playback;
-  currentMedia = media;
-  const type = resolveMediaType(media);
-  mbIcon.textContent = mediaTypeIcon(type);
-  mbTitle.textContent = media.title || media.url;
-  mbStatus.textContent = media.queue_remaining ? `队列 ${media.queue_remaining}` : (media.playback === 'paused' ? '已暂停' : '');
-  mediaBar.classList.add('visible');
-  if (sameMedia) {
-    if (previousPlayback === 'paused' && media.playback === 'playing' && !embeddedPlayer) {
-      openMediaPanel();
-    } else {
-      applyPlaybackState();
-    }
-  }
-  return sameMedia;
-}
-
-function hideMediaBar() {
-  mediaBar.classList.remove('visible');
-  closeMediaPanel();
-  currentMedia = null;
-  mbStatus.textContent = '';
-}
-
-function closeMediaPanel() {
-  mediaPanel.classList.remove('open');
-  mpContent.innerHTML = '';
+function teardownMediaPlayer() {
   if (embeddedPlayer) {
     try { embeddedPlayer.pause(); } catch(e) {}
     embeddedPlayer = null;
   }
+  mountedMediaId = '';
+  if (mediaViewport) mediaViewport.replaceChildren();
 }
 
-function setMediaMessage(message, link) {
+function setMediaMessage(message, link, title) {
+  if (!mediaViewport) return;
+  mediaViewport.replaceChildren();
   const box = document.createElement('div');
-  box.className = 'mp-message';
-  box.textContent = message;
+  box.className = 'media-empty';
+  if (title) {
+    const heading = document.createElement('strong');
+    heading.textContent = title;
+    box.appendChild(heading);
+  }
+  box.appendChild(document.createTextNode(message));
   if (link) {
     box.appendChild(document.createElement('br'));
     const anchor = document.createElement('a');
@@ -6649,7 +6665,69 @@ function setMediaMessage(message, link) {
     anchor.textContent = '打开来源链接';
     box.appendChild(anchor);
   }
-  mpContent.appendChild(box);
+  mediaViewport.appendChild(box);
+}
+
+function mediaTypeLabel(media) {
+  const type = resolveMediaType(media);
+  return ({bilibili:'B 站视频', video:'直链视频', audio:'直链音频'})[type] || '未知媒体';
+}
+
+function renderMediaQueue() {
+  if (!mediaQueueList || !mediaQueueCount) return;
+  const items = currentMedia ? [currentMedia, ...mediaQueue] : mediaQueue.slice();
+  mediaQueueCount.textContent = items.length + ' 项' + (mediaQueue.length ? ' · 待播 ' + mediaQueue.length : '');
+  mediaQueueList.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'media-empty';
+    empty.textContent = '播放列表为空';
+    mediaQueueList.appendChild(empty);
+    return;
+  }
+  items.forEach((item, index) => {
+    const isCurrent = Boolean(currentMedia && item.media_id === currentMedia.media_id);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'media-queue-item' + (isCurrent ? ' current' : '');
+    row.disabled = isCurrent;
+    row.title = isCurrent ? '正在播放' : '立即播放此项';
+
+    const icon = document.createElement('span');
+    icon.className = 'media-queue-item-icon';
+    icon.textContent = mediaTypeIcon(resolveMediaType(item));
+    const copy = document.createElement('span');
+    copy.className = 'media-queue-item-copy';
+    const title = document.createElement('span');
+    title.className = 'media-queue-item-title';
+    title.textContent = item.title || item.url || '未命名媒体';
+    const meta = document.createElement('span');
+    meta.className = 'media-queue-item-meta';
+    meta.textContent = mediaTypeLabel(item);
+    copy.append(title, meta);
+    const state = document.createElement('span');
+    state.className = 'media-queue-item-state';
+    state.textContent = isCurrent ? (item.playback === 'paused' ? '已暂停' : '播放中') : String(index).padStart(2, '0');
+    row.append(icon, copy, state);
+    if (!isCurrent) row.addEventListener('click', () => requestMediaControl('select', item.media_id));
+    mediaQueueList.appendChild(row);
+  });
+}
+
+function renderMediaBoard() {
+  if (mediaDockButton) mediaDockButton.classList.toggle('has-media', Boolean(currentMedia || mediaQueue.length));
+  if (!currentMedia) {
+    if (mediaNowIcon) mediaNowIcon.textContent = '▶';
+    if (mediaNowTitle) mediaNowTitle.textContent = '没有正在播放的内容';
+    if (mediaNowMeta) mediaNowMeta.textContent = '支持 B 站视频和直链音频、视频';
+    if (panelOpen === 'media') setMediaMessage('Agent 加入媒体后会出现在这里。', '', '等待播放');
+  } else {
+    const type = resolveMediaType(currentMedia);
+    if (mediaNowIcon) mediaNowIcon.textContent = mediaTypeIcon(type);
+    if (mediaNowTitle) mediaNowTitle.textContent = currentMedia.title || currentMedia.url;
+    if (mediaNowMeta) mediaNowMeta.textContent = mediaTypeLabel(currentMedia) + ' · ' + (currentMedia.playback === 'paused' ? '已暂停' : '正在播放');
+  }
+  renderMediaQueue();
 }
 
 function applyPlaybackState() {
@@ -6659,8 +6737,8 @@ function applyPlaybackState() {
     if (paused) {
       embeddedPlayer.remove();
       embeddedPlayer = null;
-      mpContent.innerHTML = '';
-      setMediaMessage('B 站播放已暂停；继续播放时会重新载入视频。');
+      mountedMediaId = '';
+      setMediaMessage('继续播放时会重新载入视频。', '', 'B 站播放已暂停');
     }
     return;
   }
@@ -6668,7 +6746,7 @@ function applyPlaybackState() {
     embeddedPlayer.pause();
   } else {
     embeddedPlayer.play().catch(() => {
-      mbStatus.textContent = '点击播放';
+      if (mediaNowMeta) mediaNowMeta.textContent = mediaTypeLabel(currentMedia) + ' · 点击播放';
     });
   }
 }
@@ -6680,29 +6758,35 @@ async function requestMediaControl(action, mediaId) {
       body: JSON.stringify({action, media_id: mediaId || (currentMedia && currentMedia.media_id) || ''})
     });
     if (!response.ok) throw new Error('media control failed');
+    const payload = await response.json();
+    updateMediaState(payload.current || null, payload.queue || []);
   } catch(e) {
-    mbStatus.textContent = '控制失败';
+    if (mediaNowMeta) mediaNowMeta.textContent = '控制失败';
   }
 }
 
-function openMediaPanel() {
-  if (!currentMedia) return;
+function mountCurrentMedia() {
+  if (!currentMedia || panelOpen !== 'media') return;
+  if (mountedMediaId === currentMedia.media_id && embeddedPlayer) {
+    applyPlaybackState();
+    return;
+  }
+  teardownMediaPlayer();
   const type = resolveMediaType(currentMedia);
-  mpContent.innerHTML = '';
-  embeddedPlayer = null;
+  mountedMediaId = currentMedia.media_id || '';
 
   if (type === 'bilibili') {
     const embedUrl = bilibiliEmbedUrl(currentMedia.url);
     if (!embedUrl) {
-      setMediaMessage('需要完整的 B 站视频链接（BV 号或 av 号）。', currentMedia.url);
+      setMediaMessage('需要完整的 B 站视频链接（BV 号或 av 号）。', currentMedia.url, '无法嵌入');
     } else {
-    const iframe = document.createElement('iframe');
-    iframe.src = embedUrl;
-    iframe.allow = 'autoplay';
-    iframe.allowFullscreen = true;
-    iframe.referrerPolicy = 'no-referrer-when-downgrade';
-    mpContent.appendChild(iframe);
-    embeddedPlayer = iframe;
+      const iframe = document.createElement('iframe');
+      iframe.src = embedUrl;
+      iframe.allow = 'autoplay; fullscreen';
+      iframe.allowFullscreen = true;
+      iframe.referrerPolicy = 'no-referrer-when-downgrade';
+      mediaViewport.appendChild(iframe);
+      embeddedPlayer = iframe;
     }
   } else if (type === 'video') {
     const video = document.createElement('video');
@@ -6711,10 +6795,9 @@ function openMediaPanel() {
     video.controls = true;
     video.autoplay = true;
     video.preload = 'metadata';
-    video.style.maxWidth = '90vw'; video.style.maxHeight = '85vh';
     video.addEventListener('ended', () => requestMediaControl('ended', mediaId));
-    video.addEventListener('error', () => { mbStatus.textContent = '视频无法播放'; });
-    mpContent.appendChild(video);
+    video.addEventListener('error', () => { if (mediaNowMeta) mediaNowMeta.textContent = '视频无法播放'; });
+    mediaViewport.appendChild(video);
     embeddedPlayer = video;
   } else if (type === 'audio') {
     const audio = document.createElement('audio');
@@ -6723,16 +6806,13 @@ function openMediaPanel() {
     audio.controls = true;
     audio.autoplay = true;
     audio.preload = 'metadata';
-    audio.style.width = '420px';
     audio.addEventListener('ended', () => requestMediaControl('ended', mediaId));
-    audio.addEventListener('error', () => { mbStatus.textContent = '音频无法播放'; });
-    mpContent.appendChild(audio);
+    audio.addEventListener('error', () => { if (mediaNowMeta) mediaNowMeta.textContent = '音频无法播放'; });
+    mediaViewport.appendChild(audio);
     embeddedPlayer = audio;
   } else {
-    setMediaMessage('这个链接不是可识别的 B 站视频或直链音视频。', currentMedia.url);
+    setMediaMessage('这个链接不是可识别的 B 站视频或直链音视频。', currentMedia.url, '无法播放');
   }
-
-  mediaPanel.classList.add('open');
   applyPlaybackState();
 }
 
@@ -6741,7 +6821,7 @@ function togglePlayPause() {
     if (currentMedia && currentMedia.playback === 'paused') {
       requestMediaControl('resume');
     } else {
-      openMediaPanel();
+      mountCurrentMedia();
     }
     return;
   }
@@ -6758,20 +6838,31 @@ function togglePlayPause() {
   } catch(e) {}
 }
 
-document.getElementById('mbPlayToggle').addEventListener('click', togglePlayPause);
-document.getElementById('mbNext').addEventListener('click', () => requestMediaControl('next'));
-document.getElementById('mbExpand').addEventListener('click', function() {
-  mediaPanel.classList.contains('open') ? closeMediaPanel() : openMediaPanel();
-});
-document.getElementById('mbClose').addEventListener('click', () => {
-  requestMediaControl('stop');
-  hideMediaBar();
-});
-document.getElementById('mpClose').addEventListener('click', closeMediaPanel);
+document.getElementById('mediaPlayToggle').addEventListener('click', togglePlayPause);
+document.getElementById('mediaNext').addEventListener('click', () => requestMediaControl('next'));
+document.getElementById('mediaStop').addEventListener('click', () => requestMediaControl('stop'));
 
-mediaPanel.addEventListener('click', function(e) {
-  if (e.target === mediaPanel) closeMediaPanel();
-});
+function updateMediaState(media, queue) {
+  const previousId = currentMedia && currentMedia.media_id;
+  const previousPlayback = currentMedia && currentMedia.playback;
+  currentMedia = media || null;
+  mediaQueue = Array.isArray(queue) ? queue : [];
+  renderMediaBoard();
+  if (!currentMedia) {
+    teardownMediaPlayer();
+    return;
+  }
+  const changed = previousId !== currentMedia.media_id;
+  if (changed) {
+    teardownMediaPlayer();
+    if (currentMedia.auto_play !== false) openPanel('media');
+    mountCurrentMedia();
+  } else if (previousPlayback === 'paused' && currentMedia.playback === 'playing' && !embeddedPlayer) {
+    mountCurrentMedia();
+  } else {
+    applyPlaybackState();
+  }
+}
 
 /* ── SSE: 媒体事件 ── */
 if ('EventSource' in window) {
@@ -6779,18 +6870,17 @@ if ('EventSource' in window) {
   mediaES.addEventListener('play', function(ev) {
     const media = JSON.parse(ev.data);
     if (media && media.url) {
-      const sameMedia = showMediaBar(media);
-      if (!sameMedia && media.auto_play !== false) openMediaPanel();
+      updateMediaState(media, media.queue || []);
     }
   });
-  mediaES.addEventListener('stop', function() { hideMediaBar(); });
+  mediaES.addEventListener('stop', function(ev) {
+    const payload = JSON.parse(ev.data || '{}');
+    updateMediaState(null, payload.queue || []);
+  });
 }
 
 /* ── 键盘快捷键 ── */
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && mediaPanel.classList.contains('open')) {
-    closeMediaPanel();
-  }
   if (e.key === ' ' && currentMedia && e.target === document.body) {
     e.preventDefault();
     togglePlayPause();
