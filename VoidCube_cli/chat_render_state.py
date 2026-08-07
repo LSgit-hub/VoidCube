@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -19,6 +19,9 @@ class CliStreamRenderState:
     reasoning_preview_buffer: str = ""
     deferred_content: str = ""
     reasoning_shown_this_turn: bool = False
+    in_code_fence: bool = False
+    code_fence_language: str = ""
+    code_fence_lines: list[str] = field(default_factory=list)
 
     def reset_stream(self) -> None:
         """Reset one model invocation while preserving user-turn history."""
@@ -33,6 +36,9 @@ class CliStreamRenderState:
         self.reasoning_buffer = ""
         self.reasoning_preview_buffer = ""
         self.deferred_content = ""
+        self.in_code_fence = False
+        self.code_fence_language = ""
+        self.code_fence_lines.clear()
 
     def begin_turn(self) -> None:
         """Reset all rendering state at the start of a user turn."""

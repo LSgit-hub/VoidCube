@@ -42,15 +42,15 @@ def register_management_commands(subparsers: argparse._SubParsersAction) -> None
         mcp_add_p.add_argument("--preset", help="Known MCP preset name")
         mcp_add_p.add_argument("--env", nargs="*", default=[], help="Environment variables for stdio servers (KEY=VALUE)")
 
-        mcp_rm_p = mcp_sub.add_parser("remove", aliases=["rm"], help="Remove an MCP server")
+        mcp_rm_p = mcp_sub.add_parser("remove", help="Remove an MCP server")
         mcp_rm_p.add_argument("name", help="Server name to remove")
 
-        mcp_sub.add_parser("list", aliases=["ls"], help="List configured MCP servers")
+        mcp_sub.add_parser("list", help="List configured MCP servers")
 
         mcp_test_p = mcp_sub.add_parser("test", help="Test MCP server connection")
         mcp_test_p.add_argument("name", help="Server name to test")
 
-        mcp_cfg_p = mcp_sub.add_parser("configure", aliases=["config"], help="Toggle tool selection")
+        mcp_cfg_p = mcp_sub.add_parser("configure", help="Toggle tool selection")
         mcp_cfg_p.add_argument("name", help="Server name to configure")
 
 

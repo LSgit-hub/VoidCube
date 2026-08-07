@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import textwrap
+from io import StringIO
 from collections.abc import Callable
 
 from VoidCube_cli.chat_render_state import CliStreamRenderState
@@ -191,16 +192,52 @@ class CliStreamRenderer:
         buffered = flush_text_line(self.state)
         if buffered:
             self._emit_response_line(buffered)
+        self._flush_unclosed_code_fence()
         if self.state.response_box_open:
             self._emit_line(
                 f"{_response_accent()}╰{'─' * (self._terminal_width() - 2)}╯{_RESET}"
             )
 
     def _emit_response_line(self, text: str) -> None:
+        fence = re.fullmatch(r"\s*```([^`]*)\s*", text)
+        if self.state.in_code_fence:
+            if fence:
+                self._emit_highlighted_code()
+            else:
+                self.state.code_fence_lines.append(text)
+            return
+        if fence:
+            self.state.in_code_fence = True
+            self.state.code_fence_language = fence.group(1).strip()
+            self.state.code_fence_lines.clear()
+            return
         if self.state.text_ansi:
             self._emit_line(f"{self.state.text_ansi}{text}{_RESET}")
         else:
             self._emit_line(text)
+
+    def _emit_highlighted_code(self) -> None:
+        code = "\n".join(self.state.code_fence_lines)
+        language = self.state.code_fence_language or "text"
+        for line in _highlight_code(code, language, self._terminal_width()):
+            self._emit_line(line)
+        self.state.in_code_fence = False
+        self.state.code_fence_language = ""
+        self.state.code_fence_lines.clear()
+
+    def _flush_unclosed_code_fence(self) -> None:
+        if not self.state.in_code_fence:
+            return
+        opening = f"```{self.state.code_fence_language}"
+        lines = (opening, *self.state.code_fence_lines)
+        self.state.in_code_fence = False
+        self.state.code_fence_language = ""
+        self.state.code_fence_lines.clear()
+        for line in lines:
+            if self.state.text_ansi:
+                self._emit_line(f"{self.state.text_ansi}{line}{_RESET}")
+            else:
+                self._emit_line(line)
 
 
 def _default_terminal_width() -> int:
@@ -208,6 +245,38 @@ def _default_terminal_width() -> int:
         return shutil.get_terminal_size().columns
     except Exception:
         return 80
+
+
+def _highlight_code(code: str, language: str, width: int) -> tuple[str, ...]:
+    """Render a complete fenced block once, falling back to literal text."""
+    if not code:
+        return ("",)
+    try:
+        from rich.console import Console
+        from rich.syntax import Syntax
+
+        buffer = StringIO()
+        console = Console(
+            file=buffer,
+            force_terminal=True,
+            color_system="truecolor",
+            width=max(20, width),
+            highlight=False,
+        )
+        console.print(
+            Syntax(
+                code,
+                language,
+                background_color="default",
+                line_numbers=False,
+                padding=0,
+                word_wrap=False,
+            )
+        )
+        rendered = buffer.getvalue().rstrip("\n")
+        return tuple(rendered.splitlines()) if rendered else (code,)
+    except Exception:
+        return tuple(code.splitlines()) or (code,)
 
 
 def _response_style() -> tuple[str, str]:

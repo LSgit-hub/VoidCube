@@ -73,8 +73,8 @@ def test_completed_event_uses_its_own_arguments_for_scrollback(monkeypatch) -> N
     observed = []
     monkeypatch.setattr(
         "agent.display.get_cute_tool_message",
-        lambda name, arguments, duration: observed.append(
-            (name, arguments, duration)
+        lambda name, arguments, duration, result: observed.append(
+            (name, arguments, duration, result)
         ) or "done",
     )
     host, _ = _host(tool_progress_mode="all")
@@ -94,8 +94,33 @@ def test_completed_event_uses_its_own_arguments_for_scrollback(monkeypatch) -> N
         emit_line=lines.append,
     )
 
-    assert observed == [("read_file", {"path": "README.md"}, 0.25)]
-    assert lines == ["  done"]
+    assert observed == [("read_file", {"path": "README.md"}, 0.25, "content")]
+    assert lines == ["  ✓ done"]
+
+
+def test_completed_error_has_explicit_failure_marker(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent.display.get_cute_tool_message",
+        lambda *_args, **_kwargs: "shell command",
+    )
+    host, _ = _host(tool_progress_mode="all")
+    lines = []
+
+    project_tool_event(
+        host,
+        ToolEvent.completed(
+            call_id="call-error",
+            name="shell",
+            arguments={"command": "false"},
+            result="failed",
+            duration=0.4,
+            is_error=True,
+        ),
+        append_autonomous_event=lambda *_args, **_kwargs: None,
+        emit_line=lines.append,
+    )
+
+    assert lines == ["  ✗ shell command"]
 
 
 def test_reasoning_and_subagent_events_do_not_mutate_cli_state() -> None:

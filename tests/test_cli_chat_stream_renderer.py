@@ -79,3 +79,33 @@ def test_reasoning_preview_is_bounded_unless_verbose() -> None:
     assert "line 0" in output[0]
     assert "more lines" in output[0]
     assert "line 7" not in output[0]
+
+
+def test_closed_code_fence_is_emitted_once_with_highlighting() -> None:
+    state = CliStreamRenderState()
+    output: list[str] = []
+    renderer = _renderer(state, output, show_reasoning=False)
+
+    renderer.stream_delta("before\n```python\nprint('hello')\n```\nafter\n")
+    renderer.flush_stream()
+
+    rendered = "\n".join(output)
+    assert "before" in rendered
+    assert "print" in rendered
+    assert "after" in rendered
+    assert "```python" not in rendered
+    assert state.in_code_fence is False
+
+
+def test_unclosed_code_fence_falls_back_to_literal_text() -> None:
+    state = CliStreamRenderState()
+    output: list[str] = []
+    renderer = _renderer(state, output, show_reasoning=False)
+
+    renderer.stream_delta("```python\nprint('partial')")
+    renderer.flush_stream()
+
+    rendered = "\n".join(output)
+    assert "```python" in rendered
+    assert "print('partial')" in rendered
+    assert state.in_code_fence is False

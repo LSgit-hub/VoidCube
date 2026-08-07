@@ -77,6 +77,11 @@ from VoidCube_cli.command_handlers.compression import (
     CompressionCommandPorts,
     handle_compression_command,
 )
+from VoidCube_cli.command_handlers.chat_blocks import (
+    ChatBlockCommandPorts,
+    handle_export_command,
+    handle_find_command,
+)
 from VoidCube_cli.command_handlers.input import (
     QueueCommandPorts,
     RetryCommandPorts,
@@ -372,6 +377,14 @@ def install_cli_command_execution(
                     no_history_message=translate("no_conversation_history_yet"),
                     tools_label=translate("tools"),
                 ),
+            ),
+            "find": lambda request: handle_find_command(
+                request,
+                ports=_chat_block_command_ports(host, emit=emit),
+            ),
+            "export": lambda request: handle_export_command(
+                request,
+                ports=_chat_block_command_ports(host, emit=emit),
             ),
             "paste": lambda request: handle_paste_command(
                 request,
@@ -1011,6 +1024,20 @@ def _format_tool_config_session_reset() -> str:
     from VoidCube_cli.cli_ui import _DIM, _RST
 
     return f"{_DIM}Session reset. New tool configuration is active.{_RST}"
+
+
+def _chat_block_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> ChatBlockCommandPorts:
+    return ChatBlockCommandPorts(
+        blocks=lambda: host._chat_blocks().blocks(),
+        session_id=lambda: str(host.session_id or ""),
+        now=datetime.now,
+        working_directory=Path.cwd,
+        emit=emit,
+    )
 
 
 def _history_mutation_ports(

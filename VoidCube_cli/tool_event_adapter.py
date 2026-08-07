@@ -7,6 +7,11 @@ import time
 from typing import Any, Callable
 
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind
+from VoidCube_cli.cli_tool_progress import (
+    emit_diff_line,
+    format_tool_completion,
+    should_emit_tool_completion,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -61,23 +66,22 @@ def _project_completed(
         )
 
     progress_mode = getattr(host, "tool_progress_mode", "off")
-    if event.name and progress_mode in {"all", "new"}:
-        repeated = (
-            progress_mode == "new"
-            and event.name == getattr(host, "_last_scrollback_tool", "")
-        )
-        if not repeated:
-            host._last_scrollback_tool = event.name
-        if not repeated and host._should_emit_scrollback_output():
+    last_tool_name = getattr(host, "_last_scrollback_tool", "")
+    if should_emit_tool_completion(progress_mode, event.name, last_tool_name):
+        host._last_scrollback_tool = event.name
+        if host._should_emit_scrollback_output():
             try:
                 from agent.display import get_cute_tool_message
 
-                line = get_cute_tool_message(
+                line = format_tool_completion(
                     event.name,
                     dict(event.arguments),
                     event.duration,
+                    result=event.result,
+                    is_error=event.is_error,
+                    get_message=get_cute_tool_message,
                 )
-                emit_line(f"  {line} [error]" if event.is_error else f"  {line}")
+                emit_line(f"  {line}")
             except Exception:
                 logger.debug("Tool scrollback rendering failed", exc_info=True)
 
@@ -95,7 +99,7 @@ def _project_completed(
                     event.result,
                     function_args=dict(event.arguments),
                     snapshot=snapshot,
-                    print_fn=emit_line,
+                    print_fn=lambda line: emit_diff_line(emit_line, line),
                 )
             except Exception:
                 logger.debug(

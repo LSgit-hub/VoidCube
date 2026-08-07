@@ -57,6 +57,18 @@ def test_parser_registry_is_independently_constructible():
     assert parser.parse_args(["chat", "-q", "hello"]).query == "hello"
 
 
+def test_entrypoint_command_registry_has_no_aliases():
+    parser = build_parser()
+    commands = parser._subparsers._group_actions[0].choices
+
+    assert "autonomous" in commands
+    assert "auto-cli" not in commands
+
+    mcp_commands = commands["mcp"]._subparsers._group_actions[0].choices
+    assert {"remove", "list", "configure"} <= mcp_commands.keys()
+    assert {"rm", "ls", "config"}.isdisjoint(mcp_commands)
+
+
 def test_dispatch_maps_version_without_reading_process_argv(monkeypatch):
     calls = []
     monkeypatch.setattr(

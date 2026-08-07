@@ -47,7 +47,7 @@ def dispatch_cli(parser: argparse.ArgumentParser, argv: list[str] | None = None)
     # name that happens to match a subcommand takes priority.
     _KNOWN_COMMANDS = {
         "chat", "model", "gateway", "login", "logout",
-        "body", "agent", "serve", "status", "autonomous", "auto-cli", "doctor", "config", "tools",
+        "body", "agent", "serve", "status", "autonomous", "doctor", "config", "tools",
         "mcp", "sessions", "insights", "version", "api", "acp", "logs",
         "memory", "profile", "update", "uninstall",
     }

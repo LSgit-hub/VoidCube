@@ -93,6 +93,7 @@ from VoidCube_cli.turn_queue_adapter import (
     requeue_interrupted_inputs,
 )
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
+from VoidCube_cli.chat_block_store import ChatBlockStore
 from VoidCube_cli.cli_tui_host_assembly_runtime import (
     CliTuiCompositionPorts,
     CliTuiExtensionPorts,
@@ -1075,6 +1076,17 @@ class VoidcubeCLI:
         self.__dict__.pop("_session_start", None)
         return runtime
 
+    def _chat_blocks(self) -> ChatBlockStore:
+        """Return the renderer-neutral store for this CLI host."""
+        store = self.__dict__.get("_chat_block_store")
+        if store is None:
+            store = ChatBlockStore()
+            session_id = str(getattr(self, "session_id", "") or "").strip()
+            if session_id:
+                store.bind_session(session_id)
+            self.__dict__["_chat_block_store"] = store
+        return store
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -1258,6 +1270,9 @@ class VoidcubeCLI:
         # Conversation state
         self.conversation_history: List[Dict[str, Any]] = []
         self.session_start = datetime.now()
+        # Renderer-neutral records for the active CLI session. ApplicationRuntime
+        # remains the canonical owner of conversation and turn state.
+        self._chat_block_store = ChatBlockStore()
         # Interactive and autonomous Hosts index sessions. Scheduled work is
         # deliberately ephemeral and does not need session search or /title.
         self._session_db = None
@@ -2434,6 +2449,7 @@ class VoidcubeCLI:
 
     def _display_resumed_history(self):
         """Render the resumed history through the dedicated display runtime."""
+        self._chat_blocks().hydrate_history(self.conversation_history)
         CliHistoryDisplayRuntime(
             CliHistoryDisplayPorts(
                 conversation_history=lambda: self.conversation_history,
@@ -2874,8 +2890,6 @@ class VoidcubeCLI:
             return builtin.continue_running
 
         _skcmds = _get_skill_commands()
-        from VoidCube_cli.commands import COMMANDS
-
         def _emit_dynamic_markup(text: str) -> None:
             console = getattr(self, "console", None)
             if console is not None:
@@ -2885,10 +2899,9 @@ class VoidcubeCLI:
 
         return CliDynamicCommandRuntime(
             CliDynamicCommandPorts(
-                quick_commands=self.config.get("quick_commands", {}),
+                custom_commands=self.config.get("quick_commands", {}),
                 plugin_names=_get_plugin_cmd_handler_names(),
                 skill_commands=_skcmds,
-                known_commands=set(COMMANDS),
                 get_plugin_handler=lambda name: __import__(
                     "VoidCube_cli.plugins", fromlist=["get_plugin_command_handler"]
                 ).get_plugin_command_handler(name),
@@ -2903,7 +2916,6 @@ class VoidcubeCLI:
                 ),
                 emit=_cprint,
                 emit_markup=_emit_dynamic_markup,
-                run_redirect=self.process_command,
             )
         ).run(request)
 
@@ -3347,6 +3359,7 @@ class VoidcubeCLI:
         )
 
     def _handle_application_event(self, event) -> None:
+        self._chat_blocks().consume(event)
         if isinstance(event, ToolEvent):
             self._on_tool_event(event)
         elif isinstance(event, MessageDelta):
@@ -3698,6 +3711,10 @@ class VoidcubeCLI:
         turn_input = prepared_input.turn_input
         if turn_input is None:
             return None
+        self._chat_blocks().record_user_message(
+            message,
+            turn_id=self._ensure_application_runtime().state.active_turn_id or "",
+        )
         if self._should_emit_scrollback_output():
             ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
             print(flush=True)
@@ -5018,4 +5035,3 @@ if __name__ == "__main__":
     import fire
 
     fire.Fire(main)
-

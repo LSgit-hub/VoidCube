@@ -4,7 +4,6 @@
   "translations": {
     "commands": {
       "usage_label": "用法",
-      "alias_for": "别名",
       "plugin_command": "插件命令",
       "skill_command": "技能命令",
       "new": {
@@ -18,6 +17,14 @@
       "history": {
         "description": "显示对话历史",
         "usage": "用法: /history"
+      },
+      "find": {
+        "description": "搜索当前会话的结构化记录",
+        "usage": "用法: /find <关键词>"
+      },
+      "export": {
+        "description": "导出当前会话的结构化记录",
+        "usage": "用法: /export <markdown|json>"
       },
       "save": {
         "description": "保存当前对话",
@@ -74,6 +81,10 @@
       "status": {
         "description": "显示会话信息",
         "usage": "用法: /status"
+      },
+      "tasks": {
+        "description": "显示当前子代理观测状态（高级调试）",
+        "usage": "用法: /tasks [bg|fg]"
       },
       "profile": {
         "description": "显示活动配置文件名称和主目录",
@@ -244,6 +255,10 @@
         "description": "强制启动监督者自主规划任务并分析可行性",
         "usage": "用法: /auto [focus]"
       },
+      "auto-q": {
+        "description": "临时停用自主链路，保留主 CLI 用户交互",
+        "usage": "用法: /auto-q"
+      },
       "quit": {
         "description": "退出CLI",
         "usage": "用法: /quit"
@@ -316,7 +331,8 @@
       "skills": "访问、创建、编辑和管理技能文档",
       "full": "所有可用工具",
       "mini": "精简工具集，适用于快速任务",
-      "voidcube": "服务器管理核心工具",    },
+      "voidcube": "服务器管理核心工具"
+    },
     "errors": {
       "no_tty": "Voidcube CLI 需要交互式终端 (TTY)。请勿通过管道或重定向输入。",
       "no_session": "无法加载会话: {session_id}",

@@ -150,7 +150,6 @@ def register_core_commands(subparsers: argparse._SubParsersAction) -> None:
 
     autonomous_parser = subparsers.add_parser(
         "autonomous",
-        aliases=["auto-cli"],
         help="Debug the embedded API-A autonomous execution component",
         description="Debug-only surface for autonomous-chain API-A task execution and observation; normal use is /auto inside the main CLI.",
     )

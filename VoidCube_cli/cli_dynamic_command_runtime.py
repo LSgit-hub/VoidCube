@@ -18,17 +18,15 @@ from VoidCube_cli.command_router import (
 class CliDynamicCommandPorts:
     """Dynamic command sources and terminal operations supplied by the host."""
 
-    quick_commands: Mapping[str, Mapping[str, Any]]
+    custom_commands: Mapping[str, Mapping[str, Any]]
     plugin_names: Set[str]
     skill_commands: Mapping[str, Any]
-    known_commands: Set[str]
     get_plugin_handler: Callable[[str], Callable[[str], Any] | None]
     build_skill_message: Callable[[str, str, str], str | None]
     session_id: Callable[[], str]
     enqueue_pending_input: Callable[[str], None]
     emit: Callable[[str], None]
     emit_markup: Callable[[str], None]
-    run_redirect: Callable[[str], bool]
 
 
 class CliDynamicCommandRuntime:
@@ -41,35 +39,25 @@ class CliDynamicCommandRuntime:
         ports = self.ports
         route = resolve_dynamic_command(
             request,
-            quick_commands=ports.quick_commands,
+            custom_commands=ports.custom_commands,
             plugin_names=ports.plugin_names,
             skill_commands=ports.skill_commands,
-            known_commands=ports.known_commands,
         )
 
-        if route.kind == "quick_exec":
-            self._run_quick_exec(route.executable)
-        elif route.kind == "quick_alias":
-            return ports.run_redirect(route.redirect_command)
-        elif route.kind == "quick_invalid":
-            self._report_invalid_quick_command(request, route.quick_type)
+        if route.kind == "custom_exec":
+            self._run_custom_exec(route.executable)
+        elif route.kind == "custom_invalid":
+            self._report_invalid_custom_command(request, route.custom_type)
         elif route.kind == "plugin":
             self._run_plugin(request)
         elif route.kind == "skill":
             self._run_skill(request)
-        elif route.kind == "redirect":
-            return ports.run_redirect(route.redirect_command)
-        elif route.kind == "ambiguous":
-            ports.emit(f"\033[1;38;2;218;165;32mAmbiguous command: {request.normalized}\033[0m")
-            ports.emit(
-                f"\033[2mDid you mean: {', '.join(route.matches)}?\033[0m"
-            )
         else:
             ports.emit(f"\033[1;31mUnknown command: {request.normalized}\033[0m")
             ports.emit("\033[2m\033[1;38;2;218;165;32mType /help for available commands\033[0m")
         return True
 
-    def _run_quick_exec(self, executable: str) -> None:
+    def _run_custom_exec(self, executable: str) -> None:
         try:
             result = subprocess.run(
                 shlex.split(executable),
@@ -80,23 +68,19 @@ class CliDynamicCommandRuntime:
             output = result.stdout.strip() or result.stderr.strip()
             self.ports.emit_markup(output or "[dim]Command returned no output[/]")
         except subprocess.TimeoutExpired:
-            self.ports.emit_markup("[bold red]Quick command timed out (30s)[/]")
+            self.ports.emit_markup("[bold red]Custom command timed out (30s)[/]")
         except Exception as error:
-            self.ports.emit_markup(f"[bold red]Quick command error: {error}[/]")
+            self.ports.emit_markup(f"[bold red]Custom command error: {error}[/]")
 
-    def _report_invalid_quick_command(self, request: ParsedCliCommand, quick_type: str) -> None:
-        if quick_type == "exec":
+    def _report_invalid_custom_command(self, request: ParsedCliCommand, custom_type: str) -> None:
+        if custom_type == "exec":
             self.ports.emit_markup(
-                f"[bold red]Quick command '{request.base_token}' has no command defined[/]"
-            )
-        elif quick_type == "alias":
-            self.ports.emit_markup(
-                f"[bold red]Quick command '{request.base_token}' has no target defined[/]"
+                f"[bold red]Custom command '{request.base_token}' has no command defined[/]"
             )
         else:
             self.ports.emit_markup(
-                f"[bold red]Quick command '{request.base_token}' has unsupported type "
-                "(supported: 'exec', 'alias')"
+                f"[bold red]Custom command '{request.base_token}' has unsupported type "
+                "(supported: 'exec')"
             )
 
     def _run_plugin(self, request: ParsedCliCommand) -> None:

@@ -4,7 +4,6 @@ Central registry for all slash commands. Every consumer -- CLI help, gateway
 dispatch, autocomplete -- derives its data from ``COMMAND_REGISTRY``.
 
 To add a command: add a ``CommandDef`` entry to ``COMMAND_REGISTRY``.
-To add an alias: set ``aliases=("short",)`` on the existing ``CommandDef``.
 """
 
 from __future__ import annotations
@@ -40,7 +39,6 @@ class CommandDef:
     name: str                          # canonical name without slash: "background"
     description: str                   # human-readable description
     category: str                      # "Session", "Configuration", etc.
-    aliases: tuple[str, ...] = ()      # alternative names: ("bg",)
     args_hint: str = ""                # argument placeholder: "<prompt>", "[name]"
     subcommands: tuple[str, ...] = ()  # tab-completable subcommands
     cli_only: bool = False             # only available in CLI
@@ -73,12 +71,16 @@ class CommandDef:
 
 COMMAND_REGISTRY: list[CommandDef] = [
     # Session - 会话管理
-    CommandDef("new", "开始新会话", "会话管理",
-               aliases=("reset",)),
+    CommandDef("new", "开始新会话", "会话管理"),
     CommandDef("clear", "清屏并开始新会话", "会话管理",
                cli_only=True),
     CommandDef("history", "显示对话历史", "会话管理",
                cli_only=True),
+    CommandDef("find", "搜索当前会话的结构化记录", "会话管理",
+               cli_only=True, args_hint="<keyword>"),
+    CommandDef("export", "导出当前会话的结构化记录", "会话管理",
+               cli_only=True, args_hint="<markdown|json>",
+               subcommands=("markdown", "json")),
     CommandDef("save", "保存当前对话", "会话管理",
                cli_only=True),
     CommandDef("retry", "重试上一条消息", "会话管理"),
@@ -89,14 +91,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("bg", "fg"),
                defer_subcommands_until_prefix=True),
     CommandDef("resume", "恢复之前的会话", "会话管理",
-               args_hint="[name]", aliases=("r",)),
+               args_hint="[name]"),
 
     # Configuration - 配置管理
     CommandDef("config", "显示当前配置", "配置管理",
                cli_only=True),
     CommandDef("model", "切换LLM模型", "配置管理", args_hint="[model] [--global]"),
     CommandDef("provider", "显示已配置 API Provider",
-               "配置管理", aliases=("pk",)),
+               "配置管理"),
     CommandDef("language", "显示或更改显示语言", "配置管理",
                cli_only=True, args_hint="[-CN|-EN]",
                subcommands=("-CN", "-EN")),
@@ -122,10 +124,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
 
     # Auto - 自主规划
     CommandDef("auto", "临时启用自主链路；API-A 执行组件会按需显示", "会话管理",
-               aliases=("autonomous",),
                args_hint="[focus]"),
     CommandDef("auto-q", "临时停用自主链路，保留主 CLI 用户交互", "会话管理",
-               aliases=("auto-quit", "auto-stop"),
                cli_only=True),
 
     # Exit - 退出
@@ -139,12 +139,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
 # ---------------------------------------------------------------------------
 
 def _build_command_lookup() -> dict[str, CommandDef]:
-    """Map every name and alias to its CommandDef."""
+    """Map each canonical command name to its definition."""
     lookup: dict[str, CommandDef] = {}
     for cmd in COMMAND_REGISTRY:
         lookup[cmd.name] = cmd
-        for alias in cmd.aliases:
-            lookup[alias] = cmd
     return lookup
 
 
@@ -152,7 +150,7 @@ _COMMAND_LOOKUP: dict[str, CommandDef] = _build_command_lookup()
 
 
 def resolve_command(name: str) -> CommandDef | None:
-    """Resolve a command name or alias to its CommandDef.
+    """Resolve a canonical command name to its CommandDef.
 
     Accepts names with or without the leading slash.
     """
@@ -174,21 +172,12 @@ def rebuild_lookups() -> None:
     for cmd in COMMAND_REGISTRY:
         if not cmd.gateway_only:
             COMMANDS[f"/{cmd.name}"] = _build_description(cmd)
-            for alias in cmd.aliases:
-                try:
-                    from VoidCube_cli.i18n import t
-                    alias_label = t('commands.alias_for', default='alias for')
-                    COMMANDS[f"/{alias}"] = f"{cmd.get_description()} ({alias_label} /{cmd.name})"
-                except Exception:
-                    COMMANDS[f"/{alias}"] = f"{cmd.get_description()} (alias for /{cmd.name})"
 
     COMMANDS_BY_CATEGORY.clear()
     for cmd in COMMAND_REGISTRY:
         if not cmd.gateway_only:
             cat = COMMANDS_BY_CATEGORY.setdefault(cmd.get_category(), {})
             cat[f"/{cmd.name}"] = COMMANDS[f"/{cmd.name}"]
-            for alias in cmd.aliases:
-                cat[f"/{alias}"] = COMMANDS[f"/{alias}"]
 
     SUBCOMMANDS.clear()
     for cmd in COMMAND_REGISTRY:
@@ -203,10 +192,9 @@ def rebuild_lookups() -> None:
             SUBCOMMANDS[key] = m.group(0).split("|")
 
     GATEWAY_KNOWN_COMMANDS = frozenset(
-        name
+        cmd.name
         for cmd in COMMAND_REGISTRY
         if not cmd.cli_only or cmd.gateway_config_gate
-        for name in (cmd.name, *cmd.aliases)
     )
 
 
@@ -228,13 +216,6 @@ COMMANDS: dict[str, str] = {}
 for _cmd in COMMAND_REGISTRY:
     if not _cmd.gateway_only:
         COMMANDS[f"/{_cmd.name}"] = _build_description(_cmd)
-        for _alias in _cmd.aliases:
-            try:
-                from VoidCube_cli.i18n import t
-                alias_label = t('commands.alias_for', default='alias for')
-                COMMANDS[f"/{_alias}"] = f"{_cmd.get_description()} ({alias_label} /{_cmd.name})"
-            except Exception:
-                COMMANDS[f"/{_alias}"] = f"{_cmd.get_description()} (alias for /{_cmd.name})"
 
 # Backwards-compatible categorized dict
 COMMANDS_BY_CATEGORY: dict[str, dict[str, str]] = {}
@@ -242,8 +223,6 @@ for _cmd in COMMAND_REGISTRY:
     if not _cmd.gateway_only:
         _cat = COMMANDS_BY_CATEGORY.setdefault(_cmd.get_category(), {})
         _cat[f"/{_cmd.name}"] = COMMANDS[f"/{_cmd.name}"]
-        for _alias in _cmd.aliases:
-            _cat[f"/{_alias}"] = COMMANDS[f"/{_alias}"]
 
 
 # Subcommands lookup: "/cmd" -> ["sub1", "sub2", ...]
@@ -270,14 +249,13 @@ for _cmd in COMMAND_REGISTRY:
 # Gateway helpers
 # ---------------------------------------------------------------------------
 
-# Set of all command names + aliases recognized by the gateway.
+# Set of all canonical command names recognized by the gateway.
 # Includes config-gated commands so the gateway can dispatch them
 # (the handler checks the config gate at runtime).
 GATEWAY_KNOWN_COMMANDS: frozenset[str] = frozenset(
-    name
+    cmd.name
     for cmd in COMMAND_REGISTRY
     if not cmd.cli_only or cmd.gateway_config_gate
-    for name in (cmd.name, *cmd.aliases)
 )
 
 
@@ -334,22 +312,7 @@ def gateway_help_lines() -> list[str]:
         if not _is_gateway_available(cmd, overrides):
             continue
         args = f" {cmd.args_hint}" if cmd.args_hint else ""
-        alias_parts: list[str] = []
-        for a in cmd.aliases:
-            # Skip internal aliases like reload_mcp (underscore variant)
-            if a.replace("-", "_") == cmd.name.replace("-", "_") and a != cmd.name:
-                continue
-            alias_parts.append(f"`/{a}`")
-        if alias_parts:
-            try:
-                from VoidCube_cli.i18n import t
-                alias_label = t('commands.alias_for', default='alias')
-                alias_note = f" ({alias_label}: {', '.join(alias_parts)})"
-            except Exception:
-                alias_note = f" (alias: {', '.join(alias_parts)})"
-        else:
-            alias_note = ""
-        lines.append(f"`/{cmd.name}{args}` -- {cmd.get_description()}{alias_note}")
+        lines.append(f"`/{cmd.name}{args}` -- {cmd.get_description()}")
     return lines
 
 

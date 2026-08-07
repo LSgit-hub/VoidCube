@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ import pytest
 import VoidCube_core
 from scripts.compare_locales import audit_files, compare_catalogs
 from VoidCube_cli.i18n import get_i18n, init_i18n, set_locale, t
+from VoidCube_cli.commands import COMMAND_REGISTRY
+from VoidCube_cli.commands import COMMANDS, resolve_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +57,29 @@ def test_browser_tip_uses_the_canonical_json_locales():
         )
     finally:
         set_locale(original_locale)
+
+
+def test_discoverable_command_descriptions_are_localized_in_both_catalogs():
+    discoverable = [command for command in COMMAND_REGISTRY if not command.gateway_only]
+    for locale in ("en_US", "zh_CN"):
+        catalog = json.loads(
+            (ROOT / "VoidCube_cli" / "locales" / f"{locale}.json").read_text(encoding="utf-8")
+        )
+        commands = catalog["translations"]["commands"]
+        missing = [
+            command.name
+            for command in discoverable
+            if not isinstance(commands.get(command.name), dict)
+            or not commands[command.name].get("description")
+        ]
+        assert missing == [], (locale, missing)
+
+
+def test_slash_command_registry_has_no_alias_surface():
+    assert all(not hasattr(command, "aliases") for command in COMMAND_REGISTRY)
+    for removed in ("reset", "r", "pk", "autonomous", "auto-quit", "auto-stop"):
+        assert resolve_command(removed) is None
+        assert f"/{removed}" not in COMMANDS
 
 
 def test_legacy_core_i18n_surface_is_absent():

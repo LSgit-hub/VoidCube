@@ -21,6 +21,9 @@ def _populated_state() -> CliStreamRenderState:
         reasoning_preview_buffer="preview",
         deferred_content="deferred",
         reasoning_shown_this_turn=True,
+        in_code_fence=True,
+        code_fence_language="python",
+        code_fence_lines=["print('hello')"],
     )
 
 
