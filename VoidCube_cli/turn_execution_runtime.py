@@ -1,4 +1,4 @@
-"""Thread and interrupt lifecycle for one CLI model turn."""
+"""Thread and timeout lifecycle for one CLI model turn."""
 
 from __future__ import annotations
 
@@ -8,20 +8,11 @@ from dataclasses import dataclass
 from threading import Thread
 from typing import Any
 
-from VoidCube_cli.turn_queue_adapter import InterruptPollResult, InterruptPollStatus
-from VoidCube_app.turn_queue import cancel_turn, TurnInterrupt, TurnInterruptReason
-
-
 @dataclass(frozen=True, slots=True)
 class TurnExecutionPorts:
     """External operations required by the model-turn execution loop."""
 
-    has_interrupt_queue: Callable[[], bool]
-    poll_interrupt: Callable[[bool], InterruptPollResult]
-    should_defer_interrupt: Callable[[], bool]
-    invalidate: Callable[[], None]
-    interrupt_agent: Callable[[str | None], None]
-    emit_interrupt_notice: Callable[[], None]
+    interrupt_agent: Callable[[], None]
     check_autonomous_timeout: Callable[[], tuple[bool, bool]]
     cleanup_async_clients: Callable[[], None]
     flush_stream: Callable[[], None]
@@ -32,10 +23,9 @@ class TurnExecutionPorts:
 
 @dataclass(frozen=True, slots=True)
 class TurnExecutionResult:
-    """Result of the threaded model turn and its observed interruption state."""
+    """Result of the threaded model turn and autonomous timeout state."""
 
     result: Mapping[str, Any] | None
-    turn_interrupt: TurnInterrupt | None
     autonomous_timeout_reported: bool
     autonomous_timeout_writeback_succeeded: bool
 
@@ -63,7 +53,6 @@ class TurnExecutionRuntime:
         )
         agent_thread.start()
 
-        turn_interrupt: TurnInterrupt | None = None
         autonomous_timeout_reported = False
         autonomous_timeout_writeback_succeeded = False
         while agent_thread.is_alive():
@@ -72,27 +61,12 @@ class TurnExecutionRuntime:
                     self.ports.check_autonomous_timeout()
                 )
                 if autonomous_timeout_reported:
-                    turn_interrupt = cancel_turn(TurnInterruptReason.TIMEOUT)
                     try:
-                        self.ports.interrupt_agent(turn_interrupt.agent_message)
+                        self.ports.interrupt_agent()
                     except Exception:
                         pass
 
-            if self.ports.has_interrupt_queue():
-                poll_result = self.ports.poll_interrupt(
-                    self.ports.should_defer_interrupt()
-                )
-                if poll_result.status is InterruptPollStatus.DEFERRED:
-                    continue
-                if poll_result.interrupt is None:
-                    self.ports.invalidate()
-                    continue
-                turn_interrupt = poll_result.interrupt
-                self.ports.emit_interrupt_notice()
-                self.ports.interrupt_agent(turn_interrupt.agent_message)
-                break
-            else:
-                agent_thread.join(0.1)
+            agent_thread.join(0.1)
 
         agent_thread.join()
         self.ports.cleanup_async_clients()
@@ -101,7 +75,6 @@ class TurnExecutionRuntime:
         self.ports.sleep(0.15)
         return TurnExecutionResult(
             result=result_holder["result"],
-            turn_interrupt=turn_interrupt,
             autonomous_timeout_reported=autonomous_timeout_reported,
             autonomous_timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
         )

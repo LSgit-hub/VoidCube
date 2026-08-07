@@ -59,11 +59,10 @@ def _runtime(calls, state):
             run_api_command=lambda _event: calls.append("api"),
             autonomous_gate_active=lambda: False,
             exit_autonomous_gate_fast=lambda: calls.append("auto-exit"),
-            enqueue_input=lambda payload, is_command: calls.append(
-                ("enqueue", payload, is_command)
+            enqueue_input=lambda payload: calls.append(
+                ("enqueue", payload)
             ) or TurnInputRoute.NEXT_TURN,
             agent_running=lambda: True,
-            busy_input_mode=lambda: "interrupt",
             emit=lambda value: calls.append(("emit", value)),
         )
     )
@@ -85,7 +84,7 @@ def test_enter_keybinding_runtime_routes_normal_input_and_preserves_images():
 
     _runtime(calls, state).handle(event)
 
-    assert ("enqueue", ("hello", ["image.png"]), False) in calls
+    assert ("enqueue", ("hello", ["image.png"])) in calls
     assert state["images"] == []
     assert event.app.current_buffer.resets == [True]
     assert any(call[0] == "emit" and "Queued" in call[1] for call in calls)

@@ -34,7 +34,7 @@ def _confirm_prompt(prompt: str) -> bool:
     """Prompt for y/N confirmation, safe against non-TTY environments."""
     try:
         return input(prompt).strip().lower() in ("y", "yes")
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
         return False
 
 def cmd_sessions(args):
@@ -279,7 +279,7 @@ def cmd_profile(args):
         if not args.yes:
             try:
                 confirm = input(f"  Delete profile '{args.name}'? This removes all its data. [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 print("  Cancelled.")
                 return
             if confirm not in ("y", "yes"):

@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.defaults import load_key_bindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import Window
 
@@ -51,6 +53,26 @@ def test_create_tui_application_omits_optional_cursor(monkeypatch) -> None:
     )
 
     assert "cursor" not in captured
+
+
+def test_create_tui_application_does_not_claim_terminal_copy_or_paste(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tui_application,
+        "Application",
+        lambda **kwargs: SimpleNamespace(
+            **kwargs,
+            _default_bindings=load_key_bindings(),
+        ),
+    )
+    application = tui_application.create_tui_application(
+        layout=Layout(Window()),
+        key_bindings=KeyBindings(),
+        cursor=None,
+    )
+
+    sequences = {binding.keys for binding in application._default_bindings.bindings}
+    assert (Keys.ControlC,) not in sequences
+    assert (Keys.ControlV,) not in sequences
 
 
 def test_resize_reflow_cleanup_inflates_cursor_before_original_handler() -> None:

@@ -8,6 +8,7 @@ from VoidCube_app.configuration import (
 )
 from VoidCube_app.application import ApplicationRuntime, ApplicationState
 from VoidCube_app.contracts import (
+    AgentExecutor,
     Artifact,
     ApplicationEvent,
     ApplicationEventSink,
@@ -67,30 +68,19 @@ from VoidCube_app.turn_contract import (
     normalize_turn_outcome,
 )
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind, ToolEventSink
-from VoidCube_app.turn_queue import (
-    BusyInputMode,
-    InterruptedInputBatch,
-    TurnInterrupt,
-    TurnInterruptReason,
-    TurnInputRoute,
-    cancel_turn,
-    interrupt_for_input,
-    interrupt_text,
-    normalize_busy_input_mode,
-    prepare_interrupted_input_batch,
-    resolve_interrupted_followup,
-    route_turn_input,
-)
+from VoidCube_app.turn_queue import TurnInputRoute
 from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
 from VoidCube_app.autonomous_component_runtime import (
     AutonomousComponentRuntime,
     AutonomousComponentRuntimePorts,
 )
 from VoidCube_app.turn_scheduler import CancellationToken, TurnExecutor, TurnScheduler
+from VoidCube_app.single_turn_executor import SingleTurnExecutor, SingleTurnExecutorPorts
 
 __all__ = [
     "application_config",
     "Artifact",
+    "AgentExecutor",
     "ApplicationEvent",
     "ApplicationEventSink",
     "ApplicationClock",
@@ -147,22 +137,13 @@ __all__ = [
     "ToolEventKind",
     "ToolEventSink",
     "UsageUpdated",
-    "BusyInputMode",
-    "InterruptedInputBatch",
-    "TurnInterrupt",
-    "TurnInterruptReason",
     "TurnInputRoute",
-    "cancel_turn",
-    "interrupt_for_input",
-    "interrupt_text",
-    "normalize_busy_input_mode",
-    "prepare_interrupted_input_batch",
-    "resolve_interrupted_followup",
-    "route_turn_input",
     "VoiceSessionRuntime",
     "AutonomousComponentRuntime",
     "AutonomousComponentRuntimePorts",
     "CancellationToken",
     "TurnExecutor",
     "TurnScheduler",
+    "SingleTurnExecutor",
+    "SingleTurnExecutorPorts",
 ]

@@ -382,7 +382,6 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_app/turn_queue.py" in expected
     assert "VoidCube_cli/interaction_adapter.py" in expected
     assert "VoidCube_cli/tool_event_adapter.py" in expected
-    assert "VoidCube_cli/turn_queue_adapter.py" in expected
     assert "VoidCube_cli/tui_layout.py" in expected
     assert "VoidCube_cli/tui_application.py" in expected
     assert "VoidCube_cli/tui_keybindings.py" in expected

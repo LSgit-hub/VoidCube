@@ -47,7 +47,9 @@ def test_lifecycle_runtime_connects_loop_and_application_owners(monkeypatch):
         install_asyncio_exception_handler=lambda: calls.append("asyncio"),
         is_unusable_stdin_error=lambda _error: False,
     )
-    application = SimpleNamespace(run=lambda: calls.append("application-run"))
+    application = SimpleNamespace(
+        run=lambda **kwargs: calls.append(("application-run", kwargs))
+    )
 
     runtime = CliInteractiveLifecycleRuntime(
         CliInteractiveLifecyclePorts(
@@ -84,5 +86,5 @@ def test_lifecycle_runtime_connects_loop_and_application_owners(monkeypatch):
     assert captured["idle"] is idle
     assert captured["run"].application_ready() is True
     captured["application"].run_application()
-    assert calls[-1] == "application-run"
+    assert calls[-1] == ("application-run", {"handle_sigint": False})
     assert captured["application"].install_signal_handlers is guards.install_signal_handlers

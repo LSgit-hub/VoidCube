@@ -278,7 +278,7 @@ def _session_browse_picker(sessions: list) -> Optional[str]:
             print(f"  Invalid selection. Enter 1-{len(sessions)} or q to cancel.")
         except ValueError:
             print("  Invalid input. Enter a number or q to cancel.")
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             print()
             return None
 

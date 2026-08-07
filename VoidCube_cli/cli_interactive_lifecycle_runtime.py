@@ -87,7 +87,7 @@ class CliInteractiveLifecycleRuntime:
                     ports.lifecycle_guards.install_asyncio_exception_handler
                 ),
                 stdout_context=ports.stdout_context,
-                run_application=ports.application.run,
+                run_application=lambda: ports.application.run(handle_sigint=False),
                 is_unusable_stdin_error=ports.lifecycle_guards.is_unusable_stdin_error,
                 report_unusable_stdin=ports.report_unusable_stdin,
                 request_stop=ports.request_stop,

@@ -128,8 +128,6 @@ def run_autonomous_component_debug(
             if once:
                 break
             time.sleep(max(0.5, float(interval or 2.0)))
-    except KeyboardInterrupt:
-        print("\n  自主执行组件调试面已退出。\n")
     finally:
         try:
             push_cli_agent_scene(

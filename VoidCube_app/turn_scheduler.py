@@ -117,6 +117,10 @@ class TurnScheduler:
             )
             return self._snapshot_locked()
 
+    @property
+    def executor(self) -> TurnExecutor | None:
+        return self._executor
+
     def start_next(self) -> TurnRequest | None:
         """Move the highest-priority queued request to the active slot."""
         with self._condition:

@@ -4,7 +4,7 @@
 >
 > 建立日期：2026-08-07
 >
-> 当前状态：P2 进行中；P0 contract 与行为基线已完成，P1 调度器核心已完成，用户输入 admission 已接入 CLI，展示层和 scheduled-task 迁移尚未完成。
+> 当前状态：P3 进行中；P0/P1/P2 已完成，单 turn 执行已抽取为无 TUI ports runtime，旧 `chat()` 执行实现已删除；完整 embedded host 移除与 scheduled-task 迁移尚未完成。
 
 ## 1. 目标
 
@@ -26,7 +26,7 @@
 
 ## 3. 当前基线
 
-当前实现是“双 host + 单锁”：
+当前实现是“双 host + 单一 Scheduler owner”：
 
 - 父 host 负责用户 TUI 和 `user_chat`。
 - `component_host` 负责 `supervisor_task`。
@@ -87,7 +87,7 @@ TUI / Supervisor adapter
 2. 用户 turn 默认高于自主 turn；自主 turn 等待时不阻塞输入采集。
 3. 用户提交期间，新的自主任务只能排队，不能抢占当前用户 turn。
 4. `/auto-q` 立即关闭自主门控，并请求取消当前自主 turn；已完成的用户 turn 不受影响。
-5. 中断和退出只接受显式命令：`/cancel` 取消用户 turn，`/auto-q` 停用并取消自主链路，`/quit` 退出 CLI；TUI 不绑定系统复制/粘贴组合键。
+5. 取消和退出只接受显式命令：`/cancel` 取消用户 turn，`/auto-q` 停用并取消自主链路，`/quit` 退出 CLI。
 6. 取消必须幂等；取消失败、超时和 Agent 已退出都要产生明确事件。
 7. 队列中的用户输入不得静默丢失；若被延迟，TUI 显示排队原因和当前活动 lane。
 
@@ -110,7 +110,7 @@ TUI / Supervisor adapter
 
 **退出条件**：调度器核心测试不导入 `VoidCube_cli.app`，且能证明没有第二个调度状态 owner。已由 `tests/test_application_turn_scheduler.py` 验证。
 
-### P2：接入现有 CLI 输入链路（进行中）
+### P2：接入现有 CLI 输入链路（已完成）
 
 - [x] 将 `PendingInputRuntime` 的用户输入转换为 `TurnRequest`，由 Scheduler admission。
 - [x] 将 autonomous polling 的认领结果转换为 `supervisor_task` request（component host pending input 统一经 Scheduler adapter admission）。
@@ -118,17 +118,18 @@ TUI / Supervisor adapter
 - [x] 保留现有 `/auto`、`/auto-q` 命令入口，并同步 Scheduler autonomous gate。
 - [x] TUI 中间状态栏通过只读 snapshot 显示活动 lane 和排队数量，不改变输入内容和 session 归属。
 
-**退出条件**：用户/自主两条链路的现有回归测试通过；用户/自主旧锁不再作为业务调度入口；scheduled-task 专用锁仍属于独立任务域，待后续明确迁移。P2 核心接入已满足，待 independent adapter/快照验收记录后关闭阶段。
+**退出条件**：用户/自主两条链路的现有回归测试通过；用户/自主旧锁不再作为业务调度入口；scheduled-task 专用锁仍属于独立任务域，待后续明确迁移。已由 183 个定向测试验证。
 
-### P3：抽取 `AgentExecutor`（未开始）
+### P3：抽取 `AgentExecutor`（进行中）
 
-- [ ] 从 `VoidcubeCLI.chat()` 提取单 turn 执行所需的显式 ports。
-- [ ] 复用 `TurnExecutionRuntime` 的线程、中断、超时和流刷新逻辑。
-- [ ] 将自主任务 tool policy、Agent 生命周期和用户回调能力声明为 request/executor 配置。
+- [x] 定义无 TUI 的 `AgentExecutor` contract，并新增 CLI `CliAgentExecutor` adapter。
+- [x] 从 `VoidcubeCLI.chat()` 提取单 turn 执行所需的显式 ports，并删除旧双执行路径。
+- [x] 通过 `SingleTurnExecutor` 复用 `TurnExecutionRuntime` 的线程、命令取消、超时和流刷新逻辑。
+- [x] 将自主任务 tool policy、Agent 生命周期和用户回调能力声明为 request/executor 配置。
 - [ ] 让 autonomous executor 不再创建完整 TUI host；过渡期保留 adapter，但禁止新增对 TUI 的依赖。
 - [ ] 生产调用者切换后删除旧的 `embedded_role` 分支、重复 cprint/输出兜底和无调用字段。
 
-**退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。
+**退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。无 TUI 执行与 lane 隔离已由 `tests/test_cli_agent_turn_executor_runtime.py` 验证，完整 embedded host 移除仍待完成。
 
 ### P4：统一事件投影与 TUI 状态（进行中）
 
@@ -143,7 +144,7 @@ TUI / Supervisor adapter
 
 - [ ] 删除失效兼容分支、重复参数、旧锁接线和无调用 embedded host 能力。
 - [ ] 更新架构文档、命令帮助和测试契约，删除过期描述。
-- [ ] 运行 owner 测试、CLI 自主链路回归、并发/中断测试、文档测试、架构依赖检查和生产编译。
+- [ ] 运行 owner 测试、CLI 自主链路回归、并发/取消测试、文档测试、架构依赖检查和生产编译。
 - [ ] 涉及模型/请求链路时运行退役集成扫描；涉及打包时运行 wheel 契约和 source-to-artifact parity。
 - [ ] 执行 `git diff --check`，确认没有残留调试输出或临时兼容代码。
 
@@ -169,13 +170,6 @@ TUI / Supervisor adapter
 - 若阶段被阻塞，记录具体阻塞条件、已尝试替代方案和恢复所需的外部条件。
 - 任何后续会话开始前，先读取本文件“当前状态”和未完成阶段，禁止把旧 `embedded_role` 逻辑重新当成目标设计。
 
-### 8.1 已完成的交互约束调整
-
-- [x] 删除 CLI 对系统中断、复制和粘贴组合键的按键绑定、运行时端口和测试。
-- [x] 保留终端 bracketed paste；图片剪贴板操作使用 `/paste`，不占用系统复制/粘贴组合键。
-- [x] 新增 `/cancel` 作为当前用户 turn 的显式取消命令；`/auto-q` 和 `/quit` 分别负责自主链路停用与 CLI 退出。
-- [x] 更新动态提示、帮助语言、冲突分析和相关测试，禁止恢复快捷键中断/退出语义。
-
 ## 9. 下一步
 
-继续 P2：将 autonomous polling 的 pending task 直接提交为 `supervisor_task` request，补 Scheduler snapshot/event 到 TUI projector 的只读适配；完成后再迁移 scheduled-task 独立执行域。
+继续 P3/P4：让 autonomous executor 直接持有执行 ports，删除完整 embedded TUI host；同时将 Scheduler event sink 接入统一 projector。之后迁移 scheduled-task 独立执行域并清理剩余 embedded host 兼容分支。

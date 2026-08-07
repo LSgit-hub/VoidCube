@@ -10,7 +10,9 @@ from dataclasses import dataclass
 class CliLifecycleGuardPorts:
     """Process, event-loop and stdin operations supplied by the host."""
 
-    install_signal: Callable[[object, Callable[[int, object], None]], None]
+    install_signal: Callable[[object, object], None]
+    sigint: object | None
+    sigint_ignore: object
     sigterm: object
     sighup: object | None
     get_running_loop: Callable[[], object]
@@ -32,9 +34,11 @@ class CliLifecycleGuardRuntime:
     def install_signal_handlers(self) -> None:
         def signal_handler(signum: int, _frame: object) -> None:
             self.ports.log_signal(signum)
-            raise KeyboardInterrupt()
+            raise SystemExit(128 + signum)
 
         try:
+            if self.ports.sigint is not None:
+                self.ports.install_signal(self.ports.sigint, self.ports.sigint_ignore)
             self.ports.install_signal(self.ports.sigterm, signal_handler)
             if self.ports.sighup is not None:
                 self.ports.install_signal(self.ports.sighup, signal_handler)

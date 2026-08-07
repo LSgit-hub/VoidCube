@@ -5,7 +5,7 @@ from VoidCube_cli.cli_chat_finalization_runtime import (
 )
 
 
-def test_chat_finalization_renders_before_requeueing_followup(monkeypatch):
+def test_chat_finalization_renders_response(monkeypatch):
     events = []
 
     class FakeResponseRuntime:
@@ -15,20 +15,7 @@ def test_chat_finalization_renders_before_requeueing_followup(monkeypatch):
         def render(self, **kwargs):
             events.append(("render", kwargs))
 
-    class FakeFollowupRuntime:
-        def __init__(self, ports):
-            events.append(("followup_ports", ports))
-
-        def requeue(self, message):
-            events.append(("requeue", message))
-            return True
-
     monkeypatch.setattr(finalization_module, "ChatResponseRuntime", FakeResponseRuntime)
-    monkeypatch.setattr(
-        finalization_module,
-        "InterruptedFollowupRuntime",
-        FakeFollowupRuntime,
-    )
     runtime = CliChatFinalizationRuntime(
         CliChatFinalizationPorts(
             should_emit_scrollback=lambda: True,
@@ -40,9 +27,6 @@ def test_chat_finalization_renders_before_requeueing_followup(monkeypatch):
             rich_text_from_ansi=lambda text: text,
             bell_on_complete=lambda: False,
             bell=lambda: None,
-            has_pending_queue=lambda: True,
-            requeue_followup=lambda message: message,
-            emit_followup=lambda _text: None,
         )
     )
 
@@ -54,14 +38,7 @@ def test_chat_finalization_renders_before_requeueing_followup(monkeypatch):
         stream_started=False,
         response_box_open=False,
         reasoning="thinking",
-        pending_message="follow-up",
     )
 
-    assert [event[0] for event in events] == [
-        "response_ports",
-        "render",
-        "followup_ports",
-        "requeue",
-    ]
+    assert [event[0] for event in events] == ["response_ports", "render"]
     assert events[1][1]["response"] == "answer"
-    assert events[-1] == ("requeue", "follow-up")

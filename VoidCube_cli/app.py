@@ -83,11 +83,6 @@ from VoidCube_app.session_lifecycle import (
     SessionTitleStatus,
 )
 from VoidCube_app.tool_events import ToolEvent
-from VoidCube_app.turn_queue import normalize_busy_input_mode
-from VoidCube_cli.turn_queue_adapter import (
-    poll_interrupt_input,
-    requeue_interrupted_inputs,
-)
 from VoidCube_cli.tui_application import install_resize_reflow_cleanup
 from VoidCube_cli.chat_block_store import ChatBlockStore
 from VoidCube_cli.cli_tui_host_assembly_runtime import (
@@ -210,11 +205,9 @@ from VoidCube_cli.cli_session_lifecycle_runtime import (
 )
 from VoidCube_cli.cli_agent_turn_call_runtime import (
     CliAgentTurnCallPorts,
-    CliAgentTurnCallRuntime,
 )
 from VoidCube_cli.cli_turn_input_preparation_runtime import (
     CliTurnInputPreparationPorts,
-    CliTurnInputPreparationRuntime,
 )
 from VoidCube_cli.cli_chat_error_runtime import (
     CliChatErrorPorts,
@@ -255,7 +248,6 @@ from VoidCube_cli.pending_input_runtime import (
 )
 from VoidCube_cli.turn_postprocessing_runtime import (
     TurnPostprocessingPorts,
-    TurnPostprocessingRuntime,
 )
 from VoidCube_cli.cli_chat_finalization_runtime import (
     CliChatFinalizationPorts,
@@ -267,11 +259,9 @@ from VoidCube_cli.cli_session_teardown_runtime import (
 )
 from VoidCube_cli.turn_result_application_runtime import (
     TurnResultApplicationPorts,
-    TurnResultApplicationRuntime,
 )
 from VoidCube_cli.turn_execution_runtime import (
     TurnExecutionPorts,
-    TurnExecutionRuntime,
 )
 from VoidCube_cli.tui_teardown import TuiTeardownPorts, run_tui_teardown
 from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
@@ -287,10 +277,16 @@ from VoidCube_app.autonomous_component_runtime import (
     AutonomousComponentRuntimePorts,
     ensure_autonomous_component_host,
 )
+from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
 from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
 from VoidCube_cli.turn_scheduler_runtime import (
     CliTurnSchedulerPorts,
     CliTurnSchedulerRuntime,
+)
+from VoidCube_cli.cli_agent_turn_executor_runtime import (
+    CliAgentTurnExecutorPorts,
+    CliAgentTurnExecutorRuntime,
+    CliAgentTurnResult,
 )
 from VoidCube_cli.autonomous_component_output import run_component_operation_silently
 from VoidCube_cli.chat_render_state import CliStreamRenderState
@@ -1011,25 +1007,6 @@ class VoidcubeCLI:
         else:
             self.__dict__["_pending_input_fallback"] = value
 
-    @property
-    def _interrupt_queue(self):
-        runtime = self.__dict__.get("_application_runtime")
-        if runtime is not None:
-            return runtime.state.interrupt_queue
-        fallback = self.__dict__.get("_interrupt_queue_fallback")
-        if fallback is None:
-            fallback = queue.Queue()
-            self.__dict__["_interrupt_queue_fallback"] = fallback
-        return fallback
-
-    @_interrupt_queue.setter
-    def _interrupt_queue(self, value) -> None:
-        runtime = self.__dict__.get("_application_runtime")
-        if runtime is not None:
-            runtime.state.interrupt_queue = value
-        else:
-            self.__dict__["_interrupt_queue_fallback"] = value
-
     def _initialize_application_runtime(self, session_identity) -> None:
         self.session_id = session_identity.session_id
         self._application_runtime = ApplicationRuntime.create(
@@ -1057,7 +1034,6 @@ class VoidcubeCLI:
         hydration = self.__dict__.pop("_session_hydration_fallback", None)
         agent_running = self.__dict__.pop("_agent_running_fallback", False)
         pending_input = self.__dict__.pop("_pending_input_fallback", None)
-        interrupt_queue = self.__dict__.pop("_interrupt_queue_fallback", None)
         if pending_title is not None:
             runtime.set_pending_title(pending_title)
         if hydration is not None:
@@ -1065,8 +1041,6 @@ class VoidcubeCLI:
         runtime.set_agent_running(agent_running)
         if pending_input is not None:
             runtime.state.pending_input_queue = pending_input
-        if interrupt_queue is not None:
-            runtime.state.interrupt_queue = interrupt_queue
         self.__dict__["_application_runtime"] = runtime
         self.__dict__.pop("_session_id", None)
         self.__dict__.pop("_session_start", None)
@@ -1131,10 +1105,6 @@ class VoidcubeCLI:
         self.bell_on_complete = display_config.get("bell_on_complete", False)
         # show_reasoning: display model thinking/reasoning before the response
         self.show_reasoning = display_config.get("show_reasoning", False)
-        # busy_input_mode: "interrupt" (Enter interrupts current run) or "queue" (Enter queues for next turn)
-        _bim = display_config.get("busy_input_mode", "interrupt")
-        self.busy_input_mode = normalize_busy_input_mode(_bim).value
-
         self.verbose = verbose if verbose is not None else (self.tool_progress_mode == "verbose")
         
         # streaming: stream tokens to the terminal as they arrive (display.streaming in config.yaml)
@@ -1394,34 +1364,87 @@ class VoidcubeCLI:
     def _build_turn_scheduler_runtime(self) -> CliTurnSchedulerRuntime:
         scheduler = TurnScheduler(autonomous_gate_active=False)
 
-        def execute_payload(
+        def execute_request(
             host: Any,
-            payload: Any,
+            request: TurnRequest,
             token: CancellationToken,
         ) -> Any:
-            if token.cancelled:
-                return None
-            message, images = payload
-            host._agent_running = True
-            try:
-                return host.chat(message, images=images)
-            finally:
-                host._agent_running = False
+            return host._execute_agent_turn_request(request, token)
 
         runtime = CliTurnSchedulerRuntime(
             scheduler,
             CliTurnSchedulerPorts(
                 session_id=lambda host: str(getattr(host, "session_id", "") or ""),
-                execute_user=execute_payload,
-                execute_autonomous=execute_payload,
-                cancel_user=lambda host, _request_id: host.agent.interrupt(None),
-                cancel_autonomous=lambda host, _request_id: host.agent.interrupt(None),
+                tool_policy=lambda host, payload, lane: host._turn_tool_policy(
+                    payload,
+                    lane,
+                ),
+                execute_user=execute_request,
+                execute_autonomous=execute_request,
+                cancel_user=lambda host, _request_id: host._cancel_agent_for_scheduler(),
+                cancel_autonomous=lambda host, _request_id: host._cancel_agent_for_scheduler(),
             ),
             asynchronous=True,
             thread_factory=threading.Thread,
         )
         scheduler.set_executor(runtime)
         return runtime
+
+    def _cancel_agent_for_scheduler(self) -> None:
+        agent = getattr(self, "agent", None)
+        if agent is None:
+            return
+        try:
+            agent.interrupt(None)
+        except Exception:
+            logger.debug("Agent cancellation callback failed", exc_info=True)
+
+    def _turn_autonomous_runtime(self):
+        return _autonomous_executor_runtime_view(
+            self,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            git_head_commit=_git_head_commit,
+            git_improvement_diff=_git_improvement_diff,
+            cprint=(
+                self._quiet_autonomous_component_cprint
+                if self._is_embedded_component()
+                else _cprint
+            ),
+        )
+
+    def _turn_tool_policy(
+        self,
+        payload: Any,
+        lane: TurnLane,
+    ) -> dict[str, Any]:
+        policy: dict[str, Any] = {"agent_role": lane.value}
+        if lane is not TurnLane.SUPERVISOR_TASK:
+            return policy
+        message = payload[0] if isinstance(payload, tuple) and payload else payload
+        current_task = self._turn_autonomous_runtime().current_task()
+        run_id = autonomous_task_run_id_for_message(current_task, message)
+        if run_id:
+            policy["autonomous_task_run_id"] = run_id
+            toolsets = autonomous_task_toolsets(current_task)
+            if toolsets is not None:
+                policy["enabled_toolsets"] = tuple(toolsets)
+        return policy
+
+    def _direct_turn_request(self, message: Any, images: list | None) -> TurnRequest:
+        lane = (
+            TurnLane.SUPERVISOR_TASK
+            if self._is_embedded_autonomous_component()
+            else TurnLane.USER_CHAT
+        )
+        payload = (message, images)
+        return TurnRequest(
+            request_id=f"direct-{uuid.uuid4()}",
+            lane=lane,
+            session_id=str(self.session_id or "direct-session"),
+            prompt=payload,
+            tool_policy=self._turn_tool_policy(payload, lane),
+            source="direct",
+        )
 
     def _scheduler_runtime(self) -> CliTurnSchedulerRuntime:
         runtime = self.__dict__.get("_turn_scheduler_runtime")
@@ -1966,9 +1989,8 @@ class VoidcubeCLI:
                 should_emit_scrollback=self._should_emit_scrollback_output,
                 process_command=self.process_command,
                 set_should_exit=lambda value: setattr(self, "_should_exit", bool(value)),
-                set_agent_running=lambda value: setattr(self, "_agent_running", bool(value)),
                 reset_turn_state=reset_turn_state,
-                chat=lambda message, images: self.chat(message, images=images),
+                submit_turn=self._submit_turn_via_scheduler,
                 invalidate_app=invalidate_app,
                 exit_app=exit_app,
                 voice_restart_ready=lambda: bool(
@@ -1980,7 +2002,6 @@ class VoidcubeCLI:
                 enqueue_pending_input=self._pending_input.put,
                 render_markup=lambda text: ChatConsole().print(text),
                 emit=_cprint,
-                submit_turn=self._submit_turn_via_scheduler,
             )
         )
         self._pending_input_runtime_instance = runtime
@@ -2785,7 +2806,7 @@ class VoidcubeCLI:
         def _ask():
             try:
                 result[0] = input(prompt_text).strip() or None
-            except (KeyboardInterrupt, EOFError):
+            except EOFError:
                 pass
 
         if self._app:
@@ -3689,72 +3710,31 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-    def chat(self, message, images: list = None) -> Optional[str]:
-        """
-        Send a message to the agent and get a response.
-        
-        Handles streaming output, interrupt detection (user typing while agent
-        is working), and re-queueing of interrupted messages.
-        
-        Uses a dedicated _interrupt_queue (separate from _pending_input) to avoid
-        race conditions between the process_loop and interrupt monitoring. Messages
-        typed while the agent is running go to _interrupt_queue; messages typed while
-        idle go to _pending_input.
-        
-        Args:
-            message: The user's message (str or multimodal content list)
-            images: Optional list of Path objects for attached images
-            
-        Returns:
-            The agent's response, or None on error
-        """
-        # Single-query and direct chat callers do not go through run(), so
-        # register secure secret capture here as well.
-        _get_set_secret_capture_callback()(self._secret_capture_callback)
+    def _agent_turn_executor_runtime(self) -> CliAgentTurnExecutorRuntime:
+        runtime = self.__dict__.get("_agent_turn_executor_runtime_instance")
+        if runtime is not None:
+            return runtime
+        autonomous_runtime = self._turn_autonomous_runtime()
 
-        # Refresh provider credentials if needed (handles key rotation transparently)
-        if not self._ensure_runtime_credentials():
-            return None
-        autonomous_runtime = _autonomous_executor_runtime_view(
-            self,
-            push_cli_agent_scene=_push_cli_agent_scene,
-            git_head_commit=_git_head_commit,
-            git_improvement_diff=_git_improvement_diff,
-            cprint=_cprint,
-        )
-        current_autonomous_task = autonomous_runtime.current_task()
-        autonomous_task_run_id = autonomous_task_run_id_for_message(
-            current_autonomous_task,
-            message,
-        )
-        autonomous_toolsets = (
-            autonomous_task_toolsets(current_autonomous_task)
-            if autonomous_task_run_id
-            else None
-        )
-        if autonomous_toolsets is not None and self.agent is not None:
-            self.agent = None
-        if autonomous_task_run_id or current_autonomous_task is None:
-            autonomous_runtime.set_last_agent_turn_result(None)
+        def initialize_agent(
+            route: Mapping[str, Any],
+            toolsets: Sequence[str] | None,
+        ) -> bool:
+            if self.agent is None and self._should_emit_scrollback_output():
+                _cprint(f"{_DIM}Initializing agent...{_RST}")
+            return self._init_agent(
+                model_override=route.get("model"),
+                runtime_override=route.get("runtime"),
+                route_label=route.get("label"),
+                request_overrides=route.get("request_overrides"),
+                enabled_toolsets_override=(list(toolsets) if toolsets is not None else None),
+            )
 
-        turn_route = self._resolve_turn_agent_config(message)
-        if turn_route["signature"] != self._active_agent_route_signature:
-            self.agent = None
-
-        # Initialize agent if needed
-        if self.agent is None and self._should_emit_scrollback_output():
-            _cprint(f"{_DIM}Initializing agent...{_RST}")
-        if not self._init_agent(
-            model_override=turn_route["model"],
-            runtime_override=turn_route["runtime"],
-            route_label=turn_route["label"],
-            request_overrides=turn_route.get("request_overrides"),
-            enabled_toolsets_override=autonomous_toolsets,
-        ):
-            return None
-        
-        prepared_input = CliTurnInputPreparationRuntime(
-            CliTurnInputPreparationPorts(
+        def prepare_input_ports(
+            message: Any,
+            images: Sequence[Any] | None,
+        ) -> CliTurnInputPreparationPorts:
+            return CliTurnInputPreparationPorts(
                 message=message,
                 images=images,
                 conversation_history=self.conversation_history,
@@ -3767,79 +3747,70 @@ class VoidcubeCLI:
                 emit=_cprint,
                 begin_turn=self._ensure_application_runtime().begin_turn,
             )
-        ).prepare()
-        if prepared_input.blocked_response is not None:
-            return prepared_input.blocked_response
-        message = prepared_input.message
-        turn_input = prepared_input.turn_input
-        if turn_input is None:
-            return None
-        self._chat_blocks().record_user_message(
-            message,
-            turn_id=self._ensure_application_runtime().state.active_turn_id or "",
-        )
-        if self._should_emit_scrollback_output():
-            ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-            print(flush=True)
-        
-        autonomous_timeout_reported = False
-        autonomous_timeout_writeback_succeeded = False
-        previous_active_role = str(getattr(self, "_active_chat_agent_role", "") or "")
-        self._active_chat_agent_role = "supervisor_task" if autonomous_task_run_id else "user_chat"
-        try:
-            self._stream_render_state.begin_turn()
 
-            stream_callback = None
+        def record_user_message(message: Any) -> None:
+            self._chat_blocks().record_user_message(
+                message,
+                turn_id=self._ensure_application_runtime().state.active_turn_id or "",
+            )
 
-            # When voice mode is active, prepend a brief instruction so the
-            # model responds concisely. The prefix is API-call-local only —
-            # run_conversation persists the original clean user message.
-            _voice_prefix = ""
-            if self._voice_state().mode and isinstance(message, str):
-                _voice_prefix = (
-                    "[Voice input — respond concisely and conversationally, "
-                    "2-3 sentences max. No code blocks or markdown.] "
-                )
+        def notify_turn_started() -> None:
+            if self._should_emit_scrollback_output():
+                ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
+                print(flush=True)
 
-            def run_agent():
-                return CliAgentTurnCallRuntime(
-                    CliAgentTurnCallPorts(
-                        message=message,
-                        voice_prefix=_voice_prefix,
-                        pending_model_switch_note=lambda: getattr(
-                            self, "_pending_model_switch_note", None
-                        ),
-                        clear_pending_model_switch_note=lambda: setattr(
-                            self, "_pending_model_switch_note", None
-                        ),
-                        prior_history=turn_input.prior_history,
-                        session_id=self.session_id,
-                        stream_callback=stream_callback,
-                        persist_user_message=message if _voice_prefix else None,
-                        new_trace_id=lambda: str(uuid.uuid4()),
-                        set_trace_id=lambda value: setattr(
-                            self, "_current_trace_id", value
-                        ),
-                        run_conversation=lambda **kwargs: self.agent.run_conversation(
-                            **kwargs
-                        ),
-                        summarize_error=summarize_api_error,
-                        log_error=lambda error: logging.error(
-                            "run_conversation raised: %s",
-                            error,
-                            exc_info=True,
-                        ),
-                    )
-                ).run()
+        def voice_prefix(message: Any) -> str:
+            if not self._voice_state().mode or not isinstance(message, str):
+                return ""
+            return (
+                "[Voice input - respond concisely and conversationally, "
+                "2-3 sentences max. No code blocks or markdown.] "
+            )
 
+        def agent_call_ports(
+            message: Any,
+            prefix: str,
+            prior_history: Sequence[Mapping[str, Any]],
+        ) -> CliAgentTurnCallPorts:
+            return CliAgentTurnCallPorts(
+                message=message,
+                voice_prefix=prefix,
+                pending_model_switch_note=lambda: getattr(
+                    self,
+                    "_pending_model_switch_note",
+                    None,
+                ),
+                clear_pending_model_switch_note=lambda: setattr(
+                    self,
+                    "_pending_model_switch_note",
+                    None,
+                ),
+                prior_history=prior_history,
+                session_id=self.session_id,
+                stream_callback=None,
+                persist_user_message=message if prefix else None,
+                new_trace_id=lambda: str(uuid.uuid4()),
+                set_trace_id=lambda value: setattr(self, "_current_trace_id", value),
+                run_conversation=lambda **kwargs: self.agent.run_conversation(**kwargs),
+                summarize_error=summarize_api_error,
+                log_error=lambda error: logging.error(
+                    "run_conversation raised: %s",
+                    error,
+                    exc_info=True,
+                ),
+            )
+
+        def execution_ports(run_id: str) -> TurnExecutionPorts:
             def check_autonomous_timeout() -> tuple[bool, bool]:
                 timed_out_task = autonomous_runtime.current_task()
                 timed_out_run_id = (
-                    str((timed_out_task or {}).get("_autonomous_task_run_id") or "").strip()
+                    str(
+                        (timed_out_task or {}).get("_autonomous_task_run_id") or ""
+                    ).strip()
                     if isinstance(timed_out_task, dict)
                     else ""
                 )
-                if timed_out_run_id != autonomous_task_run_id:
+                if timed_out_run_id != run_id:
                     return False, False
                 reported = autonomous_runtime.report_current_task_timeout_if_needed(
                     timeout=15,
@@ -3854,131 +3825,52 @@ class VoidcubeCLI:
                 except Exception:
                     pass
 
-            execution = TurnExecutionRuntime(
-                TurnExecutionPorts(
-                    has_interrupt_queue=lambda: hasattr(self, "_interrupt_queue"),
-                    poll_interrupt=lambda defer: poll_interrupt_input(
-                        self._pending_input,
-                        self._interrupt_queue,
-                        timeout=0.1,
-                        defer=defer,
-                    ),
-                    should_defer_interrupt=lambda: bool(
-                        self._clarify_state or self._clarify_freetext
-                    ),
-                    invalidate=lambda: self._invalidate(min_interval=0.15),
-                    interrupt_agent=lambda agent_message: self.agent.interrupt(agent_message),
-                    emit_interrupt_notice=lambda: print(
-                        "\n🔧 New message detected, interrupting..."
-                    ),
-                    check_autonomous_timeout=check_autonomous_timeout,
-                    cleanup_async_clients=cleanup_async_clients,
-                    flush_stream=self._flush_stream,
-                    flush_output=sys.stdout.flush,
-                )
-            ).execute(
-                run_agent,
-                autonomous_task_run_id=autonomous_task_run_id,
-            )
-            result = execution.result
-            turn_interrupt = execution.turn_interrupt
-            autonomous_timeout_reported = execution.autonomous_timeout_reported
-            autonomous_timeout_writeback_succeeded = (
-                execution.autonomous_timeout_writeback_succeeded
+            return TurnExecutionPorts(
+                interrupt_agent=lambda: self.agent.interrupt(None),
+                check_autonomous_timeout=check_autonomous_timeout,
+                cleanup_async_clients=cleanup_async_clients,
+                flush_stream=self._flush_stream,
+                flush_output=sys.stdout.flush,
             )
 
-            applied = TurnResultApplicationRuntime(
-                TurnResultApplicationPorts(
-                    conversation_history=lambda: self.conversation_history,
-                    set_conversation_history=lambda history: setattr(
-                        self, "conversation_history", history
-                    ),
-                    publish_usage=self._ensure_application_runtime().usage_sink,
-                    record_autonomous_result=autonomous_runtime.record_turn_result,
-                    record_autonomous_finished=autonomous_runtime.record_model_turn_finished,
-                )
-            ).apply(
-                result,
-                autonomous_task_run_id=autonomous_task_run_id,
-                autonomous_timeout_reported=autonomous_timeout_reported,
-                autonomous_timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
-            )
-            outcome = applied.outcome
-            response = outcome.response
-            turn_result = applied.turn_result
-            self._ensure_application_runtime().finish_turn(
-                outcome,
-                history_applied=True,
+        def result_ports() -> TurnResultApplicationPorts:
+            return TurnResultApplicationPorts(
+                conversation_history=lambda: self.conversation_history,
+                set_conversation_history=lambda history: setattr(
+                    self,
+                    "conversation_history",
+                    history,
+                ),
+                publish_usage=self._ensure_application_runtime().usage_sink,
+                record_autonomous_result=autonomous_runtime.record_turn_result,
+                record_autonomous_finished=autonomous_runtime.record_model_turn_finished,
             )
 
-            postprocessed = TurnPostprocessingRuntime(
-                TurnPostprocessingPorts(
-                    session_db=lambda: self._session_db,
-                    session_id=lambda: str(self.session_id or ""),
-                    voice_continuous=lambda: bool(self._voice_state().continuous),
-                    stop_voice_continuous=lambda: setattr(
-                        self._voice_state(), "continuous", False
-                    ),
-                    emit=_cprint,
-                )
-            ).process(
-                outcome=outcome,
-                message=message,
-                conversation_history=self.conversation_history,
-                turn_result=turn_result,
-                turn_interrupt=turn_interrupt,
+        def postprocessing_ports() -> TurnPostprocessingPorts:
+            return TurnPostprocessingPorts(
+                session_db=lambda: self._session_db,
+                session_id=lambda: str(self.session_id or ""),
+                voice_continuous=lambda: bool(self._voice_state().continuous),
+                stop_voice_continuous=lambda: setattr(
+                    self._voice_state(),
+                    "continuous",
+                    False,
+                ),
+                emit=_cprint,
             )
-            response = postprocessed.response
-            turn_result = postprocessed.turn_result
-            pending_message = postprocessed.pending_message
 
-            response_previewed = outcome.response_previewed
-
-            def bell() -> None:
-                sys.stdout.write("\a")
-                sys.stdout.flush()
-
-            CliChatFinalizationRuntime(
-                CliChatFinalizationPorts(
-                    should_emit_scrollback=self._should_emit_scrollback_output,
-                    show_reasoning=lambda: bool(self.show_reasoning),
-                    reasoning_already_shown=lambda: bool(
-                        self._stream_render_state.reasoning_shown_this_turn
-                    ),
-                    terminal_width=lambda: shutil.get_terminal_size().columns,
-                    emit=_cprint,
-                    create_console=ChatConsole,
-                    rich_text_from_ansi=_rich_text_from_ansi,
-                    bell_on_complete=lambda: bool(self.bell_on_complete),
-                    bell=bell,
-                    has_pending_queue=lambda: hasattr(self, "_pending_input"),
-                    requeue_followup=lambda payload: requeue_interrupted_inputs(
-                        self._pending_input,
-                        self._interrupt_queue,
-                        payload,
-                    ),
-                    emit_followup=print,
-                )
-            ).finalize(
-                response=response,
-                response_previewed=response_previewed,
-                failed=outcome.failed,
-                partial=outcome.partial,
-                stream_started=self._stream_render_state.started,
-                response_box_open=self._stream_render_state.response_box_open,
-                reasoning=outcome.last_reasoning,
-                pending_message=pending_message,
-            )
-            
-            return response
-            
-        except Exception as e:
+        def handle_error(
+            error: Exception,
+            timeout_reported: bool,
+            run_id: str,
+            timeout_writeback_succeeded: bool,
+        ) -> None:
             CliChatErrorRuntime(
                 CliChatErrorPorts(
-                    autonomous_timeout_reported=autonomous_timeout_reported,
-                    autonomous_task_run_id=autonomous_task_run_id,
+                    autonomous_timeout_reported=timeout_reported,
+                    autonomous_task_run_id=run_id,
                     autonomous_timeout_writeback_succeeded=(
-                        autonomous_timeout_writeback_succeeded
+                        timeout_writeback_succeeded
                     ),
                     current_autonomous_task=autonomous_runtime.current_task,
                     set_last_agent_turn_result=(
@@ -3987,13 +3879,97 @@ class VoidcubeCLI:
                     should_emit=self._should_emit_scrollback_output,
                     emit=print,
                 )
-            ).handle(e)
-            return None
-        finally:
-            if autonomous_toolsets is not None:
-                self.agent = None
-            self._active_chat_agent_role = previous_active_role
-    
+            ).handle(error)
+
+        runtime = CliAgentTurnExecutorRuntime(
+            CliAgentTurnExecutorPorts(
+                ensure_credentials=self._ensure_runtime_credentials,
+                current_autonomous_task=autonomous_runtime.current_task,
+                set_last_agent_turn_result=autonomous_runtime.set_last_agent_turn_result,
+                agent_exists=lambda: self.agent is not None,
+                clear_agent=lambda: setattr(self, "agent", None),
+                active_route_signature=lambda: self._active_agent_route_signature,
+                resolve_route=self._resolve_turn_agent_config,
+                initialize_agent=initialize_agent,
+                prepare_input_ports=prepare_input_ports,
+                record_user_message=record_user_message,
+                notify_turn_started=notify_turn_started,
+                set_agent_running=lambda value: setattr(
+                    self,
+                    "_agent_running",
+                    bool(value),
+                ),
+                active_role=lambda: str(
+                    getattr(self, "_active_chat_agent_role", "") or ""
+                ),
+                set_active_role=lambda value: setattr(
+                    self,
+                    "_active_chat_agent_role",
+                    value,
+                ),
+                begin_stream=self._stream_render_state.begin_turn,
+                voice_prefix=voice_prefix,
+                agent_call_ports=agent_call_ports,
+                execution_ports=execution_ports,
+                result_ports=result_ports,
+                postprocessing_ports=postprocessing_ports,
+                finish_turn=lambda applied: self._ensure_application_runtime().finish_turn(
+                    applied.outcome,
+                    history_applied=True,
+                ),
+                handle_error=handle_error,
+            )
+        )
+        self._agent_turn_executor_runtime_instance = runtime
+        return runtime
+
+    def _present_agent_turn_result(self, result: CliAgentTurnResult) -> None:
+        def bell() -> None:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+
+        CliChatFinalizationRuntime(
+            CliChatFinalizationPorts(
+                should_emit_scrollback=self._should_emit_scrollback_output,
+                show_reasoning=lambda: bool(self.show_reasoning),
+                reasoning_already_shown=lambda: bool(
+                    self._stream_render_state.reasoning_shown_this_turn
+                ),
+                terminal_width=lambda: shutil.get_terminal_size().columns,
+                emit=_cprint,
+                create_console=ChatConsole,
+                rich_text_from_ansi=_rich_text_from_ansi,
+                bell_on_complete=lambda: bool(self.bell_on_complete),
+                bell=bell,
+            )
+        ).finalize(
+            response=result.response,
+            response_previewed=result.outcome.response_previewed,
+            failed=result.outcome.failed,
+            partial=result.outcome.partial,
+            stream_started=self._stream_render_state.started,
+            response_box_open=self._stream_render_state.response_box_open,
+            reasoning=result.outcome.last_reasoning,
+        )
+
+    def _execute_agent_turn_request(
+        self,
+        request: TurnRequest,
+        cancellation: CancellationToken,
+    ) -> Optional[str]:
+        result = self._agent_turn_executor_runtime().execute(request, cancellation)
+        if isinstance(result, CliAgentTurnResult):
+            self._present_agent_turn_result(result)
+            return result.response
+        return result
+
+    def chat(self, message, images: list = None) -> Optional[str]:
+        _get_set_secret_capture_callback()(self._secret_capture_callback)
+        return self._execute_agent_turn_request(
+            self._direct_turn_request(message, images),
+            CancellationToken(),
+        )
+
     def _print_exit_summary(self):
         """Render session resume information through the display runtime."""
         CliExitSummaryRuntime(
@@ -4156,13 +4132,10 @@ class VoidcubeCLI:
                 run_api_command=run_api_command,
                 autonomous_gate_active=lambda: bool(self._autonomous_gate_active),
                 exit_autonomous_gate_fast=exit_autonomous_gate_fast,
-                 enqueue_input=lambda payload, is_command: self._ensure_application_runtime().enqueue_turn_input(
-                     payload,
-                     is_command=is_command,
-                     busy_input_mode=self.busy_input_mode,
-                 ),
+                enqueue_input=lambda payload: self._ensure_application_runtime().enqueue_turn_input(
+                    payload
+                ),
                 agent_running=lambda: bool(self._agent_running),
-                busy_input_mode=lambda: self.busy_input_mode,
                 emit=_cprint,
             )
         )
@@ -4370,6 +4343,8 @@ class VoidcubeCLI:
         return CliLifecycleGuardRuntime(
             CliLifecycleGuardPorts(
                 install_signal=signal.signal,
+                sigint=signal.SIGINT,
+                sigint_ignore=signal.SIG_IGN,
                 sigterm=signal.SIGTERM,
                 sighup=getattr(signal, "SIGHUP", None),
                 get_running_loop=asyncio.get_running_loop,
@@ -4722,10 +4697,7 @@ def _maybe_stop_daemons_on_exit(force: bool = False) -> None:
     except ImportError:
         return
 
-    try:
-        stop_all(force=True)
-    except KeyboardInterrupt:
-        pass
+    stop_all(force=True)
     _daemons_auto_started = False
 
 

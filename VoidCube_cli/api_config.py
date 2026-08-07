@@ -1410,7 +1410,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         try:
             user_input = sys.stdin.readline().strip()
             return user_input if user_input else default
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             return default
 
     def secret_inp(prompt, default=""):
@@ -1418,7 +1418,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         try:
             value = getpass.getpass(f"{prompt}: ")
             return value if value else default
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             return default
 
     def apply_runtime_updates(selected_model: str, provider_key: str) -> None:

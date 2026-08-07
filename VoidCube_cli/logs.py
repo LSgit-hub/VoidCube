@@ -239,11 +239,8 @@ def tail_log(
         return
 
     # Follow mode — poll for new content
-    try:
-        _follow_log(log_path, min_level=min_level, session_filter=session,
-                     since=since_dt, component_prefixes=component_prefixes)
-    except KeyboardInterrupt:
-        print("\n--- stopped ---")
+    _follow_log(log_path, min_level=min_level, session_filter=session,
+                since=since_dt, component_prefixes=component_prefixes)
 
 
 def _read_tail(

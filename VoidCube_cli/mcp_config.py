@@ -51,7 +51,7 @@ def _confirm(question: str, default: bool = True) -> bool:
     default_str = "Y/n" if default else "y/N"
     try:
         val = input(color(f"  {question} [{default_str}]: ", Colors.YELLOW)).strip().lower()
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         print()
         return default
     if not val:
@@ -360,7 +360,7 @@ def cmd_mcp_add(args):
         choice = input(
             color(f"  Enable all {len(tools)} tools? [Y/n/select]: ", Colors.YELLOW)
         ).strip().lower()
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         print()
         _info("Cancelled.")
         return

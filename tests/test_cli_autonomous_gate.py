@@ -781,14 +781,46 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
         def invalidate(self):
             self.invalidate_calls += 1
 
-    def fake_chat(user_input, images=None):
+    def fake_execute(request, _token):
+        user_input, images = request.prompt
         calls.append({"user_input": user_input, "images": images})
         cli._last_agent_turn_result = {"failed": False}
 
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
 
     app = _FakeApp()
-    cli.chat = fake_chat
+    cli._execute_agent_turn_request = fake_execute
+    cli._scheduler_runtime = lambda: type(
+        "_Runtime",
+        (),
+        {
+            "scheduler": type(
+                "_Scheduler",
+                (),
+                {
+                    "snapshot": lambda _scheduler: type(
+                        "_Snapshot",
+                        (),
+                        {"autonomous_gate": True},
+                    )()
+                },
+            )(),
+            "submit_autonomous": lambda _runtime, _host, payload: (
+                fake_execute(
+                    type("_Request", (), {"prompt": payload})(),
+                    None,
+                )
+                or True
+            ),
+            "submit_user": lambda _runtime, _host, payload: (
+                fake_execute(
+                    type("_Request", (), {"prompt": payload})(),
+                    None,
+                )
+                or True
+            ),
+        },
+    )()
 
     handled = cli._execute_pending_input("[Autonomous Learning Task] Learn backlog recovery", app=app)
 
@@ -820,14 +852,46 @@ def test_embedded_autonomous_component_execute_pending_input_stays_out_of_main_s
         def print(self, *args, **kwargs):
             scrollback.append(("chat", args, kwargs))
 
-    def fake_chat(user_input, images=None):
+    def fake_execute(request, _token):
+        user_input, images = request.prompt
         chat_calls.append({"user_input": user_input, "images": images})
         cli._last_agent_turn_result = {"failed": False}
 
     monkeypatch.setattr("cli.ChatConsole", _FakeChatConsole)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append(("cprint", args, kwargs)))
 
-    cli.chat = fake_chat
+    cli._execute_agent_turn_request = fake_execute
+    cli._scheduler_runtime = lambda: type(
+        "_Runtime",
+        (),
+        {
+            "scheduler": type(
+                "_Scheduler",
+                (),
+                {
+                    "snapshot": lambda _scheduler: type(
+                        "_Snapshot",
+                        (),
+                        {"autonomous_gate": True},
+                    )()
+                },
+            )(),
+            "submit_autonomous": lambda _runtime, _host, payload: (
+                fake_execute(
+                    type("_Request", (), {"prompt": payload})(),
+                    None,
+                )
+                or True
+            ),
+            "submit_user": lambda _runtime, _host, payload: (
+                fake_execute(
+                    type("_Request", (), {"prompt": payload})(),
+                    None,
+                )
+                or True
+            ),
+        },
+    )()
 
     handled = cli._execute_pending_input("[Autonomous Learning Task] Embedded quiet turn", app=None)
 
@@ -900,7 +964,6 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
     cli._last_agent_turn_result = None
     cli._active_chat_agent_role = ""
     cli.conversation_history = []
-    cli._interrupt_queue = queue.Queue()
     cli._pending_input = queue.Queue()
     cli._invalidate = lambda *args, **kwargs: None
     cli._voice_runtime_state = CliVoiceRuntimeState()
@@ -955,12 +1018,18 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
 
     monkeypatch.setattr("cli.ChatConsole", _FakeChatConsole)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append(("cprint", args, kwargs)))
+    secret_callbacks = []
+    monkeypatch.setattr(
+        "cli._get_set_secret_capture_callback",
+        lambda: secret_callbacks.append,
+    )
     monkeypatch.setattr("agent.title_generator.maybe_auto_title", lambda *args, **kwargs: None)
     cli._init_agent = fake_init_agent
 
     response = cli.chat("embedded autonomous prompt")
 
     assert response == "embedded autonomous result"
+    assert secret_callbacks == [cli._secret_capture_callback]
     assert scrollback == []
     assert parent.conversation_history == [{"role": "user", "content": "parent"}]
     assert cli.conversation_history[-1] == {

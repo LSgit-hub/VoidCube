@@ -47,9 +47,8 @@ class EnterKeybindingPorts:
     run_api_command: Callable[[Any], None]
     autonomous_gate_active: Callable[[], bool]
     exit_autonomous_gate_fast: Callable[[], None]
-    enqueue_input: Callable[[Any, bool], TurnInputRoute]
+    enqueue_input: Callable[[Any], TurnInputRoute]
     agent_running: Callable[[], bool]
-    busy_input_mode: Callable[[], Any]
     emit: Callable[[str], None]
 
 
@@ -109,7 +108,7 @@ class EnterKeybindingRuntime:
             return
 
         is_command = bool(text and looks_like_slash_command(text))
-        route = self.ports.enqueue_input(payload, is_command)
+        route = self.ports.enqueue_input(payload)
         if route is TurnInputRoute.NEXT_TURN and self.ports.agent_running() and not is_command:
             preview = text or f"[{len(images)} image{'s' if len(images) != 1 else ''} attached]"
             self.ports.emit(

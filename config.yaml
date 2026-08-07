@@ -107,7 +107,6 @@ display:
   compact: false
   personality: kawaii
   resume_display: full
-  busy_input_mode: interrupt
   bell_on_complete: false
   show_reasoning: false
   streaming: false

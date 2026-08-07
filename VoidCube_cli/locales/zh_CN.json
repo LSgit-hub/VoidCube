@@ -3049,7 +3049,6 @@
       "prompts.usage__voice_[on|off|tts|status]": "Usage: /voice [on|off|tts|status]",
       "prompts.\\n_[tools]": "\\n  [Tools]",
       "prompts.\\n🔧_force_exiting...": "\\n🔧 Force exiting...",
-      "prompts.\\n🔧_new_message_detected,_interrupting...": "\\n🔧 New message detected, interrupting...",
       "prompts.🌐_browser_connected_to_live_chrome_via_cdp": "🌐 Browser connected to live Chrome via CDP",
       "prompts.🌐_browser_disconnected_from_live_chrome": "🌐 Browser disconnected from live Chrome",
       "prompts.🌐_browser_local_headless_chromium_(agent-browser)": "🌐 Browser: local headless Chromium (agent-browser)",

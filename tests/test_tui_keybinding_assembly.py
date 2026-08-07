@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from VoidCube_cli.tui_keybinding_assembly import (
     TuiKeybindingAssemblyPorts,
@@ -42,6 +43,6 @@ def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> 
         tuple(key.value if hasattr(key, "value") else str(key) for key in binding.keys)
         for binding in bindings.bindings
     }
-    assert ("c-c",) not in key_sequences
+    assert (Keys.ControlC.value,) not in key_sequences
     assert ("c-d",) not in key_sequences
-    assert ("c-v",) not in key_sequences
+    assert (Keys.ControlV.value,) not in key_sequences

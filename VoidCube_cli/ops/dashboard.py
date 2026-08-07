@@ -636,23 +636,20 @@ def watch_dashboard(interval: float = 3.0) -> None:
     # ANSI clear-screen sequence
     clear = "\033[2J\033[H"
 
-    try:
-        while True:
-            # Clear and re-print
-            sys.stdout.write(clear)
-            sys.stdout.flush()
+    while True:
+        # Clear and re-print
+        sys.stdout.write(clear)
+        sys.stdout.flush()
 
-            # Timestamp
-            from datetime import datetime
-            print(f"  刷新时间 {datetime.now().strftime('%H:%M:%S')}")
+        # Timestamp
+        from datetime import datetime
+        print(f"  刷新时间 {datetime.now().strftime('%H:%M:%S')}")
+        print()
+
+        try:
+            print_dashboard()
+        except Exception as exc:
+            print(f"  ⚠ Dashboard 错误: {exc}")
             print()
 
-            try:
-                print_dashboard()
-            except Exception as exc:
-                print(f"  ⚠ Dashboard 错误: {exc}")
-                print()
-
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\n  监视已停止。\n")
+        time.sleep(interval)

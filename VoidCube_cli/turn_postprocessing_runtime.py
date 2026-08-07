@@ -1,4 +1,4 @@
-"""Post-process one model-turn outcome before presentation and requeueing."""
+"""Post-process one model-turn outcome before presentation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from VoidCube_app.turn_contract import TurnOutcome
-from VoidCube_app.turn_queue import TurnInterrupt, resolve_interrupted_followup
 
 
 _DIM = "\033[2m"
@@ -29,11 +28,10 @@ class TurnPostprocessingPorts:
 class TurnPostprocessingResult:
     response: str
     turn_result: dict[str, Any]
-    pending_message: Any = None
 
 
 class TurnPostprocessingRuntime:
-    """Own title, failure, voice-error and interrupted-follow-up transitions."""
+    """Own title, failure and voice-error transitions."""
 
     def __init__(self, ports: TurnPostprocessingPorts) -> None:
         self.ports = ports
@@ -45,7 +43,6 @@ class TurnPostprocessingRuntime:
         message: str,
         conversation_history: Sequence[dict[str, Any]],
         turn_result: dict[str, Any],
-        turn_interrupt: TurnInterrupt | None,
     ) -> TurnPostprocessingResult:
         response = outcome.response
         result = dict(turn_result)
@@ -73,17 +70,7 @@ class TurnPostprocessingRuntime:
                     f"\n{_DIM}Continuous voice mode stopped due to error.{_RST}"
                 )
 
-        pending_message = None
-        if outcome.interrupted:
-            pending_message = resolve_interrupted_followup(
-                turn_interrupt,
-                outcome.interrupt_message,
-            )
-            if response and pending_message:
-                response = response + "\n\n---\n_[Interrupted - processing new message]_"
-
         return TurnPostprocessingResult(
             response=response,
             turn_result=result,
-            pending_message=pending_message,
         )

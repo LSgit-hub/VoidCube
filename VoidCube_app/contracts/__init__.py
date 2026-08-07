@@ -1,6 +1,7 @@
 """Stable, user-interface-independent application contracts."""
 
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.executor import AgentExecutor
 from VoidCube_app.contracts.events import (
     ApplicationEvent,
     ApplicationEventSink,
@@ -29,6 +30,7 @@ from VoidCube_app.contracts.scheduler import (
 
 __all__ = [
     "Artifact",
+    "AgentExecutor",
     "ApplicationEvent",
     "ApplicationEventSink",
     "ApplicationClock",

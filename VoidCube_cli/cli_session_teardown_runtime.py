@@ -35,7 +35,7 @@ class CliSessionTeardownRuntime:
             return
         try:
             ports.end_session(repository, ports.session_id(), "cli_close")
-        except (Exception, KeyboardInterrupt) as error:
+        except Exception as error:
             ports.log_debug("Could not close session in DB: %s", error)
 
     def finish_interrupted_session(self) -> None:

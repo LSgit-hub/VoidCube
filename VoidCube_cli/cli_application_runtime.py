@@ -43,7 +43,7 @@ class CliApplicationRuntime:
             with ports.stdout_context():
                 ports.install_asyncio_exception_handler()
                 ports.run_application()
-        except (EOFError, KeyboardInterrupt, BrokenPipeError):
+        except (EOFError, BrokenPipeError):
             pass
         except (KeyError, OSError) as error:
             if ports.is_unusable_stdin_error(error):

@@ -208,7 +208,7 @@ def _login_api_key(provider: str, args) -> None:
     print()
     try:
         api_key = getpass.getpass("  API Key (input hidden): ").strip()
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         print("\n  Cancelled.")
         return
 

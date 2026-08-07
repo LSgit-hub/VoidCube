@@ -460,7 +460,7 @@ def _run_service_in_thread(name: str, port: int) -> None:
     server = uvicorn.Server(config)
     try:
         loop.run_until_complete(server.serve())
-    except (KeyboardInterrupt, SystemExit):
+    except SystemExit:
         pass
     finally:
         loop.close()
@@ -586,7 +586,7 @@ def stop_service(name: str, silent: bool = False) -> bool:
             time.sleep(0.5)
             if _pid_alive(pid):
                 os.kill(pid, signal.SIGKILL)
-    except (Exception, KeyboardInterrupt):
+    except Exception:
         pass
 
     _delete_pid(svc.pid_file)
@@ -698,12 +698,9 @@ def start_all(foreground: bool = False) -> None:
         _safe_print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
         _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
         _safe_print()
-        try:
-            import threading
-            for t in _foreground_threads:
-                t.join()
-        except KeyboardInterrupt:
-            _safe_print("\n  Shutting down...")
+        import threading
+        for thread in _foreground_threads:
+            thread.join()
         return
 
     _safe_print()

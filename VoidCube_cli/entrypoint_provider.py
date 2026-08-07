@@ -105,7 +105,7 @@ def select_provider_and_model(args=None):
         if model_idx == len(numbered_choices) - 2:
             try:
                 selected_model = input("Model name: ").strip()
-            except (KeyboardInterrupt, EOFError):
+            except EOFError:
                 print()
                 print("No change.")
                 return
@@ -118,7 +118,7 @@ def select_provider_and_model(args=None):
         prompt += ": "
         try:
             entered = input(prompt).strip()
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             print()
             print("No change.")
             return
@@ -171,7 +171,7 @@ def _prompt_provider_choice(choices, *, default=0):
             print(f"Please enter 1-{len(choices)}")
         except ValueError:
             print("Please enter a number")
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             print()
             return None
 

@@ -12,9 +12,8 @@ def _runtime(calls):
             should_emit_scrollback=lambda: False,
             process_command=lambda command: calls.append(("command", command)) or True,
             set_should_exit=lambda value: calls.append(("exit", value)),
-            set_agent_running=lambda value: calls.append(("running", value)),
             reset_turn_state=lambda: calls.append("reset"),
-            chat=lambda message, images: calls.append(("chat", message, images)),
+            submit_turn=lambda payload, app: calls.append(("submit", payload, app)) or True,
             invalidate_app=lambda app: calls.append(("invalidate", app)),
             exit_app=lambda app: calls.append(("app-exit", app)),
             voice_restart_ready=lambda: False,
@@ -32,10 +31,8 @@ def test_pending_input_runtime_owns_turn_lifecycle_through_ports():
     assert _runtime(calls).execute("hello") is True
 
     assert calls == [
-        ("running", True),
         ("invalidate", None),
-        ("chat", "hello", None),
-        ("running", False),
+        ("submit", ("hello", None), None),
         "reset",
         ("invalidate", None),
     ]

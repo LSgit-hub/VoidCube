@@ -26,9 +26,8 @@ class PendingInputExecutionPorts:
     should_emit_scrollback: Callable[[], bool]
     process_command: Callable[[str], bool]
     set_should_exit: Callable[[bool], None]
-    set_agent_running: Callable[[bool], None]
     reset_turn_state: Callable[[], None]
-    chat: Callable[[Any, list[Any] | None], Any]
+    submit_turn: Callable[[Any, Any], bool]
     invalidate_app: Callable[[Any | None], None]
     exit_app: Callable[[Any], None]
     voice_restart_ready: Callable[[], bool]
@@ -36,8 +35,6 @@ class PendingInputExecutionPorts:
     enqueue_pending_input: Callable[[Any], None]
     render_markup: Callable[[str], None]
     emit: Callable[[str], None] = _cprint
-    submit_turn: Callable[[Any, Any], bool] | None = None
-    submit_turn: Callable[[Any, Any], bool] | None = None
 
 
 class PendingInputRuntime:
@@ -90,9 +87,6 @@ class PendingInputRuntime:
                 f"  {_DIM}📎 {count} image{'s' if count > 1 else ''} attached{_RST}"
             )
 
-        deferred_turn = self.ports.submit_turn is not None
-        if not deferred_turn:
-            self.ports.set_agent_running(True)
         self.ports.invalidate_app(app)
         sanitized = str(user_input).encode("ascii", errors="replace").decode("ascii")
         logger.info(
@@ -102,13 +96,8 @@ class PendingInputRuntime:
         )
 
         try:
-            if self.ports.submit_turn is not None:
-                self.ports.submit_turn((user_input, submit_images or None), app)
-            else:
-                self.ports.chat(user_input, submit_images or None)
+            self.ports.submit_turn((user_input, submit_images or None), app)
         finally:
-            if not deferred_turn:
-                self.ports.set_agent_running(False)
             self.ports.reset_turn_state()
             self.ports.invalidate_app(app)
             self._restart_continuous_voice_if_needed(app)

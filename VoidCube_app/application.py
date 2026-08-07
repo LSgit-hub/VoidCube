@@ -52,14 +52,7 @@ from VoidCube_app.session_lifecycle import (
     start_new_session as _start_new_session,
 )
 from VoidCube_app.tool_events import ToolEvent
-from VoidCube_app.turn_queue import (
-    TurnInputRoute,
-    TurnInterrupt,
-    TurnInterruptReason,
-    cancel_turn as _cancel_turn,
-    interrupt_for_input as _interrupt_for_input,
-    route_turn_input as _route_turn_input,
-)
+from VoidCube_app.turn_queue import TurnInputRoute
 from VoidCube_app.turn_contract import (
     Message,
     TurnInput,
@@ -81,7 +74,6 @@ class ApplicationState:
     session_hydration: SessionHydration | None = None
     agent_running: bool = False
     pending_input_queue: queue.Queue[Any] = field(default_factory=queue.Queue)
-    interrupt_queue: queue.Queue[Any] = field(default_factory=queue.Queue)
 
     @property
     def turn_active(self) -> bool:
@@ -182,7 +174,6 @@ class ApplicationRuntime:
     def reset_input_queues(self) -> None:
         """Start a fresh adapter run while retaining shared session identity."""
         self.state.pending_input_queue = queue.Queue()
-        self.state.interrupt_queue = queue.Queue()
 
     def set_agent_running(self, value: bool) -> None:
         self.state.agent_running = bool(value)
@@ -334,48 +325,10 @@ class ApplicationRuntime:
     def enqueue_turn_input(
         self,
         payload: Any,
-        *,
-        is_command: bool,
-        busy_input_mode: Any,
     ) -> TurnInputRoute:
-        """Route and enqueue input through the shared turn state."""
-        route = _route_turn_input(
-            agent_running=self.state.agent_running,
-            is_command=is_command,
-            busy_input_mode=busy_input_mode,
-        )
-        target = (
-            self.state.pending_input_queue
-            if route is TurnInputRoute.NEXT_TURN
-            else self.state.interrupt_queue
-        )
-        target.put(payload)
-        return route
-
-    def route_turn_input(
-        self,
-        *,
-        agent_running: bool | None = None,
-        is_command: bool,
-        busy_input_mode: Any,
-    ) -> TurnInputRoute:
-        return _route_turn_input(
-            agent_running=(
-                self.state.agent_running
-                if agent_running is None
-                else agent_running
-            ),
-            is_command=is_command,
-            busy_input_mode=busy_input_mode,
-        )
-
-    @staticmethod
-    def interrupt_for_input(payload: Any) -> TurnInterrupt:
-        return _interrupt_for_input(payload)
-
-    @staticmethod
-    def cancel_turn(reason: TurnInterruptReason) -> TurnInterrupt:
-        return _cancel_turn(reason)
+        """Queue input for Scheduler admission without cancelling active work."""
+        self.state.pending_input_queue.put(payload)
+        return TurnInputRoute.NEXT_TURN
 
     def begin_turn(self, user_message: Any) -> TurnInput:
         if self.state.turn_active:

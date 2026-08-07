@@ -15,6 +15,8 @@ def _runtime(calls, *, sighup=True, stdin_ok=True):
     return CliLifecycleGuardRuntime(
         CliLifecycleGuardPorts(
             install_signal=lambda name, handler: calls.append(("signal", name, handler)),
+            sigint="INT",
+            sigint_ignore="IGNORE",
             sigterm="TERM",
             sighup="HUP" if sighup else None,
             get_running_loop=lambda: loop,
@@ -31,19 +33,24 @@ def _runtime(calls, *, sighup=True, stdin_ok=True):
     ), loop
 
 
-def test_signal_installation_and_handler_trigger_keyboard_interrupt():
+def test_signal_installation_leaves_terminal_interrupt_unhandled():
     calls = []
     runtime, _loop = _runtime(calls)
     runtime.install_signal_handlers()
 
-    assert [call[:2] for call in calls] == [("signal", "TERM"), ("signal", "HUP")]
-    handler = calls[0][2]
+    assert [call[:2] for call in calls] == [
+        ("signal", "INT"),
+        ("signal", "TERM"),
+        ("signal", "HUP"),
+    ]
+    assert calls[0][2] == "IGNORE"
+    handler = calls[1][2]
     try:
         handler(15, object())
-    except KeyboardInterrupt:
-        pass
+    except SystemExit as error:
+        assert error.code == 143
     else:
-        raise AssertionError("signal handler must interrupt the application")
+        raise AssertionError("termination signal must stop the application")
     assert ("log-signal", 15) in calls
 
 

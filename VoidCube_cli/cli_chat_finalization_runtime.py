@@ -1,4 +1,4 @@
-"""Compose completed-turn response rendering and interrupted follow-up handling."""
+"""Compose completed-turn response rendering."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from VoidCube_cli.chat_response_runtime import ChatResponsePorts, ChatResponseRuntime
-from VoidCube_cli.interrupted_followup_runtime import (
-    InterruptedFollowupPorts,
-    InterruptedFollowupRuntime,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +22,6 @@ class CliChatFinalizationPorts:
     rich_text_from_ansi: Callable[[str], Any]
     bell_on_complete: Callable[[], bool]
     bell: Callable[[], None]
-    has_pending_queue: Callable[[], bool]
-    requeue_followup: Callable[[Any], Any]
-    emit_followup: Callable[[str], None]
 
 
 class CliChatFinalizationRuntime:
@@ -47,7 +40,6 @@ class CliChatFinalizationRuntime:
         stream_started: bool,
         response_box_open: bool,
         reasoning: str,
-        pending_message: Any,
     ) -> None:
         ports = self.ports
         ChatResponseRuntime(
@@ -71,10 +63,3 @@ class CliChatFinalizationRuntime:
             response_box_open=response_box_open,
             reasoning=reasoning,
         )
-        InterruptedFollowupRuntime(
-            InterruptedFollowupPorts(
-                has_queue=ports.has_pending_queue,
-                requeue=ports.requeue_followup,
-                emit=ports.emit_followup,
-            )
-        ).requeue(pending_message)

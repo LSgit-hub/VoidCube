@@ -8,7 +8,7 @@ import pytest
 from VoidCube_app.application import ApplicationRuntime
 from VoidCube_app.contracts.events import SessionEventKind
 from VoidCube_app.session_lifecycle import HistoryMutationStatus, SessionTitleStatus
-from VoidCube_app.turn_queue import TurnInputRoute, TurnInterruptReason
+from VoidCube_app.turn_queue import TurnInputRoute
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -164,13 +164,8 @@ def test_public_history_title_and_turn_control_use_cases_share_runtime_state() -
     assert current.title == "Work"
     assert mutation.status is HistoryMutationStatus.APPLIED
     assert runtime.state.conversation_history == history[:2]
-    assert runtime.route_turn_input(
-        agent_running=True,
-        is_command=False,
-        busy_input_mode="interrupt",
-    ) is TurnInputRoute.INTERRUPT
-    assert runtime.interrupt_for_input("follow up").followup_payload == "follow up"
-    assert runtime.cancel_turn(TurnInterruptReason.USER_CANCELLED).agent_message is None
+    assert runtime.enqueue_turn_input("follow up") is TurnInputRoute.NEXT_TURN
+    assert runtime.state.pending_input_queue.get_nowait() == "follow up"
 
 
 def test_shared_runtime_owns_pending_title_hydration_busy_state_and_queues() -> None:
@@ -186,15 +181,11 @@ def test_shared_runtime_owns_pending_title_hydration_busy_state_and_queues() -> 
     assert queued.status is SessionTitleStatus.QUEUED
     assert runtime.state.pending_title == "Queued"
     runtime.set_agent_running(True)
-    runtime.enqueue_turn_input(
-        "interrupt me",
-        is_command=False,
-        busy_input_mode="interrupt",
-    )
+    route = runtime.enqueue_turn_input("queue me")
 
     assert runtime.state.agent_running is True
-    assert runtime.state.interrupt_queue.get_nowait() == "interrupt me"
-    assert runtime.state.pending_input_queue.empty()
+    assert route is TurnInputRoute.NEXT_TURN
+    assert runtime.state.pending_input_queue.get_nowait() == "queue me"
 
     runtime.clear_pending_title()
     runtime.clear_session_hydration()
