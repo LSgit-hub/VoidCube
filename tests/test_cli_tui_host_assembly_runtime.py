@@ -31,7 +31,6 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
     monkeypatch.setattr(assembly_module, "TuiRuntimeFactory", FakeFactory)
     registrations = CliInteractiveRegistrations(
         enter=SimpleNamespace(handle="enter"),
-        control=SimpleNamespace(handle_ctrl_c="ctrl-c", handle_ctrl_d="ctrl-d"),
         voice=SimpleNamespace(handle="voice"),
         suspend=SimpleNamespace(handle="suspend"),
         dynamic_text=SimpleNamespace(),
@@ -106,7 +105,6 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
     assert assembly.build() == "application"
     factory_ports = captured["ports"]
     assert factory_ports.enter == "enter"
-    assert factory_ports.ctrl_c == "ctrl-c"
     assert factory_ports.voice_key == "c-b"
     assert factory_ports.input.history_path == "history"
     assert factory_ports.register_extra_keybindings is register_extra_keybindings

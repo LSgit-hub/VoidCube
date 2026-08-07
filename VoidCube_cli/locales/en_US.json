@@ -47,6 +47,9 @@
       "stop": {
         "description": "Kill all running background processes"
       },
+      "cancel": {
+        "description": "Cancel the active user turn"
+      },
       "approve": {
         "description": "Approve a pending dangerous command"
       },
@@ -325,7 +328,7 @@
       "login_successful": "Login successful!",
       "login_cancelled": "Login cancelled.",
       "signing_in": "Signing in to {provider}...",
-      "waiting_signin": "Waiting for sign-in... (press Ctrl+C to cancel)",
+      "waiting_signin": "Waiting for sign-in...",
       "please_enter_number": "Please enter a number",
       "invalid_choice": "Invalid choice.",
       "credential_pool_status": "Credential Pool Status",
@@ -422,7 +425,7 @@
       "skill_commands": "⚡ Skill Commands",
       "tip_chat": "Tip: Just type your message to chat with Voidcube!",
       "tip_multiline": "Multi-line: Alt+Enter for a new line",
-      "tip_paste": "Paste image: Alt+V (or /paste)"
+      "tip_paste": "Paste image: use /paste"
     },
     "time": {
       "just_now": "just now",

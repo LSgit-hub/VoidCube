@@ -24,7 +24,6 @@ class CliInteractiveRegistrationPorts:
     approval_sink: Callable[..., object]
     secret_capture_callback: Callable[..., object]
     create_enter_runtime: Callable[[], object]
-    create_control_runtime: Callable[[], object]
     create_voice_runtime: Callable[[], object]
     create_suspend_runtime: Callable[[], object]
     create_dynamic_text_runtime: Callable[[], object]
@@ -36,7 +35,6 @@ class CliInteractiveRegistrations:
     """Registrations consumed by the TUI and interactive lifecycle host."""
 
     enter: object
-    control: object
     voice: object
     suspend: object
     dynamic_text: object
@@ -65,7 +63,6 @@ class CliInteractiveRegistrationRuntime:
         ).prepare()
         return CliInteractiveRegistrations(
             enter=ports.create_enter_runtime(),
-            control=ports.create_control_runtime(),
             voice=ports.create_voice_runtime(),
             suspend=ports.create_suspend_runtime(),
             dynamic_text=ports.create_dynamic_text_runtime(),

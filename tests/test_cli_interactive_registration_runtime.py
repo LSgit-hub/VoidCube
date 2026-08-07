@@ -25,7 +25,6 @@ def _ports(calls, *, voice_key="ctrl+b", load_error=None):
         approval_sink=lambda: None,
         secret_capture_callback=lambda: None,
         create_enter_runtime=lambda: calls.append("enter") or SimpleNamespace(),
-        create_control_runtime=lambda: calls.append("control") or SimpleNamespace(),
         create_voice_runtime=lambda: calls.append("voice") or SimpleNamespace(),
         create_suspend_runtime=lambda: calls.append("suspend") or SimpleNamespace(),
         create_dynamic_text_runtime=lambda: calls.append("dynamic") or SimpleNamespace(),
@@ -44,7 +43,7 @@ def test_registration_runtime_prepares_preflight_before_building_runtimes(monkey
     result = CliInteractiveRegistrationRuntime(ports).prepare()
 
     assert calls[0][0] == "preflight"
-    assert calls[1:] == ["preflight-prepare", "enter", "control", "voice", "suspend", "dynamic"]
+    assert calls[1:] == ["preflight-prepare", "enter", "voice", "suspend", "dynamic"]
     assert result.voice_key == "a-v"
 
 

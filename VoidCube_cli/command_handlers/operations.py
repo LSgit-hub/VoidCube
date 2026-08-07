@@ -19,6 +19,14 @@ class StopCommandPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class CancelCommandPorts:
+    agent_running: Callable[[], bool]
+    interrupt_agent: Callable[[], None]
+    emit: Callable[[str], None]
+    cancel_scheduler: Callable[[], bool] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DoctorCommandPorts:
     run_diagnosis: Callable[[], None]
 
@@ -174,3 +182,24 @@ def handle_stop_command(
         return
     ports.emit(ports.stopping_message(running_count))
     ports.emit(ports.stopped_message(ports.kill_all()))
+
+
+def handle_cancel_command(
+    request: ParsedCliCommand,
+    *,
+    ports: CancelCommandPorts,
+) -> None:
+    """Cancel the active user turn through an explicit CLI command."""
+    del request
+    if ports.cancel_scheduler is not None and ports.cancel_scheduler():
+        ports.emit("  Cancellation requested for the active user turn.")
+        return
+    if not ports.agent_running():
+        ports.emit("  No active user turn to cancel.")
+        return
+    try:
+        ports.interrupt_agent()
+    except Exception as exc:
+        ports.emit(f"  Failed to cancel the active user turn: {exc}")
+        return
+    ports.emit("  Cancellation requested for the active user turn.")

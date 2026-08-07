@@ -83,11 +83,7 @@ from VoidCube_app.session_lifecycle import (
     SessionTitleStatus,
 )
 from VoidCube_app.tool_events import ToolEvent
-from VoidCube_app.turn_queue import (
-    TurnInterruptReason,
-    cancel_turn,
-    normalize_busy_input_mode,
-)
+from VoidCube_app.turn_queue import normalize_busy_input_mode
 from VoidCube_cli.turn_queue_adapter import (
     poll_interrupt_input,
     requeue_interrupted_inputs,
@@ -233,10 +229,6 @@ from VoidCube_cli.enter_keybinding_runtime import (
     EnterKeybindingPorts,
     EnterKeybindingRuntime,
 )
-from VoidCube_cli.control_keybinding_runtime import (
-    ControlKeybindingPorts,
-    ControlKeybindingRuntime,
-)
 from VoidCube_cli.voice_keybinding_runtime import (
     VoiceKeybindingPorts,
     VoiceKeybindingRuntime,
@@ -295,6 +287,11 @@ from VoidCube_app.autonomous_component_runtime import (
     AutonomousComponentRuntimePorts,
     ensure_autonomous_component_host,
 )
+from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
+from VoidCube_cli.turn_scheduler_runtime import (
+    CliTurnSchedulerPorts,
+    CliTurnSchedulerRuntime,
+)
 from VoidCube_cli.autonomous_component_output import run_component_operation_silently
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
@@ -305,7 +302,6 @@ from VoidCube_cli.command_router import (
 from VoidCube_cli.command_handlers.registry import (
     autonomous_command_ports_for_host,
     exit_autonomous_gate_fast_for_host,
-    force_quit_autonomous_gate_for_host,
     install_cli_command_execution,
     reload_mcp_for_host,
     render_tools_for_host,
@@ -1317,7 +1313,6 @@ class VoidcubeCLI:
         # mode does not go through run().
         self._autonomous_gate_active: bool = False
         self._should_exit = False
-        self._last_ctrl_c_time = 0
         self._clarify_state = None
         self._clarify_freetext = False
         self._clarify_deadline = 0
@@ -1381,7 +1376,7 @@ class VoidcubeCLI:
         self._autonomous_component_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
-        self._api_a_execution_gate = threading.Lock()
+        self._turn_scheduler_runtime = self._build_turn_scheduler_runtime()
         self._scheduled_parent_host = None
         self._scheduled_component_host = None
         self._scheduled_execution_gate = threading.Lock()
@@ -1392,6 +1387,39 @@ class VoidcubeCLI:
     def _quiet_autonomous_component_cprint(self, *args: Any, **kwargs: Any) -> None:
         """Keep autonomous component execution out of the user's scrollback."""
         del args, kwargs
+
+    def _build_turn_scheduler_runtime(self) -> CliTurnSchedulerRuntime:
+        scheduler = TurnScheduler(autonomous_gate_active=False)
+
+        def execute_payload(
+            host: Any,
+            payload: Any,
+            token: CancellationToken,
+        ) -> Any:
+            if token.cancelled:
+                return None
+            message, images = payload
+            return host.chat(message, images=images)
+
+        runtime = CliTurnSchedulerRuntime(
+            scheduler,
+            CliTurnSchedulerPorts(
+                session_id=lambda host: str(getattr(host, "session_id", "") or ""),
+                execute_user=execute_payload,
+                execute_autonomous=execute_payload,
+                cancel_user=lambda host, _request_id: host.agent.interrupt(None),
+                cancel_autonomous=lambda host, _request_id: host.agent.interrupt(None),
+            ),
+        )
+        scheduler.set_executor(runtime)
+        return runtime
+
+    def _scheduler_runtime(self) -> CliTurnSchedulerRuntime:
+        runtime = self.__dict__.get("_turn_scheduler_runtime")
+        if runtime is None:
+            runtime = self._build_turn_scheduler_runtime()
+            self._turn_scheduler_runtime = runtime
+        return runtime
 
     def _is_embedded_autonomous_component(self) -> bool:
         """Return True when this host only exists for the embedded mini CLI."""
@@ -1477,6 +1505,10 @@ class VoidcubeCLI:
                 embedded_role="autonomous",
             )
 
+        def bind_component_parent(host: Any) -> None:
+            host._autonomous_parent_host = self
+            host._turn_scheduler_runtime = self._turn_scheduler_runtime
+
         return ensure_autonomous_component_host(
             AutonomousComponentHostPorts(
                 get_component_host=lambda: getattr(self, "_autonomous_component_host", None),
@@ -1484,9 +1516,7 @@ class VoidcubeCLI:
                 set_component_active=lambda host, active: setattr(
                     host, "_autonomous_gate_active", active
                 ),
-                bind_component_parent=lambda host: setattr(
-                    host, "_autonomous_parent_host", self
-                ),
+                bind_component_parent=bind_component_parent,
                 ensure_task_session=lambda host: _ensure_supervisor_task_session_view(
                     host, logger_debug=logger.debug
                 ),
@@ -1627,9 +1657,11 @@ class VoidcubeCLI:
 
     def _start_autonomous_execution_component(self) -> bool:
         """Start the embedded API-A autonomous execution component."""
+        self._scheduler_runtime().enable_autonomous()
         return self._autonomous_component_lifecycle().start()
 
     def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
+        self._scheduler_runtime().cancel_autonomous()
         self._autonomous_component_lifecycle().stop(interrupt=interrupt)
 
     def _interrupt_autonomous_component_task(
@@ -1936,6 +1968,7 @@ class VoidcubeCLI:
                 enqueue_pending_input=self._pending_input.put,
                 render_markup=lambda text: ChatConsole().print(text),
                 emit=_cprint,
+                submit_turn=self._submit_turn_via_scheduler,
             )
         )
         self._pending_input_runtime_instance = runtime
@@ -1944,6 +1977,15 @@ class VoidcubeCLI:
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
         """Execute one queued prompt/command through the pending-input runtime."""
         return self._pending_input_runtime().execute(user_input, app=app)
+
+    def _submit_turn_via_scheduler(self, payload: Any, app: Any | None) -> bool:
+        del app
+        runtime = self._scheduler_runtime()
+        if self._is_embedded_autonomous_component():
+            if not runtime.scheduler.snapshot().autonomous_gate:
+                runtime.enable_autonomous()
+            return runtime.submit_autonomous(self, payload)
+        return runtime.submit_user(self, payload)
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -4112,77 +4154,6 @@ class VoidcubeCLI:
             )
         )
 
-    def _control_keybinding_runtime(self) -> ControlKeybindingRuntime:
-        def run_background(operation: Callable[[], None]) -> None:
-            threading.Thread(target=operation, daemon=True).start()
-
-        def cancel_voice_recording() -> None:
-            state = self._voice_state()
-            with state.lock:
-                state.recording = False
-                state.continuous = False
-
-        def clear_input(event: Any) -> None:
-            event.app.current_buffer.reset()
-            self._attached_images.clear()
-
-        def force_quit_autonomous() -> None:
-            force_quit_autonomous_gate_for_host(
-                self,
-                event_ports=self._autonomous_panel_event_ports(),
-                emit=_cprint,
-                interrupt_current_task=self._interrupt_autonomous_component_task,
-                push_cli_agent_scene=_push_cli_agent_scene,
-            )
-
-        return ControlKeybindingRuntime(
-            ControlKeybindingPorts(
-                now=time.time,
-                voice_recording=lambda: bool(self._voice_state().recording),
-                cancel_voice_recording=cancel_voice_recording,
-                interrupt_voice=lambda: self._voice_session().interrupt(),
-                run_background=run_background,
-                sudo_active=lambda: bool(self._sudo_state),
-                submit_sudo_cancel=lambda: self._sudo_state["response_queue"].put(""),
-                clear_sudo_state=lambda: setattr(self, "_sudo_state", None),
-                secret_active=lambda: bool(self._secret_state),
-                cancel_secret=self._cancel_secret_capture,
-                clear_secret_input=lambda event: event.app.current_buffer.reset(),
-                approval_active=lambda: bool(self._approval_state),
-                deny_approval=lambda: self._approval_state["response_queue"].put(
-                    ApprovalStatus.DENIED.value
-                ),
-                clear_approval_state=lambda: setattr(self, "_approval_state", None),
-                model_picker_active=lambda: bool(self._model_picker_state),
-                close_model_picker=self._close_model_picker,
-                clear_model_picker_input=lambda event: event.app.current_buffer.reset(),
-                clarification_active=lambda: bool(self._clarify_state),
-                cancel_clarification=lambda: self._clarify_state["response_queue"].put(
-                    ClarificationDecision(ClarificationStatus.CANCELLED)
-                ),
-                clear_clarification_state=lambda: setattr(self, "_clarify_state", None),
-                set_clarify_freetext=lambda value: setattr(
-                    self, "_clarify_freetext", bool(value)
-                ),
-                clear_clarification_input=lambda event: event.app.current_buffer.reset(),
-                agent_running=lambda: bool(self._agent_running and self.agent),
-                interrupt_agent=lambda: self.agent.interrupt(
-                    cancel_turn(TurnInterruptReason.USER_CANCELLED).agent_message
-                ),
-                set_last_ctrl_c_time=lambda value: setattr(
-                    self, "_last_ctrl_c_time", value
-                ),
-                has_input=lambda event: bool(
-                    event.app.current_buffer.text or self._attached_images
-                ),
-                clear_input=clear_input,
-                autonomous_gate_active=lambda: bool(self._autonomous_gate_active),
-                force_quit_autonomous=force_quit_autonomous,
-                emit=_cprint,
-                invalidate=lambda event: event.app.invalidate(),
-            )
-        )
-
     def _voice_keybinding_runtime(self) -> VoiceKeybindingRuntime:
         def run_background(operation: Callable[[], None]) -> None:
             threading.Thread(target=operation, daemon=True).start()
@@ -4472,7 +4443,6 @@ class VoidcubeCLI:
         self._ensure_application_runtime().reset_input_queues()
         self._agent_running = run_state.agent_running
         self._should_exit = run_state.should_exit
-        self._last_ctrl_c_time = run_state.last_ctrl_c_time
         self._config_mtime = run_state.config_mtime
         self._config_mcp_servers = run_state.config_mcp_servers
         self._last_config_check = run_state.last_config_check
@@ -4507,7 +4477,6 @@ class VoidcubeCLI:
                 approval_sink=self._approval_sink,
                 secret_capture_callback=self._secret_capture_callback,
                 create_enter_runtime=self._enter_keybinding_runtime,
-                create_control_runtime=self._control_keybinding_runtime,
                 create_voice_runtime=self._voice_keybinding_runtime,
                 create_suspend_runtime=self._suspend_keybinding_runtime,
                 create_dynamic_text_runtime=self._tui_dynamic_text_runtime,
@@ -4643,10 +4612,8 @@ class VoidcubeCLI:
                 ),
                 command_running=lambda: self._command_running,
                 poll_scheduled_workflow=self._scheduled_executor_runtime.poll_workflow,
-                execution_gate=self._api_a_execution_gate,
                 get_pending_input=lambda timeout: self._pending_input.get(timeout=timeout),
                 empty_input=queue.Empty,
-                requeue_input=self._pending_input.put,
                 execute_input=lambda user_input: self._execute_pending_input(user_input, app=app),
                 report_input_error=lambda error: print(f"Error: {error}"),
                 sleep=time.sleep,
@@ -4729,7 +4696,7 @@ def _maybe_stop_daemons_on_exit(force: bool = False) -> None:
     """Called at process exit: stop daemons that were auto-started.
 
     When ``force=True`` (from /quit): stop immediately, no output.
-    When ``force=False`` (from Ctrl+C / EOF / normal exit): stop silently
+    When ``force=False`` (from EOF or normal exit): stop silently
     without prompting — ``input()`` is unreliable inside atexit handlers
     because stdin may already be closed after TUI teardown.
     """

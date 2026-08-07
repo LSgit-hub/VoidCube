@@ -24,8 +24,6 @@ class TuiKeybindingAssemblyPorts:
 
     key_bindings: Any
     enter: Callable[[Any], None]
-    ctrl_c: Callable[[Any], None]
-    ctrl_d: Callable[[Any], None]
     ctrl_z: Callable[[Any], None]
     voice_key: str
     voice: Callable[[Any], None]
@@ -58,14 +56,6 @@ class TuiKeybindingAssemblyRuntime:
             normal_input_active=ports.normal_input_active,
         )
 
-        @key_bindings.add("c-c")
-        def handle_ctrl_c(event: Any) -> None:
-            ports.ctrl_c(event)
-
-        @key_bindings.add("c-d")
-        def handle_ctrl_d(event: Any) -> None:
-            ports.ctrl_d(event)
-
         @key_bindings.add("c-z")
         def handle_ctrl_z(event: Any) -> None:
             ports.ctrl_z(event)
@@ -77,11 +67,3 @@ class TuiKeybindingAssemblyRuntime:
         @key_bindings.add(Keys.BracketedPaste, eager=True)
         def handle_paste(event: Any) -> None:
             ports.paste.handle_bracketed_paste(event)
-
-        @key_bindings.add("c-v")
-        def handle_ctrl_v(event: Any) -> None:
-            ports.paste.handle_image_paste(event)
-
-        @key_bindings.add("escape", "v")
-        def handle_alt_v(event: Any) -> None:
-            ports.paste.handle_image_paste(event)

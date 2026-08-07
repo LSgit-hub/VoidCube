@@ -42,7 +42,7 @@ class TuiDynamicTextRuntime:
 
     def placeholder(self) -> str:
         if self.ports.voice_recording():
-            return "recording... Ctrl+B to stop, Ctrl+C to cancel"
+            return "recording... Ctrl+B to stop"
         if self.ports.voice_processing():
             return "transcribing..."
         if self.ports.sudo_active():
@@ -60,7 +60,7 @@ class TuiDynamicTextRuntime:
             status = self.ports.command_status() or "Processing command..."
             return f"{frame} {status}"
         if self.ports.agent_running():
-            return "type a message + Enter to interrupt, Ctrl+C to cancel"
+            return "agent running... use /cancel to stop this turn"
         if self.ports.voice_mode():
             return "type or Ctrl+B to record"
         return ""

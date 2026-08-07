@@ -57,10 +57,10 @@ def prompt(
         question: The prompt question to display
         default: Optional default value shown in brackets
         password: If True, mask input (for passwords)
-        exit_on_interrupt: If True, exit on Ctrl-C; if False, return empty string
+        exit_on_interrupt: If True, exit on terminal interrupt; otherwise return empty string
 
     Returns the user's input (stripped), or *default* if the user presses Enter.
-    Returns empty string on Ctrl-C or EOF (if exit_on_interrupt=False).
+    Returns empty string on terminal interrupt or EOF when interruption is non-fatal.
     """
     suffix = f" [{default}]" if default else ""
     display = color(f"  {question}{suffix}: ", Colors.YELLOW)

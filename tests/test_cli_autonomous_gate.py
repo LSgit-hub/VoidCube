@@ -2021,52 +2021,6 @@ def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
     assert "监督者链路裁决: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
 
 
-def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._agent_running = False
-    cli._autonomous_gate_active = True
-    cli._current_autonomous_task = {
-        "task_id": "body-1",
-        "execution_kind": "body_improvement",
-    }
-    cli.session_id = ""
-
-    requests = []
-
-    def fake_cprint(*args, **kwargs):
-        del args, kwargs
-
-    def fake_urlopen(request, timeout=0):
-        del timeout
-        if isinstance(request, Request):
-            requests.append(
-                {
-                    "url": request.full_url,
-                    "method": request.get_method(),
-                    "data": json.loads((request.data or b"{}").decode("utf-8")) if request.data else None,
-                }
-            )
-        return _FakeUrlopenResponse({})
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("cli._cprint", fake_cprint)
-
-    result = autonomous_gate_module.force_quit_autonomous_gate(
-        cli,
-        event_ports=_panel_event_ports(cli),
-        cprint=fake_cprint,
-        interrupt_current_task_callback=_autonomous_runtime(cli).interrupt_current_task,
-        push_cli_agent_scene_callback=autonomous_presence_module.push_cli_agent_scene,
-    )
-
-    assert result is True
-    task_request = next(item for item in requests if item["url"].endswith("/v1/tasks/body-1/decision"))
-    assert task_request["data"]["decision"] == "failed"
-    assert task_request["data"]["context"]["execution_kind"] == "body_improvement"
-    assert "改进链路项被用户中断" in task_request["data"]["reason"]
-    assert cli._current_autonomous_task is None
-
-
 def test_body_improvement_completion_requires_improvement_report(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._agent_running = False
@@ -2388,8 +2342,6 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     parent = VoidcubeCLI.__new__(VoidcubeCLI)
     parent._autonomous_gate_active = True
     parent._agent_running = True
-    parent._api_a_execution_gate = threading.Lock()
-    parent._api_a_execution_gate.acquire()
     parent.conversation_history = [{"role": "user", "content": "parent turn"}]
     parent._autonomous_component_thread = None
     parent._invalidate = lambda *args, **kwargs: None
@@ -2482,8 +2434,6 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     assert component._autonomous_parent_host is parent
     assert component._should_emit_scrollback_output() is False
     assert any(item[0] == "idle" for item in pushed if isinstance(item, tuple))
-    assert parent._api_a_execution_gate.locked()
-    parent._api_a_execution_gate.release()
 
 
 def test_autonomous_component_panel_stays_hidden_when_idle():

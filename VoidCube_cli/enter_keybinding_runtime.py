@@ -93,6 +93,8 @@ class EnterKeybindingRuntime:
             return
         if self._handle_quit(event, text):
             return
+        if self._handle_cancel(event, text):
+            return
 
         images = self.ports.snapshot_images()
         self.ports.clear_images()
@@ -183,8 +185,20 @@ class EnterKeybindingRuntime:
         self.ports.reset_buffer(event, True)
         return True
 
+    def _handle_cancel(self, event: Any, text: str) -> bool:
+        if not self.ports.agent_running() or not self._is_command(text, "cancel"):
+            return False
+        self.ports.process_command(text)
+        self.ports.reset_buffer(event, True)
+        self.ports.invalidate(event)
+        return True
+
     def _is_fast_autonomous_exit(self, text: str) -> bool:
+        return self._is_command(text, "auto-q")
+
+    @staticmethod
+    def _is_command(text: str, command_name: str) -> bool:
         if not text or not looks_like_slash_command(text):
             return False
         command = text.strip().lstrip("/").split()[0].lower()
-        return command in ("auto-q", "auto-quit", "auto-stop")
+        return command == command_name

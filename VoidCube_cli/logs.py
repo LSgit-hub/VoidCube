@@ -154,7 +154,7 @@ def tail_log(
     num_lines
         Number of recent lines to show (before follow starts).
     follow
-        If True, keep watching for new lines (Ctrl+C to stop).
+        If True, keep watching for new lines until the watch process ends.
     level
         Minimum log level to show (e.g. ``"WARNING"``).
     session
@@ -228,7 +228,7 @@ def tail_log(
     filter_desc = f" [{', '.join(filter_parts)}]" if filter_parts else ""
 
     if follow:
-        print(f"--- {display_VoidCube_home()}/logs/{filename}{filter_desc} (Ctrl+C to stop) ---")
+        print(f"--- {display_VoidCube_home()}/logs/{filename}{filter_desc} ---")
     else:
         print(f"--- {display_VoidCube_home()}/logs/{filename}{filter_desc} (last {num_lines}) ---")
 

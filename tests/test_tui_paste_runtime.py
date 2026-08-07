@@ -39,13 +39,12 @@ def test_bracketed_paste_normalizes_and_compacts_large_text(tmp_path):
     assert buffer.text.startswith("prefix\n[Pasted text #1: 6 lines")
 
 
-def test_image_gestures_and_text_changed_fallback_use_same_runtime(tmp_path):
+def test_bracketed_paste_and_text_changed_fallback_use_same_runtime(tmp_path):
     calls = []
     runtime = _runtime(calls, tmp_path)
     event = SimpleNamespace(data=" ", current_buffer=_Buffer())
     runtime.handle_bracketed_paste(event)
-    runtime.handle_image_paste(event)
-    assert calls[:3] == ["attach", "invalidate", "attach"]
+    assert calls[:2] == ["attach", "invalidate"]
 
     buffer = _Buffer("a\nb\nc\nd\ne\nf", 11)
     runtime.handle_text_changed(buffer)

@@ -33,10 +33,8 @@ class CliInteractiveLifecyclePorts:
     command_running: Callable[[], bool]
     invalidate: Callable[[float], None]
     poll_scheduled_workflow: Callable[[], None]
-    execution_gate: Any
     get_pending_input: Callable[[float], object]
     empty_input: type[Exception]
-    requeue_input: Callable[[object], None]
     execute_input: Callable[[object], None]
     report_input_error: Callable[[Exception], None]
     sleep: Callable[[float], None]
@@ -69,10 +67,8 @@ class CliInteractiveLifecycleRuntime:
                 invalidate=ports.invalidate,
                 poll_scheduled_workflow=ports.poll_scheduled_workflow,
                 perform_idle_maintenance=idle_runtime.run_once,
-                execution_gate=ports.execution_gate,
                 get_pending_input=ports.get_pending_input,
                 empty_input=ports.empty_input,
-                requeue_input=ports.requeue_input,
                 execute_input=ports.execute_input,
                 report_input_error=ports.report_input_error,
                 sleep=ports.sleep,

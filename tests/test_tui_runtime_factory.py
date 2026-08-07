@@ -78,8 +78,6 @@ def test_factory_connects_paste_keybindings_widgets_and_composition(monkeypatch)
     result = TuiRuntimeFactory(
         TuiRuntimeFactoryPorts(
             enter=lambda _event: None,
-            ctrl_c=lambda _event: None,
-            ctrl_d=lambda _event: None,
             ctrl_z=lambda _event: None,
             voice_key="c-b",
             voice=lambda _event: None,

@@ -54,10 +54,6 @@ class TuiPasteRuntime:
             return
         buffer.insert_text(pasted_text)
 
-    def handle_image_paste(self, event: Any) -> None:
-        if self.ports.attach_clipboard_image():
-            self.ports.invalidate(event)
-
     def handle_text_changed(self, buffer: Any) -> None:
         text = buffer.text
         chars_added = len(text) - self._previous_text_length

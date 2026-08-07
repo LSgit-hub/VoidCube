@@ -36,6 +36,8 @@ class PendingInputExecutionPorts:
     enqueue_pending_input: Callable[[Any], None]
     render_markup: Callable[[str], None]
     emit: Callable[[str], None] = _cprint
+    submit_turn: Callable[[Any, Any], bool] | None = None
+    submit_turn: Callable[[Any, Any], bool] | None = None
 
 
 class PendingInputRuntime:
@@ -98,7 +100,10 @@ class PendingInputRuntime:
         )
 
         try:
-            self.ports.chat(user_input, submit_images or None)
+            if self.ports.submit_turn is not None:
+                self.ports.submit_turn((user_input, submit_images or None), app)
+            else:
+                self.ports.chat(user_input, submit_images or None)
         finally:
             self.ports.set_agent_running(False)
             self.ports.reset_turn_state()

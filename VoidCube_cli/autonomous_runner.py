@@ -83,7 +83,7 @@ def run_autonomous_component_debug(
     if show_idle:
         print("\n  VoidCube API-A 自主执行组件调试面")
         print("  正常使用请在主 CLI 内执行 /auto；此入口只用于隔离诊断。")
-        print("  空态调试显示已开启。Ctrl+C 退出。\n")
+        print("  空态调试显示已开启。\n")
 
     try:
         while True:
@@ -119,8 +119,8 @@ def run_autonomous_component_debug(
                 if not has_rendered and not show_idle:
                     print("\n  VoidCube API-A 自主执行组件调试面")
                     print("  正常路径是主 CLI 内嵌组件；此处只显示隔离诊断信息。")
-                    print("  Ctrl+C 退出。\n")
-                print(f"  刷新时间 {time.strftime('%H:%M:%S')}  （Ctrl+C 退出）\n")
+                    print("  诊断观察仍在运行。\n")
+                print(f"  刷新时间 {time.strftime('%H:%M:%S')}\n")
                 _render_rows(host)
                 print()
                 has_rendered = True

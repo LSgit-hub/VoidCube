@@ -11,13 +11,46 @@ from VoidCube_cli.command_handlers.info import (
     handle_profile_command,
 )
 from VoidCube_cli.command_handlers.operations import (
+    CancelCommandPorts,
     StopCommandPorts,
+    handle_cancel_command,
     handle_stop_command,
 )
 from VoidCube_cli.command_router import parse_cli_command
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
+
+
+def test_cancel_handler_interrupts_only_an_active_user_turn() -> None:
+    events: list[str] = []
+    ports = CancelCommandPorts(
+        agent_running=lambda: True,
+        interrupt_agent=lambda: events.append("interrupt"),
+        emit=events.append,
+    )
+
+    handle_cancel_command(parse_cli_command("/cancel"), ports=ports)
+
+    assert events == [
+        "interrupt",
+        "  Cancellation requested for the active user turn.",
+    ]
+
+
+def test_cancel_handler_reports_when_no_user_turn_is_active() -> None:
+    output: list[str] = []
+
+    handle_cancel_command(
+        parse_cli_command("/cancel"),
+        ports=CancelCommandPorts(
+            agent_running=lambda: False,
+            interrupt_agent=lambda: pytest.fail("idle cancel must not interrupt"),
+            emit=output.append,
+        ),
+    )
+
+    assert output == ["  No active user turn to cancel."]
 
 
 def test_stop_handler_reports_when_no_process_is_running() -> None:

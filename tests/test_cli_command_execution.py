@@ -75,6 +75,7 @@ EXPECTED_BUILTINS = {
     "branch",
     "browser",
     "btw",
+    "cancel",
     "clear",
     "compress",
     "config",
@@ -325,7 +326,7 @@ def test_cli_process_routes_tools_through_explicit_ports(monkeypatch) -> None:
 
 def test_cli_process_routes_skills_through_explicit_ports(monkeypatch) -> None:
     output: list[str] = []
-    events: list[str] = []
+    events: list[object] = []
     monkeypatch.setattr(
         command_handler_registry,
         "_skills_command_ports",
@@ -397,6 +398,23 @@ def test_cli_process_routes_auto_commands_through_explicit_ports() -> None:
     assert app.process_command("/auto Focus Mixed Case") is True
     assert app.process_command("/auto-q") is True
     assert events == [("activate", "Focus Mixed Case"), ("deactivate", "")]
+
+
+def test_cli_process_routes_cancel_to_the_active_user_agent() -> None:
+    events: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._agent_running = True
+    app.agent = SimpleNamespace(interrupt=lambda message: events.append(message))
+    app._invalidate = lambda **kwargs: None
+    install_cli_command_execution(app, emit=lambda message: events.append(message))
+
+    assert app.process_command("/cancel") is True
+    assert events == [
+        None,
+        "  Cancellation requested for the active user turn.",
+    ]
 
 
 def test_cli_process_routes_plan_through_explicit_ports(monkeypatch) -> None:

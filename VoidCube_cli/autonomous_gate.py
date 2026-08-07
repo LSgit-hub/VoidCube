@@ -10,12 +10,7 @@ from VoidCube_cli.autonomous_events import (
     AutonomousPanelEventPorts,
     append_autonomous_execution_event,
 )
-from VoidCube_cli.autonomous_executor import (
-    autonomous_task_execution_kind,
-    autonomous_task_label,
-)
 from VoidCube_cli.autonomous_presence import ensure_supervisor_task_session
-from VoidCube_cli.ops.executor import default_gateway_url
 from VoidCube_cli.autonomous_status_host import (
     preview_supervisor_status_lines,
 )
@@ -30,6 +25,9 @@ def _enter_autonomous_gate_locally(
     refresh_gateway_cli_presence_callback: Any,
 ) -> None:
     host._autonomous_gate_active = True
+    scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
+    if scheduler_runtime is not None:
+        scheduler_runtime.enable_autonomous()
     append_autonomous_execution_event(
         event_ports=event_ports,
         message="自主链路已激活，API-A 自主执行面等待任务",
@@ -59,6 +57,9 @@ def _exit_autonomous_gate_locally(
             timeout=interrupt_timeout,
         )
     host._autonomous_gate_active = False
+    scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
+    if scheduler_runtime is not None:
+        scheduler_runtime.cancel_autonomous()
     push_cli_agent_scene_callback(
         "idle",
         session_id=getattr(component_host, "session_id", None),
@@ -336,66 +337,3 @@ def exit_autonomous_gate_fast(
         cprint("     本地自主链路状态已关闭（supervisor 侧状态可能仍陈旧）。")
         cprint("     等 supervisor 可用后，可再次执行 /auto 重新进入。")
         return True
-
-
-def force_quit_autonomous_gate(
-    host: Any,
-    *,
-    event_ports: AutonomousPanelEventPorts,
-    cprint: Any,
-    interrupt_current_task_callback: Any,
-    push_cli_agent_scene_callback: Any,
-) -> bool:
-    cprint("\n  🚨 强制退出自主链路 —— 正在尝试紧急清理...")
-
-    supervisor_url = _resolve_supervisor_url()
-    try:
-        request = urllib.request.Request(
-            f"{supervisor_url}/autonomous-chain-gate/deactivate",
-            data=json.dumps({"force": True}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        json.loads(urllib.request.urlopen(request, timeout=5).read())
-        cprint("  ✅ 自主链路已停止")
-    except Exception as exc:
-        cprint(f"  ⚠️  自主链路停用失败: {exc}")
-
-    component_host = getattr(host, "_autonomous_component_host", None) or host
-    current = getattr(component_host, "_current_autonomous_task", None)
-    if current is not None:
-        task_id = str(current.get("task_id") or "")
-        execution_kind = autonomous_task_execution_kind(current)
-        task_label = autonomous_task_label(execution_kind)
-        chain_item_label = "改进" if execution_kind == "body_improvement" else "学习"
-        if interrupt_current_task_callback(
-            reason=f"自主链路被强制退出；{chain_item_label}链路项被用户中断。",
-            source="force_quit",
-            timeout=5,
-        ):
-            cprint(f"  ✅ {task_label} {task_id[:8]}... 已标记为中断")
-        else:
-            cprint("  ⚠️  未能向 Gateway 回报链路项终态")
-
-    try:
-        session_id = getattr(component_host, "session_id", "")
-        if session_id:
-            gateway_base = default_gateway_url()
-            request = urllib.request.Request(
-                f"{gateway_base}/v1/sessions/{session_id}",
-                method="DELETE",
-            )
-            urllib.request.urlopen(request, timeout=5)
-            cprint("  ✅ Gateway session unregistered")
-    except Exception:
-        pass
-
-    _exit_autonomous_gate_locally(
-        host,
-        event_ports=event_ports,
-        push_cli_agent_scene_callback=push_cli_agent_scene_callback,
-        interrupt_current_task_callback=interrupt_current_task_callback,
-        event_message="",
-    )
-    cprint("  🛡️  强制退出完成 —— 自主链路已停止。")
-    return True

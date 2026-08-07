@@ -110,3 +110,25 @@ def test_enter_keybinding_runtime_submits_modal_text_without_normal_routing():
     assert ("sudo", " raw ") in calls
     assert state["sudo"] is None
     assert not any(call[0] == "enqueue" for call in calls if isinstance(call, tuple))
+
+
+def test_cancel_command_runs_immediately_without_consuming_attached_images():
+    calls = []
+    state = {
+        "images": ["image.png"],
+        "sudo": None,
+        "secret": None,
+        "approval": None,
+        "model": None,
+        "clarify": None,
+        "clarify_text": False,
+        "status_visible": True,
+    }
+    event = SimpleNamespace(app=SimpleNamespace(current_buffer=_Buffer("/cancel")))
+
+    _runtime(calls, state).handle(event)
+
+    assert ("command", "/cancel") in calls
+    assert not any(call[0] == "enqueue" for call in calls if isinstance(call, tuple))
+    assert state["images"] == ["image.png"]
+    assert event.app.current_buffer.resets == [True]

@@ -628,7 +628,7 @@ def print_dashboard() -> None:
 def watch_dashboard(interval: float = 3.0) -> None:
     """Print the dashboard in a loop, refreshing every *interval* seconds.
 
-    Press Ctrl+C to exit watch mode.
+    Watch mode runs until the command process ends.
     """
     import os
     import sys
@@ -644,7 +644,7 @@ def watch_dashboard(interval: float = 3.0) -> None:
 
             # Timestamp
             from datetime import datetime
-            print(f"  刷新时间 {datetime.now().strftime('%H:%M:%S')}  （Ctrl+C 退出）")
+            print(f"  刷新时间 {datetime.now().strftime('%H:%M:%S')}")
             print()
 
             try:

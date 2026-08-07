@@ -33,10 +33,8 @@ def test_cli_run_runtime_starts_all_long_lived_loops(monkeypatch):
             invalidate=lambda _interval: None,
             poll_scheduled_workflow=lambda: None,
             perform_idle_maintenance=lambda: None,
-            execution_gate=None,
             get_pending_input=lambda _timeout: None,
             empty_input=TimeoutError,
-            requeue_input=lambda _value: None,
             execute_input=lambda _value: None,
             report_input_error=lambda _error: None,
             sleep=lambda _seconds: None,
@@ -50,4 +48,3 @@ def test_cli_run_runtime_starts_all_long_lived_loops(monkeypatch):
     assert [name for name, _kwargs in calls] == ["refresh", "scheduled", "input"]
     assert calls[0][1]["stop_requested"]() is False
     assert calls[1][1]["poll_workflow"] is not None
-    assert calls[2][1]["execution_gate"] is None

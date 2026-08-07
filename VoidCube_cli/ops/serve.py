@@ -694,7 +694,7 @@ def start_all(foreground: bool = False) -> None:
     if foreground:
         # Foreground: default stable services are running in daemon threads.
         # Wait for them (join) — the main thread stays alive until interrupted.
-        _safe_print(f"\n  Core services started. Press Ctrl+C to stop.\n")
+        _safe_print("\n  Core services started. Use `voidcube serve stop` from another terminal to stop.\n")
         _safe_print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
         _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
         _safe_print()

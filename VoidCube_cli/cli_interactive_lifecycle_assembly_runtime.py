@@ -34,10 +34,8 @@ class CliInteractiveLifecycleAssemblyPorts:
     presence_refresh_needed: Callable[[], bool]
     command_running: Callable[[], bool]
     poll_scheduled_workflow: Callable[[], None]
-    execution_gate: object
     get_pending_input: Callable[[float], object]
     empty_input: type[Exception]
-    requeue_input: Callable[[object], None]
     execute_input: Callable[[object], None]
     report_input_error: Callable[[Exception], None]
     sleep: Callable[[float], None]
@@ -82,10 +80,8 @@ class CliInteractiveLifecycleAssemblyRuntime:
                 command_running=ports.command_running,
                 invalidate=ports.invalidate,
                 poll_scheduled_workflow=ports.poll_scheduled_workflow,
-                execution_gate=ports.execution_gate,
                 get_pending_input=ports.get_pending_input,
                 empty_input=ports.empty_input,
-                requeue_input=ports.requeue_input,
                 execute_input=ports.execute_input,
                 report_input_error=ports.report_input_error,
                 sleep=ports.sleep,

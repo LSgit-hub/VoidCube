@@ -170,8 +170,6 @@ class CliTuiHostAssemblyRuntime:
         return TuiRuntimeFactory(
             TuiRuntimeFactoryPorts(
                 enter=registrations.enter.handle,
-                ctrl_c=registrations.control.handle_ctrl_c,
-                ctrl_d=registrations.control.handle_ctrl_d,
                 ctrl_z=registrations.suspend.handle,
                 voice_key=registrations.voice_key,
                 voice=registrations.voice.handle,

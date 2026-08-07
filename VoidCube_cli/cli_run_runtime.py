@@ -24,10 +24,8 @@ class CliRunRuntimePorts:
     invalidate: Callable[[float], None]
     poll_scheduled_workflow: Callable[[], None]
     perform_idle_maintenance: Callable[[], None]
-    execution_gate: Any
     get_pending_input: Callable[[float], object]
     empty_input: type[Exception]
-    requeue_input: Callable[[object], None]
     execute_input: Callable[[object], None]
     report_input_error: Callable[[Exception], None]
     sleep: Callable[[float], None]
@@ -63,10 +61,8 @@ class CliRunRuntime:
         )
         start_input_process_loop(
             stop_requested=ports.stop_requested,
-            execution_gate=ports.execution_gate,
             get_pending_input=ports.get_pending_input,
             empty_input=ports.empty_input,
-            requeue_input=ports.requeue_input,
             perform_idle_maintenance=ports.perform_idle_maintenance,
             execute_input=ports.execute_input,
             sleep=ports.sleep,

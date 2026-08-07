@@ -782,7 +782,6 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
 
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._scheduled_execution_gate = threading.Lock()
-    cli._api_a_execution_gate = threading.Lock()
     cli._scheduled_execution_active = False
     cli._autonomous_component_host = SimpleNamespace(_agent_running=False)
     cli._scheduled_component_host = None
@@ -792,7 +791,6 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
     runtime = cli._create_scheduled_executor_runtime()
 
     assert runtime.ports.execution_gate is cli._scheduled_execution_gate
-    assert runtime.ports.execution_gate is not cli._api_a_execution_gate
     assert runtime.ports.start_background_task is cli._start_scheduled_component_task
 
 
@@ -800,7 +798,6 @@ def test_scheduled_gate_does_not_stop_foreground_input_loop():
     from VoidCube_cli.app import VoidcubeCLI
 
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._api_a_execution_gate = threading.Lock()
     cli._scheduled_execution_gate = threading.Lock()
     cli._scheduled_execution_gate.acquire()
     processed: list[object] = []
@@ -813,10 +810,8 @@ def test_scheduled_gate_does_not_stop_foreground_input_loop():
 
     run_input_process_loop(
         stop_requested=lambda: stopped,
-        execution_gate=cli._api_a_execution_gate,
         get_pending_input=lambda _timeout: "foreground input",
         empty_input=queue.Empty,
-        requeue_input=lambda _value: None,
         perform_idle_maintenance=lambda: None,
         execute_input=execute,
         sleep=lambda _seconds: None,

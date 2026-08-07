@@ -17,7 +17,6 @@ class CliInteractiveRunState:
 
     agent_running: bool
     should_exit: bool
-    last_ctrl_c_time: float
     config_mtime: float
     config_mcp_servers: dict[str, Any]
     last_config_check: float
@@ -58,7 +57,6 @@ class CliInteractiveStateRuntime:
         return CliInteractiveRunState(
             agent_running=False,
             should_exit=False,
-            last_ctrl_c_time=0.0,
             config_mtime=config_mtime,
             config_mcp_servers=dict(self.ports.config_mcp_servers),
             last_config_check=0.0,

@@ -89,6 +89,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("retry", "重试上一条消息", "会话管理"),
     CommandDef("undo", "撤销上一轮对话", "会话管理"),
     CommandDef("status", "显示会话状态", "会话管理"),
+    CommandDef("cancel", "取消当前用户任务", "会话管理",
+               cli_only=True),
     CommandDef("tasks", "显示当前子代理观测状态（高级调试）", "会话管理",
                cli_only=True,
                subcommands=("bg", "fg"),

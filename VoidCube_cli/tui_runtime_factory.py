@@ -32,8 +32,6 @@ class TuiRuntimeFactoryPorts:
     """Host callbacks and runtime adapters needed for TUI assembly."""
 
     enter: Callable[[object], None]
-    ctrl_c: Callable[[object], None]
-    ctrl_d: Callable[[object], None]
     ctrl_z: Callable[[object], None]
     voice_key: str
     voice: Callable[[object], None]
@@ -64,8 +62,6 @@ class TuiRuntimeFactory:
             TuiKeybindingAssemblyPorts(
                 key_bindings=key_bindings,
                 enter=ports.enter,
-                ctrl_c=ports.ctrl_c,
-                ctrl_d=ports.ctrl_d,
                 ctrl_z=ports.ctrl_z,
                 voice_key=ports.voice_key,
                 voice=ports.voice,

@@ -13,9 +13,6 @@ class _Paste:
     def handle_bracketed_paste(self, event) -> None:
         event.calls.append("paste")
 
-    def handle_image_paste(self, event) -> None:
-        event.calls.append("image")
-
 
 def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> None:
     calls: list[str] = []
@@ -24,8 +21,6 @@ def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> 
         TuiKeybindingAssemblyPorts(
             key_bindings=bindings,
             enter=lambda _event: calls.append("enter"),
-            ctrl_c=lambda _event: calls.append("ctrl-c"),
-            ctrl_d=lambda _event: calls.append("ctrl-d"),
             ctrl_z=lambda _event: calls.append("ctrl-z"),
             voice_key="c-b",
             voice=lambda _event: calls.append("voice"),
@@ -43,4 +38,10 @@ def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> 
 
     runtime.install()
 
-    assert len(bindings.bindings) == 19
+    key_sequences = {
+        tuple(key.value if hasattr(key, "value") else str(key) for key in binding.keys)
+        for binding in bindings.bindings
+    }
+    assert ("c-c",) not in key_sequences
+    assert ("c-d",) not in key_sequences
+    assert ("c-v",) not in key_sequences
