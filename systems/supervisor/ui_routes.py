@@ -19,6 +19,7 @@ class SupervisorUIRoutePorts:
     get_voice_levels: Callable[..., Any]
     get_media_events: Callable[..., Any]
     enqueue_media: Callable[..., Any]
+    enqueue_media_playlist: Callable[..., Any]
     get_identity_archive: Callable[..., Any]
     get_identity_turns: Callable[..., Any]
     get_evolution_audit: Callable[..., Any]
@@ -39,6 +40,7 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
     app.add_api_route("/ui/voice-levels", ports.get_voice_levels, methods=["GET"])
     app.add_api_route("/ui/media-events", ports.get_media_events, methods=["GET"])
     app.add_api_route("/ui/media/enqueue", ports.enqueue_media, methods=["POST"])
+    app.add_api_route("/ui/media/playlist", ports.enqueue_media_playlist, methods=["POST"])
     if ports.control_media is not None:
         app.add_api_route("/ui/media/control", ports.control_media, methods=["POST"])
     app.add_api_route(

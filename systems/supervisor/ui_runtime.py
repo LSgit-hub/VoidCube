@@ -39,6 +39,9 @@ from systems.supervisor.ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
     control_media_state,
     enqueue_media_state,
+    enqueue_media_playlist_state,
+    load_media_state,
+    persist_media_state,
 )
 from systems.supervisor.ui_memory_status_adapters import (
     SupervisorUIMemoryStatusContext,
@@ -128,6 +131,11 @@ class SupervisorUIRuntime:
         self.current_media: JsonDict | None = None
         self.media_queue: deque[JsonDict] = deque()
         self.media_revision = 0
+        self.media_state_path = ports.runtime_root / "supervisor-ui-media.json"
+        current, queue, revision = load_media_state(self.media_state_path)
+        self.current_media = current
+        self.media_queue.extend(queue)
+        self.media_revision = revision
 
     def _media_context(self) -> SupervisorUIMediaStateContext:
         return SupervisorUIMediaStateContext(
@@ -145,6 +153,15 @@ class SupervisorUIRuntime:
             queue_mode=str(media.get("queue_mode") or "replace"),
         )
         logger.info("Media enqueued: %s (%s)", current.get("title"), current.get("type"))
+        persist_media_state(self.media_state_path, current=self.current_media, queue=self.media_queue, revision=self.media_revision)
+        return current
+
+    def enqueue_media_playlist(self, media: list[JsonDict], queue_mode: str = "replace") -> JsonDict | None:
+        current = enqueue_media_playlist_state(
+            context=self._media_context(), items=media, queue_mode=queue_mode
+        )
+        persist_media_state(self.media_state_path, current=self.current_media, queue=self.media_queue, revision=self.media_revision)
+        logger.info("Media playlist enqueued: %s items", len(media))
         return current
 
     def control_media(self, action: str, media_id: str = "") -> JsonDict | None:
@@ -154,6 +171,7 @@ class SupervisorUIRuntime:
             media_id=media_id,
         )
         logger.info("Media control: %s (current=%s)", action, (current or {}).get("title"))
+        persist_media_state(self.media_state_path, current=self.current_media, queue=self.media_queue, revision=self.media_revision)
         return current
 
     def media_queue_length(self) -> int:
@@ -283,6 +301,17 @@ class SupervisorUIRuntime:
             control_media=self.control_media,
             current_revision=lambda: self.media_revision,
             queue_length=self.media_queue_length,
+            queue_items=self.media_queue_items,
+        )
+
+    async def enqueue_media_playlist_endpoint(self, request: Request) -> JsonDict:
+        from systems.supervisor.ui_stream_adapters import enqueue_media_playlist_request
+        return await enqueue_media_playlist_request(
+            request,
+            enqueue_playlist=self.enqueue_media_playlist,
+            current_revision=lambda: self.media_revision,
+            queue_length=self.media_queue_length,
+            current_media=lambda: self.current_media,
             queue_items=self.media_queue_items,
         )
 

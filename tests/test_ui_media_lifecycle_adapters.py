@@ -7,6 +7,9 @@ from systems.supervisor.ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
     control_media_state,
     enqueue_media_state,
+    enqueue_media_playlist_state,
+    load_media_state,
+    persist_media_state,
 )
 from systems.supervisor.ui_open_lifecycle_adapters import (
     SupervisorUIOpenLifecycleContext,
@@ -88,6 +91,33 @@ def test_media_state_queue_and_controls_share_one_canonical_state():
 
     assert control_media_state(context=context(), action="stop") is None
     assert state["current"] is None
+
+
+def test_media_playlist_state_persists_current_and_queue(tmp_path):
+    state = {"revision": 0, "current": None}
+    queue = deque()
+
+    def context():
+        return SupervisorUIMediaStateContext(
+            current_revision=state["revision"],
+            current_media=state["current"],
+            media_queue=queue,
+            set_revision=lambda value: state.update(revision=value),
+            set_current_media=lambda value: state.update(current=value),
+        )
+
+    current = enqueue_media_playlist_state(
+        context=context(),
+        items=[{"url": "https://example.com/a.mp3"}, {"url": "https://example.com/b.mp3"}],
+    )
+    assert current["url"].endswith("a.mp3")
+    assert [item["url"] for item in queue] == ["https://example.com/b.mp3"]
+    path = tmp_path / "media.json"
+    persist_media_state(path, current=state["current"], queue=queue, revision=state["revision"])
+    restored_current, restored_queue, restored_revision = load_media_state(path)
+    assert restored_current["url"].endswith("a.mp3")
+    assert [item["url"] for item in restored_queue] == ["https://example.com/b.mp3"]
+    assert restored_revision == state["revision"]
 
 
 @pytest.mark.parametrize(

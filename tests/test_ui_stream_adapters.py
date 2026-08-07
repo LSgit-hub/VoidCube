@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from systems.supervisor.ui_stream_adapters import (
     normalize_media_enqueue_body,
+    normalize_media_playlist_body,
     media_events,
     supervisor_state_events,
     voice_level_events,
@@ -75,3 +76,6 @@ async def test_media_sse_adapter_emits_revision_and_enqueue_body_is_normalized()
         normalize_media_enqueue_body({"title": "missing"})
     with pytest.raises(HTTPException):
         normalize_media_enqueue_body({"url": "file:///tmp/song.mp3"})
+    playlist = normalize_media_playlist_body({"queue_mode": "enqueue", "items": [{"url": "https://example.com/a.mp3", "type": "audio"}]})
+    assert playlist["queue_mode"] == "enqueue"
+    assert playlist["items"][0]["queue_mode"] == "enqueue"

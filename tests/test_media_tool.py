@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools.media_tool import _supervisor_media_url, media_control, media_play
+from tools.media_tool import _supervisor_media_url, media_control, media_play, media_playlist
 
 
 def test_media_url_uses_canonical_supervisor_config(monkeypatch) -> None:
@@ -54,7 +54,19 @@ def test_media_play_is_available_to_web_and_playback_agents() -> None:
         for item in get_tool_definitions(["playback"], quiet_mode=True)
     }
     assert "media_play" in web_names
-    assert playback_names == {"media_play", "media_control"}
+    assert playback_names == {"media_play", "media_playlist", "media_control"}
+
+
+def test_media_playlist_posts_one_batch(monkeypatch) -> None:
+    monkeypatch.setenv("SUPERVISOR_MEDIA_URL", "http://127.0.0.1:6002")
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"status": "ok", "accepted": 2}
+    items = [{"url": "https://example.com/a.mp3", "type": "audio"}, {"url": "https://www.bilibili.com/video/BV1", "type": "bilibili"}]
+    with patch("tools.media_tool.httpx.post", return_value=response) as post:
+        result = media_playlist(items)
+    assert '"accepted": 2' in result
+    post.assert_called_once_with("http://127.0.0.1:6002/ui/media/playlist", json={"items": items, "queue_mode": "replace"}, timeout=10.0)
 
 
 def test_default_toolset_exposes_reconnected_core_tools() -> None:

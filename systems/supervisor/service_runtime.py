@@ -912,7 +912,7 @@ class ServiceRuntimeMixin:
                     "title": f"播放媒体 · {query[:160]}",
                     "instruction": (
                         f"用户希望立即播放：{query}。先使用 web_search 找到可靠且可播放的媒体 URL，"
-                        "再调用 media_play；不得只回复链接或声称无法播放。"
+                        "歌单优先调用 media_playlist，单项调用 media_play；不得只回复链接或声称无法播放。"
                     ),
                     "schedule_type": "once",
                     "run_at": datetime.now(timezone.utc).isoformat(),

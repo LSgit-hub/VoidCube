@@ -11,6 +11,43 @@ from uuid import uuid4
 JsonDict = Dict[str, Any]
 
 
+def load_media_state(path: Any) -> tuple[Optional[JsonDict], list[JsonDict], int]:
+    """Load persisted player state; malformed or stale files are ignored."""
+    import json
+
+    try:
+        if path is None or not path.exists():
+            return None, [], 0
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None, [], 0
+        current = payload.get("current")
+        queue = payload.get("queue")
+        return (
+            dict(current) if isinstance(current, dict) else None,
+            [dict(item) for item in queue if isinstance(item, dict)] if isinstance(queue, list) else [],
+            max(int(payload.get("revision") or 0), 0),
+        )
+    except Exception:
+        return None, [], 0
+
+
+def persist_media_state(path: Any, *, current: Optional[JsonDict], queue: Deque[JsonDict], revision: int) -> None:
+    if path is None:
+        return
+    from VoidCube_core.utils import atomic_json_write
+
+    try:
+        atomic_json_write(path, {
+            "version": 1,
+            "revision": int(revision),
+            "current": dict(current) if current else None,
+            "queue": [dict(item) for item in queue],
+        })
+    except Exception:
+        return
+
+
 @dataclass(frozen=True, slots=True)
 class SupervisorUIMediaStateContext:
     """Callbacks that keep media state owned by the Supervisor runtime."""
@@ -65,6 +102,24 @@ def enqueue_media_state(
 
     context.media_queue.clear()
     return _stamp_current(context=context, current=item) or item
+
+
+def enqueue_media_playlist_state(
+    *,
+    context: SupervisorUIMediaStateContext,
+    items: list[JsonDict],
+    queue_mode: str = "replace",
+) -> Optional[JsonDict]:
+    prepared = [_prepare_media(item) for item in items]
+    if not prepared:
+        return context.current_media
+    if queue_mode == "enqueue" and context.current_media is not None:
+        context.media_queue.extend(prepared)
+        return _stamp_current(context=context, current=context.current_media)
+    context.media_queue.clear()
+    current, *pending = prepared
+    context.media_queue.extend(pending)
+    return _stamp_current(context=context, current=current)
 
 
 def control_media_state(

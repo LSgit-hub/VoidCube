@@ -338,7 +338,8 @@ class ScheduledTaskExecutorRuntime:
             if companion_media:
                 prompt = (
                     "这是日常模式下星子转交的即时媒体播放请求。请使用 API-A 的正常工具能力"
-                    "查找可靠、可播放的媒体 URL，然后调用 media_play 推送到 VoidCube Web UI。"
+                    "查找可靠、可播放的媒体 URL；歌单优先一次调用 media_playlist，单项才调用 media_play。"
+                    "media_playlist 返回 status=ok 即表示整张歌单已入队，不要再调用浏览器、端口检查或其他验证工具。"
                     "不要创建定时任务，也不要把请求交给 Auto 自主链。\n\n"
                     f"请求：{title}\n播放要求：{instruction}"
                 )

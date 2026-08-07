@@ -95,6 +95,15 @@ def media_control(action: str) -> str:
     )
 
 
+def media_playlist(items: list[Dict[str, Any]], queue_mode: str = "replace") -> str:
+    """一次性将整张歌单推送到 VoidCube 播放列表。成功后即可汇报完成。"""
+    return _post_media(
+        _supervisor_media_url("playlist"),
+        {"items": items, "queue_mode": queue_mode},
+        operation="media_playlist",
+    )
+
+
 # ── Registry ──
 from tools.registry import registry
 
@@ -152,6 +161,37 @@ MEDIA_CONTROL_SCHEMA = {
     },
 }
 
+MEDIA_PLAYLIST_SCHEMA = {
+    "name": "media_playlist",
+    "description": (
+        "一次性将多首已找到 URL 的音乐或视频推送到 VoidCube Web UI 播放列表。"
+        "返回 status=ok 即表示整张歌单已接受；不要再调用 browser_navigate、browser_snapshot 或 check_port 验证。"
+        "第一批使用 replace，后续追加使用 enqueue。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 200,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "title": {"type": "string"},
+                        "media_type": {"type": "string", "enum": ["bilibili", "audio", "video", "auto"]},
+                        "auto_play": {"type": "boolean"},
+                    },
+                    "required": ["url"],
+                },
+            },
+            "queue_mode": {"type": "string", "enum": ["replace", "enqueue"]},
+        },
+        "required": ["items"],
+    },
+}
+
 registry.register(
     name="media_play",
     toolset="web",
@@ -164,6 +204,24 @@ registry.register(
         queue_mode=args.get("queue_mode", "replace"),
     ),
     emoji="🎵",
+)
+registry.register(
+    name="media_playlist",
+    toolset="playback",
+    schema=MEDIA_PLAYLIST_SCHEMA,
+    handler=lambda args, **kw: media_playlist(
+        items=[
+            {
+                "url": item.get("url", ""),
+                "title": item.get("title", ""),
+                "type": item.get("media_type", "auto"),
+                "auto_play": item.get("auto_play", True),
+            }
+            for item in args.get("items", [])
+        ],
+        queue_mode=args.get("queue_mode", "replace"),
+    ),
+    emoji="🎶",
 )
 registry.register(
     name="media_control",

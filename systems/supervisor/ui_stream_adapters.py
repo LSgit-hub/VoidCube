@@ -140,6 +140,21 @@ def normalize_media_enqueue_body(body: Any) -> Dict[str, Any]:
     return normalized
 
 
+def normalize_media_playlist_body(body: Any) -> Dict[str, Any]:
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        raise HTTPException(status_code=400, detail="歌单请求必须包含 items 数组")
+    items = body.get("items")
+    if not items or len(items) > 200:
+        raise HTTPException(status_code=400, detail="歌单项目数量必须在 1 到 200 之间")
+    normalized_items = [normalize_media_enqueue_body(item) for item in items]
+    queue_mode = str(body.get("queue_mode") or "replace").strip().lower()
+    if queue_mode not in {"replace", "enqueue"}:
+        raise HTTPException(status_code=400, detail="不支持的队列模式")
+    for item in normalized_items:
+        item["queue_mode"] = queue_mode
+    return {"items": normalized_items, "queue_mode": queue_mode}
+
+
 async def enqueue_media_request(
     request: Request,
     *,
@@ -160,6 +175,33 @@ async def enqueue_media_request(
         "status": "ok",
         "queued": pending_count + (1 if current else 0),
         "queue_length": pending_count,
+        "queue": queue_items(),
+        "current": current,
+        "revision": current_revision(),
+    }
+
+
+async def enqueue_media_playlist_request(
+    request: Request,
+    *,
+    enqueue_playlist: Callable[[list[Dict[str, Any]], str], Optional[Dict[str, Any]]],
+    current_revision: Callable[[], int],
+    queue_length: Callable[[], int] = lambda: 0,
+    current_media: Callable[[], Optional[Dict[str, Any]]] = lambda: None,
+    queue_items: Callable[[], list[Dict[str, Any]]] = lambda: [],
+) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+    normalized = normalize_media_playlist_body(body)
+    enqueue_playlist(normalized["items"], normalized["queue_mode"])
+    current = current_media()
+    return {
+        "status": "ok",
+        "accepted": len(normalized["items"]),
+        "queued": queue_length() + (1 if current else 0),
+        "queue_length": queue_length(),
         "queue": queue_items(),
         "current": current,
         "revision": current_revision(),
