@@ -4,35 +4,12 @@ Pure display functions with no VoidcubeCLI state dependency.
 """
 
 import logging
-import os
 import shutil
-from pathlib import Path
-from VoidCube_core.constants import get_VoidCube_home
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-
-from prompt_toolkit import print_formatted_text as _pt_print
-from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
 
 logger = logging.getLogger(__name__)
-
-
-# =========================================================================
-# ANSI building blocks for conversation display
-# =========================================================================
-
-_GOLD = "\033[1;38;2;255;215;0m"  # True-color #FFD700 bold
-_BOLD = "\033[1m"
-_DIM = "\033[2m"
-_RST = "\033[0m"
-
-
-def cprint(text: str):
-    """Print ANSI-colored text through prompt_toolkit's renderer."""
-    _pt_print(_PT_ANSI(text))
 
 
 # =========================================================================
@@ -146,9 +123,9 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
                          get_toolset_for_tool=None,
                          context_length: int = None,
                          conversation_history: List[dict] = None):
-    """Build and print a welcome banner with ASCII art logo only."""
+    """Build and print the wide welcome banner and its session metadata."""
     
-    from VoidCube_cli.style import BANNER_ACCENT
+    from VoidCube_cli.style import BANNER_ACCENT, BANNER_BORDER, BANNER_DIM, BANNER_TITLE
 
     accent = BANNER_ACCENT
 
@@ -162,4 +139,17 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
         for line in logo_lines:
             console.print(f"[{accent}]{' ' * padding}{line}[/]")
     
+    # Keep the wide banner informative without turning it into a dashboard.
+    width = shutil.get_terminal_size((80, 24)).columns
+    rule_width = min(max_length if logo_lines else 48, max(32, width - 8))
+    console.print(f"[{BANNER_BORDER}]" + "─" * rule_width + "[/]")
+    model_label = str(model or "default").rsplit("/", 1)[-1]
+    if len(model_label) > 28:
+        model_label = model_label[:25] + "..."
+    session_label = str(session_id or "new")[-12:]
+    console.print(
+        f"[bold {BANNER_TITLE}]AGENT CONSOLE[/] "
+        f"[dim {BANNER_DIM}]{format_banner_version_label()}  ·  "
+        f"{model_label}  ·  session {session_label}[/]"
+    )
     console.print()

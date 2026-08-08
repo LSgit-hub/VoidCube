@@ -9,6 +9,8 @@ from typing import Any
 from rich import box as rich_box
 from rich.panel import Panel
 
+from VoidCube_cli.style import ACCENT, BORDER, RESPONSE_LABEL, TEXT
+
 
 @dataclass(frozen=True, slots=True)
 class CliBackgroundResponsePorts:
@@ -42,26 +44,26 @@ class CliBackgroundResponseRuntime:
         self.ports.sleep(0.05)
         self.ports.emit_blank_line()
         console = self.ports.create_console()
-        console.print("[#34D399]" + "~" * 40 + "[/]")
+        console.print(f"[{BORDER}]" + "─" * 40 + "[/]")
         if success:
             self.ports.emit(f"  ✅ {task_label} #{task_num} complete")
         else:
             self.ports.emit(f"  ❌ {task_label} #{task_num} failed: {error}")
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
         self.ports.emit(f'  Prompt: "{preview}"')
-        console.print("[#34D399]" + "~" * 40 + "[/]")
+        console.print(f"[{BORDER}]" + "─" * 40 + "[/]")
         if response:
-            color = "#CD7F32"
-            label = "> Voidcube"
+            color = ACCENT
+            label = RESPONSE_LABEL
             title = response_title or f"{label} (background #{task_num})"
             console.print(
                 Panel(
                     self.ports.rich_text_from_ansi(response),
                     title=f"[{color} bold]{title}[/]",
                     title_align="left",
-                    border_style=color,
-                    style="#FFF8DC",
-                    box=rich_box.HORIZONTALS,
+                    border_style=BORDER,
+                    style=TEXT,
+                    box=rich_box.ROUNDED,
                     padding=(1, 2),
                 )
             )

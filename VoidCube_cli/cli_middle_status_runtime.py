@@ -6,6 +6,18 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from VoidCube_cli.style import (
+    ACCENT,
+    BACKGROUND,
+    BORDER,
+    DANGER,
+    GOOD,
+    INFO,
+    MUTED,
+    SECONDARY,
+    WARN,
+)
+
 
 StatusFragment = tuple[str, str]
 
@@ -24,7 +36,7 @@ class CliMiddleStatusPorts:
 class CliMiddleStatusRuntime:
     """Own middle status formatting without owning supervisor state."""
 
-    _BACKGROUND = "bg:#1a1a2e"
+    _BACKGROUND = f"bg:{BACKGROUND}"
 
     def __init__(self, ports: CliMiddleStatusPorts) -> None:
         self.ports = ports
@@ -53,23 +65,23 @@ class CliMiddleStatusRuntime:
                 queued = tuple(getattr(snapshot, "queued", ()) or ())
                 if active is not None or queued:
                     if fragments:
-                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                        fragments.append((f"{self._BACKGROUND} {BORDER}", " · "))
                     lane = getattr(getattr(active, "lane", None), "value", "queued")
                     label = "用户" if lane == "user_chat" else "自主"
                     state = getattr(getattr(active, "state", None), "value", "排队")
                     request_id = str(getattr(active, "request_id", "") or "")
                     request_suffix = f" #{request_id[-8:]}" if request_id else ""
                     fragments.append(
-                        (f"{self._BACKGROUND} #60A5FA", f"{label}:{state}{request_suffix}")
+                        (f"{self._BACKGROUND} {INFO}", f"{label}:{state}{request_suffix}")
                     )
                     if queued:
-                        fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{len(queued)}"))
+                        fragments.append((f"{self._BACKGROUND} {MUTED}", f" +{len(queued)}"))
                 blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
                 if blocked_reason and active is None:
                     if fragments:
-                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                        fragments.append((f"{self._BACKGROUND} {BORDER}", " · "))
                     fragments.append(
-                        (f"{self._BACKGROUND} #FBBF24", f"等待:{blocked_reason}")
+                        (f"{self._BACKGROUND} {WARN}", f"等待:{blocked_reason}")
                     )
             except Exception:
                 pass
@@ -88,24 +100,24 @@ class CliMiddleStatusRuntime:
                 memory_model = provider if len(provider) <= 12 else provider[:9] + "..."
 
             icon = "[M]" if ascii_mode else "🧠"
-            fragments.append((f"{self._BACKGROUND} #6B7280", icon))
+            fragments.append((f"{self._BACKGROUND} {MUTED}", icon))
             if supervisor_active and memory_model:
                 fragments.extend(self._marquee(memory_model))
             else:
-                fragments.append((f"{self._BACKGROUND} #7CC9A0 bold", memory_model))
+                fragments.append((f"{self._BACKGROUND} {GOOD} bold", memory_model))
 
             percent = memory_usage.get("last_request_usage_percent")
             request_count = memory_usage.get("request_count", 0)
             if percent is not None and request_count > 0:
                 if percent >= 80:
-                    color = "#FF6B6B"
+                    color = DANGER
                 elif percent >= 60:
-                    color = "#FFD700"
+                    color = WARN
                 else:
-                    color = "#8FBC8F"
+                    color = GOOD
                 fragments.append((f"{self._BACKGROUND} {color} bold", f" {percent}%"))
             else:
-                fragments.append((f"{self._BACKGROUND} #6B7280", " --"))
+                fragments.append((f"{self._BACKGROUND} {MUTED}", " --"))
         except Exception:
             pass
 
@@ -115,15 +127,15 @@ class CliMiddleStatusRuntime:
             subagent = ports.subagent_snapshot()
             if subagent.get("active"):
                 if fragments:
-                    fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    fragments.append((f"{self._BACKGROUND} {BORDER}", " · "))
                 icon = "[SA]" if ascii_mode else "🧩"
-                fragments.append((f"{self._BACKGROUND} #F59E0B", icon))
+                fragments.append((f"{self._BACKGROUND} {ACCENT}", icon))
                 fragments.append(
-                    (f"{self._BACKGROUND} #F59E0B bold", f" {subagent.get('counts_label', '0')}")
+                    (f"{self._BACKGROUND} {ACCENT} bold", f" {subagent.get('counts_label', '0')}")
                 )
                 preview = str(subagent.get("compact_preview") or "").strip()
                 if preview:
-                    fragments.append((f"{self._BACKGROUND} #94A3B8", f" {preview}"))
+                    fragments.append((f"{self._BACKGROUND} {MUTED}", f" {preview}"))
         except Exception:
             pass
 
@@ -137,13 +149,13 @@ class CliMiddleStatusRuntime:
         fragments: list[StatusFragment] = []
         for index, char in enumerate(text):
             if index == position - 1:
-                color = "#FFFFFF"
+                color = "#F8FAFC"
             elif index == position:
-                color = "#C0FFC0"
+                color = "#B8F2D5"
             elif index == position + 1:
-                color = "#80C080"
+                color = "#75B996"
             else:
-                color = "#7CC9A0"
+                color = GOOD
             fragments.append((f"{cls._BACKGROUND} {color} bold", char))
         return fragments
 
@@ -158,9 +170,9 @@ class CliMiddleStatusRuntime:
         if not scene:
             if has_prefix:
                 return [
-                    (f"{cls._BACKGROUND} #4B5563", " · "),
-                    (f"{cls._BACKGROUND} #6B7280", "[x]" if ascii_mode else "⚙️"),
-                    (f"{cls._BACKGROUND} #6B7280", "离线"),
+                    (f"{cls._BACKGROUND} {BORDER}", " · "),
+                    (f"{cls._BACKGROUND} {MUTED}", "[x]" if ascii_mode else "⚙️"),
+                    (f"{cls._BACKGROUND} {MUTED}", "离线"),
                 ]
             return []
 
@@ -176,21 +188,21 @@ class CliMiddleStatusRuntime:
                 "handoff": "📤", "maintenance": "🔧", "body_switch": "🔄",
             }
         colors = {
-            "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
-            "drive": "#E2B04A", "handoff": "#A78BFA", "maintenance": "#60A5FA",
-            "body_switch": "#C084FC",
+            "idle": MUTED, "planning": DANGER, "memory": GOOD,
+            "drive": ACCENT, "handoff": SECONDARY, "maintenance": INFO,
+            "body_switch": SECONDARY,
         }
         labels = {
             "idle": "辅助", "planning": "规划", "memory": "记忆", "drive": "驱动",
             "handoff": "交接", "maintenance": "维护", "body_switch": "切换",
         }
-        color = colors.get(scene, "#9CA3AF")
+        color = colors.get(scene, MUTED)
         fragments: list[StatusFragment] = []
         if has_prefix:
-            fragments.append((f"{cls._BACKGROUND} #4B5563", " · "))
+            fragments.append((f"{cls._BACKGROUND} {BORDER}", " · "))
         fragments.append((f"{cls._BACKGROUND} {color}", icons.get(scene, "●")))
         fragments.append((f"{cls._BACKGROUND} {color}", labels.get(scene, scene)))
         error_count = supervisor.get("error_count", 0)
         if error_count > 0:
-            fragments.append((f"{cls._BACKGROUND} #FF6B6B bold", f" !{error_count}"))
+            fragments.append((f"{cls._BACKGROUND} {DANGER} bold", f" !{error_count}"))
         return fragments

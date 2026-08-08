@@ -9,6 +9,8 @@ from typing import Any
 from rich import box as rich_box
 from rich.panel import Panel
 
+from VoidCube_cli.style import ACCENT, BORDER, RESPONSE_LABEL, TEXT
+
 
 _DIM = "\033[2m"
 _RST = "\033[0m"
@@ -76,16 +78,16 @@ class ChatResponseRuntime:
         self.ports.emit(f"\n{top}\n{_DIM}{display}{_RST}\n{bottom}")
 
     def _render_response_panel(self, response: str) -> None:
-        color = "#CD7F32"
-        text_color = "#FFF8DC"
+        color = ACCENT
+        text_color = TEXT
         self.ports.create_console().print(
             Panel(
                 self.ports.rich_text_from_ansi(response),
-                title=f"[{color} bold]> Voidcube[/]",
+                title=f"[{color} bold]{RESPONSE_LABEL}[/]",
                 title_align="left",
-                border_style=color,
+                border_style=BORDER,
                 style=text_color,
-                box=rich_box.HORIZONTALS,
+                box=rich_box.ROUNDED,
                 padding=(1, 2),
             )
         )

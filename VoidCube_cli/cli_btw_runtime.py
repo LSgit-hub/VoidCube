@@ -10,6 +10,8 @@ from typing import Any
 from rich import box as rich_box
 from rich.panel import Panel
 
+from VoidCube_cli.style import ACCENT, BORDER
+
 
 @dataclass(frozen=True, slots=True)
 class CliBtwPorts:
@@ -84,14 +86,14 @@ class CliBtwRuntime:
         ports.sleep(0.05)
         ports.emit_blank_line()
         if response:
-            color = "#4F6D4A"
+            color = ACCENT
             ports.create_console().print(
                 Panel(
                     ports.rich_text_from_ansi(response),
                     title=f"[{color} bold]> /btw[/]",
                     title_align="left",
-                    border_style=color,
-                    box=rich_box.HORIZONTALS,
+                    border_style=BORDER,
+                    box=rich_box.ROUNDED,
                     padding=(1, 2),
                 )
             )

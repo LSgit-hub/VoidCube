@@ -15,8 +15,10 @@ from rich.text import Text as _RichText
 from prompt_toolkit import print_formatted_text as _pt_print
 from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
 
+from VoidCube_cli.style import ACCENT
 
-_ACCENT_ANSI_DEFAULT = "\033[1;38;2;255;215;0m"
+
+_ACCENT_ANSI_DEFAULT = "\033[1;38;2;105;217;232m"
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _RST = "\033[0m"
@@ -35,7 +37,7 @@ def _hex_to_ansi_bold(hex_color: str) -> str:
 
 def _accent_hex() -> str:
     """Return the single built-in accent color."""
-    return "#FFBF00"
+    return ACCENT
 
 
 def _rich_text_from_ansi(text: str) -> _RichText:
@@ -87,4 +89,4 @@ class ChatConsole:
         yield self
 
 
-_ACCENT = _hex_to_ansi_bold("#30363D")
+_ACCENT = _hex_to_ansi_bold(ACCENT)

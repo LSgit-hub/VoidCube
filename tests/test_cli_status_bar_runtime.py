@@ -4,6 +4,7 @@ from VoidCube_cli.cli_status_bar_runtime import (
     CliStatusBarPorts,
     CliStatusBarRuntime,
 )
+from VoidCube_cli.style import DANGER
 
 
 def _runtime(
@@ -46,7 +47,7 @@ def test_status_bar_builds_model_context_and_middle_fragments():
     assert "api-a" in rendered
     assert "85%" in rendered
     assert "MEM" in rendered
-    assert any("#FF6B6B" in style for style, _ in fragments)
+    assert any(DANGER in style for style, _ in fragments)
 
 
 def test_status_bar_places_git_at_the_right_and_fits_width():

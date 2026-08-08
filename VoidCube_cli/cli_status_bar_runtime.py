@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from VoidCube_cli.terminal_text_layout import display_width, trim_to_width
+from VoidCube_cli.style import BACKGROUND, DANGER, GOOD, MUTED, PRIMARY, WARN
 
 
 StatusFragment = tuple[str, str]
@@ -30,7 +31,7 @@ class CliStatusBarPorts:
 class CliStatusBarRuntime:
     """Own status-bar fragment assembly without owning CLI state."""
 
-    _BACKGROUND = "bg:#1a1a2e"
+    _BACKGROUND = f"bg:{BACKGROUND}"
 
     def __init__(self, ports: CliStatusBarPorts) -> None:
         self.ports = ports
@@ -54,14 +55,14 @@ class CliStatusBarRuntime:
             percent = snapshot.get("context_percent")
             if percent is not None:
                 if percent >= 80:
-                    percent_color = "#FF6B6B"
+                    percent_color = DANGER
                 elif percent >= 60:
-                    percent_color = "#FFD700"
+                    percent_color = WARN
                 else:
-                    percent_color = "#8FBC8F"
+                    percent_color = GOOD
                 percent_label = f"{percent}%"
             else:
-                percent_color = "#8B8682"
+                percent_color = MUTED
                 percent_label = "--"
 
             model_name = str(snapshot.get("model_short") or "Voidcube")
@@ -95,20 +96,20 @@ class CliStatusBarRuntime:
             fragments: list[StatusFragment] = []
             for index, char in enumerate(model_name):
                 if index == position - 1:
-                    color = "#FFFFFF"
+                    color = "#F8FAFC"
                 elif index == position:
-                    color = "#C0C0C0"
+                    color = "#CBD5E1"
                 elif index == position + 1:
-                    color = "#808080"
+                    color = "#64748B"
                 else:
-                    color = "#1E40AF"
+                    color = PRIMARY
                 fragments.append((f"{cls._BACKGROUND} {color} bold", char))
             fragments.append(("class:status-bar", "  "))
             fragments.append((f"{cls._BACKGROUND} {percent_color} bold", percent_label))
             return fragments
 
         return [
-            (f"{cls._BACKGROUND} #1E40AF bold", model_name),
+            (f"{cls._BACKGROUND} {PRIMARY} bold", model_name),
             ("class:status-bar", "  "),
             (f"{cls._BACKGROUND} {percent_color} bold", percent_label),
         ]

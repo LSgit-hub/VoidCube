@@ -13,6 +13,7 @@ from VoidCube_cli.attachments import _detect_file_drop
 from VoidCube_cli.cli_ui import _DIM, _RST, _accent_hex, _cprint
 from VoidCube_cli.command_router import looks_like_slash_command
 from VoidCube_cli.cli_idle_maintenance_runtime import drain_process_notifications
+from VoidCube_cli.style import PRIMARY
 
 
 logger = logging.getLogger(__name__)
@@ -130,7 +131,7 @@ class PendingInputRuntime:
             total_lines = expanded.count("\n") + 1
             paste_count = len(paste_refs)
             if should_emit_scrollback:
-                user_bar = f"[#34D399]{'~' * 40}[/]"
+                user_bar = f"[{PRIMARY}]" + "─" * 40 + "[/]"
                 print()
                 self.ports.render_markup(user_bar)
                 split_parts = _PASTE_REF_RE.split(user_input)
@@ -153,7 +154,7 @@ class PendingInputRuntime:
             return expanded
 
         if should_emit_scrollback:
-            user_bar = f"[#34D399]{'~' * 40}[/]"
+            user_bar = f"[{PRIMARY}]" + "─" * 40 + "[/]"
             if isinstance(user_input, str) and "\n" in user_input:
                 first_line = user_input.split("\n")[0]
                 line_count = user_input.count("\n") + 1

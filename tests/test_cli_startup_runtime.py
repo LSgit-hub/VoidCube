@@ -1,4 +1,5 @@
 from VoidCube_cli.cli_startup_runtime import CliStartupPorts, CliStartupRuntime
+from VoidCube_cli.style import TEXT
 
 
 def _runtime(calls, state):
@@ -47,7 +48,10 @@ def test_startup_runtime_orders_resume_history_and_summary():
 
     assert calls[:4] == [("blank", 4), "banner", "preload", "history"]
     assert ("panel", ["[bold #fff]历史会话列表[/]", "", "  1.ID: old | Earlier"]) in calls
-    assert ("emit", "[#FFF8DC]记忆模型: local-model · 3 个工具 · 2 技能 · 当前会话: current[/]") in calls
+    assert (
+        "emit",
+        f"[{TEXT}]记忆模型: local-model · 3 个工具 · 2 技能 · 当前会话: current[/]",
+    ) in calls
     assert state["skills_shown"] is True
 
 
@@ -66,4 +70,7 @@ def test_startup_runtime_uses_welcome_and_no_history_for_new_session():
 
     assert "preload" not in calls
     assert ("emit", "[dim]暂无对话历史[/]") in calls
-    assert ("emit", "[#FFF8DC]VoidCube ready · 3 个工具 · 2 技能 · 当前会话: current[/]") in calls
+    assert (
+        "emit",
+        f"[{TEXT}]VoidCube ready · 3 个工具 · 2 技能 · 当前会话: current[/]",
+    ) in calls
