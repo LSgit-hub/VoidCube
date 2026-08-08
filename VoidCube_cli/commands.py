@@ -64,6 +64,16 @@ class CommandDef:
         except Exception:
             return self.category
 
+    def get_subcommand_description(self, subcommand: str) -> str:
+        """Get a translated completion description for one subcommand."""
+        try:
+            from VoidCube_cli.i18n import t
+
+            key = f"commands.{self.name}.subcommands.{subcommand}"
+            return t(key, default="")
+        except Exception:
+            return ""
+
 
 # ---------------------------------------------------------------------------
 # Central registry -- single source of truth
@@ -351,6 +361,11 @@ class SlashCommandCompleter(Completer):
         cmd = resolve_command(base_cmd)
         return bool(cmd and cmd.defer_subcommands_until_prefix)
 
+    @staticmethod
+    def _subcommand_description(base_cmd: str, subcommand: str) -> str:
+        cmd = resolve_command(base_cmd)
+        return cmd.get_subcommand_description(subcommand) if cmd else ""
+
     def _iter_skill_commands(self) -> Mapping[str, dict[str, Any]]:
         if self._skill_commands_provider is None:
             return {}
@@ -636,6 +651,7 @@ class SlashCommandCompleter(Completer):
                             sub,
                             start_position=-len(sub_text),
                             display=sub,
+                            display_meta=self._subcommand_description(base_cmd, sub),
                         )
             return
 

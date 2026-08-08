@@ -20,7 +20,13 @@
       },
       "goal": {
         "description": "管理当前会话目标",
-        "usage": "用法: /goal [目标|status|complete|blocked|clear]"
+        "usage": "用法: /goal [目标|status|complete|blocked|clear]",
+        "subcommands": {
+          "status": "查看当前目标状态",
+          "complete": "将活动目标标记为完成",
+          "blocked": "将活动目标标记为阻塞，后接原因",
+          "clear": "清除已结束的目标"
+        }
       },
       "find": {
         "description": "搜索当前会话的结构化记录",

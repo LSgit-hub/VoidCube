@@ -15,7 +15,13 @@
         "description": "Show conversation history"
       },
       "goal": {
-        "description": "Manage the current session goal"
+        "description": "Manage the current session goal",
+        "subcommands": {
+          "status": "Show the current goal status",
+          "complete": "Mark the active goal as completed",
+          "blocked": "Mark the active goal as blocked; add a reason",
+          "clear": "Clear a finished goal"
+        }
       },
       "find": {
         "description": "Search structured records in the current session"
