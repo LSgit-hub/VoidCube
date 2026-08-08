@@ -153,8 +153,13 @@ def _delete_pid(path: str) -> None:
         pass
 
 
-def _port_listening(port: int, timeout: float = 0.5) -> bool:
-    """Quick TCP connect check — returns True if something is listening."""
+def _port_listening(port: int, timeout: float = 0.1) -> bool:
+    """Quick TCP connect check — returns True if something is listening.
+
+    This probe runs before every cold service start.  A closed localhost port
+    can take the full socket timeout to fail on Windows, so keep the timeout
+    short and leave the longer readiness wait to ``_wait_for_health``.
+    """
     import socket
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -729,7 +734,7 @@ def _wait_for_health(name: str, port: int, timeout: float = 15.0) -> bool:
     while time.time() < deadline:
         if _health_check(port):
             return True
-        time.sleep(0.3)
+        time.sleep(0.1)
     _safe_print(f"  ⚠ {name} did not respond within {timeout}s")
     return False
 
@@ -767,7 +772,7 @@ def _wait_for_gateway_service_type(service_type: str, timeout: float = 20.0) -> 
     while time.time() < deadline:
         if _gateway_has_service_type(service_type):
             return True
-        time.sleep(0.3)
+        time.sleep(0.1)
     _safe_print(f"  ⚠ gateway did not list service_type={service_type} within {timeout}s")
     return False
 
@@ -783,6 +788,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
+    prestarted_services: set[str] = set()
     _sync_canonical_mem_binding_before_start()
 
     # Default stable path: Gateway → Mem → Supervisor.
@@ -795,8 +801,30 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             continue
 
         existing_pid = _read_pid(svc.pid_file)
+
+        # Memory and Supervisor both register against the already-healthy
+        # Gateway and do not depend on each other.  Starting a cold Supervisor
+        # while Memory is booting removes one full service startup from the
+        # interactive CLI's critical path.  The normal loop below still owns
+        # Supervisor's health and registration checks, including retries.
+        if name == "memory" and not (existing_pid and _pid_alive(existing_pid)):
+            supervisor = SERVICES.get("supervisor")
+            supervisor_pid = _read_pid(supervisor.pid_file) if supervisor else None
+            if supervisor and not (supervisor_pid and _pid_alive(supervisor_pid)):
+                if not silent:
+                    _safe_print(
+                        f"  ▶ {supervisor.name:12s} starting on port {supervisor.port}..."
+                    )
+                supervisor_process = start_service("supervisor", foreground=False)
+                if supervisor_process is not None:
+                    prestarted_services.add("supervisor")
+
         if existing_pid and _pid_alive(existing_pid):
-            healthy = _health_check(svc.port)
+            healthy = (
+                _wait_for_health(name, svc.port, timeout=30.0)
+                if name in prestarted_services
+                else _health_check(svc.port)
+            )
             if healthy:
                 required_gateway_types = _required_gateway_service_types(name)
                 missing_gateway_types = [
@@ -813,11 +841,24 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
                         )
                     stop_service(name, silent=True)
                 else:
-                    result[name] = {"running": True, "healthy": True, "pid": existing_pid, "started": False}
+                    result[name] = {
+                        "running": True,
+                        "healthy": True,
+                        "pid": existing_pid,
+                        "started": name in prestarted_services,
+                    }
                     if required_gateway_types:
                         result[name]["registered"] = True
                     if not silent:
-                        _safe_print(f"  ✓ {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
+                        label = (
+                            "started in parallel"
+                            if name in prestarted_services
+                            else "already running"
+                        )
+                        _safe_print(
+                            f"  ✓ {svc.name:12s} {label} "
+                            f"(pid {existing_pid}, port {svc.port})"
+                        )
                     svc.pid = existing_pid
                     continue
 
