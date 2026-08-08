@@ -101,11 +101,12 @@ class ToolRegistry:
     def get_toolset_requirements(self) -> Dict[str, bool]:
         """Return availability for toolsets that contain registered tools."""
         requirements: Dict[str, bool] = {}
+        availability = self._availability_for(self.list_tools())
         for toolset_name, tools in self._toolsets.items():
             registered = [name for name in tools if name in self._tools]
             if registered:
                 requirements[toolset_name] = all(
-                    self._is_tool_available(name) for name in registered
+                    availability.get(name, False) for name in registered
                 )
         return requirements
 
@@ -117,6 +118,24 @@ class ToolRegistry:
             return bool(check_fn())
         except Exception:
             return False
+
+    def _availability_for(self, names: List[str]) -> Dict[str, bool]:
+        """Evaluate each shared availability check at most once per scan."""
+        results: Dict[str, bool] = {}
+        by_check: Dict[int, bool] = {}
+        for name in names:
+            check_fn = self._check_fns.get(name)
+            if check_fn is None:
+                results[name] = name in self._tools
+                continue
+            cache_key = id(check_fn)
+            if cache_key not in by_check:
+                try:
+                    by_check[cache_key] = bool(check_fn())
+                except Exception:
+                    by_check[cache_key] = False
+            results[name] = by_check[cache_key]
+        return results
     
     def get_definitions(self, tool_names: List[str] = None, quiet: bool = False) -> List[Dict[str, Any]]:
         """获取工具定义（schema）
@@ -133,9 +152,10 @@ class ToolRegistry:
         if tool_names is None:
             tool_names = self.list_tools()
         
+        availability = self._availability_for(tool_names)
         for name in tool_names:
             tool = self.get(name)
-            if tool is None or not self._is_tool_available(name):
+            if tool is None or not availability.get(name, False):
                 continue
             
             # 构建工具定义
@@ -322,11 +342,12 @@ class ToolRegistry:
         """
         available: list = []
         unavailable: list = []
+        availability = self._availability_for(self.list_tools())
         
         for toolset_name, tools in self._toolsets.items():
             registered = [name for name in tools if name in self._tools]
             available_tools = [
-                name for name in registered if self._is_tool_available(name)
+                name for name in registered if availability.get(name, False)
             ]
             unavailable_tools = [
                 name for name in registered if name not in available_tools

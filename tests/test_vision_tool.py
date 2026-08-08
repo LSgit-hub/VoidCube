@@ -69,3 +69,19 @@ def test_vision_tool_accepts_legacy_image_url_and_user_prompt_aliases(monkeypatc
     )
 
     assert result["error"] == "No configured vision backend is available"
+
+
+def test_startup_vision_configuration_check_does_not_probe_models(monkeypatch):
+    from agent import auxiliary_client
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "configured-for-test")
+    monkeypatch.setattr(auxiliary_client, "_read_main_provider", lambda: "")
+    monkeypatch.setattr(
+        auxiliary_client,
+        "_first_live_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("startup must not query the model endpoint")
+        ),
+    )
+
+    assert "openrouter" in auxiliary_client.get_configured_vision_backends()

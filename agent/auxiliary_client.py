@@ -918,6 +918,65 @@ def _strict_vision_backend_available(provider: str) -> bool:
     return _resolve_strict_vision_backend(provider)[0] is not None
 
 
+def _vision_provider_configured(provider: str) -> bool:
+    """Check vision credentials/endpoints without making a network request.
+
+    This is intentionally separate from ``_strict_vision_backend_available``:
+    the latter validates a backend by querying its model endpoint and is only
+    appropriate immediately before a vision request, never during CLI startup.
+    """
+    provider = _normalize_vision_provider(provider)
+    if provider == "openrouter":
+        pool_present, entry = _select_pool_entry("openrouter")
+        return bool(_pool_runtime_api_key(entry)) if pool_present else bool(
+            os.getenv("OPENROUTER_API_KEY", "").strip()
+        )
+    if provider == "nous":
+        return bool(_read_nous_auth())
+    if provider == "custom":
+        return bool(_resolve_custom_runtime()[0])
+
+    try:
+        from VoidCube_app.provider_auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
+        pconfig = PROVIDER_REGISTRY.get(provider)
+        if pconfig is None:
+            return False
+        if pconfig.auth_type != "api_key":
+            return bool(pconfig.inference_base_url)
+        pool_present, entry = _select_pool_entry(provider)
+        if pool_present:
+            return bool(_pool_runtime_api_key(entry))
+        return bool(resolve_api_key_provider_credentials(provider).get("api_key", "").strip())
+    except Exception:
+        return False
+
+
+def get_configured_vision_backends() -> List[str]:
+    """Return locally configured vision backends without probing the network."""
+    configured: List[str] = []
+    try:
+        requested, _model, base_url, _api_key = _resolve_task_provider_model("vision")
+    except Exception:
+        requested, base_url = "auto", None
+
+    # A task-specific endpoint is itself sufficient evidence for startup
+    # gating; validating it belongs to the first actual vision request.
+    if base_url:
+        configured.append("custom")
+    elif requested not in ("auto", "") and _vision_provider_configured(requested):
+        configured.append(_normalize_vision_provider(requested))
+    elif requested in ("auto", ""):
+        main_provider = _read_main_provider()
+        if main_provider and main_provider not in ("auto", "") and _vision_provider_configured(main_provider):
+            configured.append(_normalize_vision_provider(main_provider))
+        for candidate in _VISION_AUTO_PROVIDER_ORDER:
+            if candidate not in configured and _vision_provider_configured(candidate):
+                configured.append(candidate)
+        if _vision_provider_configured("custom") and "custom" not in configured:
+            configured.append("custom")
+    return configured
+
+
 def get_available_vision_backends() -> List[str]:
 
     """Return the currently available vision backends in auto-selection order.

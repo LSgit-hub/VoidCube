@@ -1275,6 +1275,7 @@ class VoidcubeCLI:
         self._config_cache: Dict[str, Any] | None = None
         self._config_cache_ts: float = 0.0
         self._ascii_fallback: bool | None = None  # cached once, never changes mid-session
+        self._tool_definitions_cache: tuple[tuple[str, ...], list[dict[str, Any]]] | None = None
 
         # State shared by interactive run() and single-query chat mode.
         # These must exist before any direct chat() call because single-query
@@ -2446,7 +2447,7 @@ class VoidcubeCLI:
             self._show_status()
         else:
             # Get tools for display
-            tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+            tools = self._get_cached_tool_definitions()
             
             # Get terminal working directory (where commands will execute)
             cwd = os.getenv("TERMINAL_CWD", os.getcwd())
@@ -2463,9 +2464,6 @@ class VoidcubeCLI:
                 conversation_history=self.conversation_history,
             )
         
-        # Show tool availability warnings if any tools are disabled
-        self._show_tool_availability_warnings()
-
         # Warn about very low context lengths (common with local servers)
         if ctx_len and ctx_len <= 8192:
             self.console.print()
@@ -2507,6 +2505,19 @@ class VoidcubeCLI:
             )
 
         self.console.print()
+
+    def _get_cached_tool_definitions(self) -> list[dict[str, Any]]:
+        """Resolve tool schemas once per enabled-toolset configuration."""
+        key = tuple(str(item) for item in (self.enabled_toolsets or ()))
+        cached = self._tool_definitions_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        definitions = _get_tool_definitions(
+            enabled_toolsets=list(key),
+            quiet_mode=True,
+        )
+        self._tool_definitions_cache = (key, definitions)
+        return definitions
 
     def _hydrate_resumed_session(self) -> tuple[SessionHydration, bool]:
         """Return one cached hydration result for the selected session."""
@@ -2637,32 +2648,10 @@ class VoidcubeCLI:
             return f"{prefix}\n\n{user_text}" if user_text else prefix
         return user_text or "What do you see in this image?"
 
-    def _show_tool_availability_warnings(self):
-        """Show warnings about disabled tools due to missing API keys."""
-        try:
-            from tools.model_tools import check_tool_availability
-            
-            available, unavailable = check_tool_availability()
-            
-            # Filter to only those missing API keys (not system deps)
-            api_key_missing = [u for u in unavailable if u["missing_vars"]]
-            
-            if api_key_missing:
-                self.console.print()
-                self.console.print(t('some_tools_disabled_missing_api_keys'))
-                for item in api_key_missing:
-                    tools_str = ", ".join(item["tools"][:2])  # Show first 2 tools
-                    if len(item["tools"]) > 2:
-                        tools_str += f", +{len(item['tools'])-2} more"
-                    self.console.print(f"   [dim]• {item['name']}[/] [dim italic]({', '.join(item['missing_vars'])})[/]")
-                self.console.print(t('run_api_to_configure'))
-        except Exception:
-            pass  # Don't crash on import errors
-    
     def _show_status(self):
         """Show compact startup status line."""
         # Get tool count
-        tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+        tools = self._get_cached_tool_definitions()
         tool_count = len(tools) if tools else 0
 
         # Format model name (shorten if needed)
@@ -4414,10 +4403,7 @@ class VoidcubeCLI:
 
         def tools_count() -> int:
             try:
-                tools = _get_tool_definitions(
-                    enabled_toolsets=self.enabled_toolsets,
-                    quiet_mode=True,
-                )
+                tools = self._get_cached_tool_definitions()
                 return len(tools) if tools else 0
             except Exception:
                 return 0

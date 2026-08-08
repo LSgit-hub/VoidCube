@@ -104,6 +104,20 @@ def _vision_backends_available() -> bool:
         return False
 
 
+def _vision_backends_configured() -> bool:
+    """Return local configuration status for startup tool gating.
+
+    Runtime calls still use ``_vision_backends_available`` so a stale or
+    unreachable provider is reported at the point of use, not during startup.
+    """
+    try:
+        from agent.auxiliary_client import get_configured_vision_backends
+
+        return bool(get_configured_vision_backends())
+    except Exception:
+        return False
+
+
 def vision_analyze_tool(
     images: Optional[list[str]] = None,
     prompt: str = "",
@@ -158,5 +172,5 @@ registry.register(
     toolset="vision",
     schema=VISION_SCHEMA,
     handler=lambda args, **kwargs: vision_analyze_tool(**args, **kwargs),
-    check_fn=_vision_backends_available,
+    check_fn=_vision_backends_configured,
 )
