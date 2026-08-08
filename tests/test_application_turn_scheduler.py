@@ -191,3 +191,47 @@ def test_cancel_notifies_injected_executor_once() -> None:
     assert scheduler.cancel("user") is True
     assert scheduler.cancel("user") is False
     assert executor.cancelled_ids == ["user"]
+
+
+def test_shutdown_cancels_active_and_queued_requests_and_waits_for_drain() -> None:
+    executor = _RecordingExecutor()
+    scheduler = TurnScheduler(clock=lambda: 1.0, executor=executor)
+    entered = threading.Event()
+
+    def execute(_request, token) -> None:
+        entered.set()
+        assert token._cancel_event.wait(1)
+
+    worker = threading.Thread(
+        target=lambda: scheduler.run(request("first", TurnLane.USER_CHAT), execute)
+    )
+    worker.start()
+    assert entered.wait(1)
+    scheduler.submit(request("second", TurnLane.USER_CHAT))
+
+    assert scheduler.shutdown(wait_timeout=1) is True
+    worker.join(1)
+
+    assert not worker.is_alive()
+    assert scheduler.snapshot().active is None
+    assert scheduler.snapshot().queued == ()
+    assert executor.cancelled_ids == ["first"]
+    terminal = {
+        event.request_id: event.kind
+        for event in scheduler.drain_events()
+        if event.kind in {SchedulerEventKind.CANCELLED, SchedulerEventKind.FAILED}
+    }
+    assert terminal == {
+        "first": SchedulerEventKind.CANCELLED,
+        "second": SchedulerEventKind.CANCELLED,
+    }
+
+
+def test_shutdown_rejects_new_work_and_autonomous_resume() -> None:
+    scheduler = TurnScheduler(autonomous_gate_active=True)
+
+    assert scheduler.shutdown() is True
+    with pytest.raises(RuntimeError, match="shut down"):
+        scheduler.submit(request("new", TurnLane.USER_CHAT))
+    with pytest.raises(RuntimeError, match="shut down"):
+        scheduler.resume_autonomous()

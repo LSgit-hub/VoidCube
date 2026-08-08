@@ -812,11 +812,12 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
                 )
                 or True
             ),
-            "submit_user": lambda _runtime, _host, payload: (
+            "submit_user": lambda _runtime, _host, payload, on_finished=None: (
                 fake_execute(
                     type("_Request", (), {"prompt": payload})(),
                     None,
                 )
+                or (on_finished() if on_finished is not None else None)
                 or True
             ),
         },

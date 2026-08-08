@@ -9,13 +9,18 @@ from VoidCube_cli.app import VoidcubeCLI
 from VoidCube_cli.autonomous_execution_host import AutonomousExecutionHost
 
 
-def _host(*, submit=lambda _host, _payload: True) -> AutonomousExecutionHost:
+def _host(
+    *,
+    submit=lambda _host, _payload: True,
+    gate: bool = True,
+    enable=lambda: None,
+) -> AutonomousExecutionHost:
     scheduler = SimpleNamespace(
-        snapshot=lambda: SimpleNamespace(autonomous_gate=True),
+        snapshot=lambda: SimpleNamespace(autonomous_gate=gate),
     )
     runtime = SimpleNamespace(
         scheduler=scheduler,
-        enable_autonomous=lambda: None,
+        enable_autonomous=enable,
         submit_autonomous=submit,
     )
     return AutonomousExecutionHost(
@@ -53,6 +58,18 @@ def test_autonomous_execution_host_submits_only_supervisor_lane() -> None:
 
     assert host._execute_pending_input("research") is True
     assert calls == [(host, ("research", None))]
+
+
+def test_pending_autonomous_input_cannot_reopen_closed_gate() -> None:
+    calls = []
+    host = _host(
+        gate=False,
+        submit=lambda *_args: calls.append("submit") or True,
+        enable=lambda: calls.append("enable"),
+    )
+
+    assert host._execute_pending_input("stale task") is False
+    assert calls == []
 
 
 def test_autonomous_execution_host_delegates_admitted_turn_execution() -> None:

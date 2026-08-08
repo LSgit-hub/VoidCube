@@ -75,6 +75,7 @@ class CliAgentTurnExecutorPorts:
     postprocessing_ports: Callable[[], TurnPostprocessingPorts]
     finish_turn: Callable[[AppliedTurnResult], None]
     handle_error: Callable[[Exception, bool, str, bool], None]
+    finish_failed_turn: Callable[[Exception, bool], None] | None = None
 
 
 class CliAgentTurnExecutorRuntime:
@@ -100,6 +101,9 @@ class CliAgentTurnExecutorRuntime:
         previous_role = ports.active_role()
         autonomous_timeout_reported = False
         autonomous_timeout_writeback_succeeded = False
+        turn_started = False
+        finalized = False
+        failure_handled = False
 
         try:
             if not ports.ensure_credentials() or cancellation.cancelled:
@@ -127,6 +131,7 @@ class CliAgentTurnExecutorRuntime:
             if prepared.turn_input is None or cancellation.cancelled:
                 return None
 
+            turn_started = True
             message = prepared.message
             ports.record_user_message(message)
             ports.notify_turn_started()
@@ -152,6 +157,13 @@ class CliAgentTurnExecutorRuntime:
             autonomous_timeout_writeback_succeeded = (
                 execution.autonomous_timeout_writeback_succeeded
             )
+            if cancellation.cancelled:
+                return None
+
+            def finish_turn(value: AppliedTurnResult, _postprocessed: Any) -> None:
+                nonlocal finalized
+                ports.finish_turn(value)
+                finalized = True
 
             applied, postprocessed = SingleTurnExecutor(
                 SingleTurnExecutorPorts(
@@ -176,20 +188,41 @@ class CliAgentTurnExecutorRuntime:
                         conversation_history=value.outcome.conversation_history,
                         turn_result=value.turn_result,
                     ),
-                    finish=lambda value, _postprocessed: ports.finish_turn(value),
+                    finish=finish_turn,
                     finalize=lambda value, processed: (value, processed),
                 )
             ).execute()
             return self._result(applied, postprocessed)
         except Exception as error:
-            ports.handle_error(
-                error,
-                autonomous_timeout_reported,
-                run_id,
-                autonomous_timeout_writeback_succeeded,
-            )
-            return None
+            try:
+                ports.handle_error(
+                    error,
+                    autonomous_timeout_reported,
+                    run_id,
+                    autonomous_timeout_writeback_succeeded,
+                )
+            finally:
+                if ports.finish_failed_turn is not None:
+                    try:
+                        ports.finish_failed_turn(error, cancellation.cancelled)
+                        failure_handled = True
+                    except Exception:
+                        pass
+            raise
         finally:
+            if (
+                turn_started
+                and not finalized
+                and not failure_handled
+                and ports.finish_failed_turn is not None
+            ):
+                try:
+                    ports.finish_failed_turn(
+                        RuntimeError("turn cancelled before completion"),
+                        cancellation.cancelled,
+                    )
+                except Exception:
+                    pass
             if clear_temporary_agent:
                 ports.clear_agent()
             ports.set_active_role(previous_role)

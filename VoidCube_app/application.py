@@ -368,6 +368,23 @@ class ApplicationRuntime:
         self.state.active_turn_id = None
         self.set_agent_running(False)
 
+    def abort_turn(self, error: str, *, interrupted: bool = False) -> None:
+        """Close a turn that failed before the normal result pipeline ran."""
+        if not self.state.turn_active:
+            self.set_agent_running(False)
+            return
+        self.finish_turn(
+            TurnOutcome(
+                conversation_history=tuple(self.state.conversation_history),
+                response="",
+                failed=not interrupted,
+                partial=False,
+                interrupted=interrupted,
+                error=str(error or "Turn aborted"),
+            ),
+            history_applied=True,
+        )
+
     def tool_event_sink(self, event: ToolEvent) -> None:
         self._emit(event)
         for artifact in event.artifacts:

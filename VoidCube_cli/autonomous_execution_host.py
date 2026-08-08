@@ -122,7 +122,9 @@ class AutonomousExecutionHost:
         payload = pending if isinstance(pending, tuple) else (pending, None)
         runtime = self._turn_scheduler_runtime
         if not runtime.scheduler.snapshot().autonomous_gate:
-            runtime.enable_autonomous()
+            # Pending work admitted before /auto-q belongs to the stopped
+            # generation and must not reopen the autonomous lane.
+            return False
         return runtime.submit_autonomous(self, payload)
 
     def _turn_tool_policy(self, payload: Any, lane: TurnLane) -> dict[str, Any]:

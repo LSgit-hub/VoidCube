@@ -382,6 +382,28 @@ def test_cli_process_routes_cancel_to_the_active_user_agent() -> None:
     ]
 
 
+@pytest.mark.parametrize("command", ["/new", "/resume latest", "/undo", "/model"])
+def test_cli_rejects_session_and_model_mutations_during_active_turn(
+    monkeypatch, command
+) -> None:
+    output = []
+    mutations = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._turn_scheduler_runtime = SimpleNamespace(
+        scheduler=SimpleNamespace(
+            snapshot=lambda: SimpleNamespace(active=SimpleNamespace(request_id="active"))
+        )
+    )
+    app._builtin_command_executor = SimpleNamespace(
+        execute=lambda _request: mutations.append(command)
+    )
+    monkeypatch.setattr(cli_module, "_cprint", output.append)
+
+    assert app.process_command(command) is True
+    assert mutations == []
+    assert output == ["  Command unavailable while a turn is active."]
+
+
 def test_cli_process_routes_plan_through_explicit_ports(monkeypatch) -> None:
     output: list[str] = []
     events: list[tuple[str, str]] = []

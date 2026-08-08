@@ -27,7 +27,7 @@ class PendingInputExecutionPorts:
     process_command: Callable[[str], bool]
     set_should_exit: Callable[[bool], None]
     reset_turn_state: Callable[[], None]
-    submit_turn: Callable[[Any, Any], bool]
+    submit_turn: Callable[[Any, Any, Callable[[], None]], bool]
     invalidate_app: Callable[[Any | None], None]
     exit_app: Callable[[Any], None]
     voice_restart_ready: Callable[[], bool]
@@ -95,13 +95,27 @@ class PendingInputRuntime:
             len(submit_images),
         )
 
-        try:
-            self.ports.submit_turn((user_input, submit_images or None), app)
-        finally:
+        completed = False
+
+        def on_finished() -> None:
+            nonlocal completed
+            if completed:
+                return
+            completed = True
             self.ports.reset_turn_state()
             self.ports.invalidate_app(app)
             self._restart_continuous_voice_if_needed(app)
             self._enqueue_process_notifications()
+
+        try:
+            self.ports.submit_turn(
+                (user_input, submit_images or None),
+                app,
+                on_finished,
+            )
+        except Exception:
+            on_finished()
+            raise
 
         return True
 

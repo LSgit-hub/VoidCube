@@ -9,6 +9,7 @@ def test_run_tui_teardown_preserves_cleanup_order() -> None:
 
     run_tui_teardown(
         TuiTeardownPorts(
+            shutdown_scheduler=operation("scheduler"),
             stop_autonomous=operation("autonomous"),
             interrupt_agent=operation("agent"),
             interrupt_voice=operation("voice"),
@@ -22,6 +23,7 @@ def test_run_tui_teardown_preserves_cleanup_order() -> None:
     )
 
     assert calls == [
+        "scheduler",
         "autonomous",
         "agent",
         "voice",

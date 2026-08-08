@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
+import pytest
+
+from VoidCube_app.application import ApplicationRuntime
+from VoidCube_app.contracts.events import TurnEvent, TurnEventKind
+from VoidCube_app.contracts.scheduler import SchedulerEventKind, TurnLane, TurnRequest
 from VoidCube_app.turn_contract import begin_turn
-from VoidCube_app.turn_scheduler import CancellationToken
+from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
 from VoidCube_cli.cli_agent_turn_call_runtime import CliAgentTurnCallPorts
 from VoidCube_cli.cli_agent_turn_executor_runtime import (
     CliAgentTurnExecutorPorts,
@@ -299,3 +304,86 @@ def test_executor_module_has_no_app_or_prompt_toolkit_imports() -> None:
 
     assert "VoidCube_cli.app" not in imported
     assert not any(name == "prompt_toolkit" or name.startswith("prompt_toolkit.") for name in imported)
+
+
+def test_failure_after_application_turn_starts_converges_both_lifecycles() -> None:
+    owner = _TurnOwner("failure-session", [])
+    application = ApplicationRuntime.create(
+        session_id=owner.session_id,
+        session_start=datetime(2026, 8, 8),
+    )
+    base_ports = owner.ports()
+
+    def prepare_input(message, images):
+        return replace(
+            base_ports.prepare_input_ports(message, images),
+            begin_turn=application.begin_turn,
+        )
+
+    ports = replace(
+        base_ports,
+        prepare_input_ports=prepare_input,
+        notify_turn_started=lambda: (_ for _ in ()).throw(RuntimeError("ui hook failed")),
+        finish_failed_turn=lambda error, interrupted: application.abort_turn(
+            str(error), interrupted=interrupted
+        ),
+    )
+    scheduler = TurnScheduler()
+
+    with pytest.raises(RuntimeError, match="ui hook failed"):
+        scheduler.run(
+            _request(TurnLane.USER_CHAT, "hello"),
+            CliAgentTurnExecutorRuntime(ports).execute,
+        )
+
+    assert application.state.turn_active is False
+    assert application.state.active_turn_id is None
+    assert scheduler.snapshot().active is None
+    assert scheduler.drain_events()[-1].kind is SchedulerEventKind.FAILED
+
+
+def test_cancelled_turn_clears_application_active_turn() -> None:
+    owner = _TurnOwner("cancel-session", [])
+    events = []
+    application = ApplicationRuntime.create(
+        session_id=owner.session_id,
+        session_start=datetime(2026, 8, 8),
+        event_sink=events.append,
+    )
+    active_token = {}
+    base_ports = owner.ports()
+
+    def prepare_input(message, images):
+        return replace(
+            base_ports.prepare_input_ports(message, images),
+            begin_turn=application.begin_turn,
+        )
+
+    ports = replace(
+        base_ports,
+        prepare_input_ports=prepare_input,
+        notify_turn_started=lambda: active_token["value"].cancel(),
+        finish_turn=lambda applied: application.finish_turn(
+            applied.outcome, history_applied=True
+        ),
+        finish_failed_turn=lambda error, interrupted: application.abort_turn(
+            str(error), interrupted=interrupted
+        ),
+    )
+
+    runtime = CliAgentTurnExecutorRuntime(ports)
+    scheduler = TurnScheduler()
+
+    def execute(request, token):
+        active_token["value"] = token
+        return runtime.execute(request, token)
+
+    scheduler.run(_request(TurnLane.USER_CHAT, "cancel me"), execute)
+
+    assert active_token["value"].cancelled is True
+    assert application.state.turn_active is False
+    assert [event.kind for event in events if isinstance(event, TurnEvent)] == [
+        TurnEventKind.STARTED,
+        TurnEventKind.INTERRUPTED,
+    ]
+    assert scheduler.drain_events()[-1].kind is SchedulerEventKind.CANCELLED

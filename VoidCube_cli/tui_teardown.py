@@ -19,10 +19,13 @@ class TuiTeardownPorts:
     finish_interrupted_session: Callable[[], None]
     run_global_cleanup: Callable[[], None]
     print_exit_summary: Callable[[], None]
+    shutdown_scheduler: Callable[[], None] | None = None
 
 
 def run_tui_teardown(ports: TuiTeardownPorts) -> None:
     """Run the CLI's established shutdown order without owning its state."""
+    if ports.shutdown_scheduler is not None:
+        ports.shutdown_scheduler()
     ports.stop_autonomous()
     ports.interrupt_agent()
     ports.interrupt_voice()

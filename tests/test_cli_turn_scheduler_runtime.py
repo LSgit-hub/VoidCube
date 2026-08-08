@@ -138,3 +138,121 @@ def test_runtime_unbinds_request_after_executor_failure() -> None:
     with pytest.raises(RuntimeError, match="boom"):
         runtime.submit_user(host, "x")
     assert runtime._executor._hosts == {}
+
+
+class _DeferredThread:
+    def __init__(self, *, target, **_kwargs) -> None:
+        self._target = target
+        self._worker = None
+
+    def start(self) -> None:
+        return None
+
+    def launch(self) -> None:
+        self._worker = threading.Thread(target=self._target)
+        self._worker.start()
+
+    def join(self, timeout: float = 1.0) -> None:
+        assert self._worker is not None
+        self._worker.join(timeout)
+        assert not self._worker.is_alive()
+
+
+def test_async_admission_preserves_fifo_when_workers_start_out_of_order() -> None:
+    threads = []
+    execution_order = []
+
+    def thread_factory(**kwargs):
+        thread = _DeferredThread(**kwargs)
+        threads.append(thread)
+        return thread
+
+    runtime = CliTurnSchedulerRuntime(
+        TurnScheduler(),
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            tool_policy=lambda *_args: {},
+            execute_user=lambda _host, request, _token: execution_order.append(
+                request.prompt
+            ),
+            execute_autonomous=lambda *_args: None,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+        asynchronous=True,
+        thread_factory=thread_factory,
+    )
+    host = object()
+
+    runtime.submit_user(host, "first")
+    runtime.submit_user(host, "second")
+    threads[1].launch()
+    for _ in range(100):
+        active = runtime.scheduler.snapshot().active
+        if active is not None:
+            break
+        threading.Event().wait(0.01)
+    assert active.request_id == "user_chat-1"
+    threads[0].launch()
+    threads[0].join()
+    threads[1].join()
+
+    assert execution_order == ["first", "second"]
+
+
+def test_async_completion_callback_runs_after_execution_finishes() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def execute(*_args):
+        entered.set()
+        release.wait(1)
+
+    runtime = CliTurnSchedulerRuntime(
+        TurnScheduler(),
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            tool_policy=lambda *_args: {},
+            execute_user=execute,
+            execute_autonomous=execute,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+        asynchronous=True,
+    )
+
+    runtime.submit_user(object(), "hello", on_finished=completed.set)
+    assert entered.wait(1)
+    assert completed.is_set() is False
+    release.set()
+    assert completed.wait(1)
+
+
+def test_thread_start_failure_cancels_admitted_request_and_unbinds_host() -> None:
+    class BrokenThread:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+    runtime = CliTurnSchedulerRuntime(
+        TurnScheduler(),
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            tool_policy=lambda *_args: {},
+            execute_user=lambda *_args: None,
+            execute_autonomous=lambda *_args: None,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+        asynchronous=True,
+        thread_factory=BrokenThread,
+    )
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        runtime.submit_user(object(), "hello")
+
+    assert runtime.scheduler.snapshot().queued == ()
+    assert runtime._executor._hosts == {}

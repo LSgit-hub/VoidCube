@@ -1992,7 +1992,11 @@ class VoidcubeCLI:
                 process_command=self.process_command,
                 set_should_exit=lambda value: setattr(self, "_should_exit", bool(value)),
                 reset_turn_state=reset_turn_state,
-                submit_turn=self._submit_turn_via_scheduler,
+                submit_turn=lambda payload, app, on_finished: self._submit_turn_via_scheduler(
+                    payload,
+                    app,
+                    on_finished=on_finished,
+                ),
                 invalidate_app=invalidate_app,
                 exit_app=exit_app,
                 voice_restart_ready=lambda: bool(
@@ -2013,9 +2017,16 @@ class VoidcubeCLI:
         """Execute one queued prompt/command through the pending-input runtime."""
         return self._pending_input_runtime().execute(user_input, app=app)
 
-    def _submit_turn_via_scheduler(self, payload: Any, app: Any | None) -> bool:
+    def _submit_turn_via_scheduler(
+        self,
+        payload: Any,
+        app: Any | None,
+        *,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
         del app
-        return self._scheduler_runtime().submit_user(self, payload)
+        runtime = self._scheduler_runtime()
+        return runtime.submit_user(self, payload, on_finished=on_finished)
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -2964,6 +2975,9 @@ class VoidcubeCLI:
             bool: True to continue, False to exit
         """
         request = parse_cli_command(command)
+        if self._command_blocked_during_turn(request.canonical):
+            _cprint("  Command unavailable while a turn is active.")
+            return True
         builtin = self._builtin_command_executor.execute(request)
         if builtin.handled:
             return builtin.continue_running
@@ -2997,6 +3011,31 @@ class VoidcubeCLI:
                 emit_markup=_emit_dynamic_markup,
             )
         ).run(request)
+
+    def _command_blocked_during_turn(self, command_name: str) -> bool:
+        """Prevent session/model mutations from racing an active turn."""
+        protected_commands = {
+            "new",
+            "clear",
+            "resume",
+            "branch",
+            "undo",
+            "retry",
+            "model",
+            "provider",
+            "config",
+            "api",
+            "goal",
+        }
+        if command_name not in protected_commands:
+            return False
+        runtime = self.__dict__.get("_turn_scheduler_runtime")
+        if runtime is None:
+            return False
+        try:
+            return runtime.scheduler.snapshot().active is not None
+        except Exception:
+            return True
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
         """Non-fatal UI activity recording — best-effort, never throws."""
@@ -4010,6 +4049,10 @@ class VoidcubeCLI:
                     applied.outcome,
                     history_applied=True,
                 ),
+                finish_failed_turn=lambda error, interrupted: application_runtime.abort_turn(
+                    str(error),
+                    interrupted=interrupted,
+                ),
                 handle_error=handle_error,
             )
         )
@@ -4496,6 +4539,10 @@ class VoidcubeCLI:
         )
 
         return TuiTeardownPorts(
+            shutdown_scheduler=lambda: self._scheduler_runtime().shutdown(
+                reason="cli_exit",
+                wait_timeout=5.0,
+            ),
             stop_autonomous=lambda: self._stop_autonomous_execution(
                 interrupt=True
             ),

@@ -51,15 +51,28 @@ class CliTurnSchedulerRuntime:
             )
         )
 
-    def submit_user(self, host: Any, payload: Any) -> bool:
-        return self._submit(host, payload, TurnLane.USER_CHAT, TurnLane.USER_CHAT.value)
+    def submit_user(
+        self,
+        host: Any,
+        payload: Any,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
+        return self._submit(
+            host, payload, TurnLane.USER_CHAT, TurnLane.USER_CHAT.value, on_finished
+        )
 
-    def submit_autonomous(self, host: Any, payload: Any) -> bool:
+    def submit_autonomous(
+        self,
+        host: Any,
+        payload: Any,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
         return self._submit(
             host,
             payload,
             TurnLane.SUPERVISOR_TASK,
             TurnLane.SUPERVISOR_TASK.value,
+            on_finished,
         )
 
     def cancel_user(self) -> bool:
@@ -68,6 +81,9 @@ class CliTurnSchedulerRuntime:
 
     def cancel_autonomous(self) -> None:
         self.scheduler.pause_autonomous()
+
+    def shutdown(self, *, reason: str = "shutdown", wait_timeout: float = 5.0) -> bool:
+        return self.scheduler.shutdown(reason, wait_timeout=wait_timeout)
 
     def enable_autonomous(self) -> None:
         self.scheduler.resume_autonomous()
@@ -86,30 +102,63 @@ class CliTurnSchedulerRuntime:
             source=source,
         )
 
-    def _submit(self, host: Any, payload: Any, lane: TurnLane, source: str) -> bool:
+    def _submit(
+        self,
+        host: Any,
+        payload: Any,
+        lane: TurnLane,
+        source: str,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
         request = self._request(host, payload, lane, source)
         if lane is TurnLane.SUPERVISOR_TASK and not self.scheduler.snapshot().autonomous_gate:
             raise RuntimeError("autonomous gate is closed")
-        self._executor.bind(request, host)
-        if not self._asynchronous:
-            return self._run(host, request)
-        thread = self._thread_factory(
-            target=lambda: self._run(host, request),
-            daemon=True,
-            name=f"turn-scheduler-{lane.value}",
-        )
+        # Admission stays on the caller thread so sequence numbers preserve
+        # input order while execution remains asynchronous.
+        self.scheduler.submit(request)
         try:
+            self._executor.bind(request, host)
+        except Exception:
+            self.scheduler.cancel(request.request_id)
+            raise
+        if not self._asynchronous:
+            return self._run_admitted(request, on_finished)
+        try:
+            thread = self._thread_factory(
+                target=lambda: self._run_async(request, on_finished),
+                daemon=True,
+                name=f"turn-scheduler-{lane.value}",
+            )
             thread.start()
         except Exception:
             self._executor.unbind(request.request_id)
+            self.scheduler.cancel(request.request_id)
             raise
         return True
 
-    def _run(self, host: Any, request: TurnRequest) -> bool:
+    def _run_admitted(
+        self,
+        request: TurnRequest,
+        on_finished: Callable[[], None] | None = None,
+    ) -> bool:
         try:
-            return self.scheduler.run(request, self._executor.execute)
+            return self.scheduler.run_admitted(request, self._executor.execute)
         finally:
             self._executor.unbind(request.request_id)
+            if on_finished is not None:
+                on_finished()
+
+    def _run_async(
+        self,
+        request: TurnRequest,
+        on_finished: Callable[[], None] | None = None,
+    ) -> None:
+        try:
+            self._run_admitted(request, on_finished)
+        except Exception:
+            # Scheduler already records the terminal event; background workers
+            # must not leak an unhandled exception into stderr.
+            return
 
 
 __all__ = ["CliTurnSchedulerPorts", "CliTurnSchedulerRuntime"]

@@ -76,6 +76,7 @@ class TurnScheduler:
         self._sequence = 0
         self._autonomous_gate = bool(autonomous_gate_active)
         self._blocked_reason = ""
+        self._closed = False
         self._events: deque[SchedulerEvent] = deque()
 
     def submit(self, request: TurnRequest) -> SchedulerSnapshot:
@@ -83,6 +84,8 @@ class TurnScheduler:
         if not isinstance(request, TurnRequest):
             raise TypeError("request must be a TurnRequest")
         with self._lock:
+            if self._closed:
+                raise RuntimeError("scheduler is shut down")
             if request.lane is TurnLane.SUPERVISOR_TASK and not self._autonomous_gate:
                 self._blocked_reason = "autonomous_gate_closed"
                 self._emit(
@@ -143,6 +146,20 @@ class TurnScheduler:
         while queued (or never became admissible).
         """
         self.submit(request)
+        return self.run_admitted(request, execute, wait_timeout=wait_timeout)
+
+    def run_admitted(
+        self,
+        request: TurnRequest,
+        execute: Callable[[TurnRequest, CancellationToken], Any],
+        *,
+        wait_timeout: float | None = None,
+    ) -> bool:
+        """Run a request that has already been admitted to the queue.
+
+        Keeping admission separate lets adapters assign queue order on their
+        caller thread while execution remains asynchronous.
+        """
         with self._condition:
             while self._active is None or self._active.request_id != request.request_id:
                 if not any(item.request.request_id == request.request_id for item in self._queue):
@@ -169,6 +186,46 @@ class TurnScheduler:
             self.cancelled(request.request_id, "executor_observed_cancel")
         else:
             self.finish(request.request_id)
+        return True
+
+    def shutdown(self, reason: str = "shutdown", *, wait_timeout: float = 5.0) -> bool:
+        """Stop accepting work, cancel queued/active requests, and drain.
+
+        The scheduler remains the sole owner of terminal state. A ``False``
+        return means an executor did not observe cancellation before the
+        deadline; the active request is intentionally retained for its worker
+        to close later.
+        """
+        active_id: str | None = None
+        with self._condition:
+            self._closed = True
+            self._autonomous_gate = False
+            self._blocked_reason = str(reason or "shutdown")
+            queued = tuple(self._queue)
+            self._queue.clear()
+            for item in queued:
+                self._emit(
+                    SchedulerEvent(
+                        kind=SchedulerEventKind.CANCELLED,
+                        request_id=item.request.request_id,
+                        lane=item.request.lane,
+                        state=SchedulerState.CANCELLED,
+                        timestamp=self._now(),
+                        reason=self._blocked_reason,
+                    )
+                )
+            if self._active is not None:
+                active_id = self._active.request_id
+            self._condition.notify_all()
+        if active_id is not None:
+            self.cancel(active_id)
+        deadline = monotonic() + max(0.0, float(wait_timeout))
+        with self._condition:
+            while self._active is not None:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(timeout=remaining)
         return True
 
     def dispatch_next(
@@ -307,6 +364,8 @@ class TurnScheduler:
 
     def resume_autonomous(self, reason: str = "auto") -> SchedulerSnapshot:
         with self._condition:
+            if self._closed:
+                raise RuntimeError("scheduler is shut down")
             self._autonomous_gate = True
             self._blocked_reason = ""
             self._emit_gate_changed(reason)
