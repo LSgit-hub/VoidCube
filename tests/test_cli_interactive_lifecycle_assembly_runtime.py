@@ -32,7 +32,7 @@ def test_lifecycle_assembly_maps_idle_and_forced_presence_refresh(monkeypatch):
             ),
             refresh_gateway_presence=lambda force: calls.append(("presence", force)),
             autonomous_gate_active=lambda: False,
-            start_autonomous_component=lambda: None,
+            start_autonomous_execution=lambda: None,
             application_ready=lambda: True,
             invalidate=lambda _interval: None,
             enqueue_pending_input=lambda _value: None,

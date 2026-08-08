@@ -26,7 +26,7 @@ class CliInteractiveLifecycleAssemblyPorts:
     refresh_observation_surfaces: Callable[[Callable[[], None]], None]
     refresh_gateway_presence: Callable[[bool], None]
     autonomous_gate_active: Callable[[], bool]
-    start_autonomous_component: Callable[[], None]
+    start_autonomous_execution: Callable[[], None]
     application_ready: Callable[[], bool]
     invalidate: Callable[[float], None]
     enqueue_pending_input: Callable[[str], None]
@@ -64,7 +64,7 @@ class CliInteractiveLifecycleAssemblyRuntime:
                 lambda: ports.refresh_gateway_presence(False)
             ),
             autonomous_gate_active=ports.autonomous_gate_active,
-            start_autonomous_component=ports.start_autonomous_component,
+            start_autonomous_execution=ports.start_autonomous_execution,
             application_ready=ports.application_ready,
             invalidate=ports.invalidate,
             enqueue_pending_input=ports.enqueue_pending_input,

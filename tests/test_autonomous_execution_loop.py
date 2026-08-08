@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from VoidCube_app.autonomous_component_runtime import (
-    AutonomousComponentLoopPorts,
-    run_autonomous_component_loop,
-    start_autonomous_component_loop,
+from VoidCube_app.autonomous_execution_runtime import (
+    AutonomousExecutionLoopPorts,
+    run_autonomous_execution_loop,
+    start_autonomous_execution_loop,
 )
 
 
@@ -19,12 +19,12 @@ class _OneCycleStopEvent:
         return True
 
 
-def test_component_loop_polls_and_executes_pending_input_without_owning_host() -> None:
+def test_execution_loop_polls_and_executes_pending_input_without_owning_host() -> None:
     stop_event = _OneCycleStopEvent()
     calls: list[object] = []
     pending = ["autonomous prompt"]
 
-    ports = AutonomousComponentLoopPorts(
+    ports = AutonomousExecutionLoopPorts(
         stop_event=stop_event,
         execution_active=lambda: True,
         set_execution_active=lambda active: calls.append(("active", active)),
@@ -38,7 +38,7 @@ def test_component_loop_polls_and_executes_pending_input_without_owning_host() -
         publish_idle_scene=lambda: calls.append("idle"),
     )
 
-    run_autonomous_component_loop(ports)
+    run_autonomous_execution_loop(ports)
 
     assert calls == [
         ("active", True),
@@ -52,10 +52,10 @@ def test_component_loop_polls_and_executes_pending_input_without_owning_host() -
     ]
 
 
-def test_component_loop_reports_errors_then_releases_component_state() -> None:
+def test_execution_loop_reports_errors_then_releases_lane_state() -> None:
     stop_event = _OneCycleStopEvent()
     calls: list[object] = []
-    ports = AutonomousComponentLoopPorts(
+    ports = AutonomousExecutionLoopPorts(
         stop_event=stop_event,
         execution_active=lambda: True,
         set_execution_active=lambda active: calls.append(("active", active)),
@@ -69,7 +69,7 @@ def test_component_loop_reports_errors_then_releases_component_state() -> None:
         publish_idle_scene=lambda: calls.append("idle"),
     )
 
-    run_autonomous_component_loop(ports)
+    run_autonomous_execution_loop(ports)
 
     assert calls == [
         ("active", True),
@@ -80,7 +80,7 @@ def test_component_loop_reports_errors_then_releases_component_state() -> None:
     ]
 
 
-def test_start_component_loop_builds_a_named_daemon_thread() -> None:
+def test_start_execution_loop_builds_a_named_daemon_thread() -> None:
     captured: dict[str, object] = {}
 
     class _Thread:
@@ -90,7 +90,7 @@ def test_start_component_loop_builds_a_named_daemon_thread() -> None:
         def start(self) -> None:
             captured["started"] = True
 
-    ports = AutonomousComponentLoopPorts(
+    ports = AutonomousExecutionLoopPorts(
         stop_event=_OneCycleStopEvent(),
         execution_active=lambda: False,
         set_execution_active=lambda active: None,
@@ -104,8 +104,8 @@ def test_start_component_loop_builds_a_named_daemon_thread() -> None:
         publish_idle_scene=lambda: None,
     )
 
-    start_autonomous_component_loop(ports, thread_factory=_Thread)
+    start_autonomous_execution_loop(ports, thread_factory=_Thread)
 
     assert captured["daemon"] is True
-    assert captured["name"] == "autonomous-execution-component"
+    assert captured["name"] == "autonomous-execution"
     assert captured["started"] is True

@@ -41,4 +41,4 @@ def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> 
         tuple(key.value if hasattr(key, "value") else str(key) for key in binding.keys)
         for binding in bindings.bindings
     }
-    assert ("c-d",) not in key_sequences
+    assert {("c-c",), ("c-d",), ("c-v",)}.isdisjoint(key_sequences)

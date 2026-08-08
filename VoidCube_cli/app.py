@@ -4680,7 +4680,7 @@ class VoidcubeCLI:
                 refresh_observation_surfaces=refresh_observation_surfaces,
                 refresh_gateway_presence=refresh_gateway_presence,
                 autonomous_gate_active=lambda: self._autonomous_gate_active,
-                start_autonomous_component=lambda: self._start_autonomous_execution(),
+                start_autonomous_execution=lambda: self._start_autonomous_execution(),
                 application_ready=lambda: bool(self._app),
                 invalidate=lambda interval: self._invalidate(min_interval=interval),
                 enqueue_pending_input=self._pending_input.put,

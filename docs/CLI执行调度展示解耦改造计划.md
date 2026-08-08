@@ -1,10 +1,10 @@
 # CLI 执行、调度与展示解耦改造计划
 
-> 计划版本：v1.0
+> 计划版本：v1.1
 >
 > 建立日期：2026-08-07
 >
-> 当前状态：P4 已完成，P5 进行中；P0/P1/P2/P3 已完成，单 turn 执行已抽取为无 TUI ports runtime，自主链路和 scheduled-task 都已改为窄 execution owner，旧完整后台 CLI host 已删除。
+> 当前状态：已完成。执行、调度和展示已分别由 execution owner、`TurnScheduler` 与 TUI projector 持有；自主链路和 scheduled-task 不再创建完整后台 CLI host。
 
 ## 1. 目标
 
@@ -140,15 +140,15 @@ TUI / Supervisor adapter
 
 **退出条件**：父 host 不需要了解 execution owner 的内部状态；状态栏和自主面板能准确显示活动 lane、等待原因、request id 和取消结果。已由 projector、状态栏、自主面板和 Scheduler 回归测试验证。
 
-### P5：清理与全量验收（进行中）
+### P5：清理与全量验收（已完成）
 
 - [x] 删除失效兼容分支、重复参数、旧锁接线和无调用后台 host 能力。
 - [x] 更新架构文档、命令帮助和测试契约，删除过期描述。
-- [ ] 运行 owner 测试、CLI 自主链路回归、scheduled-task、并发/取消测试、文档测试、架构依赖检查和生产编译。
-- [ ] 涉及模型/请求链路时运行退役集成扫描；涉及打包时运行 wheel 契约和 source-to-artifact parity。
-- [ ] 执行 `git diff --check`，确认没有残留调试输出或临时兼容代码。
+- [x] 运行 owner 测试、CLI 自主链路回归、scheduled-task、并发/取消测试、文档测试、架构依赖检查和生产编译。
+- [x] 涉及模型/请求链路时运行退役集成扫描；涉及打包时运行 wheel 契约和 source-to-artifact parity。
+- [x] 执行 `git diff --check`，确认没有残留调试输出或临时兼容代码。
 
-**退出条件**：行为、结构、文档和发行物验收全部通过；本计划更新为“已完成”，并记录实际剩余风险。
+**退出条件**：行为、结构、文档和发行物验收全部通过。最终 wheel 包含新的 execution owner 与 projector，不含过期后台执行入口、完整后台 CLI host 或退役集成入口。
 
 ## 7. 测试矩阵
 
@@ -170,6 +170,9 @@ TUI / Supervisor adapter
 - 若阶段被阻塞，记录具体阻塞条件、已尝试替代方案和恢复所需的外部条件。
 - 任何后续会话开始前，先读取本文件“当前状态”和未完成阶段，禁止把已删除的完整后台 CLI host 逻辑重新当成目标设计。
 
-## 9. 下一步
+## 9. 剩余风险与维护约束
 
-继续 P5：运行完整 owner/CLI/Scheduler 回归、架构检查、退役集成扫描、打包契约和 source-to-artifact parity；确认发行物不含旧后台 host 入口后，将计划标记为已完成。
+- Scheduler 当前使用进程内队列并保持单活动 turn；若未来引入跨进程恢复或并行模型槽位，需要先扩展 contract 和状态机，不能绕过 Scheduler 直接启动 turn。
+- 取消依赖 executor/Agent 的协作式中断；长时间外部工具调用仍可能延迟最终取消事件，应通过超时与事件指标观察，不在 TUI 建立第二套取消状态。
+- 终端宽度、系统信号和粘贴行为存在平台差异；新增平台适配只能留在 TUI/生命周期边界，不能进入 execution owner。
+- 后续改动必须保持调度状态单 owner、后台执行无 TUI API、发行物无旧 host/退役集成入口，并继续运行本计划列出的回归与打包门禁。

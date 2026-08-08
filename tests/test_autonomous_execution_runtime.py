@@ -3,10 +3,10 @@ from __future__ import annotations
 from threading import Event
 from types import SimpleNamespace
 
-from VoidCube_app import autonomous_component_runtime as runtime_module
-from VoidCube_app.autonomous_component_runtime import (
-    AutonomousComponentRuntime,
-    AutonomousComponentRuntimePorts,
+from VoidCube_app import autonomous_execution_runtime as runtime_module
+from VoidCube_app.autonomous_execution_runtime import (
+    AutonomousExecutionRuntime,
+    AutonomousExecutionRuntimePorts,
 )
 
 
@@ -15,7 +15,7 @@ def _ports(calls, *, host):
     stored_threads = []
     executor = SimpleNamespace(poll_workflow=lambda: calls.append("poll"))
 
-    ports = AutonomousComponentRuntimePorts(
+    ports = AutonomousExecutionRuntimePorts(
         get_execution_host=lambda: host,
         ensure_execution_host=lambda: calls.append("ensure") or host,
         get_execution_thread=lambda: None,
@@ -40,7 +40,7 @@ def _ports(calls, *, host):
     return ports, stop_event, stored_threads
 
 
-def test_component_runtime_delegates_start_to_one_loop_owner(monkeypatch):
+def test_execution_runtime_delegates_start_to_one_loop_owner(monkeypatch):
     calls = []
     host = object()
     ports, _stop_event, stored_threads = _ports(calls, host=host)
@@ -58,28 +58,28 @@ def test_component_runtime_delegates_start_to_one_loop_owner(monkeypatch):
 
     monkeypatch.setattr(
         runtime_module,
-        "start_autonomous_component_loop",
+        "start_autonomous_execution_loop",
         start_loop,
     )
 
-    assert AutonomousComponentRuntime(ports).start() is True
+    assert AutonomousExecutionRuntime(ports).start() is True
     assert calls == ["ensure", ("active", True), "runtime", "loop"]
     assert len(stored_threads) == 1
     assert captured[0].poll_workflow is not None
 
 
-def test_component_runtime_stop_uses_existing_host_without_creating_one(monkeypatch):
+def test_execution_runtime_stop_uses_existing_host_without_creating_one(monkeypatch):
     calls = []
     host = object()
     ports, _stop_event, _stored_threads = _ports(calls, host=host)
     monkeypatch.setattr(
         runtime_module,
-        "stop_autonomous_component",
+        "stop_autonomous_execution",
         lambda stop_ports, *, interrupt: calls.append(
             ("stop", interrupt, stop_ports.deactivate_execution_host())
         ),
     )
 
-    AutonomousComponentRuntime(ports).stop(interrupt=True)
+    AutonomousExecutionRuntime(ports).stop(interrupt=True)
 
     assert calls == ["deactivate", ("stop", True, True)]

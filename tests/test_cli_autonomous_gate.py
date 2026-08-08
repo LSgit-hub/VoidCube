@@ -2298,7 +2298,7 @@ def test_autonomous_execution_runs_while_foreground_cli_is_busy(monkeypatch):
     assert any(item[0] == "idle" for item in pushed if isinstance(item, tuple))
 
 
-def test_autonomous_component_panel_stays_hidden_when_idle():
+def test_autonomous_execution_panel_stays_hidden_when_idle():
     host = type("_Host", (), {})()
     host._autonomous_gate_active = True
     host._agent_running = False
@@ -2318,7 +2318,7 @@ def test_autonomous_component_panel_stays_hidden_when_idle():
     ) is False
 
 
-def test_autonomous_component_panel_becomes_visible_for_execution_events():
+def test_autonomous_execution_panel_becomes_visible_for_execution_events():
     host = type("_Host", (), {})()
     host._autonomous_gate_active = True
     host._agent_running = False

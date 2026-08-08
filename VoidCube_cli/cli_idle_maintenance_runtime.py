@@ -14,7 +14,7 @@ class CliIdleMaintenancePorts:
     check_config_changes: Callable[[], None]
     refresh_observation_surfaces: Callable[[], None]
     autonomous_gate_active: Callable[[], bool]
-    start_autonomous_component: Callable[[], None]
+    start_autonomous_execution: Callable[[], None]
     application_ready: Callable[[], bool]
     invalidate: Callable[[float], None]
     enqueue_pending_input: Callable[[str], None]
@@ -34,7 +34,7 @@ class CliIdleMaintenanceRuntime:
         ports.check_config_changes()
         ports.refresh_observation_surfaces()
         if ports.autonomous_gate_active():
-            ports.start_autonomous_component()
+            ports.start_autonomous_execution()
             if ports.application_ready():
                 ports.invalidate(0.5)
         drain_process_notifications(ports.enqueue_pending_input)
