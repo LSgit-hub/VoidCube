@@ -118,7 +118,7 @@ def build_body_structure_mapping(
         try:
             quality = float(task.get("quality_score"))
         except (TypeError, ValueError):
-            quality = 0.5
+            quality = 0.0
         if quality > 1.0:
             quality /= 100.0
         relevance = clamp01(clamp01(quality) * 0.65 + freshness * 0.35)

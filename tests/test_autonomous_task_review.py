@@ -94,6 +94,17 @@ def test_learning_quality_score_uses_explicit_time_input() -> None:
     assert score == 88.0
 
 
+def test_learning_quality_score_rejects_missing_quality() -> None:
+    policy = TaskProfilePolicy()
+    task = _task(task_family="self_learning", status="completed")
+
+    assert calculate_learning_quality_score(
+        [task],
+        task_profile_policy=policy,
+        now=datetime(2026, 8, 3, tzinfo=timezone.utc),
+    ) == 0.0
+
+
 def test_body_improvement_fallback_reads_completed_learning_history() -> None:
     policy = TaskProfilePolicy()
     completed_learning = _task(

@@ -99,7 +99,13 @@ def calculate_learning_quality_score(
             continue
         completed_count += 1
 
-        task_quality = float(task.metadata.get("quality_score") or 0.5)
+        raw_quality = task.metadata.get("quality_score")
+        try:
+            task_quality = float(raw_quality)
+        except (TypeError, ValueError):
+            return 0.0
+        if not 0.0 <= task_quality <= 1.0:
+            return 0.0
         quality_sum += task_quality
 
         completed_at = task.metadata.get("completed_at")

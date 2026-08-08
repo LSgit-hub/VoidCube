@@ -34,6 +34,22 @@ def test_body_eligibility_rejects_missing_slot_or_weak_learning_evidence():
     )["reason"] == "learning_quality_below_threshold"
 
 
+def test_body_eligibility_rejects_completed_learning_without_quality_evidence():
+    result = resolve_body_improvement_eligibility(
+        completed_learning_tasks=[
+            {"task_id": "completed-without-quality", "completed_at": "2026-08-08T00:00:00+00:00"}
+        ],
+        shell_slot_id="slot-B",
+        shell_worktree="body/slot-B",
+        policy={},
+        api_b_judgement_tasks=[],
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == "learning_quality_below_threshold"
+    assert result["learning_quality_score"] == 0.0
+
+
 def test_body_eligibility_rejects_matching_in_flight_improvement():
     result = resolve_body_improvement_eligibility(
         completed_learning_tasks=[{"quality_score": 1.0}],

@@ -35,7 +35,16 @@ def calculate_learning_quality_score(
         freshness_sum = 0.0
         current_time = now or datetime.now(timezone.utc)
         for task in learning_tasks:
-            quality_sum += float(task.get("quality_score") or 0.5)
+            raw_quality = task.get("quality_score")
+            try:
+                quality = float(raw_quality)
+            except (TypeError, ValueError):
+                # Completion alone is not evidence that a learning result is useful.
+                # Missing quality must keep body improvement below its hard gate.
+                return 0.0
+            if not 0.0 <= quality <= 1.0:
+                return 0.0
+            quality_sum += quality
             completed_at = task.get("completed_at")
             if completed_at:
                 try:
