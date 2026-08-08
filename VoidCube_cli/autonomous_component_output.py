@@ -1,4 +1,4 @@
-"""Terminal output isolation for the embedded autonomous component thread."""
+"""Terminal output isolation for the autonomous execution thread."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class _ThreadOutputProxy:
         return getattr(self._original, name)
 
 
-def run_component_operation_silently(operation: Callable[[], Any]) -> Any:
+def run_autonomous_operation_silently(operation: Callable[[], Any]) -> Any:
     thread_id = threading.get_ident()
     stdout_proxy = _ThreadOutputProxy(sys.stdout, thread_id, io.StringIO())
     stderr_proxy = _ThreadOutputProxy(sys.stderr, thread_id, io.StringIO())
@@ -40,4 +40,4 @@ def run_component_operation_silently(operation: Callable[[], Any]) -> Any:
         return operation()
 
 
-__all__ = ["run_component_operation_silently"]
+__all__ = ["run_autonomous_operation_silently"]

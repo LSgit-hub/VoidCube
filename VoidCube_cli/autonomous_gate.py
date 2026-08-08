@@ -71,7 +71,7 @@ def _exit_autonomous_gate_locally(
             message=event_message,
             tone=event_tone,
         )
-    stopper = getattr(host, "_stop_autonomous_execution_component", None)
+    stopper = getattr(host, "_stop_autonomous_execution", None)
     if callable(stopper):
         stopper(interrupt=False)
 
@@ -101,9 +101,9 @@ def trigger_autonomous_cycle(*, focus: str = "") -> Dict[str, Any] | None:
     return json.loads(urllib.request.urlopen(request, timeout=30).read())
 
 
-def activate_autonomous_execution_component(host: Any) -> Tuple[bool, str]:
-    """Activate the embedded API-A autonomous execution component."""
-    starter = getattr(host, "_start_autonomous_execution_component", None)
+def activate_autonomous_execution(host: Any) -> Tuple[bool, str]:
+    """Activate the API-A autonomous execution loop."""
+    starter = getattr(host, "_start_autonomous_execution", None)
     if callable(starter):
         try:
             started = bool(starter())
@@ -202,7 +202,7 @@ def handle_auto_command(
                 else:
                     cprint("     监督者快照将在后台刷新后进入观测面。")
                 cprint("     前台主 CLI 交互仍保持可用。")
-                launched, launch_message = activate_autonomous_execution_component(host)
+                launched, launch_message = activate_autonomous_execution(host)
                 cprint(f"     {launch_message}")
                 if not launched:
                     cprint("     自主执行组件未就绪，暂不会认领自主链路任务。")

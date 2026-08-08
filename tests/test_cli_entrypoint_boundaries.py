@@ -61,8 +61,7 @@ def test_entrypoint_command_registry_has_no_aliases():
     parser = build_parser()
     commands = parser._subparsers._group_actions[0].choices
 
-    assert "autonomous" in commands
-    assert "auto-cli" not in commands
+    assert {"autonomous", "auto-cli"}.isdisjoint(commands)
 
     mcp_commands = commands["mcp"]._subparsers._group_actions[0].choices
     assert {"remove", "list", "configure"} <= mcp_commands.keys()

@@ -43,7 +43,7 @@ class CliLifecycleGuardRuntime:
             if self.ports.sighup is not None:
                 self.ports.install_signal(self.ports.sighup, signal_handler)
         except Exception:
-            # Signal registration is unavailable in embedded/restricted hosts.
+            # Signal registration is unavailable in restricted process hosts.
             pass
 
     def install_asyncio_exception_handler(self) -> None:

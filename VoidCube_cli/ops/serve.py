@@ -110,10 +110,8 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
-    # ── Embedded surfaces (not standalone processes) ──
-    # Autonomous-chain display and execution tracking live inside the main CLI.
-    # Body/agent execution is triggered through the API-A pull path and tracked
-    # by the embedded minimal CLI panel, not by a separate terminal process.
+    # Autonomous-chain display and execution tracking live in the main CLI's
+    # narrow execution owner, not in a standalone service process.
 }
 
 
@@ -650,7 +648,7 @@ def start_all(foreground: bool = False) -> None:
     1. Gateway (nerve centre) — routes all traffic, accepts registrations
     2. Mem (soul layer, API-B) — registers with Gateway during startup
     3. Supervisor (Mem's governance identity, API-B) — registers both the
-       supervisor and embedded executor surfaces with Gateway
+       supervisor and executor surfaces with Gateway
 
     Body/agent subprocesses are not part of the default startup path.
     They should only be started by an explicit body-runtime operation.

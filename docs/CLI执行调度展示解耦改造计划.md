@@ -4,7 +4,7 @@
 >
 > 建立日期：2026-08-07
 >
-> 当前状态：P3 已完成；P0/P1/P2 已完成，单 turn 执行已抽取为无 TUI ports runtime，自主链路已改为窄 `AutonomousExecutionHost`，旧完整 autonomous TUI host 已删除。scheduled-task 专用 host 仍属于后续独立迁移范围。
+> 当前状态：P4 已完成，P5 进行中；P0/P1/P2/P3 已完成，单 turn 执行已抽取为无 TUI ports runtime，自主链路和 scheduled-task 都已改为窄 execution owner，旧完整后台 CLI host 已删除。
 
 ## 1. 目标
 
@@ -26,12 +26,12 @@
 
 ## 3. 当前基线
 
-当前实现是“双 host + 单一 Scheduler owner”：
+当前实现是“父 TUI + 两个窄 execution owner + 单一 Scheduler owner”：
 
 - 父 host 负责用户 TUI 和 `user_chat`。
 - `AutonomousExecutionHost` 负责 `supervisor_task`，只拥有执行和自主任务状态，不提供 TUI/快捷键/语音入口。
 - `TurnScheduler` 统一维护活动 turn、队列、优先级、门控和取消协议。
-- 父 host 与 component host 各自拥有 `_agent_running`、`_current_autonomous_task` 和展示状态，状态栏只能间接观察自主活动。
+- 父 host 与 execution owner 各自拥有自己的 Agent/turn-local 状态，展示层只读取 Scheduler snapshot 和 owner snapshot。
 - 现有 `TurnExecutionRuntime`、`PendingInputRuntime`、命令 handler 和 autonomous ports 可作为迁移边界，不重复实现已有 turn 逻辑。
 
 基线参考：
@@ -113,7 +113,7 @@ TUI / Supervisor adapter
 ### P2：接入现有 CLI 输入链路（已完成）
 
 - [x] 将 `PendingInputRuntime` 的用户输入转换为 `TurnRequest`，由 Scheduler admission。
-- [x] 将 autonomous polling 的认领结果转换为 `supervisor_task` request（component host pending input 统一经 Scheduler adapter admission）。
+- [x] 将 autonomous polling 的认领结果转换为 `supervisor_task` request（execution owner pending input 统一经 Scheduler adapter admission）。
 - [x] 用 Scheduler 的 admission/dispatch 替换旧用户/自主 turn 锁的直接等待。
 - [x] 保留现有 `/auto`、`/auto-q` 命令入口，并同步 Scheduler autonomous gate。
 - [x] TUI 中间状态栏通过只读 snapshot 显示活动 lane 和排队数量，不改变输入内容和 session 归属。
@@ -127,24 +127,24 @@ TUI / Supervisor adapter
 - [x] 通过 `SingleTurnExecutor` 复用 `TurnExecutionRuntime` 的线程、命令取消、超时和流刷新逻辑。
 - [x] 将自主任务 tool policy、Agent 生命周期和用户回调能力声明为 request/executor 配置。
 - [x] 让 autonomous executor 不再创建完整 TUI host；自主链路改由窄 `AutonomousExecutionHost` 持有执行 ports。
-- [x] 生产调用者切换后删除 autonomous 旧 `embedded_role` 分支、重复 cprint/输出兜底和无调用字段；scheduled-task 的独立 host 分支保留到后续迁移阶段。
+- [x] 生产调用者切换后删除 autonomous 和 scheduled-task 的旧完整后台 host 分支、重复 cprint/输出兜底和无调用字段。
 
 **退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。已由 `tests/test_cli_agent_turn_executor_runtime.py`、`tests/test_autonomous_execution_host.py` 和自主门控回归验证。
 
-### P4：统一事件投影与 TUI 状态（进行中）
+### P4：统一事件投影与 TUI 状态（已完成）
 
 - [x] TUI 中间状态栏通过 Scheduler snapshot 读取活动 lane/排队数量，不读取 component host 私有字段。
-- [ ] 合并自主面板与状态栏的宽度计算、截断和 spinner 投影。
-- [ ] 补窄终端、退出中、取消中、队列等待和自主执行中的渲染测试。
-- [ ] 将日志标记统一为 `user_chat` / `supervisor_task`，保留可检索的 request id。
+- [x] 合并自主面板与状态栏的宽度计算、截断和 spinner 投影。
+- [x] 补窄终端、退出中、取消中、队列等待和自主执行中的渲染测试。
+- [x] 将日志标记统一为 `user_chat` / `supervisor_task`，保留可检索的 request id。
 
-**退出条件**：父 host 不需要了解 component host 的内部状态；状态栏能准确显示活动 lane、等待原因和取消结果。
+**退出条件**：父 host 不需要了解 execution owner 的内部状态；状态栏和自主面板能准确显示活动 lane、等待原因、request id 和取消结果。已由 projector、状态栏、自主面板和 Scheduler 回归测试验证。
 
-### P5：清理与全量验收（未开始）
+### P5：清理与全量验收（进行中）
 
-- [ ] 删除失效兼容分支、重复参数、旧锁接线和无调用 embedded host 能力。
-- [ ] 更新架构文档、命令帮助和测试契约，删除过期描述。
-- [ ] 运行 owner 测试、CLI 自主链路回归、并发/取消测试、文档测试、架构依赖检查和生产编译。
+- [x] 删除失效兼容分支、重复参数、旧锁接线和无调用后台 host 能力。
+- [x] 更新架构文档、命令帮助和测试契约，删除过期描述。
+- [ ] 运行 owner 测试、CLI 自主链路回归、scheduled-task、并发/取消测试、文档测试、架构依赖检查和生产编译。
 - [ ] 涉及模型/请求链路时运行退役集成扫描；涉及打包时运行 wheel 契约和 source-to-artifact parity。
 - [ ] 执行 `git diff --check`，确认没有残留调试输出或临时兼容代码。
 
@@ -168,8 +168,8 @@ TUI / Supervisor adapter
 - 每完成一个阶段，只更新本文件对应 checkbox、阶段状态和退出条件，不追加流水账。
 - 若发现行为变化，先新增 ADR 或修订“调度规则”，再改代码。
 - 若阶段被阻塞，记录具体阻塞条件、已尝试替代方案和恢复所需的外部条件。
-- 任何后续会话开始前，先读取本文件“当前状态”和未完成阶段，禁止把旧 `embedded_role` 逻辑重新当成目标设计。
+- 任何后续会话开始前，先读取本文件“当前状态”和未完成阶段，禁止把已删除的完整后台 CLI host 逻辑重新当成目标设计。
 
 ## 9. 下一步
 
-继续 P4/P5：补齐统一事件 projector 的窄终端、取消和队列渲染测试，统一 `user_chat` / `supervisor_task` 日志标记；之后迁移 scheduled-task 独立执行域并清理剩余 `embedded_role` 兼容分支。
+继续 P5：运行完整 owner/CLI/Scheduler 回归、架构检查、退役集成扫描、打包契约和 source-to-artifact parity；确认发行物不含旧后台 host 入口后，将计划标记为已完成。

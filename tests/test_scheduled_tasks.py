@@ -41,7 +41,7 @@ def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
         ),
         start_background_task=getattr(
             host,
-            "_start_scheduled_component_task",
+            "_start_scheduled_execution_task",
             host._start_background_agent_task,
         ),
     )

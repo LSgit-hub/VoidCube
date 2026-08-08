@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from VoidCube_cli.entrypoint_operations import cmd_autonomous, cmd_body, cmd_doctor
+from VoidCube_cli.entrypoint_operations import cmd_body, cmd_doctor
 from VoidCube_cli.entrypoint_provider import (
     cmd_login, cmd_logout, cmd_model, cmd_status,
 )
@@ -147,24 +147,6 @@ def register_core_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Run deep checks (may take longer)"
     )
     status_parser.set_defaults(func=cmd_status)
-
-    autonomous_parser = subparsers.add_parser(
-        "autonomous",
-        help="Debug the embedded API-A autonomous execution component",
-        description="Debug-only surface for autonomous-chain API-A task execution and observation; normal use is /auto inside the main CLI.",
-    )
-    autonomous_parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds")
-    autonomous_parser.add_argument("--once", action="store_true", help="Poll once, then exit; no output when idle unless --show-idle is set")
-    autonomous_parser.add_argument("--no-clear", action="store_true", help="Do not clear the terminal between refreshes")
-    autonomous_parser.add_argument("--show-idle", action="store_true", help="Show the idle observation panel for debugging")
-    autonomous_parser.add_argument("-m", "--model", help="Model override for the autonomous API-A executor")
-    autonomous_parser.add_argument(
-        "--provider",
-        default=None,
-        metavar="PROVIDER",
-        help="Inference provider ID or configured custom provider for the autonomous API-A executor",
-    )
-    autonomous_parser.set_defaults(func=cmd_autonomous)
 
     # =========================================================================
     # doctor command

@@ -6,20 +6,6 @@ from VoidCube_cli import __version__
 from VoidCube_cli.entrypoint_startup import PROJECT_ROOT
 
 
-def cmd_autonomous(args):
-    """Run a debug surface for the embedded API-A autonomous component."""
-    from VoidCube_cli.autonomous_runner import run_autonomous_component_debug
-
-    run_autonomous_component_debug(
-        model=getattr(args, "model", None),
-        provider=getattr(args, "provider", None),
-        interval=float(getattr(args, "interval", 2.0) or 2.0),
-        once=bool(getattr(args, "once", False)),
-        clear=not bool(getattr(args, "no_clear", False)),
-        show_idle=bool(getattr(args, "show_idle", False)),
-    )
-
-
 def cmd_doctor(args):
     """Run configuration and agent runtime diagnostics."""
     from VoidCube_cli.config_validator import print_diagnosis

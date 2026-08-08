@@ -49,7 +49,7 @@ def has_visible_autonomous_work(
     *,
     state_ports: AutonomousPanelStatePorts,
 ) -> bool:
-    """Return True when the embedded autonomous panel should be visible."""
+    """Return True when the autonomous execution panel should be visible."""
     if not state_ports.gate_active():
         return False
     if state_ports.agent_running():

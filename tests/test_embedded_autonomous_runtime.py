@@ -16,13 +16,13 @@ def _ports(calls, *, host):
     executor = SimpleNamespace(poll_workflow=lambda: calls.append("poll"))
 
     ports = AutonomousComponentRuntimePorts(
-        get_component_host=lambda: host,
-        ensure_component_host=lambda: calls.append("ensure") or host,
-        get_component_thread=lambda: None,
-        store_component_thread=stored_threads.append,
+        get_execution_host=lambda: host,
+        ensure_execution_host=lambda: calls.append("ensure") or host,
+        get_execution_thread=lambda: None,
+        store_execution_thread=stored_threads.append,
         ensure_stop_event=lambda: stop_event,
-        parent_component_active=lambda: True,
-        set_component_active=lambda _host, active: calls.append(("active", active)),
+        execution_active=lambda: True,
+        set_execution_active=lambda _host, active: calls.append(("active", active)),
         build_executor_runtime=lambda _host: calls.append("runtime") or executor,
         refresh_statuses=lambda _host: calls.append("refresh"),
         can_poll_workflow=lambda _host: True,
@@ -31,7 +31,7 @@ def _ports(calls, *, host):
         invalidate=lambda: calls.append("invalidate"),
         report_error=lambda error: calls.append(("error", str(error))),
         publish_idle_scene=lambda _host: calls.append("idle"),
-        deactivate_component_host=lambda _host: calls.append("deactivate") or True,
+        deactivate_execution_host=lambda _host: calls.append("deactivate") or True,
         interrupt_running_agent=lambda _host: calls.append("agent"),
         interrupt_current_task=lambda: calls.append("task"),
         signal_stop=lambda: calls.append("signal"),
@@ -76,7 +76,7 @@ def test_component_runtime_stop_uses_existing_host_without_creating_one(monkeypa
         runtime_module,
         "stop_autonomous_component",
         lambda stop_ports, *, interrupt: calls.append(
-            ("stop", interrupt, stop_ports.deactivate_component_host())
+            ("stop", interrupt, stop_ports.deactivate_execution_host())
         ),
     )
 

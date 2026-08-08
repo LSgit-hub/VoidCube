@@ -26,8 +26,8 @@ def test_component_loop_polls_and_executes_pending_input_without_owning_host() -
 
     ports = AutonomousComponentLoopPorts(
         stop_event=stop_event,
-        component_active=lambda: True,
-        set_component_active=lambda active: calls.append(("active", active)),
+        execution_active=lambda: True,
+        set_execution_active=lambda active: calls.append(("active", active)),
         refresh_statuses=lambda: calls.append("refresh"),
         can_poll_workflow=lambda: True,
         poll_workflow=lambda: calls.append("poll"),
@@ -57,8 +57,8 @@ def test_component_loop_reports_errors_then_releases_component_state() -> None:
     calls: list[object] = []
     ports = AutonomousComponentLoopPorts(
         stop_event=stop_event,
-        component_active=lambda: True,
-        set_component_active=lambda active: calls.append(("active", active)),
+        execution_active=lambda: True,
+        set_execution_active=lambda active: calls.append(("active", active)),
         refresh_statuses=lambda: (_ for _ in ()).throw(RuntimeError("refresh failed")),
         can_poll_workflow=lambda: True,
         poll_workflow=lambda: None,
@@ -92,8 +92,8 @@ def test_start_component_loop_builds_a_named_daemon_thread() -> None:
 
     ports = AutonomousComponentLoopPorts(
         stop_event=_OneCycleStopEvent(),
-        component_active=lambda: False,
-        set_component_active=lambda active: None,
+        execution_active=lambda: False,
+        set_execution_active=lambda active: None,
         refresh_statuses=lambda: None,
         can_poll_workflow=lambda: False,
         poll_workflow=lambda: None,

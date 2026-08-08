@@ -17,8 +17,8 @@ class StopEvent(Protocol):
 @dataclass(frozen=True, slots=True)
 class AutonomousComponentLoopPorts:
     stop_event: StopEvent
-    component_active: Callable[[], bool]
-    set_component_active: Callable[[bool], None]
+    execution_active: Callable[[], bool]
+    set_execution_active: Callable[[bool], None]
     refresh_statuses: Callable[[], None]
     can_poll_workflow: Callable[[], bool]
     poll_workflow: Callable[[], None]
@@ -30,9 +30,9 @@ class AutonomousComponentLoopPorts:
 
 
 def run_autonomous_component_loop(ports: AutonomousComponentLoopPorts) -> None:
-    while not ports.stop_event.is_set() and ports.component_active():
+    while not ports.stop_event.is_set() and ports.execution_active():
         try:
-            ports.set_component_active(True)
+            ports.set_execution_active(True)
             ports.refresh_statuses()
             if ports.can_poll_workflow():
                 ports.poll_workflow()
@@ -48,7 +48,7 @@ def run_autonomous_component_loop(ports: AutonomousComponentLoopPorts) -> None:
             pass
         ports.stop_event.wait(0.5)
 
-    ports.set_component_active(False)
+    ports.set_execution_active(False)
     try:
         ports.publish_idle_scene()
     except Exception:
@@ -71,7 +71,7 @@ def start_autonomous_component_loop(
 
 @dataclass(frozen=True, slots=True)
 class AutonomousComponentStopPorts:
-    deactivate_component_host: Callable[[], bool]
+    deactivate_execution_host: Callable[[], bool]
     interrupt_running_agent: Callable[[], None]
     interrupt_current_task: Callable[[], None]
     signal_stop: Callable[[], None]
@@ -82,8 +82,8 @@ def stop_autonomous_component(
     *,
     interrupt: bool = False,
 ) -> None:
-    component_present = ports.deactivate_component_host()
-    if component_present and interrupt:
+    execution_present = ports.deactivate_execution_host()
+    if execution_present and interrupt:
         ports.interrupt_running_agent()
         ports.interrupt_current_task()
     ports.signal_stop()
@@ -91,13 +91,13 @@ def stop_autonomous_component(
 
 @dataclass(frozen=True, slots=True)
 class AutonomousComponentRuntimePorts:
-    get_component_host: Callable[[], Any | None]
-    ensure_component_host: Callable[[], Any]
-    get_component_thread: Callable[[], Thread | None]
-    store_component_thread: Callable[[Thread], None]
+    get_execution_host: Callable[[], Any | None]
+    ensure_execution_host: Callable[[], Any]
+    get_execution_thread: Callable[[], Thread | None]
+    store_execution_thread: Callable[[Thread], None]
     ensure_stop_event: Callable[[], Event]
-    parent_component_active: Callable[[], bool]
-    set_component_active: Callable[[Any, bool], None]
+    execution_active: Callable[[], bool]
+    set_execution_active: Callable[[Any, bool], None]
     build_executor_runtime: Callable[[Any], Any]
     refresh_statuses: Callable[[Any], None]
     can_poll_workflow: Callable[[Any], bool]
@@ -106,7 +106,7 @@ class AutonomousComponentRuntimePorts:
     invalidate: Callable[[], None]
     report_error: Callable[[Exception], None]
     publish_idle_scene: Callable[[Any], None]
-    deactivate_component_host: Callable[[Any | None], bool]
+    deactivate_execution_host: Callable[[Any | None], bool]
     interrupt_running_agent: Callable[[Any | None], None]
     interrupt_current_task: Callable[[], None]
     signal_stop: Callable[[], None]
@@ -120,48 +120,48 @@ class AutonomousComponentRuntime:
     def start(self) -> bool:
         stop_event = self.ports.ensure_stop_event()
         stop_event.clear()
-        component_host = self.ports.ensure_component_host()
-        self.ports.set_component_active(component_host, True)
+        execution_host = self.ports.ensure_execution_host()
+        self.ports.set_execution_active(execution_host, True)
 
-        thread = self.ports.get_component_thread()
+        thread = self.ports.get_execution_thread()
         if thread is not None and thread.is_alive():
             return True
 
-        executor_runtime = self.ports.build_executor_runtime(component_host)
+        executor_runtime = self.ports.build_executor_runtime(execution_host)
         thread = start_autonomous_component_loop(
             AutonomousComponentLoopPorts(
                 stop_event=stop_event,
-                component_active=self.ports.parent_component_active,
-                set_component_active=lambda active: self.ports.set_component_active(
-                    component_host,
+                execution_active=self.ports.execution_active,
+                set_execution_active=lambda active: self.ports.set_execution_active(
+                    execution_host,
                     active,
                 ),
-                refresh_statuses=lambda: self.ports.refresh_statuses(component_host),
-                can_poll_workflow=lambda: self.ports.can_poll_workflow(component_host),
+                refresh_statuses=lambda: self.ports.refresh_statuses(execution_host),
+                can_poll_workflow=lambda: self.ports.can_poll_workflow(execution_host),
                 poll_workflow=executor_runtime.poll_workflow,
-                get_pending_input=lambda: self.ports.get_pending_input(component_host),
+                get_pending_input=lambda: self.ports.get_pending_input(execution_host),
                 execute_pending_input=lambda pending: self.ports.execute_pending_input(
-                    component_host,
+                    execution_host,
                     pending,
                 ),
                 invalidate=self.ports.invalidate,
                 report_error=self.ports.report_error,
-                publish_idle_scene=lambda: self.ports.publish_idle_scene(component_host),
+                publish_idle_scene=lambda: self.ports.publish_idle_scene(execution_host),
             ),
             thread_factory=self.ports.thread_factory,
         )
-        self.ports.store_component_thread(thread)
+        self.ports.store_execution_thread(thread)
         return True
 
     def stop(self, *, interrupt: bool = False) -> None:
-        component_host = self.ports.get_component_host()
+        execution_host = self.ports.get_execution_host()
         stop_autonomous_component(
             AutonomousComponentStopPorts(
-                deactivate_component_host=lambda: self.ports.deactivate_component_host(
-                    component_host,
+                deactivate_execution_host=lambda: self.ports.deactivate_execution_host(
+                    execution_host,
                 ),
                 interrupt_running_agent=lambda: self.ports.interrupt_running_agent(
-                    component_host,
+                    execution_host,
                 ),
                 interrupt_current_task=self.ports.interrupt_current_task,
                 signal_stop=self.ports.signal_stop,

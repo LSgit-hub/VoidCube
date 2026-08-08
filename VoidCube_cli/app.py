@@ -286,7 +286,7 @@ from VoidCube_cli.cli_agent_turn_executor_runtime import (
     CliAgentTurnExecutorRuntime,
     CliAgentTurnResult,
 )
-from VoidCube_cli.autonomous_component_output import run_component_operation_silently
+from VoidCube_cli.autonomous_component_output import run_autonomous_operation_silently
 from VoidCube_cli.autonomous_execution_host import AutonomousExecutionHost
 from VoidCube_cli.scheduler_display_projector import SchedulerDisplayProjector
 from VoidCube_cli.scheduled_execution_host import ScheduledExecutionHost
@@ -1318,7 +1318,7 @@ class VoidcubeCLI:
                     push_cli_agent_scene=_push_cli_agent_scene,
                     monotonic_time=time.monotonic,
                 ),
-                interrupt_current_task=self._interrupt_autonomous_component_task,
+                interrupt_current_task=self._interrupt_autonomous_task,
                 push_cli_agent_scene=_push_cli_agent_scene,
                 thread_factory=threading.Thread,
             ),
@@ -1341,8 +1341,8 @@ class VoidcubeCLI:
         self._autonomous_execution_events: List[Dict[str, str]] = []
         self._autonomous_last_supervisor_event_key: str = ""
         self._autonomous_execution_host = None
-        self._autonomous_component_thread = None
-        self._autonomous_component_stop = threading.Event()
+        self._autonomous_execution_thread = None
+        self._autonomous_execution_stop = threading.Event()
         self._scheduler_display_projector = SchedulerDisplayProjector()
         self._turn_scheduler_runtime = self._build_turn_scheduler_runtime()
         self._scheduled_execution_host = None
@@ -1351,8 +1351,8 @@ class VoidcubeCLI:
         self._scheduled_executor_runtime = self._create_scheduled_executor_runtime()
         _initialize_autonomous_status_caches_view(self)
 
-    def _quiet_autonomous_component_cprint(self, *args: Any, **kwargs: Any) -> None:
-        """Keep autonomous component execution out of the user's scrollback."""
+    def _quiet_autonomous_cprint(self, *args: Any, **kwargs: Any) -> None:
+        """Keep autonomous execution out of the user's scrollback."""
         del args, kwargs
 
     def _build_turn_scheduler_runtime(self) -> CliTurnSchedulerRuntime:
@@ -1581,7 +1581,7 @@ class VoidcubeCLI:
             owner,
             event,
             append_autonomous_event=append_event,
-            emit_line=self._quiet_autonomous_component_cprint,
+            emit_line=self._quiet_autonomous_cprint,
         )
 
     def _execute_autonomous_agent_turn(
@@ -1593,34 +1593,34 @@ class VoidcubeCLI:
         result = self._agent_turn_executor_runtime(owner).execute(request, cancellation)
         return result.response if isinstance(result, CliAgentTurnResult) else result
 
-    def _autonomous_component_runtime(self):
+    def _autonomous_execution_runtime(self):
         execution_host = self._ensure_autonomous_execution_host()
         return _autonomous_executor_runtime_view(
             execution_host,
             push_cli_agent_scene=_push_cli_agent_scene,
             git_head_commit=_git_head_commit,
             git_improvement_diff=_git_improvement_diff,
-            cprint=self._quiet_autonomous_component_cprint,
+            cprint=self._quiet_autonomous_cprint,
         )
 
-    def _autonomous_component_lifecycle(self) -> AutonomousComponentRuntime:
-        runtime = self.__dict__.get("_autonomous_component_lifecycle_runtime")
+    def _autonomous_execution_lifecycle(self) -> AutonomousComponentRuntime:
+        runtime = self.__dict__.get("_autonomous_execution_lifecycle_runtime")
         if runtime is not None:
             return runtime
 
         def ensure_stop_event() -> threading.Event:
-            event = getattr(self, "_autonomous_component_stop", None)
+            event = getattr(self, "_autonomous_execution_stop", None)
             if event is None:
                 event = threading.Event()
-                self._autonomous_component_stop = event
+                self._autonomous_execution_stop = event
             return event
 
-        def refresh_statuses(component_host: Any) -> None:
-            _refresh_supervisor_status_view(component_host)
-            _refresh_autonomous_gateway_status_view(component_host)
-            _refresh_gateway_autonomous_execute_snapshot_view(component_host)
+        def refresh_statuses(execution_host: Any) -> None:
+            _refresh_supervisor_status_view(execution_host)
+            _refresh_autonomous_gateway_status_view(execution_host)
+            _refresh_gateway_autonomous_execute_snapshot_view(execution_host)
             _refresh_gateway_cli_presence_view(
-                component_host,
+                execution_host,
                 force=False,
                 is_gateway_running=_is_gateway_running,
                 register_with_gateway=_register_with_gateway,
@@ -1628,37 +1628,37 @@ class VoidcubeCLI:
                 monotonic_time=time.monotonic,
             )
 
-        def get_pending_input(component_host: Any) -> object | None:
+        def get_pending_input(execution_host: Any) -> object | None:
             try:
-                return component_host._pending_input.get_nowait()
+                return execution_host._pending_input.get_nowait()
             except Exception:
                 return None
 
-        def can_poll_workflow(component_host: Any) -> bool:
+        def can_poll_workflow(execution_host: Any) -> bool:
             return not getattr(self, "_scheduled_execution_active", False) and not getattr(
-                component_host,
+                execution_host,
                 "_agent_running",
                 False,
             )
 
-        def deactivate_component_host(component_host: Any | None) -> bool:
-            if component_host is None:
+        def deactivate_execution_host(execution_host: Any | None) -> bool:
+            if execution_host is None:
                 return False
-            component_host._autonomous_gate_active = False
+            execution_host._autonomous_gate_active = False
             return True
 
-        def interrupt_running_agent(component_host: Any | None) -> None:
+        def interrupt_running_agent(execution_host: Any | None) -> None:
             try:
-                if component_host and component_host.agent and component_host._agent_running:
-                    component_host.agent.interrupt()
+                if execution_host and execution_host.agent and execution_host._agent_running:
+                    execution_host.agent.interrupt()
             except Exception:
                 pass
 
         def interrupt_current_task() -> None:
             try:
-                self._autonomous_component_runtime().interrupt_current_task(
+                self._autonomous_execution_runtime().interrupt_current_task(
                     reason="自主链路已停止；当前链路项被用户中断。",
-                    source="embedded_component_stop",
+                    source="autonomous_execution_stop",
                     timeout=5,
                 )
             except Exception:
@@ -1669,34 +1669,34 @@ class VoidcubeCLI:
 
         runtime = AutonomousComponentRuntime(
             AutonomousComponentRuntimePorts(
-                get_component_host=lambda: getattr(
+                get_execution_host=lambda: getattr(
                     self,
                     "_autonomous_execution_host",
                     None,
                 ),
-                ensure_component_host=self._ensure_autonomous_execution_host,
-                get_component_thread=lambda: getattr(
+                ensure_execution_host=self._ensure_autonomous_execution_host,
+                get_execution_thread=lambda: getattr(
                     self,
-                    "_autonomous_component_thread",
+                    "_autonomous_execution_thread",
                     None,
                 ),
-                store_component_thread=lambda thread: setattr(
+                store_execution_thread=lambda thread: setattr(
                     self,
-                    "_autonomous_component_thread",
+                    "_autonomous_execution_thread",
                     thread,
                 ),
                 ensure_stop_event=ensure_stop_event,
-                parent_component_active=lambda: bool(self._autonomous_gate_active),
-                set_component_active=lambda host, active: setattr(
+                execution_active=lambda: bool(self._autonomous_gate_active),
+                set_execution_active=lambda host, active: setattr(
                     host,
                     "_autonomous_gate_active",
                     active,
                 ),
-                build_executor_runtime=lambda _host: self._autonomous_component_runtime(),
+                build_executor_runtime=lambda _host: self._autonomous_execution_runtime(),
                 refresh_statuses=refresh_statuses,
                 can_poll_workflow=can_poll_workflow,
                 get_pending_input=get_pending_input,
-                execute_pending_input=lambda host, pending: run_component_operation_silently(
+                execute_pending_input=lambda host, pending: run_autonomous_operation_silently(
                     lambda: host._execute_pending_input(
                         pending,
                         app=None,
@@ -1704,7 +1704,7 @@ class VoidcubeCLI:
                 ),
                 invalidate=lambda: self._invalidate(min_interval=0.5),
                 report_error=lambda error: logger.debug(
-                    "Autonomous execution component loop error: %s",
+                    "Autonomous execution loop error: %s",
                     error,
                 ),
                 publish_idle_scene=lambda host: _push_cli_agent_scene(
@@ -1712,26 +1712,26 @@ class VoidcubeCLI:
                     session_id=getattr(host, "session_id", None),
                     agent_role="supervisor_task",
                 ),
-                deactivate_component_host=deactivate_component_host,
+                deactivate_execution_host=deactivate_execution_host,
                 interrupt_running_agent=interrupt_running_agent,
                 interrupt_current_task=interrupt_current_task,
                 signal_stop=signal_stop,
                 thread_factory=threading.Thread,
             )
         )
-        self._autonomous_component_lifecycle_runtime = runtime
+        self._autonomous_execution_lifecycle_runtime = runtime
         return runtime
 
-    def _start_autonomous_execution_component(self) -> bool:
-        """Start the embedded API-A autonomous execution component."""
+    def _start_autonomous_execution(self) -> bool:
+        """Start the API-A autonomous execution loop."""
         self._scheduler_runtime().enable_autonomous()
-        return self._autonomous_component_lifecycle().start()
+        return self._autonomous_execution_lifecycle().start()
 
-    def _stop_autonomous_execution_component(self, *, interrupt: bool = False) -> None:
+    def _stop_autonomous_execution(self, *, interrupt: bool = False) -> None:
         self._scheduler_runtime().cancel_autonomous()
-        self._autonomous_component_lifecycle().stop(interrupt=interrupt)
+        self._autonomous_execution_lifecycle().stop(interrupt=interrupt)
 
-    def _interrupt_autonomous_component_task(
+    def _interrupt_autonomous_task(
         self,
         *,
         reason: str,
@@ -1752,7 +1752,7 @@ class VoidcubeCLI:
             push_cli_agent_scene=_push_cli_agent_scene,
             git_head_commit=_git_head_commit,
             git_improvement_diff=_git_improvement_diff,
-            cprint=self._quiet_autonomous_component_cprint,
+            cprint=self._quiet_autonomous_cprint,
         ).interrupt_current_task(reason=reason, source=source, timeout=timeout)
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
@@ -3759,7 +3759,7 @@ class VoidcubeCLI:
                     tool_gen_callback=None,
                 )
             ).create()
-            owner.agent._print_fn = self._quiet_autonomous_component_cprint
+            owner.agent._print_fn = self._quiet_autonomous_cprint
             owner._active_agent_route_signature = route.get("signature")
             if _is_gateway_running():
                 _register_with_gateway(
@@ -3789,7 +3789,7 @@ class VoidcubeCLI:
             cprint=(
                 _cprint
                 if owner is self
-                else self._quiet_autonomous_component_cprint
+                else self._quiet_autonomous_cprint
             ),
         )
         application_runtime = owner._ensure_application_runtime() if owner is self else owner._application_runtime
@@ -4180,7 +4180,7 @@ class VoidcubeCLI:
                 self,
                 event_ports=self._autonomous_panel_event_ports(),
                 emit=_cprint,
-                interrupt_current_task=self._interrupt_autonomous_component_task,
+                interrupt_current_task=self._interrupt_autonomous_task,
                 push_cli_agent_scene=_push_cli_agent_scene,
             )
 
@@ -4496,7 +4496,7 @@ class VoidcubeCLI:
         )
 
         return TuiTeardownPorts(
-            stop_autonomous=lambda: self._stop_autonomous_execution_component(
+            stop_autonomous=lambda: self._stop_autonomous_execution(
                 interrupt=True
             ),
             interrupt_agent=interrupt_running_agent,
@@ -4680,7 +4680,7 @@ class VoidcubeCLI:
                 refresh_observation_surfaces=refresh_observation_surfaces,
                 refresh_gateway_presence=refresh_gateway_presence,
                 autonomous_gate_active=lambda: self._autonomous_gate_active,
-                start_autonomous_component=lambda: self._start_autonomous_execution_component(),
+                start_autonomous_component=lambda: self._start_autonomous_execution(),
                 application_ready=lambda: bool(self._app),
                 invalidate=lambda interval: self._invalidate(min_interval=interval),
                 enqueue_pending_input=self._pending_input.put,

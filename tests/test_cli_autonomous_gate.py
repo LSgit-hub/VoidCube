@@ -2003,7 +2003,7 @@ def test_body_improvement_completion_posts_after_successful_report(monkeypatch):
     assert cli._current_autonomous_task is None
 
 
-def test_auto_command_activates_gate_and_embedded_component(monkeypatch):
+def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto"
@@ -2063,7 +2063,7 @@ def test_auto_command_activates_gate_and_embedded_component(monkeypatch):
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
-        "activate_autonomous_execution_component",
+        "activate_autonomous_execution",
         lambda host: (launches.append(host), (True, "API-A 自主执行组件已接入当前 CLI。"))[1],
     )
     monkeypatch.setattr(
@@ -2181,34 +2181,34 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
 
 
-def test_activate_autonomous_execution_component_reuses_embedded_thread(monkeypatch):
+def test_activate_autonomous_execution_reuses_running_thread(monkeypatch):
     host = type("_Host", (), {})()
     starts = []
-    host._start_autonomous_execution_component = lambda: starts.append("start") or True
+    host._start_autonomous_execution = lambda: starts.append("start") or True
 
-    launched, message = autonomous_gate_module.activate_autonomous_execution_component(host)
+    launched, message = autonomous_gate_module.activate_autonomous_execution(host)
 
     assert launched is True
     assert starts == ["start"]
     assert "当前 CLI" in message
 
 
-def test_activate_autonomous_execution_component_reports_start_failure():
+def test_activate_autonomous_execution_reports_start_failure():
     host = type("_Host", (), {})()
-    host._start_autonomous_execution_component = lambda: False
+    host._start_autonomous_execution = lambda: False
 
-    launched, message = autonomous_gate_module.activate_autonomous_execution_component(host)
+    launched, message = autonomous_gate_module.activate_autonomous_execution(host)
 
     assert launched is False
     assert "未启动" in message
 
 
-def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(monkeypatch):
+def test_autonomous_execution_runs_while_foreground_cli_is_busy(monkeypatch):
     parent = VoidcubeCLI.__new__(VoidcubeCLI)
     parent._autonomous_gate_active = True
     parent._agent_running = True
     parent.conversation_history = [{"role": "user", "content": "parent turn"}]
-    parent._autonomous_component_thread = None
+    parent._autonomous_execution_thread = None
     parent._invalidate = lambda *args, **kwargs: None
 
     class _FakeStopEvent:
@@ -2254,7 +2254,7 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     component._autonomous_gate_active = True
     component._agent_running = False
     component._pending_input = queue.Queue()
-    component._pending_input.put("[Autonomous Learning Task] embedded component turn")
+    component._pending_input.put("[Autonomous Learning Task] execution owner turn")
     component.conversation_history = []
     component._execute_pending_input_calls = []
 
@@ -2269,9 +2269,9 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     runtime = _FakeRuntime()
     pushed = []
 
-    parent._autonomous_component_stop = stop_event
+    parent._autonomous_execution_stop = stop_event
     parent._ensure_autonomous_execution_host = lambda: component
-    parent._autonomous_component_runtime = lambda: runtime
+    parent._autonomous_execution_runtime = lambda: runtime
 
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("cli._refresh_supervisor_status_view", lambda host: None)
@@ -2286,11 +2286,11 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
         lambda scene, **kwargs: pushed.append((scene, kwargs)) or True,
     )
 
-    started = parent._start_autonomous_execution_component()
+    started = parent._start_autonomous_execution()
 
     assert started is True
     assert component._execute_pending_input_calls == [
-        ("[Autonomous Learning Task] embedded component turn", None)
+        ("[Autonomous Learning Task] execution owner turn", None)
     ]
     assert runtime.poll_calls >= 2
     assert parent.conversation_history == [{"role": "user", "content": "parent turn"}]
@@ -2338,7 +2338,7 @@ def test_autonomous_component_panel_becomes_visible_for_execution_events():
     ) is True
 
 
-def test_autonomous_panel_reads_embedded_component_state():
+def test_autonomous_panel_reads_execution_owner_snapshot():
     host = type("_Host", (), {})()
     component = type("_Component", (), {})()
     host._autonomous_gate_active = True
@@ -2564,7 +2564,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
-        "activate_autonomous_execution_component",
+        "activate_autonomous_execution",
         lambda host: (launches.append(host), (True, "API-A 自主执行组件已接入当前 CLI。"))[1],
     )
     monkeypatch.setattr(
