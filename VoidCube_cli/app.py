@@ -76,7 +76,7 @@ from VoidCube_app.interaction_contract import (
     ClarificationRequest,
     ClarificationStatus,
 )
-from VoidCube_app.session_identity import resolve_session_identity
+from VoidCube_app.session_identity import generate_session_id, resolve_session_identity
 from VoidCube_app.session_lifecycle import (
     SessionHydration,
     SessionLifecycleState,
@@ -272,10 +272,8 @@ from VoidCube_cli.voice_recording_runtime import (
 )
 from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
 from VoidCube_app.autonomous_component_runtime import (
-    AutonomousComponentHostPorts,
     AutonomousComponentRuntime,
     AutonomousComponentRuntimePorts,
-    ensure_autonomous_component_host,
 )
 from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
 from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
@@ -289,6 +287,7 @@ from VoidCube_cli.cli_agent_turn_executor_runtime import (
     CliAgentTurnResult,
 )
 from VoidCube_cli.autonomous_component_output import run_component_operation_silently
+from VoidCube_cli.autonomous_execution_host import AutonomousExecutionHost
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -317,10 +316,6 @@ from VoidCube_cli.tool_event_adapter import project_tool_event as _project_tool_
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
-from VoidCube_cli.autonomous_executor import (
-    autonomous_task_toolsets,
-    autonomous_task_run_id_for_message,
-)
 from VoidCube_cli.autonomous_events import (
     AutonomousPanelEventPorts,
     append_autonomous_execution_event as _append_autonomous_execution_event_view,
@@ -1343,8 +1338,7 @@ class VoidcubeCLI:
         self._gateway_presence_refresh_interval_seconds: float = 30.0
         self._autonomous_execution_events: List[Dict[str, str]] = []
         self._autonomous_last_supervisor_event_key: str = ""
-        self._autonomous_parent_host = None
-        self._autonomous_component_host = None
+        self._autonomous_execution_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
         self._turn_scheduler_runtime = (
@@ -1399,19 +1393,6 @@ class VoidcubeCLI:
         except Exception:
             logger.debug("Agent cancellation callback failed", exc_info=True)
 
-    def _turn_autonomous_runtime(self):
-        return _autonomous_executor_runtime_view(
-            self,
-            push_cli_agent_scene=_push_cli_agent_scene,
-            git_head_commit=_git_head_commit,
-            git_improvement_diff=_git_improvement_diff,
-            cprint=(
-                self._quiet_autonomous_component_cprint
-                if self._is_embedded_component()
-                else _cprint
-            ),
-        )
-
     def _turn_tool_policy(
         self,
         payload: Any,
@@ -1420,29 +1401,16 @@ class VoidcubeCLI:
         policy: dict[str, Any] = {"agent_role": lane.value}
         if lane is not TurnLane.SUPERVISOR_TASK:
             return policy
-        message = payload[0] if isinstance(payload, tuple) and payload else payload
-        current_task = self._turn_autonomous_runtime().current_task()
-        run_id = autonomous_task_run_id_for_message(current_task, message)
-        if run_id:
-            policy["autonomous_task_run_id"] = run_id
-            toolsets = autonomous_task_toolsets(current_task)
-            if toolsets is not None:
-                policy["enabled_toolsets"] = tuple(toolsets)
         return policy
 
     def _direct_turn_request(self, message: Any, images: list | None) -> TurnRequest:
-        lane = (
-            TurnLane.SUPERVISOR_TASK
-            if self._is_embedded_autonomous_component()
-            else TurnLane.USER_CHAT
-        )
         payload = (message, images)
         return TurnRequest(
             request_id=f"direct-{uuid.uuid4()}",
-            lane=lane,
+            lane=TurnLane.USER_CHAT,
             session_id=str(self.session_id or "direct-session"),
             prompt=payload,
-            tool_policy=self._turn_tool_policy(payload, lane),
+            tool_policy=self._turn_tool_policy(payload, TurnLane.USER_CHAT),
             source="direct",
         )
 
@@ -1453,17 +1421,10 @@ class VoidcubeCLI:
             self._turn_scheduler_runtime = runtime
         return runtime
 
-    def _is_embedded_autonomous_component(self) -> bool:
-        """Return True when this host only exists for the embedded mini CLI."""
-        return getattr(self, "_embedded_component_role", "") == "autonomous" or getattr(
-            self, "_autonomous_parent_host", None
-        ) is not None
-
     def _is_embedded_component(self) -> bool:
-        """Return True for any background-only embedded CLI Host."""
+        """Return True for the remaining scheduled background CLI Host."""
         return bool(
             getattr(self, "_embedded_component_role", "")
-            or getattr(self, "_autonomous_parent_host", None) is not None
             or getattr(self, "_scheduled_parent_host", None) is not None
         )
 
@@ -1474,7 +1435,7 @@ class VoidcubeCLI:
                 is_embedded_component=self._is_embedded_component,
                 auto_task_running=lambda: bool(
                     getattr(
-                        getattr(self, "_autonomous_component_host", None),
+                        getattr(self, "_autonomous_execution_host", None),
                         "_agent_running",
                         False,
                     )
@@ -1523,48 +1484,98 @@ class VoidcubeCLI:
             **kwargs,
         )
 
-    def _ensure_autonomous_component_host(self):
-        def create_component_host():
-            return type(self)(
-                model=getattr(self, "model", None),
-                toolsets=getattr(self, "enabled_toolsets", None),
-                provider=getattr(self, "requested_provider", None) or getattr(self, "provider", None),
-                api_key=getattr(self, "_explicit_api_key", None),
-                base_url=getattr(self, "_explicit_base_url", None),
-                max_turns=getattr(self, "max_turns", None),
-                verbose=getattr(self, "verbose", False),
-                compact=True,
-                checkpoints=getattr(self, "checkpoints_enabled", False),
-                pass_session_id=True,
-                embedded_role="autonomous",
-                turn_scheduler_runtime=self._scheduler_runtime(),
+    def _ensure_autonomous_execution_host(self):
+        host = getattr(self, "_autonomous_execution_host", None)
+        if host is not None:
+            return host
+
+        session_start = datetime.now()
+        session_id = ""
+        if self._session_db is not None:
+            try:
+                sessions = self._session_db.list_sessions_rich(
+                    limit=20,
+                    exclude_id_prefixes=["scheduled_"],
+                )
+                session_id = next(
+                    (
+                        str(session.get("id") or "").strip()
+                        for session in sessions
+                        if session.get("source") == "cli_supervisor_task_lane"
+                        and session.get("ended_at") is None
+                        and str(session.get("id") or "").strip()
+                    ),
+                    "",
+                )
+            except Exception:
+                logger.debug("Could not resolve autonomous session", exc_info=True)
+        session_id = session_id or generate_session_id(session_start)
+        autonomous_session_db = self._session_db
+        if self._session_db is not None:
+            try:
+                from VoidCube_core.state import SessionDB
+
+                autonomous_session_db = SessionDB()
+            except Exception:
+                logger.debug(
+                    "Could not open autonomous SessionDB connection",
+                    exc_info=True,
+                )
+        host = AutonomousExecutionHost(
+            session_id=session_id,
+            session_start=session_start,
+            model=str(self.model or ""),
+            provider=str(self.provider or ""),
+            session_db=autonomous_session_db,
+            scheduler_runtime=self._scheduler_runtime(),
+            execute_turn=self._execute_autonomous_agent_turn,
+            invalidate=lambda: self._invalidate(min_interval=0.5),
+            tool_event_sink=self._project_autonomous_tool_event,
+            panel_event_ports=self._autonomous_panel_event_ports,
+        )
+        _ensure_supervisor_task_session_view(host, logger_debug=logger.debug)
+        self._autonomous_execution_host = host
+        return host
+
+    def _project_autonomous_tool_event(
+        self,
+        owner: AutonomousExecutionHost,
+        event: ToolEvent,
+    ) -> None:
+        def append_event(
+            _host: Any,
+            message: str,
+            *,
+            tone: str = "info",
+            stage: str = "",
+        ) -> None:
+            _append_autonomous_execution_event_view(
+                event_ports=owner._autonomous_panel_event_ports(),
+                message=message,
+                tone=tone,
+                stage=stage,
             )
 
-        def bind_component_parent(host: Any) -> None:
-            host._autonomous_parent_host = self
-            host._turn_scheduler_runtime = self._turn_scheduler_runtime
-
-        return ensure_autonomous_component_host(
-            AutonomousComponentHostPorts(
-                get_component_host=lambda: getattr(self, "_autonomous_component_host", None),
-                create_component_host=create_component_host,
-                set_component_active=lambda host, active: setattr(
-                    host, "_autonomous_gate_active", active
-                ),
-                bind_component_parent=bind_component_parent,
-                ensure_task_session=lambda host: _ensure_supervisor_task_session_view(
-                    host, logger_debug=logger.debug
-                ),
-                store_component_host=lambda host: setattr(
-                    self, "_autonomous_component_host", host
-                ),
-            )
+        _project_tool_event_view(
+            owner,
+            event,
+            append_autonomous_event=append_event,
+            emit_line=self._quiet_autonomous_component_cprint,
         )
 
+    def _execute_autonomous_agent_turn(
+        self,
+        owner: AutonomousExecutionHost,
+        request: TurnRequest,
+        cancellation: CancellationToken,
+    ) -> Optional[str]:
+        result = self._agent_turn_executor_runtime(owner).execute(request, cancellation)
+        return result.response if isinstance(result, CliAgentTurnResult) else result
+
     def _autonomous_component_runtime(self):
-        component_host = self._ensure_autonomous_component_host()
+        execution_host = self._ensure_autonomous_execution_host()
         return _autonomous_executor_runtime_view(
-            component_host,
+            execution_host,
             push_cli_agent_scene=_push_cli_agent_scene,
             git_head_commit=_git_head_commit,
             git_improvement_diff=_git_improvement_diff,
@@ -1639,10 +1650,10 @@ class VoidcubeCLI:
             AutonomousComponentRuntimePorts(
                 get_component_host=lambda: getattr(
                     self,
-                    "_autonomous_component_host",
+                    "_autonomous_execution_host",
                     None,
                 ),
-                ensure_component_host=self._ensure_autonomous_component_host,
+                ensure_component_host=self._ensure_autonomous_execution_host,
                 get_component_thread=lambda: getattr(
                     self,
                     "_autonomous_component_thread",
@@ -1706,8 +1717,8 @@ class VoidcubeCLI:
         source: str,
         timeout: float = 5,
     ) -> bool:
-        component_host = getattr(self, "_autonomous_component_host", None)
-        if component_host is None:
+        execution_host = getattr(self, "_autonomous_execution_host", None)
+        if execution_host is None:
             return _autonomous_executor_runtime_view(
                 self,
                 push_cli_agent_scene=_push_cli_agent_scene,
@@ -1716,7 +1727,7 @@ class VoidcubeCLI:
                 cprint=_cprint,
             ).interrupt_current_task(reason=reason, source=source, timeout=timeout)
         return _autonomous_executor_runtime_view(
-            component_host,
+            execution_host,
             push_cli_agent_scene=_push_cli_agent_scene,
             git_head_commit=_git_head_commit,
             git_improvement_diff=_git_improvement_diff,
@@ -1870,50 +1881,49 @@ class VoidcubeCLI:
         )
 
     def _autonomous_panel_state_ports(self) -> AutonomousPanelStatePorts:
-        state_host = getattr(self, "_autonomous_component_host", None) or self
+        def snapshot():
+            owner = getattr(self, "_autonomous_execution_host", None)
+            return owner.snapshot() if owner is not None else None
 
         def pending_input_nonempty() -> bool:
-            try:
-                return not state_host._pending_input.empty()
-            except Exception:
-                return False
+            state = snapshot()
+            return bool(state and state.pending_input_count)
 
         return AutonomousPanelStatePorts(
             gate_active=lambda: bool(self._autonomous_gate_active),
-            session_id=lambda: str(getattr(state_host, "session_id", "") or ""),
-            current_task=lambda: getattr(state_host, "_current_autonomous_task", None),
-            current_task_started_at=lambda: float(
-                getattr(state_host, "_current_autonomous_task_started_at", 0.0) or 0.0
+            session_id=lambda: snapshot().session_id if snapshot() else "",
+            current_task=lambda: snapshot().current_task if snapshot() else None,
+            current_task_started_at=lambda: (
+                snapshot().current_task_started_at if snapshot() else 0.0
             ),
-            agent_running=lambda: bool(getattr(state_host, "_agent_running", False)),
-            last_agent_turn_result=lambda: getattr(
-                state_host, "_last_agent_turn_result", None
+            agent_running=lambda: bool(snapshot() and snapshot().agent_running),
+            last_agent_turn_result=lambda: (
+                snapshot().last_agent_turn_result if snapshot() else None
             ),
             pending_input_nonempty=pending_input_nonempty,
             execution_events=lambda: list(
-                getattr(state_host, "_autonomous_execution_events", []) or []
+                getattr(self, "_autonomous_execution_events", []) or []
             ),
-            spinner_text=lambda: str(getattr(state_host, "_spinner_text", "") or ""),
+            spinner_text=lambda: snapshot().spinner_text if snapshot() else "",
         )
 
     def _autonomous_panel_event_ports(self) -> AutonomousPanelEventPorts:
-        state_host = getattr(self, "_autonomous_component_host", None) or self
         return AutonomousPanelEventPorts(
             gate_active=lambda: bool(self._autonomous_gate_active),
             execution_events=lambda: list(
-                getattr(state_host, "_autonomous_execution_events", []) or []
+                getattr(self, "_autonomous_execution_events", []) or []
             ),
             set_execution_events=lambda events: setattr(
-                state_host,
+                self,
                 "_autonomous_execution_events",
                 list(events),
             ),
             trim_status_bar_text=self._trim_status_bar_text,
             last_supervisor_event_key=lambda: str(
-                getattr(state_host, "_autonomous_last_supervisor_event_key", "") or ""
+                getattr(self, "_autonomous_last_supervisor_event_key", "") or ""
             ),
             set_last_supervisor_event_key=lambda value: setattr(
-                state_host,
+                self,
                 "_autonomous_last_supervisor_event_key",
                 str(value or ""),
             ),
@@ -2013,12 +2023,7 @@ class VoidcubeCLI:
 
     def _submit_turn_via_scheduler(self, payload: Any, app: Any | None) -> bool:
         del app
-        runtime = self._scheduler_runtime()
-        if self._is_embedded_autonomous_component():
-            if not runtime.scheduler.snapshot().autonomous_gate:
-                runtime.enable_autonomous()
-            return runtime.submit_autonomous(self, payload)
-        return runtime.submit_user(self, payload)
+        return self._scheduler_runtime().submit_user(self, payload)
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -3710,18 +3715,104 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-    def _agent_turn_executor_runtime(self) -> CliAgentTurnExecutorRuntime:
-        runtime = self.__dict__.get("_agent_turn_executor_runtime_instance")
+    def _initialize_autonomous_turn_agent(
+        self,
+        owner: AutonomousExecutionHost,
+        route: Mapping[str, Any],
+        toolsets: Sequence[str] | None,
+    ) -> bool:
+        if owner.agent is not None:
+            return True
+        try:
+            runtime = dict(route.get("runtime") or {})
+            effective_model = str(route.get("model") or self.model or "")
+            owner.agent = CliAgentInitializationRuntime(
+                CliAgentInitializationPorts(
+                    agent_factory=_get_AIAgent(),
+                    runtime=runtime,
+                    model=effective_model,
+                    max_iterations=self.max_turns,
+                    enabled_toolsets=(
+                        list(toolsets)
+                        if toolsets is not None
+                        else self.enabled_toolsets
+                    ),
+                    verbose_logging=False,
+                    quiet_mode=True,
+                    ephemeral_system_prompt=self.system_prompt or None,
+                    prefill_messages=self.prefill_messages or None,
+                    reasoning_config=self.reasoning_config,
+                    service_tier=self.service_tier,
+                    request_overrides=route.get("request_overrides"),
+                    providers_allowed=self._providers_only,
+                    providers_ignored=self._providers_ignore,
+                    providers_order=self._providers_order,
+                    provider_sort=self._provider_sort,
+                    provider_require_parameters=self._provider_require_params,
+                    provider_data_collection=self._provider_data_collection,
+                    session_id=owner.session_id,
+                    platform="cli",
+                    session_db=owner._session_db,
+                    clarification_sink=None,
+                    reasoning_callback=None,
+                    fallback_model=self._fallback_model,
+                    thinking_callback=lambda text: setattr(
+                        owner,
+                        "_spinner_text",
+                        str(text or ""),
+                    ),
+                    checkpoints_enabled=self.checkpoints_enabled,
+                    checkpoint_max_snapshots=self.checkpoint_max_snapshots,
+                    pass_session_id=True,
+                    tool_event_sink=owner._application_runtime.tool_event_sink,
+                    stream_delta_callback=None,
+                    tool_gen_callback=None,
+                )
+            ).create()
+            owner.agent._print_fn = self._quiet_autonomous_component_cprint
+            owner._active_agent_route_signature = route.get("signature")
+            if _is_gateway_running():
+                _register_with_gateway(
+                    owner.session_id,
+                    effective_model,
+                    str(runtime.get("provider") or ""),
+                )
+            return True
+        except Exception:
+            logger.debug("Failed to initialize autonomous Agent", exc_info=True)
+            owner.agent = None
+            return False
+
+    def _agent_turn_executor_runtime(
+        self,
+        owner: Any | None = None,
+    ) -> CliAgentTurnExecutorRuntime:
+        owner = owner or self
+        runtime = owner.__dict__.get("_agent_turn_executor_runtime_instance")
         if runtime is not None:
             return runtime
-        autonomous_runtime = self._turn_autonomous_runtime()
+        autonomous_runtime = _autonomous_executor_runtime_view(
+            owner,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            git_head_commit=_git_head_commit,
+            git_improvement_diff=_git_improvement_diff,
+            cprint=(
+                _cprint
+                if owner is self
+                else self._quiet_autonomous_component_cprint
+            ),
+        )
+        application_runtime = owner._ensure_application_runtime() if owner is self else owner._application_runtime
+        should_emit = self._should_emit_scrollback_output if owner is self else owner._should_emit_scrollback_output
 
         def initialize_agent(
             route: Mapping[str, Any],
             toolsets: Sequence[str] | None,
         ) -> bool:
-            if self.agent is None and self._should_emit_scrollback_output():
+            if owner.agent is None and should_emit():
                 _cprint(f"{_DIM}Initializing agent...{_RST}")
+            if owner is not self:
+                return self._initialize_autonomous_turn_agent(owner, route, toolsets)
             return self._init_agent(
                 model_override=route.get("model"),
                 runtime_override=route.get("runtime"),
@@ -3737,30 +3828,36 @@ class VoidcubeCLI:
             return CliTurnInputPreparationPorts(
                 message=message,
                 images=images,
-                conversation_history=self.conversation_history,
+                conversation_history=owner.conversation_history,
                 preprocess_images=self._preprocess_images_with_vision,
                 model=getattr(self, "model", "") or "",
                 base_url=getattr(self, "base_url", "") or "",
                 api_key=getattr(self, "api_key", "") or "",
                 cwd=os.getcwd,
-                should_emit=self._should_emit_scrollback_output,
+                should_emit=should_emit,
                 emit=_cprint,
-                begin_turn=self._ensure_application_runtime().begin_turn,
+                begin_turn=application_runtime.begin_turn,
             )
 
         def record_user_message(message: Any) -> None:
+            if owner is not self:
+                return
             self._chat_blocks().record_user_message(
                 message,
-                turn_id=self._ensure_application_runtime().state.active_turn_id or "",
+                turn_id=application_runtime.state.active_turn_id or "",
             )
 
         def notify_turn_started() -> None:
-            if self._should_emit_scrollback_output():
+            if should_emit():
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
                 print(flush=True)
 
         def voice_prefix(message: Any) -> str:
-            if not self._voice_state().mode or not isinstance(message, str):
+            if (
+                owner is not self
+                or not self._voice_state().mode
+                or not isinstance(message, str)
+            ):
                 return ""
             return (
                 "[Voice input - respond concisely and conversationally, "
@@ -3781,17 +3878,17 @@ class VoidcubeCLI:
                     None,
                 ),
                 clear_pending_model_switch_note=lambda: setattr(
-                    self,
+                    owner,
                     "_pending_model_switch_note",
                     None,
                 ),
                 prior_history=prior_history,
-                session_id=self.session_id,
+                session_id=owner.session_id,
                 stream_callback=None,
                 persist_user_message=message if prefix else None,
                 new_trace_id=lambda: str(uuid.uuid4()),
-                set_trace_id=lambda value: setattr(self, "_current_trace_id", value),
-                run_conversation=lambda **kwargs: self.agent.run_conversation(**kwargs),
+                set_trace_id=lambda value: setattr(owner, "_current_trace_id", value),
+                run_conversation=lambda **kwargs: owner.agent.run_conversation(**kwargs),
                 summarize_error=summarize_api_error,
                 log_error=lambda error: logging.error(
                     "run_conversation raised: %s",
@@ -3826,31 +3923,33 @@ class VoidcubeCLI:
                     pass
 
             return TurnExecutionPorts(
-                interrupt_agent=lambda: self.agent.interrupt(None),
+                interrupt_agent=lambda: owner.agent.interrupt(None),
                 check_autonomous_timeout=check_autonomous_timeout,
                 cleanup_async_clients=cleanup_async_clients,
-                flush_stream=self._flush_stream,
+                flush_stream=(self._flush_stream if owner is self else lambda: None),
                 flush_output=sys.stdout.flush,
             )
 
         def result_ports() -> TurnResultApplicationPorts:
             return TurnResultApplicationPorts(
-                conversation_history=lambda: self.conversation_history,
+                conversation_history=lambda: owner.conversation_history,
                 set_conversation_history=lambda history: setattr(
-                    self,
+                    owner,
                     "conversation_history",
                     history,
                 ),
-                publish_usage=self._ensure_application_runtime().usage_sink,
+                publish_usage=application_runtime.usage_sink,
                 record_autonomous_result=autonomous_runtime.record_turn_result,
                 record_autonomous_finished=autonomous_runtime.record_model_turn_finished,
             )
 
         def postprocessing_ports() -> TurnPostprocessingPorts:
             return TurnPostprocessingPorts(
-                session_db=lambda: self._session_db,
-                session_id=lambda: str(self.session_id or ""),
-                voice_continuous=lambda: bool(self._voice_state().continuous),
+                session_db=lambda: owner._session_db,
+                session_id=lambda: str(owner.session_id or ""),
+                voice_continuous=lambda: bool(
+                    owner is self and self._voice_state().continuous
+                ),
                 stop_voice_continuous=lambda: setattr(
                     self._voice_state(),
                     "continuous",
@@ -3876,7 +3975,7 @@ class VoidcubeCLI:
                     set_last_agent_turn_result=(
                         autonomous_runtime.set_last_agent_turn_result
                     ),
-                    should_emit=self._should_emit_scrollback_output,
+                    should_emit=should_emit,
                     emit=print,
                 )
             ).handle(error)
@@ -3886,41 +3985,45 @@ class VoidcubeCLI:
                 ensure_credentials=self._ensure_runtime_credentials,
                 current_autonomous_task=autonomous_runtime.current_task,
                 set_last_agent_turn_result=autonomous_runtime.set_last_agent_turn_result,
-                agent_exists=lambda: self.agent is not None,
-                clear_agent=lambda: setattr(self, "agent", None),
-                active_route_signature=lambda: self._active_agent_route_signature,
+                agent_exists=lambda: owner.agent is not None,
+                clear_agent=lambda: setattr(owner, "agent", None),
+                active_route_signature=lambda: owner._active_agent_route_signature,
                 resolve_route=self._resolve_turn_agent_config,
                 initialize_agent=initialize_agent,
                 prepare_input_ports=prepare_input_ports,
                 record_user_message=record_user_message,
                 notify_turn_started=notify_turn_started,
                 set_agent_running=lambda value: setattr(
-                    self,
+                    owner,
                     "_agent_running",
                     bool(value),
                 ),
                 active_role=lambda: str(
-                    getattr(self, "_active_chat_agent_role", "") or ""
+                    getattr(owner, "_active_chat_agent_role", "") or ""
                 ),
                 set_active_role=lambda value: setattr(
-                    self,
+                    owner,
                     "_active_chat_agent_role",
                     value,
                 ),
-                begin_stream=self._stream_render_state.begin_turn,
+                begin_stream=(
+                    self._stream_render_state.begin_turn
+                    if owner is self
+                    else lambda: None
+                ),
                 voice_prefix=voice_prefix,
                 agent_call_ports=agent_call_ports,
                 execution_ports=execution_ports,
                 result_ports=result_ports,
                 postprocessing_ports=postprocessing_ports,
-                finish_turn=lambda applied: self._ensure_application_runtime().finish_turn(
+                finish_turn=lambda applied: application_runtime.finish_turn(
                     applied.outcome,
                     history_applied=True,
                 ),
                 handle_error=handle_error,
             )
         )
-        self._agent_turn_executor_runtime_instance = runtime
+        owner._agent_turn_executor_runtime_instance = runtime
         return runtime
 
     def _present_agent_turn_result(self, result: CliAgentTurnResult) -> None:

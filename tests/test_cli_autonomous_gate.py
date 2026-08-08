@@ -56,7 +56,7 @@ def _autonomous_runtime(cli: VoidcubeCLI):
 
 
 def _panel_state_ports(host) -> AutonomousPanelStatePorts:
-    state_host = getattr(host, "_autonomous_component_host", None) or host
+    state_host = getattr(host, "_autonomous_execution_host", None) or host
 
     class _Pending:
         def empty(self):
@@ -89,7 +89,7 @@ def _panel_render_ports(host) -> AutonomousPanelRenderPorts:
 
 
 def _panel_event_ports(host) -> AutonomousPanelEventPorts:
-    state_host = getattr(host, "_autonomous_component_host", None) or host
+    state_host = getattr(host, "_autonomous_execution_host", None) or host
     return AutonomousPanelEventPorts(
         gate_active=lambda: bool(getattr(host, "_autonomous_gate_active", False)),
         execution_events=lambda: list(
@@ -832,210 +832,6 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     assert cli._current_tool_name == ""
     assert cli._last_scrollback_tool == ""
     assert app.invalidate_calls >= 2
-
-
-def test_embedded_autonomous_component_execute_pending_input_stays_out_of_main_scrollback(monkeypatch):
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._autonomous_parent_host = object()
-    cli._agent_running = False
-    cli._spinner_text = "working"
-    cli._tool_start_time = 12.0
-    cli._current_tool_name = "shell"
-    cli._last_scrollback_tool = "shell"
-    cli._voice_runtime_state = CliVoiceRuntimeState()
-    cli._pending_input = type("_Queue", (), {"put": lambda self, payload: None})()
-
-    chat_calls = []
-    scrollback = []
-
-    class _FakeChatConsole:
-        def print(self, *args, **kwargs):
-            scrollback.append(("chat", args, kwargs))
-
-    def fake_execute(request, _token):
-        user_input, images = request.prompt
-        chat_calls.append({"user_input": user_input, "images": images})
-        cli._last_agent_turn_result = {"failed": False}
-
-    monkeypatch.setattr("cli.ChatConsole", _FakeChatConsole)
-    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append(("cprint", args, kwargs)))
-
-    cli._execute_agent_turn_request = fake_execute
-    cli._scheduler_runtime = lambda: type(
-        "_Runtime",
-        (),
-        {
-            "scheduler": type(
-                "_Scheduler",
-                (),
-                {
-                    "snapshot": lambda _scheduler: type(
-                        "_Snapshot",
-                        (),
-                        {"autonomous_gate": True},
-                    )()
-                },
-            )(),
-            "submit_autonomous": lambda _runtime, _host, payload: (
-                fake_execute(
-                    type("_Request", (), {"prompt": payload})(),
-                    None,
-                )
-                or True
-            ),
-            "submit_user": lambda _runtime, _host, payload: (
-                fake_execute(
-                    type("_Request", (), {"prompt": payload})(),
-                    None,
-                )
-                or True
-            ),
-        },
-    )()
-
-    handled = cli._execute_pending_input("[Autonomous Learning Task] Embedded quiet turn", app=None)
-
-    assert handled is True
-    assert chat_calls == [{"user_input": "[Autonomous Learning Task] Embedded quiet turn", "images": None}]
-    assert scrollback == []
-    assert cli._agent_running is False
-    assert cli._spinner_text == ""
-    assert cli._tool_start_time == 0.0
-    assert cli._current_tool_name == ""
-    assert cli._last_scrollback_tool == ""
-
-
-def test_embedded_autonomous_component_tool_progress_records_panel_events_without_scrollback(monkeypatch):
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._autonomous_parent_host = object()
-    cli._autonomous_gate_active = True
-    cli._current_autonomous_task = {"task_id": "learn-quiet-tool"}
-    cli._autonomous_execution_events = []
-    cli._tool_start_time = 0.0
-    cli._current_tool_name = ""
-    cli._last_scrollback_tool = ""
-    cli.tool_progress_mode = "all"
-    cli._invalidate = lambda *args, **kwargs: None
-    cli._voice_runtime_state = CliVoiceRuntimeState()
-
-    scrollback = []
-    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append((args, kwargs)))
-
-    from VoidCube_app.tool_events import ToolEvent
-
-    cli._on_tool_event(
-        ToolEvent.started(call_id="call-1", name="shell", arguments={})
-    )
-    cli._on_tool_event(
-        ToolEvent.completed(
-            call_id="call-1",
-            name="shell",
-            arguments={},
-            result="ok",
-            duration=1.2,
-            is_error=False,
-        )
-    )
-
-    assert scrollback == []
-    assert [event["stage"] for event in cli._autonomous_execution_events] == [
-        "tool_started",
-        "tool_completed",
-    ]
-    assert "工具启动: shell" in cli._autonomous_execution_events[0]["message"]
-    assert "工具完成: shell (1.2s)" in cli._autonomous_execution_events[1]["message"]
-
-
-def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touch_parent_history(monkeypatch):
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    parent = type("_Parent", (), {"conversation_history": [{"role": "user", "content": "parent"}]})()
-    cli._autonomous_parent_host = parent
-    cli._ensure_runtime_credentials = lambda: True
-    cli._resolve_turn_agent_config = lambda message: {
-        "signature": "embedded-route",
-        "model": "agnes-2.0-flash",
-        "runtime": {},
-        "label": "embedded",
-        "request_overrides": None,
-    }
-    cli._active_agent_route_signature = None
-    cli._current_autonomous_task = None
-    cli._autonomous_gate_active = True
-    cli._last_agent_turn_result = None
-    cli._active_chat_agent_role = ""
-    cli.conversation_history = []
-    cli._pending_input = queue.Queue()
-    cli._invalidate = lambda *args, **kwargs: None
-    cli._voice_runtime_state = CliVoiceRuntimeState()
-    cli._clarify_state = None
-    cli._clarify_freetext = False
-    cli.show_reasoning = False
-    cli.streaming_enabled = False
-    cli.bell_on_complete = False
-    cli._stream_render_state = CliStreamRenderState()
-    cli._stream_renderer = CliStreamRenderer(
-        cli._stream_render_state,
-        emit_line=lambda text: None,
-        should_emit=lambda: False,
-        show_reasoning=lambda: cli.show_reasoning,
-        verbose=lambda: cli.verbose,
-    )
-    cli._session_db = None
-    cli.session_id = "embedded-session"
-    cli._pending_model_switch_note = None
-    cli.agent = None
-
-    scrollback = []
-
-    class _FakeChatConsole:
-        def print(self, *args, **kwargs):
-            scrollback.append(("chat", args, kwargs))
-
-    class _FakeAgent:
-        def run_conversation(self, **kwargs):
-            user_message = kwargs["user_message"]
-            history = list(kwargs["conversation_history"])
-            return {
-                "final_response": "embedded autonomous result",
-                "messages": history
-                + [
-                    {"role": "user", "content": user_message},
-                    {"role": "assistant", "content": "embedded autonomous result"},
-                ],
-                "failed": False,
-                "partial": False,
-                "interrupted": False,
-                "response_previewed": False,
-            }
-
-        def interrupt(self, *_args, **_kwargs):
-            return None
-
-    def fake_init_agent(**kwargs):
-        del kwargs
-        cli.agent = _FakeAgent()
-        return True
-
-    monkeypatch.setattr("cli.ChatConsole", _FakeChatConsole)
-    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: scrollback.append(("cprint", args, kwargs)))
-    secret_callbacks = []
-    monkeypatch.setattr(
-        "cli._get_set_secret_capture_callback",
-        lambda: secret_callbacks.append,
-    )
-    monkeypatch.setattr("agent.title_generator.maybe_auto_title", lambda *args, **kwargs: None)
-    cli._init_agent = fake_init_agent
-
-    response = cli.chat("embedded autonomous prompt")
-
-    assert response == "embedded autonomous result"
-    assert secret_callbacks == [cli._secret_capture_callback]
-    assert scrollback == []
-    assert parent.conversation_history == [{"role": "user", "content": "parent"}]
-    assert cli.conversation_history[-1] == {
-        "role": "assistant",
-        "content": "embedded autonomous result",
-    }
 
 
 def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
@@ -2454,8 +2250,7 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
         def poll_workflow(self):
             self.poll_calls += 1
 
-    component = VoidcubeCLI.__new__(VoidcubeCLI)
-    component._autonomous_parent_host = parent
+    component = type("_AutonomousOwner", (), {})()
     component._autonomous_gate_active = True
     component._agent_running = False
     component._pending_input = queue.Queue()
@@ -2475,7 +2270,7 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     pushed = []
 
     parent._autonomous_component_stop = stop_event
-    parent._ensure_autonomous_component_host = lambda: component
+    parent._ensure_autonomous_execution_host = lambda: component
     parent._autonomous_component_runtime = lambda: runtime
 
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
@@ -2500,8 +2295,6 @@ def test_start_embedded_autonomous_component_runs_while_foreground_cli_is_busy(m
     assert runtime.poll_calls >= 2
     assert parent.conversation_history == [{"role": "user", "content": "parent turn"}]
     assert component.conversation_history == [{"role": "assistant", "content": "component handled"}]
-    assert component._autonomous_parent_host is parent
-    assert component._should_emit_scrollback_output() is False
     assert any(item[0] == "idle" for item in pushed if isinstance(item, tuple))
 
 
@@ -2549,7 +2342,7 @@ def test_autonomous_panel_reads_embedded_component_state():
     host = type("_Host", (), {})()
     component = type("_Component", (), {})()
     host._autonomous_gate_active = True
-    host._autonomous_component_host = component
+    host._autonomous_execution_host = component
     component._agent_running = False
     component._current_autonomous_task = None
     component._last_agent_turn_result = None

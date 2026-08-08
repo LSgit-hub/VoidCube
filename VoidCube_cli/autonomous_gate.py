@@ -49,7 +49,7 @@ def _exit_autonomous_gate_locally(
     event_message: str = "",
     event_tone: str = "warn",
 ) -> None:
-    component_host = getattr(host, "_autonomous_component_host", None) or host
+    execution_host = getattr(host, "_autonomous_execution_host", None) or host
     if interrupt_reason and interrupt_source:
         interrupt_current_task_callback(
             reason=interrupt_reason,
@@ -62,7 +62,7 @@ def _exit_autonomous_gate_locally(
         scheduler_runtime.cancel_autonomous()
     push_cli_agent_scene_callback(
         "idle",
-        session_id=getattr(component_host, "session_id", None),
+        session_id=getattr(execution_host, "session_id", None),
         agent_role="supervisor_task",
     )
     if event_message:

@@ -57,9 +57,20 @@ class CliMiddleStatusRuntime:
                     lane = getattr(getattr(active, "lane", None), "value", "queued")
                     label = "用户" if lane == "user_chat" else "自主"
                     state = getattr(getattr(active, "state", None), "value", "排队")
-                    fragments.append((f"{self._BACKGROUND} #60A5FA", f"{label}:{state}"))
+                    request_id = str(getattr(active, "request_id", "") or "")
+                    request_suffix = f" #{request_id[-8:]}" if request_id else ""
+                    fragments.append(
+                        (f"{self._BACKGROUND} #60A5FA", f"{label}:{state}{request_suffix}")
+                    )
                     if queued:
                         fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{len(queued)}"))
+                blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
+                if blocked_reason and active is None:
+                    if fragments:
+                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    fragments.append(
+                        (f"{self._BACKGROUND} #FBBF24", f"等待:{blocked_reason}")
+                    )
             except Exception:
                 pass
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -40,6 +40,8 @@ class AutonomousPanelStatePorts:
     pending_input_nonempty: Callable[[], bool]
     execution_events: Callable[[], list[dict[str, object]]]
     spinner_text: Callable[[], str]
+    scheduler_snapshot: Callable[[], object | None] | None = None
+    scheduler_events: Callable[[], Sequence[Mapping[str, object]]] | None = None
 
 
 def has_visible_autonomous_work(
@@ -57,6 +59,18 @@ def has_visible_autonomous_work(
     if state_ports.last_agent_turn_result():
         return True
     if state_ports.pending_input_nonempty():
+        return True
+    scheduler_snapshot = (
+        state_ports.scheduler_snapshot() if state_ports.scheduler_snapshot else None
+    )
+    active = getattr(scheduler_snapshot, "active", None)
+    queued = tuple(getattr(scheduler_snapshot, "queued", ()) or ())
+    if getattr(getattr(active, "lane", None), "value", "") == "supervisor_task":
+        return True
+    if any(
+        getattr(getattr(item, "lane", None), "value", "") == "supervisor_task"
+        for item in queued
+    ):
         return True
     visible_event_stages = {
         "claim",
@@ -275,6 +289,9 @@ def build_autonomous_execution_panel_rows(
         supervisor_state,
         focus_stage,
     )
+    scheduler_snapshot = (
+        state_ports.scheduler_snapshot() if state_ports.scheduler_snapshot else None
+    )
 
     if focus_stage == "local_claimed_active":
         status_label = "执行中"
@@ -300,6 +317,12 @@ def build_autonomous_execution_panel_rows(
 
     rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
     rows.append((status_style, f"状态: {status_label}"))
+    _append_scheduler_rows(
+        rows,
+        scheduler_snapshot,
+        inner_width,
+        trim_status_bar_text=trim_status_bar_text,
+    )
     _append_api_b_status_rows(
         rows,
         supervisor_state,
@@ -437,6 +460,64 @@ def build_autonomous_execution_panel_rows(
 
     rows.append(("class:auto-panel-dim", "控制: /auto-q 临时停用自主链路"))
     return rows
+
+
+def _append_scheduler_rows(
+    rows: list[tuple[str, str]],
+    snapshot: object | None,
+    inner_width: int,
+    *,
+    trim_status_bar_text: Any,
+) -> None:
+    """Render scheduler ownership and waiting state from the shared snapshot."""
+    if snapshot is None:
+        return
+    active = getattr(snapshot, "active", None)
+    queued = tuple(getattr(snapshot, "queued", ()) or ())
+    gate = bool(getattr(snapshot, "autonomous_gate", False))
+    blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
+    if active is not None:
+        lane = getattr(getattr(active, "lane", None), "value", "")
+        state = getattr(getattr(active, "state", None), "value", "")
+        request_id = str(getattr(active, "request_id", "") or "")
+        lane_label = "用户" if lane == "user_chat" else "自主"
+        request_suffix = f" · #{request_id[-8:]}" if request_id else ""
+        state_label = {
+            "running": "执行中",
+            "cancelling": "取消中",
+        }.get(state, state or "活动")
+        style = "class:auto-panel-warn" if state == "cancelling" else "class:auto-panel-info"
+        rows.append(
+            (
+                style,
+                trim_status_bar_text(
+                    f"调度: {lane_label}{state_label}{request_suffix}",
+                    inner_width,
+                ),
+            )
+        )
+    supervisor_queued = sum(
+        1
+        for item in queued
+        if getattr(getattr(item, "lane", None), "value", "") == "supervisor_task"
+    )
+    if supervisor_queued:
+        rows.append(
+            (
+                "class:auto-panel-warn",
+                trim_status_bar_text(
+                    f"调度: 自主队列等待 {supervisor_queued} 项",
+                    inner_width,
+                ),
+            )
+        )
+    if not gate and blocked_reason:
+        rows.append(
+            (
+                "class:auto-panel-warn",
+                trim_status_bar_text(f"调度: 自主门控关闭 · {blocked_reason}", inner_width),
+            )
+        )
 
 
 def get_autonomous_execution_panel_fragments(

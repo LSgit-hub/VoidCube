@@ -4,7 +4,7 @@
 >
 > 建立日期：2026-08-07
 >
-> 当前状态：P3 进行中；P0/P1/P2 已完成，单 turn 执行已抽取为无 TUI ports runtime，旧 `chat()` 执行实现已删除；完整 embedded host 移除与 scheduled-task 迁移尚未完成。
+> 当前状态：P3 已完成；P0/P1/P2 已完成，单 turn 执行已抽取为无 TUI ports runtime，自主链路已改为窄 `AutonomousExecutionHost`，旧完整 autonomous TUI host 已删除。scheduled-task 专用 host 仍属于后续独立迁移范围。
 
 ## 1. 目标
 
@@ -29,7 +29,7 @@
 当前实现是“双 host + 单一 Scheduler owner”：
 
 - 父 host 负责用户 TUI 和 `user_chat`。
-- `component_host` 负责 `supervisor_task`。
+- `AutonomousExecutionHost` 负责 `supervisor_task`，只拥有执行和自主任务状态，不提供 TUI/快捷键/语音入口。
 - `TurnScheduler` 统一维护活动 turn、队列、优先级、门控和取消协议。
 - 父 host 与 component host 各自拥有 `_agent_running`、`_current_autonomous_task` 和展示状态，状态栏只能间接观察自主活动。
 - 现有 `TurnExecutionRuntime`、`PendingInputRuntime`、命令 handler 和 autonomous ports 可作为迁移边界，不重复实现已有 turn 逻辑。
@@ -120,16 +120,16 @@ TUI / Supervisor adapter
 
 **退出条件**：用户/自主两条链路的现有回归测试通过；用户/自主旧锁不再作为业务调度入口；scheduled-task 专用锁仍属于独立任务域，待后续明确迁移。已由 183 个定向测试验证。
 
-### P3：抽取 `AgentExecutor`（进行中）
+### P3：抽取 `AgentExecutor`（已完成）
 
 - [x] 定义无 TUI 的 `AgentExecutor` contract，并新增 CLI `CliAgentExecutor` adapter。
 - [x] 从 `VoidcubeCLI.chat()` 提取单 turn 执行所需的显式 ports，并删除旧双执行路径。
 - [x] 通过 `SingleTurnExecutor` 复用 `TurnExecutionRuntime` 的线程、命令取消、超时和流刷新逻辑。
 - [x] 将自主任务 tool policy、Agent 生命周期和用户回调能力声明为 request/executor 配置。
-- [ ] 让 autonomous executor 不再创建完整 TUI host；过渡期保留 adapter，但禁止新增对 TUI 的依赖。
-- [ ] 生产调用者切换后删除旧的 `embedded_role` 分支、重复 cprint/输出兜底和无调用字段。
+- [x] 让 autonomous executor 不再创建完整 TUI host；自主链路改由窄 `AutonomousExecutionHost` 持有执行 ports。
+- [x] 生产调用者切换后删除 autonomous 旧 `embedded_role` 分支、重复 cprint/输出兜底和无调用字段；scheduled-task 的独立 host 分支保留到后续迁移阶段。
 
-**退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。无 TUI 执行与 lane 隔离已由 `tests/test_cli_agent_turn_executor_runtime.py` 验证，完整 embedded host 移除仍待完成。
+**退出条件**：Executor 可在无 TUI 环境执行测试 turn；用户与自主 session/history/scene lane 不互相污染。已由 `tests/test_cli_agent_turn_executor_runtime.py`、`tests/test_autonomous_execution_host.py` 和自主门控回归验证。
 
 ### P4：统一事件投影与 TUI 状态（进行中）
 
@@ -172,4 +172,4 @@ TUI / Supervisor adapter
 
 ## 9. 下一步
 
-继续 P3/P4：让 autonomous executor 直接持有执行 ports，删除完整 embedded TUI host；同时将 Scheduler event sink 接入统一 projector。之后迁移 scheduled-task 独立执行域并清理剩余 embedded host 兼容分支。
+继续 P4/P5：补齐统一事件 projector 的窄终端、取消和队列渲染测试，统一 `user_chat` / `supervisor_task` 日志标记；之后迁移 scheduled-task 独立执行域并清理剩余 `embedded_role` 兼容分支。

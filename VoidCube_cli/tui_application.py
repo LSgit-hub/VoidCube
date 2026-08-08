@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.styles import Style
 
@@ -83,20 +82,7 @@ def create_tui_application(
         mouse_support=False,
         **options,
     )
-    defaults = getattr(application, "_default_bindings", None)
-    if defaults is not None:
-        application._default_bindings = _without_terminal_owned_bindings(defaults)
     return application
-
-
-def _without_terminal_owned_bindings(bindings: object) -> KeyBindings:
-    """Exclude terminal-owned keys from the CLI key map."""
-    terminal_owned = {(Keys.ControlC,), (Keys.ControlV,)}
-    filtered = KeyBindings()
-    for binding in bindings.bindings:
-        if binding.keys not in terminal_owned:
-            filtered.add(*binding.keys)(binding)
-    return filtered
 
 
 def install_resize_reflow_cleanup(application: Application) -> None:

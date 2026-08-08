@@ -29,14 +29,14 @@ from VoidCube_cli.input_process_loop import run_input_process_loop
 
 def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
     def auto_task_running() -> bool:
-        component = getattr(host, "_autonomous_component_host", None)
+        component = getattr(host, "_autonomous_execution_host", None)
         return bool(component is not None and getattr(component, "_agent_running", False))
 
     return ScheduledTaskExecutorPorts(
         is_embedded_component=getattr(
             host,
             "_is_embedded_component",
-            host._is_embedded_autonomous_component,
+            lambda: False,
         ),
         auto_task_running=auto_task_running,
         execution_gate=getattr(host, "_scheduled_execution_gate", None),
@@ -291,8 +291,7 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
         session_id="main-cli",
         _scheduled_execution_active=False,
         _background_task_state=BackgroundTaskState(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
 
     def start_background(prompt, **kwargs):
@@ -412,8 +411,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
         session_id="main-cli",
         _scheduled_execution_active=False,
         _background_task_state=BackgroundTaskState(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
 
     def start_background(prompt, **kwargs):
@@ -459,8 +457,7 @@ def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> No
         session_id="main-cli",
         _scheduled_execution_active=False,
         _background_task_state=BackgroundTaskState(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=True),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=True),
         _start_background_agent_task=Mock(),
     )
     runtime = ScheduledTaskExecutorRuntime(
@@ -639,8 +636,7 @@ def test_scheduled_executor_does_not_wait_for_foreground_api_a(tmp_path) -> None
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
         _scheduled_execution_gate=threading.Lock(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
     host._start_background_agent_task = lambda _prompt, **kwargs: callbacks.append(
         kwargs["on_complete"]
@@ -668,8 +664,7 @@ def test_scheduled_executor_does_not_wait_for_manual_background_api_a(tmp_path) 
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
         _scheduled_execution_gate=threading.Lock(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
     callbacks = []
     host._start_background_agent_task = lambda _prompt, **kwargs: callbacks.append(
@@ -702,8 +697,7 @@ def test_scheduled_executor_holds_scheduled_gate_until_writeback(tmp_path) -> No
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
         _scheduled_execution_gate=gate,
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
 
     def start_background(_prompt, **kwargs):
@@ -745,8 +739,7 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
         _command_running=False,
         _background_task_state=BackgroundTaskState(),
         _scheduled_execution_gate=threading.Lock(),
-        _autonomous_component_host=SimpleNamespace(_agent_running=False),
-        _is_embedded_autonomous_component=lambda: False,
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
     )
 
     def start_background(_prompt, **kwargs):
@@ -783,7 +776,7 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._scheduled_execution_gate = threading.Lock()
     cli._scheduled_execution_active = False
-    cli._autonomous_component_host = SimpleNamespace(_agent_running=False)
+    cli._autonomous_execution_host = SimpleNamespace(_agent_running=False)
     cli._scheduled_component_host = None
     cli.session_id = "main-cli"
     cli._start_scheduled_component_task = Mock()

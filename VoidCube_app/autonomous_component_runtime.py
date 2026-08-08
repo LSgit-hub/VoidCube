@@ -15,29 +15,6 @@ class StopEvent(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class AutonomousComponentHostPorts:
-    get_component_host: Callable[[], Any | None]
-    create_component_host: Callable[[], Any]
-    set_component_active: Callable[[Any, bool], None]
-    bind_component_parent: Callable[[Any], None]
-    ensure_task_session: Callable[[Any], None]
-    store_component_host: Callable[[Any], None]
-
-
-def ensure_autonomous_component_host(ports: AutonomousComponentHostPorts) -> Any:
-    component_host = ports.get_component_host()
-    if component_host is not None:
-        return component_host
-
-    component_host = ports.create_component_host()
-    ports.set_component_active(component_host, True)
-    ports.bind_component_parent(component_host)
-    ports.ensure_task_session(component_host)
-    ports.store_component_host(component_host)
-    return component_host
-
-
-@dataclass(frozen=True, slots=True)
 class AutonomousComponentLoopPorts:
     stop_event: StopEvent
     component_active: Callable[[], bool]
@@ -194,12 +171,10 @@ class AutonomousComponentRuntime:
 
 
 __all__ = [
-    "AutonomousComponentHostPorts",
     "AutonomousComponentLoopPorts",
     "AutonomousComponentRuntime",
     "AutonomousComponentRuntimePorts",
     "AutonomousComponentStopPorts",
-    "ensure_autonomous_component_host",
     "run_autonomous_component_loop",
     "start_autonomous_component_loop",
     "stop_autonomous_component",
