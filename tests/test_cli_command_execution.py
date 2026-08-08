@@ -12,7 +12,6 @@ import pytest
 import cli as cli_module
 from cli import VoidcubeCLI
 import VoidCube_cli.command_handlers.registry as command_handler_registry
-from VoidCube_cli.cli_ui import _ACCENT
 from VoidCube_cli.autonomous_events import AutonomousPanelEventPorts
 from VoidCube_cli.command_execution import (
     BUILTIN_COMMAND_SPECS,
@@ -986,7 +985,7 @@ def test_cli_process_routes_reasoning_through_runtime_ports(monkeypatch) -> None
     assert app.agent.reasoning_callback == "reasoning-callback"
     assert saved == [("display.show_reasoning", True)]
     assert output[-2:] == [
-        f"  {_ACCENT}✓ Reasoning display: ON (saved)\033[0m",
+        "  \033[1;38;2;48;54;61m✓ Reasoning display: ON (saved)\033[0m",
         "  \033[2m  Model thinking will be shown during and after each response.\033[0m",
     ]
 

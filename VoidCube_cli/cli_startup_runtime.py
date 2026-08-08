@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-from VoidCube_cli.style import TEXT
-
 
 @dataclass(frozen=True, slots=True)
 class CliStartupPorts:
@@ -62,7 +60,7 @@ class CliStartupRuntime:
             self.ports.emit("[dim]暂无对话历史[/]")
 
         self.ports.emit(
-            f"[{TEXT}]{welcome} · {self.ports.tools_count()} 个工具 · "
+            f"[#FFF8DC]{welcome} · {self.ports.tools_count()} 个工具 · "
             f"{self.ports.skills_count()} 技能 · "
             f"当前会话: {self.ports.session_id() or '新会话'}[/]"
         )

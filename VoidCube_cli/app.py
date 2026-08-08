@@ -409,7 +409,6 @@ from VoidCube_cli.cli_ui import (
     _cprint,
     _ACCENT,
 )
-from VoidCube_cli.style import ACCENT, BORDER, PRIMARY
 from VoidCube_cli.cli_handlers import (
     _setup_worktree,
     _cleanup_worktree,
@@ -788,7 +787,15 @@ def _run_cleanup():
 # ASCII Art & Branding
 # ============================================================================
 
+# Color palette (hex colors for Rich markup):
+# - Gold: #FFD700 (headers, highlights)
+# - Amber: #FFBF00 (secondary highlights)
+# - Bronze: #CD7F32 (tertiary elements)
+# - Light: #FFF8DC (text)
+# - Dim: #B8860B (muted text)
+
 # ANSI building blocks for conversation display
+_ACCENT_ANSI_DEFAULT = "\033[1;38;2;255;215;0m"  # True-color #FFD700 bold — fallback
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _RST = "\033[0m"
@@ -2669,7 +2676,7 @@ class VoidcubeCLI:
         else:
             api_indicator = "[red bold]●[/]"
 
-        separator_color, accent_color, label_color = BORDER, ACCENT, PRIMARY
+        separator_color, accent_color, label_color = "#B8860B", "#FFBF00", "#4dd0e1"
         toolsets_info = ""
         if self.enabled_toolsets and "all" not in self.enabled_toolsets:
             toolsets_info = f" [dim {separator_color}]·[/] [{label_color}]toolsets: {', '.join(self.enabled_toolsets)}[/]"
@@ -3871,7 +3878,7 @@ class VoidcubeCLI:
 
         def notify_turn_started() -> None:
             if should_emit():
-                ChatConsole().print(f"[{PRIMARY}]" + "─" * 40 + "[/]")
+                ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
                 print(flush=True)
 
         def voice_prefix(message: Any) -> str:

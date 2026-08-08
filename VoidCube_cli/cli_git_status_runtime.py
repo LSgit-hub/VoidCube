@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from threading import Thread
 from typing import Any
 
-from VoidCube_cli.style import BACKGROUND, BORDER, INFO, MUTED, TEXT
-
 
 StatusFragment = tuple[str, str]
 
@@ -26,7 +24,7 @@ class CliGitStatusRuntime:
     """Own cached background git status projection without CLI state access."""
 
     _CACHE_SECONDS = 60.0
-    _BACKGROUND = f"bg:{BACKGROUND}"
+    _BACKGROUND = "bg:#1a1a2e"
 
     def __init__(self, ports: CliGitStatusPorts) -> None:
         self.ports = ports
@@ -75,16 +73,16 @@ class CliGitStatusRuntime:
             return None
 
         fragments: list[StatusFragment] = [
-            (f"{cls._BACKGROUND} {INFO}", "Git "),
-            (f"{cls._BACKGROUND} {MUTED}", "<"),
-            (f"{cls._BACKGROUND} {INFO} bold", status.branch),
-            (f"{cls._BACKGROUND} {MUTED}", ">"),
+            (f"{cls._BACKGROUND} #58A6FF", "Git "),
+            (f"{cls._BACKGROUND} #9CA3AF", "<"),
+            (f"{cls._BACKGROUND} #58A6FF bold", status.branch),
+            (f"{cls._BACKGROUND} #9CA3AF", ">"),
         ]
         if status.staged:
             fragments.extend(
                 [
-                    (f"{cls._BACKGROUND} {MUTED}", "  暂存 "),
-                    (f"{cls._BACKGROUND} {TEXT} bold", str(len(status.staged))),
+                    (f"{cls._BACKGROUND} #9CA3AF", "  暂存 "),
+                    (f"{cls._BACKGROUND} #FFFFFF bold", str(len(status.staged))),
                 ]
             )
 
@@ -92,8 +90,8 @@ class CliGitStatusRuntime:
         if changes > 0:
             fragments.extend(
                 [
-                    (f"{cls._BACKGROUND} {MUTED}", "  更改 "),
-                    (f"{cls._BACKGROUND} {TEXT} bold", str(changes)),
+                    (f"{cls._BACKGROUND} #9CA3AF", "  更改 "),
+                    (f"{cls._BACKGROUND} #FFFFFF bold", str(changes)),
                 ]
             )
         return fragments
@@ -102,7 +100,7 @@ class CliGitStatusRuntime:
     def _render_remotes(cls, output: str) -> list[StatusFragment]:
         remote_names = ",".join(output.strip().splitlines())
         return [
-            (f"{cls._BACKGROUND} {MUTED}", "  <"),
-            (f"{cls._BACKGROUND} {BORDER}", remote_names),
-            (f"{cls._BACKGROUND} {MUTED}", ">"),
+            (f"{cls._BACKGROUND} #9CA3AF", "  <"),
+            (f"{cls._BACKGROUND} #8B949E", remote_names),
+            (f"{cls._BACKGROUND} #9CA3AF", ">"),
         ]
