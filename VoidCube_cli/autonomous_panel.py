@@ -270,7 +270,7 @@ def build_autonomous_execution_panel_rows(
 ) -> list[tuple[str, str]]:
     width = render_ports.terminal_width()
     trim_status_bar_text = render_ports.trim_status_bar_text
-    inner_width = max(34, min(width - 4, 92))
+    inner_width = max(1, min(width - 4, 92))
     session_short = state_ports.session_id()[-8:] or "unknown"
     rows: list[tuple[str, str]] = []
     supervisor_state = fetch_supervisor_status(host)
@@ -322,6 +322,7 @@ def build_autonomous_execution_panel_rows(
         scheduler_snapshot,
         inner_width,
         trim_status_bar_text=trim_status_bar_text,
+        events=state_ports.scheduler_events() if state_ports.scheduler_events else (),
     )
     _append_api_b_status_rows(
         rows,
@@ -468,6 +469,7 @@ def _append_scheduler_rows(
     inner_width: int,
     *,
     trim_status_bar_text: Any,
+    events: Sequence[Mapping[str, object]] = (),
 ) -> None:
     """Render scheduler ownership and waiting state from the shared snapshot."""
     if snapshot is None:
@@ -518,6 +520,23 @@ def _append_scheduler_rows(
                 trim_status_bar_text(f"调度: 自主门控关闭 · {blocked_reason}", inner_width),
             )
         )
+    latest = dict(events[-1] or {}) if events else {}
+    event_kind = str(latest.get("kind") or "").strip()
+    if event_kind in {"waiting", "cancel_requested", "failed", "cancelled"}:
+        request_id = str(latest.get("request_id") or "")
+        request_suffix = f" · #{request_id[-8:]}" if request_id else ""
+        reason = str(
+            latest.get("reason") or latest.get("blocked_reason") or event_kind
+        ).strip()
+        rows.append(
+            (
+                "class:auto-panel-warn" if event_kind != "failed" else "class:auto-panel-bad",
+                trim_status_bar_text(
+                    f"调度事件: {event_kind}{request_suffix} · {reason}",
+                    inner_width,
+                ),
+            )
+        )
 
 
 def get_autonomous_execution_panel_fragments(
@@ -534,7 +553,7 @@ def get_autonomous_execution_panel_fragments(
     if not rows:
         return []
     width = render_ports.terminal_width()
-    inner_width = max(34, min(width - 4, 92))
+    inner_width = max(1, min(width - 4, 92))
     lines = []
     border_style = "class:auto-panel-border"
 

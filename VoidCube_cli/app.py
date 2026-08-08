@@ -275,7 +275,7 @@ from VoidCube_app.autonomous_component_runtime import (
     AutonomousComponentRuntime,
     AutonomousComponentRuntimePorts,
 )
-from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
+from VoidCube_app.contracts.scheduler import SchedulerEvent, TurnLane, TurnRequest
 from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
 from VoidCube_cli.turn_scheduler_runtime import (
     CliTurnSchedulerPorts,
@@ -288,6 +288,13 @@ from VoidCube_cli.cli_agent_turn_executor_runtime import (
 )
 from VoidCube_cli.autonomous_component_output import run_component_operation_silently
 from VoidCube_cli.autonomous_execution_host import AutonomousExecutionHost
+from VoidCube_cli.scheduler_display_projector import SchedulerDisplayProjector
+from VoidCube_cli.scheduled_execution_host import ScheduledExecutionHost
+from VoidCube_cli.terminal_text_layout import (
+    display_width as _terminal_display_width,
+    pad_to_width as _terminal_pad_to_width,
+    trim_to_width as _terminal_trim_to_width,
+)
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_router import (
@@ -1065,8 +1072,6 @@ class VoidcubeCLI:
         resume: Optional[str] = None,
         checkpoints: bool = False,
         pass_session_id: bool = False,
-        embedded_role: Optional[str] = None,
-        turn_scheduler_runtime: CliTurnSchedulerRuntime | None = None,
     ):
         """
         Initialize the Voidcube CLI.
@@ -1082,11 +1087,9 @@ class VoidcubeCLI:
             compact: Use compact display mode
             resume: Session ID to resume (restores conversation history from SQLite)
             pass_session_id: Include the session ID in the agent's system prompt
-            embedded_role: Internal background-only Host role, when applicable
         """
         # Initialize Rich console
         self.console = Console()
-        self._embedded_component_role = str(embedded_role or "").strip().lower()
         self.config = CLI_CONFIG
         display_config = CLI_CONFIG.get("display") or {}
         self.compact = compact if compact is not None else display_config.get("compact", False)
@@ -1238,12 +1241,11 @@ class VoidcubeCLI:
         # Interactive and autonomous Hosts index sessions. Scheduled work is
         # deliberately ephemeral and does not need session search or /title.
         self._session_db = None
-        if self._embedded_component_role != "scheduled":
-            try:
-                from VoidCube_core.state import SessionDB
-                self._session_db = SessionDB()
-            except Exception as e:
-                logger.warning("Failed to initialize SessionDB — session will NOT be indexed for search: %s", e)
+        try:
+            from VoidCube_core.state import SessionDB
+            self._session_db = SessionDB()
+        except Exception as e:
+            logger.warning("Failed to initialize SessionDB — session will NOT be indexed for search: %s", e)
         
         session_identity = resolve_session_identity(
             requested_session_id=resume,
@@ -1341,11 +1343,9 @@ class VoidcubeCLI:
         self._autonomous_execution_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
-        self._turn_scheduler_runtime = (
-            turn_scheduler_runtime or self._build_turn_scheduler_runtime()
-        )
-        self._scheduled_parent_host = None
-        self._scheduled_component_host = None
+        self._scheduler_display_projector = SchedulerDisplayProjector()
+        self._turn_scheduler_runtime = self._build_turn_scheduler_runtime()
+        self._scheduled_execution_host = None
         self._scheduled_execution_gate = threading.Lock()
         self._scheduled_execution_active = False
         self._scheduled_executor_runtime = self._create_scheduled_executor_runtime()
@@ -1356,7 +1356,10 @@ class VoidcubeCLI:
         del args, kwargs
 
     def _build_turn_scheduler_runtime(self) -> CliTurnSchedulerRuntime:
-        scheduler = TurnScheduler(autonomous_gate_active=False)
+        scheduler = TurnScheduler(
+            autonomous_gate_active=False,
+            event_sink=self._handle_scheduler_event,
+        )
 
         def execute_request(
             host: Any,
@@ -1383,6 +1386,27 @@ class VoidcubeCLI:
         )
         scheduler.set_executor(runtime)
         return runtime
+
+    def _handle_scheduler_event(self, event: SchedulerEvent) -> None:
+        projector = self.__dict__.get("_scheduler_display_projector")
+        if projector is None:
+            projector = SchedulerDisplayProjector()
+            self.__dict__["_scheduler_display_projector"] = projector
+        projector.accept(event)
+        self._invalidate(min_interval=0.0)
+
+    def _scheduler_display_snapshot(self):
+        projector = self.__dict__.get("_scheduler_display_projector")
+        if projector is None:
+            projector = SchedulerDisplayProjector()
+            self.__dict__["_scheduler_display_projector"] = projector
+        return projector.snapshot(
+            lambda: self._scheduler_runtime().scheduler.snapshot()
+        )
+
+    def _scheduler_display_events(self) -> tuple[dict[str, Any], ...]:
+        projector = self.__dict__.get("_scheduler_display_projector")
+        return projector.event_dicts() if projector is not None else ()
 
     def _cancel_agent_for_scheduler(self) -> None:
         agent = getattr(self, "agent", None)
@@ -1411,7 +1435,7 @@ class VoidcubeCLI:
             session_id=str(self.session_id or "direct-session"),
             prompt=payload,
             tool_policy=self._turn_tool_policy(payload, TurnLane.USER_CHAT),
-            source="direct",
+            source=TurnLane.USER_CHAT.value,
         )
 
     def _scheduler_runtime(self) -> CliTurnSchedulerRuntime:
@@ -1421,18 +1445,10 @@ class VoidcubeCLI:
             self._turn_scheduler_runtime = runtime
         return runtime
 
-    def _is_embedded_component(self) -> bool:
-        """Return True for the remaining scheduled background CLI Host."""
-        return bool(
-            getattr(self, "_embedded_component_role", "")
-            or getattr(self, "_scheduled_parent_host", None) is not None
-        )
-
     def _create_scheduled_executor_runtime(self) -> ScheduledTaskExecutorRuntime:
         """Assemble scheduled execution from explicit CLI-owned state ports."""
         return ScheduledTaskExecutorRuntime(
             ScheduledTaskExecutorPorts(
-                is_embedded_component=self._is_embedded_component,
                 auto_task_running=lambda: bool(
                     getattr(
                         getattr(self, "_autonomous_execution_host", None),
@@ -1445,41 +1461,46 @@ class VoidcubeCLI:
                 set_execution_active=lambda active: setattr(
                     self, "_scheduled_execution_active", bool(active)
                 ),
-                start_background_task=self._start_scheduled_component_task,
+                start_background_task=self._start_scheduled_execution_task,
             )
         )
 
     def _should_emit_scrollback_output(self) -> bool:
         """Return whether this host may write into the user's main CLI transcript."""
-        return not self._is_embedded_component()
+        return True
 
-    def _ensure_scheduled_component_host(self):
-        """Lazily create the isolated Host used by scheduled and media work."""
-        component_host = getattr(self, "_scheduled_component_host", None)
-        if component_host is not None:
-            return component_host
-        component_host = type(self)(
-            model=getattr(self, "model", None),
-            toolsets=getattr(self, "enabled_toolsets", None),
-            provider=getattr(self, "requested_provider", None) or getattr(self, "provider", None),
-            api_key=getattr(self, "_explicit_api_key", None),
-            base_url=getattr(self, "_explicit_base_url", None),
-            max_turns=getattr(self, "max_turns", None),
-            verbose=False,
-            compact=True,
-            checkpoints=False,
-            pass_session_id=True,
-            embedded_role="scheduled",
-            turn_scheduler_runtime=self._scheduler_runtime(),
+    def _ensure_scheduled_execution_host(self):
+        host = getattr(self, "_scheduled_execution_host", None)
+        if host is not None:
+            return host
+        host = ScheduledExecutionHost(
+            ensure_credentials=self._ensure_runtime_credentials,
+            resolve_agent_route=self._resolve_turn_agent_config,
+            create_agent=self._create_scheduled_agent,
+            completion_outcome=_background_completion_outcome,
+            invalidate=lambda: self._invalidate(min_interval=0),
         )
-        component_host._scheduled_parent_host = self
-        component_host._turn_scheduler_runtime = self._scheduler_runtime()
-        self._scheduled_component_host = component_host
-        return component_host
+        self._scheduled_execution_host = host
+        return host
 
-    def _start_scheduled_component_task(self, prompt: str, **kwargs: Any) -> bool:
+    def _create_scheduled_agent(
+        self,
+        turn_route: dict[str, Any],
+        task_id: str,
+        request_overrides: dict[str, Any],
+        persist_session: bool,
+    ) -> Any:
+        return self._create_background_agent(
+            turn_route,
+            task_id,
+            request_overrides,
+            persist_session,
+            scheduled=True,
+        )
+
+    def _start_scheduled_execution_task(self, prompt: str, **kwargs: Any) -> bool:
         """Run scheduled work through the isolated scheduled Host runtime."""
-        return self._ensure_scheduled_component_host()._start_background_agent_task(
+        return self._ensure_scheduled_execution_host().start(
             prompt,
             **kwargs,
         )
@@ -1821,48 +1842,17 @@ class VoidcubeCLI:
         bar within the real display width prevents it from wrapping onto a
         second line and leaving behind duplicate rows.
         """
-        try:
-            from prompt_toolkit.utils import get_cwidth
-            return get_cwidth(text or "")
-        except Exception:
-            return len(text or "")
+        return _terminal_display_width(text)
 
     @classmethod
     def _trim_status_bar_text(cls, text: str, max_width: int) -> str:
         """Trim status-bar text to a single terminal row."""
-        if max_width <= 0:
-            return ""
-        try:
-            from prompt_toolkit.utils import get_cwidth
-        except Exception:
-            get_cwidth = None  # type: ignore[assignment]
-
-        if cls._status_bar_display_width(text) <= max_width:
-            return text
-
-        ellipsis = "..."
-        ellipsis_width = cls._status_bar_display_width(ellipsis)
-        if max_width <= ellipsis_width:
-            return ellipsis[:max_width]
-
-        out = []
-        width = 0
-        for ch in text:
-            ch_width = get_cwidth(ch) if get_cwidth else len(ch)
-            if width + ch_width + ellipsis_width > max_width:
-                break
-            out.append(ch)
-            width += ch_width
-        return "".join(out).rstrip() + ellipsis
+        return _terminal_trim_to_width(text, max_width)
 
     @classmethod
     def _pad_status_bar_text(cls, text: str, width: int) -> str:
         """Pad text to an exact display width using terminal cell width."""
-        text = cls._trim_status_bar_text(text, width)
-        pad = max(0, width - cls._status_bar_display_width(text))
-        if pad <= 0:
-            return text
-        return text + (" " * pad)
+        return _terminal_pad_to_width(text, width)
 
     def _tui_layout_metrics_runtime(self) -> CliTuiLayoutMetricsRuntime:
         return CliTuiLayoutMetricsRuntime(
@@ -1905,6 +1895,8 @@ class VoidcubeCLI:
                 getattr(self, "_autonomous_execution_events", []) or []
             ),
             spinner_text=lambda: snapshot().spinner_text if snapshot() else "",
+            scheduler_snapshot=self._scheduler_display_snapshot,
+            scheduler_events=self._scheduler_display_events,
         )
 
     def _autonomous_panel_event_ports(self) -> AutonomousPanelEventPorts:
@@ -2073,7 +2065,7 @@ class VoidcubeCLI:
                 ),
                 ascii_mode=self._use_ascii_fallback_cached,
                 subagent_snapshot=self._get_subagent_observability_snapshot,
-                scheduler_snapshot=lambda: self._scheduler_runtime().scheduler.snapshot(),
+                scheduler_snapshot=self._scheduler_display_snapshot,
             )
         ).build()
 
@@ -2104,6 +2096,7 @@ class VoidcubeCLI:
             or getattr(self, "_tool_start_time", 0) > 0
             or getattr(self, "_command_running", False)
             or self._stream_render_state.started
+            or self._scheduler_display_snapshot().active is not None
         )
         return CliStatusBarRuntime(
             CliStatusBarPorts(
@@ -2115,6 +2108,7 @@ class VoidcubeCLI:
                 middle_fragments=self._get_middle_status_fragments,
                 git_fragments=self._get_git_status_simple,
                 fallback_text=lambda: self._build_status_bar_text(),
+                closing=lambda: bool(getattr(self, "_should_exit", False)),
             )
         ).build()
 
@@ -2372,11 +2366,7 @@ class VoidcubeCLI:
             _active_agent_ref = self.agent
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
-            self.agent._print_fn = (  # type: ignore[assignment]
-                self._quiet_autonomous_component_cprint
-                if self._is_embedded_component()
-                else _cprint
-            )
+            self.agent._print_fn = _cprint  # type: ignore[assignment]
             self._active_agent_route_signature = (
                 effective_model,
                 runtime.get("provider"),
@@ -3052,10 +3042,14 @@ class VoidcubeCLI:
         task_id: str,
         request_overrides: dict[str, Any],
         persist_session: bool,
+        *,
+        scheduled: bool | None = None,
     ) -> Any:
         runtime = turn_route["runtime"]
         minimal_scheduled_host = (
-            getattr(self, "_embedded_component_role", "") == "scheduled"
+            str(task_id or "").startswith("scheduled_")
+            if scheduled is None
+            else bool(scheduled)
         )
         return CliAgentInitializationRuntime(
             CliAgentInitializationPorts(
@@ -3103,8 +3097,6 @@ class VoidcubeCLI:
         prompt: str,
         task_label: str,
     ) -> None:
-        if self._is_embedded_component():
-            return
         _cprint(
             f"  🔄 {task_label} #{task_num} started: \"{prompt[:60]}"
             f"{'...' if len(prompt) > 60 else ''}\""
@@ -3128,8 +3120,6 @@ class VoidcubeCLI:
         response_title: str | None,
         prompt: str,
     ) -> None:
-        if self._is_embedded_component():
-            return
         CliBackgroundResponseRuntime(
             CliBackgroundResponsePorts(
                 invalidate=lambda: self._app.invalidate() if self._app else None,
@@ -3150,7 +3140,7 @@ class VoidcubeCLI:
         )
 
     def _bell_background_completion(self) -> None:
-        if self.bell_on_complete and not self._is_embedded_component():
+        if self.bell_on_complete:
             sys.stdout.write("\a")
             sys.stdout.flush()
 

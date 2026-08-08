@@ -33,11 +33,6 @@ def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
         return bool(component is not None and getattr(component, "_agent_running", False))
 
     return ScheduledTaskExecutorPorts(
-        is_embedded_component=getattr(
-            host,
-            "_is_embedded_component",
-            lambda: False,
-        ),
         auto_task_running=auto_task_running,
         execution_gate=getattr(host, "_scheduled_execution_gate", None),
         get_session_id=lambda: str(getattr(host, "session_id", "") or ""),
@@ -777,14 +772,14 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
     cli._scheduled_execution_gate = threading.Lock()
     cli._scheduled_execution_active = False
     cli._autonomous_execution_host = SimpleNamespace(_agent_running=False)
-    cli._scheduled_component_host = None
+    cli._scheduled_execution_host = None
     cli.session_id = "main-cli"
-    cli._start_scheduled_component_task = Mock()
+    cli._start_scheduled_execution_task = Mock()
 
     runtime = cli._create_scheduled_executor_runtime()
 
     assert runtime.ports.execution_gate is cli._scheduled_execution_gate
-    assert runtime.ports.start_background_task is cli._start_scheduled_component_task
+    assert runtime.ports.start_background_task is cli._start_scheduled_execution_task
 
 
 def test_scheduled_gate_does_not_stop_foreground_input_loop():
@@ -815,53 +810,32 @@ def test_scheduled_gate_does_not_stop_foreground_input_loop():
     cli._scheduled_execution_gate.release()
 
 
-def test_scheduled_task_routes_to_isolated_host_without_parent_transcript():
+def test_scheduled_task_uses_a_narrow_execution_owner():
     from VoidCube_cli.app import VoidcubeCLI
+    from VoidCube_cli.scheduled_execution_host import ScheduledExecutionHost
 
-    class TrackingCLI(VoidcubeCLI):
-        created: list["TrackingCLI"] = []
+    parent = VoidcubeCLI.__new__(VoidcubeCLI)
+    parent._scheduled_execution_host = None
+    parent._ensure_runtime_credentials = lambda: True
+    parent._resolve_turn_agent_config = lambda _prompt: {
+        "model": "model",
+        "runtime": {},
+    }
+    parent._create_scheduled_agent = Mock()
+    parent._invalidate = lambda **_kwargs: None
 
-        def __init__(self, **kwargs):
-            self.created.append(self)
-            self.creation_kwargs = kwargs
-            self._embedded_component_role = kwargs.get("embedded_role", "")
-            self.conversation_history = []
-            self._scheduled_component_host = None
+    owner = parent._ensure_scheduled_execution_host()
 
-        def _start_background_agent_task(self, prompt, **kwargs):
-            self.started = (prompt, kwargs)
-            return True
-
-    parent = TrackingCLI.__new__(TrackingCLI)
-    parent.model = "model"
-    parent.enabled_toolsets = ["media"]
-    parent.requested_provider = "agnes-ai"
-    parent.provider = "agnes-ai"
-    parent._explicit_api_key = None
-    parent._explicit_base_url = None
-    parent.max_turns = 4
-    parent.verbose = False
-    parent.checkpoints_enabled = False
-    parent.conversation_history = [{"role": "user", "content": "parent"}]
-    parent._scheduled_component_host = None
-
-    component = parent._ensure_scheduled_component_host()
-    assert component is not parent
-    assert component._scheduled_parent_host is parent
-    assert component._should_emit_scrollback_output() is False
-    assert component.creation_kwargs["embedded_role"] == "scheduled"
-
-    parent._start_scheduled_component_task("run media", task_id="run-1")
-
-    assert component.started[0] == "run media"
-    assert parent.conversation_history == [{"role": "user", "content": "parent"}]
+    assert isinstance(owner, ScheduledExecutionHost)
+    assert not isinstance(owner, VoidcubeCLI)
+    for name in ("run", "chat", "_tui_prompt_runtime", "_voice_state"):
+        assert not hasattr(owner, name)
 
 
 def test_scheduled_host_creates_minimal_nonpersistent_agent():
     from VoidCube_cli.app import VoidcubeCLI
 
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._embedded_component_role = "scheduled"
     cli.max_turns = 3
     cli.enabled_toolsets = ["media"]
     cli.reasoning_config = None
@@ -877,7 +851,7 @@ def test_scheduled_host_creates_minimal_nonpersistent_agent():
     captured = {}
 
     with patch("VoidCube_cli.app._get_AIAgent", return_value=lambda **kwargs: captured.update(kwargs) or object()):
-        cli._create_background_agent(
+        cli._create_scheduled_agent(
             {
                 "model": "agnes-2.5-flash",
                 "runtime": {

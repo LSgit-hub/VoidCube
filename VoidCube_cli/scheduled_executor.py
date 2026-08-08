@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 class ScheduledTaskExecutorPorts:
     """Explicit CLI operations required by scheduled execution."""
 
-    is_embedded_component: Callable[[], bool]
     auto_task_running: Callable[[], bool]
     execution_gate: Any | None
     get_session_id: Callable[[], str]
@@ -272,8 +271,6 @@ class ScheduledTaskExecutorRuntime:
         ).start()
 
     def poll_workflow(self) -> None:
-        if self.ports.is_embedded_component():
-            return
         self._flush_writebacks()
         if self._outbox.pending_count():
             return

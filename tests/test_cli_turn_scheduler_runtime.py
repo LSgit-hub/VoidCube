@@ -36,6 +36,7 @@ def test_runtime_submits_user_payload_to_scheduler_executor() -> None:
     assert calls[0][0] is host
     assert calls[0][1].prompt == "hello"
     assert calls[0][1].tool_policy == {"lane": "user_chat"}
+    assert calls[0][1].source == "user_chat"
     assert calls[0][2] is False
     assert runtime.scheduler.snapshot().active is None
 
@@ -47,6 +48,7 @@ def test_runtime_rejects_autonomous_work_until_enabled() -> None:
         runtime.submit_autonomous(host, "auto")
     runtime.enable_autonomous()
     assert runtime.submit_autonomous(host, "auto") is True
+    assert runtime.scheduler.drain_events()[-1].lane is TurnLane.SUPERVISOR_TASK
 
 
 def test_runtime_cancel_user_does_not_cancel_autonomous_lane() -> None:

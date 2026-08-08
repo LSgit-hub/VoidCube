@@ -80,3 +80,36 @@ def test_middle_status_projects_scheduler_snapshot_without_reading_host_state():
     rendered = "".join(text for _, text in runtime.build())
     assert "用户:running" in rendered
     assert "+2" in rendered
+
+
+def test_middle_status_projects_request_id_and_blocked_reason():
+    snapshot = type(
+        "Snapshot",
+        (),
+        {
+            "active": type(
+                "Active",
+                (),
+                {
+                    "lane": type("Lane", (), {"value": "supervisor_task"})(),
+                    "state": type("State", (), {"value": "cancelling"})(),
+                    "request_id": "auto-123456789",
+                },
+            )(),
+            "queued": (),
+            "blocked_reason": "auto-q",
+        },
+    )()
+    runtime = CliMiddleStatusRuntime(
+        CliMiddleStatusPorts(
+            supervisor_snapshot=lambda: {"scene": "idle"},
+            memory_llm=lambda: {"provider": "mem"},
+            ascii_mode=lambda: True,
+            subagent_snapshot=lambda: {"active": False},
+            scheduler_snapshot=lambda: snapshot,
+        )
+    )
+
+    rendered = "".join(text for _, text in runtime.build())
+
+    assert "自主:cancelling #23456789" in rendered

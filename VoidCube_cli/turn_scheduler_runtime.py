@@ -52,10 +52,15 @@ class CliTurnSchedulerRuntime:
         )
 
     def submit_user(self, host: Any, payload: Any) -> bool:
-        return self._submit(host, payload, TurnLane.USER_CHAT, "cli")
+        return self._submit(host, payload, TurnLane.USER_CHAT, TurnLane.USER_CHAT.value)
 
     def submit_autonomous(self, host: Any, payload: Any) -> bool:
-        return self._submit(host, payload, TurnLane.SUPERVISOR_TASK, "autonomous")
+        return self._submit(
+            host,
+            payload,
+            TurnLane.SUPERVISOR_TASK,
+            TurnLane.SUPERVISOR_TASK.value,
+        )
 
     def cancel_user(self) -> bool:
         active = self.scheduler.snapshot().active

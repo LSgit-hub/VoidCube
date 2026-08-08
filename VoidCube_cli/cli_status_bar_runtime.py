@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from VoidCube_cli.terminal_text_layout import display_width, trim_to_width
+
 
 StatusFragment = tuple[str, str]
 
@@ -22,6 +24,7 @@ class CliStatusBarPorts:
     middle_fragments: Callable[[bool], Sequence[StatusFragment]]
     git_fragments: Callable[[], Sequence[StatusFragment]]
     fallback_text: Callable[[], str]
+    closing: Callable[[], bool] | None = None
 
 
 class CliStatusBarRuntime:
@@ -38,6 +41,13 @@ class CliStatusBarRuntime:
             return []
 
         try:
+            if ports.closing is not None and ports.closing():
+                return [
+                    (
+                        "class:status-bar-warn",
+                        trim_to_width(" 退出中 ", ports.terminal_width()),
+                    )
+                ]
             snapshot = ports.snapshot()
             width = ports.terminal_width()
             active = ports.agent_active()
@@ -171,36 +181,8 @@ class CliStatusBarRuntime:
 
     @staticmethod
     def _display_width(text: str) -> int:
-        try:
-            from prompt_toolkit.utils import get_cwidth
-
-            return get_cwidth(text or "")
-        except Exception:
-            return len(text or "")
+        return display_width(text)
 
     @classmethod
     def _trim(cls, text: str, max_width: int) -> str:
-        if max_width <= 0:
-            return ""
-        if cls._display_width(text) <= max_width:
-            return text
-
-        ellipsis = "..."
-        ellipsis_width = cls._display_width(ellipsis)
-        if max_width <= ellipsis_width:
-            return ellipsis[:max_width]
-
-        try:
-            from prompt_toolkit.utils import get_cwidth
-        except Exception:
-            get_cwidth = None
-
-        output: list[str] = []
-        current_width = 0
-        for char in text:
-            char_width = get_cwidth(char) if get_cwidth else len(char)
-            if current_width + char_width + ellipsis_width > max_width:
-                break
-            output.append(char)
-            current_width += char_width
-        return "".join(output).rstrip() + ellipsis
+        return trim_to_width(text, max_width)

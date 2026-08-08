@@ -78,3 +78,23 @@ def test_status_bar_uses_fallback_when_a_port_fails():
     )
 
     assert runtime.build() == [("class:status-bar", " fallback ")]
+
+
+def test_status_bar_trims_wide_unicode_by_terminal_cells():
+    fragments = _runtime(
+        snapshot={"model_short": "模型模型模型", "context_percent": None},
+        width=10,
+    ).build()
+
+    from VoidCube_cli.terminal_text_layout import display_width
+
+    assert display_width("".join(text for _, text in fragments)) <= 10
+
+
+def test_status_bar_projects_explicit_exit_state():
+    runtime = _runtime(width=20)
+    runtime.ports = replace(runtime.ports, closing=lambda: True)
+
+    rendered = "".join(text for _, text in runtime.build())
+
+    assert "退出中" in rendered
