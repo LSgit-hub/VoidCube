@@ -1,4 +1,4 @@
-"""UI-independent lifecycle for an autonomous execution component."""
+"""UI-independent lifecycle for the autonomous execution lane."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class StopEvent(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class AutonomousComponentLoopPorts:
+class AutonomousExecutionLoopPorts:
     stop_event: StopEvent
     execution_active: Callable[[], bool]
     set_execution_active: Callable[[bool], None]
@@ -29,7 +29,7 @@ class AutonomousComponentLoopPorts:
     publish_idle_scene: Callable[[], None]
 
 
-def run_autonomous_component_loop(ports: AutonomousComponentLoopPorts) -> None:
+def run_autonomous_execution_loop(ports: AutonomousExecutionLoopPorts) -> None:
     while not ports.stop_event.is_set() and ports.execution_active():
         try:
             ports.set_execution_active(True)
@@ -55,30 +55,30 @@ def run_autonomous_component_loop(ports: AutonomousComponentLoopPorts) -> None:
         pass
 
 
-def start_autonomous_component_loop(
-    ports: AutonomousComponentLoopPorts,
+def start_autonomous_execution_loop(
+    ports: AutonomousExecutionLoopPorts,
     *,
     thread_factory: Callable[..., Thread] = Thread,
 ) -> Thread:
     thread = thread_factory(
-        target=lambda: run_autonomous_component_loop(ports),
+        target=lambda: run_autonomous_execution_loop(ports),
         daemon=True,
-        name="autonomous-execution-component",
+        name="autonomous-execution",
     )
     thread.start()
     return thread
 
 
 @dataclass(frozen=True, slots=True)
-class AutonomousComponentStopPorts:
+class AutonomousExecutionStopPorts:
     deactivate_execution_host: Callable[[], bool]
     interrupt_running_agent: Callable[[], None]
     interrupt_current_task: Callable[[], None]
     signal_stop: Callable[[], None]
 
 
-def stop_autonomous_component(
-    ports: AutonomousComponentStopPorts,
+def stop_autonomous_execution(
+    ports: AutonomousExecutionStopPorts,
     *,
     interrupt: bool = False,
 ) -> None:
@@ -90,7 +90,7 @@ def stop_autonomous_component(
 
 
 @dataclass(frozen=True, slots=True)
-class AutonomousComponentRuntimePorts:
+class AutonomousExecutionRuntimePorts:
     get_execution_host: Callable[[], Any | None]
     ensure_execution_host: Callable[[], Any]
     get_execution_thread: Callable[[], Thread | None]
@@ -113,8 +113,8 @@ class AutonomousComponentRuntimePorts:
     thread_factory: Callable[..., Thread]
 
 
-class AutonomousComponentRuntime:
-    def __init__(self, ports: AutonomousComponentRuntimePorts) -> None:
+class AutonomousExecutionRuntime:
+    def __init__(self, ports: AutonomousExecutionRuntimePorts) -> None:
         self.ports = ports
 
     def start(self) -> bool:
@@ -128,8 +128,8 @@ class AutonomousComponentRuntime:
             return True
 
         executor_runtime = self.ports.build_executor_runtime(execution_host)
-        thread = start_autonomous_component_loop(
-            AutonomousComponentLoopPorts(
+        thread = start_autonomous_execution_loop(
+            AutonomousExecutionLoopPorts(
                 stop_event=stop_event,
                 execution_active=self.ports.execution_active,
                 set_execution_active=lambda active: self.ports.set_execution_active(
@@ -155,8 +155,8 @@ class AutonomousComponentRuntime:
 
     def stop(self, *, interrupt: bool = False) -> None:
         execution_host = self.ports.get_execution_host()
-        stop_autonomous_component(
-            AutonomousComponentStopPorts(
+        stop_autonomous_execution(
+            AutonomousExecutionStopPorts(
                 deactivate_execution_host=lambda: self.ports.deactivate_execution_host(
                     execution_host,
                 ),
@@ -171,11 +171,11 @@ class AutonomousComponentRuntime:
 
 
 __all__ = [
-    "AutonomousComponentLoopPorts",
-    "AutonomousComponentRuntime",
-    "AutonomousComponentRuntimePorts",
-    "AutonomousComponentStopPorts",
-    "run_autonomous_component_loop",
-    "start_autonomous_component_loop",
-    "stop_autonomous_component",
+    "AutonomousExecutionLoopPorts",
+    "AutonomousExecutionRuntime",
+    "AutonomousExecutionRuntimePorts",
+    "AutonomousExecutionStopPorts",
+    "run_autonomous_execution_loop",
+    "start_autonomous_execution_loop",
+    "stop_autonomous_execution",
 ]

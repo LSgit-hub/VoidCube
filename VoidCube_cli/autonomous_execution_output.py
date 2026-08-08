@@ -1,4 +1,4 @@
-"""Terminal output isolation for the autonomous execution thread."""
+"""Terminal-output isolation for the autonomous execution lane."""
 
 from __future__ import annotations
 

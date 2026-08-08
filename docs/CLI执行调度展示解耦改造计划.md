@@ -133,7 +133,7 @@ TUI / Supervisor adapter
 
 ### P4：统一事件投影与 TUI 状态（已完成）
 
-- [x] TUI 中间状态栏通过 Scheduler snapshot 读取活动 lane/排队数量，不读取 component host 私有字段。
+- [x] TUI 中间状态栏通过 Scheduler snapshot 读取活动 lane/排队数量，不读取 execution owner 私有字段。
 - [x] 合并自主面板与状态栏的宽度计算、截断和 spinner 投影。
 - [x] 补窄终端、退出中、取消中、队列等待和自主执行中的渲染测试。
 - [x] 将日志标记统一为 `user_chat` / `supervisor_task`，保留可检索的 request id。

@@ -70,9 +70,9 @@ from VoidCube_app.turn_contract import (
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind, ToolEventSink
 from VoidCube_app.turn_queue import TurnInputRoute
 from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
-from VoidCube_app.autonomous_component_runtime import (
-    AutonomousComponentRuntime,
-    AutonomousComponentRuntimePorts,
+from VoidCube_app.autonomous_execution_runtime import (
+    AutonomousExecutionRuntime,
+    AutonomousExecutionRuntimePorts,
 )
 from VoidCube_app.turn_scheduler import CancellationToken, TurnExecutor, TurnScheduler
 from VoidCube_app.single_turn_executor import SingleTurnExecutor, SingleTurnExecutorPorts
@@ -139,8 +139,8 @@ __all__ = [
     "UsageUpdated",
     "TurnInputRoute",
     "VoiceSessionRuntime",
-    "AutonomousComponentRuntime",
-    "AutonomousComponentRuntimePorts",
+    "AutonomousExecutionRuntime",
+    "AutonomousExecutionRuntimePorts",
     "CancellationToken",
     "TurnExecutor",
     "TurnScheduler",

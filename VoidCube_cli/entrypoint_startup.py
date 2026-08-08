@@ -14,7 +14,6 @@ Usage:
     VoidCube api                  # Configure API settings
     VoidCube logout              # Clear stored authentication
     VoidCube status              # Show status of all components
-    VoidCube autonomous          # Debug the API-A autonomous execution component
     VoidCube doctor              # Check configuration and dependencies
     VoidCube honcho setup                    # Configure Honcho AI memory integration
     VoidCube honcho status                   # Show Honcho config and connection status

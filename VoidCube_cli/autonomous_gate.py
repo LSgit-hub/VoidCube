@@ -108,11 +108,11 @@ def activate_autonomous_execution(host: Any) -> Tuple[bool, str]:
         try:
             started = bool(starter())
         except Exception as exc:
-            logger.warning("Failed to start autonomous execution component: %s", exc)
-            return False, f"API-A 自主执行组件启动失败: {exc}"
+            logger.warning("Failed to start autonomous execution loop: %s", exc)
+            return False, f"API-A 自主执行链路启动失败: {exc}"
         if not started:
-            return False, "API-A 自主执行组件未启动。"
-    return True, "API-A 自主执行组件已在当前 CLI 中启动；有链路项执行时会自动显示。"
+            return False, "API-A 自主执行链路未启动。"
+    return True, "API-A 自主执行链路已在当前 CLI 中启动；有链路项执行时会自动显示。"
 
 
 def handle_auto_command(

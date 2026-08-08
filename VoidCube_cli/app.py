@@ -271,9 +271,9 @@ from VoidCube_cli.voice_recording_runtime import (
     stop_terminal_voice_recording,
 )
 from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
-from VoidCube_app.autonomous_component_runtime import (
-    AutonomousComponentRuntime,
-    AutonomousComponentRuntimePorts,
+from VoidCube_app.autonomous_execution_runtime import (
+    AutonomousExecutionRuntime,
+    AutonomousExecutionRuntimePorts,
 )
 from VoidCube_app.contracts.scheduler import SchedulerEvent, TurnLane, TurnRequest
 from VoidCube_app.turn_scheduler import CancellationToken, TurnScheduler
@@ -286,7 +286,7 @@ from VoidCube_cli.cli_agent_turn_executor_runtime import (
     CliAgentTurnExecutorRuntime,
     CliAgentTurnResult,
 )
-from VoidCube_cli.autonomous_component_output import run_autonomous_operation_silently
+from VoidCube_cli.autonomous_execution_output import run_autonomous_operation_silently
 from VoidCube_cli.autonomous_execution_host import AutonomousExecutionHost
 from VoidCube_cli.scheduler_display_projector import SchedulerDisplayProjector
 from VoidCube_cli.scheduled_execution_host import ScheduledExecutionHost
@@ -1603,7 +1603,7 @@ class VoidcubeCLI:
             cprint=self._quiet_autonomous_cprint,
         )
 
-    def _autonomous_execution_lifecycle(self) -> AutonomousComponentRuntime:
+    def _autonomous_execution_lifecycle(self) -> AutonomousExecutionRuntime:
         runtime = self.__dict__.get("_autonomous_execution_lifecycle_runtime")
         if runtime is not None:
             return runtime
@@ -1667,8 +1667,8 @@ class VoidcubeCLI:
         def signal_stop() -> None:
             ensure_stop_event().set()
 
-        runtime = AutonomousComponentRuntime(
-            AutonomousComponentRuntimePorts(
+        runtime = AutonomousExecutionRuntime(
+            AutonomousExecutionRuntimePorts(
                 get_execution_host=lambda: getattr(
                     self,
                     "_autonomous_execution_host",
@@ -4110,8 +4110,8 @@ class VoidcubeCLI:
         overlay menu) into the layout without overriding ``run()``.  Widgets
         are inserted between the spacer and the status bar.
 
-        The main CLI already mounts the API-A autonomous execution component
-        through ``auto_execution_panel`` when that component has visible work.
+        The main CLI already projects the API-A autonomous execution lane
+        through ``auto_execution_panel`` when that lane has visible work.
         Wrappers can still inject their own widgets here.
         """
         return []
