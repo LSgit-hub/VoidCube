@@ -4051,6 +4051,64 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_backl
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._autonomous_task_review_service._touch_activity = (  # type: ignore[method-assign]
+        supervisor._touch_gateway_activity
+    )
+
+    async def no_memory_promotion(task):
+        del task
+        return None
+
+    supervisor._autonomous_task_review_service._propose_memory_promotion = (  # type: ignore[method-assign]
+        no_memory_promotion
+    )
+    task = supervisor._autonomous_task_state.create_task(
+        title="Research a web-backed improvement",
+        summary="Collect primary-source evidence.",
+        task_type="self_learning",
+        source="self_learning",
+        metadata={
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "learning_branch": "exploratory",
+        },
+    )
+    supervisor._autonomous_task_state.update_status(
+        task.task_id,
+        status="approved",
+        reason="ready",
+    )
+    supervisor._autonomous_task_state.update_status(
+        task.task_id,
+        status="running",
+        reason="started",
+    )
+
+    result = await supervisor.decide_autonomous_chain_task(
+        task.task_id,
+        {
+            "decision": "completed",
+            "final_response": "Evidence and uncertainty are documented. " * 20,
+            "context": {
+                "tools_used": ["web_search", "web_extract"],
+                "source_urls": ["https://example.com/primary"],
+            },
+        },
+    )
+
+    assert result["status"] == "completed"
+    stored = supervisor._autonomous_chain_store.get_task(task.task_id)
+    assert stored is not None
+    assert stored.metadata["quality_score"] >= 0.6
+    assert "web_search_recorded" in stored.metadata["learning_quality_assessment"]["signals"]
+    summaries = supervisor._completed_learning_task_summaries()
+    assert summaries[0]["quality_score"] == stored.metadata["quality_score"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_governor_approved_verified_conclusion_creates_consent_candidate(
     tmp_path,
     monkeypatch,

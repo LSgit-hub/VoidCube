@@ -17,6 +17,9 @@ from systems.supervisor.autonomous_task_review import (
     is_agent_pull_task,
     normalize_autonomous_chain_decision,
 )
+from systems.supervisor.autonomous_learning_quality import (
+    assess_autonomous_learning_quality,
+)
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from systems.supervisor.schedule_allocator import ScheduleAllocator
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
@@ -233,6 +236,16 @@ class AutonomousTaskReviewService:
                 final_response = str(request.get("final_response") or "").strip()
                 if final_response:
                     decision_context["autonomous_executor_final_response"] = final_response[:4000]
+                if (
+                    normalized == "completed"
+                    and self._task_profile_policy.runtime_family(task) == "self_learning"
+                ):
+                    assessment = assess_autonomous_learning_quality(
+                        task,
+                        {**decision_context, "response": final_response},
+                    )
+                    decision_context["quality_score"] = assessment["score"]
+                    decision_context["learning_quality_assessment"] = assessment
 
         if task.status == "cancelled":
             return {
@@ -299,13 +312,23 @@ class AutonomousTaskReviewService:
         )
 
         decision_metadata = request.get("metadata")
+        if normalized == "completed" and "quality_score" in decision_context:
+            enriched_metadata = dict(decision_metadata or {})
+            enriched_metadata["quality_score"] = decision_context["quality_score"]
+            enriched_metadata["learning_quality_assessment"] = dict(
+                decision_context.get("learning_quality_assessment") or {}
+            )
+            decision_metadata = enriched_metadata
         if normalized == "running" and owner_session_id:
             enriched_metadata = dict(decision_metadata or {})
             enriched_metadata.setdefault("owner_session_id", owner_session_id)
             enriched_metadata.setdefault("execution_source", "cli_agent_pull")
             decision_metadata = enriched_metadata
         if isinstance(decision_metadata, dict) and decision_metadata:
-            self._task_state.update_metadata(task_id, metadata=decision_metadata)
+            updated_task = self._task_state.update_metadata(
+                task_id,
+                metadata=decision_metadata,
+            )
 
         promotion_candidate = None
         if normalized in {"approved", "running", "completed"}:

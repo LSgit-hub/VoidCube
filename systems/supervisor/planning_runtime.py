@@ -752,7 +752,11 @@ class PlanningRuntimeMixin:
             "decision_id": decision_id or None,
             "decision_actor": latest_decision.get("actor"),
             "decision_reason": latest_decision.get("reason") or task.decision_reason,
-            "quality_score": metadata.get("quality_score"),
+            "quality_score": (
+                metadata.get("quality_score")
+                if metadata.get("quality_score") is not None
+                else decision_context.get("quality_score")
+            ),
             "learning_quality_score": evidence.get("learning_quality_score"),
             "result_status": execution_result.get("status"),
         }
@@ -1103,6 +1107,8 @@ class PlanningRuntimeMixin:
                         "quality_score": (
                             metadata.get("quality_score")
                             if metadata.get("quality_score") is not None
+                            else latest_context.get("quality_score")
+                            if latest_context.get("quality_score") is not None
                             else evidence.get("learning_quality_score")
                         ),
                         "endogenous_drive_key": metadata.get("endogenous_drive_key"),
