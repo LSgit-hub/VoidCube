@@ -26,6 +26,13 @@ from systems.supervisor.config_models import (
     SupervisorServiceRuntimeConfig,
 )
 from systems.supervisor.planning_runtime import PlanningRuntimeMixin
+from systems.supervisor.provider_pool_service import (
+    CompanionWorkerAssignmentsRequest,
+    ProviderPoolConflictError,
+    ProviderPoolEntryRequest,
+    ProviderPoolManagedError,
+    ProviderPoolService,
+)
 from systems.supervisor.runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
@@ -123,6 +130,7 @@ class Supervisor(
         self._agent_model = AgentInstance
         self._agents: Dict[str, AgentInstance] = {}
         self._initialize_service_runtime()
+        self._provider_pool_service = ProviderPoolService()
         self._voice_manager = VoiceSessionManager(
             VoiceConfig.from_env(),
             companion_callback=self.handle_companion_message,
@@ -290,6 +298,22 @@ class Supervisor(
             self.set_companion_reminder_policy,
             methods=["POST"],
         )
+        self.app.add_api_route("/provider-pool", self.get_provider_pool, methods=["GET"])
+        self.app.add_api_route(
+            "/provider-pool/providers/{provider_key}",
+            self.upsert_provider_pool_entry,
+            methods=["PUT"],
+        )
+        self.app.add_api_route(
+            "/provider-pool/providers/{provider_key}",
+            self.delete_provider_pool_entry,
+            methods=["DELETE"],
+        )
+        self.app.add_api_route(
+            "/provider-pool/worker-roles",
+            self.set_provider_pool_worker_roles,
+            methods=["PUT"],
+        )
         self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
         self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
         self.app.add_api_route("/voice/fingerprint", self.set_voice_fingerprint, methods=["POST"])
@@ -409,6 +433,42 @@ class Supervisor(
             "managed": False,
             "status": "saved",
         }
+
+    async def get_provider_pool(self) -> Dict[str, Any]:
+        return self._provider_pool_service.snapshot()
+
+    @staticmethod
+    def _provider_pool_error(error: Exception) -> HTTPException:
+        if isinstance(error, KeyError):
+            return HTTPException(status_code=404, detail="Provider not found")
+        if isinstance(error, (ProviderPoolConflictError, ProviderPoolManagedError)):
+            return HTTPException(status_code=409, detail=str(error))
+        return HTTPException(status_code=400, detail=str(error))
+
+    async def upsert_provider_pool_entry(
+        self,
+        provider_key: str,
+        request: ProviderPoolEntryRequest,
+    ) -> Dict[str, Any]:
+        try:
+            return self._provider_pool_service.upsert_provider(provider_key, request)
+        except (KeyError, ValueError, ProviderPoolManagedError) as exc:
+            raise self._provider_pool_error(exc) from exc
+
+    async def delete_provider_pool_entry(self, provider_key: str) -> Dict[str, Any]:
+        try:
+            return self._provider_pool_service.delete_provider(provider_key)
+        except (KeyError, ValueError, ProviderPoolManagedError) as exc:
+            raise self._provider_pool_error(exc) from exc
+
+    async def set_provider_pool_worker_roles(
+        self,
+        request: CompanionWorkerAssignmentsRequest,
+    ) -> Dict[str, Any]:
+        try:
+            return self._provider_pool_service.save_worker_assignments(request)
+        except (KeyError, ValueError, ProviderPoolManagedError) as exc:
+            raise self._provider_pool_error(exc) from exc
 
     async def voice_status(self) -> Dict[str, Any]:
         return self._voice_manager.status()

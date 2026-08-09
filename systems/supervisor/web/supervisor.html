@@ -2065,6 +2065,293 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   border-radius: 2px;
 }
 
+/* ── Provider 池与员工配置 ── */
+#panelSettings {
+  max-width: 1060px;
+  max-height: min(650px, calc(100vh - 72px));
+}
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  background: rgba(0,0,0,.12);
+}
+.settings-tab {
+  min-width: 92px;
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab[aria-selected="true"] {
+  border-bottom-color: var(--mint);
+  color: var(--mint);
+}
+.settings-view {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.settings-view[hidden] { display: none; }
+.provider-pool-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 430px;
+}
+.provider-pool-list-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  border-right: 1px solid rgba(255,255,255,.07);
+  background: rgba(0,0,0,.12);
+}
+.provider-pool-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.provider-pool-list-head strong { font-size: 11px; color: var(--text-primary); }
+.provider-add-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(111,198,160,.28);
+  border-radius: 6px;
+  color: var(--mint);
+  background: rgba(111,198,160,.09);
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+.provider-add-button:hover { background: rgba(111,198,160,.18); }
+.provider-pool-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 6px;
+  overflow: auto;
+}
+.provider-list-row {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 3px 8px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.provider-list-row:hover { background: rgba(255,255,255,.045); }
+.provider-list-row.active {
+  border-color: rgba(106,158,232,.28);
+  background: rgba(106,158,232,.09);
+}
+.provider-list-state {
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--coral);
+}
+.provider-list-state.ready { background: var(--mint); }
+.provider-list-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-list-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-pool-status {
+  min-height: 34px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.provider-pool-status.error { color: var(--coral); }
+.provider-editor,
+.worker-assignment-form {
+  min-width: 0;
+  padding: 14px 16px;
+}
+.provider-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px 12px;
+}
+.provider-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+.provider-field.wide { grid-column: 1 / -1; }
+.provider-field input,
+.provider-field select,
+.worker-role-field input,
+.worker-role-field select,
+.worker-default-select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: rgba(0,0,0,.22);
+  font: inherit;
+  font-size: 10.5px;
+}
+.provider-field input:focus,
+.provider-field select:focus,
+.worker-role-field input:focus,
+.worker-role-field select:focus,
+.worker-default-select:focus {
+  outline: 1px solid var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+.provider-field input:disabled { color: var(--text-muted); opacity: .75; }
+.provider-auth-fields[hidden] { display: none; }
+.provider-active-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.provider-active-field input { accent-color: var(--mint); }
+.provider-form-actions,
+.worker-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.worker-form-actions .provider-pool-status {
+  min-height: 0;
+  margin-right: auto;
+  padding: 0;
+  border: 0;
+}
+.provider-action {
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: rgba(255,255,255,.045);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.provider-action.primary { border-color: rgba(111,198,160,.32); color: var(--mint); }
+.provider-action.danger { margin-right: auto; border-color: rgba(232,130,110,.28); color: var(--coral); }
+.provider-action:hover:not(:disabled) { background: rgba(255,255,255,.09); }
+.provider-action:disabled { cursor: default; opacity: .4; }
+.worker-assignment-form { display: grid; gap: 10px; }
+.worker-default-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(180px, 260px);
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.worker-role-list { display: grid; gap: 6px; }
+.worker-role-row {
+  display: grid;
+  grid-template-columns: minmax(140px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(120px, .7fr);
+  align-items: center;
+  gap: 9px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.worker-role-identity { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
+.worker-role-identity input { grid-row: 1 / 3; align-self: center; accent-color: var(--mint); }
+.worker-role-identity strong { overflow: hidden; color: var(--text-primary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.worker-role-identity span { overflow: hidden; color: var(--text-muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.worker-role-field { min-width: 0; display: grid; gap: 4px; color: var(--text-muted); font-size: 8.5px; }
+.worker-toolsets { position: relative; }
+.worker-toolsets summary {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: rgba(0,0,0,.22);
+  font-size: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.worker-toolsets summary::-webkit-details-marker { display: none; }
+.worker-toolset-menu {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  width: 230px;
+  max-height: 210px;
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 6px;
+  background: #1b1715;
+  box-shadow: 0 12px 24px rgba(0,0,0,.4);
+}
+.worker-toolset-option { display: flex; align-items: center; gap: 7px; min-height: 24px; color: var(--text-secondary); font-size: 9.5px; }
+.worker-toolset-option input { accent-color: var(--mint); }
+@media (max-width: 760px) {
+  #panelSettings { max-height: calc(100vh - 54px); }
+  .provider-pool-layout { grid-template-columns: 1fr; }
+  .provider-pool-list-pane { max-height: 190px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .provider-form-grid { grid-template-columns: 1fr; }
+  .provider-field.wide { grid-column: auto; }
+  .worker-role-row { grid-template-columns: 1fr; }
+  .worker-default-row { grid-template-columns: 1fr; }
+}
+
 /* ── 游戏风格卡片(面板内用) ── */
 .game-card {
   display: grid; gap: 8px;
@@ -3620,10 +3907,87 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
       <div class="dock-panel" id="panelSettings">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">⚙</span>主动提醒</div>
+          <div class="panel-title"><span class="pt-icon">⚙</span>配置</div>
           <button class="panel-close" data-panel="settings">×</button>
         </div>
-        <div class="panel-body">
+        <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="配置分类">
+          <button class="settings-tab" type="button" data-settings-view="providers" role="tab" aria-selected="true">Provider 池</button>
+          <button class="settings-tab" type="button" data-settings-view="workers" role="tab" aria-selected="false">员工角色</button>
+          <button class="settings-tab" type="button" data-settings-view="reminders" role="tab" aria-selected="false">主动提醒</button>
+        </div>
+        <div class="settings-view" data-settings-panel="providers">
+          <div class="provider-pool-layout">
+            <aside class="provider-pool-list-pane">
+              <div class="provider-pool-list-head">
+                <strong>Provider</strong>
+                <button class="provider-add-button" id="providerAdd" type="button" title="添加 Provider" aria-label="添加 Provider">+</button>
+              </div>
+              <div class="provider-pool-list" id="providerPoolList"></div>
+              <div class="provider-pool-status" id="providerPoolStatus" aria-live="polite"></div>
+            </aside>
+            <form class="provider-editor" id="providerForm">
+              <div class="provider-form-grid">
+                <label class="provider-field">
+                  <span>标识</span>
+                  <input id="providerKey" name="provider_key" required maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" autocomplete="off"/>
+                </label>
+                <label class="provider-field">
+                  <span>类型</span>
+                  <select id="providerType" name="provider_type"></select>
+                </label>
+                <label class="provider-field wide">
+                  <span>名称</span>
+                  <input id="providerLabel" name="provider_label" required maxlength="80" autocomplete="off"/>
+                </label>
+                <label class="provider-field wide">
+                  <span>API 地址</span>
+                  <input id="providerBaseUrl" name="provider_base_url" required maxlength="2048" inputmode="url" autocomplete="off"/>
+                </label>
+                <label class="provider-field wide">
+                  <span>默认模型</span>
+                  <input id="providerModel" name="provider_model" required maxlength="300" autocomplete="off"/>
+                </label>
+                <label class="provider-field">
+                  <span>鉴权</span>
+                  <select id="providerAuthMode" name="provider_auth_mode">
+                    <option value="env">环境变量</option>
+                    <option value="none">无需鉴权</option>
+                  </select>
+                </label>
+                <label class="provider-active-field">
+                  <input id="providerMakeActive" type="checkbox"/>
+                  <span>设为 API-A 当前 Provider</span>
+                </label>
+                <label class="provider-field provider-auth-fields wide" id="providerEnvField">
+                  <span>密钥变量</span>
+                  <input id="providerApiKeyEnv" name="provider_api_key_env" maxlength="120" pattern="[A-Z_][A-Z0-9_]*" autocomplete="off"/>
+                </label>
+                <label class="provider-field provider-auth-fields wide" id="providerSecretField">
+                  <span>API Key</span>
+                  <input id="providerApiKey" name="provider_api_key" type="password" maxlength="8192" autocomplete="new-password"/>
+                </label>
+              </div>
+              <div class="provider-form-actions">
+                <button class="provider-action danger" id="providerDelete" type="button">删除</button>
+                <button class="provider-action primary" id="providerSave" type="submit">保存</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="settings-view" data-settings-panel="workers" hidden>
+          <form class="worker-assignment-form" id="workerAssignmentForm">
+            <label class="worker-default-row">
+              <span>默认员工</span>
+              <select class="worker-default-select" id="workerDefaultRole"></select>
+            </label>
+            <div class="worker-role-list" id="workerRoleList"></div>
+            <div class="worker-form-actions">
+              <span class="provider-pool-status" id="workerAssignmentStatus" aria-live="polite"></span>
+              <button class="provider-action primary" id="workerAssignmentSave" type="submit">保存</button>
+            </div>
+          </form>
+        </div>
+        <div class="settings-view panel-body" data-settings-panel="reminders" hidden>
           <form class="reminder-policy-form" id="reminderPolicyForm">
             <label class="reminder-policy-field">
               <span>主动提醒</span>
@@ -3721,9 +4085,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">提升</span>
       </button>
       <span class="dock-sep"></span>
-      <button class="dock-btn" data-panel="settings" title="主动提醒设置">
+      <button class="dock-btn" data-panel="settings" title="Provider 与员工配置">
         <span class="db-icon">⚙</span>
-        <span class="db-label">提醒</span>
+        <span class="db-label">配置</span>
       </button>
 
     </nav>
@@ -3802,6 +4166,29 @@ const els = {
   panelStatsBody: $('#panelStatsBody'),
   panelPromotionsBody: $('#panelPromotionsBody'),
   panelSchedulesBody: $('#panelSchedulesBody'),
+  settingsTabs: $('#settingsTabs'),
+  providerPoolList: $('#providerPoolList'),
+  providerPoolStatus: $('#providerPoolStatus'),
+  providerAdd: $('#providerAdd'),
+  providerForm: $('#providerForm'),
+  providerKey: $('#providerKey'),
+  providerType: $('#providerType'),
+  providerLabel: $('#providerLabel'),
+  providerBaseUrl: $('#providerBaseUrl'),
+  providerModel: $('#providerModel'),
+  providerAuthMode: $('#providerAuthMode'),
+  providerMakeActive: $('#providerMakeActive'),
+  providerEnvField: $('#providerEnvField'),
+  providerSecretField: $('#providerSecretField'),
+  providerApiKeyEnv: $('#providerApiKeyEnv'),
+  providerApiKey: $('#providerApiKey'),
+  providerDelete: $('#providerDelete'),
+  providerSave: $('#providerSave'),
+  workerAssignmentForm: $('#workerAssignmentForm'),
+  workerDefaultRole: $('#workerDefaultRole'),
+  workerRoleList: $('#workerRoleList'),
+  workerAssignmentStatus: $('#workerAssignmentStatus'),
+  workerAssignmentSave: $('#workerAssignmentSave'),
   reminderPolicyForm: $('#reminderPolicyForm'),
   reminderPolicyEnabled: $('#reminderPolicyEnabled'),
   reminderPolicyTts: $('#reminderPolicyTts'),
@@ -4002,7 +4389,10 @@ function openPanel(name) {
     loadEvolutionPromotionCandidates();
     loadEvolutionPromotionAudit();
   }
-  if (name === 'settings') loadReminderPolicy();
+  if (name === 'settings') {
+    setSettingsView('providers');
+    loadProviderPool();
+  }
   if (name === 'media') {
     renderMediaBoard();
     mountCurrentMedia();
@@ -4283,6 +4673,9 @@ function drillButton(type, label) {
 function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escAttr(s) {
+  return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 function pct(v) { return (v != null && !isNaN(v)) ? Math.round(v * 100) + '%' : '—'; }
 
@@ -6388,6 +6781,293 @@ async function runVoiceSession() {
   }
 }
 
+let providerPoolSnapshot = null;
+let providerPoolBusy = false;
+let selectedProviderKey = '';
+
+function setSettingsView(name) {
+  const normalized = ['providers', 'workers', 'reminders'].includes(name) ? name : 'providers';
+  $$('[data-settings-view]', els.settingsTabs).forEach(button => {
+    button.setAttribute('aria-selected', String(button.dataset.settingsView === normalized));
+  });
+  $$('[data-settings-panel]').forEach(panel => {
+    panel.hidden = panel.dataset.settingsPanel !== normalized;
+  });
+  if (normalized === 'reminders') loadReminderPolicy();
+  if (normalized !== 'reminders' && !providerPoolSnapshot) loadProviderPool();
+}
+
+function setProviderPoolStatus(message, error) {
+  if (!els.providerPoolStatus) return;
+  els.providerPoolStatus.textContent = message || '';
+  els.providerPoolStatus.classList.toggle('error', Boolean(error));
+}
+
+function setProviderPoolBusy(busy) {
+  providerPoolBusy = busy;
+  const managed = Boolean(providerPoolSnapshot && providerPoolSnapshot.managed);
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  const selected = providers.find(item => item.key === selectedProviderKey) || null;
+  if (els.providerForm) {
+    $$('input, select, button', els.providerForm).forEach(control => {
+      control.disabled = busy || managed;
+    });
+  }
+  if (els.providerKey) els.providerKey.disabled = busy || managed || Boolean(selected);
+  if (els.providerDelete) {
+    const references = selected && Array.isArray(selected.references) ? selected.references : [];
+    els.providerDelete.disabled = busy || managed || references.length > 0;
+  }
+  if (els.providerAdd) els.providerAdd.disabled = busy || managed;
+  if (els.workerAssignmentForm) {
+    $$('input, select, button', els.workerAssignmentForm).forEach(control => {
+      control.disabled = busy || managed;
+    });
+  }
+}
+
+async function responseError(response, fallback) {
+  const payload = await response.json().catch(() => ({}));
+  return new Error(String(payload.detail || fallback));
+}
+
+function providerPreset(type) {
+  const presets = Array.isArray((providerPoolSnapshot || {}).provider_presets)
+    ? providerPoolSnapshot.provider_presets : [];
+  return presets.find(item => item.type === type) || null;
+}
+
+function renderProviderTypeOptions(selectedType) {
+  if (!els.providerType) return;
+  const presets = Array.isArray((providerPoolSnapshot || {}).provider_presets)
+    ? providerPoolSnapshot.provider_presets : [];
+  els.providerType.innerHTML = presets.map(preset =>
+    '<option value="' + escAttr(preset.type) + '"' +
+      (preset.type === selectedType ? ' selected' : '') + '>' + esc(preset.label) + '</option>'
+  ).join('');
+}
+
+function renderProviderList() {
+  if (!els.providerPoolList) return;
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  if (!providers.length) {
+    els.providerPoolList.innerHTML = '<div class="panel-empty"><div class="pe-text">未配置 Provider</div></div>';
+    return;
+  }
+  els.providerPoolList.innerHTML = providers.map(provider => {
+    const ready = provider.auth_mode === 'none' || provider.credential_configured;
+    const meta = (provider.active ? 'API-A · ' : '') + (provider.selected_model || '未选择模型');
+    return '<button class="provider-list-row' +
+      (provider.key === selectedProviderKey ? ' active' : '') +
+      '" type="button" data-provider-key="' + escAttr(provider.key) + '">' +
+      '<span class="provider-list-state' + (ready ? ' ready' : '') + '"></span>' +
+      '<span class="provider-list-name">' + esc(provider.label || provider.key) + '</span>' +
+      '<span class="provider-list-meta">' + esc(meta) + '</span></button>';
+  }).join('');
+}
+
+function applyProviderPreset() {
+  const preset = providerPreset(els.providerType ? els.providerType.value : '');
+  if (!preset) return;
+  if (els.providerLabel && !els.providerLabel.value.trim()) els.providerLabel.value = preset.label || '';
+  if (els.providerBaseUrl) els.providerBaseUrl.value = preset.base_url || '';
+  if (els.providerAuthMode) els.providerAuthMode.value = preset.auth_mode || 'env';
+  if (els.providerApiKeyEnv) els.providerApiKeyEnv.value = preset.api_key_env || '';
+  syncProviderAuthFields();
+}
+
+function syncProviderAuthFields() {
+  const usesEnv = !els.providerAuthMode || els.providerAuthMode.value === 'env';
+  if (els.providerEnvField) els.providerEnvField.hidden = !usesEnv;
+  if (els.providerSecretField) els.providerSecretField.hidden = !usesEnv;
+  if (els.providerApiKeyEnv) els.providerApiKeyEnv.required = usesEnv;
+}
+
+function editProvider(providerKey) {
+  if (!providerPoolSnapshot || !els.providerForm) return;
+  const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
+  const provider = providers.find(item => item.key === providerKey) || null;
+  selectedProviderKey = provider ? provider.key : '';
+  renderProviderTypeOptions(provider ? provider.type : 'openai_compatible');
+  els.providerKey.value = provider ? provider.key : '';
+  els.providerKey.disabled = Boolean(provider) || Boolean(providerPoolSnapshot.managed);
+  els.providerLabel.value = provider ? provider.label : '';
+  els.providerBaseUrl.value = provider ? provider.base_url : '';
+  els.providerModel.value = provider ? provider.selected_model : '';
+  els.providerAuthMode.value = provider ? provider.auth_mode : 'env';
+  els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
+  els.providerApiKey.value = '';
+  els.providerApiKey.placeholder = provider && provider.credential_configured
+    ? '已配置，留空保持不变' : '';
+  els.providerMakeActive.checked = Boolean(provider && provider.active);
+  els.providerDelete.hidden = !provider;
+  const references = provider && Array.isArray(provider.references) ? provider.references : [];
+  els.providerDelete.disabled = providerPoolBusy || Boolean(providerPoolSnapshot.managed) || references.length > 0;
+  els.providerDelete.title = references.length ? references.join('、') : '';
+  if (!provider) applyProviderPreset();
+  syncProviderAuthFields();
+  renderProviderList();
+}
+
+function renderWorkerAssignments() {
+  if (!els.workerRoleList || !providerPoolSnapshot) return;
+  const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
+  const roles = Array.isArray(providerPoolSnapshot.roles) ? providerPoolSnapshot.roles : [];
+  const toolsets = Array.isArray(providerPoolSnapshot.toolsets) ? providerPoolSnapshot.toolsets : [];
+  const providerOptions = provider =>
+    '<option value="">继承 API-A</option>' + providers.map(item =>
+      '<option value="' + escAttr(item.key) + '"' + (item.key === provider ? ' selected' : '') + '>' +
+      esc(item.label || item.key) + '</option>'
+    ).join('');
+  els.workerRoleList.innerHTML = roles.map(role => {
+    const selectedToolsets = new Set(Array.isArray(role.toolsets) ? role.toolsets : []);
+    const toolsetOptions = toolsets.map(item =>
+      '<label class="worker-toolset-option"><input type="checkbox" data-worker-toolset value="' +
+      escAttr(item.name) + '"' + (selectedToolsets.has(item.name) ? ' checked' : '') + '/><span>' +
+      esc(item.name) + '</span></label>'
+    ).join('');
+    return '<div class="worker-role-row" data-worker-role="' + escAttr(role.role) + '" data-worker-label="' + escAttr(role.label) + '">' +
+      '<label class="worker-role-identity"><input type="checkbox" data-worker-enabled' +
+      (role.enabled ? ' checked' : '') + '/><strong>' + esc(role.label || role.role) + '</strong><span>' +
+      esc(role.role) + '</span></label>' +
+      '<label class="worker-role-field"><span>Provider</span><select data-worker-provider>' +
+      providerOptions(role.provider) + '</select></label>' +
+      '<label class="worker-role-field"><span>模型覆盖</span><input data-worker-model maxlength="300" value="' +
+      escAttr(role.model || '') + '"/></label>' +
+      '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
+      toolsetOptions + '</div></details></label></div>';
+  }).join('');
+  syncWorkerDefaultOptions(providerPoolSnapshot.default_role);
+  syncWorkerToolsetSummaries();
+}
+
+function syncWorkerDefaultOptions(preferred) {
+  if (!els.workerDefaultRole || !els.workerRoleList) return;
+  const current = preferred || els.workerDefaultRole.value || (providerPoolSnapshot || {}).default_role;
+  const enabledRows = $$('[data-worker-role]', els.workerRoleList).filter(row => {
+    const toggle = $('[data-worker-enabled]', row);
+    return Boolean(toggle && toggle.checked);
+  });
+  els.workerDefaultRole.innerHTML = enabledRows.map(row =>
+    '<option value="' + escAttr(row.dataset.workerRole) + '">' + esc(row.dataset.workerLabel) + '</option>'
+  ).join('');
+  if (enabledRows.some(row => row.dataset.workerRole === current)) {
+    els.workerDefaultRole.value = current;
+  }
+}
+
+function syncWorkerToolsetSummaries() {
+  if (!els.workerRoleList) return;
+  $$('.worker-toolsets', els.workerRoleList).forEach(details => {
+    const count = $$('[data-worker-toolset]:checked', details).length;
+    const summary = $('summary', details);
+    if (summary) summary.textContent = count ? count + ' 个' : '继承';
+  });
+}
+
+function applyProviderPoolSnapshot(snapshot, preferredKey) {
+  providerPoolSnapshot = snapshot || {};
+  const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
+  const candidate = preferredKey || selectedProviderKey;
+  const selected = providers.some(item => item.key === candidate)
+    ? candidate : (providers[0] ? providers[0].key : '');
+  renderWorkerAssignments();
+  editProvider(selected);
+  setProviderPoolBusy(false);
+  setProviderPoolStatus(providerPoolSnapshot.managed ? '托管配置，只读' : '');
+}
+
+async function loadProviderPool() {
+  if (providerPoolBusy) return;
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('读取中');
+  try {
+    const response = await fetch('/provider-pool', {cache: 'no-store'});
+    if (!response.ok) throw await responseError(response, '读取失败');
+    applyProviderPoolSnapshot(await response.json());
+  } catch (error) {
+    setProviderPoolStatus(String(error.message || '读取失败'), true);
+    setProviderPoolBusy(false);
+  }
+}
+
+async function saveProviderPoolEntry() {
+  if (!els.providerForm || providerPoolBusy || !els.providerForm.reportValidity()) return;
+  const key = String(els.providerKey.value || '').trim().toLowerCase();
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('保存中');
+  try {
+    const response = await fetch('/provider-pool/providers/' + encodeURIComponent(key), {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        label: els.providerLabel.value.trim(),
+        type: els.providerType.value,
+        base_url: els.providerBaseUrl.value.trim(),
+        selected_model: els.providerModel.value.trim(),
+        auth_mode: els.providerAuthMode.value,
+        api_key_env: els.providerApiKeyEnv.value.trim(),
+        api_key: els.providerApiKey.value,
+        make_active: Boolean(els.providerMakeActive.checked),
+      }),
+    });
+    if (!response.ok) throw await responseError(response, '保存失败');
+    applyProviderPoolSnapshot(await response.json(), key);
+    setProviderPoolStatus('已保存');
+  } catch (error) {
+    setProviderPoolStatus(String(error.message || '保存失败'), true);
+    setProviderPoolBusy(false);
+  }
+}
+
+async function deleteProviderPoolEntry() {
+  if (!selectedProviderKey || providerPoolBusy) return;
+  if (!window.confirm('删除 Provider “' + selectedProviderKey + '”？')) return;
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('删除中');
+  try {
+    const response = await fetch('/provider-pool/providers/' + encodeURIComponent(selectedProviderKey), {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw await responseError(response, '删除失败');
+    applyProviderPoolSnapshot(await response.json(), '');
+    setProviderPoolStatus('已删除');
+  } catch (error) {
+    setProviderPoolStatus(String(error.message || '删除失败'), true);
+    setProviderPoolBusy(false);
+  }
+}
+
+async function saveWorkerAssignments() {
+  if (!els.workerAssignmentForm || providerPoolBusy || !els.workerAssignmentForm.reportValidity()) return;
+  const roles = {};
+  $$('[data-worker-role]', els.workerRoleList).forEach(row => {
+    roles[row.dataset.workerRole] = {
+      enabled: Boolean($('[data-worker-enabled]', row).checked),
+      provider: $('[data-worker-provider]', row).value,
+      model: $('[data-worker-model]', row).value.trim(),
+      toolsets: $$('[data-worker-toolset]:checked', row).map(input => input.value),
+    };
+  });
+  setProviderPoolBusy(true);
+  if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = '保存中';
+  try {
+    const response = await fetch('/provider-pool/worker-roles', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({default_role: els.workerDefaultRole.value, roles}),
+    });
+    if (!response.ok) throw await responseError(response, '保存失败');
+    applyProviderPoolSnapshot(await response.json());
+    if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = '已保存';
+  } catch (error) {
+    if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = String(error.message || '保存失败');
+    setProviderPoolBusy(false);
+  }
+}
+
 let reminderPolicy = null;
 let reminderPolicyBusy = false;
 
@@ -6711,6 +7391,38 @@ function renderMediaQueue() {
     row.append(icon, copy, state);
     if (!isCurrent) row.addEventListener('click', () => requestMediaControl('select', item.media_id));
     mediaQueueList.appendChild(row);
+  });
+}
+if (els.settingsTabs) {
+  els.settingsTabs.addEventListener('click', event => {
+    const button = event.target.closest('[data-settings-view]');
+    if (button) setSettingsView(button.dataset.settingsView);
+  });
+}
+if (els.providerAdd) els.providerAdd.addEventListener('click', () => editProvider(''));
+if (els.providerType) els.providerType.addEventListener('change', applyProviderPreset);
+if (els.providerAuthMode) els.providerAuthMode.addEventListener('change', syncProviderAuthFields);
+if (els.providerPoolList) {
+  els.providerPoolList.addEventListener('click', event => {
+    const row = event.target.closest('[data-provider-key]');
+    if (row) editProvider(row.dataset.providerKey);
+  });
+}
+if (els.providerForm) {
+  els.providerForm.addEventListener('submit', event => {
+    event.preventDefault();
+    saveProviderPoolEntry();
+  });
+}
+if (els.providerDelete) els.providerDelete.addEventListener('click', deleteProviderPoolEntry);
+if (els.workerAssignmentForm) {
+  els.workerAssignmentForm.addEventListener('submit', event => {
+    event.preventDefault();
+    saveWorkerAssignments();
+  });
+  els.workerAssignmentForm.addEventListener('change', event => {
+    if (event.target.matches('[data-worker-enabled]')) syncWorkerDefaultOptions();
+    if (event.target.matches('[data-worker-toolset]')) syncWorkerToolsetSummaries();
   });
 }
 

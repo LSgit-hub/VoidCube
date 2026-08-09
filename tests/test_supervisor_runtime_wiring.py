@@ -805,6 +805,20 @@ def test_supervisor_room_frontend_uses_canonical_reminder_policy_contract():
 
 
 @pytest.mark.unit
+def test_supervisor_room_frontend_manages_provider_pool_and_worker_assignments():
+    assert 'data-settings-view="providers"' in UI_HTML
+    assert 'data-settings-view="workers"' in UI_HTML
+    assert 'id="providerPoolList"' in UI_HTML
+    assert 'id="providerForm"' in UI_HTML
+    assert 'id="workerAssignmentForm"' in UI_HTML
+    assert "fetch('/provider-pool'" in UI_HTML
+    assert "fetch('/provider-pool/providers/'" in UI_HTML
+    assert "fetch('/provider-pool/worker-roles'" in UI_HTML
+    assert "api_key: els.providerApiKey.value" in UI_HTML
+    assert "provider.credential_configured" in UI_HTML
+
+
+@pytest.mark.unit
 def test_companion_reminder_policy_route_persists_only_its_canonical_subtree(
     tmp_path,
     monkeypatch,

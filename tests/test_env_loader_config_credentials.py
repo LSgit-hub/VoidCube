@@ -71,7 +71,7 @@ def test_retired_display_settings_migrate_once_to_platforms(tmp_path, monkeypatc
     retired_key = "tool_progress_" + "overrides"
     unused_key = "tool_progress_" + "command"
     (home / "config.yaml").write_text(
-        f"""_config_version: 20
+        f"""_config_version: 21
 display:
   skin: custom-theme
   future_display_option: retained
@@ -126,7 +126,7 @@ def test_retired_tool_progress_env_migrates_once_on_current_config(
     home.mkdir()
     enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
     mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
-    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / "config.yaml").write_text("_config_version: 21\n", encoding="utf-8")
     (home / ".env").write_text(
         f"{enabled_key}=false\n"
         f"{mode_key}=verbose\n"
@@ -172,7 +172,7 @@ def test_retired_tool_progress_env_does_not_override_explicit_config(
     home.mkdir()
     enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
     mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
-    original_config = "_config_version: 20\ndisplay:\n  tool_progress: new\n"
+    original_config = "_config_version: 21\ndisplay:\n  tool_progress: new\n"
     (home / "config.yaml").write_text(original_config, encoding="utf-8")
     (home / ".env").write_text(
         f"{enabled_key}=false\n{mode_key}=verbose\nKEEP_ME=value\n",
@@ -217,7 +217,7 @@ def test_retired_tool_progress_env_mode_mapping(
     home.mkdir()
     enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
     mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
-    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / "config.yaml").write_text("_config_version: 21\n", encoding="utf-8")
     (home / ".env").write_text(
         f"{enabled_key}={enabled}\n{mode_key}={mode}\n",
         encoding="utf-8",
@@ -250,7 +250,7 @@ def test_retired_messaging_env_is_removed_without_rewriting_config(
 ):
     home = tmp_path / ".VoidCube"
     home.mkdir()
-    original_config = "_config_version: 20\n"
+    original_config = "_config_version: 21\n"
     (home / "config.yaml").write_text(original_config, encoding="utf-8")
     retired_values = {
         "API_SERVER_ENABLED": "true",
@@ -292,7 +292,7 @@ def test_retired_messaging_env_is_removed_without_rewriting_config(
 def test_unused_optional_env_registrations_are_removed(tmp_path, monkeypatch):
     home = tmp_path / ".VoidCube"
     home.mkdir()
-    original_config = "_config_version: 20\n"
+    original_config = "_config_version: 21\n"
     (home / "config.yaml").write_text(original_config, encoding="utf-8")
     (home / ".env").write_text(
         "GEMINI_BASE_URL=https://unused.example/v1\n"
@@ -338,7 +338,7 @@ def test_retired_prefill_env_migrates_once_to_agent_config(tmp_path, monkeypatch
     home = tmp_path / ".VoidCube"
     home.mkdir()
     retired_key = "VOIDCUBE_PREFILL_" + "MESSAGES_FILE"
-    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / "config.yaml").write_text("_config_version: 21\n", encoding="utf-8")
     (home / ".env").write_text(
         f"{retired_key}=C:/prompts/prefill.json\nKEEP_ME=value\n",
         encoding="utf-8",
@@ -382,7 +382,7 @@ def test_retired_prefill_env_does_not_override_explicit_config(
     home.mkdir()
     retired_key = "VOIDCUBE_PREFILL_" + "MESSAGES_FILE"
     original_config = (
-        "_config_version: 20\n"
+        "_config_version: 21\n"
         "agent:\n"
         "  prefill_messages_file: C:/prompts/current.json\n"
     )
@@ -503,7 +503,7 @@ auxiliary:
     migrate_config(interactive=False, quiet=True)
 
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-    assert config["_config_version"] == 20
+    assert config["_config_version"] == 21
     assert config["compression"]["enabled"] is True
     assert not {
         "summary_provider",
@@ -548,7 +548,7 @@ def test_migrate_config_moves_legacy_cache_directories_to_v20_layout(
     migrate_config(interactive=False, quiet=True)
 
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-    assert config["_config_version"] == 20
+    assert config["_config_version"] == 21
     for legacy_name, canonical_name in legacy_dirs.items():
         assert not (home / legacy_name).exists()
         assert (home / "cache" / canonical_name / "cached.bin").read_text(

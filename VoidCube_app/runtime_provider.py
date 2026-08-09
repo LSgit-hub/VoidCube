@@ -190,6 +190,8 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
             "name": name.strip(),
             "base_url": base_url.strip(),
             "api_key": str(entry.get("api_key", "") or "").strip(),
+            "api_key_env": str(entry.get("api_key_env", "") or "").strip(),
+            "auth_mode": str(entry.get("auth_mode", "") or "").strip().lower(),
         }
         model_name = str(entry.get("selected_model") or entry.get("default_model") or entry.get("model", "") or "").strip()
         if model_name:
@@ -197,6 +199,33 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
         return result
 
     return None
+
+
+def _configured_provider_overrides(requested_provider: str) -> tuple[str, str]:
+    """Return the endpoint and credential owned by one named pool entry."""
+    requested_norm = _normalize_custom_provider_name(requested_provider or "")
+    if not requested_norm:
+        return "", ""
+    config = load_config()
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        return "", ""
+    entry = providers.get(requested_norm)
+    if not isinstance(entry, dict):
+        return "", ""
+
+    base_url = normalize_openai_compatible_base_url(
+        str(entry.get("base_url") or "").strip()
+    )
+    api_key = str(entry.get("api_key") or "").strip()
+    api_key_env = str(entry.get("api_key_env") or "").strip()
+    if not has_usable_secret(api_key) and api_key_env:
+        from VoidCube_app.config import get_env_value
+
+        api_key = str(get_env_value(api_key_env) or "").strip()
+    if str(entry.get("auth_mode") or "").strip().lower() == "none":
+        api_key = "no-key-required"
+    return base_url, api_key if has_usable_secret(api_key) else ""
 
 
 def _resolve_named_custom_runtime(
@@ -226,13 +255,33 @@ def _resolve_named_custom_runtime(
             pool_result["model"] = model_name
         return pool_result
 
+    api_key_env = str(custom_provider.get("api_key_env") or "").strip()
+    env_api_key = ""
+    if api_key_env:
+        from VoidCube_app.config import get_env_value
+
+        env_api_key = str(get_env_value(api_key_env) or "").strip()
     api_key_candidates = [
         (explicit_api_key or "").strip(),
         str(custom_provider.get("api_key", "") or "").strip(),
-        env_str("OPENAI_API_KEY"),
-        env_str("OPENROUTER_API_KEY"),
+        env_api_key,
     ]
     api_key = next((candidate for candidate in api_key_candidates if has_usable_secret(candidate)), "")
+    auth_mode = str(custom_provider.get("auth_mode") or "").strip().lower()
+    if not api_key and not api_key_env and not auth_mode:
+        api_key = next(
+            (
+                candidate
+                for candidate in (env_str("OPENAI_API_KEY"), env_str("OPENROUTER_API_KEY"))
+                if has_usable_secret(candidate)
+            ),
+            "",
+        )
+    if not api_key and auth_mode != "none":
+        source = api_key_env or "a configured API key"
+        raise AuthError(
+            f"Provider '{requested_provider}' requires {source}, but no credential is configured."
+        )
 
     result = {
         "provider": "custom",
@@ -387,6 +436,14 @@ def _resolve_explicit_runtime(
         }
 
     pconfig = PROVIDER_REGISTRY.get(provider)
+    if pconfig and pconfig.auth_type == "none" and explicit_base_url:
+        return {
+            "provider": provider,
+            "base_url": explicit_base_url.rstrip("/"),
+            "api_key": explicit_api_key or "no-key-required",
+            "source": "explicit",
+            "requested_provider": requested_provider,
+        }
     if pconfig and pconfig.auth_type == "api_key":
         env_url = ""
         if pconfig.base_url_env_var:
@@ -429,10 +486,16 @@ def resolve_runtime_provider(
     if not requested_provider:
         raise AuthError("No provider configured. Run /api to configure a provider first.")
 
+    configured_base_url, configured_api_key = _configured_provider_overrides(
+        requested_provider
+    )
+    effective_base_url = (explicit_base_url or "").strip() or configured_base_url
+    effective_api_key = (explicit_api_key or "").strip() or configured_api_key
+
     custom_runtime = _resolve_named_custom_runtime(
         requested_provider=requested_provider,
-        explicit_api_key=explicit_api_key,
-        explicit_base_url=explicit_base_url,
+        explicit_api_key=effective_api_key,
+        explicit_base_url=effective_base_url,
     )
     if custom_runtime:
         custom_runtime["requested_provider"] = requested_provider
@@ -440,8 +503,8 @@ def resolve_runtime_provider(
 
     provider = resolve_provider(
         requested_provider,
-        explicit_api_key=explicit_api_key,
-        explicit_base_url=explicit_base_url,
+        explicit_api_key=effective_api_key,
+        explicit_base_url=effective_base_url,
     )
     if provider != "auto" and provider not in RUNTIME_PROVIDER_IDS:
         raise AuthError(
@@ -453,8 +516,8 @@ def resolve_runtime_provider(
         provider=provider,
         requested_provider=requested_provider,
         model_cfg=model_cfg,
-        explicit_api_key=explicit_api_key,
-        explicit_base_url=explicit_base_url,
+        explicit_api_key=effective_api_key,
+        explicit_base_url=effective_base_url,
     )
     if explicit_runtime:
         return explicit_runtime
