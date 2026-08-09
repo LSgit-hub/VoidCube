@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './runtime-locator'
@@ -9,6 +10,17 @@ let mainWindow: BrowserWindow | undefined
 let terminal: TerminalSession | undefined
 let services: ServiceController | undefined
 let quitting = false
+
+const APP_ID = 'io.voidcube.desktop'
+
+function windowIconPath(): string | undefined {
+  const filename = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+  return [
+    join(app.getAppPath(), 'assets', filename),
+    join(process.cwd(), 'assets', filename),
+    join(process.resourcesPath, filename)
+  ].find((candidate) => existsSync(candidate))
+}
 
 function developmentProjectRoot(): string | undefined {
   return findProjectRoot([
@@ -31,6 +43,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#11151b',
     title: 'VoidCube',
+    icon: windowIconPath(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -119,6 +132,9 @@ function registerIpc(): void {
     if (typeof columns === 'number' && typeof rows === 'number') terminal?.resize(columns, rows)
   })
 }
+
+app.setName('VoidCube')
+app.setAppUserModelId(APP_ID)
 
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))

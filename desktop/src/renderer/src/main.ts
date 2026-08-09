@@ -17,6 +17,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
+import { MonitorHealthGate } from './monitor-health'
 import type {
   ServiceControlResult,
   ExecutionContext,
@@ -113,6 +114,9 @@ terminal.loadAddon(fitAddon)
 terminal.open(terminalHost)
 
 let monitorTimer: number | undefined
+let monitorProbeGeneration = 0
+let monitorProbePending = false
+const monitorHealth = new MonitorHealthGate(3)
 let servicePollTimer: number | undefined
 let serviceActionPending = false
 let splitPercent = readSplitPercent()
@@ -165,13 +169,23 @@ function showMonitorWaiting(title: string, detail: string, error = false): void 
 }
 
 async function connectMonitor(forceReload = false): Promise<void> {
-  if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
+  if (monitorTimer !== undefined) {
+    window.clearTimeout(monitorTimer)
+    monitorTimer = undefined
+  }
   showMonitorWaiting('正在连接 Supervisor', '本地监控服务就绪后将在这里显示')
 
-  const result = await api.monitor.probe()
+  const result = await api.monitor.probe().catch((error: unknown) => ({
+    ready: false,
+    url: '',
+    message: error instanceof Error ? error.message : String(error)
+  }))
   if (result.ready) {
+    monitorHealth.observe(true)
     if (forceReload || monitorFrame.getAttribute('src') !== result.url) {
       monitorFrame.src = result.url
+    } else {
+      monitorOverlay.hidden = true
     }
     return
   }
@@ -182,6 +196,45 @@ async function connectMonitor(forceReload = false): Promise<void> {
 
 function showMonitorFailure(message: string): void {
   showMonitorWaiting('Supervisor 页面无法加载', message, true)
+}
+
+function invalidateMonitorProbe(): void {
+  monitorProbeGeneration += 1
+  monitorProbePending = false
+}
+
+function stopMonitorView(): void {
+  invalidateMonitorProbe()
+  monitorHealth.reset()
+  if (monitorTimer !== undefined) {
+    window.clearTimeout(monitorTimer)
+    monitorTimer = undefined
+  }
+  monitorFrame.removeAttribute('src')
+  showMonitorWaiting('Supervisor 已停止', 'Gateway → Memory → Supervisor')
+}
+
+async function verifyMonitorAvailability(): Promise<void> {
+  if (monitorProbePending) return
+
+  monitorProbePending = true
+  const generation = ++monitorProbeGeneration
+  const result = await api.monitor.probe().catch((error: unknown) => ({
+    ready: false,
+    url: '',
+    message: error instanceof Error ? error.message : String(error)
+  }))
+  if (generation !== monitorProbeGeneration) return
+  monitorProbePending = false
+
+  if (monitorHealth.observe(result.ready) === 'keep') {
+    if (result.ready && !monitorFrame.getAttribute('src')) monitorFrame.src = result.url
+    return
+  }
+
+  monitorFrame.removeAttribute('src')
+  showMonitorWaiting('正在重新连接 Supervisor', '连续探测失败，正在等待服务恢复')
+  monitorTimer = window.setTimeout(() => void connectMonitor(), 1500)
 }
 
 function executionModeLabel(context: ExecutionContext): string {
@@ -254,15 +307,14 @@ function applyServiceResult(result: ServiceControlResult): void {
   if (total > 0 && stoppedCount === total) servicesSummary.textContent = '已全部停止'
 
   const supervisor = serviceByName.get('supervisor')
-  if (supervisor?.state === 'healthy') {
+  if (result.action === 'stop') {
+    stopMonitorView()
+  } else if (supervisor?.state === 'healthy') {
+    invalidateMonitorProbe()
+    monitorHealth.reset()
     if (!monitorFrame.getAttribute('src')) void connectMonitor()
   } else if (supervisor) {
-    if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
-    monitorFrame.removeAttribute('src')
-    showMonitorWaiting(
-      result.action === 'stop' ? 'Supervisor 已停止' : '正在启动 Supervisor',
-      'Gateway → Memory → Supervisor'
-    )
+    void verifyMonitorAvailability()
   }
 }
 
@@ -383,6 +435,7 @@ resizeObserver.observe(terminalHost)
 
 monitorFrame.addEventListener('load', () => {
   if (!monitorFrame.getAttribute('src')) return
+  monitorHealth.observe(true)
   monitorOverlay.hidden = true
 })
 monitorFrame.addEventListener('error', () => showMonitorFailure('请检查 Supervisor 服务日志后重试'))
