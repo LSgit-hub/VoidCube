@@ -55,12 +55,15 @@ class CliMiddleStatusRuntime:
                     if fragments:
                         fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
                     lane = getattr(getattr(active, "lane", None), "value", "queued")
-                    label = "用户" if lane == "user_chat" else "自主"
                     state = getattr(getattr(active, "state", None), "value", "排队")
-                    request_id = str(getattr(active, "request_id", "") or "")
-                    request_suffix = f" #{request_id[-8:]}" if request_id else ""
+                    cancelling = state == "cancelling"
+                    if ascii_mode:
+                        indicator = "o" if cancelling else ("*" if lane == "user_chat" else ">")
+                    else:
+                        indicator = "○" if cancelling else ("●" if lane == "user_chat" else "◆")
+                    color = "#FBBF24" if cancelling else "#60A5FA"
                     fragments.append(
-                        (f"{self._BACKGROUND} #60A5FA", f"{label}:{state}{request_suffix}")
+                        (f"{self._BACKGROUND} {color} bold", indicator)
                     )
                     if queued:
                         fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{len(queued)}"))
@@ -87,7 +90,7 @@ class CliMiddleStatusRuntime:
                 provider = str(memory_config.get("provider") or "Mem")
                 memory_model = provider if len(provider) <= 12 else provider[:9] + "..."
 
-            icon = "[M]" if ascii_mode else "🧠"
+            icon = "[B] " if ascii_mode else "B✓ "
             fragments.append((f"{self._BACKGROUND} #6B7280", icon))
             if supervisor_active and memory_model:
                 fragments.extend(self._marquee(memory_model))

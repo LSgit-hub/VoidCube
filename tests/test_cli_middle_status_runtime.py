@@ -27,7 +27,7 @@ def test_middle_status_renders_memory_scene_context_and_errors():
     ).build()
 
     rendered = "".join(text for _, text in fragments)
-    assert "[M]" in rendered
+    assert "[B]" in rendered
     assert "demo" in rendered
     assert "72%" in rendered
     assert "(?)规划" in rendered
@@ -78,11 +78,13 @@ def test_middle_status_projects_scheduler_snapshot_without_reading_host_state():
     )
 
     rendered = "".join(text for _, text in runtime.build())
-    assert "用户:running" in rendered
+    assert "*" in rendered
+    assert "用户" not in rendered
+    assert "running" not in rendered
     assert "+2" in rendered
 
 
-def test_middle_status_projects_request_id_and_blocked_reason():
+def test_middle_status_compacts_cancelling_autonomous_request():
     snapshot = type(
         "Snapshot",
         (),
@@ -112,4 +114,41 @@ def test_middle_status_projects_request_id_and_blocked_reason():
 
     rendered = "".join(text for _, text in runtime.build())
 
-    assert "自主:cancelling #23456789" in rendered
+    assert "o" in rendered
+    assert "自主" not in rendered
+    assert "cancelling" not in rendered
+    assert "23456789" not in rendered
+
+
+def test_middle_status_uses_compact_unicode_user_and_api_b_indicators():
+    snapshot = type(
+        "Snapshot",
+        (),
+        {
+            "active": type(
+                "Active",
+                (),
+                {
+                    "lane": type("Lane", (), {"value": "user_chat"})(),
+                    "state": type("State", (), {"value": "running"})(),
+                },
+            )(),
+            "queued": (),
+        },
+    )()
+    runtime = CliMiddleStatusRuntime(
+        CliMiddleStatusPorts(
+            supervisor_snapshot=lambda: {"scene": "idle"},
+            memory_llm=lambda: {"model": "deepseek-v4-flash"},
+            ascii_mode=lambda: False,
+            subagent_snapshot=lambda: {"active": False},
+            scheduler_snapshot=lambda: snapshot,
+        )
+    )
+
+    rendered = "".join(text for _, text in runtime.build())
+
+    assert "●" in rendered
+    assert "B✓ deepseek-v4-flash" in rendered
+    assert "用户" not in rendered
+    assert "running" not in rendered
