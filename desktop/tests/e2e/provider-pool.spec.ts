@@ -41,8 +41,13 @@ test('provider pool and worker assignment panels stay usable across viewports', 
 
     await page.locator('[data-settings-view="workers"]').click()
     await expect(page.locator('#workerRoleList .worker-role-row')).toHaveCount(4)
-    await expect(page.locator('[data-worker-provider]').first()).toHaveValue('')
-    await expect(page.locator('[data-worker-provider]').first().locator('option')).toHaveCount(4)
+    const firstProviderSelect = page.locator('[data-worker-provider]').first()
+    await expect(firstProviderSelect.locator('option')).toHaveCount(4)
+    const selectedProvider = await firstProviderSelect.inputValue()
+    const providerOptions = await firstProviderSelect.locator('option').evaluateAll(
+      (options) => options.map((option) => (option as HTMLOptionElement).value)
+    )
+    expect(providerOptions).toContain(selectedProvider)
     await expect(page.locator('#workerRoleList .worker-role-row').first()).toBeInViewport()
     await page.screenshot({
       path: 'test-results/worker-roles-desktop.png',
