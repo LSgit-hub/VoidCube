@@ -38,6 +38,24 @@ def test_input_area_height_stays_within_the_existing_bounds(tmp_path) -> None:
     assert 1 <= area.window.height() <= 8
 
 
+def test_input_area_height_preserves_space_in_a_short_terminal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "VoidCube_cli.tui_input_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=80, rows=6)
+            )
+        ),
+    )
+    area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
+    area.buffer.text = "\n".join(f"line {index}" for index in range(10))
+
+    assert area.window.height() == 3
+
+
 def test_placeholder_processor_only_appends_to_an_empty_first_line(tmp_path) -> None:
     area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
     install_placeholder_processor(area, placeholder_text=lambda: "ready")

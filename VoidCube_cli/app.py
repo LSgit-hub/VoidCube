@@ -4629,12 +4629,18 @@ class VoidcubeCLI:
                     state_ports=self._autonomous_panel_state_ports(),
                     render_ports=self._autonomous_panel_render_ports(),
                 ),
-                autonomous_visible=lambda: _has_visible_autonomous_work_view(
-                    self,
-                    state_ports=self._autonomous_panel_state_ports(),
+                autonomous_visible=lambda: (
+                    layout_metrics.extended_panels_visible()
+                    and _has_visible_autonomous_work_view(
+                        self,
+                        state_ports=self._autonomous_panel_state_ports(),
+                    )
                 ),
                 status_fragments=self._get_status_bar_fragments,
-                status_visible=lambda: self._status_bar_visible,
+                status_visible=lambda: (
+                    self._status_bar_visible
+                    and layout_metrics.status_bar_visible()
+                ),
             )
         ).build()
 
