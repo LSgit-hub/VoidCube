@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src http://127.0.0.1:* http://localhost:*; connect-src 'self' ws://localhost:*;"
+    />
+    <title>VoidCube</title>
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <header class="app-bar">
+        <div class="brand" aria-label="VoidCube Desktop">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <div class="brand-copy">
+            <strong>VoidCube</strong>
+            <span>Desktop</span>
+          </div>
+        </div>
+        <div class="runtime-states" aria-live="polite">
+          <div class="runtime-state" id="monitor-state">
+            <span class="state-dot" aria-hidden="true"></span>
+            <span>监控连接中</span>
+          </div>
+          <div class="runtime-state" id="terminal-state">
+            <span class="state-dot" aria-hidden="true"></span>
+            <span>CLI 启动中</span>
+          </div>
+        </div>
+        <div class="app-actions">
+          <button id="reload-monitor" class="icon-button" type="button" title="重新加载监控页面" aria-label="重新加载监控页面">
+            <i data-lucide="refresh-cw" aria-hidden="true"></i>
+          </button>
+          <button id="restart-terminal" class="icon-button" type="button" title="重启 CLI" aria-label="重启 CLI">
+            <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+          </button>
+        </div>
+      </header>
+
+      <main id="workspace" class="workspace">
+        <section class="monitor-pane" aria-label="Supervisor 监控页面">
+          <iframe
+            id="monitor-frame"
+            title="VoidCube Supervisor"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads"
+          ></iframe>
+          <div id="monitor-overlay" class="monitor-overlay">
+            <span class="loading-ring" aria-hidden="true"></span>
+            <strong id="monitor-overlay-title">正在启动 Supervisor</strong>
+            <span id="monitor-overlay-detail">本地监控服务就绪后将在这里显示</span>
+            <button id="retry-monitor" class="command-button" type="button" hidden>重试连接</button>
+          </div>
+        </section>
+
+        <div
+          id="splitter"
+          class="splitter"
+          role="separator"
+          aria-label="调整监控与终端高度"
+          aria-orientation="horizontal"
+          aria-valuemin="25"
+          aria-valuemax="75"
+          aria-valuenow="58"
+          tabindex="0"
+        ><span aria-hidden="true"></span></div>
+
+        <section class="terminal-pane" aria-label="VoidCube Agent CLI">
+          <div class="pane-bar">
+            <div class="pane-title">
+              <span class="terminal-glyph" aria-hidden="true">›_</span>
+              <strong>Agent CLI</strong>
+            </div>
+            <span id="terminal-meta" class="pane-meta">等待进程</span>
+          </div>
+          <div id="terminal" class="terminal-host"></div>
+          <div id="terminal-error" class="terminal-error" hidden>
+            <strong>CLI 无法启动</strong>
+            <span id="terminal-error-message"></span>
+            <button id="retry-terminal" class="command-button" type="button">重新启动</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

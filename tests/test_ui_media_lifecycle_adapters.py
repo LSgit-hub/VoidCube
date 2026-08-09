@@ -121,14 +121,20 @@ def test_media_playlist_state_persists_current_and_queue(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("ui_enabled", "auto_open", "test_environment"),
-    [(False, True, False), (True, False, False), (True, True, True)],
+    ("ui_enabled", "auto_open", "test_environment", "desktop_environment"),
+    [
+        (False, True, False, False),
+        (True, False, False, False),
+        (True, True, True, False),
+        (True, True, False, True),
+    ],
 )
 def test_open_lifecycle_owner_skips_disabled_or_test_schedules(
     monkeypatch,
     ui_enabled,
     auto_open,
     test_environment,
+    desktop_environment,
 ):
     import systems.supervisor.ui_open_lifecycle_adapters as owner
 
@@ -150,6 +156,10 @@ def test_open_lifecycle_owner_skips_disabled_or_test_schedules(
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "test")
     else:
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    if desktop_environment:
+        monkeypatch.setenv("VOIDCUBE_DESKTOP", "1")
+    else:
+        monkeypatch.delenv("VOIDCUBE_DESKTOP", raising=False)
 
     maybe_open_supervisor_ui(
         context=SupervisorUIOpenLifecycleContext(
@@ -184,6 +194,7 @@ def test_open_lifecycle_owner_schedules_daemon_and_opens_url(monkeypatch):
         lambda url: captured.update(opened=url),
     )
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("VOIDCUBE_DESKTOP", raising=False)
 
     maybe_open_supervisor_ui(
         context=SupervisorUIOpenLifecycleContext(

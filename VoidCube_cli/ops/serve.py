@@ -121,16 +121,17 @@ def _pid_alive(pid: int) -> bool:
     """Check if a process with the given PID is alive."""
     try:
         if sys.platform == "win32":
-            import subprocess
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True,
+                timeout=5,
             )
-            return f'"{pid}"' in result.stdout
+            output = result.stdout or b""
+            return f'"{pid}"'.encode("ascii") in output
         else:
             os.kill(pid, 0)
             return True
-    except (OSError, ProcessLookupError, subprocess.CalledProcessError, TimeoutError):
+    except (OSError, ProcessLookupError, subprocess.SubprocessError, TimeoutError):
         return False
 
 
@@ -193,17 +194,17 @@ def _port_owner_pid(port: int) -> Optional[int]:
             result = subprocess.run(
                 ["netstat", "-ano", "-p", "tcp"],
                 capture_output=True,
-                text=True,
                 timeout=5,
             )
-            for raw_line in result.stdout.splitlines():
+            output = result.stdout or b""
+            for raw_line in output.splitlines():
                 columns = raw_line.split()
-                if len(columns) < 5 or columns[0].upper() != "TCP":
+                if len(columns) < 5 or columns[0].upper() != b"TCP":
                     continue
                 local_address, state, pid_text = columns[1], columns[3], columns[4]
-                if state.upper() != "LISTENING":
+                if state.upper() != b"LISTENING":
                     continue
-                if local_address.rsplit(":", 1)[-1] != str(int(port)):
+                if local_address.rsplit(b":", 1)[-1] != str(int(port)).encode("ascii"):
                     continue
                 return int(pid_text)
         except (OSError, ValueError, subprocess.SubprocessError):

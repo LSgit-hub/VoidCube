@@ -25,6 +25,8 @@ def maybe_open_supervisor_ui(
 ) -> None:
     if not context.ui_enabled or not context.auto_open:
         return
+    if os.getenv("VOIDCUBE_DESKTOP") == "1":
+        return
     if os.getenv("PYTEST_CURRENT_TEST"):
         return
 

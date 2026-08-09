@@ -197,6 +197,12 @@ podman_workspace_probe.txt
 Thumbs.db
 desktop.ini
 
+# VoidCube Electron desktop workspace
+desktop/node_modules/
+desktop/out/
+desktop/release/
+desktop/test-results/
+
 # ==========================================
 # 🏷️ 本地运行和敏感临时文件（建议）
 # ==========================================

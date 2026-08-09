@@ -203,19 +203,52 @@ def test_start_service_adopts_existing_voidcube_process_when_pid_file_is_missing
 def test_port_owner_pid_uses_windows_netstat_without_psutil(monkeypatch):
     from VoidCube_cli.ops import serve
 
+    def run_netstat(*args, **kwargs):
+        assert kwargs.get("text") is not True
+        return SimpleNamespace(
+            stdout=b"  TCP    127.0.0.1:6002    0.0.0.0:0    LISTENING    23156\n"
+        )
+
     monkeypatch.setattr(serve.sys, "platform", "win32")
     monkeypatch.setitem(sys.modules, "psutil", None)
-    monkeypatch.setattr(
-        serve.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=(
-                "  TCP    127.0.0.1:6002    0.0.0.0:0    LISTENING    23156\n"
-            )
-        ),
-    )
+    monkeypatch.setattr(serve.subprocess, "run", run_netstat)
 
     assert serve._port_owner_pid(6002) == 23156
+
+
+def test_pid_alive_handles_non_utf8_windows_tasklist_output(monkeypatch):
+    from VoidCube_cli.ops import serve
+
+    def run_tasklist(*args, **kwargs):
+        assert kwargs.get("text") is not True
+        return SimpleNamespace(
+            stdout=b"\xd0\xcf\x00\r\n\"python.exe\",\"1234\"\r\n"
+        )
+
+    monkeypatch.setattr(serve.sys, "platform", "win32")
+    monkeypatch.setattr(serve.subprocess, "run", run_tasklist)
+
+    assert serve._pid_alive(1234) is True
+
+
+@pytest.mark.parametrize("stdout", [None, b"\xd0\xcf\x00\r\n"])
+def test_windows_process_probes_treat_empty_or_malformed_output_as_no_match(
+    monkeypatch, stdout
+):
+    from VoidCube_cli.ops import serve
+
+    monkeypatch.setattr(serve.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    calls = iter(
+        [
+            SimpleNamespace(stdout=stdout),
+            SimpleNamespace(stdout=stdout),
+        ]
+    )
+    monkeypatch.setattr(serve.subprocess, "run", lambda *args, **kwargs: next(calls))
+
+    assert serve._pid_alive(4321) is False
+    assert serve._port_owner_pid(6002) is None
 
 
 @pytest.mark.parametrize(
