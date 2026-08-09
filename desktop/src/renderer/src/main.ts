@@ -1,9 +1,30 @@
-import { createIcons, RefreshCw, RotateCcw } from 'lucide'
+import {
+  createIcons,
+  Minus,
+  PanelTop,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Rows3,
+  ServerCog,
+  Square,
+  SquareTerminal,
+  X
+} from 'lucide'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
-import type { TerminalState } from '../../shared/contracts'
+import type {
+  ServiceControlResult,
+  ServiceInfo,
+  ServiceLifecycleAction,
+  TerminalState
+} from '../../shared/contracts'
+
+type LayoutMode = 'split' | 'monitor' | 'terminal'
+
+const SPLIT_STORAGE_KEY = 'voidcube.desktop.monitor-size'
 
 const api = window.voidcubeDesktop
 const terminalHost = requiredElement<HTMLDivElement>('terminal')
@@ -15,12 +36,35 @@ const retryMonitor = requiredElement<HTMLButtonElement>('retry-monitor')
 const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
+const servicesState = requiredElement<HTMLElement>('services-state')
 const monitorState = requiredElement<HTMLElement>('monitor-state')
 const terminalState = requiredElement<HTMLElement>('terminal-state')
+const servicesSummary = requiredElement<HTMLElement>('services-summary')
+const servicesError = requiredElement<HTMLParagraphElement>('services-error')
+const serviceMenu = requiredElement<HTMLDetailsElement>('service-menu')
 const workspace = requiredElement<HTMLElement>('workspace')
 const splitter = requiredElement<HTMLElement>('splitter')
+const layoutButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-layout-mode]'))
+const serviceButtons = [
+  requiredElement<HTMLButtonElement>('start-services'),
+  requiredElement<HTMLButtonElement>('restart-services'),
+  requiredElement<HTMLButtonElement>('stop-services')
+]
 
-createIcons({ icons: { RefreshCw, RotateCcw } })
+createIcons({
+  icons: {
+    PanelTop,
+    Play,
+    RefreshCw,
+    RotateCcw,
+    Rows3,
+    ServerCog,
+    Square,
+    SquareTerminal,
+    Minus,
+    X
+  }
+})
 
 const terminal = new Terminal({
   allowTransparency: false,
@@ -64,7 +108,10 @@ terminal.loadAddon(fitAddon)
 terminal.open(terminalHost)
 
 let monitorTimer: number | undefined
+let servicePollTimer: number | undefined
+let serviceActionPending = false
 let splitPercent = readSplitPercent()
+let layoutMode = readLayoutMode()
 let dragStartY = 0
 let dragStartPercent = splitPercent
 
@@ -90,7 +137,8 @@ function applyTerminalState(state: TerminalState): void {
     case 'running':
       setRuntimeState(terminalState, 'CLI 已连接', 'good')
       terminalMeta.textContent = state.pid ? `PID ${state.pid}` : '运行中'
-      terminal.focus()
+      requestAnimationFrame(fitTerminal)
+      if (layoutMode !== 'monitor') terminal.focus()
       break
     case 'exited':
       setRuntimeState(terminalState, 'CLI 已退出', 'bad')
@@ -114,19 +162,25 @@ function showTerminalError(message: string): void {
   terminalError.hidden = false
 }
 
+function showMonitorWaiting(title: string, detail: string, error = false): void {
+  monitorOverlay.hidden = false
+  monitorOverlay.classList.toggle('error', error)
+  monitorOverlayTitle.textContent = title
+  monitorOverlayDetail.textContent = detail
+  retryMonitor.hidden = !error
+}
+
 async function connectMonitor(forceReload = false): Promise<void> {
   if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
   setRuntimeState(monitorState, '监控连接中', 'pending')
-  retryMonitor.hidden = true
-  monitorOverlay.hidden = false
-  monitorOverlay.classList.remove('error')
-  monitorOverlayTitle.textContent = '正在启动 Supervisor'
-  monitorOverlayDetail.textContent = '本地监控服务就绪后将在这里显示'
+  showMonitorWaiting('正在连接 Supervisor', '本地监控服务就绪后将在这里显示')
 
   const result = await api.monitor.probe()
   if (result.ready) {
     setRuntimeState(monitorState, '正在载入监控', 'pending')
-    if (forceReload || monitorFrame.src !== result.url) monitorFrame.src = result.url
+    if (forceReload || monitorFrame.getAttribute('src') !== result.url) {
+      monitorFrame.src = result.url
+    }
     return
   }
 
@@ -136,14 +190,106 @@ async function connectMonitor(forceReload = false): Promise<void> {
 
 function showMonitorFailure(message: string): void {
   setRuntimeState(monitorState, '监控不可用', 'bad')
-  monitorOverlay.hidden = false
-  monitorOverlay.classList.add('error')
-  monitorOverlayTitle.textContent = 'Supervisor 页面无法加载'
-  monitorOverlayDetail.textContent = message
-  retryMonitor.hidden = false
+  showMonitorWaiting('Supervisor 页面无法加载', message, true)
+}
+
+function serviceLabel(service: ServiceInfo): string {
+  if (service.state === 'healthy') return service.pid ? `PID ${service.pid}` : '正常'
+  if (service.state === 'unhealthy') return '无响应'
+  return '已停止'
+}
+
+function applyServiceResult(result: ServiceControlResult): void {
+  servicesError.hidden = !result.error
+  servicesError.textContent = result.error ?? ''
+
+  const serviceByName = new Map(result.services.map((service) => [service.name, service]))
+  for (const row of document.querySelectorAll<HTMLElement>('.service-row')) {
+    const name = row.dataset.service
+    const service = name ? serviceByName.get(name) : undefined
+    row.className = `service-row ${service?.state ?? 'unknown'}`
+    const detail = row.querySelector('small')
+    if (detail && service) detail.textContent = serviceLabel(service)
+  }
+
+  if (result.error) {
+    setRuntimeState(servicesState, '服务控制失败', 'bad')
+    servicesSummary.textContent = '控制不可用'
+    return
+  }
+
+  const healthyCount = result.services.filter((service) => service.state === 'healthy').length
+  const stoppedCount = result.services.filter((service) => service.state === 'stopped').length
+  const total = result.services.length
+  servicesSummary.textContent = `${healthyCount}/${total} 正常`
+  if (total > 0 && healthyCount === total) {
+    setRuntimeState(servicesState, '服务正常', 'good')
+  } else if (total > 0 && stoppedCount === total) {
+    setRuntimeState(servicesState, '服务已停止', 'pending')
+  } else {
+    setRuntimeState(servicesState, `服务 ${healthyCount}/${total}`, 'bad')
+  }
+
+  const supervisor = serviceByName.get('supervisor')
+  if (supervisor?.state === 'healthy') {
+    if (!monitorFrame.getAttribute('src')) void connectMonitor()
+  } else if (supervisor) {
+    if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
+    monitorFrame.removeAttribute('src')
+    setRuntimeState(monitorState, '等待 Supervisor', 'pending')
+    showMonitorWaiting(
+      result.action === 'stop' ? 'Supervisor 已停止' : '正在启动 Supervisor',
+      'Gateway → Memory → Supervisor'
+    )
+  }
+}
+
+function setServiceBusy(action?: ServiceLifecycleAction): void {
+  serviceActionPending = action !== undefined
+  for (const button of serviceButtons) button.disabled = serviceActionPending
+  serviceMenu.classList.toggle('busy', serviceActionPending)
+  if (!action) return
+  const labels: Record<ServiceLifecycleAction, string> = {
+    start: '服务启动中',
+    restart: '服务重启中',
+    stop: '服务停止中'
+  }
+  setRuntimeState(servicesState, labels[action], 'pending')
+  servicesSummary.textContent = labels[action]
+}
+
+async function runServiceAction(action: ServiceLifecycleAction): Promise<ServiceControlResult> {
+  setServiceBusy(action)
+  try {
+    const result = await api.services.control(action)
+    applyServiceResult(result)
+    if (action !== 'stop' && result.services.some(
+      (service) => service.name === 'supervisor' && service.state === 'healthy'
+    )) {
+      await connectMonitor(true)
+    }
+    return result
+  } finally {
+    setServiceBusy()
+  }
+}
+
+function scheduleServicePoll(): void {
+  if (servicePollTimer !== undefined) window.clearTimeout(servicePollTimer)
+  servicePollTimer = window.setTimeout(() => void refreshServiceStatus(), 5000)
+}
+
+async function refreshServiceStatus(): Promise<void> {
+  if (serviceActionPending || document.hidden) {
+    scheduleServicePoll()
+    return
+  }
+  applyServiceResult(await api.services.status())
+  scheduleServicePoll()
 }
 
 function fitTerminal(): void {
+  if (layoutMode === 'monitor') return
   try {
     fitAddon.fit()
     api.terminal.resize(terminal.cols, terminal.rows)
@@ -153,19 +299,40 @@ function fitTerminal(): void {
 }
 
 function readSplitPercent(): number {
-  const stored = Number.parseFloat(localStorage.getItem('voidcube.desktop.split') ?? '')
-  return Number.isFinite(stored) ? Math.max(25, Math.min(75, stored)) : 58
+  localStorage.removeItem('voidcube.desktop.split')
+  const stored = Number.parseFloat(localStorage.getItem(SPLIT_STORAGE_KEY) ?? '')
+  return Number.isFinite(stored) ? Math.max(25, Math.min(75, stored)) : 54
 }
 
 function setSplitPercent(value: number, persist = false): void {
   splitPercent = Math.max(25, Math.min(75, value))
   workspace.style.setProperty('--monitor-size', `${splitPercent}%`)
   splitter.setAttribute('aria-valuenow', String(Math.round(splitPercent)))
-  if (persist) localStorage.setItem('voidcube.desktop.split', splitPercent.toFixed(2))
+  if (persist) localStorage.setItem(SPLIT_STORAGE_KEY, splitPercent.toFixed(2))
   requestAnimationFrame(fitTerminal)
 }
 
+function readLayoutMode(): LayoutMode {
+  const stored = localStorage.getItem('voidcube.desktop.layout')
+  return stored === 'monitor' || stored === 'terminal' ? stored : 'split'
+}
+
+function setLayoutMode(mode: LayoutMode, persist = false): void {
+  layoutMode = mode
+  workspace.dataset.layout = mode
+  splitter.tabIndex = mode === 'split' ? 0 : -1
+  for (const button of layoutButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.layoutMode === mode))
+  }
+  if (persist) localStorage.setItem('voidcube.desktop.layout', mode)
+  requestAnimationFrame(() => {
+    fitTerminal()
+    if (mode === 'terminal') terminal.focus()
+  })
+}
+
 function beginSplitDrag(event: PointerEvent): void {
+  if (layoutMode !== 'split') return
   dragStartY = event.clientY
   dragStartPercent = splitPercent
   splitter.setPointerCapture(event.pointerId)
@@ -194,6 +361,7 @@ const resizeObserver = new ResizeObserver(() => requestAnimationFrame(fitTermina
 resizeObserver.observe(terminalHost)
 
 monitorFrame.addEventListener('load', () => {
+  if (!monitorFrame.getAttribute('src')) return
   monitorOverlay.hidden = true
   setRuntimeState(monitorState, '监控已连接', 'good')
 })
@@ -202,24 +370,48 @@ requiredElement<HTMLButtonElement>('reload-monitor').addEventListener('click', (
 retryMonitor.addEventListener('click', () => void connectMonitor(true))
 requiredElement<HTMLButtonElement>('restart-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.restart()))
 requiredElement<HTMLButtonElement>('retry-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.start()))
+requiredElement<HTMLButtonElement>('minimize-window').addEventListener('click', () => api.window.minimize())
+requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () => api.window.close())
+requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
+requiredElement<HTMLButtonElement>('restart-services').addEventListener('click', () => void runServiceAction('restart'))
+requiredElement<HTMLButtonElement>('stop-services').addEventListener('click', () => void runServiceAction('stop'))
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) void refreshServiceStatus()
+})
+
+for (const button of layoutButtons) {
+  button.addEventListener('click', () => {
+    const mode = button.dataset.layoutMode
+    if (mode === 'split' || mode === 'monitor' || mode === 'terminal') {
+      setLayoutMode(mode, true)
+    }
+  })
+}
 
 splitter.addEventListener('pointerdown', beginSplitDrag)
 splitter.addEventListener('pointermove', moveSplitDrag)
 splitter.addEventListener('pointerup', endSplitDrag)
 splitter.addEventListener('pointercancel', endSplitDrag)
 splitter.addEventListener('keydown', (event) => {
-  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+  if (layoutMode !== 'split' || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
   event.preventDefault()
   setSplitPercent(splitPercent + (event.key === 'ArrowDown' ? 2 : -2), true)
 })
 
 window.addEventListener('beforeunload', () => {
   if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
+  if (servicePollTimer !== undefined) window.clearTimeout(servicePollTimer)
   resizeObserver.disconnect()
   disposeTerminalData()
   disposeTerminalState()
 })
 
-setSplitPercent(splitPercent)
-void connectMonitor()
-void api.terminal.start().then(applyTerminalState)
+async function startDesktop(): Promise<void> {
+  setLayoutMode(layoutMode)
+  setSplitPercent(splitPercent)
+  await runServiceAction('start')
+  applyTerminalState(await api.terminal.start())
+  scheduleServicePoll()
+}
+
+void startDesktop()

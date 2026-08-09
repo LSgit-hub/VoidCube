@@ -19,23 +19,77 @@
             <span>Desktop</span>
           </div>
         </div>
-        <div class="runtime-states" aria-live="polite">
-          <div class="runtime-state" id="monitor-state">
-            <span class="state-dot" aria-hidden="true"></span>
-            <span>监控连接中</span>
-          </div>
-          <div class="runtime-state" id="terminal-state">
-            <span class="state-dot" aria-hidden="true"></span>
-            <span>CLI 启动中</span>
-          </div>
-        </div>
         <div class="app-actions">
+          <div class="layout-switcher" role="group" aria-label="桌面布局">
+            <button class="icon-button" type="button" data-layout-mode="split" title="上下分屏" aria-label="上下分屏" aria-pressed="true">
+              <i data-lucide="rows-3" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" type="button" data-layout-mode="monitor" title="监控最大化" aria-label="监控最大化" aria-pressed="false">
+              <i data-lucide="panel-top" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" type="button" data-layout-mode="terminal" title="终端最大化" aria-label="终端最大化" aria-pressed="false">
+              <i data-lucide="square-terminal" aria-hidden="true"></i>
+            </button>
+          </div>
+          <span class="action-divider" aria-hidden="true"></span>
+          <details id="service-menu" class="service-menu">
+            <summary class="icon-button" title="后台服务" aria-label="后台服务">
+              <i data-lucide="server-cog" aria-hidden="true"></i>
+            </summary>
+            <div class="service-popover">
+              <div class="service-popover-heading">
+                <strong>后台服务</strong>
+                <span id="services-summary">检查中</span>
+              </div>
+              <div class="service-list" aria-live="polite">
+                <div class="service-row" data-service="gateway">
+                  <span class="state-dot" aria-hidden="true"></span>
+                  <span>Gateway</span>
+                  <small>6000</small>
+                </div>
+                <div class="service-row" data-service="memory">
+                  <span class="state-dot" aria-hidden="true"></span>
+                  <span>Memory</span>
+                  <small>6001</small>
+                </div>
+                <div class="service-row" data-service="supervisor">
+                  <span class="state-dot" aria-hidden="true"></span>
+                  <span>Supervisor</span>
+                  <small>6002</small>
+                </div>
+              </div>
+              <p id="services-error" class="services-error" hidden></p>
+              <div class="service-commands">
+                <button id="start-services" type="button">
+                  <i data-lucide="play" aria-hidden="true"></i>
+                  <span>启动</span>
+                </button>
+                <button id="restart-services" type="button">
+                  <i data-lucide="refresh-cw" aria-hidden="true"></i>
+                  <span>重启</span>
+                </button>
+                <button id="stop-services" type="button">
+                  <i data-lucide="square" aria-hidden="true"></i>
+                  <span>停止</span>
+                </button>
+              </div>
+            </div>
+          </details>
           <button id="reload-monitor" class="icon-button" type="button" title="重新加载监控页面" aria-label="重新加载监控页面">
             <i data-lucide="refresh-cw" aria-hidden="true"></i>
           </button>
           <button id="restart-terminal" class="icon-button" type="button" title="重启 CLI" aria-label="重启 CLI">
             <i data-lucide="rotate-ccw" aria-hidden="true"></i>
           </button>
+          <span class="action-divider" aria-hidden="true"></span>
+          <div class="window-controls" aria-label="窗口控制">
+            <button id="minimize-window" class="icon-button" type="button" title="最小化" aria-label="最小化">
+              <i data-lucide="minus" aria-hidden="true"></i>
+            </button>
+            <button id="close-window" class="icon-button close-button" type="button" title="关闭窗口" aria-label="关闭窗口">
+              <i data-lucide="x" aria-hidden="true"></i>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -62,7 +116,7 @@
           aria-orientation="horizontal"
           aria-valuemin="25"
           aria-valuemax="75"
-          aria-valuenow="58"
+          aria-valuenow="54"
           tabindex="0"
         ><span aria-hidden="true"></span></div>
 
@@ -71,6 +125,20 @@
             <div class="pane-title">
               <span class="terminal-glyph" aria-hidden="true">›_</span>
               <strong>Agent CLI</strong>
+            </div>
+            <div class="runtime-states pane-runtime-states" aria-live="polite">
+              <div class="runtime-state" id="services-state">
+                <span class="state-dot" aria-hidden="true"></span>
+                <span>服务检查中</span>
+              </div>
+              <div class="runtime-state" id="monitor-state">
+                <span class="state-dot" aria-hidden="true"></span>
+                <span>监控连接中</span>
+              </div>
+              <div class="runtime-state" id="terminal-state">
+                <span class="state-dot" aria-hidden="true"></span>
+                <span>CLI 启动中</span>
+              </div>
             </div>
             <span id="terminal-meta" class="pane-meta">等待进程</span>
           </div>

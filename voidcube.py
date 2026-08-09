@@ -125,7 +125,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if _handle_daemon_lifecycle(args) else 1
 
     # ── Auto-start daemons (interactive / non-fast paths) ──────────
-    if not _is_fast_path(args):
+    desktop_manages_services = (
+        os.environ.get("VOIDCUBE_DESKTOP_MANAGED_SERVICES") == "1"
+    )
+    if not _is_fast_path(args) and not desktop_manages_services:
         try:
             _auto_start_daemons()
         except Exception as exc:

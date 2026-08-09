@@ -33,3 +33,21 @@ def test_auto_start_daemons_reports_actual_startup_order(monkeypatch, capsys):
     assert "Gateway -> Memory -> Supervisor" in output
     assert "Memory -> Gateway -> Supervisor" not in output
     assert calls == [{"silent": False}]
+
+
+@pytest.mark.unit
+def test_desktop_managed_cli_skips_wrapper_daemon_ownership(monkeypatch):
+    calls = []
+    monkeypatch.setenv("VOIDCUBE_DESKTOP_MANAGED_SERVICES", "1")
+    monkeypatch.setattr(
+        voidcube,
+        "_auto_start_daemons",
+        lambda: pytest.fail("desktop-managed CLI attempted daemon startup"),
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.main.main",
+        lambda: calls.append("cli"),
+    )
+
+    assert voidcube.main([]) == 0
+    assert calls == ["cli"]

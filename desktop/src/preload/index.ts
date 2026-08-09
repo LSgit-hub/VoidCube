@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { MonitorProbe, TerminalState, VoidCubeDesktopApi } from '../shared/contracts'
+import type {
+  MonitorProbe,
+  ServiceControlResult,
+  ServiceLifecycleAction,
+  TerminalState,
+  VoidCubeDesktopApi
+} from '../shared/contracts'
 
 const api: VoidCubeDesktopApi = {
   runtime: {
@@ -12,6 +18,15 @@ const api: VoidCubeDesktopApi = {
   },
   monitor: {
     probe: () => ipcRenderer.invoke('monitor:probe') as Promise<MonitorProbe>
+  },
+  services: {
+    status: () => ipcRenderer.invoke('services:status') as Promise<ServiceControlResult>,
+    control: (action: ServiceLifecycleAction) =>
+      ipcRenderer.invoke('services:control', action) as Promise<ServiceControlResult>
+  },
+  window: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    close: () => ipcRenderer.send('window:close')
   },
   terminal: {
     start: () => ipcRenderer.invoke('terminal:start') as Promise<TerminalState>,

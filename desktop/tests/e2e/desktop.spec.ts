@@ -1,4 +1,6 @@
 import { _electron as electron, expect, test } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 function electronExecutable(): string {
@@ -7,6 +9,15 @@ function electronExecutable(): string {
   if (process.platform === 'win32') return join(root, 'electron.exe')
   if (process.platform === 'darwin') return join(root, 'Electron.app', 'Contents', 'MacOS', 'Electron')
   return join(root, 'electron')
+}
+
+function projectPython(projectRoot: string): string {
+  const candidates = process.platform === 'win32'
+    ? [join(projectRoot, '.venv', 'Scripts', 'python.exe')]
+    : [join(projectRoot, '.venv', 'bin', 'python3'), join(projectRoot, '.venv', 'bin', 'python')]
+  const python = candidates.find((candidate) => existsSync(candidate))
+  if (!python) throw new Error('Project Python is unavailable')
+  return python
 }
 
 test('opens the supervisor and a real VoidCube PTY', async () => {
@@ -30,6 +41,12 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     const pageErrors: string[] = []
     window.on('pageerror', (error) => pageErrors.push(error.message))
     await expect(window.locator('.app-shell')).toBeVisible()
+    await expect(window.locator('#minimize-window')).toBeVisible()
+    await expect(window.locator('#close-window')).toBeVisible()
+    await expect.poll(() => window.locator('#workspace').evaluate(
+      (element) => element.style.getPropertyValue('--monitor-size')
+    )).toBe('54%')
+    await expect(window.locator('#services-state')).toHaveClass(/good/)
     await expect(window.locator('#terminal-state')).toHaveClass(/good/)
     await expect(window.locator('#monitor-state')).toHaveClass(/good/)
     await expect(window.locator('#monitor-frame')).toHaveAttribute('src', /127\.0\.0\.1:6002\/ui/)
@@ -40,9 +57,56 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await window.keyboard.type('/help')
     await expect.poll(async () => window.locator('.xterm-rows').textContent()).toContain('/help')
     await window.keyboard.press('Enter')
+
+    await application.evaluate(({ BrowserWindow }) => {
+      const activeWindow = BrowserWindow.getAllWindows()[0]
+      if (!activeWindow) throw new Error('Desktop window is unavailable')
+      activeWindow.setSize(920, 800)
+    })
+    await window.waitForTimeout(700)
+    await window.screenshot({ path: 'test-results/voidcube-desktop-narrow.png' })
+    await application.evaluate(({ BrowserWindow }) => {
+      const activeWindow = BrowserWindow.getAllWindows()[0]
+      if (!activeWindow) throw new Error('Desktop window is unavailable')
+      activeWindow.setSize(1060, 960)
+    })
+    await window.waitForTimeout(700)
+
+    await window.locator('#service-menu > summary').click()
+    await expect(window.locator('#services-summary')).toHaveText('3/3 正常')
+    await expect(window.locator('.service-row.healthy')).toHaveCount(3)
+    await window.screenshot({ path: 'test-results/voidcube-service-menu.png' })
+    await window.locator('#service-menu > summary').click()
+
+    await window.locator('[data-layout-mode="monitor"]').click()
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'monitor')
+    await expect(window.locator('.monitor-pane')).toBeVisible()
+    await expect(window.locator('.terminal-pane')).toBeHidden()
+
+    await window.locator('[data-layout-mode="terminal"]').click()
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'terminal')
+    await expect(window.locator('.monitor-pane')).toBeHidden()
+    await expect(window.locator('.terminal-pane')).toBeVisible()
+    await expect.poll(() => window.evaluate(() => localStorage.getItem('voidcube.desktop.layout')))
+      .toBe('terminal')
+
+    await window.reload()
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'terminal')
+    await window.locator('[data-layout-mode="split"]').click()
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'split')
+    await expect(window.locator('.monitor-pane')).toBeVisible()
+    await expect(window.locator('.terminal-pane')).toBeVisible()
+    await expect(window.locator('#monitor-state')).toHaveClass(/good/)
     await window.screenshot({ path: 'test-results/voidcube-desktop.png' })
     expect(pageErrors).toEqual([])
   } finally {
     await application.close()
   }
+
+  const status = JSON.parse(execFileSync(
+    projectPython(projectRoot),
+    ['-m', 'VoidCube_cli.desktop_control', 'status'],
+    { cwd: projectRoot, encoding: 'utf8' }
+  )) as { ok: boolean }
+  expect(status.ok).toBe(true)
 })

@@ -9,6 +9,8 @@ const DEFAULT_ROWS = 30
 export class TerminalSession {
   private process?: pty.IPty
   private state: TerminalState = { phase: 'stopped' }
+  private columns = DEFAULT_COLUMNS
+  private rows = DEFAULT_ROWS
 
   constructor(
     private readonly window: BrowserWindow,
@@ -31,15 +33,16 @@ export class TerminalSession {
       const args = [...this.runtime.pythonPrefixArgs, ...this.runtime.cliArgs]
       const child = pty.spawn(this.runtime.pythonCommand, args, {
         name: process.platform === 'win32' ? 'xterm-256color' : 'xterm-256color',
-        cols: DEFAULT_COLUMNS,
-        rows: DEFAULT_ROWS,
+        cols: this.columns,
+        rows: this.rows,
         cwd: this.runtime.workingDirectory,
         env: {
           ...process.env,
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
           PYTHONUTF8: '1',
-          VOIDCUBE_DESKTOP: '1'
+          VOIDCUBE_DESKTOP: '1',
+          VOIDCUBE_DESKTOP_MANAGED_SERVICES: '1'
         } as Record<string, string>
       })
       this.process = child
@@ -68,10 +71,9 @@ export class TerminalSession {
   }
 
   resize(columns: number, rows: number): void {
-    if (!this.process) return
-    const cols = Math.max(20, Math.min(500, Math.floor(columns)))
-    const lines = Math.max(5, Math.min(200, Math.floor(rows)))
-    this.process.resize(cols, lines)
+    this.columns = Math.max(20, Math.min(500, Math.floor(columns)))
+    this.rows = Math.max(5, Math.min(200, Math.floor(rows)))
+    this.process?.resize(this.columns, this.rows)
   }
 
   requestGracefulExit(): void {

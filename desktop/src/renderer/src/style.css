@@ -3,7 +3,7 @@
   font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   font-synthesis: none;
   --app-bar-height: 46px;
-  --monitor-size: 58%;
+  --monitor-size: 54%;
   --surface: #11151b;
   --surface-raised: #171c24;
   --surface-soft: #202630;
@@ -55,8 +55,10 @@ button:focus-visible,
 }
 
 .app-bar {
+  position: relative;
+  z-index: 10;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr);
+  grid-template-columns: minmax(150px, 1fr) auto;
   align-items: center;
   gap: 18px;
   height: var(--app-bar-height);
@@ -64,6 +66,15 @@ button:focus-visible,
   border-bottom: 1px solid var(--line);
   background: var(--surface-raised);
   user-select: none;
+  -webkit-app-region: drag;
+}
+
+.app-bar button,
+.app-bar summary,
+.app-bar details,
+.app-bar input,
+.app-bar select {
+  -webkit-app-region: no-drag;
 }
 
 .brand {
@@ -160,8 +171,52 @@ button:focus-visible,
 
 .app-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 4px;
+}
+
+.layout-switcher {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #10141a;
+}
+
+.layout-switcher .icon-button {
+  width: 28px;
+  height: 26px;
+}
+
+.layout-switcher .icon-button[aria-pressed="true"] {
+  color: var(--green);
+  background: var(--surface-soft);
+}
+
+.action-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: var(--line);
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.window-controls .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.window-controls .close-button:hover {
+  border-color: var(--coral);
+  color: #fff;
+  background: var(--coral);
 }
 
 .icon-button {
@@ -188,12 +243,179 @@ button:focus-visible,
   height: 16px;
 }
 
+.service-menu {
+  position: relative;
+}
+
+.service-menu > summary {
+  list-style: none;
+}
+
+.service-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.service-menu[open] > summary,
+.service-menu.busy > summary {
+  border-color: var(--line);
+  color: var(--green);
+  background: var(--surface-soft);
+}
+
+.service-popover {
+  position: absolute;
+  top: 35px;
+  right: 0;
+  width: 286px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: #171c24;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 40%);
+}
+
+.service-popover-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.service-popover-heading strong {
+  font-size: 12px;
+}
+
+.service-popover-heading span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.service-list {
+  padding: 6px 0;
+}
+
+.service-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 3px;
+  font-size: 12px;
+}
+
+.service-row small {
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-row .state-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.service-row.healthy .state-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgb(104 213 179 / 12%);
+}
+
+.service-row.unhealthy .state-dot {
+  background: var(--coral);
+  box-shadow: 0 0 0 3px rgb(239 127 121 / 12%);
+}
+
+.service-row.stopped .state-dot {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.services-error {
+  max-height: 72px;
+  margin: 2px 2px 9px;
+  overflow: auto;
+  color: var(--coral);
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.service-commands {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.service-commands button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  background: #11161d;
+  cursor: pointer;
+}
+
+.service-commands button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.service-commands button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.service-commands svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.service-commands span {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace {
   display: grid;
   grid-template-rows: minmax(180px, var(--monitor-size)) 7px minmax(180px, 1fr);
   min-width: 0;
   min-height: 0;
   background: var(--surface);
+}
+
+.workspace[data-layout="monitor"] {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.workspace[data-layout="terminal"] {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.workspace[data-layout="monitor"] .splitter,
+.workspace[data-layout="monitor"] .terminal-pane,
+.workspace[data-layout="terminal"] .monitor-pane,
+.workspace[data-layout="terminal"] .splitter {
+  display: none;
 }
 
 .monitor-pane,
@@ -205,7 +427,7 @@ button:focus-visible,
 }
 
 .monitor-pane {
-  background: #241812;
+  background: #10141a;
 }
 
 #monitor-frame {
@@ -213,7 +435,7 @@ button:focus-visible,
   width: 100%;
   height: 100%;
   border: 0;
-  background: #241812;
+  background: #10141a;
 }
 
 .monitor-overlay {
@@ -314,9 +536,10 @@ body.resizing * {
 }
 
 .pane-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
   min-width: 0;
   padding: 0 12px;
   border-bottom: 1px solid #232a34;
@@ -338,11 +561,26 @@ body.resizing * {
 }
 
 .pane-meta {
+  justify-self: end;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pane-runtime-states {
+  gap: 18px;
+}
+
+.pane-runtime-states .runtime-state {
+  font-size: 11px;
+}
+
+.pane-runtime-states .state-dot {
+  width: 6px;
+  height: 6px;
+  flex-basis: 6px;
 }
 
 .terminal-host {
@@ -413,10 +651,6 @@ body.resizing * {
 @media (max-width: 760px) {
   .app-bar {
     grid-template-columns: minmax(120px, 1fr) auto;
-  }
-
-  .runtime-states {
-    display: none;
   }
 
   .brand-copy span {

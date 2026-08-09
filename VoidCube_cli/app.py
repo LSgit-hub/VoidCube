@@ -4943,11 +4943,15 @@ def main(
     #
     # When VOIDCUBE_DAEMONS_STARTED=1 (set by voidcube.py), daemons were
     # already started by the wrapper — skip the start but still register
-    # cleanup so /quit and atexit can stop them.  Without this, daemons
-    # started via ``voidcube`` would be orphaned on exit.
+    # cleanup so /quit and atexit can stop them. The desktop shell owns its
+    # service processes independently, so its embedded CLI neither starts
+    # nor stops them.
     is_interactive = query is None and not list_tools and not list_toolsets
     daemons_already_started = os.environ.get("VOIDCUBE_DAEMONS_STARTED") == "1"
-    if is_interactive:
+    desktop_manages_services = (
+        os.environ.get("VOIDCUBE_DESKTOP_MANAGED_SERVICES") == "1"
+    )
+    if is_interactive and not desktop_manages_services:
         if daemons_already_started:
             # Daemons were started by voidcube.py — we still own cleanup
             global _daemons_auto_started

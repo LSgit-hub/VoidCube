@@ -2,6 +2,14 @@
 
 VoidCube Desktop 是现有 Supervisor Web UI 与 Agent CLI 的跨平台容器。桌面层不复制 Python 业务逻辑：Electron 管理窗口和本地进程，Supervisor 页面保留原有 HTTP/SSE 协议，CLI 通过真实 PTY 运行。
 
+桌面工作区提供上下分屏、监控最大化和终端最大化三种布局，并记忆布局模式和分割比例。工具栏的服务菜单显示 Gateway、Memory、Supervisor 的结构化状态，可直接启动、重启或停止后台服务。
+
+## 控制边界
+
+Electron 不解析终端输出。主进程通过 `python -m VoidCube_cli.desktop_control <action>` 调用 Python 服务所有者，使用版本化 JSON 协议执行 `status`、`start`、`restart` 和 `stop`。渲染进程只能通过受限 preload IPC 读取状态或请求生命周期操作，不能直接访问 Node.js 或创建任意进程。
+
+桌面通过 `VOIDCUBE_DESKTOP_MANAGED_SERVICES=1` 明确取得后台服务生命周期所有权。关闭桌面窗口只结束嵌入式 CLI，不停止 Gateway、Memory 和 Supervisor；需要停止服务时使用工具栏服务菜单中的“停止”。
+
 ## 开发运行
 
 需要 Node.js 22+、npm，以及仓库根目录的 Python 3.14 虚拟环境：

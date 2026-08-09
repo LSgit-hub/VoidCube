@@ -1,11 +1,13 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './runtime-locator'
+import { ServiceController } from './service-controller'
 import { TerminalSession } from './terminal-session'
-import type { MonitorProbe } from '../shared/contracts'
+import type { MonitorProbe, ServiceLifecycleAction } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
 let terminal: TerminalSession | undefined
+let services: ServiceController | undefined
 let quitting = false
 
 function developmentProjectRoot(): string | undefined {
@@ -19,10 +21,13 @@ function developmentProjectRoot(): string | undefined {
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1440,
+    width: 1060,
     height: 960,
     minWidth: 900,
     minHeight: 640,
+    center: true,
+    frame: false,
+    resizable: true,
     show: false,
     backgroundColor: '#11151b',
     title: 'VoidCube',
@@ -42,15 +47,16 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  const rendererUrl = process.env.ELECTRON_RENDERER_URL
-  if (rendererUrl) void window.loadURL(rendererUrl)
-  else void window.loadFile(join(__dirname, '../renderer/index.html'))
-
   const runtime = resolveRuntimePaths({
     projectRoot: developmentProjectRoot(),
     resourcesPath: process.resourcesPath
   })
+  services = new ServiceController(runtime)
   terminal = new TerminalSession(window, runtime)
+
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (rendererUrl) void window.loadURL(rendererUrl)
+  else void window.loadFile(join(__dirname, '../renderer/index.html'))
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
     if (process.platform !== 'darwin' || !terminal) return
@@ -85,6 +91,19 @@ async function probeMonitor(): Promise<MonitorProbe> {
 
 function registerIpc(): void {
   ipcMain.handle('monitor:probe', probeMonitor)
+  ipcMain.on('window:minimize', () => mainWindow?.minimize())
+  ipcMain.on('window:close', () => mainWindow?.close())
+  ipcMain.handle('services:status', () => {
+    if (!services) throw new Error('Service control is unavailable')
+    return services.status()
+  })
+  ipcMain.handle('services:control', (_event, action: unknown) => {
+    if (action !== 'start' && action !== 'stop' && action !== 'restart') {
+      throw new Error('Invalid service lifecycle action')
+    }
+    if (!services) throw new Error('Service control is unavailable')
+    return services.control(action as ServiceLifecycleAction)
+  })
   ipcMain.handle('terminal:start', () => terminal?.start() ?? { phase: 'error', message: 'Terminal is unavailable' })
   ipcMain.handle('terminal:restart', () => terminal?.restart() ?? { phase: 'error', message: 'Terminal is unavailable' })
   ipcMain.on('terminal:write', (_event, data: unknown) => {
