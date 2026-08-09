@@ -2010,7 +2010,6 @@ def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
     cli.session_id = "cli-session-auto"
 
     pushed = []
-    cycle_calls = []
     presence_refreshes = []
     printed = []
     launches = []
@@ -2050,10 +2049,6 @@ def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
             }
         )
 
-    def fake_cycle(*, focus=""):
-        cycle_calls.append(focus)
-        return {"summary": {"planned": 1, "handed_off": 0}}
-
     def fake_refresh_gateway_cli_presence(*, force=False):
         presence_refreshes.append(force)
         fake_push("executing", session_id=cli.session_id)
@@ -2061,7 +2056,6 @@ def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
     monkeypatch.setattr("cli._cprint", fake_cprint)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
         "activate_autonomous_execution",
@@ -2085,7 +2079,6 @@ def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
     assert presence_refreshes == [True]
     assert pushed[0]["scene"] == "executing"
     assert pushed[0]["session_id"] == "cli-session-auto"
-    assert cycle_calls == [""]
     assert launches == [cli]
     assert any("组件已接入当前 CLI" in line for line in printed)
 
@@ -2146,11 +2139,6 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     monkeypatch.setattr("cli._cprint", fake_cprint)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(
-        autonomous_gate_module,
-        "trigger_autonomous_cycle",
-        lambda focus="": {"summary": {"planned": 0, "handed_off": 0}},
-    )
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
@@ -2506,7 +2494,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     cli.session_id = "cli-session-auto-recover"
 
     printed = []
-    cycle_calls = []
     presence_refreshes = []
     pushed = []
     launches = []
@@ -2551,10 +2538,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
             }
         )
 
-    def fake_cycle(*, focus=""):
-        cycle_calls.append(focus)
-        return {"summary": {"planned": 1, "handed_off": 0}}
-
     def fake_refresh_gateway_cli_presence(*, force=False):
         presence_refreshes.append(force)
         fake_push("executing", session_id=cli.session_id)
@@ -2562,7 +2545,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     monkeypatch.setattr("cli._cprint", fake_cprint)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
         "activate_autonomous_execution",
@@ -2593,7 +2575,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     assert any("attempting daemon recovery" in line for line in printed)
     assert presence_refreshes == [True]
     assert pushed[0]["scene"] == "executing"
-    assert cycle_calls == [""]
     assert launches == [cli]
     assert any("组件已接入当前 CLI" in line for line in printed)
 

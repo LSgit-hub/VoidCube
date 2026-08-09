@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -164,7 +165,8 @@ async def evaluate_endogenous_drive(
 
     deliberation = context.build_deliberation_report(drive_input=drive_input)
     deliberation_dict = deliberation.to_dict()
-    candidates = context.generate_candidates(
+    candidates = await asyncio.to_thread(
+        context.generate_candidates,
         drive_input=drive_input,
         existing_drive_keys=context.existing_drive_keys(),
         max_candidates=max_candidates,
@@ -202,7 +204,8 @@ async def evaluate_endogenous_drive(
     if any(float(cognitive_self_regulation.get(key) or 0.0) > 0.0 for key in boost_keys):
         deliberation = context.build_deliberation_report(drive_input=drive_input)
         deliberation_dict = deliberation.to_dict()
-        candidates = context.generate_candidates(
+        candidates = await asyncio.to_thread(
+            context.generate_candidates,
             drive_input=drive_input,
             existing_drive_keys=context.existing_drive_keys(),
             max_candidates=max_candidates,

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import urllib.request
-from typing import Any, Dict, Tuple
+from typing import Any, Tuple
 
-from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
 from VoidCube_cli.autonomous_events import (
     AutonomousPanelEventPorts,
     append_autonomous_execution_event,
@@ -89,18 +88,6 @@ def _resolve_supervisor_url() -> str:
         return "http://127.0.0.1:6002"
 
 
-def trigger_autonomous_cycle(*, focus: str = "") -> Dict[str, Any] | None:
-    supervisor_url = _resolve_supervisor_url()
-    payload = json.dumps({"focus": focus}).encode()
-    request = urllib.request.Request(
-        f"{supervisor_url}{AUTONOMOUS_CHAIN_CYCLE_ROUTE}",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    return json.loads(urllib.request.urlopen(request, timeout=30).read())
-
-
 def activate_autonomous_execution(host: Any) -> Tuple[bool, str]:
     """Activate the API-A autonomous execution loop."""
     starter = getattr(host, "_start_autonomous_execution", None)
@@ -180,21 +167,11 @@ def handle_auto_command(
                     event_ports=event_ports,
                     refresh_gateway_cli_presence_callback=refresh_gateway_cli_presence_callback,
                 )
-                cycle_result = None
-                try:
-                    cycle_result = trigger_autonomous_cycle(focus=focus)
-                except Exception as exc:
-                    cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
                 cprint("  ✅ 自主链路 [bold green]已激活[/]")
                 cprint(f"     内生驱动循环: {'运行中' if resp.get('drive_loop_running') else '未运行'}")
                 cprint(f"     治理复核循环: {'运行中' if resp.get('review_loop_running') else '未运行'}")
                 if not resp.get("endogenous_drive_enabled", True):
                     cprint("     ⚠️  endogenous_drive_enabled=False，内生驱动循环未启用")
-                if isinstance(cycle_result, dict):
-                    summary = cycle_result.get("summary", {}) if isinstance(cycle_result, dict) else {}
-                    planned = summary.get("planned", 0)
-                    handed_off = summary.get("handed_off", 0)
-                    cprint(f"     首轮循环: planned={planned}, handed_off={handed_off}")
                 supervisor_preview = preview_supervisor_status_lines(host, limit=4)
                 if supervisor_preview:
                     for line in supervisor_preview:

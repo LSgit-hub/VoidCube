@@ -1,4 +1,4 @@
-export type MonitorHealthDecision = 'keep' | 'replace'
+export type MonitorHealthDecision = 'keep' | 'stale'
 
 export class MonitorHealthGate {
   private consecutiveFailures = 0
@@ -16,7 +16,7 @@ export class MonitorHealthGate {
     }
 
     this.consecutiveFailures += 1
-    return this.consecutiveFailures >= this.failureLimit ? 'replace' : 'keep'
+    return this.consecutiveFailures >= this.failureLimit ? 'stale' : 'keep'
   }
 
   reset(): void {

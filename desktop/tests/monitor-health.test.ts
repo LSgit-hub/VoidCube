@@ -11,12 +11,12 @@ describe('monitor health gate', () => {
     expect(gate.observe(false)).toBe('keep')
   })
 
-  it('replaces the monitor only after consecutive failures reach the limit', () => {
+  it('marks the monitor stale after consecutive failures reach the limit', () => {
     const gate = new MonitorHealthGate(3)
 
     expect(gate.observe(false)).toBe('keep')
     expect(gate.observe(false)).toBe('keep')
-    expect(gate.observe(false)).toBe('replace')
+    expect(gate.observe(false)).toBe('stale')
   })
 
   it('rejects an invalid failure limit', () => {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -16,6 +18,7 @@ RunAsync = Callable[..., Awaitable[JsonDict]]
 RecordActivity = Callable[..., None]
 UpdateSchedule = Callable[[datetime, datetime], None]
 Now = Callable[[], datetime]
+logger = logging.getLogger("supervisor")
 
 
 class AutonomousCycleService:
@@ -57,8 +60,24 @@ class AutonomousCycleService:
         self._update_drive_schedule = update_drive_schedule
         self._update_review_schedule = update_review_schedule
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._drive_lock = asyncio.Lock()
 
     async def run_drive_cycle(self) -> JsonDict:
+        if self._drive_lock.locked():
+            logger.info(
+                "Skipping endogenous-drive cycle because another cycle is already running."
+            )
+            return {
+                "status": "skipped",
+                "skipped": "cycle_already_running",
+                "planned": 0,
+                "tasks": [],
+            }
+
+        async with self._drive_lock:
+            return await self._run_drive_cycle_locked()
+
+    async def _run_drive_cycle_locked(self) -> JsonDict:
         context = EndogenousDriveCycleContext(
             runtime_config=self._runtime_config,
             evaluate_drive=self._evaluate_drive,

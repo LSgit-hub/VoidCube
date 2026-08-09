@@ -162,10 +162,20 @@ function showTerminalError(message: string): void {
 
 function showMonitorWaiting(title: string, detail: string, error = false): void {
   monitorOverlay.hidden = false
+  monitorOverlay.classList.remove('stale')
   monitorOverlay.classList.toggle('error', error)
   monitorOverlayTitle.textContent = title
   monitorOverlayDetail.textContent = detail
   retryMonitor.hidden = !error
+}
+
+function showMonitorStale(): void {
+  monitorOverlay.hidden = false
+  monitorOverlay.classList.remove('error')
+  monitorOverlay.classList.add('stale')
+  monitorOverlayTitle.textContent = '状态更新暂停'
+  monitorOverlayDetail.textContent = 'Supervisor 正在处理后台任务，连接恢复后继续更新'
+  retryMonitor.hidden = true
 }
 
 async function connectMonitor(forceReload = false): Promise<void> {
@@ -228,13 +238,21 @@ async function verifyMonitorAvailability(): Promise<void> {
   monitorProbePending = false
 
   if (monitorHealth.observe(result.ready) === 'keep') {
-    if (result.ready && !monitorFrame.getAttribute('src')) monitorFrame.src = result.url
+    if (result.ready) {
+      if (!monitorFrame.getAttribute('src')) monitorFrame.src = result.url
+      monitorOverlay.hidden = true
+      monitorOverlay.classList.remove('stale')
+    }
     return
   }
 
-  monitorFrame.removeAttribute('src')
-  showMonitorWaiting('正在重新连接 Supervisor', '连续探测失败，正在等待服务恢复')
-  monitorTimer = window.setTimeout(() => void connectMonitor(), 1500)
+  if (monitorFrame.getAttribute('src')) {
+    showMonitorStale()
+    monitorTimer = window.setTimeout(() => void verifyMonitorAvailability(), 1500)
+  } else {
+    showMonitorWaiting('正在重新连接 Supervisor', '连续探测失败，正在等待服务恢复')
+    monitorTimer = window.setTimeout(() => void connectMonitor(), 1500)
+  }
 }
 
 function executionModeLabel(context: ExecutionContext): string {

@@ -470,6 +470,40 @@ button:focus-visible,
   font-weight: 700;
 }
 
+.monitor-overlay.stale {
+  inset: 12px 12px auto auto;
+  width: auto;
+  max-width: min(420px, calc(100% - 24px));
+  min-height: 0;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  background: rgba(21, 26, 33, 0.92);
+  text-align: left;
+  pointer-events: none;
+}
+
+.monitor-overlay.stale .loading-ring {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.monitor-overlay.stale strong {
+  margin: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.monitor-overlay.stale > span:not(.loading-ring) {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
