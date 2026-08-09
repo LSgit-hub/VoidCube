@@ -31,6 +31,7 @@ from systems.supervisor.provider_pool_service import (
     ProviderPoolConflictError,
     ProviderPoolEntryRequest,
     ProviderPoolManagedError,
+    ProviderPoolProbeError,
     ProviderPoolService,
 )
 from systems.supervisor.runtime_assemblers import (
@@ -310,6 +311,16 @@ class Supervisor(
             methods=["DELETE"],
         )
         self.app.add_api_route(
+            "/provider-pool/providers/{provider_key}/test",
+            self.test_provider_pool_entry,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/provider-pool/providers/{provider_key}/models",
+            self.list_provider_pool_models,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
             "/provider-pool/worker-roles",
             self.set_provider_pool_worker_roles,
             methods=["PUT"],
@@ -441,6 +452,8 @@ class Supervisor(
     def _provider_pool_error(error: Exception) -> HTTPException:
         if isinstance(error, KeyError):
             return HTTPException(status_code=404, detail="Provider not found")
+        if isinstance(error, ProviderPoolProbeError):
+            return HTTPException(status_code=error.status_code, detail=str(error))
         if isinstance(error, (ProviderPoolConflictError, ProviderPoolManagedError)):
             return HTTPException(status_code=409, detail=str(error))
         return HTTPException(status_code=400, detail=str(error))
@@ -459,6 +472,18 @@ class Supervisor(
         try:
             return self._provider_pool_service.delete_provider(provider_key)
         except (KeyError, ValueError, ProviderPoolManagedError) as exc:
+            raise self._provider_pool_error(exc) from exc
+
+    async def test_provider_pool_entry(self, provider_key: str) -> Dict[str, Any]:
+        try:
+            return await self._provider_pool_service.test_provider(provider_key)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise self._provider_pool_error(exc) from exc
+
+    async def list_provider_pool_models(self, provider_key: str) -> Dict[str, Any]:
+        try:
+            return await self._provider_pool_service.discover_models(provider_key)
+        except (KeyError, ValueError, RuntimeError) as exc:
             raise self._provider_pool_error(exc) from exc
 
     async def set_provider_pool_worker_roles(

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from VoidCube_app.companion_workers import DEFAULT_COMPANION_WORKER_ROLES
@@ -20,6 +23,7 @@ from VoidCube_app.config import (
 )
 from VoidCube_app.environment import is_placeholder_secret
 from VoidCube_app.provider_auth import (
+    AuthError,
     PROVIDER_REGISTRY,
     normalize_openai_compatible_base_url,
 )
@@ -37,6 +41,14 @@ class ProviderPoolConflictError(ValueError):
 
 class ProviderPoolManagedError(RuntimeError):
     """Raised when the user configuration is externally managed."""
+
+
+class ProviderPoolProbeError(RuntimeError):
+    """A sanitized Provider connectivity or model-catalog failure."""
+
+    def __init__(self, message: str, *, status_code: int = 502) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ProviderPoolEntryRequest(BaseModel):
@@ -186,6 +198,13 @@ def _toolset_catalog(config: Mapping[str, Any]) -> list[dict[str, str]]:
 
 class ProviderPoolService:
     """Read and mutate the canonical ``providers`` and worker-role subtrees."""
+
+    def __init__(
+        self,
+        *,
+        http_client_factory: Callable[..., Any] | None = None,
+    ) -> None:
+        self._http_client_factory = http_client_factory or httpx.AsyncClient
 
     @staticmethod
     def _ensure_writable(action: str) -> None:
@@ -394,11 +413,119 @@ class ProviderPoolService:
         save_config(config, preserve_structure=True)
         return {**self.snapshot(), "status": "saved"}
 
+    @staticmethod
+    def _provider_runtime(provider_key: str) -> dict[str, Any]:
+        key = _validate_provider_key(provider_key)
+        if key not in _provider_map(_raw_config()):
+            raise KeyError(key)
+        from VoidCube_app.runtime_provider import resolve_runtime_provider
+
+        try:
+            runtime = resolve_runtime_provider(requested=key)
+        except AuthError as exc:
+            raise ProviderPoolProbeError(str(exc), status_code=400) from exc
+        base_url = str(runtime.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            raise ProviderPoolProbeError("Provider has no usable API address")
+        return {**runtime, "provider_key": key, "base_url": base_url}
+
+    @staticmethod
+    def _model_ids(payload: Any) -> list[str]:
+        if not isinstance(payload, Mapping):
+            raise ProviderPoolProbeError("Provider returned an invalid model catalog")
+        raw_models = payload.get("data")
+        if not isinstance(raw_models, list):
+            raw_models = payload.get("models")
+        if not isinstance(raw_models, list):
+            raise ProviderPoolProbeError("Provider returned an invalid model catalog")
+
+        model_ids: list[str] = []
+        for item in raw_models[:2000]:
+            if isinstance(item, str):
+                model_id = item.strip()
+            elif isinstance(item, Mapping):
+                model_id = str(
+                    item.get("id") or item.get("name") or item.get("model") or ""
+                ).strip()
+            else:
+                continue
+            if model_id and len(model_id) <= 300 and model_id not in model_ids:
+                model_ids.append(model_id)
+            if len(model_ids) >= 1000:
+                break
+        return model_ids
+
+    async def _request_model_catalog(
+        self,
+        provider_key: str,
+        *,
+        require_catalog: bool,
+    ) -> tuple[dict[str, Any], list[str], int]:
+        runtime = self._provider_runtime(provider_key)
+        api_key = str(runtime.get("api_key") or "").strip()
+        headers = {"Accept": "application/json"}
+        if api_key and api_key != "no-key-required":
+            headers["Authorization"] = f"Bearer {api_key}"
+        url = f"{runtime['base_url']}/models"
+        started = time.perf_counter()
+        try:
+            async with self._http_client_factory(timeout=15.0) as client:
+                response = await client.get(url, headers=headers)
+        except httpx.TimeoutException as exc:
+            raise ProviderPoolProbeError(
+                "Provider connection timed out", status_code=504
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderPoolProbeError("Provider connection failed") from exc
+        latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+        if response.status_code >= 400:
+            raise ProviderPoolProbeError(
+                f"Provider returned HTTP {response.status_code}"
+            )
+
+        try:
+            model_ids = self._model_ids(response.json())
+        except (ValueError, ProviderPoolProbeError):
+            if require_catalog:
+                raise ProviderPoolProbeError(
+                    "Provider returned an invalid model catalog"
+                ) from None
+            model_ids = []
+        return runtime, model_ids, latency_ms
+
+    async def test_provider(self, provider_key: str) -> dict[str, Any]:
+        runtime, model_ids, latency_ms = await self._request_model_catalog(
+            provider_key,
+            require_catalog=False,
+        )
+        return {
+            "status": "ok",
+            "provider": runtime["provider_key"],
+            "base_url": runtime["base_url"],
+            "latency_ms": latency_ms,
+            "model_count": len(model_ids),
+        }
+
+    async def discover_models(self, provider_key: str) -> dict[str, Any]:
+        runtime, model_ids, latency_ms = await self._request_model_catalog(
+            provider_key,
+            require_catalog=True,
+        )
+        return {
+            "status": "ok",
+            "provider": runtime["provider_key"],
+            "base_url": runtime["base_url"],
+            "latency_ms": latency_ms,
+            "count": len(model_ids),
+            "models": model_ids,
+        }
+
 
 __all__ = [
     "CompanionWorkerAssignmentsRequest",
     "ProviderPoolConflictError",
     "ProviderPoolEntryRequest",
     "ProviderPoolManagedError",
+    "ProviderPoolProbeError",
     "ProviderPoolService",
 ]

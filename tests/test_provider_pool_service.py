@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+import httpx
 from fastapi.testclient import TestClient
 
 from systems.supervisor.provider_pool_service import (
@@ -11,6 +13,7 @@ from systems.supervisor.provider_pool_service import (
     CompanionWorkerAssignmentsRequest,
     ProviderPoolConflictError,
     ProviderPoolEntryRequest,
+    ProviderPoolProbeError,
     ProviderPoolService,
 )
 from systems.supervisor.supervisor import Supervisor
@@ -273,3 +276,179 @@ def test_supervisor_provider_pool_routes_reject_managed_writes(
 
     assert response.status_code == 409
     assert "managed by NixOS" in response.json()["detail"]
+
+
+class _ProbeResponse:
+    def __init__(self, payload, *, status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+class _ProbeClient:
+    def __init__(self, response=None, error: Exception | None = None) -> None:
+        self.response = response
+        self.error = error
+        self.requests = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def get(self, url, *, headers):
+        self.requests.append((url, headers))
+        if self.error:
+            raise self.error
+        return self.response
+
+
+def _probe_service(monkeypatch, response=None, error=None):
+    client = _ProbeClient(response=response, error=error)
+    service = ProviderPoolService(http_client_factory=lambda **_kwargs: client)
+    monkeypatch.setattr(
+        service,
+        "_provider_runtime",
+        lambda key: {
+            "provider_key": key,
+            "provider": "custom",
+            "base_url": "https://models.example/v1",
+            "api_key": "sk-private-provider-secret",
+        },
+    )
+    return service, client
+
+
+@pytest.mark.asyncio
+async def test_provider_probe_uses_secret_only_in_outbound_header(monkeypatch):
+    service, client = _probe_service(
+        monkeypatch,
+        response=_ProbeResponse({"data": [{"id": "model-a"}, {"id": "model-b"}]}),
+    )
+
+    result = await service.test_provider("research-endpoint")
+
+    assert result["status"] == "ok"
+    assert result["model_count"] == 2
+    assert result["base_url"] == "https://models.example/v1"
+    assert "api_key" not in result
+    assert client.requests == [
+        (
+            "https://models.example/v1/models",
+            {
+                "Accept": "application/json",
+                "Authorization": "Bearer sk-private-provider-secret",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provider_model_discovery_supports_common_catalog_shapes(monkeypatch):
+    service, _client = _probe_service(
+        monkeypatch,
+        response=_ProbeResponse(
+            {
+                "models": [
+                    {"name": "model-a"},
+                    {"model": "model-b"},
+                    "model-c",
+                    {"id": "model-a"},
+                ]
+            }
+        ),
+    )
+
+    result = await service.discover_models("research-endpoint")
+
+    assert result["models"] == ["model-a", "model-b", "model-c"]
+    assert result["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_provider_probe_returns_sanitized_timeout_and_http_errors(monkeypatch):
+    request = httpx.Request("GET", "https://models.example/v1/models")
+    timed_out, _client = _probe_service(
+        monkeypatch,
+        error=httpx.ReadTimeout("contains transport detail", request=request),
+    )
+    unauthorized, _client = _probe_service(
+        monkeypatch,
+        response=_ProbeResponse(
+            {"error": "response body must not be exposed"}, status_code=401
+        ),
+    )
+
+    with pytest.raises(ProviderPoolProbeError) as timeout_error:
+        await timed_out.test_provider("research-endpoint")
+    with pytest.raises(ProviderPoolProbeError) as http_error:
+        await unauthorized.discover_models("research-endpoint")
+
+    assert timeout_error.value.status_code == 504
+    assert str(timeout_error.value) == "Provider connection timed out"
+    assert http_error.value.status_code == 502
+    assert str(http_error.value) == "Provider returned HTTP 401"
+
+
+def test_supervisor_provider_probe_routes_preserve_safe_contract(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    test_provider = AsyncMock(
+        return_value={
+            "status": "ok",
+            "provider": "research-endpoint",
+            "base_url": "https://models.example/v1",
+            "latency_ms": 37,
+            "model_count": 2,
+        }
+    )
+    discover_models = AsyncMock(
+        return_value={
+            "status": "ok",
+            "provider": "research-endpoint",
+            "base_url": "https://models.example/v1",
+            "latency_ms": 41,
+            "count": 2,
+            "models": ["model-a", "model-b"],
+        }
+    )
+    monkeypatch.setattr(ProviderPoolService, "test_provider", test_provider)
+    monkeypatch.setattr(ProviderPoolService, "discover_models", discover_models)
+    client = _supervisor_client(tmp_path)
+
+    tested = client.post("/provider-pool/providers/research-endpoint/test")
+    models = client.get("/provider-pool/providers/research-endpoint/models")
+
+    assert tested.status_code == 200
+    assert tested.json()["model_count"] == 2
+    assert "api_key" not in tested.json()
+    assert models.status_code == 200
+    assert models.json()["models"] == ["model-a", "model-b"]
+    test_provider.assert_awaited_once_with("research-endpoint")
+    discover_models.assert_awaited_once_with("research-endpoint")
+
+
+def test_supervisor_provider_probe_route_maps_timeout_to_504(tmp_path, monkeypatch):
+    _configure_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ProviderPoolService,
+        "test_provider",
+        AsyncMock(
+            side_effect=ProviderPoolProbeError(
+                "Provider connection timed out", status_code=504
+            )
+        ),
+    )
+    client = _supervisor_client(tmp_path)
+
+    response = client.post("/provider-pool/providers/research-endpoint/test")
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": "Provider connection timed out"}

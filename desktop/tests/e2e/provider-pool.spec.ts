@@ -6,6 +6,14 @@ test('provider pool and worker assignment panels stay usable across viewports', 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route('**/provider-pool/providers/*/test', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'ok', latency_ms: 42, model_count: 2 })
+  }))
+  await page.route('**/provider-pool/providers/*/models', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'ok', count: 2, models: ['model-a', 'model-b'] })
+  }))
 
   try {
     await page.goto('http://127.0.0.1:6002/ui', { waitUntil: 'domcontentloaded' })
@@ -17,6 +25,13 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('#providerDelete')).toBeDisabled()
     await expect(page.locator('#providerApiKey')).toHaveValue('')
     await expect(page.locator('#providerApiKey')).toHaveAttribute('type', 'password')
+    await expect(page.locator('#providerTest')).toBeEnabled()
+    await expect(page.locator('#providerLoadModels')).toBeEnabled()
+    await page.locator('#providerTest').click()
+    await expect(page.locator('#providerPoolStatus')).toHaveText('连接正常 · 42 ms · 2 个模型')
+    await page.locator('#providerLoadModels').click()
+    await expect(page.locator('#providerPoolStatus')).toHaveText('已读取 2 个模型')
+    await expect(page.locator('#providerModelOptions option')).toHaveCount(2)
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({
       path: 'test-results/provider-pool-desktop.png',

@@ -3945,7 +3945,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                 </label>
                 <label class="provider-field wide">
                   <span>默认模型</span>
-                  <input id="providerModel" name="provider_model" required maxlength="300" autocomplete="off"/>
+                  <input id="providerModel" name="provider_model" required maxlength="300" autocomplete="off" list="providerModelOptions"/>
+                  <datalist id="providerModelOptions"></datalist>
                 </label>
                 <label class="provider-field">
                   <span>鉴权</span>
@@ -3969,6 +3970,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
               </div>
               <div class="provider-form-actions">
                 <button class="provider-action danger" id="providerDelete" type="button">删除</button>
+                <button class="provider-action" id="providerTest" type="button">测试连接</button>
+                <button class="provider-action" id="providerLoadModels" type="button">读取模型</button>
                 <button class="provider-action primary" id="providerSave" type="submit">保存</button>
               </div>
             </form>
@@ -4176,6 +4179,7 @@ const els = {
   providerLabel: $('#providerLabel'),
   providerBaseUrl: $('#providerBaseUrl'),
   providerModel: $('#providerModel'),
+  providerModelOptions: $('#providerModelOptions'),
   providerAuthMode: $('#providerAuthMode'),
   providerMakeActive: $('#providerMakeActive'),
   providerEnvField: $('#providerEnvField'),
@@ -4183,6 +4187,8 @@ const els = {
   providerApiKeyEnv: $('#providerApiKeyEnv'),
   providerApiKey: $('#providerApiKey'),
   providerDelete: $('#providerDelete'),
+  providerTest: $('#providerTest'),
+  providerLoadModels: $('#providerLoadModels'),
   providerSave: $('#providerSave'),
   workerAssignmentForm: $('#workerAssignmentForm'),
   workerDefaultRole: $('#workerDefaultRole'),
@@ -6819,6 +6825,8 @@ function setProviderPoolBusy(busy) {
     const references = selected && Array.isArray(selected.references) ? selected.references : [];
     els.providerDelete.disabled = busy || managed || references.length > 0;
   }
+  if (els.providerTest) els.providerTest.disabled = busy || !selected;
+  if (els.providerLoadModels) els.providerLoadModels.disabled = busy || !selected;
   if (els.providerAdd) els.providerAdd.disabled = busy || managed;
   if (els.workerAssignmentForm) {
     $$('input, select, button', els.workerAssignmentForm).forEach(control => {
@@ -6845,6 +6853,14 @@ function renderProviderTypeOptions(selectedType) {
   els.providerType.innerHTML = presets.map(preset =>
     '<option value="' + escAttr(preset.type) + '"' +
       (preset.type === selectedType ? ' selected' : '') + '>' + esc(preset.label) + '</option>'
+  ).join('');
+}
+
+function renderProviderModelOptions(models) {
+  if (!els.providerModelOptions) return;
+  const values = Array.isArray(models) ? models : [];
+  els.providerModelOptions.innerHTML = values.map(model =>
+    '<option value="' + escAttr(model) + '"></option>'
   ).join('');
 }
 
@@ -6899,6 +6915,7 @@ function editProvider(providerKey) {
   els.providerAuthMode.value = provider ? provider.auth_mode : 'env';
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
+  renderProviderModelOptions([]);
   els.providerApiKey.placeholder = provider && provider.credential_configured
     ? '已配置，留空保持不变' : '';
   els.providerMakeActive.checked = Boolean(provider && provider.active);
@@ -6909,6 +6926,7 @@ function editProvider(providerKey) {
   if (!provider) applyProviderPreset();
   syncProviderAuthFields();
   renderProviderList();
+  setProviderPoolBusy(providerPoolBusy);
 }
 
 function renderWorkerAssignments() {
@@ -7036,6 +7054,51 @@ async function deleteProviderPoolEntry() {
     setProviderPoolStatus('已删除');
   } catch (error) {
     setProviderPoolStatus(String(error.message || '删除失败'), true);
+    setProviderPoolBusy(false);
+  }
+}
+
+async function testProviderPoolEntry() {
+  if (!selectedProviderKey || providerPoolBusy) return;
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('连接中');
+  try {
+    const response = await fetch(
+      '/provider-pool/providers/' + encodeURIComponent(selectedProviderKey) + '/test',
+      {method: 'POST'}
+    );
+    if (!response.ok) throw await responseError(response, '连接失败');
+    const result = await response.json();
+    const count = Number(result.model_count || 0);
+    setProviderPoolStatus(
+      '连接正常 · ' + Number(result.latency_ms || 0) + ' ms' +
+      (count ? ' · ' + count + ' 个模型' : '')
+    );
+  } catch (error) {
+    setProviderPoolStatus(String(error.message || '连接失败'), true);
+  } finally {
+    setProviderPoolBusy(false);
+  }
+}
+
+async function loadProviderModels() {
+  if (!selectedProviderKey || providerPoolBusy) return;
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('读取模型中');
+  try {
+    const response = await fetch(
+      '/provider-pool/providers/' + encodeURIComponent(selectedProviderKey) + '/models',
+      {cache: 'no-store'}
+    );
+    if (!response.ok) throw await responseError(response, '读取模型失败');
+    const result = await response.json();
+    renderProviderModelOptions(result.models);
+    setProviderPoolStatus('已读取 ' + Number(result.count || 0) + ' 个模型');
+    if (els.providerModel) els.providerModel.focus();
+  } catch (error) {
+    renderProviderModelOptions([]);
+    setProviderPoolStatus(String(error.message || '读取模型失败'), true);
+  } finally {
     setProviderPoolBusy(false);
   }
 }
@@ -7415,6 +7478,8 @@ if (els.providerForm) {
   });
 }
 if (els.providerDelete) els.providerDelete.addEventListener('click', deleteProviderPoolEntry);
+if (els.providerTest) els.providerTest.addEventListener('click', testProviderPoolEntry);
+if (els.providerLoadModels) els.providerLoadModels.addEventListener('click', loadProviderModels);
 if (els.workerAssignmentForm) {
   els.workerAssignmentForm.addEventListener('submit', event => {
     event.preventDefault();
