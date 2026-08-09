@@ -93,6 +93,12 @@ function registerIpc(): void {
   ipcMain.handle('monitor:probe', probeMonitor)
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
   ipcMain.on('window:close', () => mainWindow?.close())
+  ipcMain.handle('workspace:open', async () => {
+    const path = services?.currentWorkspacePath()
+    if (!path) return { ok: false, message: 'Workspace path is unavailable' }
+    const message = await shell.openPath(path)
+    return message ? { ok: false, message } : { ok: true }
+  })
   ipcMain.handle('services:status', () => {
     if (!services) throw new Error('Service control is unavailable')
     return services.status()

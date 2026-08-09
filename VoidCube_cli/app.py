@@ -4957,6 +4957,14 @@ def main(
     desktop_manages_services = (
         os.environ.get("VOIDCUBE_DESKTOP_MANAGED_SERVICES") == "1"
     )
+    if os.environ.get("VOIDCUBE_DESKTOP") == "1":
+        from VoidCube_cli.execution_context import (
+            clear_execution_context,
+            publish_execution_context,
+        )
+
+        publish_execution_context(wt_info)
+        atexit.register(clear_execution_context, os.getpid())
     if is_interactive and not desktop_manages_services:
         if daemons_already_started:
             # Daemons were started by voidcube.py — we still own cleanup

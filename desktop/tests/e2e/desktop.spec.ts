@@ -46,9 +46,15 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await expect.poll(() => window.locator('#workspace').evaluate(
       (element) => element.style.getPropertyValue('--monitor-size')
     )).toBe('54%')
-    await expect(window.locator('#services-state')).toHaveClass(/good/)
-    await expect(window.locator('#terminal-state')).toHaveClass(/good/)
-    await expect(window.locator('#monitor-state')).toHaveClass(/good/)
+    await expect(window.locator('#execution-mode')).toHaveText('Podman 沙箱')
+    await expect(window.locator('#execution-workspace')).toHaveText('VoidCube · master')
+    await expect(window.locator('#open-workspace')).toHaveAttribute(
+      'title',
+      '在文件管理器中打开工作区'
+    )
+    await expect(window.locator('#execution-context')).toHaveAttribute('title', /Agent 目录：\/workspace/)
+    await expect(window.locator('#services-state, #monitor-state, #terminal-state')).toHaveCount(0)
+    await expect(window.locator('#terminal-meta')).toHaveText(/PID \d+/)
     await expect(window.locator('#monitor-frame')).toHaveAttribute('src', /127\.0\.0\.1:6002\/ui/)
     await expect(window.locator('#monitor-overlay')).toBeHidden()
     await expect(window.frameLocator('#monitor-frame').locator('.room')).toBeVisible()
@@ -106,7 +112,7 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'split')
     await expect(window.locator('.monitor-pane')).toBeVisible()
     await expect(window.locator('.terminal-pane')).toBeVisible()
-    await expect(window.locator('#monitor-state')).toHaveClass(/good/)
+    await expect(window.locator('#monitor-overlay')).toBeHidden()
     await window.screenshot({ path: 'test-results/voidcube-desktop.png' })
     expect(pageErrors).toEqual([])
   } finally {

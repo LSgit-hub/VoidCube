@@ -24,12 +24,30 @@ export interface ServiceInfo {
   state: ServicePhase
 }
 
+export type ExecutionMode = 'system' | 'sandbox' | 'remote'
+
+export interface ExecutionContext {
+  mode: ExecutionMode
+  backend: string
+  hostPlatform: string
+  hostWorkingDirectory: string
+  backendWorkingDirectory: string
+  workspaceName: string
+  branch: string
+  worktree: boolean
+  workspaceMounted: boolean
+  fallbackToLocal: boolean
+  pid?: number
+  updatedAt?: string
+}
+
 export interface ServiceControlResult {
   schemaVersion: 1
   action: ServiceControlAction
   ok: boolean
   generatedAt: string
   services: ServiceInfo[]
+  executionContext?: ExecutionContext
   error?: string
 }
 
@@ -40,6 +58,11 @@ export interface RuntimeInfo {
     electron: string
     chrome: string
   }
+}
+
+export interface WorkspaceOpenResult {
+  ok: boolean
+  message?: string
 }
 
 export interface VoidCubeDesktopApi {
@@ -54,6 +77,9 @@ export interface VoidCubeDesktopApi {
   window: {
     minimize: () => void
     close: () => void
+  }
+  workspace: {
+    open: () => Promise<WorkspaceOpenResult>
   }
   terminal: {
     start: () => Promise<TerminalState>

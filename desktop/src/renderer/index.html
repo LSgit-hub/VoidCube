@@ -126,19 +126,23 @@
               <span class="terminal-glyph" aria-hidden="true">›_</span>
               <strong>Agent CLI</strong>
             </div>
-            <div class="runtime-states pane-runtime-states" aria-live="polite">
-              <div class="runtime-state" id="services-state">
-                <span class="state-dot" aria-hidden="true"></span>
-                <span>服务检查中</span>
+            <div id="execution-context" class="execution-context" aria-live="polite">
+              <div class="context-item">
+                <i data-lucide="shield-check" aria-hidden="true"></i>
+                <span>执行环境</span>
+                <strong id="execution-mode">检测中</strong>
               </div>
-              <div class="runtime-state" id="monitor-state">
-                <span class="state-dot" aria-hidden="true"></span>
-                <span>监控连接中</span>
-              </div>
-              <div class="runtime-state" id="terminal-state">
-                <span class="state-dot" aria-hidden="true"></span>
-                <span>CLI 启动中</span>
-              </div>
+              <span class="context-divider" aria-hidden="true"></span>
+              <button
+                id="open-workspace"
+                class="context-item context-button"
+                type="button"
+                title="在文件管理器中打开工作区"
+              >
+                <i data-lucide="folder-git-2" aria-hidden="true"></i>
+                <span>工作区</span>
+                <strong id="execution-workspace">等待 CLI</strong>
+              </button>
             </div>
             <span id="terminal-meta" class="pane-meta">等待进程</span>
           </div>

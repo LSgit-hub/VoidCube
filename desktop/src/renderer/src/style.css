@@ -135,21 +135,6 @@ button:focus-visible,
   text-transform: uppercase;
 }
 
-.runtime-states {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.runtime-state {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 .state-dot {
   width: 7px;
   height: 7px;
@@ -157,16 +142,6 @@ button:focus-visible,
   border-radius: 50%;
   background: var(--amber);
   box-shadow: 0 0 0 3px rgb(230 189 105 / 12%);
-}
-
-.runtime-state.good .state-dot {
-  background: var(--green);
-  box-shadow: 0 0 0 3px rgb(104 213 179 / 12%);
-}
-
-.runtime-state.bad .state-dot {
-  background: var(--coral);
-  box-shadow: 0 0 0 3px rgb(239 127 121 / 12%);
 }
 
 .app-actions {
@@ -569,18 +544,80 @@ body.resizing * {
   white-space: nowrap;
 }
 
-.pane-runtime-states {
-  gap: 18px;
+.execution-context {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: 12px;
+  color: var(--muted);
 }
 
-.pane-runtime-states .runtime-state {
+.context-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.context-button {
+  min-height: 26px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.context-button:hover {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+.context-button:focus-visible {
+  outline-offset: 0;
+}
+
+.execution-context.context-error .context-button {
+  border-color: var(--coral);
+}
+
+.context-item svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  color: var(--blue);
+}
+
+.execution-context[data-mode="sandbox"] .context-item:first-child svg {
+  color: var(--green);
+}
+
+.execution-context[data-mode="remote"] .context-item:first-child svg {
+  color: var(--amber);
+}
+
+.context-item span {
+  font-size: 10px;
+}
+
+.context-item strong {
+  max-width: 150px;
+  overflow: hidden;
+  color: var(--text);
   font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.pane-runtime-states .state-dot {
-  width: 6px;
-  height: 6px;
-  flex-basis: 6px;
+.context-divider {
+  width: 1px;
+  height: 14px;
+  flex: 0 0 1px;
+  background: var(--line);
 }
 
 .terminal-host {

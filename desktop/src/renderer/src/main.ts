@@ -1,5 +1,6 @@
 import {
   createIcons,
+  FolderGit2,
   Minus,
   PanelTop,
   Play,
@@ -7,6 +8,7 @@ import {
   RotateCcw,
   Rows3,
   ServerCog,
+  ShieldCheck,
   Square,
   SquareTerminal,
   X
@@ -17,6 +19,7 @@ import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import type {
   ServiceControlResult,
+  ExecutionContext,
   ServiceInfo,
   ServiceLifecycleAction,
   TerminalState
@@ -36,9 +39,9 @@ const retryMonitor = requiredElement<HTMLButtonElement>('retry-monitor')
 const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
-const servicesState = requiredElement<HTMLElement>('services-state')
-const monitorState = requiredElement<HTMLElement>('monitor-state')
-const terminalState = requiredElement<HTMLElement>('terminal-state')
+const executionContext = requiredElement<HTMLElement>('execution-context')
+const executionMode = requiredElement<HTMLElement>('execution-mode')
+const executionWorkspace = requiredElement<HTMLElement>('execution-workspace')
 const servicesSummary = requiredElement<HTMLElement>('services-summary')
 const servicesError = requiredElement<HTMLParagraphElement>('services-error')
 const serviceMenu = requiredElement<HTMLDetailsElement>('service-menu')
@@ -54,11 +57,13 @@ const serviceButtons = [
 createIcons({
   icons: {
     PanelTop,
+    FolderGit2,
     Play,
     RefreshCw,
     RotateCcw,
     Rows3,
     ServerCog,
+    ShieldCheck,
     Square,
     SquareTerminal,
     Minus,
@@ -121,37 +126,26 @@ function requiredElement<T extends HTMLElement>(id: string): T {
   return element as T
 }
 
-function setRuntimeState(element: HTMLElement, label: string, phase: 'pending' | 'good' | 'bad'): void {
-  element.className = `runtime-state ${phase}`
-  const labelNode = element.querySelector('span:last-child')
-  if (labelNode) labelNode.textContent = label
-}
-
 function applyTerminalState(state: TerminalState): void {
   terminalError.hidden = true
   switch (state.phase) {
     case 'starting':
-      setRuntimeState(terminalState, 'CLI 启动中', 'pending')
       terminalMeta.textContent = '正在创建 PTY'
       break
     case 'running':
-      setRuntimeState(terminalState, 'CLI 已连接', 'good')
       terminalMeta.textContent = state.pid ? `PID ${state.pid}` : '运行中'
       requestAnimationFrame(fitTerminal)
       if (layoutMode !== 'monitor') terminal.focus()
       break
     case 'exited':
-      setRuntimeState(terminalState, 'CLI 已退出', 'bad')
       terminalMeta.textContent = `退出码 ${state.exitCode ?? '-'}`
       showTerminalError(state.message ?? 'CLI 进程已结束')
       break
     case 'error':
-      setRuntimeState(terminalState, 'CLI 启动失败', 'bad')
       terminalMeta.textContent = '进程不可用'
       showTerminalError(state.message ?? '未知启动错误')
       break
     case 'stopped':
-      setRuntimeState(terminalState, 'CLI 已停止', 'pending')
       terminalMeta.textContent = '等待进程'
       break
   }
@@ -172,12 +166,10 @@ function showMonitorWaiting(title: string, detail: string, error = false): void 
 
 async function connectMonitor(forceReload = false): Promise<void> {
   if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
-  setRuntimeState(monitorState, '监控连接中', 'pending')
   showMonitorWaiting('正在连接 Supervisor', '本地监控服务就绪后将在这里显示')
 
   const result = await api.monitor.probe()
   if (result.ready) {
-    setRuntimeState(monitorState, '正在载入监控', 'pending')
     if (forceReload || monitorFrame.getAttribute('src') !== result.url) {
       monitorFrame.src = result.url
     }
@@ -189,8 +181,44 @@ async function connectMonitor(forceReload = false): Promise<void> {
 }
 
 function showMonitorFailure(message: string): void {
-  setRuntimeState(monitorState, '监控不可用', 'bad')
   showMonitorWaiting('Supervisor 页面无法加载', message, true)
+}
+
+function executionModeLabel(context: ExecutionContext): string {
+  const backendNames: Record<string, string> = {
+    docker: 'Docker',
+    podman: 'Podman',
+    singularity: 'Singularity',
+    modal: 'Modal',
+    daytona: 'Daytona',
+    ssh: 'SSH'
+  }
+  const backend = backendNames[context.backend] ?? context.backend
+  if (context.mode === 'sandbox') return `${backend} 沙箱`
+  if (context.mode === 'remote') return `${backend} 远程`
+  return '系统终端'
+}
+
+function applyExecutionContext(context?: ExecutionContext): void {
+  if (!context) {
+    executionContext.dataset.mode = 'pending'
+    executionMode.textContent = '检测中'
+    executionWorkspace.textContent = '等待 CLI'
+    executionContext.title = ''
+    return
+  }
+  executionContext.dataset.mode = context.mode
+  executionMode.textContent = executionModeLabel(context)
+  executionWorkspace.textContent = context.branch
+    ? `${context.workspaceName} · ${context.branch}`
+    : context.workspaceName
+  executionContext.title = [
+    `执行方式：${executionModeLabel(context)}`,
+    `Agent 目录：${context.backendWorkingDirectory}`,
+    `宿主工作区：${context.hostWorkingDirectory}`,
+    context.worktree ? 'Git 隔离：Worktree' : 'Git 隔离：主工作区',
+    `回退到系统终端：${context.fallbackToLocal ? '允许' : '禁止'}`
+  ].join('\n')
 }
 
 function serviceLabel(service: ServiceInfo): string {
@@ -213,22 +241,17 @@ function applyServiceResult(result: ServiceControlResult): void {
   }
 
   if (result.error) {
-    setRuntimeState(servicesState, '服务控制失败', 'bad')
     servicesSummary.textContent = '控制不可用'
     return
   }
+
+  applyExecutionContext(result.executionContext)
 
   const healthyCount = result.services.filter((service) => service.state === 'healthy').length
   const stoppedCount = result.services.filter((service) => service.state === 'stopped').length
   const total = result.services.length
   servicesSummary.textContent = `${healthyCount}/${total} 正常`
-  if (total > 0 && healthyCount === total) {
-    setRuntimeState(servicesState, '服务正常', 'good')
-  } else if (total > 0 && stoppedCount === total) {
-    setRuntimeState(servicesState, '服务已停止', 'pending')
-  } else {
-    setRuntimeState(servicesState, `服务 ${healthyCount}/${total}`, 'bad')
-  }
+  if (total > 0 && stoppedCount === total) servicesSummary.textContent = '已全部停止'
 
   const supervisor = serviceByName.get('supervisor')
   if (supervisor?.state === 'healthy') {
@@ -236,7 +259,6 @@ function applyServiceResult(result: ServiceControlResult): void {
   } else if (supervisor) {
     if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
     monitorFrame.removeAttribute('src')
-    setRuntimeState(monitorState, '等待 Supervisor', 'pending')
     showMonitorWaiting(
       result.action === 'stop' ? 'Supervisor 已停止' : '正在启动 Supervisor',
       'Gateway → Memory → Supervisor'
@@ -254,7 +276,6 @@ function setServiceBusy(action?: ServiceLifecycleAction): void {
     restart: '服务重启中',
     stop: '服务停止中'
   }
-  setRuntimeState(servicesState, labels[action], 'pending')
   servicesSummary.textContent = labels[action]
 }
 
@@ -363,7 +384,6 @@ resizeObserver.observe(terminalHost)
 monitorFrame.addEventListener('load', () => {
   if (!monitorFrame.getAttribute('src')) return
   monitorOverlay.hidden = true
-  setRuntimeState(monitorState, '监控已连接', 'good')
 })
 monitorFrame.addEventListener('error', () => showMonitorFailure('请检查 Supervisor 服务日志后重试'))
 requiredElement<HTMLButtonElement>('reload-monitor').addEventListener('click', () => void connectMonitor(true))
@@ -375,6 +395,13 @@ requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () 
 requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
 requiredElement<HTMLButtonElement>('restart-services').addEventListener('click', () => void runServiceAction('restart'))
 requiredElement<HTMLButtonElement>('stop-services').addEventListener('click', () => void runServiceAction('stop'))
+requiredElement<HTMLButtonElement>('open-workspace').addEventListener('click', async () => {
+  const result = await api.workspace.open()
+  if (result.ok) return
+  executionContext.classList.add('context-error')
+  executionContext.title = result.message ?? '无法打开工作区'
+  window.setTimeout(() => executionContext.classList.remove('context-error'), 1800)
+})
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) void refreshServiceStatus()
 })

@@ -3,6 +3,7 @@ import type { RuntimePaths } from './runtime-locator'
 import type {
   ServiceControlAction,
   ServiceControlResult,
+  ExecutionContext,
   ServiceInfo,
   ServiceLifecycleAction
 } from '../shared/contracts'
@@ -21,6 +22,23 @@ function isServiceInfo(value: unknown): value is ServiceInfo {
   )
 }
 
+function isExecutionContext(value: unknown): value is ExecutionContext {
+  if (!value || typeof value !== 'object') return false
+  const context = value as Partial<ExecutionContext>
+  return (
+    (context.mode === 'system' || context.mode === 'sandbox' || context.mode === 'remote') &&
+    typeof context.backend === 'string' &&
+    typeof context.hostPlatform === 'string' &&
+    typeof context.hostWorkingDirectory === 'string' &&
+    typeof context.backendWorkingDirectory === 'string' &&
+    typeof context.workspaceName === 'string' &&
+    typeof context.branch === 'string' &&
+    typeof context.worktree === 'boolean' &&
+    typeof context.workspaceMounted === 'boolean' &&
+    typeof context.fallbackToLocal === 'boolean'
+  )
+}
+
 export function parseServiceControlResult(output: string): ServiceControlResult {
   const value: unknown = JSON.parse(output)
   if (!value || typeof value !== 'object') throw new Error('Service control returned an invalid response')
@@ -34,6 +52,7 @@ export function parseServiceControlResult(output: string): ServiceControlResult 
     typeof result.generatedAt !== 'string' ||
     !Array.isArray(result.services) ||
     !result.services.every(isServiceInfo) ||
+    (result.executionContext !== undefined && !isExecutionContext(result.executionContext)) ||
     (result.error !== undefined && typeof result.error !== 'string')
   ) {
     throw new Error('Service control returned an unsupported response')
@@ -54,6 +73,7 @@ function errorResult(action: ServiceControlAction, error: unknown): ServiceContr
 
 export class ServiceController {
   private operation?: Promise<ServiceControlResult>
+  private executionContext?: ExecutionContext
 
   constructor(private readonly runtime: RuntimePaths) {}
 
@@ -67,6 +87,10 @@ export class ServiceController {
       this.operation = undefined
     })
     return this.operation
+  }
+
+  currentWorkspacePath(): string | undefined {
+    return this.executionContext?.hostWorkingDirectory
   }
 
   private invoke(action: ServiceControlAction): Promise<ServiceControlResult> {
@@ -114,6 +138,7 @@ export class ServiceController {
       child.on('close', () => {
         try {
           const result = parseServiceControlResult(stdout.trim())
+          this.executionContext = result.executionContext
           if (!result.error && stderr.trim() && !result.ok) result.error = stderr.trim()
           finish(result)
         } catch (error) {

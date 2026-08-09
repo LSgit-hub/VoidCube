@@ -4,7 +4,8 @@ import type {
   ServiceControlResult,
   ServiceLifecycleAction,
   TerminalState,
-  VoidCubeDesktopApi
+  VoidCubeDesktopApi,
+  WorkspaceOpenResult
 } from '../shared/contracts'
 
 const api: VoidCubeDesktopApi = {
@@ -27,6 +28,9 @@ const api: VoidCubeDesktopApi = {
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     close: () => ipcRenderer.send('window:close')
+  },
+  workspace: {
+    open: () => ipcRenderer.invoke('workspace:open') as Promise<WorkspaceOpenResult>
   },
   terminal: {
     start: () => ipcRenderer.invoke('terminal:start') as Promise<TerminalState>,

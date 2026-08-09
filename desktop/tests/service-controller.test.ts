@@ -11,7 +11,19 @@ describe('service control protocol', () => {
       services: [
         { name: 'gateway', port: 6000, pid: 1234, state: 'healthy' },
         { name: 'memory', port: 6001, pid: null, state: 'stopped' }
-      ]
+      ],
+      executionContext: {
+        mode: 'sandbox',
+        backend: 'podman',
+        hostPlatform: 'windows',
+        hostWorkingDirectory: 'C:\\repo',
+        backendWorkingDirectory: '/workspace',
+        workspaceName: 'repo',
+        branch: 'main',
+        worktree: false,
+        workspaceMounted: true,
+        fallbackToLocal: false
+      }
     }))
 
     expect(result.services[0]).toEqual({
@@ -20,6 +32,7 @@ describe('service control protocol', () => {
       pid: 1234,
       state: 'healthy'
     })
+    expect(result.executionContext?.backend).toBe('podman')
   })
 
   it('rejects unknown protocol versions and service states', () => {

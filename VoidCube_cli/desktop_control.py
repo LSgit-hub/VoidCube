@@ -9,7 +9,16 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from VoidCube_cli.ops.serve import ensure_running, status_all, stop_all
+from VoidCube_cli.execution_context import (
+    collect_execution_context,
+    load_execution_context,
+)
+from VoidCube_cli.ops.serve import (
+    _pid_alive,
+    ensure_running,
+    status_all,
+    stop_all,
+)
 
 ControlAction = Literal["status", "start", "stop", "restart"]
 SCHEMA_VERSION = 1
@@ -35,12 +44,16 @@ def snapshot(action: ControlAction) -> dict[str, Any]:
         for name, info in status_all().items()
     ]
     expected_state = "stopped" if action == "stop" else "healthy"
+    execution_context = load_execution_context(pid_alive=_pid_alive)
+    if execution_context is None:
+        execution_context = collect_execution_context()
     return {
         "schemaVersion": SCHEMA_VERSION,
         "action": action,
         "ok": all(service["state"] == expected_state for service in services),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "services": services,
+        "executionContext": execution_context,
     }
 
 
