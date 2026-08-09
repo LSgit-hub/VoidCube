@@ -63,14 +63,20 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
       if (!activeWindow) throw new Error('Desktop window is unavailable')
       activeWindow.setSize(920, 800)
     })
-    await window.waitForTimeout(700)
+    await expect.poll(async () => {
+      const text = await window.locator('.xterm-rows').textContent() ?? ''
+      return (text.match(/Git <[^>]+>/g) ?? []).length
+    }).toBe(1)
     await window.screenshot({ path: 'test-results/voidcube-desktop-narrow.png' })
     await application.evaluate(({ BrowserWindow }) => {
       const activeWindow = BrowserWindow.getAllWindows()[0]
       if (!activeWindow) throw new Error('Desktop window is unavailable')
       activeWindow.setSize(1060, 960)
     })
-    await window.waitForTimeout(700)
+    await expect.poll(async () => {
+      const text = await window.locator('.xterm-rows').textContent() ?? ''
+      return (text.match(/Git <[^>]+>/g) ?? []).length
+    }).toBe(1)
 
     await window.locator('#service-menu > summary').click()
     await expect(window.locator('#services-summary')).toHaveText('3/3 正常')
