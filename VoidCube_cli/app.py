@@ -1479,6 +1479,8 @@ class VoidcubeCLI:
             resolve_agent_route=self._resolve_turn_agent_config,
             create_agent=self._create_scheduled_agent,
             completion_outcome=_background_completion_outcome,
+            announce_start=self._announce_scheduled_execution_start,
+            render_completion=self._render_scheduled_execution_completion,
             invalidate=lambda: self._invalidate(min_interval=0),
         )
         self._scheduled_execution_host = host
@@ -1498,6 +1500,54 @@ class VoidcubeCLI:
             persist_session,
             scheduled=True,
         )
+
+    @staticmethod
+    def _scheduled_execution_display_text(value: str, *, limit: int = 200) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: max(1, limit - 3)].rstrip() + "..."
+
+    def _announce_scheduled_execution_start(
+        self,
+        _task_num: int,
+        _task_id: str,
+        _prompt: str,
+        task_label: str,
+    ) -> None:
+        if not self._should_emit_scrollback_output():
+            return
+        if task_label.startswith("API-B 指令 · "):
+            label = task_label.removeprefix("API-B 指令 · ")
+            _cprint(f"  ◇ API-B → API-A 子代理  {label}")
+        elif task_label.startswith("媒体请求 · "):
+            label = task_label.removeprefix("媒体请求 · ")
+            _cprint(f"  ◇ API-B → API-A 子代理  {label}")
+        else:
+            label = task_label.removeprefix("定时任务 · ")
+            _cprint(f"  ◇ API-A 定时任务  {label}")
+
+    def _render_scheduled_execution_completion(
+        self,
+        success: bool,
+        response: str,
+        error: str,
+        _task_num: int,
+        task_label: str,
+        _response_title: str | None,
+        _prompt: str,
+    ) -> None:
+        if not self._should_emit_scrollback_output():
+            return
+        source = (
+            "API-A 子代理"
+            if task_label.startswith(("API-B 指令 · ", "媒体请求 · "))
+            else "API-A 定时任务"
+        )
+        summary = self._scheduled_execution_display_text(
+            (response or "执行完成") if success else error or response or "执行失败"
+        )
+        _cprint(f"  {'✓' if success else '!'} {source}  {summary}")
 
     def _start_scheduled_execution_task(self, prompt: str, **kwargs: Any) -> bool:
         """Run scheduled work through the isolated scheduled Host runtime."""

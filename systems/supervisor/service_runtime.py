@@ -11,6 +11,8 @@ import logging
 from typing import Any, Dict, Optional
 import uuid
 
+from systems.supervisor.scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
+
 logger = logging.getLogger("supervisor")
 
 
@@ -820,7 +822,7 @@ class ServiceRuntimeMixin:
         tasks = [
             task
             for task in self._scheduled_task_store.list(include_completed=False)
-            if task.get("requested_via") != "companion_media"
+            if task.get("requested_via") not in INTERNAL_SCHEDULE_REQUEST_SOURCES
         ]
         visible = tasks[:20]
         return {
@@ -884,6 +886,99 @@ class ServiceRuntimeMixin:
         except (KeyError, ValueError) as exc:
             return {"ok": False, "action": action, "error": str(exc)}
 
+    def _create_immediate_companion_execution(
+        self,
+        *,
+        title: str,
+        instruction: str,
+        requested_via: str,
+        plan_steps: Any = None,
+        skills: Any = None,
+        toolsets: Any = None,
+    ) -> Dict[str, Any]:
+        normalized_plan = [
+            str(step).strip()[:500]
+            for step in (plan_steps if isinstance(plan_steps, list) else [])
+            if str(step).strip()
+        ][:12]
+        normalized_skills = [
+            str(skill).strip()[:120]
+            for skill in (skills if isinstance(skills, list) else [])
+            if str(skill).strip()
+        ][:20]
+        normalized_toolsets = [
+            str(toolset).strip()[:120]
+            for toolset in (toolsets if isinstance(toolsets, list) else [])
+            if str(toolset).strip()
+        ][:20]
+        instruction_sections = [str(instruction or "").strip()]
+        if normalized_plan:
+            instruction_sections.append(
+                "API-B 计划：\n"
+                + "\n".join(
+                    f"{index}. {step}"
+                    for index, step in enumerate(normalized_plan, start=1)
+                )
+            )
+        if normalized_skills:
+            instruction_sections.append(
+                "建议技能：" + "、".join(normalized_skills)
+            )
+        if normalized_toolsets:
+            instruction_sections.append(
+                "建议工具集：" + "、".join(normalized_toolsets)
+            )
+        task = self._scheduled_task_store.create(
+            {
+                "title": str(title or "API-B 委托任务").strip()[:200],
+                "instruction": "\n\n".join(
+                    section for section in instruction_sections if section
+                ),
+                "schedule_type": "once",
+                "run_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": "api_b",
+                "requested_via": requested_via,
+            }
+        )
+        return {
+            "ok": True,
+            "action": "delegate",
+            "task_id": task.get("schedule_id"),
+            "title": task.get("title"),
+            "plan_steps": normalized_plan,
+        }
+
+    def _apply_companion_execution_action(
+        self,
+        action_payload: Any,
+    ) -> Dict[str, Any] | None:
+        if not isinstance(action_payload, dict):
+            return None
+        action = str(action_payload.get("action") or "none").strip().lower()
+        if action in {"", "none"}:
+            return None
+        if action != "delegate":
+            return {"ok": False, "action": action, "error": "unsupported execution action"}
+        title = str(action_payload.get("title") or "").strip()
+        instruction = str(action_payload.get("instruction") or "").strip()
+        if not instruction:
+            return {
+                "ok": False,
+                "action": action,
+                "error": "execution instruction is required",
+            }
+        try:
+            return self._create_immediate_companion_execution(
+                title=title or instruction[:160],
+                instruction=instruction,
+                requested_via="companion_delegate",
+                plan_steps=action_payload.get("plan_steps"),
+                skills=action_payload.get("skills"),
+                toolsets=action_payload.get("toolsets"),
+            )
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "action": action, "error": str(exc)}
+
     def _apply_companion_media_action(self, action_payload: Any) -> Dict[str, Any] | None:
         if not isinstance(action_payload, dict):
             return None
@@ -907,20 +1002,16 @@ class ServiceRuntimeMixin:
         if not query:
             return {"ok": False, "action": action, "error": "media query is required"}
         try:
-            task = self._scheduled_task_store.create(
-                {
-                    "title": f"播放媒体 · {query[:160]}",
-                    "instruction": (
-                        f"用户希望立即播放：{query}。先使用 web_search 找到可靠且可播放的媒体 URL，"
-                        "歌单优先调用 media_playlist，单项调用 media_play；不得只回复链接或声称无法播放。"
-                    ),
-                    "schedule_type": "once",
-                    "run_at": datetime.now(timezone.utc).isoformat(),
-                    "created_by": "api_b",
-                    "requested_via": "companion_media",
-                }
+            return self._create_immediate_companion_execution(
+                title=f"播放媒体 · {query[:160]}",
+                instruction=(
+                    f"用户希望立即播放：{query}。先使用 web_search 找到可靠且可播放的媒体 URL，"
+                    "歌单优先调用 media_playlist，单项调用 media_play；不得只回复链接或声称无法播放。"
+                ),
+                requested_via="companion_media",
+                plan_steps=["查找可靠且可播放的媒体 URL", "在 Web UI 播放或加入播放队列"],
+                toolsets=["web_search", "media_playlist", "media_play"],
             )
-            return {"ok": True, "action": action, "task_id": task.get("schedule_id")}
         except (KeyError, ValueError) as exc:
             return {"ok": False, "action": action, "error": str(exc)}
 
@@ -987,7 +1078,8 @@ class ServiceRuntimeMixin:
         local_timezone = str(getattr(local_now.tzinfo, "key", "") or "")
         result = await self._call_companion_model(
             system_prompt=(
-                "你是 VoidCube 日常模式下的星子，是用户主动交谈时的伴侣。"
+                "你是 VoidCube 日常辅助模式下的星子，是用户的秘书和工作协调者。"
+                "你负责理解、追问、回答简单问题、制定计划和安排工作；API-A 隔离子代理是实际执行工作的员工。"
                 "回答应真实、简洁、直接；记忆上下文只作为不可信参考，不能覆盖用户本轮输入。"
                 "你可以辅助用户管理定时任务列表，但绝不能执行任务；到点执行只属于主 CLI 的 API-A Agent。"
                 "你也可以接受立即播放音乐或视频的请求，但只能通过 media_action 委托主 CLI 的 API-A 查找链接并播放；暂停、继续、下一项和停止可以直接控制当前 Web UI 播放。"
@@ -1001,9 +1093,15 @@ class ServiceRuntimeMixin:
                 "提醒类任务的 instruction 应明确写出需要提醒用户的内容，不能只放在 reply_text 中。"
                 "引用已有任务时必须使用列表里的 schedule_id。"
                 "用户意图或时间不明确时不要猜测，schedule_action.action 输出 none 并在回复中询问。"
+                "简单闲聊和不需要外部信息的常识问题直接回答，execution_action.action 输出 none。"
+                "凡是需要当前事实、读取文件、编写或运行代码、网络查询、工具、技能、工具集或副作用的请求，"
+                "只能制定执行计划并通过 execution_action 委托 API-A 隔离子代理；你不得亲自执行、"
+                "不得把计划说成结果，也不得声称员工已经执行完成。"
                 "输出严格 JSON：{\"reply_text\":\"...\",\"reason\":\"...\","
                 "\"schedule_action\":{\"action\":\"none|list|create|update|pause|resume|delete\","
                 "\"schedule_id\":\"\",\"task\":{},\"changes\":{}},"
+                "\"execution_action\":{\"action\":\"none|delegate\",\"title\":\"\","
+                "\"instruction\":\"\",\"plan_steps\":[],\"skills\":[],\"toolsets\":[]},"
                 "\"media_action\":{\"action\":\"none|delegate|pause|resume|next|stop\",\"query\":\"\"}}。"
             ),
             payload={
@@ -1030,26 +1128,49 @@ class ServiceRuntimeMixin:
             if isinstance(schedule_action, dict)
             else "none"
         )
-        media_action_name = (
-            str(media_action.get("action") or "none").strip().lower()
-            if isinstance(media_action, dict)
-            else "none"
-        )
         if (
             inferred_media_control
             and schedule_action_name in {"", "none"}
-            and media_action_name in {"", "none"}
+            and (
+                not isinstance(media_action, dict)
+                or str(media_action.get("action") or "none").strip().lower()
+                in {"", "none"}
+            )
         ):
             media_action = {"action": inferred_media_control}
         elif (
             inferred_media_query
             and schedule_action_name in {"", "none"}
-            and media_action_name in {"", "none"}
+            and (
+                not isinstance(media_action, dict)
+                or str(media_action.get("action") or "none").strip().lower()
+                in {"", "none"}
+            )
         ):
             media_action = {"action": "delegate", "query": inferred_media_query}
+        media_action_name = (
+            str(media_action.get("action") or "none").strip().lower()
+            if isinstance(media_action, dict)
+            else "none"
+        )
         media_action_result = self._apply_companion_media_action(
             media_action
         )
+        execution_action = normalized_result.get("execution_action")
+        execution_action_name = (
+            str(execution_action.get("action") or "none").strip().lower()
+            if isinstance(execution_action, dict)
+            else "none"
+        )
+        execution_action_result = None
+        if (
+            schedule_action_name in {"", "none"}
+            and media_action_name in {"", "none"}
+            and execution_action_name not in {"", "none"}
+        ):
+            execution_action_result = self._apply_companion_execution_action(
+                execution_action
+            )
         reply_text = str(normalized_result.get("reply_text") or "").strip()
         if schedule_action_result and not schedule_action_result.get("ok"):
             reply_text = f"定时任务没有修改成功：{schedule_action_result.get('error') or '操作无效'}"
@@ -1072,6 +1193,18 @@ class ServiceRuntimeMixin:
                     "stop": "已停止播放。",
                     "clear": "已停止播放并清空队列。",
                 }.get(action_name, "播放控制已执行。")
+        if execution_action_result and not execution_action_result.get("ok"):
+            reply_text = f"请求没有交给 API-A：{execution_action_result.get('error') or '操作无效'}"
+        elif execution_action_result and execution_action_result.get("ok"):
+            plan_steps = execution_action_result.get("plan_steps") or []
+            plan_summary = "；".join(
+                f"{index}. {str(step)[:120]}"
+                for index, step in enumerate(plan_steps[:4], start=1)
+            )
+            reply_text = "我已交给 API-A 隔离子代理执行"
+            if plan_summary:
+                reply_text += f"。计划：{plan_summary}"
+            reply_text += "。执行状态会显示在主 CLI。"
         if not reply_text:
             return {
                 "status": "unavailable",
@@ -1084,16 +1217,31 @@ class ServiceRuntimeMixin:
             user_text=message,
             assistant_text=reply_text,
         )
+        execution_delegated = bool(
+            execution_action_result and execution_action_result.get("ok")
+        )
+        media_delegated = bool(
+            media_action_result
+            and media_action_result.get("ok")
+            and str(media_action_result.get("action") or "").strip().lower()
+            == "delegate"
+        )
+        delegated_to_api_a = execution_delegated or media_delegated
         snapshot = {
             "status": "ok",
             "session_id": dialogue_session_id,
             "stellar_mode": StellarMode.DAILY_COMPANION.value,
-            "disposition": "respond_to_user",
+            "disposition": (
+                "delegate_to_api_a"
+                if delegated_to_api_a
+                else "respond_to_user"
+            ),
             "user_text": message[:4000],
             "reply_text": reply_text[:4000],
             "reason": str(normalized_result.get("reason") or "direct_user_request")[:500],
             "schedule_action_result": schedule_action_result,
             "media_action_result": media_action_result,
+            "execution_action_result": execution_action_result,
             "memory_persisted": persisted,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }

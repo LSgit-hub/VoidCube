@@ -1,4 +1,4 @@
-"""Narrow execution owner for scheduled and companion-media tasks."""
+"""Narrow execution owner for scheduled and companion-delegated tasks."""
 
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ class ScheduledExecutionHost:
         resolve_agent_route: Callable[[str], dict[str, Any]],
         create_agent: Callable[[dict[str, Any], str, dict[str, Any], bool], Any],
         completion_outcome: Callable[[dict[str, Any] | None], tuple[bool, str, str]],
+        announce_start: Callable[[int, str, str, str], None],
+        render_completion: Callable[[bool, str, str, int, str, str | None, str], None],
         invalidate: Callable[[], None],
     ) -> None:
         self._state = BackgroundTaskState()
@@ -38,8 +40,8 @@ class ScheduledExecutionHost:
                 ensure_credentials=ensure_credentials,
                 resolve_agent_route=resolve_agent_route,
                 create_agent=create_agent,
-                announce_start=lambda *_args: None,
-                render_completion=lambda *_args: None,
+                announce_start=announce_start,
+                render_completion=render_completion,
                 set_thinking=lambda _text: None,
                 invalidate=invalidate,
                 bell_on_complete=lambda: None,

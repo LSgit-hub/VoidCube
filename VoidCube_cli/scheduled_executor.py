@@ -332,7 +332,18 @@ class ScheduledTaskExecutorRuntime:
             title = str(task.get("title") or "定时任务").strip()
             instruction = str(task.get("instruction") or "").strip()
             companion_media = task.get("requested_via") == "companion_media"
-            if companion_media:
+            companion_delegate = task.get("requested_via") == "companion_delegate"
+            api_b_origin = str(task.get("created_by") or "").strip().lower() == "api_b"
+            if companion_delegate:
+                prompt = (
+                    "这是日常模式下 API-B 制定计划后转交的执行请求。你是隔离的 API-A 子代理，"
+                    "必须使用正常工具和技能完成请求并给出真实结果。API-B 只负责规划，尚未执行任何步骤。"
+                    "不要创建新的定时任务，也不要把请求交给 Auto 自主链。\n\n"
+                    f"请求：{title}\nAPI-B 的执行说明：{instruction}"
+                )
+                task_label = f"API-B 指令 · {title}"
+                response_title = "> Voidcube（API-A 子代理）"
+            elif companion_media:
                 prompt = (
                     "这是日常模式下星子转交的即时媒体播放请求。请使用 API-A 的正常工具能力"
                     "查找可靠、可播放的媒体 URL；歌单优先一次调用 media_playlist，单项才调用 media_play。"
@@ -342,6 +353,15 @@ class ScheduledTaskExecutorRuntime:
                 )
                 task_label = f"媒体请求 · {title}"
                 response_title = "> Voidcube（媒体播放）"
+            elif api_b_origin:
+                prompt = (
+                    "这是日常模式下由 API-B 秘书安排并已到期的工作。你是隔离的 API-A 子代理，"
+                    "必须使用正常工具和技能完成任务并给出真实结果。API-B 只负责传达和安排，"
+                    "尚未执行任务。不要创建新的定时任务，也不要把任务交给 Auto 自主链。\n\n"
+                    f"任务：{title}\nAPI-B 的工作指令：{instruction}"
+                )
+                task_label = f"API-B 指令 · {title}"
+                response_title = "> Voidcube（API-A 子代理）"
             else:
                 prompt = (
                     "这是用户预先安排并已到期的定时任务。请使用 API-A 的正常工具能力完成任务，"

@@ -341,6 +341,7 @@ async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_sch
     result = await supervisor.handle_companion_message(text="帮我播放测试视频")
 
     assert result["media_action_result"]["ok"] is True
+    assert result["disposition"] == "delegate_to_api_a"
     stored = supervisor._scheduled_task_store.list(include_completed=True)
     assert len(stored) == 1
     assert stored[0]["requested_via"] == "companion_media"
@@ -349,6 +350,71 @@ async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_sch
     assert supervisor._companion_schedule_context()["items"] == []
     prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
     assert "schedule_action.action 必须为 none" in prompt
+
+
+@pytest.mark.asyncio
+async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "我已整理计划并交给 API-A。",
+            "reason": "requires_repository_tools",
+            "schedule_action": {"action": "none"},
+            "media_action": {"action": "none"},
+            "execution_action": {
+                "action": "delegate",
+                "title": "检查项目测试",
+                "instruction": "检查当前项目并运行相关测试。",
+                "plan_steps": ["读取项目配置", "运行相关测试", "汇总失败原因"],
+                "skills": ["project-testing"],
+                "toolsets": ["terminal"],
+            },
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="检查这个项目的测试")
+
+    assert result["disposition"] == "delegate_to_api_a"
+    assert result["execution_action_result"]["ok"] is True
+    assert "计划：1. 读取项目配置；2. 运行相关测试" in result["reply_text"]
+    stored = supervisor._scheduled_task_store.list(include_completed=True)
+    assert len(stored) == 1
+    assert stored[0]["created_by"] == "api_b"
+    assert stored[0]["requested_via"] == "companion_delegate"
+    assert "1. 读取项目配置" in stored[0]["instruction"]
+    assert "建议技能：project-testing" in stored[0]["instruction"]
+    assert "建议工具集：terminal" in stored[0]["instruction"]
+    assert supervisor._scheduled_task_snapshot()["tasks"] == []
+    assert supervisor._companion_schedule_context()["items"] == []
+    prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
+    assert "秘书和工作协调者" in prompt
+    assert "API-A 隔离子代理是实际执行工作的员工" in prompt
+    assert "execution_action" in prompt
+    assert "不得把计划说成结果" in prompt
+
+
+@pytest.mark.asyncio
+async def test_companion_simple_reply_does_not_create_execution_task(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "在的。",
+            "reason": "simple_conversation",
+            "schedule_action": {"action": "none"},
+            "media_action": {"action": "none"},
+            "execution_action": {"action": "none"},
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="你在吗？")
+
+    assert result["disposition"] == "respond_to_user"
+    assert result["execution_action_result"] is None
+    assert supervisor._scheduled_task_store.list(include_completed=True) == []
 
 
 @pytest.mark.asyncio
@@ -445,6 +511,131 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
     callbacks[0](True, "已播放", "")
 
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/media-run-1/finish"
+
+
+def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+
+    def start_background(prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        assert "API-B 制定计划后转交" in prompt
+        assert "隔离的 API-A 子代理" in prompt
+        assert "不要创建新的定时任务" in prompt
+        assert "不要把请求交给 Auto 自主链" in prompt
+        assert kwargs["task_label"] == "API-B 指令 · 检查项目测试"
+        assert kwargs["persist_session"] is False
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host),
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "delegate-writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {
+                        "title": "检查项目测试",
+                        "instruction": "执行计划并汇总结果",
+                        "requested_via": "companion_delegate",
+                    },
+                    "run": {"run_id": "delegate-run-1"},
+                },
+            },
+            {"status": "completed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](True, "测试通过", "")
+
+    assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/delegate-run-1/finish"
+
+
+def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+
+    def start_background(prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        assert "由 API-B 秘书安排并已到期" in prompt
+        assert "API-B 只负责传达和安排" in prompt
+        assert kwargs["task_label"] == "API-B 指令 · 整理项目进展"
+        assert kwargs["response_title"] == "> Voidcube（API-A 子代理）"
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host),
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "api-b-scheduled-writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {
+                        "title": "整理项目进展",
+                        "instruction": "读取状态并整理进展",
+                        "created_by": "api_b",
+                        "requested_via": "companion_voice",
+                    },
+                    "run": {"run_id": "api-b-scheduled-run-1"},
+                },
+            },
+            {"status": "completed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](True, "已整理", "")
+
+    assert runtime._post.call_args_list[-1].args[0] == (
+        "/scheduled-task-runs/api-b-scheduled-run-1/finish"
+    )
+
+
+def test_scheduled_execution_projection_is_compact() -> None:
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    output = []
+    with patch("VoidCube_cli.app._cprint", side_effect=output.append):
+        cli._announce_scheduled_execution_start(
+            1,
+            "scheduled-run",
+            "full prompt must not be rendered",
+            "API-B 指令 · 检查项目测试",
+        )
+        cli._render_scheduled_execution_completion(
+            True,
+            "第一行\n第二行 " + "结果" * 120,
+            "",
+            1,
+            "API-B 指令 · 检查项目测试",
+            None,
+            "full prompt must not be rendered",
+        )
+
+    assert output[0] == "  ◇ API-B → API-A 子代理  检查项目测试"
+    assert output[1].startswith("  ✓ API-A 子代理  第一行 第二行")
+    assert len(output[1]) <= 220
+    assert "full prompt" not in "".join(output)
 
 
 def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> None:

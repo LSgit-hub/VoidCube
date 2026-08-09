@@ -16,7 +16,9 @@ from fastapi import HTTPException
 
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
 TERMINAL_SCHEDULE_STATUSES = frozenset({"completed", "failed"})
-INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset({"companion_media"})
+INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset(
+    {"companion_delegate", "companion_media"}
+)
 
 
 def _utc_now() -> datetime:
