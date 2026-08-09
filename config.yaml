@@ -7,6 +7,53 @@ runtime:
 providers: {}
 fallback_providers: []
 credential_pool_strategies: {}
+companion_workers:
+  default_role: general
+  roles:
+    general:
+      label: 通用员工
+      description: 处理不属于专门角色的综合工作
+      enabled: true
+      provider: ''
+      model: ''
+      toolsets: []
+    research:
+      label: 调研员工
+      description: 负责检索、核实、比较和整理外部信息
+      enabled: true
+      provider: ''
+      model: ''
+      toolsets: []
+    coding:
+      label: 工程员工
+      description: 负责读取项目、编写或修改代码并运行验证
+      enabled: true
+      provider: ''
+      model: ''
+      toolsets: []
+    media:
+      label: 媒体员工
+      description: 负责查找、组织和播放音视频媒体
+      enabled: true
+      provider: ''
+      model: ''
+      toolsets: []
+image_generation:
+  provider: agnes-ai
+  api_key_env: AGNES_API_KEY
+  endpoint: https://api.agnes-ai.cn/v1/images/generations
+  edit_endpoint: https://api.agnes-ai.cn/v1/images/edits
+  model: agnes-image-2.1-flash
+  request_timeout_seconds: 120
+video_generation:
+  provider: agnes-ai
+  api_key_env: AGNES_API_KEY
+  endpoint: https://api.agnes-ai.cn/v1/videos
+  result_endpoint: https://api.agnes-ai.cn/agnesapi
+  model: agnes-video-v2.0
+  request_timeout_seconds: 120
+  poll_interval_seconds: 3
+  timeout_seconds: 600
 toolsets:
 - VoidCube-cli
 agent:
@@ -226,4 +273,4 @@ logging:
   backup_count: 3
 network:
   force_ipv4: false
-_config_version: 20
+_config_version: 21

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -74,7 +75,7 @@ class ScheduledTaskStore:
         "schedule_id", "title", "instruction", "schedule_type", "timezone",
         "status", "created_by", "requested_via", "created_at", "updated_at",
         "next_run_at", "last_run_at", "last_run_status", "active_run_id",
-        "run_at", "time_of_day", "weekdays_json",
+        "run_at", "time_of_day", "worker_role", "weekdays_json",
     )
     _RUN_COLUMNS = (
         "run_id", "schedule_id", "due_at", "status", "owner_session_id",
@@ -144,8 +145,22 @@ class ScheduledTaskStore:
                 "status TEXT NOT NULL, created_by TEXT NOT NULL, requested_via TEXT NOT NULL, "
                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_run_at TEXT, "
                 "last_run_at TEXT, last_run_status TEXT, active_run_id TEXT, run_at TEXT, "
-                "time_of_day TEXT, weekdays_json TEXT NOT NULL DEFAULT '[]')"
+                "time_of_day TEXT, worker_role TEXT NOT NULL DEFAULT '', "
+                "weekdays_json TEXT NOT NULL DEFAULT '[]')"
             )
+            task_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(scheduled_tasks)")
+            }
+            if "worker_role" not in task_columns:
+                connection.execute(
+                    "ALTER TABLE scheduled_tasks "
+                    "ADD COLUMN worker_role TEXT NOT NULL DEFAULT ''"
+                )
+                connection.execute(
+                    "UPDATE scheduled_tasks SET worker_role = 'general' "
+                    "WHERE lower(created_by) = 'api_b'"
+                )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS scheduled_task_runs ("
                 "run_id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, due_at TEXT NOT NULL, "
@@ -166,7 +181,7 @@ class ScheduledTaskStore:
                 "ON scheduled_task_runs(claimed_at DESC)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '2')"
+                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '3')"
             )
 
     def _migrate_legacy_json_once(self) -> None:
@@ -263,6 +278,12 @@ class ScheduledTaskStore:
         zone_name = str(request.get("timezone") or "").strip()
         _timezone(zone_name)
 
+        created_by = str(request.get("created_by") or "api_a")[:40]
+        worker_role = str(request.get("worker_role") or "").strip().lower()[:40]
+        if not worker_role and created_by == "api_b":
+            worker_role = "general"
+        if worker_role and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", worker_role):
+            raise ValueError("worker_role must use lowercase letters, digits, _ or -")
         task: Dict[str, Any] = {
             "schedule_id": str(uuid.uuid4()),
             "title": title[:200],
@@ -270,7 +291,7 @@ class ScheduledTaskStore:
             "schedule_type": schedule_type,
             "timezone": zone_name,
             "status": "active",
-            "created_by": str(request.get("created_by") or "api_a")[:40],
+            "created_by": created_by,
             "requested_via": str(request.get("requested_via") or "cli")[:40],
             "created_at": _iso_utc(now),
             "updated_at": _iso_utc(now),
@@ -278,6 +299,7 @@ class ScheduledTaskStore:
             "last_run_at": None,
             "last_run_status": None,
             "active_run_id": None,
+            "worker_role": worker_role,
         }
         if schedule_type == "once":
             task["run_at"] = _iso_utc(_parse_datetime(request.get("run_at"), field="run_at"))
@@ -318,6 +340,11 @@ class ScheduledTaskStore:
         for column in ScheduledTaskStore._TASK_COLUMNS:
             if column == "weekdays_json":
                 values.append(json.dumps(task.get("weekdays") or [], ensure_ascii=False))
+            elif column == "worker_role":
+                values.append(
+                    task.get("worker_role")
+                    or ("general" if task.get("created_by") == "api_b" else "")
+                )
             else:
                 values.append(task.get(column))
         return tuple(values)
@@ -398,7 +425,7 @@ class ScheduledTaskStore:
         current = (now or _utc_now()).astimezone(timezone.utc)
         allowed = {
             "title", "instruction", "schedule_type", "run_at", "time_of_day",
-            "weekdays", "timezone",
+            "weekdays", "timezone", "worker_role",
         }
         with self._transaction() as connection:
             existing = self._task(connection, schedule_id)
@@ -412,6 +439,7 @@ class ScheduledTaskStore:
                     "created_at": existing.get("created_at"),
                     "created_by": existing.get("created_by"),
                     "requested_via": existing.get("requested_via"),
+                    "worker_role": normalized.get("worker_role"),
                     "updated_at": _iso_utc(current),
                     "status": (
                         "active"

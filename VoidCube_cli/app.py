@@ -1476,7 +1476,7 @@ class VoidcubeCLI:
             return host
         host = ScheduledExecutionHost(
             ensure_credentials=self._ensure_runtime_credentials,
-            resolve_agent_route=self._resolve_turn_agent_config,
+            resolve_agent_route=self._resolve_scheduled_worker_route,
             create_agent=self._create_scheduled_agent,
             completion_outcome=_background_completion_outcome,
             announce_start=self._announce_scheduled_execution_start,
@@ -1500,6 +1500,46 @@ class VoidcubeCLI:
             persist_session,
             scheduled=True,
         )
+
+    def _resolve_scheduled_worker_route(
+        self,
+        prompt: str,
+        worker_role: str,
+    ) -> dict[str, Any]:
+        base_route = self._resolve_turn_agent_config(prompt)
+        if not worker_role:
+            return base_route
+
+        from VoidCube_app.companion_workers import resolve_companion_worker_route
+        from VoidCube_app.config import load_config
+        from VoidCube_app.runtime_provider import resolve_runtime_provider
+
+        route = resolve_companion_worker_route(
+            config=load_config(),
+            requested_role=worker_role,
+            base_route=base_route,
+            resolve_provider=resolve_runtime_provider,
+        )
+        if self.service_tier:
+            from VoidCube_app.models import resolve_fast_mode_overrides
+
+            route["request_overrides"] = resolve_fast_mode_overrides(
+                route.get("model")
+            )
+        configured_toolsets = route.get("enabled_toolsets")
+        if configured_toolsets is not None:
+            mcp_names = set((self.config.get("mcp_servers") or {}).keys())
+            invalid = [
+                toolset
+                for toolset in configured_toolsets
+                if not _get_validate_toolset(toolset) and toolset not in mcp_names
+            ]
+            if invalid:
+                raise ValueError(
+                    f"worker role '{worker_role}' has unknown toolsets: "
+                    + ", ".join(invalid)
+                )
+        return route
 
     @staticmethod
     def _scheduled_execution_display_text(value: str, *, limit: int = 200) -> str:
@@ -3129,13 +3169,18 @@ class VoidcubeCLI:
             if scheduled is None
             else bool(scheduled)
         )
+        route_toolsets = turn_route.get("enabled_toolsets")
         return CliAgentInitializationRuntime(
             CliAgentInitializationPorts(
                 agent_factory=_get_AIAgent(),
                 runtime=runtime,
                 model=turn_route["model"],
                 max_iterations=self.max_turns,
-                enabled_toolsets=self.enabled_toolsets,
+                enabled_toolsets=(
+                    self.enabled_toolsets
+                    if route_toolsets is None
+                    else list(route_toolsets)
+                ),
                 verbose_logging=False,
                 quiet_mode=True,
                 ephemeral_system_prompt=None,
@@ -3154,7 +3199,11 @@ class VoidcubeCLI:
                 session_db=None if minimal_scheduled_host else self._session_db,
                 clarification_sink=None,
                 reasoning_callback=None,
-                fallback_model=self._fallback_model,
+                fallback_model=(
+                    None
+                    if turn_route.get("worker_provider_explicit")
+                    else self._fallback_model
+                ),
                 thinking_callback=None,
                 checkpoints_enabled=False,
                 checkpoint_max_snapshots=0,

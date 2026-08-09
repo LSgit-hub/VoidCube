@@ -112,6 +112,7 @@ class BackgroundTaskRuntime:
         timeout_seconds: float | None = None,
         persist_session: bool = True,
         on_complete: Callable[[bool, str, str], None] | None = None,
+        route_override: dict[str, Any] | None = None,
     ) -> bool:
         state = self.ports.state
         task_num = state.next_task_number()
@@ -134,7 +135,7 @@ class BackgroundTaskRuntime:
         }
         state.record_info(task_id, task_info)
 
-        turn_route = self.ports.resolve_agent_route(prompt)
+        turn_route = dict(route_override) if route_override is not None else self.ports.resolve_agent_route(prompt)
         request_overrides = dict(turn_route.get("request_overrides") or {})
         if request_timeout_seconds is not None:
             request_overrides["timeout"] = max(0.1, float(request_timeout_seconds))

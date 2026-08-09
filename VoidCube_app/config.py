@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from VoidCube_core.constants import get_VoidCube_home, get_config_path, get_env_path
+from VoidCube_app.companion_workers import DEFAULT_COMPANION_WORKER_ROLES
 from VoidCube_app.default_identity import DEFAULT_SOUL_MD
 from VoidCube_app.environment import is_placeholder_secret
 from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
@@ -348,6 +349,10 @@ DEFAULT_CONFIG = {
     "providers": {},
     "fallback_providers": [],
     "credential_pool_strategies": {},
+    "companion_workers": {
+        "default_role": "general",
+        "roles": copy.deepcopy(DEFAULT_COMPANION_WORKER_ROLES),
+    },
     "image_generation": {
         "provider": "agnes-ai",
         "api_key_env": "AGNES_API_KEY",
@@ -1291,7 +1296,7 @@ def check_config_version() -> Tuple[int, int]:
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "runtime", "providers", "fallback_model",
-    "fallback_providers", "credential_pool_strategies", "image_generation",
+    "fallback_providers", "credential_pool_strategies", "companion_workers", "image_generation",
     "video_generation", "toolsets",
     "agent", "terminal", "display", "clarify", "compression", "delegation",
     "auxiliary", "context", "memory", "gateway", "supervisor",
@@ -1923,6 +1928,7 @@ _RUNTIME_MAPPING_SECTIONS = (
     "checkpoints",
     "compression",
     "delegation",
+    "companion_workers",
     "auxiliary",
     "clarify",
 )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -234,6 +235,7 @@ async def test_daily_companion_can_manage_but_not_execute_schedule(tmp_path) -> 
                     "instruction": "整理今日项目进展",
                     "schedule_type": "once",
                     "run_at": "2026-07-29T20:00:00+08:00",
+                    "worker_role": "coding",
                 },
             },
         }
@@ -245,6 +247,7 @@ async def test_daily_companion_can_manage_but_not_execute_schedule(tmp_path) -> 
     task = supervisor._scheduled_task_store.list()[0]
     assert task["created_by"] == "api_b"
     assert task["requested_via"] == "companion_voice"
+    assert task["worker_role"] == "coding"
     assert task["active_run_id"] is None
     schedule_context = supervisor._call_companion_model.call_args.kwargs["payload"]["scheduled_tasks"]
     assert schedule_context == {"count": 0, "omitted_count": 0, "items": []}
@@ -367,6 +370,7 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
                 "action": "delegate",
                 "title": "检查项目测试",
                 "instruction": "检查当前项目并运行相关测试。",
+                "worker_role": "coding",
                 "plan_steps": ["读取项目配置", "运行相关测试", "汇总失败原因"],
                 "skills": ["project-testing"],
                 "toolsets": ["terminal"],
@@ -378,11 +382,13 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
 
     assert result["disposition"] == "delegate_to_api_a"
     assert result["execution_action_result"]["ok"] is True
+    assert result["execution_action_result"]["worker_role"] == "coding"
     assert "计划：1. 读取项目配置；2. 运行相关测试" in result["reply_text"]
     stored = supervisor._scheduled_task_store.list(include_completed=True)
     assert len(stored) == 1
     assert stored[0]["created_by"] == "api_b"
     assert stored[0]["requested_via"] == "companion_delegate"
+    assert stored[0]["worker_role"] == "coding"
     assert "1. 读取项目配置" in stored[0]["instruction"]
     assert "建议技能：project-testing" in stored[0]["instruction"]
     assert "建议工具集：terminal" in stored[0]["instruction"]
@@ -393,6 +399,9 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
     assert "API-A 隔离子代理是实际执行工作的员工" in prompt
     assert "execution_action" in prompt
     assert "不得把计划说成结果" in prompt
+    worker_roles = supervisor._call_companion_model.call_args.kwargs["payload"]["worker_roles"]
+    assert worker_roles["default_role"] == "general"
+    assert "coding" in {item["role"] for item in worker_roles["roles"]}
 
 
 @pytest.mark.asyncio
@@ -482,6 +491,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
         assert kwargs["task_label"].startswith("媒体请求 ·")
         assert kwargs["response_title"] == "> Voidcube（媒体播放）"
         assert kwargs["persist_session"] is False
+        assert kwargs["worker_role"] == "media"
         return True
 
     host._start_background_agent_task = start_background
@@ -499,6 +509,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
                         "title": "播放媒体 · 测试视频",
                         "instruction": "搜索并播放测试视频",
                         "requested_via": "companion_media",
+                        "worker_role": "media",
                     },
                     "run": {"run_id": "media-run-1"},
                 },
@@ -530,6 +541,7 @@ def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> Non
         assert "不要把请求交给 Auto 自主链" in prompt
         assert kwargs["task_label"] == "API-B 指令 · 检查项目测试"
         assert kwargs["persist_session"] is False
+        assert kwargs["worker_role"] == "general"
         return True
 
     host._start_background_agent_task = start_background
@@ -547,6 +559,7 @@ def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> Non
                         "title": "检查项目测试",
                         "instruction": "执行计划并汇总结果",
                         "requested_via": "companion_delegate",
+                        "worker_role": "general",
                     },
                     "run": {"run_id": "delegate-run-1"},
                 },
@@ -576,6 +589,7 @@ def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) 
         assert "API-B 只负责传达和安排" in prompt
         assert kwargs["task_label"] == "API-B 指令 · 整理项目进展"
         assert kwargs["response_title"] == "> Voidcube（API-A 子代理）"
+        assert kwargs["worker_role"] == "general"
         return True
 
     host._start_background_agent_task = start_background
@@ -594,6 +608,7 @@ def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) 
                         "instruction": "读取状态并整理进展",
                         "created_by": "api_b",
                         "requested_via": "companion_voice",
+                        "worker_role": "general",
                     },
                     "run": {"run_id": "api-b-scheduled-run-1"},
                 },
@@ -636,6 +651,144 @@ def test_scheduled_execution_projection_is_compact() -> None:
     assert output[1].startswith("  ✓ API-A 子代理  第一行 第二行")
     assert len(output[1]) <= 220
     assert "full prompt" not in "".join(output)
+
+
+def test_scheduled_host_projects_resolved_worker_label() -> None:
+    from VoidCube_cli.scheduled_execution_host import ScheduledExecutionHost
+
+    starts = []
+    completions = []
+    completed = threading.Event()
+    captured_route = {}
+
+    class Agent:
+        def run_conversation(self, **_kwargs):
+            return {"final_response": "完成"}
+
+    def create_agent(route, *_args):
+        captured_route.update(route)
+        return Agent()
+
+    host = ScheduledExecutionHost(
+        ensure_credentials=lambda: True,
+        resolve_agent_route=lambda _prompt, role: {
+            "model": "worker-model",
+            "runtime": {},
+            "worker_role": role,
+            "worker_label": "调研员工",
+        },
+        create_agent=create_agent,
+        completion_outcome=lambda result: (
+            True,
+            str((result or {}).get("final_response") or ""),
+            "",
+        ),
+        announce_start=lambda *_args: starts.append(_args),
+        render_completion=lambda *_args: completions.append(_args) or completed.set(),
+        invalidate=lambda: None,
+    )
+
+    assert host.start(
+        "查询资料",
+        task_label="API-B 指令 · 核实资料",
+        worker_role="research",
+        persist_session=False,
+    )
+    assert completed.wait(2)
+
+    assert starts[0][3] == "API-B 指令 · 调研员工 · 核实资料"
+    assert completions[0][4] == "API-B 指令 · 调研员工 · 核实资料"
+    assert captured_route["worker_role"] == "research"
+
+
+def test_cli_resolves_scheduled_worker_provider_model_and_toolsets() -> None:
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.config = {"mcp_servers": {}}
+    cli.service_tier = None
+    cli._resolve_turn_agent_config = Mock(
+        return_value={
+            "model": "primary-model",
+            "runtime": {"provider": "primary", "args": []},
+        }
+    )
+    worker_config = {
+        "providers": {
+            "research-provider": {"selected_model": "research-model"},
+        },
+        "companion_workers": {
+            "roles": {
+                "research": {
+                    "provider": "research-provider",
+                    "toolsets": ["web", "skills"],
+                }
+            }
+        },
+    }
+    with (
+        patch("VoidCube_app.config.load_config", return_value=worker_config),
+        patch(
+            "VoidCube_app.runtime_provider.resolve_runtime_provider",
+            return_value={
+                "provider": "research-provider",
+                "base_url": "https://research.example/v1",
+                "api_key": "worker-key",
+                "args": [],
+            },
+        ),
+    ):
+        route = cli._resolve_scheduled_worker_route("查询并核实资料", "research")
+
+    assert route["worker_role"] == "research"
+    assert route["model"] == "research-model"
+    assert route["runtime"]["provider"] == "research-provider"
+    assert route["enabled_toolsets"] == ["web", "skills"]
+
+
+def test_scheduled_worker_route_failure_is_written_back(tmp_path) -> None:
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+    host._start_background_agent_task = Mock(
+        side_effect=ValueError("unknown provider 'missing-provider'")
+    )
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host),
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "worker-route-failure-writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {
+                        "title": "调研任务",
+                        "instruction": "查询资料",
+                        "created_by": "api_b",
+                        "requested_via": "companion_delegate",
+                        "worker_role": "research",
+                    },
+                    "run": {"run_id": "worker-route-failure-run"},
+                },
+            },
+            {"status": "failed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+
+    finish_call = runtime._post.call_args_list[-1]
+    assert finish_call.args[0] == (
+        "/scheduled-task-runs/worker-route-failure-run/finish"
+    )
+    assert finish_call.args[1]["success"] is False
+    assert "unknown provider 'missing-provider'" in finish_call.args[1]["error"]
+    assert host._scheduled_execution_active is False
 
 
 def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> None:
@@ -1038,13 +1191,15 @@ def test_scheduled_host_creates_minimal_nonpersistent_agent():
     cli._provider_require_params = False
     cli._provider_data_collection = None
     cli._session_db = object()
-    cli._fallback_model = None
+    cli._fallback_model = [{"provider": "fallback", "model": "fallback-model"}]
     captured = {}
 
     with patch("VoidCube_cli.app._get_AIAgent", return_value=lambda **kwargs: captured.update(kwargs) or object()):
         cli._create_scheduled_agent(
             {
                 "model": "agnes-2.5-flash",
+                "enabled_toolsets": ["research"],
+                "worker_provider_explicit": True,
                 "runtime": {
                     "provider": "custom",
                     "base_url": "https://api.agnes-ai.cn/v1",
@@ -1061,3 +1216,46 @@ def test_scheduled_host_creates_minimal_nonpersistent_agent():
     assert captured["persist_session"] is False
     assert captured["skip_memory"] is True
     assert captured["skip_context_files"] is True
+    assert captured["enabled_toolsets"] == ["research"]
+    assert captured["fallback_model"] is None
+
+
+def test_scheduled_store_upgrades_v2_schema_with_worker_role(tmp_path) -> None:
+    database = tmp_path / "scheduled_tasks-v2.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE scheduled_task_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE scheduled_tasks ("
+            "schedule_id TEXT PRIMARY KEY, title TEXT NOT NULL, instruction TEXT NOT NULL, "
+            "schedule_type TEXT NOT NULL, timezone TEXT NOT NULL DEFAULT '', "
+            "status TEXT NOT NULL, created_by TEXT NOT NULL, requested_via TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_run_at TEXT, "
+            "last_run_at TEXT, last_run_status TEXT, active_run_id TEXT, run_at TEXT, "
+            "time_of_day TEXT, weekdays_json TEXT NOT NULL DEFAULT '[]')"
+        )
+        connection.execute(
+            "INSERT INTO scheduled_tasks (schedule_id, title, instruction, schedule_type, "
+            "status, created_by, requested_via, created_at, updated_at, run_at) "
+            "VALUES ('legacy-api-b', '旧任务', '执行旧任务', 'once', 'active', 'api_b', "
+            "'companion_voice', '2026-08-09T00:00:00+00:00', "
+            "'2026-08-09T00:00:00+00:00', '2026-08-10T00:00:00+00:00')"
+        )
+        connection.execute(
+            "INSERT INTO scheduled_task_meta(key, value) VALUES('schema_version', '2')"
+        )
+
+    store = ScheduledTaskStore(database)
+
+    assert store.get("legacy-api-b")["worker_role"] == "general"
+    with sqlite3.connect(database) as connection:
+        version = connection.execute(
+            "SELECT value FROM scheduled_task_meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(scheduled_tasks)")
+        }
+    assert version == "3"
+    assert "worker_role" in columns

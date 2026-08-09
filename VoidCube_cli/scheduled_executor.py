@@ -333,13 +333,18 @@ class ScheduledTaskExecutorRuntime:
             instruction = str(task.get("instruction") or "").strip()
             companion_media = task.get("requested_via") == "companion_media"
             companion_delegate = task.get("requested_via") == "companion_delegate"
-            api_b_origin = str(task.get("created_by") or "").strip().lower() == "api_b"
+            api_b_origin = (
+                str(task.get("created_by") or "").strip().lower() == "api_b"
+                or companion_media
+                or companion_delegate
+            )
+            worker_role = str(task.get("worker_role") or "").strip().lower()
             if companion_delegate:
                 prompt = (
                     "这是日常模式下 API-B 制定计划后转交的执行请求。你是隔离的 API-A 子代理，"
                     "必须使用正常工具和技能完成请求并给出真实结果。API-B 只负责规划，尚未执行任何步骤。"
                     "不要创建新的定时任务，也不要把请求交给 Auto 自主链。\n\n"
-                    f"请求：{title}\nAPI-B 的执行说明：{instruction}"
+                    f"员工角色：{worker_role}\n请求：{title}\nAPI-B 的执行说明：{instruction}"
                 )
                 task_label = f"API-B 指令 · {title}"
                 response_title = "> Voidcube（API-A 子代理）"
@@ -349,7 +354,7 @@ class ScheduledTaskExecutorRuntime:
                     "查找可靠、可播放的媒体 URL；歌单优先一次调用 media_playlist，单项才调用 media_play。"
                     "media_playlist 返回 status=ok 即表示整张歌单已入队，不要再调用浏览器、端口检查或其他验证工具。"
                     "不要创建定时任务，也不要把请求交给 Auto 自主链。\n\n"
-                    f"请求：{title}\n播放要求：{instruction}"
+                    f"员工角色：{worker_role}\n请求：{title}\n播放要求：{instruction}"
                 )
                 task_label = f"媒体请求 · {title}"
                 response_title = "> Voidcube（媒体播放）"
@@ -358,7 +363,7 @@ class ScheduledTaskExecutorRuntime:
                     "这是日常模式下由 API-B 秘书安排并已到期的工作。你是隔离的 API-A 子代理，"
                     "必须使用正常工具和技能完成任务并给出真实结果。API-B 只负责传达和安排，"
                     "尚未执行任务。不要创建新的定时任务，也不要把任务交给 Auto 自主链。\n\n"
-                    f"任务：{title}\nAPI-B 的工作指令：{instruction}"
+                    f"员工角色：{worker_role}\n任务：{title}\nAPI-B 的工作指令：{instruction}"
                 )
                 task_label = f"API-B 指令 · {title}"
                 response_title = "> Voidcube（API-A 子代理）"
@@ -389,18 +394,23 @@ class ScheduledTaskExecutorRuntime:
                 self._flush_writebacks()
                 self._release_execution_slot()
 
-            started = self.ports.start_background_task(
-                prompt,
-                task_id=f"scheduled_{run_id}",
-                task_label=task_label,
-                response_title=response_title,
-                request_timeout_seconds=self.request_timeout_seconds,
-                timeout_seconds=self.execution_timeout_seconds,
-                persist_session=False,
-                on_complete=on_complete,
-            )
+            try:
+                started = self.ports.start_background_task(
+                    prompt,
+                    task_id=f"scheduled_{run_id}",
+                    task_label=task_label,
+                    response_title=response_title,
+                    request_timeout_seconds=self.request_timeout_seconds,
+                    timeout_seconds=self.execution_timeout_seconds,
+                    persist_session=False,
+                    on_complete=on_complete,
+                    worker_role=worker_role,
+                )
+            except Exception as exc:
+                on_complete(False, "", f"API-A worker route unavailable: {exc}")
+                started = False
             execution_started = bool(started)
-            if not started:
+            if not started and self._active_run_id:
                 on_complete(False, "", "API-A scheduled execution could not start")
         finally:
             if not execution_started and self._active_run_id:

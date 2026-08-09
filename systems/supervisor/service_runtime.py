@@ -12,6 +12,10 @@ from typing import Any, Dict, Optional
 import uuid
 
 from systems.supervisor.scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
+from VoidCube_app.companion_workers import (
+    companion_worker_catalog,
+    resolve_companion_worker_role,
+)
 
 logger = logging.getLogger("supervisor")
 
@@ -846,6 +850,21 @@ class ServiceRuntimeMixin:
             ],
         }
 
+    @staticmethod
+    def _companion_worker_catalog() -> Dict[str, Any]:
+        from VoidCube_app.config import load_config
+
+        return companion_worker_catalog(load_config())
+
+    @staticmethod
+    def _resolve_companion_worker_role(requested_role: Any) -> str:
+        from VoidCube_app.config import load_config
+
+        return resolve_companion_worker_role(
+            load_config(),
+            str(requested_role or ""),
+        ).role
+
     def _apply_companion_schedule_action(self, action_payload: Any) -> Dict[str, Any] | None:
         if not isinstance(action_payload, dict):
             return None
@@ -864,6 +883,9 @@ class ServiceRuntimeMixin:
                     request["instruction"] = title
                 request["created_by"] = "api_b"
                 request["requested_via"] = "companion_voice"
+                request["worker_role"] = self._resolve_companion_worker_role(
+                    request.get("worker_role")
+                )
                 task = self._scheduled_task_store.create(request)
             else:
                 schedule_id = str(action_payload.get("schedule_id") or "").strip()
@@ -895,6 +917,7 @@ class ServiceRuntimeMixin:
         plan_steps: Any = None,
         skills: Any = None,
         toolsets: Any = None,
+        worker_role: Any = None,
     ) -> Dict[str, Any]:
         normalized_plan = [
             str(step).strip()[:500]
@@ -938,6 +961,7 @@ class ServiceRuntimeMixin:
                 "run_at": datetime.now(timezone.utc).isoformat(),
                 "created_by": "api_b",
                 "requested_via": requested_via,
+                "worker_role": self._resolve_companion_worker_role(worker_role),
             }
         )
         return {
@@ -946,6 +970,7 @@ class ServiceRuntimeMixin:
             "task_id": task.get("schedule_id"),
             "title": task.get("title"),
             "plan_steps": normalized_plan,
+            "worker_role": task.get("worker_role"),
         }
 
     def _apply_companion_execution_action(
@@ -975,6 +1000,7 @@ class ServiceRuntimeMixin:
                 plan_steps=action_payload.get("plan_steps"),
                 skills=action_payload.get("skills"),
                 toolsets=action_payload.get("toolsets"),
+                worker_role=action_payload.get("worker_role"),
             )
         except (KeyError, ValueError) as exc:
             return {"ok": False, "action": action, "error": str(exc)}
@@ -1011,6 +1037,7 @@ class ServiceRuntimeMixin:
                 requested_via="companion_media",
                 plan_steps=["查找可靠且可播放的媒体 URL", "在 Web UI 播放或加入播放队列"],
                 toolsets=["web_search", "media_playlist", "media_play"],
+                worker_role="media",
             )
         except (KeyError, ValueError) as exc:
             return {"ok": False, "action": action, "error": str(exc)}
@@ -1090,6 +1117,7 @@ class ServiceRuntimeMixin:
                 "创建任务支持 once、daily、weekly；once 使用带时区的 ISO-8601 run_at，daily/weekly 使用 time_of_day，"
                 "weekly 还要提供 weekdays（周一=0，周日=6）；无法确定 IANA 时区名称时省略 timezone，使用主机本地时区。"
                 "create 的 task 必须包含 title、instruction 和 schedule_type；instruction 是到点后交给 API-A 执行的完整指令。"
+                "需要执行的任务必须从 payload.worker_roles 中选择 worker_role；不确定时使用 default_role。"
                 "提醒类任务的 instruction 应明确写出需要提醒用户的内容，不能只放在 reply_text 中。"
                 "引用已有任务时必须使用列表里的 schedule_id。"
                 "用户意图或时间不明确时不要猜测，schedule_action.action 输出 none 并在回复中询问。"
@@ -1099,9 +1127,11 @@ class ServiceRuntimeMixin:
                 "不得把计划说成结果，也不得声称员工已经执行完成。"
                 "输出严格 JSON：{\"reply_text\":\"...\",\"reason\":\"...\","
                 "\"schedule_action\":{\"action\":\"none|list|create|update|pause|resume|delete\","
-                "\"schedule_id\":\"\",\"task\":{},\"changes\":{}},"
+                "\"schedule_id\":\"\",\"task\":{\"title\":\"\",\"instruction\":\"\","
+                "\"schedule_type\":\"\",\"worker_role\":\"\"},\"changes\":{}},"
                 "\"execution_action\":{\"action\":\"none|delegate\",\"title\":\"\","
-                "\"instruction\":\"\",\"plan_steps\":[],\"skills\":[],\"toolsets\":[]},"
+                "\"instruction\":\"\",\"plan_steps\":[],\"skills\":[],\"toolsets\":[],"
+                "\"worker_role\":\"\"},"
                 "\"media_action\":{\"action\":\"none|delegate|pause|resume|next|stop\",\"query\":\"\"}}。"
             ),
             payload={
@@ -1111,6 +1141,7 @@ class ServiceRuntimeMixin:
                 "local_time": local_now.isoformat(),
                 "local_timezone": local_timezone,
                 "scheduled_tasks": schedule_context,
+                "worker_roles": self._companion_worker_catalog(),
                 "internal_observation": dict(
                     self._service_runtime.latest_companion_observation
                 ),
