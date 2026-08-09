@@ -27,7 +27,6 @@ def test_middle_status_renders_memory_scene_context_and_errors():
     ).build()
 
     rendered = "".join(text for _, text in fragments)
-    assert "[B]" in rendered
     assert "demo" in rendered
     assert "72%" in rendered
     assert "(?)规划" in rendered
@@ -55,7 +54,7 @@ def test_middle_status_isolates_failed_ports():
     )
 
     rendered = "".join(text for _, text in runtime.build())
-    assert "辅助" in rendered
+    assert "(-)" in rendered
 
 
 def test_middle_status_projects_scheduler_snapshot_without_reading_host_state():
@@ -120,7 +119,7 @@ def test_middle_status_compacts_cancelling_autonomous_request():
     assert "23456789" not in rendered
 
 
-def test_middle_status_uses_compact_unicode_user_and_api_b_indicators():
+def test_middle_status_uses_compact_unicode_user_and_model_status():
     snapshot = type(
         "Snapshot",
         (),
@@ -148,7 +147,7 @@ def test_middle_status_uses_compact_unicode_user_and_api_b_indicators():
 
     rendered = "".join(text for _, text in runtime.build())
 
-    assert "●" in rendered
-    assert "B✓ deepseek-v4-flash" in rendered
+    assert "● deepseek-v4-flash" in rendered
+    assert "B✓" not in rendered
     assert "用户" not in rendered
     assert "running" not in rendered

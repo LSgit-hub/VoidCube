@@ -90,8 +90,8 @@ class CliMiddleStatusRuntime:
                 provider = str(memory_config.get("provider") or "Mem")
                 memory_model = provider if len(provider) <= 12 else provider[:9] + "..."
 
-            icon = "[B] " if ascii_mode else "B✓ "
-            fragments.append((f"{self._BACKGROUND} #6B7280", icon))
+            if fragments:
+                fragments.append((f"{self._BACKGROUND} #6B7280", " "))
             if supervisor_active and memory_model:
                 fragments.extend(self._marquee(memory_model))
             else:
@@ -184,7 +184,7 @@ class CliMiddleStatusRuntime:
             "body_switch": "#C084FC",
         }
         labels = {
-            "idle": "辅助", "planning": "规划", "memory": "记忆", "drive": "驱动",
+            "idle": "", "planning": "规划", "memory": "记忆", "drive": "驱动",
             "handoff": "交接", "maintenance": "维护", "body_switch": "切换",
         }
         color = colors.get(scene, "#9CA3AF")
@@ -192,7 +192,9 @@ class CliMiddleStatusRuntime:
         if has_prefix:
             fragments.append((f"{cls._BACKGROUND} #4B5563", " · "))
         fragments.append((f"{cls._BACKGROUND} {color}", icons.get(scene, "●")))
-        fragments.append((f"{cls._BACKGROUND} {color}", labels.get(scene, scene)))
+        label = labels.get(scene, scene)
+        if label:
+            fragments.append((f"{cls._BACKGROUND} {color}", label))
         error_count = supervisor.get("error_count", 0)
         if error_count > 0:
             fragments.append((f"{cls._BACKGROUND} #FF6B6B bold", f" !{error_count}"))

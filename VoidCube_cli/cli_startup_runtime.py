@@ -16,8 +16,6 @@ class CliStartupPorts:
     resumed: Callable[[], bool]
     preload_resumed_session: Callable[[], bool]
     display_resumed_history: Callable[[], None]
-    memory_model_display: Callable[[], str | None]
-    welcome_text: Callable[[], str]
     recent_sessions: Callable[[], Sequence[Mapping[str, object]]]
     terminal_width: Callable[[], int]
     render_history_panel: Callable[[list[str]], None]
@@ -43,12 +41,6 @@ class CliStartupRuntime:
         if self.ports.resumed() and self.ports.preload_resumed_session():
             self.ports.display_resumed_history()
 
-        memory_model = self.ports.memory_model_display()
-        welcome = (
-            f"记忆模型: {memory_model}"
-            if memory_model
-            else self.ports.welcome_text()
-        )
         sessions = [
             session
             for session in self.ports.recent_sessions()
@@ -60,7 +52,7 @@ class CliStartupRuntime:
             self.ports.emit("[dim]暂无对话历史[/]")
 
         self.ports.emit(
-            f"[#FFF8DC]{welcome} · {self.ports.tools_count()} 个工具 · "
+            f"[#FFF8DC]{self.ports.tools_count()} 个工具 · "
             f"{self.ports.skills_count()} 技能 · "
             f"当前会话: {self.ports.session_id() or '新会话'}[/]"
         )

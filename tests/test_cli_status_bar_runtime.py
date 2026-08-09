@@ -46,6 +46,7 @@ def test_status_bar_builds_model_context_and_middle_fragments():
     assert "api-a" in rendered
     assert "85%" in rendered
     assert "MEM" in rendered
+    assert "A✓" not in rendered
     assert any("#FF6B6B" in style for style, _ in fragments)
 
 

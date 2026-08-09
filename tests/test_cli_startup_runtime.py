@@ -10,8 +10,6 @@ def _runtime(calls, state):
             resumed=lambda: state["resumed"],
             preload_resumed_session=lambda: calls.append("preload") or state["preload"],
             display_resumed_history=lambda: calls.append("history"),
-            memory_model_display=lambda: state["memory_model"],
-            welcome_text=lambda: "VoidCube ready",
             recent_sessions=lambda: state["sessions"],
             terminal_width=lambda: 80,
             render_history_panel=lambda lines: calls.append(("panel", lines)),
@@ -34,7 +32,6 @@ def test_startup_runtime_orders_resume_history_and_summary():
     state = {
         "resumed": True,
         "preload": True,
-        "memory_model": "local-model",
         "sessions": [
             {"id": "current", "title": "ignored"},
             {"id": "old", "title": "Earlier"},
@@ -47,7 +44,7 @@ def test_startup_runtime_orders_resume_history_and_summary():
 
     assert calls[:4] == [("blank", 4), "banner", "preload", "history"]
     assert ("panel", ["[bold #fff]历史会话列表[/]", "", "  1.ID: old | Earlier"]) in calls
-    assert ("emit", "[#FFF8DC]记忆模型: local-model · 3 个工具 · 2 技能 · 当前会话: current[/]") in calls
+    assert ("emit", "[#FFF8DC]3 个工具 · 2 技能 · 当前会话: current[/]") in calls
     assert state["skills_shown"] is True
 
 
@@ -56,7 +53,6 @@ def test_startup_runtime_uses_welcome_and_no_history_for_new_session():
     state = {
         "resumed": False,
         "preload": False,
-        "memory_model": None,
         "sessions": [],
         "skills": [],
         "skills_shown": False,
@@ -66,4 +62,4 @@ def test_startup_runtime_uses_welcome_and_no_history_for_new_session():
 
     assert "preload" not in calls
     assert ("emit", "[dim]暂无对话历史[/]") in calls
-    assert ("emit", "[#FFF8DC]VoidCube ready · 3 个工具 · 2 技能 · 当前会话: current[/]") in calls
+    assert ("emit", "[#FFF8DC]3 个工具 · 2 技能 · 当前会话: current[/]") in calls

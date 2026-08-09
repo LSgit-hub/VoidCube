@@ -4352,30 +4352,6 @@ class VoidcubeCLI:
         )
 
     def _cli_startup_runtime(self) -> CliStartupRuntime:
-        def memory_model_display() -> str | None:
-            try:
-                from VoidCube_app.config import load_config
-
-                memory = load_config().get("memory", {})
-                memory_llm = memory.get("llm", {})
-                model = memory_llm.get("model") or memory.get("model")
-                if not model:
-                    return None
-                display = str(model).split("/")[-1]
-                if display.endswith(".gguf"):
-                    display = display[:-5]
-                return display if len(display) <= 25 else display[:22] + "..."
-            except Exception:
-                return None
-
-        def welcome_text() -> str:
-            try:
-                from VoidCube_cli.i18n import t
-
-                return t("cli.welcome", default="VoidCube 就绪")
-            except Exception:
-                return "VoidCube 就绪"
-
         def recent_sessions() -> list[dict[str, Any]]:
             try:
                 from VoidCube_core.state import SessionDB
@@ -4429,8 +4405,6 @@ class VoidcubeCLI:
                 resumed=lambda: self._ensure_application_runtime().state.resumed,
                 preload_resumed_session=self._preload_resumed_session,
                 display_resumed_history=self._display_resumed_history,
-                memory_model_display=memory_model_display,
-                welcome_text=welcome_text,
                 recent_sessions=recent_sessions,
                 terminal_width=lambda: shutil.get_terminal_size((80, 24)).columns,
                 render_history_panel=render_history_panel,
