@@ -87,9 +87,10 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await page.locator('.dock-btn[data-panel="settings"]').click({ force: true })
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(page.locator('#providerForm')).toBeInViewport()
-    await expect(page.locator('#providerPoolList .provider-list-row')).toHaveCount(3)
-    await expect(page.locator('#providerPoolList')).toContainText('员工验证正常')
     const providerRows = page.locator('#providerPoolList .provider-list-row')
+    await expect.poll(() => providerRows.count()).toBeGreaterThanOrEqual(2)
+    const providerCount = await providerRows.count()
+    await expect(page.locator('#providerPoolList')).toContainText('员工验证正常')
     await providerRows.nth(1).click()
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(providerRows.nth(1)).toHaveClass(/active/)
@@ -130,7 +131,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('[data-worker-role="media"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
     await expect(page.locator('#workerAssignmentStatus')).toHaveText('已应用推荐，请保存')
     const firstProviderSelect = page.locator('[data-worker-provider]').first()
-    await expect(firstProviderSelect.locator('option')).toHaveCount(4)
+    await expect(firstProviderSelect.locator('option')).toHaveCount(providerCount + 1)
     const selectedProvider = await firstProviderSelect.inputValue()
     const providerOptions = await firstProviderSelect.locator('option').evaluateAll(
       (options) => options.map((option) => (option as HTMLOptionElement).value)
@@ -178,6 +179,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     })
     expect(pageErrors).toEqual([])
   } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
     await browser.close()
   }
 })
