@@ -350,6 +350,7 @@ class SupervisorUIRuntime:
             PLATFORM_PRESETS,
             account_for_api,
             load_accounts,
+            missing_required_auth_cookies,
             parse_cookie_string,
             PlatformAccount,
             save_account,
@@ -373,6 +374,16 @@ class SupervisorUIRuntime:
         parsed = parse_cookie_string(cookies_raw, platform)
         if not parsed:
             raise HTTPException(status_code=400, detail="无法解析 cookie 字符串")
+        missing = missing_required_auth_cookies(parsed, platform)
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"缺少登录所需 Cookie: {', '.join(missing)}。"
+                    "请从浏览器 Application/应用 → Cookies 中复制，"
+                    "document.cookie 无法读取 HttpOnly 登录 Cookie。"
+                ),
+            )
 
         # 更新已有账号或新建
         existing_account: Optional[PlatformAccount] = None
@@ -417,6 +428,7 @@ class SupervisorUIRuntime:
         from systems.supervisor.account_store import (
             account_for_api,
             import_browser_cookies,
+            missing_required_auth_cookies,
             parse_cookie_string,
             PlatformAccount,
             save_account,
@@ -437,6 +449,12 @@ class SupervisorUIRuntime:
         parsed = parse_cookie_string(cookies_raw, platform)
         if not parsed:
             raise HTTPException(status_code=400, detail="导入的 Cookie 解析失败")
+        missing = missing_required_auth_cookies(parsed, platform)
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"浏览器中缺少登录所需 Cookie: {', '.join(missing)}",
+            )
 
         account = PlatformAccount(
             id=uuid.uuid4().hex[:12],

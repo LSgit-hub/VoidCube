@@ -35,6 +35,7 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     cwd: process.cwd(),
     env
   })
+  const originalClipboard = await application.evaluate(({ clipboard }) => clipboard.readText())
 
   try {
     const window = await application.firstWindow()
@@ -60,7 +61,8 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await expect(window.frameLocator('#monitor-frame').locator('.room')).toBeVisible()
     await expect.poll(async () => window.locator('.xterm-rows').textContent()).toContain('❯')
     await window.locator('#terminal').click()
-    await window.keyboard.type('/help')
+    await application.evaluate(({ clipboard }) => clipboard.writeText('/help'))
+    await window.keyboard.press('Control+V')
     await expect.poll(async () => window.locator('.xterm-rows').textContent()).toContain('/help')
     await window.keyboard.press('Enter')
 
@@ -116,6 +118,7 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await window.screenshot({ path: 'test-results/voidcube-desktop.png' })
     expect(pageErrors).toEqual([])
   } finally {
+    await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), originalClipboard)
     await application.close()
   }
 

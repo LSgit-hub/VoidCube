@@ -3577,6 +3577,61 @@ def test_media_enqueue_replaces_current_item_and_revisions_repeat_url(tmp_path):
 
 
 @pytest.mark.unit
+def test_media_html_uses_sandboxed_srcdoc_rendering() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert "iframe.sandbox = '';" in ui_source
+    assert "iframe.srcdoc = content;" in ui_source
+    assert "container.innerHTML = content;" not in ui_source
+
+
+@pytest.mark.unit
+def test_ui_text_has_scale_compensated_readability_baseline() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert "--ui-readable-font: calc(10pt * var(--room-scale-inverse));" in ui_source
+    assert ".dock-btn .db-label" in ui_source
+    assert ".companion-chat-line" in ui_source
+
+
+@pytest.mark.unit
+def test_account_panel_uses_existing_escape_helper() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    account_source = ui_source.split("function renderAccountPanel(data)", 1)[1].split(
+        "async function importFromBrowser()", 1
+    )[0]
+    assert "esc(account.platform_name || account.platform)" in account_source
+    assert "h(account.platform" not in account_source
+    assert "从剪贴板粘贴" in account_source
+    assert "looksLikeCookieString(label)" in ui_source
+
+
+@pytest.mark.unit
+def test_account_api_rejects_cookie_string_without_login_cookie(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VOIDCUBE_HOME", str(tmp_path / "home"))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/ui/accounts",
+        json={
+            "platform": "bilibili",
+            "label": "test account",
+            "cookies_raw": "bili_jct=csrf-token; DedeUserID=12345",
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "SESSDATA" in detail
+    assert "HttpOnly" in detail
+    assert not (tmp_path / "home" / "accounts.json").exists()
+
+
+@pytest.mark.unit
 def test_media_http_api_supports_queue_and_control_actions(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     client = TestClient(supervisor.app)

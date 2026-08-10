@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import Mock, patch
+
+import pytest
 
 from systems.supervisor.account_store import (
     AccountStoreSnapshot,
@@ -15,6 +18,9 @@ from systems.supervisor.account_store import (
     save_account,
     delete_account,
     load_accounts,
+    missing_required_auth_cookies,
+    _decrypt_chrome_cookie,
+    _load_aes_key_from_local_state,
 )
 
 
@@ -48,6 +54,16 @@ class TestParseCookieString:
         # Only "valid=123" and "also_valid=456" should parse
         names = {c.name for c in parsed}
         assert names == {"valid", "also_valid"}
+
+    def test_reports_missing_platform_login_cookie(self) -> None:
+        parsed = parse_cookie_string("bili_jct=csrf-token; DedeUserID=12345", "bilibili")
+
+        assert missing_required_auth_cookies(parsed, "bilibili") == ["SESSDATA"]
+
+    def test_accepts_platform_login_cookie(self) -> None:
+        parsed = parse_cookie_string("SESSDATA=session-token; bili_jct=csrf-token", "bilibili")
+
+        assert missing_required_auth_cookies(parsed, "bilibili") == []
 
 
 class TestAccountStoreSnapshot:
@@ -169,3 +185,30 @@ class TestSaveAndDelete:
         finally:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_chromium_v10_cookie_uses_aes_master_key() -> None:
+    AESGCM = pytest.importorskip(
+        "cryptography.hazmat.primitives.ciphers.aead"
+    ).AESGCM
+
+    key = AESGCM.generate_key(bit_length=256)
+    nonce = b"0123456789ab"
+    encrypted = b"v10" + nonce + AESGCM(key).encrypt(nonce, b"cookie-value", None)
+
+    assert _decrypt_chrome_cookie(encrypted, key) == "cookie-value"
+
+
+def test_local_state_keeps_dpapi_master_key_as_bytes(tmp_path, monkeypatch) -> None:
+    key = bytes(range(256))
+    state = tmp_path / "Local State"
+    state.write_text(
+        json.dumps({"os_crypt": {"encrypted_key": base64.b64encode(b"DPAPI" + b"wrapped").decode()}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "systems.supervisor.account_store._dpapi_decrypt",
+        lambda value: key if value == b"wrapped" else None,
+    )
+
+    assert _load_aes_key_from_local_state(str(state)) == key

@@ -3694,6 +3694,55 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .media-now-copy { flex: 1 1 calc(100% - 40px); }
   .media-controls { flex: 0 0 100%; width: 100%; justify-content: flex-end; }
 }
+
+/* ── Desktop readability baseline ──
+   The room is scaled as one scene. Multiplying UI text by the inverse scale
+   keeps menus and conversation text at a physical minimum of about 10pt. */
+:root {
+  --ui-readable-font: calc(10pt * var(--room-scale-inverse));
+}
+.status,
+.companion-chat-line,
+.companion-chat-label,
+.dock-btn .db-label,
+.dock-btn.media-dock-btn .db-label,
+.dock-panel,
+.drawer {
+  font-size: var(--ui-readable-font);
+}
+.companion-chat-line,
+.companion-chat-label {
+  line-height: 1.45;
+}
+.dock-btn .db-label,
+.dock-btn.media-dock-btn .db-label {
+  font-size: var(--ui-readable-font);
+  line-height: 1.1;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.dock-panel :where(
+  label, input, select, textarea, button:not(.panel-close), strong, small, p, b,
+  [class*="-label"], [class*="-meta"], [class*="-text"], [class*="-title"],
+  [class*="-state"], [class*="-note"], [class*="-summary"], [class*="-hint"],
+  [class*="-sub"], [class*="-value"], [class*="-field"], [class*="-option"],
+  [class*="-badge"], [class*="-tag"], [style*="font-size"]
+):not([class*="-icon"]),
+.drawer :where(
+  label, input, select, textarea, button:not(.drawer-close), strong, small, p, b,
+  [class*="-label"], [class*="-meta"], [class*="-text"], [class*="-title"],
+  [class*="-state"], [class*="-note"], [class*="-summary"], [class*="-hint"],
+  [class*="-sub"], [class*="-value"], [class*="-badge"], [class*="-tag"],
+  [style*="font-size"]
+):not([class*="-icon"]) {
+  font-size: var(--ui-readable-font) !important;
+}
+@media (min-width: 721px) {
+  .bottom-dock { height: 60px; }
+  .dock-panels { bottom: 60px; }
+  .dock-btn { width: 76px; height: 60px; flex-basis: 76px; }
+  .dock-btn.media-dock-btn { width: 82px; height: 70px; }
+}
 </style>
 </head>
 <body data-scene="idle" data-action="rest" data-has-errors="false" data-exec-window="true">
@@ -7836,10 +7885,10 @@ function renderAccountPanel(data) {
       html += '<div class="account-card-meta">';
       html += '<div class="account-card-title">';
       html += '<span class="account-status-dot ' + dotClass + '" title="' + statusText + '"></span>';
-      html += h(account.platform_name || account.platform);
-      if (account.label) html += ' <span style="font-weight:400;color:var(--text-muted);">· ' + h(account.label) + '</span>';
+      html += esc(account.platform_name || account.platform);
+      if (account.label) html += ' <span style="font-weight:400;color:var(--text-muted);">· ' + esc(account.label) + '</span>';
       html += '</div>';
-      html += '<div class="account-card-detail">' + h(cookieNames || '无 cookie') + ' · ' + statusText + '</div>';
+      html += '<div class="account-card-detail">' + esc(cookieNames || '无 cookie') + ' · ' + statusText + '</div>';
       html += '</div>';
       html += '<div class="account-card-actions">';
       html += '<button title="验证登录状态" onclick="verifyAccount(\'' + account.id + '\')">✓</button>';
@@ -7863,7 +7912,7 @@ function renderAccountPanel(data) {
   html += '<select id="accountPlatform">';
   for (const p of platforms) {
     const nameMap = { bilibili: 'B站 (bilibili)', netease_music: '网易云音乐' };
-    html += '<option value="' + h(p) + '">' + h(nameMap[p] || p) + '</option>';
+    html += '<option value="' + esc(p) + '">' + esc(nameMap[p] || p) + '</option>';
   }
   html += '</select>';
   html += '</div>';
@@ -7874,7 +7923,7 @@ function renderAccountPanel(data) {
   html += '</div>';
   html += '<div class="account-add-bar" style="border-top:none; padding-top:4px;">';
   html += '<div class="provider-field wide">';
-  html += '<span>Cookie 字符串</span>';
+  html += '<span>Cookie 字符串（请粘贴到这里）</span>';
   html += '<textarea id="accountCookies" placeholder="SESSDATA=xxx; bili_jct=yyy; DedeUserID=zzz"></textarea>';
   html += '<div class="account-help-note">';
   html += '如何获取：浏览器打开 bilibili.com 并登录 → F12 DevTools → Application → Cookies → bilibili.com → ';
@@ -7884,11 +7933,75 @@ function renderAccountPanel(data) {
   html += '</div>';
   html += '</div>';
   html += '<div class="account-add-bar" style="border-top:none; padding-top:0;">';
+  html += '<button class="provider-action" type="button" onclick="pasteAccountCookies()" style="min-width:120px;">从剪贴板粘贴</button>';
   html += '<button class="provider-action primary" onclick="saveAccount()" style="min-width:80px;">保存</button>';
   html += '<span style="font-size:9.5px;color:var(--text-muted);">Cookie 仅本地存储，不会上传到任何服务器</span>';
   html += '</div>';
 
   els.panelAccountBody.innerHTML = html;
+  const accountLabel = document.getElementById('accountLabel');
+  if (accountLabel) {
+    accountLabel.addEventListener('paste', event => {
+      const pasted = event.clipboardData && event.clipboardData.getData('text');
+      if (!looksLikeCookieString(pasted)) return;
+      event.preventDefault();
+      setAccountCookies(pasted);
+    });
+  }
+}
+
+function looksLikeCookieString(value) {
+  const text = String(value || '').trim();
+  return text.includes(';') && /(?:^|;\s*)[A-Za-z0-9_.-]+=[^;]+/.test(text);
+}
+
+function setAccountCookies(value) {
+  const cookiesEl = document.getElementById('accountCookies');
+  if (!cookiesEl) return false;
+  cookiesEl.value = String(value || '').trim();
+  cookiesEl.focus();
+  cookiesEl.setSelectionRange(cookiesEl.value.length, cookiesEl.value.length);
+  return Boolean(cookiesEl.value);
+}
+
+function readDesktopClipboard() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => window.removeEventListener('message', receive);
+    const receive = event => {
+      if (event.source !== window.parent) return;
+      const data = event.data || {};
+      if (data.type !== 'clipboard:read-text-result') return;
+      settled = true;
+      cleanup();
+      data.ok ? resolve(String(data.text || '')) : reject(new Error(String(data.error || '读取剪贴板失败')));
+    };
+    window.addEventListener('message', receive);
+    window.parent.postMessage({ type: 'clipboard:read-text' }, '*');
+    setTimeout(() => {
+      if (settled) return;
+      cleanup();
+      reject(new Error('桌面剪贴板没有响应'));
+    }, 1500);
+  });
+}
+
+async function pasteAccountCookies() {
+  try {
+    let text = '';
+    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+      try { text = await navigator.clipboard.readText(); } catch (error) {}
+    }
+    if (!text && window.parent !== window) text = await readDesktopClipboard();
+    if (!text) { alert('剪贴板中没有文本'); return; }
+    if (!looksLikeCookieString(text)) {
+      alert('剪贴板内容不像 Cookie 字符串，请确认包含“名称=值; 名称=值”');
+      return;
+    }
+    setAccountCookies(text);
+  } catch (error) {
+    alert('无法读取剪贴板，请直接点击 Cookie 输入框后按 Ctrl+V。');
+  }
 }
 
 async function importFromBrowser() {
@@ -7922,8 +8035,14 @@ async function saveAccount() {
   const cookiesEl = document.getElementById('accountCookies');
   if (!platformEl || !cookiesEl) return;
   const platform = platformEl.value;
-  const label = (labelEl && labelEl.value || '').trim();
-  const cookiesRaw = cookiesEl.value.trim();
+  let label = (labelEl && labelEl.value || '').trim();
+  let cookiesRaw = cookiesEl.value.trim();
+  if (!cookiesRaw && looksLikeCookieString(label)) {
+    cookiesRaw = label;
+    label = '';
+    labelEl.value = '';
+    setAccountCookies(cookiesRaw);
+  }
   if (!cookiesRaw) { alert('请粘贴 Cookie 字符串或使用"从浏览器导入"按钮'); return; }
   try {
     const r = await fetch('/ui/accounts', {
@@ -8410,23 +8529,29 @@ function mountCurrentMedia() {
     mediaViewport.appendChild(iframe);
     embeddedPlayer = iframe;
   } else if (type === 'html') {
-    const container = document.createElement('div');
-    container.className = 'media-html-content';
+    // Render agent-supplied markup in a sandboxed document. This preserves
+    // report formatting while preventing scripts and event handlers from
+    // executing in the Supervisor page origin.
+    const iframe = document.createElement('iframe');
+    iframe.className = 'media-html-content';
+    iframe.sandbox = '';
+    iframe.referrerPolicy = 'no-referrer';
     const content = (currentMedia.content || currentMedia.url || '').trim();
     if (content) {
       if (content.startsWith('<') || content.startsWith('<!')) {
-        container.innerHTML = content;
+        iframe.srcdoc = content;
       } else {
-        // Plain text → wrap in <pre> for readability
-        const pre = document.createElement('pre');
-        pre.textContent = content;
-        container.appendChild(pre);
+        const escaped = content.replace(/[&<>"']/g, character => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[character]);
+        iframe.srcdoc = '<!doctype html><meta charset="utf-8"><pre>' + escaped + '</pre>';
       }
     } else {
-      container.innerHTML = '<span style="color:var(--text-muted)">没有可渲染的内容</span>';
+      iframe.srcdoc = '<!doctype html><meta charset="utf-8"><p>没有可渲染的内容</p>';
     }
-    mediaViewport.appendChild(container);
-    embeddedPlayer = container;
+    iframe.addEventListener('error', () => { setMediaMessage('内容无法加载。', '', '内容加载失败'); });
+    mediaViewport.appendChild(iframe);
+    embeddedPlayer = iframe;
   } else {
     setMediaMessage('Agent 可以通过展板展示图片、文档、网页、音视频等多种内容。', currentMedia.url, '等待内容');
   }

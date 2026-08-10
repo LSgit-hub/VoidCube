@@ -31,6 +31,7 @@ PLATFORM_PRESETS: Dict[str, Dict[str, Any]] = {
         "verify_method": "GET",
         "verify_ok_status": 0,  # B站 API code=0 表示正常
         "verify_field": "code",
+        "required_auth_cookies": ["SESSDATA"],
     },
     "netease_music": {
         "name": "网易云音乐",
@@ -39,6 +40,7 @@ PLATFORM_PRESETS: Dict[str, Dict[str, Any]] = {
         "verify_method": "GET",
         "verify_ok_status": 200,
         "verify_field": "code",
+        "required_auth_cookies": ["MUSIC_U"],
     },
 }
 
@@ -132,9 +134,18 @@ def parse_cookie_string(raw: str, platform: str) -> List[ParsedCookie]:
     return parsed
 
 
+def missing_required_auth_cookies(
+    parsed: List[ParsedCookie], platform: str
+) -> List[str]:
+    """Return login cookies required for the platform but absent from input."""
+    required = PLATFORM_PRESETS.get(platform, {}).get("required_auth_cookies") or []
+    present = {cookie.name for cookie in parsed if cookie.value}
+    return [str(name) for name in required if str(name) not in present]
+
+
 # ── 存储读写 ───────────────────────────────────────────
 
-_storage_lock = threading.Lock()
+_storage_lock = threading.RLock()
 
 
 def load_account_store() -> AccountStoreSnapshot:
@@ -174,30 +185,32 @@ def save_account(account: PlatformAccount) -> List[PlatformAccount]:
     如果已存在相同平台和 domain 的账号则替换。
     返回更新后的全部账号列表。
     """
-    store = load_account_store()
-    accounts = list(store.accounts)
-    # 查找是否已存在同平台账号
-    existing_index: Optional[int] = None
-    for i, existing in enumerate(accounts):
-        if existing.platform == account.platform:
-            existing_index = i
-            break
-    if existing_index is not None:
-        accounts[existing_index] = account
-    else:
-        accounts.append(account)
-    store.accounts = accounts
-    save_account_store(store)
-    return accounts
+    with _storage_lock:
+        store = load_account_store()
+        accounts = list(store.accounts)
+        # 查找是否已存在同平台账号
+        existing_index: Optional[int] = None
+        for i, existing in enumerate(accounts):
+            if existing.platform == account.platform:
+                existing_index = i
+                break
+        if existing_index is not None:
+            accounts[existing_index] = account
+        else:
+            accounts.append(account)
+        store.accounts = accounts
+        save_account_store(store)
+        return accounts
 
 
 def delete_account(account_id: str) -> List[PlatformAccount]:
     """删除指定 ID 的账号。返回剩余账号列表。"""
-    store = load_account_store()
-    accounts = [a for a in store.accounts if a.id != account_id]
-    store.accounts = accounts
-    save_account_store(store)
-    return accounts
+    with _storage_lock:
+        store = load_account_store()
+        accounts = [a for a in store.accounts if a.id != account_id]
+        store.accounts = accounts
+        save_account_store(store)
+        return accounts
 
 
 # ── 验证 ────────────────────────────────────────────────
@@ -312,15 +325,15 @@ def _find_browser_cookie_dbs() -> list[dict]:
 def _decrypt_chrome_cookie(encrypted_value: bytes, aes_key: bytes | None) -> str | None:
     """解密单个 Chromium cookie 值。
 
-    支持 v10 (DPAPI) 和 v20 (AES-256-GCM) 两种格式。
+    支持 Chromium 的 v10/v20 AES-256-GCM 格式和旧版 DPAPI 格式。
     """
     import platform as _platform
 
     if not encrypted_value:
         return None
 
-    # v20: AES-256-GCM (Chrome v80+)
-    if encrypted_value[:3] == b"v20" and aes_key:
+    # Chromium v10/v20: AES-256-GCM (master key from Local State).
+    if encrypted_value[:3] in {b"v10", b"v20"} and aes_key:
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -332,18 +345,15 @@ def _decrypt_chrome_cookie(encrypted_value: bytes, aes_key: bytes | None) -> str
         except Exception:
             return None
 
-    # v10: DPAPI (Windows)
-    if encrypted_value[:3] == b"v10":
-        return _dpapi_decrypt(encrypted_value[3:])
-
     # Older format: DPAPI directly (pre-Chrome v80)
     if _platform.system() == "Windows":
-        return _dpapi_decrypt(encrypted_value)
+        plain = _dpapi_decrypt(encrypted_value)
+        return plain.decode("utf-8", errors="replace") if plain else None
 
     return None
 
 
-def _dpapi_decrypt(data: bytes) -> str | None:
+def _dpapi_decrypt(data: bytes) -> bytes | None:
     """Windows DPAPI 解密。"""
     import ctypes
     import ctypes.wintypes
@@ -372,7 +382,7 @@ def _dpapi_decrypt(data: bytes) -> str | None:
 
     decrypted = ctypes.string_at(blob_out.pbData, blob_out.cbData)
     ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-    return decrypted.decode("utf-8", errors="replace")
+    return decrypted
 
 
 def _load_aes_key_from_local_state(local_state_path: str) -> bytes | None:
@@ -391,7 +401,7 @@ def _load_aes_key_from_local_state(local_state_path: str) -> bytes | None:
         if encrypted_key[:5] == b"DPAPI":
             decrypted = _dpapi_decrypt(encrypted_key[5:])
             if decrypted:
-                return decrypted.encode("latin-1")
+                return decrypted
         return None
     except Exception:
         return None
@@ -435,8 +445,9 @@ def import_browser_cookies(platform: str) -> dict:
                 conn = sqlite3.connect(tmp_path)
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
-                    "SELECT name, encrypted_value FROM cookies WHERE host_key LIKE ?",
-                    (f"%{domain_filter}",),
+                    "SELECT name, encrypted_value FROM cookies "
+                    "WHERE host_key = ? OR host_key LIKE ?",
+                    (domain_filter, f"%.{domain_filter}"),
                 ).fetchall()
                 conn.close()
             finally:

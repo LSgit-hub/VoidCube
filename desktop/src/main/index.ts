@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, session, shell } from 'electron'
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './runtime-locator'
 import { ServiceController } from './service-controller'
 import { TerminalSession } from './terminal-session'
@@ -150,6 +150,13 @@ async function injectCookies(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle('monitor:probe', probeMonitor)
   ipcMain.handle('cookies:refresh', () => injectCookies().then(() => ({ ok: true })).catch((err) => ({ ok: false, error: String(err) })))
+  ipcMain.handle('clipboard:read-text', () => {
+    try {
+      return { ok: true, text: clipboard.readText() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
   ipcMain.on('window:close', () => mainWindow?.close())
   ipcMain.handle('workspace:open', async () => {

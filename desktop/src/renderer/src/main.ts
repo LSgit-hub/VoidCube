@@ -112,6 +112,16 @@ const terminal = new Terminal({
 const fitAddon = new FitAddon()
 terminal.loadAddon(fitAddon)
 terminal.open(terminalHost)
+terminal.attachCustomKeyEventHandler((event) => {
+  const isPasteShortcut = event.type === 'keydown'
+    && event.ctrlKey
+    && event.key.toLowerCase() === 'v'
+  if (!isPasteShortcut) return true
+
+  event.preventDefault()
+  void pasteClipboardIntoTerminal()
+  return false
+})
 
 let monitorTimer: number | undefined
 let monitorProbeGeneration = 0
@@ -158,6 +168,18 @@ function applyTerminalState(state: TerminalState): void {
 function showTerminalError(message: string): void {
   terminalErrorMessage.textContent = message
   terminalError.hidden = false
+}
+
+async function pasteClipboardIntoTerminal(): Promise<void> {
+  const result: { ok: boolean; text?: string; error?: string } = await api.clipboardReadText().catch((error: unknown) => ({
+    ok: false,
+    error: error instanceof Error ? error.message : String(error)
+  }))
+  if (!result.ok) {
+    showTerminalError(result.error || '无法读取系统剪贴板')
+    return
+  }
+  if (result.text) terminal.paste(result.text)
 }
 
 function showMonitorWaiting(title: string, detail: string, error = false): void {
@@ -510,6 +532,18 @@ window.addEventListener('message', (event) => {
   if (!data || typeof data.type !== 'string') return
   if (data.type === 'cookies:refresh') {
     api.cookiesRefresh?.().catch(() => {})
+    return
+  }
+  if (data.type === 'clipboard:read-text') {
+    const source = event.source as WindowProxy | null
+    if (!source || source !== monitorFrame.contentWindow) return
+    api.clipboardReadText()
+      .then((result) => source.postMessage({ type: 'clipboard:read-text-result', ...result }, '*'))
+      .catch((error: unknown) => source.postMessage({
+        type: 'clipboard:read-text-result',
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }, '*'))
   }
 })
 
