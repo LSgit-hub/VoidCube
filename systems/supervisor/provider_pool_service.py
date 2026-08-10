@@ -252,6 +252,15 @@ class ProviderPoolService:
 
         public_roles = []
         for role, values in roles.items():
+            toolsets = [
+                str(item).strip().lower()
+                for item in (values.get("toolsets") or [])
+                if str(item).strip()
+            ]
+            defaults = DEFAULT_COMPANION_WORKER_ROLES.get(role)
+            recommended_toolsets = (
+                list(defaults.get("toolsets") or []) if defaults else list(toolsets)
+            )
             public_roles.append(
                 {
                     "role": role,
@@ -260,11 +269,8 @@ class ProviderPoolService:
                     "enabled": bool(values.get("enabled", True)),
                     "provider": str(values.get("provider") or "").strip().lower(),
                     "model": str(values.get("model") or "").strip(),
-                    "toolsets": [
-                        str(item).strip().lower()
-                        for item in (values.get("toolsets") or [])
-                        if str(item).strip()
-                    ],
+                    "toolsets": toolsets,
+                    "recommended_toolsets": recommended_toolsets,
                 }
             )
 

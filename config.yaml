@@ -16,28 +16,39 @@ companion_workers:
       enabled: true
       provider: ''
       model: ''
-      toolsets: []
+      toolsets:
+      - web
+      - file
+      - skills
+      - todo
     research:
       label: 调研员工
       description: 负责检索、核实、比较和整理外部信息
       enabled: true
       provider: ''
       model: ''
-      toolsets: []
+      toolsets:
+      - learn
     coding:
       label: 工程员工
       description: 负责读取项目、编写或修改代码并运行验证
       enabled: true
       provider: ''
       model: ''
-      toolsets: []
+      toolsets:
+      - file
+      - terminal
+      - code_execution
+      - skills
+      - todo
     media:
       label: 媒体员工
       description: 负责查找、组织和播放音视频媒体
       enabled: true
       provider: ''
       model: ''
-      toolsets: []
+      toolsets:
+      - web
 image_generation:
   provider: agnes-ai
   api_key_env: AGNES_API_KEY

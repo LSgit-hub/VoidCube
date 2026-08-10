@@ -97,6 +97,12 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       'placeholder',
       '留空使用 Provider 默认模型'
     )
+    await page.locator('#workerRecommendedApply').click()
+    await expect(page.locator('[data-worker-role="general"] .worker-toolsets summary')).toHaveText('推荐 · 4 个')
+    await expect(page.locator('[data-worker-role="research"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
+    await expect(page.locator('[data-worker-role="coding"] .worker-toolsets summary')).toHaveText('推荐 · 5 个')
+    await expect(page.locator('[data-worker-role="media"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
+    await expect(page.locator('#workerAssignmentStatus')).toHaveText('已应用推荐，请保存')
     const firstProviderSelect = page.locator('[data-worker-provider]').first()
     await expect(firstProviderSelect.locator('option')).toHaveCount(4)
     const selectedProvider = await firstProviderSelect.inputValue()

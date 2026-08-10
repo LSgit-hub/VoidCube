@@ -35,6 +35,14 @@ def test_default_worker_catalog_exposes_secret_free_roles() -> None:
     ]
     assert all("provider" not in item for item in catalog["roles"])
     assert all("model" not in item for item in catalog["roles"])
+    assert {
+        item["role"]: item["toolsets"] for item in catalog["roles"]
+    } == {
+        "general": ["web", "file", "skills", "todo"],
+        "research": ["learn"],
+        "coding": ["file", "terminal", "code_execution", "skills", "todo"],
+        "media": ["web"],
+    }
 
 
 def test_unknown_or_disabled_worker_role_falls_back_to_configured_default() -> None:
@@ -49,7 +57,7 @@ def test_unknown_or_disabled_worker_role_falls_back_to_configured_default() -> N
     assert resolve_companion_worker_role(config, "not-configured").role == "coding"
 
 
-def test_worker_route_inherits_primary_api_a_when_role_has_no_override() -> None:
+def test_worker_route_inherits_primary_api_a_and_role_default_toolsets() -> None:
     provider_resolver = Mock()
 
     route = resolve_companion_worker_route(
@@ -63,7 +71,7 @@ def test_worker_route_inherits_primary_api_a_when_role_has_no_override() -> None
     assert route["worker_label"] == "调研员工"
     assert route["model"] == "primary-model"
     assert route["runtime"]["provider"] == "primary"
-    assert "enabled_toolsets" not in route
+    assert route["enabled_toolsets"] == ["learn"]
     provider_resolver.assert_not_called()
 
 

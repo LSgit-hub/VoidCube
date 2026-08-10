@@ -15,7 +15,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": [],
+        "toolsets": ["web", "file", "skills", "todo"],
     },
     "research": {
         "label": "调研员工",
@@ -23,7 +23,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": [],
+        "toolsets": ["learn"],
     },
     "coding": {
         "label": "工程员工",
@@ -31,7 +31,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": [],
+        "toolsets": ["file", "terminal", "code_execution", "skills", "todo"],
     },
     "media": {
         "label": "媒体员工",
@@ -39,7 +39,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": [],
+        "toolsets": ["web"],
     },
 }
 _ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")

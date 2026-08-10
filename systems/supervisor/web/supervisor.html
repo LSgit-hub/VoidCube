@@ -4033,6 +4033,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
             <div class="worker-role-list" id="workerRoleList"></div>
             <div class="worker-form-actions">
               <span class="provider-pool-status" id="workerAssignmentStatus" aria-live="polite"></span>
+              <button class="provider-action" id="workerRecommendedApply" type="button">应用推荐</button>
               <button class="provider-action primary" id="workerAssignmentSave" type="submit">保存</button>
             </div>
             <div class="provider-pool-status" id="workerTestStatus" aria-live="polite"></div>
@@ -4244,6 +4245,7 @@ const els = {
   workerTestInstruction: $('#workerTestInstruction'),
   workerRoleList: $('#workerRoleList'),
   workerAssignmentStatus: $('#workerAssignmentStatus'),
+  workerRecommendedApply: $('#workerRecommendedApply'),
   workerAssignmentSave: $('#workerAssignmentSave'),
   workerTestStatus: $('#workerTestStatus'),
   workerTestResult: $('#workerTestResult'),
@@ -7040,10 +7042,32 @@ function syncWorkerDefaultOptions(preferred) {
 function syncWorkerToolsetSummaries() {
   if (!els.workerRoleList) return;
   $$('.worker-toolsets', els.workerRoleList).forEach(details => {
-    const count = $$('[data-worker-toolset]:checked', details).length;
+    const row = details.closest('[data-worker-role]');
+    const role = (providerPoolSnapshot && Array.isArray(providerPoolSnapshot.roles))
+      ? providerPoolSnapshot.roles.find(item => item.role === row?.dataset.workerRole) : null;
+    const selected = $$('[data-worker-toolset]:checked', details).map(input => input.value).sort();
+    const recommended = Array.isArray(role && role.recommended_toolsets)
+      ? role.recommended_toolsets.map(item => String(item)).sort() : [];
     const summary = $('summary', details);
-    if (summary) summary.textContent = count ? count + ' 个' : '继承';
+    if (!summary) return;
+    if (!selected.length) summary.textContent = '全部工具';
+    else if (selected.join('\n') === recommended.join('\n')) summary.textContent = '推荐 · ' + selected.length + ' 个';
+    else summary.textContent = '自定义 · ' + selected.length + ' 个';
   });
+}
+
+function applyRecommendedWorkerToolsets() {
+  if (!els.workerRoleList || !providerPoolSnapshot) return;
+  const roles = Array.isArray(providerPoolSnapshot.roles) ? providerPoolSnapshot.roles : [];
+  $$('[data-worker-role]', els.workerRoleList).forEach(row => {
+    const role = roles.find(item => item.role === row.dataset.workerRole);
+    const recommended = new Set(Array.isArray(role && role.recommended_toolsets) ? role.recommended_toolsets : []);
+    $$('[data-worker-toolset]', row).forEach(input => {
+      input.checked = recommended.has(input.value);
+    });
+  });
+  syncWorkerToolsetSummaries();
+  if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = '已应用推荐，请保存';
 }
 
 function setWorkerTestStatus(message, error) {
@@ -7128,7 +7152,8 @@ async function loadWorkerTestHistory() {
 
 function setWorkerTestBusy(busy) {
   $$('#workerRoleList [data-worker-test]').forEach(button => {
-    button.disabled = Boolean(busy) || providerPoolBusy || Boolean(providerPoolSnapshot && providerPoolSnapshot.managed);
+    const enabled = $('[data-worker-enabled]', button.closest('[data-worker-role]'));
+    button.disabled = Boolean(busy) || providerPoolBusy || !enabled?.checked || Boolean(providerPoolSnapshot && providerPoolSnapshot.managed);
   });
 }
 
@@ -7680,13 +7705,19 @@ if (els.providerForm) {
 if (els.providerDelete) els.providerDelete.addEventListener('click', deleteProviderPoolEntry);
 if (els.providerTest) els.providerTest.addEventListener('click', testProviderPoolEntry);
 if (els.providerLoadModels) els.providerLoadModels.addEventListener('click', loadProviderModels);
+if (els.workerRecommendedApply) {
+  els.workerRecommendedApply.addEventListener('click', applyRecommendedWorkerToolsets);
+}
 if (els.workerAssignmentForm) {
   els.workerAssignmentForm.addEventListener('submit', event => {
     event.preventDefault();
     saveWorkerAssignments();
   });
   els.workerAssignmentForm.addEventListener('change', event => {
-    if (event.target.matches('[data-worker-enabled]')) syncWorkerDefaultOptions();
+    if (event.target.matches('[data-worker-enabled]')) {
+      syncWorkerDefaultOptions();
+      setWorkerTestBusy(false);
+    }
     if (event.target.matches('[data-worker-toolset]')) syncWorkerToolsetSummaries();
   });
 }

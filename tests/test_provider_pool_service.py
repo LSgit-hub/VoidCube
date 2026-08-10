@@ -130,6 +130,7 @@ def test_provider_pool_assigns_roles_and_protects_referenced_provider(
     assert research["provider"] == "research-endpoint"
     assert research["model"] == "research-override"
     assert research["toolsets"] == ["web", "search"]
+    assert research["recommended_toolsets"] == ["learn"]
     with pytest.raises(ProviderPoolConflictError, match="员工角色 research"):
         service.delete_provider("research-endpoint")
 
