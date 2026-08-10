@@ -325,6 +325,11 @@ class Supervisor(
             methods=["POST"],
         )
         self.app.add_api_route(
+            "/provider-pool/scheduler",
+            self.get_provider_pool_scheduler,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
             "/provider-pool/worker-roles",
             self.set_provider_pool_worker_roles,
             methods=["PUT"],
@@ -466,6 +471,11 @@ class Supervisor(
 
     async def get_provider_pool(self) -> Dict[str, Any]:
         return self._provider_pool_service.snapshot()
+
+    async def get_provider_pool_scheduler(self) -> Dict[str, Any]:
+        policy = self._provider_pool_service.dispatch_policy()
+        state = self._scheduled_task_store.dispatch_state(**policy)
+        return {"status": "ok", **state}
 
     @staticmethod
     def _provider_pool_error(error: Exception) -> HTTPException:

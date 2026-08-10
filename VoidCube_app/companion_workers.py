@@ -16,6 +16,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "provider": "",
         "model": "",
         "toolsets": ["web", "file", "skills", "todo"],
+        "concurrency_limit": 1,
     },
     "research": {
         "label": "调研员工",
@@ -24,6 +25,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "provider": "",
         "model": "",
         "toolsets": ["learn"],
+        "concurrency_limit": 1,
     },
     "coding": {
         "label": "工程员工",
@@ -32,6 +34,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "provider": "",
         "model": "",
         "toolsets": ["file", "terminal", "code_execution", "skills", "todo"],
+        "concurrency_limit": 1,
     },
     "media": {
         "label": "媒体员工",
@@ -40,6 +43,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "provider": "",
         "model": "",
         "toolsets": ["web"],
+        "concurrency_limit": 1,
     },
 }
 _ROLE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
@@ -53,6 +57,7 @@ class CompanionWorkerRole:
     provider: str
     model: str
     toolsets: tuple[str, ...]
+    concurrency_limit: int
 
 
 def _enabled(value: Any) -> bool:
@@ -71,6 +76,13 @@ def _toolsets(value: Any) -> tuple[str, ...]:
             if str(item).strip()
         )
     )
+
+
+def _concurrency_limit(value: Any) -> int:
+    try:
+        return max(1, min(int(value), 8))
+    except (TypeError, ValueError):
+        return 1
 
 
 def companion_worker_roles(config: Mapping[str, Any] | None) -> dict[str, CompanionWorkerRole]:
@@ -103,6 +115,7 @@ def companion_worker_roles(config: Mapping[str, Any] | None) -> dict[str, Compan
             provider=str(values.get("provider") or "").strip().lower(),
             model=str(values.get("model") or "").strip(),
             toolsets=_toolsets(values.get("toolsets")),
+            concurrency_limit=_concurrency_limit(values.get("concurrency_limit", 1)),
         )
     return roles
 
@@ -134,6 +147,7 @@ def companion_worker_catalog(config: Mapping[str, Any] | None) -> dict[str, Any]
                 "label": role.label,
                 "description": role.description,
                 "toolsets": list(role.toolsets),
+                "concurrency_limit": role.concurrency_limit,
             }
             for role in roles.values()
         ],

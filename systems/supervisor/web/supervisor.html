@@ -2292,6 +2292,12 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .provider-action:hover:not(:disabled) { background: rgba(255,255,255,.09); }
 .provider-action:disabled { cursor: default; opacity: .4; }
 .worker-assignment-form { display: grid; gap: 10px; }
+.worker-scheduler-status {
+  min-height: 20px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
 .worker-default-row {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) minmax(180px, 260px);
@@ -2306,7 +2312,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-role-list { display: grid; gap: 6px; }
 .worker-role-row {
   display: grid;
-  grid-template-columns: minmax(140px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(120px, .7fr) auto;
+  grid-template-columns: minmax(140px, .8fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(64px, .35fr) minmax(110px, .7fr) auto;
   align-items: center;
   gap: 9px;
   padding: 9px 0;
@@ -2351,12 +2357,13 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-test-result:empty { display: none; }
 .worker-test-result.error { color: var(--coral); }
 .worker-role-identity { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
-.worker-role-identity input { grid-row: 1 / 4; align-self: center; accent-color: var(--mint); }
+.worker-role-identity input { grid-row: 1 / 5; align-self: center; accent-color: var(--mint); }
 .worker-role-identity strong { overflow: hidden; color: var(--text-primary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .worker-role-identity span { overflow: hidden; color: var(--text-muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .worker-role-test-state { grid-column: 2; color: var(--text-muted); font-size: 8px; font-weight: 400; }
 .worker-role-test-state.ok { color: var(--mint); }
 .worker-role-test-state.error { color: var(--coral); }
+.worker-role-dispatch-state { grid-column: 2; color: var(--accent-blue); font-size: 8px; font-weight: 400; }
 .worker-role-field { min-width: 0; display: grid; gap: 4px; color: var(--text-muted); font-size: 8.5px; }
 .worker-toolsets { position: relative; }
 .worker-toolsets summary {
@@ -4044,6 +4051,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
               <span>默认员工</span>
               <select class="worker-default-select" id="workerDefaultRole"></select>
             </label>
+            <label class="worker-default-row">
+              <span>员工总并发</span>
+              <input class="worker-default-select" id="workerMaxConcurrent" type="number" min="1" max="16" step="1" required/>
+            </label>
+            <div class="worker-scheduler-status" id="workerSchedulerStatus" aria-live="polite"></div>
             <label class="worker-test-row">
               <span>测试指令</span>
               <input id="workerTestInstruction" maxlength="2000" value="请回复：员工测试成功，并简要说明你使用的模型。"/>
@@ -4261,6 +4273,8 @@ const els = {
   providerSave: $('#providerSave'),
   workerAssignmentForm: $('#workerAssignmentForm'),
   workerDefaultRole: $('#workerDefaultRole'),
+  workerMaxConcurrent: $('#workerMaxConcurrent'),
+  workerSchedulerStatus: $('#workerSchedulerStatus'),
   workerTestInstruction: $('#workerTestInstruction'),
   workerRoleList: $('#workerRoleList'),
   workerAssignmentStatus: $('#workerAssignmentStatus'),
@@ -6867,6 +6881,8 @@ let providerPoolBusy = false;
 let selectedProviderKey = '';
 let workerModelCandidates = {};
 let workerTestHistory = {tests: [], provider_health: []};
+let workerSchedulerSnapshot = {active_count: 0, queued_count: 0, roles: [], providers: []};
+let workerSchedulerLoading = false;
 
 function setSettingsView(name) {
   const normalized = ['providers', 'workers', 'reminders'].includes(name) ? name : 'providers';
@@ -6877,6 +6893,7 @@ function setSettingsView(name) {
     panel.hidden = panel.dataset.settingsPanel !== normalized;
   });
   if (normalized === 'reminders') loadReminderPolicy();
+  if (normalized === 'workers' && providerPoolSnapshot) loadWorkerSchedulerState();
   if (normalized !== 'reminders' && !providerPoolSnapshot) loadProviderPool();
 }
 
@@ -7017,13 +7034,16 @@ function renderProviderList() {
     const meta = (provider.active ? 'API-A · ' : '') + (provider.selected_model || '未选择模型');
     const health = (workerTestHistory.provider_health || []).find(item => item.provider === provider.key);
     const healthText = health ? ' · 员工验证正常' : '';
+    const occupancy = (workerSchedulerSnapshot.providers || []).find(item => item.provider === provider.key);
+    const occupancyText = occupancy && (occupancy.active || occupancy.queued)
+      ? ' · 运行 ' + Number(occupancy.active || 0) + ' · 排队 ' + Number(occupancy.queued || 0) : '';
     return '<button class="provider-list-row' +
       (provider.key === selectedProviderKey ? ' active' : '') +
       '" type="button" data-provider-key="' + escAttr(provider.key) + '">' +
       '<span class="provider-list-state' + (ready ? ' ready' : '') + '"></span>' +
       '<span class="provider-list-name">' + esc(provider.label || provider.key) + '</span>' +
       '<span class="provider-list-meta">' + esc(meta) +
-      (healthText ? '<span class="provider-list-health">' + esc(healthText) + '</span>' : '') +
+      (healthText ? '<span class="provider-list-health">' + esc(healthText) + '</span>' : '') + esc(occupancyText) +
       '</span></button>';
   }).join('');
 }
@@ -7094,11 +7114,14 @@ function renderWorkerAssignments() {
     return '<div class="worker-role-row" data-worker-role="' + escAttr(role.role) + '" data-worker-label="' + escAttr(role.label) + '">' +
       '<label class="worker-role-identity"><input type="checkbox" data-worker-enabled' +
       (role.enabled ? ' checked' : '') + '/><strong>' + esc(role.label || role.role) + '</strong><span>' +
-      esc(role.role) + '</span><span class="worker-role-test-state" data-worker-test-state>未测试</span></label>' +
+      esc(role.role) + '</span><span class="worker-role-test-state" data-worker-test-state>未测试</span>' +
+      '<span class="worker-role-dispatch-state" data-worker-dispatch-state>空闲</span></label>' +
       '<label class="worker-role-field"><span>Provider</span><select data-worker-provider>' +
       providerOptions(role.provider) + '</select></label>' +
       '<label class="worker-role-field"><span>指定模型（可选）</span><select data-worker-model>' +
       workerModelOptionMarkup(role.provider, role.model) + '</select></label>' +
+      '<label class="worker-role-field"><span>并发</span><input data-worker-concurrency type="number" min="1" max="8" step="1" value="' +
+      Number(role.concurrency_limit || 1) + '" required/></label>' +
       '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
       toolsetOptions + '</div></details></label>' +
       '<button class="provider-action" type="button" data-worker-test' +
@@ -7107,6 +7130,44 @@ function renderWorkerAssignments() {
   syncWorkerDefaultOptions(providerPoolSnapshot.default_role);
   syncWorkerToolsetSummaries();
   renderWorkerTestStates();
+  renderWorkerSchedulerState();
+}
+
+function renderWorkerSchedulerState() {
+  const snapshot = workerSchedulerSnapshot || {};
+  if (els.workerSchedulerStatus) {
+    els.workerSchedulerStatus.textContent = '运行 ' + Number(snapshot.active_count || 0) +
+      ' / ' + Number(els.workerMaxConcurrent?.value || snapshot.max_concurrent || 4) +
+      ' · 排队 ' + Number(snapshot.queued_count || 0);
+  }
+  if (!els.workerRoleList) return;
+  $$('[data-worker-role]', els.workerRoleList).forEach(row => {
+    const state = $('[data-worker-dispatch-state]', row);
+    if (!state) return;
+    const roleState = (snapshot.roles || []).find(item => item.role === row.dataset.workerRole) || {};
+    const active = Number(roleState.active || 0);
+    const queued = Number(roleState.queued || 0);
+    const limit = Number($('[data-worker-concurrency]', row)?.value || roleState.limit || 1);
+    state.textContent = (active || queued)
+      ? '运行 ' + active + ' · 排队 ' + queued + ' · 上限 ' + limit
+      : '空闲 · 上限 ' + limit;
+  });
+}
+
+async function loadWorkerSchedulerState() {
+  if (workerSchedulerLoading) return;
+  workerSchedulerLoading = true;
+  try {
+    const response = await fetch('/provider-pool/scheduler', {cache: 'no-store'});
+    if (!response.ok) throw await responseError(response, '读取员工调度状态失败');
+    workerSchedulerSnapshot = await response.json();
+  } catch (_error) {
+    workerSchedulerSnapshot = {active_count: 0, queued_count: 0, roles: [], providers: []};
+  } finally {
+    workerSchedulerLoading = false;
+  }
+  renderWorkerSchedulerState();
+  renderProviderList();
 }
 
 function syncWorkerDefaultOptions(preferred) {
@@ -7262,6 +7323,7 @@ async function runWorkerTest(workerRole) {
     if (!response.ok) throw await responseError(response, '员工测试失败');
     const queued = await response.json();
     updateWorkerTestHistory(queued);
+    await loadWorkerSchedulerState();
     setWorkerTestStatus('已排队 · ' + workerTestAssignmentText(queued));
     const testId = String(queued.test_id || '').trim();
     if (!testId) return;
@@ -7284,6 +7346,7 @@ async function runWorkerTest(workerRole) {
         els.workerTestResult.textContent = detail;
         els.workerTestResult.classList.toggle('error', state !== 'completed');
       }
+      await loadWorkerSchedulerState();
       return;
     }
     setWorkerTestStatus('测试等待超时，请查看任务状态', true);
@@ -7298,6 +7361,7 @@ function applyProviderPoolSnapshot(snapshot, preferredKey) {
   providerPoolSnapshot = snapshot || {};
   const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
   hydrateWorkerModelCandidates(providers);
+  if (els.workerMaxConcurrent) els.workerMaxConcurrent.value = String(providerPoolSnapshot.max_concurrent || 4);
   const candidate = preferredKey || selectedProviderKey;
   const selected = providers.some(item => item.key === candidate)
     ? candidate : (providers[0] ? providers[0].key : '');
@@ -7315,7 +7379,7 @@ async function loadProviderPool() {
     const response = await fetch('/provider-pool', {cache: 'no-store'});
     if (!response.ok) throw await responseError(response, '读取失败');
     applyProviderPoolSnapshot(await response.json());
-    await loadWorkerTestHistory();
+    await Promise.all([loadWorkerTestHistory(), loadWorkerSchedulerState()]);
   } catch (error) {
     setProviderPoolStatus(String(error.message || '读取失败'), true);
     setProviderPoolBusy(false);
@@ -7436,6 +7500,7 @@ async function saveWorkerAssignments() {
       provider: $('[data-worker-provider]', row).value,
       model: $('[data-worker-model]', row).value.trim(),
       toolsets: $$('[data-worker-toolset]:checked', row).map(input => input.value),
+      concurrency_limit: Number($('[data-worker-concurrency]', row).value || 1),
     };
   });
   setProviderPoolBusy(true);
@@ -7444,10 +7509,15 @@ async function saveWorkerAssignments() {
     const response = await fetch('/provider-pool/worker-roles', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({default_role: els.workerDefaultRole.value, roles}),
+      body: JSON.stringify({
+        default_role: els.workerDefaultRole.value,
+        max_concurrent: Number(els.workerMaxConcurrent.value || 4),
+        roles,
+      }),
     });
     if (!response.ok) throw await responseError(response, '保存失败');
     applyProviderPoolSnapshot(await response.json());
+    await loadWorkerSchedulerState();
     if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = '已保存';
   } catch (error) {
     if (els.workerAssignmentStatus) els.workerAssignmentStatus.textContent = String(error.message || '保存失败');
@@ -7822,6 +7892,9 @@ if (els.workerAssignmentForm) {
     if (event.target.matches('[data-worker-provider]')) {
       syncWorkerModelOptions(event.target.closest('[data-worker-role]'), '');
     }
+    if (event.target.matches('[data-worker-concurrency]') || event.target === els.workerMaxConcurrent) {
+      renderWorkerSchedulerState();
+    }
     if (event.target.matches('[data-worker-toolset]')) syncWorkerToolsetSummaries();
   });
 }
@@ -7832,6 +7905,10 @@ if (els.workerRoleList) {
     if (row) runWorkerTest(row.dataset.workerRole);
   });
 }
+setInterval(() => {
+  const workerTab = $('[data-settings-view="workers"][aria-selected="true"]', els.settingsTabs);
+  if (panelOpen === 'settings' && workerTab) loadWorkerSchedulerState();
+}, 3000);
 
 function renderMediaBoard() {
   if (mediaDockButton) mediaDockButton.classList.toggle('has-media', Boolean(currentMedia || mediaQueue.length));

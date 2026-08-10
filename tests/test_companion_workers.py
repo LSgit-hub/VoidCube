@@ -35,6 +35,7 @@ def test_default_worker_catalog_exposes_secret_free_roles() -> None:
     ]
     assert all("provider" not in item for item in catalog["roles"])
     assert all("model" not in item for item in catalog["roles"])
+    assert all(item["concurrency_limit"] == 1 for item in catalog["roles"])
     assert {
         item["role"]: item["toolsets"] for item in catalog["roles"]
     } == {

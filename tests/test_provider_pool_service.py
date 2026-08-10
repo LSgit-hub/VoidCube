@@ -133,6 +133,9 @@ def test_provider_pool_assigns_roles_and_protects_referenced_provider(
     assert research["model"] == "research-override"
     assert research["toolsets"] == ["web", "search"]
     assert research["recommended_toolsets"] == ["learn"]
+    assert research["concurrency_limit"] == 1
+    assert snapshot["max_concurrent"] == 4
+    assert service.dispatch_policy()["role_providers"]["research"] == "research-endpoint"
     with pytest.raises(ProviderPoolConflictError, match="员工角色 research"):
         service.delete_provider("research-endpoint")
 
@@ -254,10 +257,14 @@ def test_supervisor_provider_pool_routes_use_sanitized_contract(
         json=_provider_request().model_dump(),
     )
     snapshot = client.get("/provider-pool")
+    scheduler = client.get("/provider-pool/scheduler")
     conflict = client.delete("/provider-pool/providers/research-endpoint")
 
     assert saved.status_code == 200
     assert snapshot.status_code == 200
+    assert scheduler.status_code == 200
+    assert scheduler.json()["max_concurrent"] == 4
+    assert scheduler.json()["active_count"] == 0
     provider = snapshot.json()["providers"][0]
     assert "api_key" not in provider
     assert provider["credential_configured"] is True

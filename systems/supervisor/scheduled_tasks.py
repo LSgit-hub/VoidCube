@@ -526,24 +526,65 @@ class ScheduledTaskStore:
         owner_session_id: str,
         now: Optional[datetime] = None,
         lease_seconds: int = 300,
+        max_concurrent: int = 1,
+        role_limits: Optional[Dict[str, int]] = None,
+        role_providers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         owner = str(owner_session_id or "").strip()
         if not owner:
             raise ValueError("owner_session_id is required")
         current = (now or _utc_now()).astimezone(timezone.utc)
         bounded_lease = max(60, min(int(lease_seconds), 3600))
+        bounded_total = max(1, min(int(max_concurrent), 16))
+        limits = dict(role_limits or {})
+        providers = dict(role_providers or {})
         with self._transaction() as connection:
             self._recover_expired_claims(connection, now=current)
             self._prune_runs(connection)
-            row = connection.execute(
+            running_rows = connection.execute(
+                "SELECT t.worker_role, r.execution_provider FROM scheduled_task_runs r "
+                "JOIN scheduled_tasks t ON t.schedule_id = r.schedule_id "
+                "WHERE r.status = 'running'"
+            ).fetchall()
+            if len(running_rows) >= bounded_total:
+                return None
+            active_by_role: Dict[str, int] = {}
+            for running in running_rows:
+                role = str(running["worker_role"] or "").strip().lower()
+                active_by_role[role] = active_by_role.get(role, 0) + 1
+            rows = connection.execute(
                 "SELECT * FROM scheduled_tasks WHERE status = 'active' "
                 "AND active_run_id IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? "
-                "ORDER BY next_run_at, created_at LIMIT 1",
+                "ORDER BY next_run_at, created_at",
                 (_iso_utc(current),),
-            ).fetchone()
+            ).fetchall()
+            row = next(
+                (
+                    candidate
+                    for candidate in rows
+                    if active_by_role.get(
+                        str(candidate["worker_role"] or "").strip().lower(),
+                        0,
+                    )
+                    < max(
+                        1,
+                        min(
+                            int(
+                                limits.get(
+                                    str(candidate["worker_role"] or "").strip().lower(),
+                                    1,
+                                )
+                            ),
+                            8,
+                        ),
+                    )
+                ),
+                None,
+            )
             if row is None:
                 return None
             task = self._task_from_row(row)
+            worker_role = str(task.get("worker_role") or "").strip().lower()
             run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
@@ -556,7 +597,7 @@ class ScheduledTaskStore:
                 "completed_at": None,
                 "result_summary": "",
                 "error": "",
-                "execution_provider": "",
+                "execution_provider": str(providers.get(worker_role) or "")[:120],
                 "execution_model": "",
                 "elapsed_ms": None,
             }
@@ -565,6 +606,74 @@ class ScheduledTaskStore:
             task["updated_at"] = _iso_utc(current)
             self._replace_task(connection, task)
             return {"task": dict(task), "run": dict(run)}
+
+    def dispatch_state(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        max_concurrent: int = 1,
+        role_limits: Optional[Dict[str, int]] = None,
+        role_providers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        current = (now or _utc_now()).astimezone(timezone.utc)
+        limits = dict(role_limits or {})
+        providers = dict(role_providers or {})
+        with self._transaction() as connection:
+            self._recover_expired_claims(connection, now=current)
+            running_rows = connection.execute(
+                "SELECT t.worker_role, r.execution_provider FROM scheduled_task_runs r "
+                "JOIN scheduled_tasks t ON t.schedule_id = r.schedule_id "
+                "WHERE r.status = 'running'"
+            ).fetchall()
+            queued_rows = connection.execute(
+                "SELECT worker_role FROM scheduled_tasks WHERE status = 'active' "
+                "AND active_run_id IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? "
+                "ORDER BY next_run_at, created_at",
+                (_iso_utc(current),),
+            ).fetchall()
+
+        role_state: Dict[str, Dict[str, Any]] = {}
+        provider_state: Dict[str, Dict[str, Any]] = {}
+
+        def role_bucket(role: str) -> Dict[str, Any]:
+            return role_state.setdefault(
+                role,
+                {
+                    "role": role,
+                    "active": 0,
+                    "queued": 0,
+                    "limit": max(1, min(int(limits.get(role, 1)), 8)),
+                },
+            )
+
+        def provider_bucket(provider: str) -> Dict[str, Any]:
+            return provider_state.setdefault(
+                provider,
+                {"provider": provider, "active": 0, "queued": 0},
+            )
+
+        for row in running_rows:
+            role = str(row["worker_role"] or "").strip().lower()
+            provider = str(row["execution_provider"] or providers.get(role) or "").strip().lower()
+            role_bucket(role)["active"] += 1
+            provider_bucket(provider)["active"] += 1
+        for row in queued_rows:
+            role = str(row["worker_role"] or "").strip().lower()
+            provider = str(providers.get(role) or "").strip().lower()
+            role_bucket(role)["queued"] += 1
+            provider_bucket(provider)["queued"] += 1
+        for role in limits:
+            role_bucket(role)
+        for provider in providers.values():
+            provider_bucket(str(provider or "").strip().lower())
+        provider_state.pop("", None)
+        return {
+            "max_concurrent": max(1, min(int(max_concurrent), 16)),
+            "active_count": len(running_rows),
+            "queued_count": len(queued_rows),
+            "roles": list(role_state.values()),
+            "providers": list(provider_state.values()),
+        }
 
     def renew_run(
         self,
@@ -768,10 +877,12 @@ class ScheduledTaskRuntimeMixin:
         }
 
     async def claim_scheduled_task(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        policy = self._provider_pool_service.dispatch_policy()
         claimed = self._scheduled_store_call(
             "claim_due",
             owner_session_id=str(request.get("owner_session_id") or ""),
             lease_seconds=int(request.get("lease_seconds") or 300),
+            **policy,
         )
         return {"status": "claimed" if claimed else "idle", "claim": claimed}
 

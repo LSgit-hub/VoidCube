@@ -351,6 +351,7 @@ DEFAULT_CONFIG = {
     "credential_pool_strategies": {},
     "companion_workers": {
         "default_role": "general",
+        "max_concurrent": 4,
         "roles": copy.deepcopy(DEFAULT_COMPANION_WORKER_ROLES),
     },
     "image_generation": {

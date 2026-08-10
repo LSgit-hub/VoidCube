@@ -33,6 +33,22 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       })
     })
   })
+  await page.route('**/provider-pool/scheduler', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      status: 'ok',
+      max_concurrent: 4,
+      active_count: 1,
+      queued_count: 2,
+      roles: [
+        { role: 'general', active: 0, queued: 1, limit: 1 },
+        { role: 'research', active: 1, queued: 1, limit: 1 },
+        { role: 'coding', active: 0, queued: 0, limit: 1 },
+        { role: 'media', active: 0, queued: 0, limit: 1 }
+      ],
+      providers: []
+    })
+  }))
   await page.route(/\/provider-pool\/worker-tests(?:\/[^/?]+)?(?:\?.*)?$/, (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -120,6 +136,12 @@ test('provider pool and worker assignment panels stay usable across viewports', 
 
     await page.locator('[data-settings-view="workers"]').click()
     await expect(page.locator('#workerRoleList .worker-role-row')).toHaveCount(4)
+    await expect(page.locator('#workerMaxConcurrent')).toHaveValue('4')
+    await expect(page.locator('#workerSchedulerStatus')).toHaveText('运行 1 / 4 · 排队 2')
+    await expect(page.locator('[data-worker-role="research"] [data-worker-dispatch-state]')).toHaveText(
+      '运行 1 · 排队 1 · 上限 1'
+    )
+    await expect(page.locator('[data-worker-concurrency]')).toHaveCount(4)
     await expect(page.locator('[data-worker-role="research"] [data-worker-test-state]')).toHaveText(
       '已验证 · 1.2 s · history-model'
     )

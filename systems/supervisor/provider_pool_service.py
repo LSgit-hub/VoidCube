@@ -73,6 +73,7 @@ class CompanionWorkerAssignmentRequest(BaseModel):
     provider: str = Field(default="", max_length=64)
     model: str = Field(default="", max_length=300)
     toolsets: list[str] = Field(default_factory=list, max_length=40)
+    concurrency_limit: int = Field(default=1, ge=1, le=8)
 
     @field_validator("provider", "model")
     @classmethod
@@ -93,6 +94,7 @@ class CompanionWorkerAssignmentRequest(BaseModel):
 
 class CompanionWorkerAssignmentsRequest(BaseModel):
     default_role: str = Field(min_length=1, max_length=40)
+    max_concurrent: int = Field(default=4, ge=1, le=16)
     roles: dict[str, CompanionWorkerAssignmentRequest] = Field(min_length=1)
 
     @field_validator("default_role")
@@ -162,6 +164,22 @@ def _configured_worker_entries(config: Mapping[str, Any]) -> tuple[str, dict[str
             roles[role_key] = dict(values)
     default_role = str(section.get("default_role") or "general").strip().lower()
     return default_role, roles
+
+
+def _worker_max_concurrent(config: Mapping[str, Any]) -> int:
+    section = config.get("companion_workers")
+    section = section if isinstance(section, Mapping) else {}
+    try:
+        return max(1, min(int(section.get("max_concurrent", 4)), 16))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _worker_role_concurrency(values: Mapping[str, Any]) -> int:
+    try:
+        return max(1, min(int(values.get("concurrency_limit", 1)), 8))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _provider_references(config: Mapping[str, Any], provider_key: str) -> list[str]:
@@ -290,6 +308,7 @@ class ProviderPoolService:
                     "model": str(values.get("model") or "").strip(),
                     "toolsets": toolsets,
                     "recommended_toolsets": recommended_toolsets,
+                    "concurrency_limit": _worker_role_concurrency(values),
                 }
             )
 
@@ -321,6 +340,7 @@ class ProviderPoolService:
             "providers": public_providers,
             "provider_presets": presets,
             "default_role": default_role,
+            "max_concurrent": _worker_max_concurrent(config),
             "roles": public_roles,
             "toolsets": _toolset_catalog(config),
         }
@@ -428,6 +448,7 @@ class ProviderPoolService:
                     "provider": provider,
                     "model": assignment.model,
                     "toolsets": assignment.toolsets,
+                    "concurrency_limit": assignment.concurrency_limit,
                 }
             )
             normalized_roles[role] = values
@@ -442,10 +463,32 @@ class ProviderPoolService:
 
         config["companion_workers"] = {
             "default_role": request.default_role,
+            "max_concurrent": request.max_concurrent,
             "roles": normalized_roles,
         }
         save_config(config, preserve_structure=True)
         return {**self.snapshot(), "status": "saved"}
+
+    def dispatch_policy(self) -> dict[str, Any]:
+        config = _raw_config()
+        active_provider = str(
+            (config.get("runtime") or {}).get("active_provider") or ""
+        ).strip().lower()
+        _, roles = _configured_worker_entries(config)
+        role_limits: dict[str, int] = {}
+        role_providers: dict[str, str] = {}
+        for role, values in roles.items():
+            if not bool(values.get("enabled", True)):
+                continue
+            role_limits[role] = _worker_role_concurrency(values)
+            role_providers[role] = str(
+                values.get("provider") or active_provider
+            ).strip().lower()
+        return {
+            "max_concurrent": _worker_max_concurrent(config),
+            "role_limits": role_limits,
+            "role_providers": role_providers,
+        }
 
     @staticmethod
     def _provider_runtime(provider_key: str) -> dict[str, Any]:

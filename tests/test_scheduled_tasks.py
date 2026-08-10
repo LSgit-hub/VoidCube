@@ -89,6 +89,66 @@ def test_once_schedule_claim_and_api_a_writeback(tmp_path) -> None:
         store.set_status(task["schedule_id"], "active")
 
 
+def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    requests = [
+        ("调研一", "research", "2026-07-28T00:56:00+00:00"),
+        ("调研二", "research", "2026-07-28T00:57:00+00:00"),
+        ("工程一", "coding", "2026-07-28T00:58:00+00:00"),
+    ]
+    for title, role, run_at in requests:
+        store.create(
+            {
+                "title": title,
+                "instruction": title,
+                "schedule_type": "once",
+                "run_at": run_at,
+                "created_by": "api_b",
+                "worker_role": role,
+            },
+            now=now,
+        )
+
+    policy = {
+        "max_concurrent": 2,
+        "role_limits": {"research": 1, "coding": 1},
+        "role_providers": {"research": "provider-r", "coding": "provider-c"},
+    }
+    first = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    second = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    blocked = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+
+    assert first is not None and first["task"]["title"] == "调研一"
+    assert first["run"]["execution_provider"] == "provider-r"
+    assert second is not None and second["task"]["title"] == "工程一"
+    assert second["run"]["execution_provider"] == "provider-c"
+    assert blocked is None
+
+    state = store.dispatch_state(now=now, **policy)
+    assert state["active_count"] == 2
+    assert state["queued_count"] == 1
+    assert {item["role"]: item for item in state["roles"]}["research"] == {
+        "role": "research",
+        "active": 1,
+        "queued": 1,
+        "limit": 1,
+    }
+    assert {item["provider"]: item for item in state["providers"]} == {
+        "provider-r": {"provider": "provider-r", "active": 1, "queued": 1},
+        "provider-c": {"provider": "provider-c", "active": 1, "queued": 0},
+    }
+
+    store.finish_run(
+        first["run"]["run_id"],
+        owner_session_id="cli-main",
+        success=True,
+        now=now,
+    )
+    third = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    assert third is not None and third["task"]["title"] == "调研二"
+
+
 def test_daily_schedule_advances_after_failed_api_a_run(tmp_path) -> None:
     store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
     created_at = datetime(2026, 7, 27, 10, 59, tzinfo=timezone.utc)
@@ -329,6 +389,75 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
     callbacks[0](True, "任务结果", "")
     assert host._scheduled_execution_active is False
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/run-1/finish"
+
+
+def test_main_cli_scheduled_executor_keeps_multiple_workers_active(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+
+    def start_background(_prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        return True
+
+    claims = iter(
+        [
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {"title": "调研", "instruction": "查资料", "worker_role": "research"},
+                    "run": {"run_id": "run-research"},
+                },
+            },
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {"title": "工程", "instruction": "改代码", "worker_role": "coding"},
+                    "run": {"run_id": "run-coding"},
+                },
+            },
+        ]
+    )
+    posts = []
+
+    def post(path, payload):
+        posts.append((path, payload))
+        if path == "/scheduled-tasks/claim":
+            return next(claims)
+        return {"status": "completed"}
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host),
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "concurrent-writebacks.db",
+    )
+    runtime._post = post  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    runtime._last_poll_at = 0
+    runtime.poll_workflow()
+
+    assert len(callbacks) == 2
+    assert host._scheduled_execution_active is True
+    assert runtime._active_run_ids == {"run-research", "run-coding"}
+    callbacks[0](True, "调研完成", "")
+    assert host._scheduled_execution_active is True
+    assert runtime._active_run_ids == {"run-coding"}
+    callbacks[1](True, "工程完成", "")
+    assert host._scheduled_execution_active is False
+    assert runtime._active_run_ids == set()
+    assert [path for path, _payload in posts].count("/scheduled-tasks/claim") == 2
+    assert [path for path, _payload in posts].count(
+        "/scheduled-task-runs/run-research/finish"
+    ) == 1
+    assert [path for path, _payload in posts].count(
+        "/scheduled-task-runs/run-coding/finish"
+    ) == 1
 
 
 @pytest.mark.asyncio

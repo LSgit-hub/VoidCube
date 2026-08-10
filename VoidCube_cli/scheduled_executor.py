@@ -173,7 +173,7 @@ class ScheduledTaskExecutorRuntime:
         self._poll_lock = threading.Lock()
         self._delivery_lock = threading.Lock()
         self._state_lock = threading.RLock()
-        self._active_run_id = ""
+        self._active_run_ids: set[str] = set()
         self._execution_gate_acquired = False
         self._outbox = ScheduledWritebackOutbox(
             outbox_path
@@ -197,17 +197,29 @@ class ScheduledTaskExecutorRuntime:
         return bool(self.ports.auto_task_running())
 
     def _acquire_execution_gate(self) -> bool:
-        gate = self.ports.execution_gate
-        if gate is None:
-            return True
-        acquired = bool(gate.acquire(blocking=False))
-        self._execution_gate_acquired = acquired
-        return acquired
-
-    def _release_execution_slot(self) -> None:
         with self._state_lock:
-            self.ports.set_execution_active(False)
             if self._execution_gate_acquired:
+                return True
+            gate = self.ports.execution_gate
+            if gate is None:
+                self._execution_gate_acquired = True
+                return True
+            acquired = bool(gate.acquire(blocking=False))
+            self._execution_gate_acquired = acquired
+            return acquired
+
+    def _mark_execution_started(self, run_id: str) -> None:
+        with self._state_lock:
+            self._active_run_ids.add(run_id)
+            self.ports.set_execution_active(True)
+
+    def _release_execution_slot(self, run_id: str = "") -> None:
+        with self._state_lock:
+            if run_id:
+                self._active_run_ids.discard(run_id)
+            active = bool(self._active_run_ids)
+            self.ports.set_execution_active(active)
+            if not active and self._execution_gate_acquired:
                 gate = self.ports.execution_gate
                 self._execution_gate_acquired = False
                 if gate is not None:
@@ -274,8 +286,6 @@ class ScheduledTaskExecutorRuntime:
         self._flush_writebacks()
         if self._outbox.pending_count():
             return
-        if self._active_run_id:
-            return
         now = time.monotonic()
         if now - self._last_poll_at < self.poll_interval_seconds:
             return
@@ -288,10 +298,10 @@ class ScheduledTaskExecutorRuntime:
 
         execution_started = False
         heartbeat_stop: threading.Event | None = None
+        claimed_run_id = ""
         try:
             if not self._acquire_execution_gate():
                 return
-            self.ports.set_execution_active(True)
             if self._auto_task_is_running():
                 self._release_execution_slot()
                 return
@@ -321,8 +331,8 @@ class ScheduledTaskExecutorRuntime:
                 self._release_execution_slot()
                 return
 
-            with self._state_lock:
-                self._active_run_id = run_id
+            claimed_run_id = run_id
+            self._mark_execution_started(run_id)
             heartbeat_stop = threading.Event()
             self._start_lease_heartbeat(
                 run_id=run_id,
@@ -388,9 +398,8 @@ class ScheduledTaskExecutorRuntime:
 
             def on_complete(success: bool, response_text: str, error: str) -> None:
                 with self._state_lock:
-                    if self._active_run_id != run_id:
+                    if run_id not in self._active_run_ids:
                         return
-                    self._active_run_id = ""
                 heartbeat_stop.set()
                 self._outbox.enqueue(
                     run_id,
@@ -408,7 +417,7 @@ class ScheduledTaskExecutorRuntime:
                     },
                 )
                 self._flush_writebacks()
-                self._release_execution_slot()
+                self._release_execution_slot(run_id)
 
             try:
                 execution_details: Dict[str, Any] = {}
@@ -429,13 +438,17 @@ class ScheduledTaskExecutorRuntime:
                 on_complete(False, "", f"API-A worker route unavailable: {exc}")
                 started = False
             execution_started = bool(started)
-            if not started and self._active_run_id:
+            if not started and run_id in self._active_run_ids:
                 on_complete(False, "", "API-A scheduled execution could not start")
         finally:
-            if not execution_started and self._active_run_id:
+            if (
+                not execution_started
+                and claimed_run_id
+                and claimed_run_id in self._active_run_ids
+            ):
                 if heartbeat_stop is not None:
                     heartbeat_stop.set()
-                with self._state_lock:
-                    self._active_run_id = ""
+                self._release_execution_slot(claimed_run_id)
+            elif not claimed_run_id:
                 self._release_execution_slot()
             self._poll_lock.release()
