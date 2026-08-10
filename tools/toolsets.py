@@ -9,13 +9,13 @@ from typing import List, Dict, Any, Set, Optional
 TOOLSETS = {
     "web": {
         "description": "Web research, content extraction, site crawling, and Web UI media playback tools",
-        "tools": ["web_search", "web_extract", "web_crawl", "media_play", "media_playlist", "media_display", "media_control"],
+        "tools": ["web_search", "web_extract", "web_crawl", "media_play", "media_playlist", "media_display", "media_control", "account_status"],
         "includes": []
     },
 
     "playback": {
         "description": "Display images, documents, web pages, and play audio/video in the VoidCube Web UI",
-        "tools": ["media_play", "media_playlist", "media_display", "media_control"],
+        "tools": ["media_play", "media_playlist", "media_display", "media_control", "account_status"],
         "includes": [],
     },
     

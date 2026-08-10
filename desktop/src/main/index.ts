@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './runtime-locator'
@@ -102,8 +103,53 @@ async function probeMonitor(): Promise<MonitorProbe> {
   }
 }
 
+// ── Cookie 注入（账号中心） ──
+
+function getAccountsPath(): string {
+  const home = process.env.VOIDCUBE_HOME || join(homedir(), '.VoidCube')
+  return join(home, 'accounts.json')
+}
+
+async function injectCookies(): Promise<void> {
+  const path = getAccountsPath()
+  if (!existsSync(path)) return
+  try {
+    const raw = readFileSync(path, 'utf-8')
+    const data = JSON.parse(raw)
+    const accounts: Array<Record<string, unknown>> = Array.isArray(data.accounts) ? data.accounts : []
+    if (accounts.length === 0) return
+    for (const account of accounts) {
+      if (account.status !== 'active') continue
+      const cookies = Array.isArray(account.parsed_cookies) ? account.parsed_cookies : []
+      for (const cookie of cookies) {
+        const c = cookie as Record<string, unknown>
+        const domain = String(c.domain || '')
+        const name = String(c.name || '')
+        const value = String(c.value || '')
+        if (!domain || !name || !value) continue
+        await session.defaultSession.cookies.set({
+          url: `https://${domain.replace(/^\./, '')}`,
+          name,
+          value,
+          domain,
+          path: String(c.path || '/'),
+          secure: c.secure !== false,
+          httpOnly: c.http_only === true,
+          sameSite: 'no_restriction' as const,
+          expirationDate: Math.floor(Date.now() / 1000) + 365 * 86400,
+        })
+      }
+    }
+    console.log(`[VoidCube] Injected cookies for ${accounts.length} account(s)`)
+  } catch (err) {
+    // accounts.json 不存在或格式错误 — 忽略，不影响正常启动
+    console.debug('[VoidCube] No accounts found for cookie injection:', err instanceof Error ? err.message : err)
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('monitor:probe', probeMonitor)
+  ipcMain.handle('cookies:refresh', () => injectCookies().then(() => ({ ok: true })).catch((err) => ({ ok: false, error: String(err) })))
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
   ipcMain.on('window:close', () => mainWindow?.close())
   ipcMain.handle('workspace:open', async () => {
@@ -136,8 +182,9 @@ function registerIpc(): void {
 app.setName('VoidCube')
 app.setAppUserModelId(APP_ID)
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  await injectCookies()
   registerIpc()
   mainWindow = createWindow()
 

@@ -171,6 +171,12 @@ class ScheduledTaskStore:
                 "execution_provider TEXT NOT NULL DEFAULT '', "
                 "execution_model TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS scheduled_provider_cooldowns ("
+                "provider_key TEXT PRIMARY KEY, cooldown_until TEXT NOT NULL, "
+                "failure_count INTEGER NOT NULL DEFAULT 1, "
+                "last_status INTEGER NOT NULL DEFAULT 429, updated_at TEXT NOT NULL)"
+            )
             run_columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(scheduled_task_runs)")
@@ -197,7 +203,7 @@ class ScheduledTaskStore:
                 "ON scheduled_task_runs(claimed_at DESC)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '4')"
+                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '5')"
             )
 
     def _migrate_legacy_json_once(self) -> None:
@@ -529,6 +535,7 @@ class ScheduledTaskStore:
         max_concurrent: int = 1,
         role_limits: Optional[Dict[str, int]] = None,
         role_providers: Optional[Dict[str, str]] = None,
+        provider_limits: Optional[Dict[str, int]] = None,
     ) -> Optional[Dict[str, Any]]:
         owner = str(owner_session_id or "").strip()
         if not owner:
@@ -538,6 +545,7 @@ class ScheduledTaskStore:
         bounded_total = max(1, min(int(max_concurrent), 16))
         limits = dict(role_limits or {})
         providers = dict(role_providers or {})
+        upstream_limits = dict(provider_limits or {})
         with self._transaction() as connection:
             self._recover_expired_claims(connection, now=current)
             self._prune_runs(connection)
@@ -549,36 +557,55 @@ class ScheduledTaskStore:
             if len(running_rows) >= bounded_total:
                 return None
             active_by_role: Dict[str, int] = {}
+            active_by_provider: Dict[str, int] = {}
             for running in running_rows:
                 role = str(running["worker_role"] or "").strip().lower()
+                provider = str(
+                    running["execution_provider"] or providers.get(role) or ""
+                ).strip().lower()
                 active_by_role[role] = active_by_role.get(role, 0) + 1
+                if provider:
+                    active_by_provider[provider] = active_by_provider.get(provider, 0) + 1
+            cooling_providers = {
+                str(item["provider_key"] or "").strip().lower()
+                for item in connection.execute(
+                    "SELECT provider_key FROM scheduled_provider_cooldowns "
+                    "WHERE cooldown_until > ?",
+                    (_iso_utc(current),),
+                ).fetchall()
+            }
             rows = connection.execute(
                 "SELECT * FROM scheduled_tasks WHERE status = 'active' "
                 "AND active_run_id IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? "
                 "ORDER BY next_run_at, created_at",
                 (_iso_utc(current),),
             ).fetchall()
+
+            def candidate_available(candidate: sqlite3.Row) -> bool:
+                role = str(candidate["worker_role"] or "").strip().lower()
+                try:
+                    role_limit = max(1, min(int(limits.get(role, 1)), 8))
+                except (TypeError, ValueError):
+                    role_limit = 1
+                if active_by_role.get(role, 0) >= role_limit:
+                    return False
+
+                provider = str(providers.get(role) or "").strip().lower()
+                if not provider:
+                    return True
+                try:
+                    provider_limit = max(
+                        1, min(int(upstream_limits.get(provider, 2)), 16)
+                    )
+                except (TypeError, ValueError):
+                    provider_limit = 2
+                return (
+                    provider not in cooling_providers
+                    and active_by_provider.get(provider, 0) < provider_limit
+                )
+
             row = next(
-                (
-                    candidate
-                    for candidate in rows
-                    if active_by_role.get(
-                        str(candidate["worker_role"] or "").strip().lower(),
-                        0,
-                    )
-                    < max(
-                        1,
-                        min(
-                            int(
-                                limits.get(
-                                    str(candidate["worker_role"] or "").strip().lower(),
-                                    1,
-                                )
-                            ),
-                            8,
-                        ),
-                    )
-                ),
+                (candidate for candidate in rows if candidate_available(candidate)),
                 None,
             )
             if row is None:
@@ -614,10 +641,12 @@ class ScheduledTaskStore:
         max_concurrent: int = 1,
         role_limits: Optional[Dict[str, int]] = None,
         role_providers: Optional[Dict[str, str]] = None,
+        provider_limits: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
         current = (now or _utc_now()).astimezone(timezone.utc)
         limits = dict(role_limits or {})
         providers = dict(role_providers or {})
+        upstream_limits = dict(provider_limits or {})
         with self._transaction() as connection:
             self._recover_expired_claims(connection, now=current)
             running_rows = connection.execute(
@@ -630,6 +659,10 @@ class ScheduledTaskStore:
                 "AND active_run_id IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ? "
                 "ORDER BY next_run_at, created_at",
                 (_iso_utc(current),),
+            ).fetchall()
+            cooldown_rows = connection.execute(
+                "SELECT provider_key, cooldown_until, failure_count, last_status "
+                "FROM scheduled_provider_cooldowns"
             ).fetchall()
 
         role_state: Dict[str, Dict[str, Any]] = {}
@@ -647,9 +680,24 @@ class ScheduledTaskStore:
             )
 
         def provider_bucket(provider: str) -> Dict[str, Any]:
+            try:
+                provider_limit = max(
+                    1, min(int(upstream_limits.get(provider, 2)), 16)
+                )
+            except (TypeError, ValueError):
+                provider_limit = 2
             return provider_state.setdefault(
                 provider,
-                {"provider": provider, "active": 0, "queued": 0},
+                {
+                    "provider": provider,
+                    "active": 0,
+                    "queued": 0,
+                    "limit": provider_limit,
+                    "cooldown_until": "",
+                    "cooldown_remaining_seconds": 0,
+                    "failure_count": 0,
+                    "last_status": None,
+                },
             )
 
         for row in running_rows:
@@ -666,6 +714,25 @@ class ScheduledTaskStore:
             role_bucket(role)
         for provider in providers.values():
             provider_bucket(str(provider or "").strip().lower())
+        for provider in upstream_limits:
+            provider_bucket(str(provider or "").strip().lower())
+        for row in cooldown_rows:
+            provider = str(row["provider_key"] or "").strip().lower()
+            if not provider:
+                continue
+            bucket = provider_bucket(provider)
+            cooldown_until = _parse_datetime(
+                row["cooldown_until"], field="cooldown_until"
+            )
+            remaining = max(0, int((cooldown_until - current).total_seconds() + 0.999))
+            bucket.update(
+                {
+                    "cooldown_until": row["cooldown_until"] if remaining else "",
+                    "cooldown_remaining_seconds": remaining,
+                    "failure_count": int(row["failure_count"] or 0),
+                    "last_status": int(row["last_status"] or 0) or None,
+                }
+            )
         provider_state.pop("", None)
         return {
             "max_concurrent": max(1, min(int(max_concurrent), 16)),
@@ -716,6 +783,9 @@ class ScheduledTaskStore:
         execution_provider: str = "",
         execution_model: str = "",
         elapsed_ms: int | None = None,
+        rate_limited: bool = False,
+        retry_after_seconds: float | None = None,
+        error_code: int | None = None,
         now: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         current = (now or _utc_now()).astimezone(timezone.utc)
@@ -739,13 +809,16 @@ class ScheduledTaskStore:
                 raise ValueError("schedule/run ownership is inconsistent")
 
             completed_at = _iso_utc(current)
+            provider_key = str(
+                execution_provider or run.get("execution_provider") or ""
+            ).strip().lower()[:120]
             run.update(
                 {
                     "status": expected_status,
                     "result_summary": str(result_summary or "")[:12000],
                     "error": str(error or "")[:2000],
                     "completed_at": completed_at,
-                    "execution_provider": str(execution_provider or "")[:120],
+                    "execution_provider": provider_key,
                     "execution_model": str(execution_model or "")[:300],
                     "elapsed_ms": (
                         max(0, min(int(elapsed_ms), 86_400_000))
@@ -753,6 +826,37 @@ class ScheduledTaskStore:
                     ),
                 }
             )
+            if provider_key and success:
+                connection.execute(
+                    "DELETE FROM scheduled_provider_cooldowns WHERE provider_key = ?",
+                    (provider_key,),
+                )
+            elif provider_key and (rate_limited or error_code == 429):
+                previous = connection.execute(
+                    "SELECT failure_count FROM scheduled_provider_cooldowns "
+                    "WHERE provider_key = ?",
+                    (provider_key,),
+                ).fetchone()
+                failure_count = int(previous["failure_count"] or 0) + 1 if previous else 1
+                if retry_after_seconds is None:
+                    delay = min(30.0 * (2 ** (failure_count - 1)), 900.0)
+                else:
+                    delay = max(1.0, min(float(retry_after_seconds), 900.0))
+                connection.execute(
+                    "INSERT INTO scheduled_provider_cooldowns "
+                    "(provider_key, cooldown_until, failure_count, last_status, updated_at) "
+                    "VALUES (?, ?, ?, 429, ?) "
+                    "ON CONFLICT(provider_key) DO UPDATE SET "
+                    "cooldown_until = excluded.cooldown_until, "
+                    "failure_count = excluded.failure_count, "
+                    "last_status = excluded.last_status, updated_at = excluded.updated_at",
+                    (
+                        provider_key,
+                        _iso_utc(current + timedelta(seconds=delay)),
+                        failure_count,
+                        completed_at,
+                    ),
+                )
             connection.execute(
                 "UPDATE scheduled_task_runs SET status = ?, result_summary = ?, error = ?, "
                 "completed_at = ?, execution_provider = ?, execution_model = ?, "
@@ -899,6 +1003,19 @@ class ScheduledTaskRuntimeMixin:
         success = request.get("success")
         if not isinstance(success, bool):
             raise HTTPException(status_code=400, detail="success must be a boolean")
+        rate_limited = request.get("rate_limited", False)
+        if not isinstance(rate_limited, bool):
+            raise HTTPException(status_code=400, detail="rate_limited must be a boolean")
+        try:
+            error_code = (
+                int(request["error_code"])
+                if request.get("error_code") is not None else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="error_code must be an integer"
+            ) from exc
+        retry_after = request.get("retry_after_seconds")
         result = self._scheduled_store_call(
             "finish_run",
             run_id,
@@ -909,5 +1026,8 @@ class ScheduledTaskRuntimeMixin:
             execution_provider=str(request.get("execution_provider") or ""),
             execution_model=str(request.get("execution_model") or ""),
             elapsed_ms=request.get("elapsed_ms"),
+            rate_limited=rate_limited,
+            retry_after_seconds=retry_after,
+            error_code=error_code,
         )
         return {"status": "completed" if success else "failed", **result}

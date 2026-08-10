@@ -95,6 +95,30 @@ def media_control(action: str) -> str:
     )
 
 
+def account_status() -> str:
+    """查询平台账号登录状态（B站等），返回已登录/已过期/未配置。
+
+    Agent 在播放 B站视频前可调用此工具检查是否有可用登录态。
+    如无登录态，可提示用户在账号中心添加 Cookie 以获得高清播放。
+    """
+    try:
+        from systems.supervisor.account_store import account_for_api, load_accounts
+
+        accounts = load_accounts()
+        if not accounts:
+            return json.dumps(
+                {"status": "ok", "accounts": [], "hint": "暂无已配置的平台账号。请在 VoidCube 底部 dock 的账号中心添加 B站 Cookie 以获得高清播放。"},
+                ensure_ascii=False,
+            )
+        result = {
+            "status": "ok",
+            "accounts": [account_for_api(a) for a in accounts],
+        }
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False)
+
+
 def media_playlist(items: list[Dict[str, Any]], queue_mode: str = "replace") -> str:
     """一次性将整张歌单推送到 VoidCube 播放列表。成功后即可汇报完成。"""
     return _post_media(
@@ -159,6 +183,8 @@ MEDIA_PLAY_SCHEMA = {
         "用户说'播放某首歌'或'放某个视频'时，先用 web_search 找到 URL，"
         "再调用此工具推送到小屋播放器。"
         "支持 B站视频页和 http/https 直链 mp3/mp4；不支持普通网页或搜索结果页。"
+        "注意：B站高清播放和部分影视内容需要账号登录。如用户需要高清，"
+        "可提示用户在账号中心（底部 dock → 🔑 账号）添加 B站 Cookie。"
     ),
     "parameters": {
         "type": "object",
@@ -329,4 +355,26 @@ registry.register(
     schema=MEDIA_CONTROL_SCHEMA,
     handler=lambda args, **kw: media_control(args.get("action", "")),
     emoji="⏯",
+)
+
+ACCOUNT_STATUS_SCHEMA = {
+    "name": "account_status",
+    "description": (
+        "查询 VoidCube 已配置的平台账号登录状态（B站等）。"
+        "在播放 B站视频前可调用此工具检查是否有可用登录态，"
+        "以确定能否获得高清播放和会员内容访问。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+registry.register(
+    name="account_status",
+    toolset="web",
+    schema=ACCOUNT_STATUS_SCHEMA,
+    handler=lambda args, **kw: account_status(),
+    emoji="🔑",
 )

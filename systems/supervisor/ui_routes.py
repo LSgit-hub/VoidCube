@@ -27,6 +27,10 @@ class SupervisorUIRoutePorts:
     consent_evolution_candidate: Callable[..., Any]
     verify_identity_experience: Callable[..., Any]
     control_media: Callable[..., Any] | None = None
+    list_accounts: Callable[..., Any] | None = None
+    add_account: Callable[..., Any] | None = None
+    delete_account: Callable[..., Any] | None = None
+    verify_account: Callable[..., Any] | None = None
 
 
 def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
@@ -73,6 +77,14 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
         ports.verify_identity_experience,
         methods=["POST"],
     )
+    if ports.list_accounts is not None:
+        app.add_api_route("/ui/accounts", ports.list_accounts, methods=["GET"])
+    if ports.add_account is not None:
+        app.add_api_route("/ui/accounts", ports.add_account, methods=["POST"])
+    if ports.delete_account is not None:
+        app.add_api_route("/ui/accounts/{account_id}", ports.delete_account, methods=["DELETE"])
+    if ports.verify_account is not None:
+        app.add_api_route("/ui/accounts/{account_id}/verify", ports.verify_account, methods=["POST"])
 
 
 __all__ = ["SupervisorUIRoutePorts", "mount_supervisor_ui_routes"]

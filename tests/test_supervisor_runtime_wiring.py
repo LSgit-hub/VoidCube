@@ -814,6 +814,7 @@ def test_supervisor_room_frontend_manages_provider_pool_and_worker_assignments()
     assert 'id="providerLoadModels"' in UI_HTML
     assert 'id="providerModelOptions"' in UI_HTML
     assert 'id="providerModelCatalogMeta"' in UI_HTML
+    assert 'id="providerConcurrency"' in UI_HTML
     assert 'id="workerAssignmentForm"' in UI_HTML
     assert 'id="workerMaxConcurrent"' in UI_HTML
     assert 'data-worker-concurrency' in UI_HTML

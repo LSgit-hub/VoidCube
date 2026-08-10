@@ -504,6 +504,15 @@ window.addEventListener('beforeunload', () => {
   disposeTerminalState()
 })
 
+// 监听 Supervisor iframe 的 postMessage（账号中心 cookie 刷新等）
+window.addEventListener('message', (event) => {
+  const data = event.data as Record<string, unknown> | undefined
+  if (!data || typeof data.type !== 'string') return
+  if (data.type === 'cookies:refresh') {
+    api.cookiesRefresh?.().catch(() => {})
+  }
+})
+
 async function startDesktop(): Promise<void> {
   setLayoutMode(layoutMode)
   setSplitPercent(splitPercent)

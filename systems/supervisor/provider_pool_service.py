@@ -60,6 +60,7 @@ class ProviderPoolEntryRequest(BaseModel):
     auth_mode: Literal["env", "none"] = "env"
     api_key_env: str = Field(default="", max_length=120)
     api_key: str = Field(default="", max_length=8192)
+    concurrency_limit: int = Field(default=2, ge=1, le=16)
     make_active: bool = False
 
     @field_validator("label", "type", "base_url", "selected_model", "api_key_env")
@@ -182,6 +183,13 @@ def _worker_role_concurrency(values: Mapping[str, Any]) -> int:
         return 1
 
 
+def _provider_concurrency(values: Mapping[str, Any]) -> int:
+    try:
+        return max(1, min(int(values.get("concurrency_limit", 2)), 16))
+    except (TypeError, ValueError):
+        return 2
+
+
 def _provider_references(config: Mapping[str, Any], provider_key: str) -> list[str]:
     references: list[str] = []
     runtime = config.get("runtime")
@@ -278,6 +286,7 @@ class ProviderPoolService:
                     "type": provider_type,
                     "base_url": str(entry.get("base_url") or ""),
                     "selected_model": str(entry.get("selected_model") or ""),
+                    "concurrency_limit": _provider_concurrency(entry),
                     "model_catalog": _stored_model_catalog(entry),
                     "auth_mode": auth_mode,
                     "api_key_env": api_key_env,
@@ -381,6 +390,7 @@ class ProviderPoolService:
                 "base_url": base_url,
                 "selected_model": request.selected_model,
                 "auth_mode": request.auth_mode,
+                "concurrency_limit": request.concurrency_limit,
             }
         )
         if catalog_invalidated:
@@ -484,10 +494,15 @@ class ProviderPoolService:
             role_providers[role] = str(
                 values.get("provider") or active_provider
             ).strip().lower()
+        provider_limits = {
+            key: _provider_concurrency(entry)
+            for key, entry in _provider_map(config).items()
+        }
         return {
             "max_concurrent": _worker_max_concurrent(config),
             "role_limits": role_limits,
             "role_providers": role_providers,
+            "provider_limits": provider_limits,
         }
 
     @staticmethod

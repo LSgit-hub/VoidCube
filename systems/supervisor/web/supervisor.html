@@ -3338,6 +3338,85 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   margin: 0 0 10px;
   line-height: 1.5;
 }
+/* 账号中心 */
+#panelAccount { max-width: 820px; max-height: min(560px, calc(100vh - 72px)); }
+.account-card {
+  border-radius: 10px; padding: 14px 16px;
+  background: rgba(0,0,0,.22);
+  border: 1px solid rgba(255,255,255,.08);
+  display: flex; align-items: center; gap: 14px;
+  transition: border-color .15s;
+}
+.account-card:hover { border-color: rgba(255,255,255,.14); }
+.account-card-icon {
+  font-size: 28px; flex-shrink: 0;
+  width: 42px; height: 42px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: rgba(255,255,255,.04);
+}
+.account-card-meta { flex: 1; min-width: 0; }
+.account-card-title {
+  font-size: 12px; font-weight: 700;
+  color: var(--text-primary);
+  display: flex; align-items: center; gap: 8px;
+}
+.account-card-detail {
+  font-size: 10px; color: var(--text-secondary);
+  margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.account-status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+}
+.account-status-dot.active { background: var(--mint); box-shadow: 0 0 6px var(--mint-g); }
+.account-status-dot.expired { background: var(--coral); }
+.account-status-dot.error { background: var(--gold); }
+.account-card-actions {
+  display: flex; gap: 6px; flex-shrink: 0;
+}
+.account-card-actions button {
+  width: 28px; height: 28px;
+  border: 0; border-radius: 5px;
+  background: rgba(255,255,255,.06);
+  color: var(--text-secondary);
+  cursor: pointer; font-size: 13px;
+  display: grid; place-items: center;
+}
+.account-card-actions button:hover { background: rgba(255,255,255,.14); }
+.account-card-actions button.danger:hover { background: rgba(232,130,110,.25); color: var(--coral); }
+.account-add-bar {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.account-add-bar .provider-field { flex: 1; min-width: 0; }
+.account-add-bar .provider-field textarea {
+  width: 100%;
+  min-height: 56px; resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: rgba(0,0,0,.22);
+  font: inherit; font-size: 10.5px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+.account-add-bar .provider-field textarea:focus {
+  outline: 1px solid var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+.account-help-note {
+  font-size: 9.5px; color: var(--text-muted);
+  margin-top: 6px; line-height: 1.6;
+}
+.account-help-note code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 9px;
+  background: rgba(255,255,255,.06);
+  padding: 1px 4px; border-radius: 3px;
+}
 /* 自主链路观测 */
 .segment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 720px) { .segment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -4023,6 +4102,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                     <option value="none">无需鉴权</option>
                   </select>
                 </label>
+                <label class="provider-field">
+                  <span>员工并发上限</span>
+                  <input id="providerConcurrency" name="provider_concurrency" type="number" min="1" max="16" step="1" value="2" required/>
+                </label>
                 <label class="provider-active-field">
                   <input id="providerMakeActive" type="checkbox"/>
                   <span>设为 API-A 当前 Provider</span>
@@ -4115,6 +4198,16 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           <div class="panel-empty"><div class="pe-text">正在读取任务列表...</div></div>
         </div>
       </div>
+
+      <div class="dock-panel" id="panelAccount">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">🔑</span>账号中心</div>
+          <button class="panel-close" data-panel="account" title="关闭">×</button>
+        </div>
+        <div class="panel-body" id="panelAccountBody">
+          <!-- JS 动态渲染 -->
+        </div>
+      </div>
     </div>
 
     <!-- 底部 Dock 栏 -->
@@ -4171,6 +4264,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <button class="dock-btn" data-panel="settings" title="Provider 与员工配置">
         <span class="db-icon">⚙</span>
         <span class="db-label">配置</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="account" title="账号中心">
+        <span class="db-icon">🔑</span>
+        <span class="db-label">账号</span>
       </button>
 
     </nav>
@@ -4249,6 +4347,7 @@ const els = {
   panelStatsBody: $('#panelStatsBody'),
   panelPromotionsBody: $('#panelPromotionsBody'),
   panelSchedulesBody: $('#panelSchedulesBody'),
+  panelAccountBody: $('#panelAccountBody'),
   settingsTabs: $('#settingsTabs'),
   providerPoolList: $('#providerPoolList'),
   providerPoolStatus: $('#providerPoolStatus'),
@@ -4262,6 +4361,7 @@ const els = {
   providerModelOptions: $('#providerModelOptions'),
   providerModelCatalogMeta: $('#providerModelCatalogMeta'),
   providerAuthMode: $('#providerAuthMode'),
+  providerConcurrency: $('#providerConcurrency'),
   providerMakeActive: $('#providerMakeActive'),
   providerEnvField: $('#providerEnvField'),
   providerSecretField: $('#providerSecretField'),
@@ -4489,6 +4589,9 @@ function openPanel(name) {
   if (name === 'media') {
     renderMediaBoard();
     mountCurrentMedia();
+  }
+  if (name === 'account') {
+    loadAccounts();
   }
 }
 
@@ -7035,8 +7138,12 @@ function renderProviderList() {
     const health = (workerTestHistory.provider_health || []).find(item => item.provider === provider.key);
     const healthText = health ? ' · 员工验证正常' : '';
     const occupancy = (workerSchedulerSnapshot.providers || []).find(item => item.provider === provider.key);
-    const occupancyText = occupancy && (occupancy.active || occupancy.queued)
-      ? ' · 运行 ' + Number(occupancy.active || 0) + ' · 排队 ' + Number(occupancy.queued || 0) : '';
+    const active = Number((occupancy || {}).active || 0);
+    const queued = Number((occupancy || {}).queued || 0);
+    const limit = Number((occupancy || {}).limit || provider.concurrency_limit || 2);
+    const cooldown = Number((occupancy || {}).cooldown_remaining_seconds || 0);
+    const occupancyText = ' · 运行 ' + active + ' / ' + limit + ' · 排队 ' + queued +
+      (cooldown > 0 ? ' · 冷却 ' + cooldown + ' 秒' : '');
     return '<button class="provider-list-row' +
       (provider.key === selectedProviderKey ? ' active' : '') +
       '" type="button" data-provider-key="' + escAttr(provider.key) + '">' +
@@ -7077,6 +7184,7 @@ function editProvider(providerKey) {
   els.providerBaseUrl.value = provider ? provider.base_url : '';
   els.providerModel.value = provider ? provider.selected_model : '';
   els.providerAuthMode.value = provider ? provider.auth_mode : 'env';
+  els.providerConcurrency.value = String(provider ? provider.concurrency_limit || 2 : 2);
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
@@ -7403,6 +7511,7 @@ async function saveProviderPoolEntry() {
         auth_mode: els.providerAuthMode.value,
         api_key_env: els.providerApiKeyEnv.value.trim(),
         api_key: els.providerApiKey.value,
+        concurrency_limit: Number(els.providerConcurrency.value || 2),
         make_active: Boolean(els.providerMakeActive.checked),
       }),
     });
@@ -7602,11 +7711,159 @@ async function saveReminderPolicy() {
   }
 }
 
+/* ── 账号中心 ── */
+let accountsCache = null;
+let accountsRevision = 0;
+
+async function loadAccounts() {
+  if (!els.panelAccountBody) return;
+  try {
+    const r = await fetch('/ui/accounts');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    accountsCache = data;
+    renderAccountPanel(data);
+  } catch (e) {
+    els.panelAccountBody.innerHTML = '<div class="panel-empty"><div class="pe-icon">⚠️</div><div class="pe-text">无法加载账号数据</div></div>';
+  }
+}
+
+function renderAccountPanel(data) {
+  if (!els.panelAccountBody) return;
+  const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+  const platforms = Array.isArray(data.supported_platforms) ? data.supported_platforms : [];
+  let html = '';
+
+  if (accounts.length === 0) {
+    html += '<div class="panel-empty">';
+    html += '<div class="pe-icon">🔑</div>';
+    html += '<div class="pe-text">暂无已保存的平台账号</div>';
+    html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">添加账号后，B站等平台可获得高清播放和会员内容访问</div>';
+    html += '</div>';
+  } else {
+    for (const account of accounts) {
+      const dotClass = account.status || 'error';
+      const statusText = { active: '已登录', expired: '已过期', error: '异常' }[dotClass] || dotClass;
+      const cookieNames = (account.cookies || []).map(c => c.name).join(', ');
+      html += '<div class="account-card">';
+      html += '<div class="account-card-icon">' + (account.platform === 'bilibili' ? '📺' : '🎵') + '</div>';
+      html += '<div class="account-card-meta">';
+      html += '<div class="account-card-title">';
+      html += '<span class="account-status-dot ' + dotClass + '" title="' + statusText + '"></span>';
+      html += h(account.platform_name || account.platform);
+      if (account.label) html += ' <span style="font-weight:400;color:var(--text-muted);">· ' + h(account.label) + '</span>';
+      html += '</div>';
+      html += '<div class="account-card-detail">' + h(cookieNames || '无 cookie') + ' · ' + statusText + '</div>';
+      html += '</div>';
+      html += '<div class="account-card-actions">';
+      html += '<button title="验证登录状态" onclick="verifyAccount(\'' + account.id + '\')">✓</button>';
+      html += '<button class="danger" title="删除账号" onclick="deleteAccount(\'' + account.id + '\')">✕</button>';
+      html += '</div>';
+      html += '</div>';
+    }
+  }
+
+  // 添加账号表单
+  html += '<div class="account-add-bar">';
+  html += '<div class="provider-field">';
+  html += '<span>平台</span>';
+  html += '<select id="accountPlatform">';
+  for (const p of platforms) {
+    const nameMap = { bilibili: 'B站 (bilibili)', netease_music: '网易云音乐' };
+    html += '<option value="' + h(p) + '">' + h(nameMap[p] || p) + '</option>';
+  }
+  html += '</select>';
+  html += '</div>';
+  html += '<div class="provider-field">';
+  html += '<span>标签（可选）</span>';
+  html += '<input id="accountLabel" placeholder="如：我的主号" maxlength="40">';
+  html += '</div>';
+  html += '</div>';
+  html += '<div class="account-add-bar" style="border-top:none; padding-top:4px;">';
+  html += '<div class="provider-field wide">';
+  html += '<span>Cookie 字符串</span>';
+  html += '<textarea id="accountCookies" placeholder="SESSDATA=xxx; bili_jct=yyy; DedeUserID=zzz"></textarea>';
+  html += '<div class="account-help-note">';
+  html += '如何获取：浏览器打开 bilibili.com 并登录 → F12 DevTools → Application → Cookies → bilibili.com → ';
+  html += '复制 <code>SESSDATA</code>、<code>bili_jct</code>、<code>DedeUserID</code> 的值，';
+  html += '格式为 <code>名称=值; 名称=值</code>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '<div class="account-add-bar" style="border-top:none; padding-top:0;">';
+  html += '<button class="provider-action primary" onclick="saveAccount()" style="min-width:80px;">保存</button>';
+  html += '<span style="font-size:9.5px;color:var(--text-muted);">Cookie 仅本地存储，不会上传到任何服务器</span>';
+  html += '</div>';
+
+  els.panelAccountBody.innerHTML = html;
+}
+
+async function saveAccount() {
+  const platformEl = document.getElementById('accountPlatform');
+  const labelEl = document.getElementById('accountLabel');
+  const cookiesEl = document.getElementById('accountCookies');
+  if (!platformEl || !cookiesEl) return;
+  const platform = platformEl.value;
+  const label = (labelEl && labelEl.value || '').trim();
+  const cookiesRaw = cookiesEl.value.trim();
+  if (!cookiesRaw) { alert('请粘贴 Cookie 字符串'); return; }
+  try {
+    const r = await fetch('/ui/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, label, cookies_raw: cookiesRaw }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('保存失败: ' + (err.detail || 'HTTP ' + r.status));
+      return;
+    }
+    await loadAccounts();
+    // 通知 Electron 刷新 cookie（如果运行在桌面端）
+    try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
+  } catch (e) {
+    alert('保存失败: ' + e.message);
+  }
+}
+
+async function deleteAccount(id) {
+  if (!confirm('确定删除此账号吗？删除后 B站播放将恢复未登录状态。')) return;
+  try {
+    await fetch('/ui/accounts/' + encodeURIComponent(id), { method: 'DELETE' });
+    await loadAccounts();
+    try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
+  } catch (e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+async function verifyAccount(id) {
+  try {
+    const r = await fetch('/ui/accounts/' + encodeURIComponent(id) + '/verify', { method: 'POST' });
+    const data = await r.json();
+    const result = data.verify_result || {};
+    alert(result.status === 'active' ? '✓ Cookie 有效' : '✗ ' + (result.detail || '验证失败'));
+    await loadAccounts();
+  } catch (e) {
+    alert('验证失败: ' + e.message);
+  }
+}
+
 /* ── 应用状态(主入口) ── */
 let lastState = null;
 
 function applyState(state) {
   lastState = state;
+
+  // 账号变更 → 通知 Electron 刷新 cookie
+  const newRevision = state.accounts_revision || 0;
+  if (newRevision !== accountsRevision) {
+    accountsRevision = newRevision;
+    try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
+    // 如果账号面板正打开，刷新列表
+    if (panelOpen === 'account') loadAccounts();
+  }
+
   const scene = state.scene || 'idle';
   const prevScene = els.body.dataset.scene;
   els.body.dataset.scene = scene;
@@ -7906,8 +8163,8 @@ if (els.workerRoleList) {
   });
 }
 setInterval(() => {
-  const workerTab = $('[data-settings-view="workers"][aria-selected="true"]', els.settingsTabs);
-  if (panelOpen === 'settings' && workerTab) loadWorkerSchedulerState();
+  const schedulerTab = $('[data-settings-view="providers"][aria-selected="true"], [data-settings-view="workers"][aria-selected="true"]', els.settingsTabs);
+  if (panelOpen === 'settings' && schedulerTab) loadWorkerSchedulerState();
 }, 3000);
 
 function renderMediaBoard() {

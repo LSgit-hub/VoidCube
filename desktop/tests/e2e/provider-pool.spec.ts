@@ -46,7 +46,16 @@ test('provider pool and worker assignment panels stay usable across viewports', 
         { role: 'coding', active: 0, queued: 0, limit: 1 },
         { role: 'media', active: 0, queued: 0, limit: 1 }
       ],
-      providers: []
+      providers: [{
+        provider: 'openrouter',
+        active: 1,
+        queued: 2,
+        limit: 2,
+        cooldown_until: '2026-08-10T02:04:00+00:00',
+        cooldown_remaining_seconds: 38,
+        failure_count: 1,
+        last_status: 429
+      }]
     })
   }))
   await page.route(/\/provider-pool\/worker-tests(?:\/[^/?]+)?(?:\?.*)?$/, (route) => {
@@ -107,6 +116,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect.poll(() => providerRows.count()).toBeGreaterThanOrEqual(2)
     const providerCount = await providerRows.count()
     await expect(page.locator('#providerPoolList')).toContainText('员工验证正常')
+    await expect(page.locator('#providerPoolList')).toContainText('冷却 38 秒')
     await providerRows.nth(1).click()
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(providerRows.nth(1)).toHaveClass(/active/)
@@ -117,6 +127,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('#providerDelete')).toBeDisabled()
     await expect(page.locator('#providerApiKey')).toHaveValue('')
     await expect(page.locator('#providerApiKey')).toHaveAttribute('type', 'password')
+    await expect(page.locator('#providerConcurrency')).toHaveValue('2')
     await expect(page.locator('#providerTest')).toBeEnabled()
     await expect(page.locator('#providerLoadModels')).toBeEnabled()
     await expect(page.locator('#providerModelOptions option')).toHaveAttribute('value', 'cached-model')

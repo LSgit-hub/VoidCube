@@ -100,6 +100,7 @@ def test_provider_pool_saves_named_entries_and_never_returns_secrets(
             "type": "openai_compatible",
             "base_url": "https://models.example/v1",
             "selected_model": "research-model",
+            "concurrency_limit": 2,
             "model_catalog": {"models": [], "updated_at": ""},
             "auth_mode": "env",
             "api_key_env": "RESEARCH_API_KEY",
@@ -114,6 +115,21 @@ def test_provider_pool_saves_named_entries_and_never_returns_secrets(
     ).read_text(encoding="utf-8")
     saved = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
     assert "api_key" not in saved["providers"]["research-endpoint"]
+
+
+def test_provider_pool_persists_provider_concurrency_policy(tmp_path, monkeypatch):
+    _configure_home(tmp_path, monkeypatch)
+    service = ProviderPoolService()
+
+    snapshot = service.upsert_provider(
+        "research-endpoint",
+        _provider_request(api_key="", concurrency_limit=5),
+    )
+
+    assert snapshot["providers"][0]["concurrency_limit"] == 5
+    assert service.dispatch_policy()["provider_limits"] == {
+        "research-endpoint": 5
+    }
 
 
 def test_provider_pool_assigns_roles_and_protects_referenced_provider(

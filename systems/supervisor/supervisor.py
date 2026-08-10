@@ -205,6 +205,10 @@ class Supervisor(
                     self._ui_runtime.consent_evolution_promotion_candidate
                 ),
                 verify_identity_experience=self._ui_runtime.verify_identity_experience,
+                list_accounts=self._ui_runtime.list_accounts,
+                add_account=self._ui_runtime.add_account,
+                delete_account=self._ui_runtime.delete_account_endpoint,
+                verify_account=self._ui_runtime.verify_account_endpoint,
             )
         )
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])

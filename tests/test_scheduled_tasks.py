@@ -135,8 +135,16 @@ def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) 
         "limit": 1,
     }
     assert {item["provider"]: item for item in state["providers"]} == {
-        "provider-r": {"provider": "provider-r", "active": 1, "queued": 1},
-        "provider-c": {"provider": "provider-c", "active": 1, "queued": 0},
+        "provider-r": {
+            "provider": "provider-r", "active": 1, "queued": 1, "limit": 2,
+            "cooldown_until": "", "cooldown_remaining_seconds": 0,
+            "failure_count": 0, "last_status": None,
+        },
+        "provider-c": {
+            "provider": "provider-c", "active": 1, "queued": 0, "limit": 2,
+            "cooldown_until": "", "cooldown_remaining_seconds": 0,
+            "failure_count": 0, "last_status": None,
+        },
     }
 
     store.finish_run(
@@ -147,6 +155,115 @@ def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) 
     )
     third = store.claim_due(owner_session_id="cli-main", now=now, **policy)
     assert third is not None and third["task"]["title"] == "调研二"
+
+
+def test_dispatch_skips_saturated_provider_without_blocking_other_provider(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    for title, role in (("调研", "research"), ("工程", "coding"), ("媒体", "media")):
+        store.create(
+            {
+                "title": title,
+                "instruction": title,
+                "schedule_type": "once",
+                "run_at": "2026-07-28T00:59:00+00:00",
+                "created_by": "api_b",
+                "worker_role": role,
+            },
+            now=now,
+        )
+    policy = {
+        "max_concurrent": 3,
+        "role_limits": {"research": 1, "coding": 1, "media": 1},
+        "role_providers": {
+            "research": "shared-provider",
+            "coding": "shared-provider",
+            "media": "media-provider",
+        },
+        "provider_limits": {"shared-provider": 1, "media-provider": 1},
+    }
+
+    first = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    second = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+
+    assert first is not None and first["task"]["title"] == "调研"
+    assert second is not None and second["task"]["title"] == "媒体"
+    assert store.claim_due(owner_session_id="cli-main", now=now, **policy) is None
+
+
+def test_provider_429_cooldown_uses_retry_after_and_success_clears_state(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    for index in range(3):
+        store.create(
+            {
+                "title": f"任务 {index}",
+                "instruction": "执行",
+                "schedule_type": "once",
+                "run_at": "2026-07-28T00:59:00+00:00",
+                "created_by": "api_b",
+                "worker_role": "research",
+            },
+            now=now,
+        )
+    policy = {
+        "max_concurrent": 2,
+        "role_limits": {"research": 1},
+        "role_providers": {"research": "limited-provider"},
+        "provider_limits": {"limited-provider": 2},
+    }
+
+    first = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    assert first is not None
+    store.finish_run(
+        first["run"]["run_id"],
+        owner_session_id="cli-main",
+        success=False,
+        error="HTTP 429",
+        rate_limited=True,
+        retry_after_seconds=75,
+        error_code=429,
+        now=now,
+    )
+    state = store.dispatch_state(now=now, **policy)
+    provider = state["providers"][0]
+    assert provider["cooldown_remaining_seconds"] == 75
+    assert provider["failure_count"] == 1
+    assert provider["last_status"] == 429
+    assert store.claim_due(owner_session_id="cli-main", now=now, **policy) is None
+
+    after_first_cooldown = now.replace(minute=1, second=16)
+    second = store.claim_due(
+        owner_session_id="cli-main", now=after_first_cooldown, **policy
+    )
+    assert second is not None
+    store.finish_run(
+        second["run"]["run_id"],
+        owner_session_id="cli-main",
+        success=False,
+        rate_limited=True,
+        now=after_first_cooldown,
+    )
+    state = store.dispatch_state(now=after_first_cooldown, **policy)
+    provider = state["providers"][0]
+    assert provider["cooldown_remaining_seconds"] == 60
+    assert provider["failure_count"] == 2
+
+    after_second_cooldown = now.replace(minute=2, second=17)
+    third = store.claim_due(
+        owner_session_id="cli-main", now=after_second_cooldown, **policy
+    )
+    assert third is not None
+    store.finish_run(
+        third["run"]["run_id"],
+        owner_session_id="cli-main",
+        success=True,
+        now=after_second_cooldown,
+    )
+    provider = store.dispatch_state(now=after_second_cooldown, **policy)["providers"][0]
+    assert provider["cooldown_remaining_seconds"] == 0
+    assert provider["failure_count"] == 0
+    assert provider["last_status"] is None
 
 
 def test_daily_schedule_advances_after_failed_api_a_run(tmp_path) -> None:
@@ -1306,6 +1423,51 @@ def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
     assert "timed out after 45 seconds" in finish_payload["error"]
 
 
+def test_scheduled_executor_writes_structured_rate_limit_metadata(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _agent_running=False,
+        _command_running=False,
+        _background_task_state=BackgroundTaskState(),
+        _scheduled_execution_gate=threading.Lock(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+
+    def start_background(_prompt, **kwargs):
+        kwargs["execution_details"].update(
+            {"provider": "limited-provider", "model": "worker-model"}
+        )
+        callbacks.append(kwargs["on_complete"])
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host), outbox_path=tmp_path / "writebacks.db"
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "claim": {
+                    "task": {"title": "计划", "instruction": "执行"},
+                    "run": {"run_id": "run-1"},
+                }
+            },
+            {"status": "failed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](False, "", "HTTP 429: retry after 45 seconds")
+
+    finish_payload = runtime._post.call_args_list[-1].args[1]
+    assert finish_payload["execution_provider"] == "limited-provider"
+    assert finish_payload["rate_limited"] is True
+    assert finish_payload["error_code"] == 429
+    assert finish_payload["retry_after_seconds"] == pytest.approx(45, abs=1)
+
+
 def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
     from VoidCube_cli.app import VoidcubeCLI
 
@@ -1454,5 +1616,5 @@ def test_scheduled_store_upgrades_v2_schema_with_worker_role(tmp_path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(scheduled_tasks)")
         }
-    assert version == "4"
+    assert version == "5"
     assert "worker_role" in columns

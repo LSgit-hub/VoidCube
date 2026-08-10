@@ -89,4 +89,5 @@ export interface VoidCubeDesktopApi {
     onData: (listener: (data: string) => void) => () => void
     onState: (listener: (state: TerminalState) => void) => () => void
   }
+  cookiesRefresh: () => Promise<{ ok: boolean }>
 }

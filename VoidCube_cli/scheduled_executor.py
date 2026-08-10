@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -14,11 +15,37 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+from agent.error_classifier import FailoverReason, classify_api_error
 from VoidCube_cli.ops.executor import default_gateway_url
 from VoidCube_core.runtime_paths import get_runtime_layout
 
 
 logger = logging.getLogger(__name__)
+
+
+def _rate_limit_writeback(error: str) -> Dict[str, Any]:
+    message = str(error or "").strip()
+    if not message:
+        return {
+            "rate_limited": False,
+            "retry_after_seconds": None,
+            "error_code": None,
+        }
+    classified = classify_api_error(RuntimeError(message))
+    explicit_429 = bool(re.search(r"\b429\b", message))
+    rate_limited = classified.reason is FailoverReason.rate_limit or explicit_429
+    retry_after: float | None = None
+    reset_at = classified.error_context.get("reset_at")
+    if rate_limited and reset_at not in (None, ""):
+        try:
+            retry_after = max(0.0, float(reset_at) - time.time())
+        except (TypeError, ValueError):
+            retry_after = None
+    return {
+        "rate_limited": rate_limited,
+        "retry_after_seconds": retry_after,
+        "error_code": 429 if rate_limited else None,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +428,11 @@ class ScheduledTaskExecutorRuntime:
                     if run_id not in self._active_run_ids:
                         return
                 heartbeat_stop.set()
+                limit_metadata = _rate_limit_writeback(error) if not success else {
+                    "rate_limited": False,
+                    "retry_after_seconds": None,
+                    "error_code": None,
+                }
                 self._outbox.enqueue(
                     run_id,
                     {
@@ -414,6 +446,7 @@ class ScheduledTaskExecutorRuntime:
                             0,
                             round((time.monotonic() - execution_started_at) * 1000),
                         ),
+                        **limit_metadata,
                     },
                 )
                 self._flush_writebacks()

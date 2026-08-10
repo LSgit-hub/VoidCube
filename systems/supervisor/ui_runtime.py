@@ -6,10 +6,12 @@ import logging
 from collections import deque
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+import uuid
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from systems.supervisor.ui_activity_adapters import (
@@ -315,6 +317,133 @@ class SupervisorUIRuntime:
             queue_items=self.media_queue_items,
         )
 
+    # ── 账号中心 ─────────────────────────────────────
+
+    @property
+    def accounts_revision(self) -> int:
+        """每次账号变更自增，前端通过 SSE 感知变化后刷新 cookie。"""
+        try:
+            return self._accounts_revision
+        except AttributeError:
+            self._accounts_revision = 0
+            return 0
+
+    def _bump_accounts_revision(self) -> int:
+        self._accounts_revision = self.accounts_revision + 1
+        return self._accounts_revision
+
+    async def list_accounts(self) -> JsonDict:
+        from systems.supervisor.account_store import (
+            account_for_api,
+            load_accounts,
+            SUPPORTED_PLATFORMS,
+        )
+        accounts = load_accounts()
+        return {
+            "accounts": [account_for_api(a) for a in accounts],
+            "supported_platforms": SUPPORTED_PLATFORMS,
+            "accounts_revision": self.accounts_revision,
+        }
+
+    async def add_account(self, request: Request) -> JsonDict:
+        from systems.supervisor.account_store import (
+            PLATFORM_PRESETS,
+            account_for_api,
+            load_accounts,
+            parse_cookie_string,
+            PlatformAccount,
+            save_account,
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON")
+
+        platform = str(body.get("platform") or "").strip()
+        if platform not in PLATFORM_PRESETS:
+            raise HTTPException(status_code=400, detail=f"不支持的平台: {platform}")
+
+        cookies_raw = str(body.get("cookies_raw") or "").strip()
+        if not cookies_raw:
+            raise HTTPException(status_code=400, detail="缺少 cookies_raw 字段")
+
+        label = str(body.get("label") or "").strip()
+        account_id = str(body.get("id") or "").strip()
+
+        parsed = parse_cookie_string(cookies_raw, platform)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="无法解析 cookie 字符串")
+
+        # 更新已有账号或新建
+        existing_account: Optional[PlatformAccount] = None
+        if account_id:
+            for a in load_accounts():
+                if a.id == account_id:
+                    existing_account = a
+                    break
+
+        account = PlatformAccount(
+            id=account_id or (existing_account.id if existing_account else uuid.uuid4().hex[:12]),
+            platform=platform,
+            label=label or (existing_account.label if existing_account else ""),
+            cookies_raw=cookies_raw,
+            parsed_cookies=parsed,
+            status="active",
+        )
+
+        save_account(account)
+        self._bump_accounts_revision()
+        logger.info("Account saved: %s (%s)", platform, account.id)
+        return {
+            "status": "ok",
+            "account": account_for_api(account),
+            "accounts_revision": self.accounts_revision,
+        }
+
+    async def delete_account_endpoint(self, request: Request) -> JsonDict:
+        from systems.supervisor.account_store import delete_account, load_accounts
+        account_id = request.path_params.get("account_id", "").strip()
+        if not account_id:
+            raise HTTPException(status_code=400, detail="缺少 account_id")
+        remaining = delete_account(account_id)
+        self._bump_accounts_revision()
+        return {
+            "status": "ok",
+            "accounts_remaining": len(remaining),
+            "accounts_revision": self.accounts_revision,
+        }
+
+    async def verify_account_endpoint(self, request: Request) -> JsonDict:
+        from systems.supervisor.account_store import (
+            account_for_api,
+            load_accounts,
+            verify_account,
+        )
+        account_id = request.path_params.get("account_id", "").strip()
+        if not account_id:
+            raise HTTPException(status_code=400, detail="缺少 account_id")
+        accounts = load_accounts()
+        target: Optional[PlatformAccount] = None
+        for a in accounts:
+            if a.id == account_id:
+                target = a
+                break
+        if target is None:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        result = await verify_account(target)
+        # 更新状态
+        from systems.supervisor.account_store import save_account
+        target.last_verified = datetime.now(timezone.utc).isoformat()
+        target.status = result["status"]
+        save_account(target)
+        self._bump_accounts_revision()
+        return {
+            "status": "ok",
+            "account": account_for_api(target),
+            "verify_result": result,
+            "accounts_revision": self.accounts_revision,
+        }
+
     async def _load_observation_input_snapshot(
         self,
         *,
@@ -403,7 +532,7 @@ class SupervisorUIRuntime:
         )
 
     async def get_state(self) -> JsonDict:
-        return await build_supervisor_ui_state(
+        state = await build_supervisor_ui_state(
             context=SupervisorUIStateContext(
                 runtime_config=self.ports.load_runtime_config(),
                 list_chain_projection_tasks=self.ports.list_chain_projection_tasks,
@@ -421,6 +550,8 @@ class SupervisorUIRuntime:
                 media_queue_length=self.media_queue_length,
             )
         )
+        state["accounts_revision"] = self.accounts_revision
+        return state
 
     async def load_recent_trace_details(
         self,
