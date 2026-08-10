@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -99,6 +100,7 @@ def test_provider_pool_saves_named_entries_and_never_returns_secrets(
             "type": "openai_compatible",
             "base_url": "https://models.example/v1",
             "selected_model": "research-model",
+            "model_catalog": {"models": [], "updated_at": ""},
             "auth_mode": "env",
             "api_key_env": "RESEARCH_API_KEY",
             "credential_configured": True,
@@ -274,8 +276,10 @@ def test_supervisor_provider_pool_routes_reject_managed_writes(
         "/provider-pool/providers/research-endpoint",
         json=_provider_request().model_dump(),
     )
+    refresh = client.post("/provider-pool/providers/research-endpoint/models")
 
     assert response.status_code == 409
+    assert refresh.status_code == 409
     assert "managed by NixOS" in response.json()["detail"]
 
 
@@ -458,7 +462,11 @@ async def test_provider_probe_uses_secret_only_in_outbound_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provider_model_discovery_supports_common_catalog_shapes(monkeypatch):
+async def test_provider_model_refresh_persists_common_catalog_shapes(
+    tmp_path,
+    monkeypatch,
+):
+    home = _configure_home(tmp_path, monkeypatch)
     service, _client = _probe_service(
         monkeypatch,
         response=_ProbeResponse(
@@ -472,11 +480,46 @@ async def test_provider_model_discovery_supports_common_catalog_shapes(monkeypat
             }
         ),
     )
+    service.upsert_provider(
+        "research-endpoint",
+        _provider_request(api_key=""),
+    )
 
-    result = await service.discover_models("research-endpoint")
+    result = await service.refresh_model_catalog("research-endpoint")
 
+    assert result["status"] == "refreshed"
     assert result["models"] == ["model-a", "model-b", "model-c"]
     assert result["count"] == 3
+    datetime.fromisoformat(result["updated_at"])
+    saved = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert saved["providers"]["research-endpoint"]["model_catalog"] == {
+        "models": ["model-a", "model-b", "model-c"],
+        "updated_at": result["updated_at"],
+    }
+    assert service.snapshot()["providers"][0]["model_catalog"] == saved["providers"][
+        "research-endpoint"
+    ]["model_catalog"]
+
+    retained = service.upsert_provider(
+        "research-endpoint",
+        _provider_request(selected_model="model-b", api_key=""),
+    )
+    assert retained["providers"][0]["model_catalog"]["models"] == [
+        "model-a",
+        "model-b",
+        "model-c",
+    ]
+    invalidated = service.upsert_provider(
+        "research-endpoint",
+        _provider_request(
+            base_url="https://other-models.example/v1",
+            api_key="",
+        ),
+    )
+    assert invalidated["providers"][0]["model_catalog"] == {
+        "models": [],
+        "updated_at": "",
+    }
 
 
 @pytest.mark.asyncio
@@ -496,7 +539,7 @@ async def test_provider_probe_returns_sanitized_timeout_and_http_errors(monkeypa
     with pytest.raises(ProviderPoolProbeError) as timeout_error:
         await timed_out.test_provider("research-endpoint")
     with pytest.raises(ProviderPoolProbeError) as http_error:
-        await unauthorized.discover_models("research-endpoint")
+        await unauthorized.refresh_model_catalog("research-endpoint")
 
     assert timeout_error.value.status_code == 504
     assert str(timeout_error.value) == "Provider connection timed out"
@@ -518,30 +561,37 @@ def test_supervisor_provider_probe_routes_preserve_safe_contract(
             "model_count": 2,
         }
     )
-    discover_models = AsyncMock(
+    refresh_model_catalog = AsyncMock(
         return_value={
-            "status": "ok",
+            "status": "refreshed",
             "provider": "research-endpoint",
             "base_url": "https://models.example/v1",
             "latency_ms": 41,
             "count": 2,
             "models": ["model-a", "model-b"],
+            "updated_at": "2026-08-10T01:02:03+00:00",
         }
     )
     monkeypatch.setattr(ProviderPoolService, "test_provider", test_provider)
-    monkeypatch.setattr(ProviderPoolService, "discover_models", discover_models)
+    monkeypatch.setattr(
+        ProviderPoolService,
+        "refresh_model_catalog",
+        refresh_model_catalog,
+    )
     client = _supervisor_client(tmp_path)
 
     tested = client.post("/provider-pool/providers/research-endpoint/test")
-    models = client.get("/provider-pool/providers/research-endpoint/models")
+    models = client.post("/provider-pool/providers/research-endpoint/models")
+    stale_get = client.get("/provider-pool/providers/research-endpoint/models")
 
     assert tested.status_code == 200
     assert tested.json()["model_count"] == 2
     assert "api_key" not in tested.json()
     assert models.status_code == 200
     assert models.json()["models"] == ["model-a", "model-b"]
+    assert stale_get.status_code == 405
     test_provider.assert_awaited_once_with("research-endpoint")
-    discover_models.assert_awaited_once_with("research-endpoint")
+    refresh_model_catalog.assert_awaited_once_with("research-endpoint")
 
 
 def test_supervisor_provider_probe_route_maps_timeout_to_504(tmp_path, monkeypatch):

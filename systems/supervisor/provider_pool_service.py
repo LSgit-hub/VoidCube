@@ -6,6 +6,7 @@ import re
 import time
 from collections.abc import Mapping
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -188,6 +189,23 @@ def _provider_references(config: Mapping[str, Any], provider_key: str) -> list[s
     return references
 
 
+def _stored_model_catalog(entry: Mapping[str, Any]) -> dict[str, Any]:
+    raw_catalog = entry.get("model_catalog")
+    if not isinstance(raw_catalog, Mapping):
+        return {"models": [], "updated_at": ""}
+    models: list[str] = []
+    raw_models = raw_catalog.get("models")
+    if isinstance(raw_models, list):
+        for item in raw_models[:1000]:
+            model_id = str(item or "").strip()
+            if model_id and len(model_id) <= 300 and model_id not in models:
+                models.append(model_id)
+    return {
+        "models": models,
+        "updated_at": str(raw_catalog.get("updated_at") or "").strip()[:64],
+    }
+
+
 def _toolset_catalog(config: Mapping[str, Any]) -> list[dict[str, str]]:
     names = set(get_all_toolsets())
     mcp_servers = config.get("mcp_servers")
@@ -242,6 +260,7 @@ class ProviderPoolService:
                     "type": provider_type,
                     "base_url": str(entry.get("base_url") or ""),
                     "selected_model": str(entry.get("selected_model") or ""),
+                    "model_catalog": _stored_model_catalog(entry),
                     "auth_mode": auth_mode,
                     "api_key_env": api_key_env,
                     "credential_configured": credential_configured,
@@ -328,6 +347,13 @@ class ProviderPoolService:
         config = _raw_config()
         providers = _provider_map(config)
         current = dict(providers.get(key) or {})
+        previous_type = str(current.get("type") or "openai_compatible").strip().lower()
+        previous_base_url = normalize_openai_compatible_base_url(
+            str(current.get("base_url") or "")
+        ).rstrip("/")
+        catalog_invalidated = bool(current) and (
+            previous_type != provider_type or previous_base_url != base_url
+        )
         current.update(
             {
                 "label": request.label,
@@ -337,6 +363,8 @@ class ProviderPoolService:
                 "auth_mode": request.auth_mode,
             }
         )
+        if catalog_invalidated:
+            current.pop("model_catalog", None)
         current.pop("api_key", None)
         if api_key_env:
             current["api_key_env"] = api_key_env
@@ -512,18 +540,34 @@ class ProviderPoolService:
             "model_count": len(model_ids),
         }
 
-    async def discover_models(self, provider_key: str) -> dict[str, Any]:
+    async def refresh_model_catalog(self, provider_key: str) -> dict[str, Any]:
+        self._ensure_writable("refresh the Provider model catalog")
         runtime, model_ids, latency_ms = await self._request_model_catalog(
             provider_key,
             require_catalog=True,
         )
+        key = runtime["provider_key"]
+        updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        config = _raw_config()
+        providers = _provider_map(config)
+        if key not in providers:
+            raise KeyError(key)
+        entry = dict(providers[key])
+        entry["model_catalog"] = {
+            "models": model_ids,
+            "updated_at": updated_at,
+        }
+        providers[key] = entry
+        config["providers"] = providers
+        save_config(config, preserve_structure=True)
         return {
-            "status": "ok",
-            "provider": runtime["provider_key"],
+            "status": "refreshed",
+            "provider": key,
             "base_url": runtime["base_url"],
             "latency_ms": latency_ms,
             "count": len(model_ids),
             "models": model_ids,
+            "updated_at": updated_at,
         }
 
 

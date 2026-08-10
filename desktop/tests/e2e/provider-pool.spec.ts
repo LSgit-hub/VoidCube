@@ -6,14 +6,33 @@ test('provider pool and worker assignment panels stay usable across viewports', 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route(/\/provider-pool(?:\?.*)?$/, async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    if (Array.isArray(body.providers) && body.providers[0]) {
+      body.providers[0].model_catalog = {
+        models: ['cached-model'],
+        updated_at: '2026-08-10T01:02:03+00:00'
+      }
+    }
+    await route.fulfill({ response, contentType: 'application/json', body: JSON.stringify(body) })
+  })
   await page.route('**/provider-pool/providers/*/test', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ status: 'ok', latency_ms: 42, model_count: 2 })
   }))
-  await page.route('**/provider-pool/providers/*/models', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ status: 'ok', count: 2, models: ['model-a', 'model-b'] })
-  }))
+  await page.route('**/provider-pool/providers/*/models', (route) => {
+    expect(route.request().method()).toBe('POST')
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'refreshed',
+        count: 2,
+        models: ['model-a', 'model-b'],
+        updated_at: '2026-08-10T02:03:04+00:00'
+      })
+    })
+  })
   await page.route(/\/provider-pool\/worker-tests(?:\/[^/?]+)?(?:\?.*)?$/, (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -83,11 +102,14 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('#providerApiKey')).toHaveAttribute('type', 'password')
     await expect(page.locator('#providerTest')).toBeEnabled()
     await expect(page.locator('#providerLoadModels')).toBeEnabled()
+    await expect(page.locator('#providerModelOptions option')).toHaveAttribute('value', 'cached-model')
+    await expect(page.locator('#providerModelCatalogMeta')).toContainText('目录 1 个')
     await page.locator('#providerTest').click()
     await expect(page.locator('#providerPoolStatus')).toHaveText('连接正常 · 42 ms · 2 个模型')
     await page.locator('#providerLoadModels').click()
-    await expect(page.locator('#providerPoolStatus')).toHaveText('已读取 2 个模型')
+    await expect(page.locator('#providerPoolStatus')).toHaveText('已更新 2 个模型')
     await expect(page.locator('#providerModelOptions option')).toHaveCount(2)
+    await expect(page.locator('#providerModelCatalogMeta')).toContainText('目录 2 个')
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({
       path: 'test-results/provider-pool-desktop.png',

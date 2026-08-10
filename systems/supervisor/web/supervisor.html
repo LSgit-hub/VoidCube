@@ -2199,6 +2199,12 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   line-height: 1.45;
 }
 .provider-pool-status.error { color: var(--coral); }
+.provider-catalog-meta {
+  min-height: 13px;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  font-weight: 500;
+}
 .provider-editor,
 .worker-assignment-form {
   min-width: 0;
@@ -4001,6 +4007,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <span>默认模型</span>
                   <input id="providerModel" name="provider_model" required maxlength="300" autocomplete="off" list="providerModelOptions"/>
                   <datalist id="providerModelOptions"></datalist>
+                  <span class="provider-catalog-meta" id="providerModelCatalogMeta"></span>
                 </label>
                 <label class="provider-field">
                   <span>鉴权</span>
@@ -4241,6 +4248,7 @@ const els = {
   providerBaseUrl: $('#providerBaseUrl'),
   providerModel: $('#providerModel'),
   providerModelOptions: $('#providerModelOptions'),
+  providerModelCatalogMeta: $('#providerModelCatalogMeta'),
   providerAuthMode: $('#providerAuthMode'),
   providerMakeActive: $('#providerMakeActive'),
   providerEnvField: $('#providerEnvField'),
@@ -6895,7 +6903,7 @@ function setProviderPoolBusy(busy) {
     els.providerDelete.disabled = busy || managed || references.length > 0;
   }
   if (els.providerTest) els.providerTest.disabled = busy || !selected;
-  if (els.providerLoadModels) els.providerLoadModels.disabled = busy || !selected;
+  if (els.providerLoadModels) els.providerLoadModels.disabled = busy || managed || !selected;
   if (els.providerAdd) els.providerAdd.disabled = busy || managed;
   if (els.workerAssignmentForm) {
     $$('input, select, button', els.workerAssignmentForm).forEach(control => {
@@ -6932,6 +6940,39 @@ function renderProviderModelOptions(models) {
   els.providerModelOptions.innerHTML = values.map(model =>
     '<option value="' + escAttr(model) + '"></option>'
   ).join('');
+}
+
+function providerModelCatalog(provider) {
+  const catalog = provider && provider.model_catalog && typeof provider.model_catalog === 'object'
+    ? provider.model_catalog : {};
+  return {
+    models: Array.isArray(catalog.models) ? catalog.models : [],
+    updatedAt: String(catalog.updated_at || ''),
+  };
+}
+
+function hydrateWorkerModelCandidates(providers) {
+  workerModelCandidates = {};
+  (Array.isArray(providers) ? providers : []).forEach(provider => {
+    workerModelCandidates[provider.key] = providerModelCatalog(provider).models;
+  });
+}
+
+function renderProviderModelCatalogMeta(provider) {
+  if (!els.providerModelCatalogMeta) return;
+  if (!provider) {
+    els.providerModelCatalogMeta.textContent = '';
+    return;
+  }
+  const catalog = providerModelCatalog(provider);
+  if (!catalog.updatedAt) {
+    els.providerModelCatalogMeta.textContent = '尚未读取模型目录';
+    return;
+  }
+  const updated = new Date(catalog.updatedAt);
+  const updatedText = Number.isNaN(updated.getTime())
+    ? catalog.updatedAt : updated.toLocaleString('zh-CN', {hour12: false});
+  els.providerModelCatalogMeta.textContent = '目录 ' + catalog.models.length + ' 个 · 更新于 ' + updatedText;
 }
 
 function workerModelOptionMarkup(providerKey, currentModel) {
@@ -7019,6 +7060,7 @@ function editProvider(providerKey) {
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
+  renderProviderModelCatalogMeta(provider);
   els.providerApiKey.placeholder = provider && provider.credential_configured
     ? '已配置，留空保持不变' : '';
   els.providerMakeActive.checked = Boolean(provider && provider.active);
@@ -7255,6 +7297,7 @@ async function runWorkerTest(workerRole) {
 function applyProviderPoolSnapshot(snapshot, preferredKey) {
   providerPoolSnapshot = snapshot || {};
   const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
+  hydrateWorkerModelCandidates(providers);
   const candidate = preferredKey || selectedProviderKey;
   const selected = providers.some(item => item.key === candidate)
     ? candidate : (providers[0] ? providers[0].key : '');
@@ -7356,18 +7399,25 @@ async function loadProviderModels() {
   try {
     const response = await fetch(
       '/provider-pool/providers/' + encodeURIComponent(selectedProviderKey) + '/models',
-      {cache: 'no-store'}
+      {method: 'POST'}
     );
     if (!response.ok) throw await responseError(response, '读取模型失败');
     const result = await response.json();
     const models = Array.isArray(result.models) ? result.models : [];
+    const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+      ? providerPoolSnapshot.providers : [];
+    const provider = providers.find(item => item.key === selectedProviderKey) || null;
+    if (provider) {
+      provider.model_catalog = {models, updated_at: String(result.updated_at || '')};
+    }
     workerModelCandidates[selectedProviderKey] = models;
     renderProviderModelOptions(models);
+    renderProviderModelCatalogMeta(provider);
     $$('[data-worker-role]', els.workerRoleList).forEach(row => {
       const provider = $('[data-worker-provider]', row);
       if (provider && provider.value === selectedProviderKey) syncWorkerModelOptions(row);
     });
-    setProviderPoolStatus('已读取 ' + Number(result.count || 0) + ' 个模型');
+    setProviderPoolStatus('已更新 ' + Number(result.count || 0) + ' 个模型');
     if (els.providerModel) els.providerModel.focus();
   } catch (error) {
     renderProviderModelOptions([]);
@@ -7937,8 +7987,9 @@ function togglePlayPause() {
     }
     return;
   }
-  // Only audio/video have meaningful play/pause; skip for images, documents, etc.
-  if (!('paused' in embeddedPlayer)) return;
+  // Only bilibili, video, audio support play/pause; skip static types
+  const playableTypes = ['bilibili', 'video', 'audio'];
+  if (currentMedia && !playableTypes.includes(resolveMediaType(currentMedia))) return;
   try {
     if (embeddedPlayer.tagName === 'IFRAME') {
       requestMediaControl('pause');

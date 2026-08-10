@@ -321,8 +321,8 @@ class Supervisor(
         )
         self.app.add_api_route(
             "/provider-pool/providers/{provider_key}/models",
-            self.list_provider_pool_models,
-            methods=["GET"],
+            self.refresh_provider_pool_models,
+            methods=["POST"],
         )
         self.app.add_api_route(
             "/provider-pool/worker-roles",
@@ -499,9 +499,9 @@ class Supervisor(
         except (KeyError, ValueError, RuntimeError) as exc:
             raise self._provider_pool_error(exc) from exc
 
-    async def list_provider_pool_models(self, provider_key: str) -> Dict[str, Any]:
+    async def refresh_provider_pool_models(self, provider_key: str) -> Dict[str, Any]:
         try:
-            return await self._provider_pool_service.discover_models(provider_key)
+            return await self._provider_pool_service.refresh_model_catalog(provider_key)
         except (KeyError, ValueError, RuntimeError) as exc:
             raise self._provider_pool_error(exc) from exc
 
