@@ -95,14 +95,10 @@ def test_panel_projects_scheduler_cancellation_and_request_id():
         autonomous_gate=True,
         blocked_reason="",
     )
-    rows = panel_module._append_scheduler_rows
-    output: list[tuple[str, str]] = []
-
-    rows(
-        output,
+    result = panel_module._build_scheduler_rows(
         snapshot,
         60,
-        trim_status_bar_text=lambda text, _width: text,
+        trim=lambda text, _width: text,
         events=[
             {
                 "kind": "cancel_requested",
@@ -112,9 +108,9 @@ def test_panel_projects_scheduler_cancellation_and_request_id():
         ],
     )
 
-    rendered = "\n".join(text for _, text in output)
+    rendered = "\n".join(text for _, text in result)
     assert "自主取消中" in rendered
-    assert "#23456789" in rendered
+    assert "23456789" in rendered
     assert "cancel_requested" in rendered
 
 

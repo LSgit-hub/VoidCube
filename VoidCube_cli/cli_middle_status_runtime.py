@@ -57,22 +57,32 @@ class CliMiddleStatusRuntime:
                     lane = getattr(getattr(active, "lane", None), "value", "queued")
                     state = getattr(getattr(active, "state", None), "value", "排队")
                     cancelling = state == "cancelling"
+                    # Mini‑CLI (supervisor_task) uses teal; main CLI uses blue
+                    is_mini = lane == "supervisor_task"
                     if ascii_mode:
-                        indicator = "o" if cancelling else ("*" if lane == "user_chat" else ">")
+                        indicator = "o" if cancelling else (">" if is_mini else "*")
                     else:
-                        indicator = "○" if cancelling else ("●" if lane == "user_chat" else "◆")
-                    color = "#FBBF24" if cancelling else "#60A5FA"
+                        indicator = "○" if cancelling else ("◆" if is_mini else "●")
+                    color = "#FBBF24" if cancelling else ("#2dd4bf" if is_mini else "#60A5FA")
                     fragments.append(
                         (f"{self._BACKGROUND} {color} bold", indicator)
                     )
                     if queued:
-                        fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{len(queued)}"))
+                        mini_queued = sum(
+                            1 for q in queued
+                            if getattr(getattr(q, "lane", None), "value", "") == "supervisor_task"
+                        )
+                        if mini_queued:
+                            fragments.append((f"{self._BACKGROUND} #2dd4bf", f" +{mini_queued}"))
+                        user_queued = len(queued) - mini_queued
+                        if user_queued:
+                            fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{user_queued}"))
                 blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
                 if blocked_reason and active is None:
                     if fragments:
                         fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
                     fragments.append(
-                        (f"{self._BACKGROUND} #FBBF24", f"等待:{blocked_reason}")
+                        (f"{self._BACKGROUND} #2dd4bf", f"等待:{blocked_reason}")
                     )
             except Exception:
                 pass
@@ -180,7 +190,7 @@ class CliMiddleStatusRuntime:
             }
         colors = {
             "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
-            "drive": "#E2B04A", "handoff": "#A78BFA", "maintenance": "#60A5FA",
+            "drive": "#E2B04A", "handoff": "#2dd4bf", "maintenance": "#60A5FA",
             "body_switch": "#C084FC",
         }
         labels = {

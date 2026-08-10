@@ -1,3 +1,10 @@
+"""Autonomous execution panel — mini‑CLI display surface.
+
+Renders a compact, visually distinct panel inside the main TUI so the
+API‑A autonomous lane and API‑B worker tasks are easy to tell apart from
+the user's own conversation.
+"""
+
 from __future__ import annotations
 
 import time
@@ -16,6 +23,10 @@ from VoidCube_cli.autonomous_status_host import (
     fetch_autonomous_gateway_status,
     fetch_supervisor_status,
 )
+
+# ═══════════════════════════════════════════════════════════════════════
+# Ports
+# ═══════════════════════════════════════════════════════════════════════
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +53,11 @@ class AutonomousPanelStatePorts:
     spinner_text: Callable[[], str]
     scheduler_snapshot: Callable[[], object | None] | None = None
     scheduler_events: Callable[[], Sequence[Mapping[str, object]]] | None = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Visibility gate
+# ═══════════════════════════════════════════════════════════════════════
 
 
 def has_visible_autonomous_work(
@@ -117,149 +133,401 @@ def _has_supervisor_chain_activity(supervisor_state: Dict[str, Any]) -> bool:
     return False
 
 
-def _append_api_b_status_rows(
-    rows: list[tuple[str, str]],
+# ═══════════════════════════════════════════════════════════════════════
+# Row builders (each returns list of (style, text))
+# ═══════════════════════════════════════════════════════════════════════
+
+def _section_divider(label: str, inner_width: int, trim: Any) -> list[tuple[str, str]]:
+    """Draw a thin labelled divider: ── label ──────────────"""
+    remaining = inner_width - len(label) - 4
+    if remaining < 2:
+        return [("class:mc-separator", "─" * inner_width)]
+    left = remaining // 2
+    right = remaining - left
+    return [("class:mc-separator", f"{'─' * left} {label} {'─' * right}")]
+
+
+def _build_header_rows(
+    session_id: str,
+    status_label: str,
+    status_style: str,
+    focus_stage: str,
+    inner_width: int,
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Build the filled header bar with session tag and status."""
+    session_short = session_id[-8:] or "????"
+    rows: list[tuple[str, str]] = []
+
+    # Header bar: [◆ API-A 迷你CLI]  会话 a1b2c3d4  ·  ● 执行中
+    rows.append((
+        "class:mc-header-bg",
+        trim(
+            f" ◆ API-A 迷你CLI   会话 {session_short}",
+            inner_width,
+        ),
+    ))
+    # Status line below header
+    status_icon = {
+        "local_claimed_active": "●",
+        "local_claimed_waiting_writeback": "◉",
+        "local_claimed_waiting_first_turn": "◇",
+        "waiting_api_a_claim": "○",
+        "running_on_other_api_a": "◌",
+    }.get(focus_stage, "○")
+    rows.append((
+        "class:mc-body-text",
+        f"  {status_icon} {status_label}",
+    ))
+    return rows
+
+
+def _build_api_b_status_rows(
     supervisor_state: Dict[str, Any],
     inner_width: int,
-    *,
-    trim_status_bar_text: Any,
-) -> None:
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Show API-B model health and judgement state."""
+    rows: list[tuple[str, str]] = []
     lm_input = dict(supervisor_state.get("lm_input") or {})
+
+    if not lm_input and not observation_group_items(supervisor_state, "api_b_candidates"):
+        return rows
+
+    parts: list[tuple[str, str]] = []  # (style, text-part)
+
     if lm_input:
         enabled = bool(lm_input.get("generation_enabled"))
-        status = str(lm_input.get("status") or "").strip()
-        role = str(lm_input.get("model_role") or "").strip()
-        proposal_count = lm_input.get("proposal_count")
-        details = ["LM生成=已启用" if enabled else "LM生成=未启用"]
-        tier1_stats = dict(supervisor_state.get("tier1_stats") or {})
+        tier1 = dict(supervisor_state.get("tier1_stats") or {})
+        model = str(tier1.get("llm_model") or "").strip()
+        healthy = tier1.get("llm_healthy")
+        error = str(tier1.get("llm_error") or "").strip()
+
         if enabled:
-            model = str(tier1_stats.get("llm_model") or "").strip()
-            error = str(tier1_stats.get("llm_error") or "").strip()
-            if "llm_healthy" in tier1_stats:
-                model_suffix = f"({model})" if model else ""
-                details.append(
-                    f"模型=健康{model_suffix}"
-                    if bool(tier1_stats.get("llm_healthy"))
-                    else f"模型=异常{model_suffix}"
-                )
-            elif tier1_stats.get("memory_unavailable"):
-                details.append("模型健康=未知")
-            if error:
-                details.append(f"原因={error}")
+            if model:
+                short_model = model.rsplit("/", 1)[-1][:24]
+                if healthy is True:
+                    parts.append(("class:mc-status-success", f"模型: {short_model} ✓"))
+                elif healthy is False:
+                    reason = f" ({error})" if error else ""
+                    parts.append(("class:mc-status-error", f"模型异常{reason}"))
+                else:
+                    parts.append(("class:mc-status-warn", f"模型: {short_model}"))
+            else:
+                parts.append(("class:mc-body-dim", "LM生成: 已启用"))
+        else:
+            parts.append(("class:mc-body-dim", "LM生成: 关闭"))
+
+        status = str(lm_input.get("status") or "").strip()
         if status:
-            details.append(f"状态={status}")
-        if role:
-            details.append(f"角色={role}")
-        if proposal_count is not None:
-            details.append(f"提案={proposal_count}")
-        rows.append(
-            (
-                "class:auto-panel-info" if enabled else "class:auto-panel-warn",
-                trim_status_bar_text("API-B 模型: " + " · ".join(details), inner_width),
-            )
-        )
+            parts.append(("class:mc-body-dim", f"状态: {status}"))
 
     candidate_items = observation_group_items(supervisor_state, "api_b_candidates")
     judgement_items = observation_group_items(supervisor_state, "api_b_judgement")
+
     if candidate_items or judgement_items:
-        rows.append(
-            (
-                "class:auto-panel-info",
-                trim_status_bar_text(
-                    f"API-B 阶段: 候选={len(candidate_items)} · 判断在途={len(judgement_items)}",
-                    inner_width,
-                ),
-            )
-        )
-        focus = dict((judgement_items or candidate_items)[0] or {})
+        parts.append((
+            "class:mc-body-accent",
+            f"候选 {len(candidate_items)} · 判断 {len(judgement_items)}",
+        ))
+
+    if parts:
+        joined = _join_fragments(parts, " · ")
+        rows.append(("class:mc-body-text", f"  API-B {joined}"))
+
+    # Focus item from candidates/judgements
+    focus = None
+    if judgement_items:
+        focus = dict(judgement_items[0] or {})
+    elif candidate_items:
+        focus = dict(candidate_items[0] or {})
+    if focus:
         title = str(focus.get("title") or focus.get("summary") or "").strip()
         status = str(focus.get("display_status") or focus.get("status") or "").strip()
         if title:
             suffix = f" · {status}" if status else ""
-            rows.append(
-                (
-                    "class:auto-panel-dim",
-                    trim_status_bar_text(f"API-B 焦点: {title}{suffix}", inner_width),
-                )
-            )
+            rows.append((
+                "class:mc-body-dim",
+                trim(f"     ↳ {title}{suffix}", inner_width),
+            ))
+
+    return rows
 
 
-def build_autonomous_executor_lease_row(
-    gateway_state: Dict[str, Any],
+def _build_scheduler_rows(
+    snapshot: object | None,
     inner_width: int,
-    *,
-    session_id: str,
-    trim_status_bar_text: Any,
-) -> tuple[str, str]:
-    active = dict(gateway_state.get("active_cli_executor") or {})
-    current_session_id = str(session_id or "").strip()
-    active_session_id = str(active.get("session_id") or "").strip()
-    if not active_session_id:
-        text = "执行面: 当前还没有可见的 API-A 自主执行会话"
-        return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
+    trim: Any,
+    events: Sequence[Mapping[str, object]] = (),
+) -> list[tuple[str, str]]:
+    """Show scheduler ownership and queue state."""
+    rows: list[tuple[str, str]] = []
+    if snapshot is None:
+        return rows
 
-    lease_status = str(active.get("lease_status") or "").strip().lower()
-    idle_seconds = int(active.get("idle_seconds") or 0)
-    scene = str(active.get("scene") or "idle").strip() or "idle"
-    owner_label = (
-        "当前会话"
-        if active_session_id == current_session_id
-        else f"其他会话 {active_session_id[-8:]}"
+    active = getattr(snapshot, "active", None)
+    queued = tuple(getattr(snapshot, "queued", ()) or ())
+    gate = bool(getattr(snapshot, "autonomous_gate", False))
+    blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
+
+    if active is not None:
+        lane = getattr(getattr(active, "lane", None), "value", "")
+        state = getattr(getattr(active, "state", None), "value", "")
+        request_id = str(getattr(active, "request_id", "") or "")
+        lane_icon = "◆" if lane == "supervisor_task" else "●"
+        lane_label = "自主" if lane == "supervisor_task" else "用户"
+        request_suffix = f" #{request_id[-8:]}" if request_id else ""
+        state_label = {
+            "running": "执行中",
+            "cancelling": "取消中",
+        }.get(state, state or "活动")
+        style = "class:mc-status-warn" if state == "cancelling" else "class:mc-status-active"
+        rows.append((
+            style,
+            trim(f"  {lane_icon} {lane_label}{state_label}{request_suffix}", inner_width),
+        ))
+
+    supervisor_queued = sum(
+        1 for item in queued
+        if getattr(getattr(item, "lane", None), "value", "") == "supervisor_task"
     )
-    if lease_status == "stale" or bool(active.get("is_stale")):
-        text = f"执行面: {owner_label} 已陈旧（静默 {idle_seconds}s，场景 {scene}）"
-        return "class:auto-panel-bad", trim_status_bar_text(text, inner_width)
+    if supervisor_queued:
+        rows.append((
+            "class:mc-status-warn",
+            f"  ◇ 队列 {supervisor_queued} 项等待",
+        ))
 
-    text = f"执行面: {owner_label} 正常（静默 {idle_seconds}s，场景 {scene}）"
-    if active_session_id != current_session_id:
-        return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
-    return "class:auto-panel-info", trim_status_bar_text(text, inner_width)
+    if not gate and blocked_reason:
+        rows.append((
+            "class:mc-status-warn",
+            trim(f"  门控关闭 · {blocked_reason}", inner_width),
+        ))
+
+    # Latest scheduler event if interesting
+    latest = dict(events[-1] or {}) if events else {}
+    event_kind = str(latest.get("kind") or "").strip()
+    if event_kind in {"waiting", "cancel_requested", "failed", "cancelled"}:
+        request_id = str(latest.get("request_id") or "")
+        request_suffix = f" #{request_id[-8:]}" if request_id else ""
+        reason = str(latest.get("reason") or latest.get("blocked_reason") or event_kind).strip()
+        style = "class:mc-status-error" if event_kind == "failed" else "class:mc-status-warn"
+        rows.append((
+            style,
+            trim(f"  ! {event_kind}{request_suffix} · {reason}", inner_width),
+        ))
+
+    return rows
 
 
-def resolve_autonomous_waiting_start_cause(
-    events: list[Dict[str, Any]],
-) -> tuple[str, str]:
+def _build_task_rows(
+    focus_task: dict | None,
+    focus_stage: str,
+    current_task: object | None,
+    current_task_started_at: float,
+    supervisor_descriptor: dict,
+    supervisor_state: dict,
+    execution_events: list[dict[str, object]],
+    inner_width: int,
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Show the current autonomous chain task."""
+    rows: list[tuple[str, str]] = []
+
+    if not focus_task:
+        rows.append(("class:mc-body-dim", "  暂无被认领的链路项"))
+        reason_style, reason_text = resolve_autonomous_no_task_reason(supervisor_state)
+        if reason_text:
+            rows.append((reason_style, trim(f"  {reason_text}", inner_width)))
+        return rows
+
+    task_id = str(focus_task.get("task_id") or "").strip()
+    task_title = str(focus_task.get("title") or "").strip()
+    execution_kind = str(
+        focus_task.get("execution_kind")
+        or focus_task.get("task_family")
+        or focus_task.get("task_type")
+        or ""
+    ).strip().lower()
+    kind_label = "改进" if execution_kind == "body_improvement" else "任务"
+
+    task_text = f"  {kind_label} · {task_id[:8]} · {task_title or '未命名'}"
+    if focus_task is current_task and current_task_started_at > 0:
+        elapsed = max(0, int(time.time() - current_task_started_at))
+        if elapsed < 60:
+            task_text += f" · {elapsed}s"
+        else:
+            task_text += f" · {elapsed // 60}m{elapsed % 60}s"
+
+    rows.append(("class:mc-body-text", trim(task_text, inner_width)))
+
+    # Stage-specific detail
+    if focus_stage == "local_claimed_waiting_first_turn":
+        rows.append((
+            "class:mc-status-warn",
+            trim("     ⏳ 已认领，等待进入首个回合...", inner_width),
+        ))
+        cause_style, cause_text = _resolve_waiting_cause(execution_events)
+        rows.append((cause_style, trim(f"     {cause_text}", inner_width)))
+    elif focus_stage == "local_claimed_waiting_writeback":
+        rows.append((
+            "class:mc-status-active",
+            "     ↩ 执行完成，等待结果写回",
+        ))
+    elif focus_stage == "waiting_api_a_claim":
+        rows.append((
+            "class:mc-status-warn",
+            trim(
+                f"     {supervisor_descriptor.get('chain_reason', 'API-B 已转交，等待认领')}",
+                inner_width,
+            ),
+        ))
+    elif focus_stage == "running_on_other_api_a":
+        rows.append((
+            "class:mc-body-accent",
+            trim(
+                f"     {supervisor_descriptor.get('chain_reason', '其他执行面处理中')}",
+                inner_width,
+            ),
+        ))
+
+    return rows
+
+
+def _resolve_waiting_cause(events: list[dict[str, object]]) -> tuple[str, str]:
+    """Return (style, text) for why a claimed task hasn't started yet."""
     if not events:
-        return (
-            "class:auto-panel-warn",
-            "近因: 已认领链路项，但还没有收到后续执行事件",
-        )
+        return ("class:mc-status-warn", "已认领但未收到后续事件")
     latest = dict(events[-1] or {})
     stage = str(latest.get("stage") or "").strip().lower()
     if stage == "autonomous_execution_start_failed":
-        return (
-            "class:auto-panel-bad",
-            "近因: 自主执行启动失败，链路项还没有真正进入首个执行回合",
-        )
+        return ("class:mc-status-error", "启动失败，首个回合未执行")
     if stage == "autonomous_execution_started":
-        return (
-            "class:auto-panel-info",
-            "近因: 自主执行已起跑，正在等待首个模型响应",
-        )
+        return ("class:mc-status-active", "已起跑，等待首个模型响应")
     if stage == "claim":
-        return (
-            "class:auto-panel-warn",
-            "近因: 链路项刚被认领，尚未进入首个执行回合",
-        )
+        return ("class:mc-status-warn", "刚被认领，尚未进入执行")
     if stage == "tool_started":
-        return (
-            "class:auto-panel-info",
-            "近因: 已进入工具回合，等待工具返回结果",
-        )
+        return ("class:mc-status-active", "工具执行中，等待返回")
     if stage == "tool_completed":
-        return (
-            "class:auto-panel-info",
-            "近因: 工具已返回，等待模型继续后续回合",
-        )
-    if stage == "model_turn_finished":
-        return (
-            "class:auto-panel-info",
-            "近因: 模型回合已结束，等待链路写回阶段接管",
-        )
-    return (
-        "class:auto-panel-dim",
-        f"近因: {str(latest.get('message') or '暂无可用诊断').strip()}",
-    )
+        return ("class:mc-status-active", "工具已返回，等待模型继续")
+    return ("class:mc-body-dim", str(latest.get("message", "等待中")).strip())
+
+
+def _build_flow_rows(
+    focus_stage: str,
+    agent_running: bool,
+    spinner_text: str,
+    supervisor_descriptor: dict,
+    inner_width: int,
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Show execution flow / activity description."""
+    rows: list[tuple[str, str]] = []
+
+    if spinner_text.strip():
+        activity = f"  {spinner_text}"
+        rows.append(("class:mc-status-active", trim(activity, inner_width)))
+    elif focus_stage == "local_claimed_active" or agent_running:
+        rows.append(("class:mc-status-active", "  API-A 自主执行面工作中"))
+    elif focus_stage == "local_claimed_waiting_first_turn":
+        rows.append(("class:mc-body-accent", "  已认领链路项，等待首个回合"))
+    elif focus_stage == "local_claimed_waiting_writeback":
+        rows.append(("class:mc-body-accent", "  本轮结束，写回链路状态中"))
+    elif focus_stage == "waiting_api_a_claim":
+        desc = supervisor_descriptor.get("activity_text", "API-A 认领后执行，结果写回 Mem")
+        rows.append(("class:mc-body-text", f"  {desc}"))
+    elif focus_stage == "running_on_other_api_a":
+        desc = supervisor_descriptor.get("activity_text", "链路项在其他执行面运行中")
+        rows.append(("class:mc-body-accent", f"  {desc}"))
+    else:
+        desc = supervisor_descriptor.get("activity_text", "API-B 判断、重排或读取中")
+        rows.append(("class:mc-body-dim", f"  {desc}"))
+
+    return rows
+
+
+def _build_lease_row(
+    gateway_state: Dict[str, Any],
+    session_id: str,
+    inner_width: int,
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Show the executor lease — which session owns the execution face."""
+    active = dict(gateway_state.get("active_cli_executor") or {})
+    active_session_id = str(active.get("session_id") or "").strip()
+
+    if not active_session_id:
+        return [(
+            "class:mc-body-dim",
+            "  执行面: 无活跃 API-A 执行会话",
+        )]
+
+    current = session_id.strip()
+    is_self = active_session_id == current
+    lease_status = str(active.get("lease_status") or "").strip().lower()
+    idle_seconds = int(active.get("idle_seconds") or 0)
+    scene = str(active.get("scene") or "idle").strip() or "idle"
+
+    if lease_status == "stale" or bool(active.get("is_stale")):
+        owner = "本会话" if is_self else f"会话 {active_session_id[-8:]}"
+        return [(
+            "class:mc-status-error",
+            trim(f"  执行面: {owner} 陈旧 · 静默 {idle_seconds}s · {scene}", inner_width),
+        )]
+
+    if is_self:
+        return [(
+            "class:mc-status-success",
+            trim(f"  执行面: 本会话 · 静默 {idle_seconds}s · {scene}", inner_width),
+        )]
+    else:
+        return [(
+            "class:mc-status-warn",
+            trim(f"  执行面: 会话 {active_session_id[-8:]} · 静默 {idle_seconds}s", inner_width),
+        )]
+
+
+def _build_timeline_rows(
+    execution_events: list[dict[str, object]],
+    supervisor_state: dict,
+    inner_width: int,
+    trim: Any,
+) -> list[tuple[str, str]]:
+    """Show recent execution events and supervisor timeline."""
+    rows: list[tuple[str, str]] = []
+
+    # Supervisor latest summary
+    timeline = list(supervisor_state.get("timeline") or [])
+    if timeline:
+        latest = dict(timeline[0] or {})
+        summary = str(latest.get("summary") or latest.get("title") or "").strip()
+        if summary:
+            rows.append(("class:mc-body-accent", trim(f"  {summary}", inner_width)))
+
+    # Recent execution events (last 3)
+    for event in execution_events[-3:]:
+        tone = str(event.get("tone") or "info").strip().lower()
+        style = {
+            "success": "class:mc-status-success",
+            "warn": "class:mc-status-warn",
+            "error": "class:mc-status-error",
+        }.get(tone, "class:mc-body-dim")
+        msg = f"  {event.get('at', '--:--:--')}  {event.get('message', '')}"
+        rows.append((style, trim(msg, inner_width)))
+
+    return rows
+
+
+def _build_footer_rows(inner_width: int, trim: Any) -> list[tuple[str, str]]:
+    """Keybinding hints."""
+    return [(
+        "class:mc-key-hint",
+        trim(f"  /auto-q 停用    /auto [focus] 激活    面板自动隐藏于空闲时", inner_width),
+    )]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Main row builder
+# ═══════════════════════════════════════════════════════════════════════
 
 
 def build_autonomous_execution_panel_rows(
@@ -268,11 +536,13 @@ def build_autonomous_execution_panel_rows(
     state_ports: AutonomousPanelStatePorts,
     render_ports: AutonomousPanelRenderPorts,
 ) -> list[tuple[str, str]]:
+    """Build the full panel as a flat list of (style_class, text) rows."""
     width = render_ports.terminal_width()
-    trim_status_bar_text = render_ports.trim_status_bar_text
-    inner_width = max(1, min(width - 4, 92))
-    session_short = state_ports.session_id()[-8:] or "unknown"
-    rows: list[tuple[str, str]] = []
+    trim = render_ports.trim_status_bar_text
+    inner_width = max(1, min(width - 4, 96))
+    session_id = state_ports.session_id()
+
+    # ── Fetch external state ──────────────────────────────────────────
     supervisor_state = fetch_supervisor_status(host)
     gateway_state = fetch_autonomous_gateway_status(host)
     focus_task = resolve_autonomous_panel_focus_task(
@@ -293,250 +563,93 @@ def build_autonomous_execution_panel_rows(
         state_ports.scheduler_snapshot() if state_ports.scheduler_snapshot else None
     )
 
+    # ── Resolve status label + style ──────────────────────────────────
     if focus_stage == "local_claimed_active":
-        status_label = "执行中"
-        status_style = "class:auto-panel-good"
+        status_label, status_style_key = "执行中", "mc-status-active"
     elif focus_stage == "local_claimed_waiting_writeback":
-        status_label = "等待回写"
-        status_style = "class:auto-panel-good"
+        status_label, status_style_key = "等待回写", "mc-status-active"
     elif focus_stage == "local_claimed_waiting_first_turn":
-        status_label = "已认领待起跑"
-        status_style = "class:auto-panel-warn"
+        status_label, status_style_key = "已认领 · 待起跑", "mc-status-warn"
     elif state_ports.agent_running():
-        status_label = "模型处理中"
-        status_style = "class:auto-panel-good"
+        status_label, status_style_key = "模型处理中", "mc-status-active"
     elif focus_stage == "waiting_api_a_claim":
-        status_label = str(supervisor_descriptor.get("status_label") or "API-B 已转交")
-        status_style = "class:auto-panel-warn"
+        label = str(supervisor_descriptor.get("status_label") or "API-B 已转交")
+        status_label, status_style_key = label, "mc-status-warn"
     elif focus_stage == "running_on_other_api_a":
-        status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
-        status_style = "class:auto-panel-info"
+        label = str(supervisor_descriptor.get("status_label") or "他处执行中")
+        status_label, status_style_key = label, "mc-body-accent"
     else:
-        status_label = str(supervisor_descriptor.get("status_label") or "API-B 判断中")
-        status_style = "class:auto-panel-warn"
+        label = str(supervisor_descriptor.get("status_label") or "API-B 判断中")
+        status_label, status_style_key = label, "mc-body-dim"
 
-    rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
-    rows.append((status_style, f"状态: {status_label}"))
-    _append_scheduler_rows(
-        rows,
-        scheduler_snapshot,
-        inner_width,
-        trim_status_bar_text=trim_status_bar_text,
-        events=state_ports.scheduler_events() if state_ports.scheduler_events else (),
+    # ── Assemble rows ─────────────────────────────────────────────────
+    rows: list[tuple[str, str]] = []
+
+    # 1. Header bar
+    rows.extend(_build_header_rows(session_id, status_label, status_style_key, focus_stage, inner_width, trim))
+
+    # 2. API-B status
+    api_b_rows = _build_api_b_status_rows(supervisor_state, inner_width, trim)
+    if api_b_rows:
+        rows.append(("", ""))  # spacer
+        rows.extend(api_b_rows)
+
+    # 3. Scheduler
+    sched_rows = _build_scheduler_rows(scheduler_snapshot, inner_width, trim,
+                                       events=state_ports.scheduler_events() if state_ports.scheduler_events else ())
+    if sched_rows:
+        rows.append(("", ""))  # spacer
+        rows.extend(_section_divider("调度", inner_width, trim))
+        rows.extend(sched_rows)
+
+    # 4. Task
+    task_rows = _build_task_rows(
+        focus_task, focus_stage,
+        state_ports.current_task(), state_ports.current_task_started_at(),
+        supervisor_descriptor, supervisor_state,
+        state_ports.execution_events(),
+        inner_width, trim,
     )
-    _append_api_b_status_rows(
-        rows,
-        supervisor_state,
-        inner_width,
-        trim_status_bar_text=trim_status_bar_text,
+    if task_rows:
+        rows.append(("", ""))  # spacer
+        rows.extend(_section_divider("链路项", inner_width, trim))
+        rows.extend(task_rows)
+
+    # 5. Flow
+    flow_rows = _build_flow_rows(
+        focus_stage, state_ports.agent_running(), state_ports.spinner_text(),
+        supervisor_descriptor, inner_width, trim,
     )
-    rows.append(
-        build_autonomous_executor_lease_row(
-            gateway_state,
-            inner_width,
-            session_id=state_ports.session_id(),
-            trim_status_bar_text=trim_status_bar_text,
-        )
+    if flow_rows:
+        rows.append(("", ""))  # spacer
+        rows.extend(_section_divider("执行流", inner_width, trim))
+        rows.extend(flow_rows)
+
+    # 6. Lease
+    lease_rows = _build_lease_row(gateway_state, session_id, inner_width, trim)
+    rows.append(("", ""))  # spacer
+    rows.extend(_section_divider("执行面", inner_width, trim))
+    rows.extend(lease_rows)
+
+    # 7. Timeline / events
+    timeline_rows = _build_timeline_rows(
+        state_ports.execution_events(), supervisor_state, inner_width, trim,
     )
-    task_id = str(focus_task.get("task_id") or "").strip()
-    task_title = str(focus_task.get("title") or "").strip()
-    execution_kind = str(
-        focus_task.get("execution_kind")
-        or focus_task.get("task_family")
-        or focus_task.get("task_type")
-        or ""
-    ).strip().lower()
-    if task_id:
-        label = "改进" if execution_kind == "body_improvement" else "学习"
-        task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '未命名'}"
-        current_task = state_ports.current_task()
-        if focus_task is current_task:
-            started_at = state_ports.current_task_started_at()
-            if started_at > 0:
-                elapsed = max(0, int(time.time() - started_at))
-                task_text += f" · {elapsed}s"
-        rows.append(("class:auto-panel-text", trim_status_bar_text(task_text, inner_width)))
-        if focus_stage == "local_claimed_waiting_first_turn":
-            rows.append(
-                (
-                    "class:auto-panel-warn",
-                    trim_status_bar_text(
-                        "链路: 自主执行面已认领该链路项，等待进入首个模型或工具回合",
-                        inner_width,
-                    ),
-                )
-            )
-            cause_style, cause_text = resolve_autonomous_waiting_start_cause(
-                state_ports.execution_events()
-            )
-            rows.append((cause_style, trim_status_bar_text(cause_text, inner_width)))
-        elif focus_stage == "local_claimed_waiting_writeback":
-            rows.append(
-                (
-                    "class:auto-panel-info",
-                    trim_status_bar_text(
-                        "链路: 自主执行面已完成执行，等待结果回写到自主链路",
-                        inner_width,
-                    ),
-                )
-            )
-        elif focus_stage == "waiting_api_a_claim":
-            rows.append(
-                (
-                    "class:auto-panel-warn",
-                    trim_status_bar_text(
-                        str(
-                            supervisor_descriptor.get("chain_reason")
-                            or "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手"
-                        ),
-                        inner_width,
-                    ),
-                )
-            )
-        elif focus_stage == "running_on_other_api_a":
-            rows.append(
-                (
-                    "class:auto-panel-info",
-                    trim_status_bar_text(
-                        str(
-                            supervisor_descriptor.get("chain_reason")
-                            or "链路: 该链路项已被其他 API-A 自主执行面认领"
-                        ),
-                        inner_width,
-                    ),
-                )
-            )
-    else:
-        rows.append(("class:auto-panel-dim", "链路项: 当前没有被认领的自主链路项"))
-        reason_style, reason_text = resolve_autonomous_no_task_reason(supervisor_state)
-        rows.append((reason_style, trim_status_bar_text(reason_text, inner_width)))
+    if timeline_rows:
+        rows.append(("", ""))  # spacer
+        rows.extend(_section_divider("最近事件", inner_width, trim))
+        rows.extend(timeline_rows)
 
-    spinner_text = state_ports.spinner_text().strip()
-    if spinner_text:
-        activity_text = f"执行流: {spinner_text}"
-    elif focus_stage == "local_claimed_active" or state_ports.agent_running():
-        activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
-    elif focus_stage == "local_claimed_waiting_first_turn":
-        activity_text = "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合"
-    elif focus_stage == "local_claimed_waiting_writeback":
-        activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回链路状态"
-    elif focus_stage == "waiting_api_a_claim":
-        activity_text = str(
-            supervisor_descriptor.get("activity_text")
-            or "执行流: API-A 认领后执行，结果写回 Mem"
-        )
-    elif focus_stage == "running_on_other_api_a":
-        activity_text = str(
-            supervisor_descriptor.get("activity_text")
-            or "执行流: 链路项正在其他 API-A 自主执行面中运行"
-        )
-    else:
-        activity_text = str(
-            supervisor_descriptor.get("activity_text")
-            or "执行流: API-B 判断、重排或再读取后再交给 API-A"
-        )
-    rows.append(("class:auto-panel-text", trim_status_bar_text(activity_text, inner_width)))
+    # 8. Footer
+    rows.append(("", ""))  # spacer
+    rows.extend(_build_footer_rows(inner_width, trim))
 
-    timeline = list(supervisor_state.get("timeline") or [])
-    if timeline:
-        latest = dict(timeline[0] or {})
-        latest_supervisor = str(latest.get("summary") or latest.get("title") or "").strip()
-        if latest_supervisor:
-            rows.append(
-                (
-                    "class:auto-panel-info",
-                    trim_status_bar_text(f"监督: {latest_supervisor}", inner_width),
-                )
-            )
-
-    for event in state_ports.execution_events()[-3:]:
-        tone = str(event.get("tone") or "info").strip().lower()
-        style = {
-            "success": "class:auto-panel-good",
-            "warn": "class:auto-panel-warn",
-            "error": "class:auto-panel-bad",
-        }.get(tone, "class:auto-panel-dim")
-        msg = f"{event.get('at', '--:--:--')} · {event.get('message', '')}"
-        rows.append((style, trim_status_bar_text(msg, inner_width)))
-
-    rows.append(("class:auto-panel-dim", "控制: /auto-q 临时停用自主链路"))
     return rows
 
 
-def _append_scheduler_rows(
-    rows: list[tuple[str, str]],
-    snapshot: object | None,
-    inner_width: int,
-    *,
-    trim_status_bar_text: Any,
-    events: Sequence[Mapping[str, object]] = (),
-) -> None:
-    """Render scheduler ownership and waiting state from the shared snapshot."""
-    if snapshot is None:
-        return
-    active = getattr(snapshot, "active", None)
-    queued = tuple(getattr(snapshot, "queued", ()) or ())
-    gate = bool(getattr(snapshot, "autonomous_gate", False))
-    blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
-    if active is not None:
-        lane = getattr(getattr(active, "lane", None), "value", "")
-        state = getattr(getattr(active, "state", None), "value", "")
-        request_id = str(getattr(active, "request_id", "") or "")
-        lane_label = "用户" if lane == "user_chat" else "自主"
-        request_suffix = f" · #{request_id[-8:]}" if request_id else ""
-        state_label = {
-            "running": "执行中",
-            "cancelling": "取消中",
-        }.get(state, state or "活动")
-        style = "class:auto-panel-warn" if state == "cancelling" else "class:auto-panel-info"
-        rows.append(
-            (
-                style,
-                trim_status_bar_text(
-                    f"调度: {lane_label}{state_label}{request_suffix}",
-                    inner_width,
-                ),
-            )
-        )
-    supervisor_queued = sum(
-        1
-        for item in queued
-        if getattr(getattr(item, "lane", None), "value", "") == "supervisor_task"
-    )
-    if supervisor_queued:
-        rows.append(
-            (
-                "class:auto-panel-warn",
-                trim_status_bar_text(
-                    f"调度: 自主队列等待 {supervisor_queued} 项",
-                    inner_width,
-                ),
-            )
-        )
-    if not gate and blocked_reason:
-        rows.append(
-            (
-                "class:auto-panel-warn",
-                trim_status_bar_text(f"调度: 自主门控关闭 · {blocked_reason}", inner_width),
-            )
-        )
-    latest = dict(events[-1] or {}) if events else {}
-    event_kind = str(latest.get("kind") or "").strip()
-    if event_kind in {"waiting", "cancel_requested", "failed", "cancelled"}:
-        request_id = str(latest.get("request_id") or "")
-        request_suffix = f" · #{request_id[-8:]}" if request_id else ""
-        reason = str(
-            latest.get("reason") or latest.get("blocked_reason") or event_kind
-        ).strip()
-        rows.append(
-            (
-                "class:auto-panel-warn" if event_kind != "failed" else "class:auto-panel-bad",
-                trim_status_bar_text(
-                    f"调度事件: {event_kind}{request_suffix} · {reason}",
-                    inner_width,
-                ),
-            )
-        )
+# ═══════════════════════════════════════════════════════════════════════
+# Fragment assembler (border + rows → prompt_toolkit fragments)
+# ═══════════════════════════════════════════════════════════════════════
 
 
 def get_autonomous_execution_panel_fragments(
@@ -544,7 +657,8 @@ def get_autonomous_execution_panel_fragments(
     *,
     state_ports: AutonomousPanelStatePorts,
     render_ports: AutonomousPanelRenderPorts,
-):
+) -> list[tuple[str, str]]:
+    """Return styled FormattedText fragments for the TUI panel."""
     rows = build_autonomous_execution_panel_rows(
         host,
         state_ports=state_ports,
@@ -552,16 +666,60 @@ def get_autonomous_execution_panel_fragments(
     )
     if not rows:
         return []
-    width = render_ports.terminal_width()
-    inner_width = max(1, min(width - 4, 92))
-    lines = []
-    border_style = "class:auto-panel-border"
 
-    lines.append((border_style, "╭" + ("─" * (inner_width + 2)) + "╮\n"))
+    width = render_ports.terminal_width()
+    inner_width = max(1, min(width - 4, 96))
+    pad = render_ports.pad_status_bar_text
+
+    lines: list[tuple[str, str]] = []
+
+    # Top border with label
+    lines.append(("class:mc-border", "╭" + "─" * (inner_width + 2) + "╮\n"))
+
     for style, text in rows:
-        padded = render_ports.pad_status_bar_text(text, inner_width)
-        lines.append((border_style, "│ "))
-        lines.append((style, padded))
-        lines.append((border_style, " │\n"))
-    lines.append((border_style, "╰" + ("─" * (inner_width + 2)) + "╯"))
+        if text == "":
+            # blank spacer row
+            lines.append(("class:mc-border", "│"))
+            lines.append(("class:mc-panel-bg", " " * (inner_width + 2)))
+            lines.append(("class:mc-border", "│\n"))
+        else:
+            padded = pad(text, inner_width)
+            lines.append(("class:mc-border", "│ "))
+            lines.append((style, padded))
+            lines.append(("class:mc-border", " │\n"))
+
+    # Bottom border
+    lines.append(("class:mc-border", "╰" + "─" * (inner_width + 2) + "╯"))
+
     return lines
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _join_fragments(fragments: list[tuple[str, str]], sep: str) -> str:
+    """Join styled fragment texts with a separator (for inline use)."""
+    return sep.join(text for _, text in fragments)
+
+
+def build_autonomous_executor_lease_row(
+    gateway_state: Dict[str, Any],
+    inner_width: int,
+    *,
+    session_id: str,
+    trim_status_bar_text: Any,
+) -> tuple[str, str]:
+    """Legacy single-row lease builder — kept for external callers."""
+    rows = _build_lease_row(gateway_state, session_id, inner_width, trim_status_bar_text)
+    if rows:
+        return rows[0]
+    return ("class:mc-body-dim", "执行面: 未知")
+
+
+def resolve_autonomous_waiting_start_cause(
+    events: list[Dict[str, Any]],
+) -> tuple[str, str]:
+    """Legacy helper — kept for external callers."""
+    return _resolve_waiting_cause(events)

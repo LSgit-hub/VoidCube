@@ -1136,12 +1136,13 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "API-A 自主执行面" in rendered
-    assert "执行面: 当前会话 正常" in rendered
+    assert "API-A 迷你CLI" in rendered
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
     assert "工具启动: web_search" in rendered
     assert "API-B handed task off for API-A claim." in rendered
+    # Lease row: own session with healthy status
+    assert "执行面: 本会话" in rendered
 
 
 def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
@@ -1169,8 +1170,9 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "执行面: 其他会话 " in rendered
-    assert "已陈旧（静默 120s，场景 executing）" in rendered
+    assert "执行面: 会话" in rendered
+    assert "陈旧" in rendered
+    assert "静默 120s" in rendered
 
 
 def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
@@ -1232,9 +1234,9 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: API-B 判断中" in rendered
-    assert "链路项: 当前没有被认领的自主链路项" in rendered
-    assert "当前学习链路项仍由 API-B 判断" in rendered
+    assert "API-B 判断中" in rendered
+    assert "暂无被认领的链路项" in rendered
+    assert "仍由 API-B 判断" in rendered
 
 
 def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
@@ -1305,7 +1307,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: API-B 已转交" in rendered
+    assert "○ API-B 已转交" in rendered
     assert "Board handoff task" in rendered
     assert "可由 API-A 自主执行面接手" in rendered
 
@@ -1374,7 +1376,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: API-B 已转交" in rendered
+    assert "○ API-B 已转交" in rendered
     assert "Handoff waiting task" in rendered
     assert "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手" in rendered
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
@@ -1445,7 +1447,7 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: API-B 已转交" in rendered
+    assert "○ API-B 已转交" in rendered
     assert "Stage-card waiting task" in rendered
     assert "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手" in rendered
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
@@ -1516,7 +1518,7 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
     assert "Stage-card wins task" in rendered
-    assert "状态: API-B 已转交" in rendered
+    assert "○ API-B 已转交" in rendered
     assert "以 stage_cards 正式投影为准" in rendered
 
 
@@ -1568,9 +1570,10 @@ def test_autonomous_panel_is_visible_for_api_b_state_without_api_a_task(monkeypa
     ) is True
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "API-B 模型: LM生成=未启用" in rendered
-    assert "API-B 阶段: 候选=1 · 判断在途=0" in rendered
-    assert "API-B 焦点: Review endogenous cognition" in rendered
+    assert "LM生成: 关闭" in rendered
+    assert "候选 1" in rendered
+    assert "判断 0" in rendered
+    assert "Review endogenous cognition" in rendered
 
 
 def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
@@ -1608,8 +1611,8 @@ def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "API-B 模型: LM生成=已启用 · 模型=异常(deepseek-v4-flash)" in rendered
-    assert "原因=HTTPError" in rendered
+    assert "模型异常" in rendered
+    assert "HTTPError" in rendered
 
 
 def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):
@@ -1663,7 +1666,7 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: API-B 已转交" in rendered
+    assert "○ API-B 已转交" in rendered
     assert "Loop-stage driven task" in rendered
     assert "链路: API-B 已转交该链路项，可由自主执行面接手" in rendered
     assert "执行流: API-A 自主执行面可开始处理该链路项" in rendered
@@ -1733,7 +1736,7 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: 他处执行中" in rendered
+    assert "他处执行中" in rendered
     assert "Running elsewhere task" in rendered
     assert "链路: 该链路项已被其他 API-A 自主执行面认领" in rendered
     assert "执行流: 链路项正在其他 API-A 自主执行面中运行" in rendered
@@ -1769,11 +1772,11 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: 已认领待起跑" in rendered
+    assert "已认领 · 待起跑" in rendered
     assert "Claimed not started task" in rendered
-    assert "链路: 自主执行面已认领该链路项，等待进入首个模型或工具回合" in rendered
-    assert "近因: 已认领链路项，但还没有收到后续执行事件" in rendered
-    assert "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合" in rendered
+    assert "已认领，等待进入首个回合" in rendered
+    assert "已认领但未收到后续事件" in rendered
+    assert "已认领链路项，等待首个回合" in rendered
 
 
 def test_autonomous_panel_shows_waiting_start_cause_after_autonomous_execution_started(monkeypatch):
@@ -1813,8 +1816,8 @@ def test_autonomous_panel_shows_waiting_start_cause_after_autonomous_execution_s
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: 已认领待起跑" in rendered
-    assert "近因: 自主执行已起跑，正在等待首个模型响应" in rendered
+    assert "已认领 · 待起跑" in rendered
+    assert "已起跑，等待首个模型响应" in rendered
 
 
 def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
@@ -1852,10 +1855,10 @@ def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "状态: 等待回写" in rendered
+    assert "等待回写" in rendered
     assert "Writeback waiting task" in rendered
-    assert "链路: 自主执行面已完成执行，等待结果回写到自主链路" in rendered
-    assert "执行流: API-A 自主执行面已结束本轮执行，等待写回链路状态" in rendered
+    assert "执行完成，等待结果写回" in rendered
+    assert "本轮结束，写回链路状态中" in rendered
 
 
 def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
