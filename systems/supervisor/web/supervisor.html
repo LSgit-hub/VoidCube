@@ -2259,6 +2259,18 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 10px;
 }
 .provider-active-field input { accent-color: var(--mint); }
+.provider-runtime-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 31px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.provider-runtime-metrics { min-width: 0; }
 .provider-form-actions,
 .worker-form-actions {
   display: flex;
@@ -4119,6 +4131,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <input id="providerApiKey" name="provider_api_key" type="password" maxlength="8192" autocomplete="new-password"/>
                 </label>
               </div>
+              <div class="provider-runtime-summary">
+                <span class="provider-runtime-metrics" id="providerRuntimeMetrics" aria-live="polite"></span>
+                <button class="provider-action" id="providerCooldownReset" type="button">解除冷却</button>
+              </div>
               <div class="provider-form-actions">
                 <button class="provider-action danger" id="providerDelete" type="button">删除</button>
                 <button class="provider-action" id="providerTest" type="button">测试连接</button>
@@ -4362,6 +4378,8 @@ const els = {
   providerModelCatalogMeta: $('#providerModelCatalogMeta'),
   providerAuthMode: $('#providerAuthMode'),
   providerConcurrency: $('#providerConcurrency'),
+  providerRuntimeMetrics: $('#providerRuntimeMetrics'),
+  providerCooldownReset: $('#providerCooldownReset'),
   providerMakeActive: $('#providerMakeActive'),
   providerEnvField: $('#providerEnvField'),
   providerSecretField: $('#providerSecretField'),
@@ -7024,6 +7042,13 @@ function setProviderPoolBusy(busy) {
   }
   if (els.providerTest) els.providerTest.disabled = busy || !selected;
   if (els.providerLoadModels) els.providerLoadModels.disabled = busy || managed || !selected;
+  if (els.providerCooldownReset) {
+    const scheduler = (workerSchedulerSnapshot.providers || []).find(
+      item => item.provider === selectedProviderKey
+    ) || {};
+    els.providerCooldownReset.disabled = busy || !selected ||
+      Number(scheduler.cooldown_remaining_seconds || 0) <= 0;
+  }
   if (els.providerAdd) els.providerAdd.disabled = busy || managed;
   if (els.workerAssignmentForm) {
     $$('input, select, button', els.workerAssignmentForm).forEach(control => {
@@ -7155,6 +7180,33 @@ function renderProviderList() {
   }).join('');
 }
 
+function renderProviderRuntimeMetrics(provider) {
+  if (!els.providerRuntimeMetrics) return;
+  if (!provider) {
+    els.providerRuntimeMetrics.textContent = '';
+    if (els.providerCooldownReset) els.providerCooldownReset.hidden = true;
+    return;
+  }
+  const scheduler = (workerSchedulerSnapshot.providers || []).find(
+    item => item.provider === provider.key
+  ) || {};
+  const metrics = scheduler.metrics && typeof scheduler.metrics === 'object'
+    ? scheduler.metrics : {};
+  const samples = Number(metrics.sample_size || 0);
+  let text = '暂无员工运行样本';
+  if (samples > 0) {
+    const successRate = Number(metrics.success_rate_percent || 0);
+    const average = workerTestTime(metrics.average_elapsed_ms);
+    text = '近 ' + samples + ' 次 · 成功率 ' + successRate + '%' +
+      (average ? ' · 平均 ' + average : '') +
+      ' · 429 ' + Number(metrics.rate_limit_count || 0) + ' 次';
+  }
+  const cooldown = Number(scheduler.cooldown_remaining_seconds || 0);
+  if (cooldown > 0) text += ' · 冷却剩余 ' + cooldown + ' 秒';
+  els.providerRuntimeMetrics.textContent = text;
+  if (els.providerCooldownReset) els.providerCooldownReset.hidden = false;
+}
+
 function applyProviderPreset() {
   const preset = providerPreset(els.providerType ? els.providerType.value : '');
   if (!preset) return;
@@ -7189,6 +7241,7 @@ function editProvider(providerKey) {
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
   renderProviderModelCatalogMeta(provider);
+  renderProviderRuntimeMetrics(provider);
   els.providerApiKey.placeholder = provider && provider.credential_configured
     ? '已配置，留空保持不变' : '';
   els.providerMakeActive.checked = Boolean(provider && provider.active);
@@ -7276,6 +7329,12 @@ async function loadWorkerSchedulerState() {
   }
   renderWorkerSchedulerState();
   renderProviderList();
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  renderProviderRuntimeMetrics(
+    providers.find(item => item.key === selectedProviderKey) || null
+  );
+  setProviderPoolBusy(providerPoolBusy);
 }
 
 function syncWorkerDefaultOptions(preferred) {
@@ -7595,6 +7654,32 @@ async function loadProviderModels() {
   } catch (error) {
     renderProviderModelOptions([]);
     setProviderPoolStatus(String(error.message || '读取模型失败'), true);
+  } finally {
+    setProviderPoolBusy(false);
+  }
+}
+
+async function resetProviderCooldown() {
+  if (!selectedProviderKey || providerPoolBusy) return;
+  setProviderPoolBusy(true);
+  setProviderPoolStatus('解除冷却中');
+  try {
+    const response = await fetch(
+      '/provider-pool/providers/' + encodeURIComponent(selectedProviderKey) + '/cooldown/reset',
+      {method: 'POST'}
+    );
+    if (!response.ok) throw await responseError(response, '解除冷却失败');
+    const result = await response.json();
+    workerSchedulerSnapshot = result.scheduler || workerSchedulerSnapshot;
+    renderProviderList();
+    const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+      ? providerPoolSnapshot.providers : [];
+    renderProviderRuntimeMetrics(
+      providers.find(item => item.key === selectedProviderKey) || null
+    );
+    setProviderPoolStatus(result.cleared ? '已解除冷却' : '当前未在冷却');
+  } catch (error) {
+    setProviderPoolStatus(String(error.message || '解除冷却失败'), true);
   } finally {
     setProviderPoolBusy(false);
   }
@@ -8134,6 +8219,9 @@ if (els.providerForm) {
 if (els.providerDelete) els.providerDelete.addEventListener('click', deleteProviderPoolEntry);
 if (els.providerTest) els.providerTest.addEventListener('click', testProviderPoolEntry);
 if (els.providerLoadModels) els.providerLoadModels.addEventListener('click', loadProviderModels);
+if (els.providerCooldownReset) {
+  els.providerCooldownReset.addEventListener('click', resetProviderCooldown);
+}
 if (els.workerRecommendedApply) {
   els.workerRecommendedApply.addEventListener('click', applyRecommendedWorkerToolsets);
 }

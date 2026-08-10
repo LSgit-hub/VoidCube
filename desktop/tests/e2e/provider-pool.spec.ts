@@ -6,6 +6,11 @@ test('provider pool and worker assignment panels stay usable across viewports', 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route('**/ui/media-events', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/event-stream',
+    body: ''
+  }))
   await page.route(/\/provider-pool(?:\?.*)?$/, async (route) => {
     const response = await route.fetch()
     const body = await response.json()
@@ -54,8 +59,40 @@ test('provider pool and worker assignment panels stay usable across viewports', 
         cooldown_until: '2026-08-10T02:04:00+00:00',
         cooldown_remaining_seconds: 38,
         failure_count: 1,
-        last_status: 429
+        last_status: 429,
+        metrics: {
+          sample_size: 12,
+          success_count: 9,
+          success_rate_percent: 75,
+          average_elapsed_ms: 1500,
+          rate_limit_count: 2,
+          last_completed_at: '2026-08-10T02:03:04+00:00'
+        }
       }]
+    })
+  }))
+  await page.route('**/provider-pool/providers/*/cooldown/reset', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      status: 'reset',
+      provider: 'openrouter',
+      cleared: true,
+      scheduler: {
+        max_concurrent: 4,
+        active_count: 1,
+        queued_count: 2,
+        roles: [],
+        providers: [{
+          provider: 'openrouter', active: 1, queued: 2, limit: 2,
+          cooldown_until: '', cooldown_remaining_seconds: 0,
+          failure_count: 0, last_status: null,
+          metrics: {
+            sample_size: 12, success_count: 9, success_rate_percent: 75,
+            average_elapsed_ms: 1500, rate_limit_count: 2,
+            last_completed_at: '2026-08-10T02:03:04+00:00'
+          }
+        }]
+      }
     })
   }))
   await page.route(/\/provider-pool\/worker-tests(?:\/[^/?]+)?(?:\?.*)?$/, (route) => {
@@ -120,6 +157,14 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await providerRows.nth(1).click()
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(providerRows.nth(1)).toHaveClass(/active/)
+    await expect(page.locator('#providerRuntimeMetrics')).toHaveText(
+      '近 12 次 · 成功率 75% · 平均 1.5 s · 429 2 次 · 冷却剩余 38 秒'
+    )
+    await expect(page.locator('#providerCooldownReset')).toBeEnabled()
+    await page.locator('#providerCooldownReset').click()
+    await expect(page.locator('#providerPoolStatus')).toHaveText('已解除冷却')
+    await expect(page.locator('#providerRuntimeMetrics')).not.toContainText('冷却剩余')
+    await expect(page.locator('#providerCooldownReset')).toBeDisabled()
     await providerRows.first().click()
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     const loadedProviderKey = await providerRows.first().getAttribute('data-provider-key')

@@ -209,6 +209,7 @@ class Supervisor(
                 add_account=self._ui_runtime.add_account,
                 delete_account=self._ui_runtime.delete_account_endpoint,
                 verify_account=self._ui_runtime.verify_account_endpoint,
+                import_account=self._ui_runtime.import_account_endpoint,
             )
         )
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])
@@ -332,6 +333,11 @@ class Supervisor(
             "/provider-pool/scheduler",
             self.get_provider_pool_scheduler,
             methods=["GET"],
+        )
+        self.app.add_api_route(
+            "/provider-pool/providers/{provider_key}/cooldown/reset",
+            self.reset_provider_pool_cooldown,
+            methods=["POST"],
         )
         self.app.add_api_route(
             "/provider-pool/worker-roles",
@@ -480,6 +486,25 @@ class Supervisor(
         policy = self._provider_pool_service.dispatch_policy()
         state = self._scheduled_task_store.dispatch_state(**policy)
         return {"status": "ok", **state}
+
+    async def reset_provider_pool_cooldown(
+        self, provider_key: str
+    ) -> Dict[str, Any]:
+        provider = str(provider_key or "").strip().lower()
+        snapshot = self._provider_pool_service.snapshot()
+        if not any(item.get("key") == provider for item in snapshot["providers"]):
+            raise HTTPException(status_code=404, detail="Provider not found")
+        cleared = self._scheduled_store_call(
+            "clear_provider_cooldown", provider
+        )
+        policy = self._provider_pool_service.dispatch_policy()
+        state = self._scheduled_task_store.dispatch_state(**policy)
+        return {
+            "status": "reset",
+            "provider": provider,
+            "cleared": cleared,
+            "scheduler": state,
+        }
 
     @staticmethod
     def _provider_pool_error(error: Exception) -> HTTPException:

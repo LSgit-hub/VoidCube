@@ -80,7 +80,8 @@ class ScheduledTaskStore:
     _RUN_COLUMNS = (
         "run_id", "schedule_id", "due_at", "status", "owner_session_id",
         "claimed_at", "lease_expires_at", "completed_at", "result_summary", "error",
-        "execution_provider", "execution_model", "elapsed_ms",
+        "execution_provider", "execution_model", "elapsed_ms", "rate_limited",
+        "error_code",
     )
 
     def __init__(
@@ -169,7 +170,8 @@ class ScheduledTaskStore:
                 "lease_expires_at TEXT NOT NULL, completed_at TEXT, "
                 "result_summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', "
                 "execution_provider TEXT NOT NULL DEFAULT '', "
-                "execution_model TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER)"
+                "execution_model TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER, "
+                "rate_limited INTEGER NOT NULL DEFAULT 0, error_code INTEGER)"
             )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS scheduled_provider_cooldowns ("
@@ -185,6 +187,8 @@ class ScheduledTaskStore:
                 ("execution_provider", "TEXT NOT NULL DEFAULT ''"),
                 ("execution_model", "TEXT NOT NULL DEFAULT ''"),
                 ("elapsed_ms", "INTEGER"),
+                ("rate_limited", "INTEGER NOT NULL DEFAULT 0"),
+                ("error_code", "INTEGER"),
             ):
                 if column not in run_columns:
                     connection.execute(
@@ -203,7 +207,7 @@ class ScheduledTaskStore:
                 "ON scheduled_task_runs(claimed_at DESC)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '5')"
+                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '6')"
             )
 
     def _migrate_legacy_json_once(self) -> None:
@@ -373,12 +377,15 @@ class ScheduledTaskStore:
 
     @staticmethod
     def _run_values(run: Dict[str, Any]) -> tuple[Any, ...]:
-        return tuple(
-            run.get(column) or ""
-            if column in {"execution_provider", "execution_model"}
-            else run.get(column)
-            for column in ScheduledTaskStore._RUN_COLUMNS
-        )
+        values: list[Any] = []
+        for column in ScheduledTaskStore._RUN_COLUMNS:
+            if column in {"execution_provider", "execution_model"}:
+                values.append(run.get(column) or "")
+            elif column == "rate_limited":
+                values.append(1 if run.get(column) else 0)
+            else:
+                values.append(run.get(column))
+        return tuple(values)
 
     def _insert_task(self, connection: sqlite3.Connection, task: Dict[str, Any]) -> None:
         columns = ", ".join(self._TASK_COLUMNS)
@@ -627,6 +634,8 @@ class ScheduledTaskStore:
                 "execution_provider": str(providers.get(worker_role) or "")[:120],
                 "execution_model": "",
                 "elapsed_ms": None,
+                "rate_limited": 0,
+                "error_code": None,
             }
             self._insert_run(connection, run)
             task["active_run_id"] = run_id
@@ -664,6 +673,15 @@ class ScheduledTaskStore:
                 "SELECT provider_key, cooldown_until, failure_count, last_status "
                 "FROM scheduled_provider_cooldowns"
             ).fetchall()
+            metric_rows = connection.execute(
+                "SELECT r.status, r.execution_provider, r.elapsed_ms, "
+                "r.rate_limited, r.completed_at FROM scheduled_task_runs r "
+                "JOIN scheduled_tasks t ON t.schedule_id = r.schedule_id "
+                "WHERE r.status IN ('completed', 'failed') "
+                "AND r.execution_provider != '' AND t.worker_role != '' "
+                "ORDER BY r.claimed_at DESC LIMIT ?",
+                (self.run_history_limit,),
+            ).fetchall()
 
         role_state: Dict[str, Dict[str, Any]] = {}
         provider_state: Dict[str, Dict[str, Any]] = {}
@@ -697,6 +715,14 @@ class ScheduledTaskStore:
                     "cooldown_remaining_seconds": 0,
                     "failure_count": 0,
                     "last_status": None,
+                    "metrics": {
+                        "sample_size": 0,
+                        "success_count": 0,
+                        "success_rate_percent": None,
+                        "average_elapsed_ms": None,
+                        "rate_limit_count": 0,
+                        "last_completed_at": "",
+                    },
                 },
             )
 
@@ -733,6 +759,49 @@ class ScheduledTaskStore:
                     "last_status": int(row["last_status"] or 0) or None,
                 }
             )
+        metric_accumulators: Dict[str, Dict[str, Any]] = {}
+        for row in metric_rows:
+            provider = str(row["execution_provider"] or "").strip().lower()
+            if not provider:
+                continue
+            metrics = metric_accumulators.setdefault(
+                provider,
+                {
+                    "sample_size": 0,
+                    "success_count": 0,
+                    "elapsed_total": 0,
+                    "elapsed_count": 0,
+                    "rate_limit_count": 0,
+                    "last_completed_at": "",
+                },
+            )
+            if metrics["sample_size"] >= 50:
+                continue
+            metrics["sample_size"] += 1
+            metrics["success_count"] += int(row["status"] == "completed")
+            metrics["rate_limit_count"] += int(bool(row["rate_limited"]))
+            if row["elapsed_ms"] is not None:
+                metrics["elapsed_total"] += int(row["elapsed_ms"])
+                metrics["elapsed_count"] += 1
+            if not metrics["last_completed_at"]:
+                metrics["last_completed_at"] = str(row["completed_at"] or "")
+        for provider, metrics in metric_accumulators.items():
+            sample_size = int(metrics["sample_size"])
+            elapsed_count = int(metrics["elapsed_count"])
+            provider_bucket(provider)["metrics"] = {
+                "sample_size": sample_size,
+                "success_count": int(metrics["success_count"]),
+                "success_rate_percent": (
+                    round(int(metrics["success_count"]) * 100 / sample_size, 1)
+                    if sample_size else None
+                ),
+                "average_elapsed_ms": (
+                    round(int(metrics["elapsed_total"]) / elapsed_count)
+                    if elapsed_count else None
+                ),
+                "rate_limit_count": int(metrics["rate_limit_count"]),
+                "last_completed_at": metrics["last_completed_at"],
+            }
         provider_state.pop("", None)
         return {
             "max_concurrent": max(1, min(int(max_concurrent), 16)),
@@ -824,6 +893,10 @@ class ScheduledTaskStore:
                         max(0, min(int(elapsed_ms), 86_400_000))
                         if elapsed_ms is not None else None
                     ),
+                    "rate_limited": int(
+                        not success and bool(rate_limited or error_code == 429)
+                    ),
+                    "error_code": error_code,
                 }
             )
             if provider_key and success:
@@ -831,7 +904,7 @@ class ScheduledTaskStore:
                     "DELETE FROM scheduled_provider_cooldowns WHERE provider_key = ?",
                     (provider_key,),
                 )
-            elif provider_key and (rate_limited or error_code == 429):
+            elif provider_key and run["rate_limited"]:
                 previous = connection.execute(
                     "SELECT failure_count FROM scheduled_provider_cooldowns "
                     "WHERE provider_key = ?",
@@ -860,11 +933,12 @@ class ScheduledTaskStore:
             connection.execute(
                 "UPDATE scheduled_task_runs SET status = ?, result_summary = ?, error = ?, "
                 "completed_at = ?, execution_provider = ?, execution_model = ?, "
-                "elapsed_ms = ? WHERE run_id = ?",
+                "elapsed_ms = ?, rate_limited = ?, error_code = ? WHERE run_id = ?",
                 (
                     run["status"], run["result_summary"], run["error"],
                     run["completed_at"], run["execution_provider"],
-                    run["execution_model"], run["elapsed_ms"], run_id,
+                    run["execution_model"], run["elapsed_ms"], run["rate_limited"],
+                    run["error_code"], run_id,
                 ),
             )
             task["active_run_id"] = None
@@ -884,6 +958,17 @@ class ScheduledTaskStore:
             self._replace_task(connection, task)
             self._prune_runs(connection)
             return {"task": dict(task), "run": dict(run)}
+
+    def clear_provider_cooldown(self, provider_key: str) -> bool:
+        provider = str(provider_key or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider):
+            raise ValueError("invalid Provider key")
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM scheduled_provider_cooldowns WHERE provider_key = ?",
+                (provider,),
+            )
+        return bool(cursor.rowcount)
 
     def _prune_runs(self, connection: sqlite3.Connection) -> None:
         connection.execute(

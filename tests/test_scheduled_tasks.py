@@ -4,7 +4,7 @@ import json
 import queue
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -139,11 +139,21 @@ def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) 
             "provider": "provider-r", "active": 1, "queued": 1, "limit": 2,
             "cooldown_until": "", "cooldown_remaining_seconds": 0,
             "failure_count": 0, "last_status": None,
+            "metrics": {
+                "sample_size": 0, "success_count": 0,
+                "success_rate_percent": None, "average_elapsed_ms": None,
+                "rate_limit_count": 0, "last_completed_at": "",
+            },
         },
         "provider-c": {
             "provider": "provider-c", "active": 1, "queued": 0, "limit": 2,
             "cooldown_until": "", "cooldown_remaining_seconds": 0,
             "failure_count": 0, "last_status": None,
+            "metrics": {
+                "sample_size": 0, "success_count": 0,
+                "success_rate_percent": None, "average_elapsed_ms": None,
+                "rate_limit_count": 0, "last_completed_at": "",
+            },
         },
     }
 
@@ -223,6 +233,7 @@ def test_provider_429_cooldown_uses_retry_after_and_success_clears_state(tmp_pat
         rate_limited=True,
         retry_after_seconds=75,
         error_code=429,
+        elapsed_ms=1000,
         now=now,
     )
     state = store.dispatch_state(now=now, **policy)
@@ -230,6 +241,14 @@ def test_provider_429_cooldown_uses_retry_after_and_success_clears_state(tmp_pat
     assert provider["cooldown_remaining_seconds"] == 75
     assert provider["failure_count"] == 1
     assert provider["last_status"] == 429
+    assert provider["metrics"] == {
+        "sample_size": 1,
+        "success_count": 0,
+        "success_rate_percent": 0.0,
+        "average_elapsed_ms": 1000,
+        "rate_limit_count": 1,
+        "last_completed_at": now.isoformat(),
+    }
     assert store.claim_due(owner_session_id="cli-main", now=now, **policy) is None
 
     after_first_cooldown = now.replace(minute=1, second=16)
@@ -242,6 +261,7 @@ def test_provider_429_cooldown_uses_retry_after_and_success_clears_state(tmp_pat
         owner_session_id="cli-main",
         success=False,
         rate_limited=True,
+        elapsed_ms=3000,
         now=after_first_cooldown,
     )
     state = store.dispatch_state(now=after_first_cooldown, **policy)
@@ -258,12 +278,101 @@ def test_provider_429_cooldown_uses_retry_after_and_success_clears_state(tmp_pat
         third["run"]["run_id"],
         owner_session_id="cli-main",
         success=True,
+        elapsed_ms=2000,
         now=after_second_cooldown,
     )
     provider = store.dispatch_state(now=after_second_cooldown, **policy)["providers"][0]
     assert provider["cooldown_remaining_seconds"] == 0
     assert provider["failure_count"] == 0
     assert provider["last_status"] is None
+    assert provider["metrics"] == {
+        "sample_size": 3,
+        "success_count": 1,
+        "success_rate_percent": 33.3,
+        "average_elapsed_ms": 2000,
+        "rate_limit_count": 2,
+        "last_completed_at": after_second_cooldown.isoformat(),
+    }
+
+
+def test_manual_provider_cooldown_reset_releases_queued_work(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    for index in range(2):
+        store.create(
+            {
+                "title": f"任务 {index}",
+                "instruction": "执行",
+                "schedule_type": "once",
+                "run_at": "2026-07-28T00:59:00+00:00",
+                "created_by": "api_b",
+                "worker_role": "research",
+            },
+            now=now,
+        )
+    policy = {
+        "role_providers": {"research": "limited-provider"},
+        "provider_limits": {"limited-provider": 2},
+    }
+    first = store.claim_due(owner_session_id="cli-main", now=now, **policy)
+    assert first is not None
+    store.finish_run(
+        first["run"]["run_id"],
+        owner_session_id="cli-main",
+        success=False,
+        rate_limited=True,
+        now=now,
+    )
+
+    assert store.claim_due(owner_session_id="cli-main", now=now, **policy) is None
+    assert store.clear_provider_cooldown("limited-provider") is True
+    assert store.clear_provider_cooldown("limited-provider") is False
+    assert store.claim_due(owner_session_id="cli-main", now=now, **policy) is not None
+
+
+def test_provider_metrics_use_latest_fifty_runs(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    policy = {
+        "role_providers": {"research": "metrics-provider"},
+        "provider_limits": {"metrics-provider": 2},
+    }
+    for index in range(55):
+        completed_at = now + timedelta(seconds=index)
+        store.create(
+            {
+                "title": f"样本 {index}",
+                "instruction": "执行",
+                "schedule_type": "once",
+                "run_at": now.isoformat(),
+                "created_by": "api_b",
+                "worker_role": "research",
+            },
+            now=now,
+        )
+        claim = store.claim_due(
+            owner_session_id="cli-main", now=completed_at, **policy
+        )
+        assert claim is not None
+        store.finish_run(
+            claim["run"]["run_id"],
+            owner_session_id="cli-main",
+            success=index % 2 == 0,
+            elapsed_ms=index * 10,
+            now=completed_at,
+        )
+
+    metrics = store.dispatch_state(now=now + timedelta(minutes=2), **policy)[
+        "providers"
+    ][0]["metrics"]
+    assert metrics == {
+        "sample_size": 50,
+        "success_count": 25,
+        "success_rate_percent": 50.0,
+        "average_elapsed_ms": 295,
+        "rate_limit_count": 0,
+        "last_completed_at": (now + timedelta(seconds=54)).isoformat(),
+    }
 
 
 def test_daily_schedule_advances_after_failed_api_a_run(tmp_path) -> None:
@@ -1616,5 +1725,10 @@ def test_scheduled_store_upgrades_v2_schema_with_worker_role(tmp_path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(scheduled_tasks)")
         }
-    assert version == "5"
+        run_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(scheduled_task_runs)")
+        }
+    assert version == "6"
     assert "worker_role" in columns
+    assert {"rate_limited", "error_code"} <= run_columns

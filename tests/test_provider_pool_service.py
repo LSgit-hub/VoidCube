@@ -287,6 +287,30 @@ def test_supervisor_provider_pool_routes_use_sanitized_contract(
     assert conflict.status_code == 200
 
 
+def test_supervisor_provider_cooldown_reset_route_is_provider_scoped(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    client = _supervisor_client(tmp_path)
+    client.put(
+        "/provider-pool/providers/research-endpoint",
+        json=_provider_request().model_dump(),
+    )
+
+    reset = client.post(
+        "/provider-pool/providers/research-endpoint/cooldown/reset"
+    )
+    missing = client.post("/provider-pool/providers/missing/cooldown/reset")
+
+    assert reset.status_code == 200
+    assert reset.json()["status"] == "reset"
+    assert reset.json()["provider"] == "research-endpoint"
+    assert reset.json()["cleared"] is False
+    assert reset.json()["scheduler"]["providers"][0]["metrics"]["sample_size"] == 0
+    assert missing.status_code == 404
+
+
 def test_supervisor_provider_pool_routes_reject_managed_writes(
     tmp_path,
     monkeypatch,
