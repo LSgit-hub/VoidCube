@@ -757,12 +757,82 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
     assert supervisor._companion_schedule_context()["items"] == []
     prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
     assert "秘书和工作协调者" in prompt
-    assert "API-A 隔离子代理是实际执行工作的员工" in prompt
+    assert "上层智能秘书和工作协调者" in prompt
+    assert "API-A 隔离子代理是下属执行模型" in prompt
+    assert "调用真实工具完成工作并回写结果" in prompt
     assert "execution_action" in prompt
     assert "不得把计划说成结果" in prompt
     worker_roles = supervisor._call_companion_model.call_args.kwargs["payload"]["worker_roles"]
     assert worker_roles["default_role"] == "general"
     assert "coding" in {item["role"] for item in worker_roles["roles"]}
+
+
+@pytest.mark.asyncio
+async def test_completed_companion_worker_result_is_available_to_api_b(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {
+                "reply_text": "我来安排工程员工检查。",
+                "reason": "requires_repository_tools",
+                "schedule_action": {"action": "none"},
+                "media_action": {"action": "none"},
+                "execution_action": {
+                    "action": "delegate",
+                    "title": "检查项目测试",
+                    "instruction": "运行项目测试并汇总结果。",
+                    "worker_role": "coding",
+                },
+            },
+            {
+                "reply_text": "工程员工已经完成，相关测试全部通过。",
+                "reason": "report_worker_result",
+                "schedule_action": {"action": "none"},
+                "media_action": {"action": "none"},
+                "execution_action": {"action": "none"},
+            },
+        ]
+    )
+
+    delegated = await supervisor.handle_companion_message(text="检查这个项目的测试")
+    task_id = delegated["execution_action_result"]["task_id"]
+    claim = supervisor._scheduled_task_store.claim_due(owner_session_id="mini-cli")
+    assert claim is not None
+    assert claim["task"]["schedule_id"] == task_id
+    supervisor._scheduled_task_store.finish_run(
+        claim["run"]["run_id"],
+        owner_session_id="mini-cli",
+        success=True,
+        result_summary="运行 48 项测试，全部通过。",
+        execution_provider="worker-provider",
+        execution_model="worker-model",
+    )
+
+    reported = await supervisor.handle_companion_message(text="刚才员工做完了吗？")
+
+    assert reported["disposition"] == "respond_to_user"
+    assert reported["execution_action_result"] is None
+    assert reported["reply_text"] == "工程员工已经完成，相关测试全部通过。"
+    second_call = supervisor._call_companion_model.await_args_list[1]
+    worker_context = second_call.kwargs["payload"]["worker_executions"]
+    assert worker_context["count"] == 1
+    assert worker_context["items"] == [
+        {
+            "task_id": task_id,
+            "title": "检查项目测试",
+            "worker_role": "coding",
+            "status": "completed",
+            "result_summary": "运行 48 项测试，全部通过。",
+            "error": "",
+            "created_at": worker_context["items"][0]["created_at"],
+            "completed_at": worker_context["items"][0]["completed_at"],
+        }
+    ]
+    system_prompt = second_call.kwargs["system_prompt"]
+    assert "状态是可信运行事实" in system_prompt
+    assert "不得把查询误当成新任务再次派单" in system_prompt
 
 
 @pytest.mark.asyncio
