@@ -3499,6 +3499,11 @@ async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp
     assert unavailable["reason"] == "stellar_auto_evolution_active"
 
 
+@pytest.mark.unit
+def test_companion_model_timeout_allows_full_delegation_context() -> None:
+    assert SupervisorServiceRuntimeConfig().companion_model_timeout_seconds == 30.0
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_auto_mode_blocks_all_voice_capture_entrypoints(tmp_path):

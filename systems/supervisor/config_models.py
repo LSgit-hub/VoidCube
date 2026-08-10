@@ -274,7 +274,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     companion_observation_enabled: bool = True
     companion_observation_interval: int = 30
     companion_judgement_enabled: bool = True
-    companion_model_timeout_seconds: float = 8.0
+    companion_model_timeout_seconds: float = 30.0
     companion_goal_confidence_threshold: float = 0.75
     companion_deviation_confidence_threshold: float = 0.70
     companion_help_value_threshold: float = 0.65
@@ -345,6 +345,5 @@ class SupervisorConfig(BaseModel):
     soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
     scheduled_task_store_path: Optional[str] = None
-
 
 
