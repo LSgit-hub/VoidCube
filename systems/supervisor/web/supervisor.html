@@ -3539,6 +3539,17 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .media-viewport iframe, .media-viewport video { width: 100%; height: 100%; min-height: 300px; border: 0; background: #000; }
 .media-viewport audio { width: min(480px, 90%); }
+.media-viewport img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; cursor: zoom-in; transition: transform .15s; }
+.media-viewport img.zoomed { cursor: zoom-out; position: fixed; inset: 0; z-index: 9999; max-width: 98vw; max-height: 98vh; margin: auto; background: rgba(0,0,0,.92); padding: 12px; border-radius: 12px; object-fit: contain; }
+.media-viewport .media-html-content { width: 100%; height: 100%; overflow-y: auto; padding: 14px 18px; color: var(--text-primary); font-size: 12px; line-height: 1.7; }
+.media-viewport .media-html-content h2, .media-viewport .media-html-content h3 { color: var(--mint); margin: 12px 0 6px; }
+.media-viewport .media-html-content p { margin: 4px 0 8px; color: var(--text-secondary); }
+.media-viewport .media-html-content code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 10.5px; }
+.media-viewport .media-html-content pre { background: rgba(0,0,0,.3); padding: 10px 14px; border-radius: 6px; overflow-x: auto; font-family: Consolas, monospace; font-size: 10.5px; line-height: 1.5; }
+.media-viewport .media-html-content a { color: var(--accent-yellow); }
+.media-viewport .media-html-content table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 10.5px; }
+.media-viewport .media-html-content th, .media-viewport .media-html-content td { border: 1px solid rgba(255,255,255,.12); padding: 5px 8px; text-align: left; }
+.media-viewport .media-html-content th { background: rgba(255,255,255,.06); font-weight: 700; }
 .media-empty { color: var(--text-muted); text-align: center; font-size: 11px; line-height: 1.6; padding: 24px; }
 .media-empty strong { display: block; color: var(--text-primary); font-size: 13px; margin-bottom: 4px; }
 .media-now { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -3900,7 +3911,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
               <span class="media-now-icon" id="mediaNowIcon">▶</span>
               <div class="media-now-copy">
                 <div class="media-now-title" id="mediaNowTitle">没有正在播放的内容</div>
-                <div class="media-now-meta" id="mediaNowMeta">支持 B 站视频和直链音频、视频</div>
+                <div class="media-now-meta" id="mediaNowMeta">支持图片、文档、网页、音视频等多种格式</div>
               </div>
               <div class="media-controls">
                 <button class="media-control" id="mediaPlayToggle" title="播放或暂停">⏯</button>
@@ -7614,8 +7625,8 @@ let embeddedPlayer = null;
 let mountedMediaId = '';
 
 function mediaTypeIcon(t) {
-  const map = { bilibili: '▶', video: '🎬', audio: '🎵' };
-  return map[t] || '🎵';
+  const map = { bilibili: '▶', video: '🎬', audio: '🎵', image: '🖼', document: '📄', webpage: '🌐', html: '📝' };
+  return map[t] || '📄';
 }
 
 function classifyMedia(url) {
@@ -7627,12 +7638,14 @@ function classifyMedia(url) {
   if (host === 'bilibili.com' || host.endsWith('.bilibili.com') || host === 'b23.tv') return 'bilibili';
   if (/\.(mp3|m4a|ogg|wav|flac|aac|opus)$/.test(path)) return 'audio';
   if (/\.(mp4|webm|mkv|mov|avi|m4v)$/.test(path)) return 'video';
-  return 'unsupported';
+  if (/\.(png|jpg|jpeg|gif|svg|webp|bmp|ico)$/.test(path)) return 'image';
+  if (/\.(pdf)$/.test(path)) return 'document';
+  return 'webpage';
 }
 
 function resolveMediaType(media) {
   const requested = String((media || {}).type || 'auto').toLowerCase();
-  if (['bilibili', 'audio', 'video'].includes(requested)) return requested;
+  if (['bilibili', 'audio', 'video', 'image', 'document', 'webpage', 'html'].includes(requested)) return requested;
   return classifyMedia((media || {}).url || '');
 }
 
@@ -7676,7 +7689,7 @@ function setMediaMessage(message, link, title) {
 
 function mediaTypeLabel(media) {
   const type = resolveMediaType(media);
-  return ({bilibili:'B 站视频', video:'直链视频', audio:'直链音频'})[type] || '未知媒体';
+  return ({bilibili:'B 站视频', video:'直链视频', audio:'直链音频', image:'图片', document:'文档', webpage:'网页', html:'富文本'})[type] || '网页';
 }
 
 function renderMediaQueue() {
@@ -7775,8 +7788,8 @@ function renderMediaBoard() {
   if (!currentMedia) {
     if (mediaNowIcon) mediaNowIcon.textContent = '▶';
     if (mediaNowTitle) mediaNowTitle.textContent = '没有正在播放的内容';
-    if (mediaNowMeta) mediaNowMeta.textContent = '支持 B 站视频和直链音频、视频';
-    if (panelOpen === 'media') setMediaMessage('Agent 加入媒体后会出现在这里。', '', '等待播放');
+    if (mediaNowMeta) mediaNowMeta.textContent = '支持图片、文档、网页、音视频等多种格式';
+    if (panelOpen === 'media') setMediaMessage('Agent 可以将图片、文档、网页等内容推送到这里展示。', '', '等待内容');
   } else {
     const type = resolveMediaType(currentMedia);
     if (mediaNowIcon) mediaNowIcon.textContent = mediaTypeIcon(type);
@@ -7866,8 +7879,51 @@ function mountCurrentMedia() {
     audio.addEventListener('error', () => { if (mediaNowMeta) mediaNowMeta.textContent = '音频无法播放'; });
     mediaViewport.appendChild(audio);
     embeddedPlayer = audio;
+  } else if (type === 'image') {
+    const img = document.createElement('img');
+    img.src = currentMedia.url;
+    img.alt = currentMedia.title || '';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => img.classList.toggle('zoomed'));
+    img.addEventListener('error', () => { setMediaMessage('图片无法加载，请检查链接是否有效。', currentMedia.url, '图片加载失败'); });
+    mediaViewport.appendChild(img);
+    embeddedPlayer = img;
+  } else if (type === 'document') {
+    const iframe = document.createElement('iframe');
+    iframe.src = currentMedia.url;
+    iframe.allow = 'fullscreen';
+    iframe.sandbox = 'allow-scripts allow-same-origin';
+    iframe.addEventListener('error', () => { setMediaMessage('文档无法加载。', currentMedia.url, '文档加载失败'); });
+    mediaViewport.appendChild(iframe);
+    embeddedPlayer = iframe;
+  } else if (type === 'webpage') {
+    const iframe = document.createElement('iframe');
+    iframe.src = currentMedia.url;
+    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
+    iframe.allow = 'fullscreen';
+    iframe.addEventListener('error', () => { setMediaMessage('网页无法嵌入，可能被目标站点拒绝。', currentMedia.url, '嵌入受限'); });
+    mediaViewport.appendChild(iframe);
+    embeddedPlayer = iframe;
+  } else if (type === 'html') {
+    const container = document.createElement('div');
+    container.className = 'media-html-content';
+    const content = (currentMedia.content || currentMedia.url || '').trim();
+    if (content) {
+      if (content.startsWith('<') || content.startsWith('<!')) {
+        container.innerHTML = content;
+      } else {
+        // Plain text → wrap in <pre> for readability
+        const pre = document.createElement('pre');
+        pre.textContent = content;
+        container.appendChild(pre);
+      }
+    } else {
+      container.innerHTML = '<span style="color:var(--text-muted)">没有可渲染的内容</span>';
+    }
+    mediaViewport.appendChild(container);
+    embeddedPlayer = container;
   } else {
-    setMediaMessage('这个链接不是可识别的 B 站视频或直链音视频。', currentMedia.url, '无法播放');
+    setMediaMessage('Agent 可以通过展板展示图片、文档、网页、音视频等多种内容。', currentMedia.url, '等待内容');
   }
   applyPlaybackState();
 }
@@ -7881,6 +7937,8 @@ function togglePlayPause() {
     }
     return;
   }
+  // Only audio/video have meaningful play/pause; skip for images, documents, etc.
+  if (!('paused' in embeddedPlayer)) return;
   try {
     if (embeddedPlayer.tagName === 'IFRAME') {
       requestMediaControl('pause');

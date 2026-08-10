@@ -104,6 +104,51 @@ def media_playlist(items: list[Dict[str, Any]], queue_mode: str = "replace") -> 
     )
 
 
+def media_display(
+    url: str = "",
+    content: str = "",
+    title: str = "",
+    media_type: str = "auto",
+    auto_play: bool = True,
+    mime_type: str = "",
+) -> str:
+    """将任意内容推送到 VoidCube Web UI 多媒体展板展示。
+
+    这是通用展示板工具，Agent 可以用它向用户展示各种类型的媒体内容。
+    与 media_play 不同，media_display 专注于可视化展示而非后台播放。
+
+    适用场景：
+    - Agent 生成的图片：传 url + type="image"
+    - 生成的报告/文档：传 content (HTML格式) + type="html"
+    - 任意网页：传 url + type="webpage"
+    - PDF 文档：传 url + type="document"
+    - 音乐/视频：同 media_play，传 url + type="audio"/"video"
+
+    Args:
+        url: 媒体 URL（html 类型可省略，用 content 代替）
+        content: 内联 HTML 或文本内容（仅 html 类型有效）
+        title: 显示在展板上的标题
+        media_type: "image" | "document" | "webpage" | "html" | "audio" | "video" | "bilibili" | "auto"
+        auto_play: 是否自动展开展板，默认 True
+        mime_type: 显式指定 MIME 类型（可选，如 text/html）
+
+    Returns:
+        JSON 字符串，包含 status 和展示状态
+    """
+    payload: Dict[str, Any] = {
+        "url": url,
+        "title": title or url or "Agent 展示内容",
+        "type": media_type,
+        "auto_play": auto_play,
+    }
+    if content:
+        payload["content"] = content
+    if mime_type:
+        payload["mime_type"] = mime_type
+
+    return _post_media(_supervisor_media_url(), payload, operation="media_display")
+
+
 # ── Registry ──
 from tools.registry import registry
 
@@ -128,7 +173,7 @@ MEDIA_PLAY_SCHEMA = {
             },
             "media_type": {
                 "type": "string",
-                "enum": ["bilibili", "audio", "video", "auto"],
+                "enum": ["bilibili", "audio", "video", "image", "document", "webpage", "html", "auto"],
                 "description": "媒体类型，默认 auto 自动识别",
             },
             "auto_play": {
@@ -142,6 +187,47 @@ MEDIA_PLAY_SCHEMA = {
             },
         },
         "required": ["url"],
+    },
+}
+
+MEDIA_DISPLAY_SCHEMA = {
+    "name": "media_display",
+    "description": (
+        "向 VoidCube Web UI 多媒体展板推送任意可视化内容。"
+        "Agent 生成图片/文档/网页后调用此工具展示给用户。"
+        "图片传 url+type='image'；HTML 报告传 content+type='html'；"
+        "网页传 url+type='webpage'；PDF 传 url+type='document'。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "媒体 URL。html 类型可用 content 代替，其余类型必填",
+            },
+            "content": {
+                "type": "string",
+                "description": "内联 HTML 或文本内容。仅 html 类型有效，支持完整 HTML/CSS",
+            },
+            "title": {
+                "type": "string",
+                "description": "显示在展板上的标题",
+            },
+            "media_type": {
+                "type": "string",
+                "enum": ["image", "document", "webpage", "html", "audio", "video", "bilibili", "auto"],
+                "description": "内容类型。image=图片, document=PDF, webpage=网页嵌入, html=富文本",
+            },
+            "auto_play": {
+                "type": "boolean",
+                "description": "是否自动展开展板面板，默认 true",
+            },
+            "mime_type": {
+                "type": "string",
+                "description": "显式 MIME 类型（可选），如 text/html",
+            },
+        },
+        "required": [],
     },
 }
 
@@ -222,6 +308,20 @@ registry.register(
         queue_mode=args.get("queue_mode", "replace"),
     ),
     emoji="🎶",
+)
+registry.register(
+    name="media_display",
+    toolset="media",
+    schema=MEDIA_DISPLAY_SCHEMA,
+    handler=lambda args, **kw: media_display(
+        url=args.get("url", ""),
+        content=args.get("content", ""),
+        title=args.get("title", ""),
+        media_type=args.get("media_type", "auto"),
+        auto_play=args.get("auto_play", True),
+        mime_type=args.get("mime_type", ""),
+    ),
+    emoji="🖼",
 )
 registry.register(
     name="media_control",

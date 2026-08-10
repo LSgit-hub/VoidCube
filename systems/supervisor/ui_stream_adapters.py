@@ -111,18 +111,30 @@ def media_events(
     return _sse_response(event_stream())
 
 
+VALID_MEDIA_TYPES = {"auto", "bilibili", "audio", "video", "image", "document", "webpage", "html"}
+
+
 def normalize_media_enqueue_body(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
     url = (body.get("url") or "").strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="缺少 url 字段")
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="媒体 URL 必须使用 http 或 https")
+    content = (body.get("content") or "").strip()
     media_type = str(body.get("type") or "auto").strip().lower()
-    if media_type not in {"auto", "bilibili", "audio", "video"}:
-        raise HTTPException(status_code=400, detail="不支持的媒体类型")
+    if media_type not in VALID_MEDIA_TYPES:
+        raise HTTPException(status_code=400, detail=f"不支持的媒体类型: {media_type}")
+
+    # html type can use inline content instead of a URL
+    if media_type == "html":
+        if not url and not content:
+            raise HTTPException(status_code=400, detail="html 类型必须提供 url 或 content 字段")
+    elif not url:
+        raise HTTPException(status_code=400, detail="缺少 url 字段")
+
+    if url:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=400, detail="媒体 URL 必须使用 http 或 https")
+
     queue_mode = str(body.get("queue_mode") or "replace").strip().lower()
     if queue_mode not in {"replace", "enqueue"}:
         raise HTTPException(status_code=400, detail="不支持的队列模式")
@@ -131,12 +143,17 @@ def normalize_media_enqueue_body(body: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="auto_play 必须是布尔值")
     normalized = {
         "url": url,
-        "title": (body.get("title") or "").strip() or url,
+        "title": (body.get("title") or "").strip() or url or "未命名内容",
         "type": media_type,
         "auto_play": auto_play,
     }
     if "queue_mode" in body:
         normalized["queue_mode"] = queue_mode
+    if content:
+        normalized["content"] = content
+    mime_type = (body.get("mime_type") or "").strip()
+    if mime_type:
+        normalized["mime_type"] = mime_type
     return normalized
 
 

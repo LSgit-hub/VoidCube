@@ -54,7 +54,7 @@ def test_media_play_is_available_to_web_and_playback_agents() -> None:
         for item in get_tool_definitions(["playback"], quiet_mode=True)
     }
     assert "media_play" in web_names
-    assert playback_names == {"media_play", "media_playlist", "media_control"}
+    assert playback_names == {"media_play", "media_playlist", "media_display", "media_control"}
 
 
 def test_media_playlist_posts_one_batch(monkeypatch) -> None:
