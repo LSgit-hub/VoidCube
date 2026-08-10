@@ -52,7 +52,17 @@ class ScheduledExecutionHost:
 
     def start(self, prompt: str, **kwargs: Any) -> bool:
         worker_role = str(kwargs.pop("worker_role", "") or "").strip().lower()
+        execution_details = kwargs.pop("execution_details", None)
         route = self._resolve_agent_route(prompt, worker_role)
+        if isinstance(execution_details, dict):
+            runtime = route.get("runtime")
+            runtime = runtime if isinstance(runtime, dict) else {}
+            execution_details.update(
+                {
+                    "provider": str(runtime.get("provider") or "").strip(),
+                    "model": str(route.get("model") or "").strip(),
+                }
+            )
         worker_label = str(route.get("worker_label") or "").strip()
         task_label = str(kwargs.get("task_label") or "")
         if worker_label and task_label.startswith("API-B 指令 · "):

@@ -14,6 +14,25 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     contentType: 'application/json',
     body: JSON.stringify({ status: 'ok', count: 2, models: ['model-a', 'model-b'] })
   }))
+  await page.route('**/provider-pool/worker-tests/*', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(route.request().method() === 'POST'
+      ? {
+          status: 'queued',
+          test_id: 'worker-test-1',
+          provider: 'actual-provider',
+          model: 'actual-model'
+        }
+      : {
+          status: 'completed',
+          test_id: 'worker-test-1',
+          provider: 'actual-provider',
+          model: 'actual-model',
+          elapsed_ms: 845,
+          result: '员工测试成功',
+          error: ''
+        })
+  }))
 
   try {
     await page.goto('http://127.0.0.1:6002/ui', { waitUntil: 'domcontentloaded' })
@@ -48,6 +67,12 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       (options) => options.map((option) => (option as HTMLOptionElement).value)
     )
     expect(providerOptions).toContain(selectedProvider)
+    await page.locator('[data-worker-test]').first().click()
+    await expect(page.locator('#workerTestStatus')).toHaveText(
+      '完成 · 845 ms · actual-provider · actual-model',
+      { timeout: 5000 }
+    )
+    await expect(page.locator('#workerTestResult')).toHaveText('员工测试成功')
     await expect(page.locator('#workerRoleList .worker-role-row').first()).toBeInViewport()
     await page.screenshot({
       path: 'test-results/worker-roles-desktop.png',

@@ -74,11 +74,17 @@ def test_once_schedule_claim_and_api_a_writeback(tmp_path) -> None:
         owner_session_id="cli-main",
         success=True,
         result_summary="已完成整理",
+        execution_provider="research-endpoint",
+        execution_model="research-model",
+        elapsed_ms=1250,
         now=now,
     )
     assert result["task"]["status"] == "completed"
     assert result["task"]["next_run_at"] is None
     assert result["run"]["status"] == "completed"
+    assert result["run"]["execution_provider"] == "research-endpoint"
+    assert result["run"]["execution_model"] == "research-model"
+    assert result["run"]["elapsed_ms"] == 1250
     with pytest.raises(ValueError, match="must be updated"):
         store.set_status(task["schedule_id"], "active")
 
@@ -574,6 +580,65 @@ def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> Non
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/delegate-run-1/finish"
 
 
+def test_provider_pool_worker_test_uses_isolated_api_a_prompt(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _background_task_state=BackgroundTaskState(),
+        _autonomous_execution_host=SimpleNamespace(_agent_running=False),
+    )
+
+    def start_background(prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        kwargs["execution_details"].update(
+            {"provider": "research-endpoint", "model": "research-model"}
+        )
+        assert "Provider 池中的员工连通性测试" in prompt
+        assert "隔离的 API-A 子代理" in prompt
+        assert "不要进入用户聊天链路" in prompt
+        assert kwargs["task_label"] == "员工测试 · 调研员工"
+        assert kwargs["response_title"] == "> Voidcube（员工测试）"
+        assert kwargs["worker_role"] == "research"
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host),
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "provider-pool-test-writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {
+                        "title": "员工测试 · 调研员工",
+                        "instruction": "只回复测试成功",
+                        "created_by": "api_b",
+                        "requested_via": "provider_pool_test",
+                        "worker_role": "research",
+                    },
+                    "run": {"run_id": "provider-pool-test-run-1"},
+                },
+            },
+            {"status": "completed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](True, "测试成功", "")
+
+    assert runtime._post.call_args_list[-1].args[0] == (
+        "/scheduled-task-runs/provider-pool-test-run-1/finish"
+    )
+    writeback = runtime._post.call_args_list[-1].args[1]
+    assert writeback["execution_provider"] == "research-endpoint"
+    assert writeback["execution_model"] == "research-model"
+    assert writeback["elapsed_ms"] >= 0
+
+
 def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(
@@ -660,6 +725,7 @@ def test_scheduled_host_projects_resolved_worker_label() -> None:
     completions = []
     completed = threading.Event()
     captured_route = {}
+    execution_details = {}
 
     class Agent:
         def run_conversation(self, **_kwargs):
@@ -693,12 +759,14 @@ def test_scheduled_host_projects_resolved_worker_label() -> None:
         task_label="API-B 指令 · 核实资料",
         worker_role="research",
         persist_session=False,
+        execution_details=execution_details,
     )
     assert completed.wait(2)
 
     assert starts[0][3] == "API-B 指令 · 调研员工 · 核实资料"
     assert completions[0][4] == "API-B 指令 · 调研员工 · 核实资料"
     assert captured_route["worker_role"] == "research"
+    assert execution_details == {"provider": "", "model": "worker-model"}
 
 
 def test_cli_resolves_scheduled_worker_provider_model_and_toolsets() -> None:
@@ -1257,5 +1325,5 @@ def test_scheduled_store_upgrades_v2_schema_with_worker_role(tmp_path) -> None:
             row[1]
             for row in connection.execute("PRAGMA table_info(scheduled_tasks)")
         }
-    assert version == "3"
+    assert version == "4"
     assert "worker_role" in columns

@@ -18,7 +18,7 @@ from fastapi import HTTPException
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
 TERMINAL_SCHEDULE_STATUSES = frozenset({"completed", "failed"})
 INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset(
-    {"companion_delegate", "companion_media"}
+    {"companion_delegate", "companion_media", "provider_pool_test"}
 )
 
 
@@ -80,6 +80,7 @@ class ScheduledTaskStore:
     _RUN_COLUMNS = (
         "run_id", "schedule_id", "due_at", "status", "owner_session_id",
         "claimed_at", "lease_expires_at", "completed_at", "result_summary", "error",
+        "execution_provider", "execution_model", "elapsed_ms",
     )
 
     def __init__(
@@ -166,8 +167,23 @@ class ScheduledTaskStore:
                 "run_id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, due_at TEXT NOT NULL, "
                 "status TEXT NOT NULL, owner_session_id TEXT NOT NULL, claimed_at TEXT NOT NULL, "
                 "lease_expires_at TEXT NOT NULL, completed_at TEXT, "
-                "result_summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '')"
+                "result_summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', "
+                "execution_provider TEXT NOT NULL DEFAULT '', "
+                "execution_model TEXT NOT NULL DEFAULT '', elapsed_ms INTEGER)"
             )
+            run_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(scheduled_task_runs)")
+            }
+            for column, definition in (
+                ("execution_provider", "TEXT NOT NULL DEFAULT ''"),
+                ("execution_model", "TEXT NOT NULL DEFAULT ''"),
+                ("elapsed_ms", "INTEGER"),
+            ):
+                if column not in run_columns:
+                    connection.execute(
+                        f"ALTER TABLE scheduled_task_runs ADD COLUMN {column} {definition}"
+                    )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due "
                 "ON scheduled_tasks(status, active_run_id, next_run_at)"
@@ -181,7 +197,7 @@ class ScheduledTaskStore:
                 "ON scheduled_task_runs(claimed_at DESC)"
             )
             connection.execute(
-                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '3')"
+                "INSERT OR REPLACE INTO scheduled_task_meta(key, value) VALUES('schema_version', '4')"
             )
 
     def _migrate_legacy_json_once(self) -> None:
@@ -351,7 +367,12 @@ class ScheduledTaskStore:
 
     @staticmethod
     def _run_values(run: Dict[str, Any]) -> tuple[Any, ...]:
-        return tuple(run.get(column) for column in ScheduledTaskStore._RUN_COLUMNS)
+        return tuple(
+            run.get(column) or ""
+            if column in {"execution_provider", "execution_model"}
+            else run.get(column)
+            for column in ScheduledTaskStore._RUN_COLUMNS
+        )
 
     def _insert_task(self, connection: sqlite3.Connection, task: Dict[str, Any]) -> None:
         columns = ", ".join(self._TASK_COLUMNS)
@@ -535,6 +556,9 @@ class ScheduledTaskStore:
                 "completed_at": None,
                 "result_summary": "",
                 "error": "",
+                "execution_provider": "",
+                "execution_model": "",
+                "elapsed_ms": None,
             }
             self._insert_run(connection, run)
             task["active_run_id"] = run_id
@@ -580,6 +604,9 @@ class ScheduledTaskStore:
         success: bool,
         result_summary: str = "",
         error: str = "",
+        execution_provider: str = "",
+        execution_model: str = "",
+        elapsed_ms: int | None = None,
         now: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         current = (now or _utc_now()).astimezone(timezone.utc)
@@ -609,14 +636,22 @@ class ScheduledTaskStore:
                     "result_summary": str(result_summary or "")[:12000],
                     "error": str(error or "")[:2000],
                     "completed_at": completed_at,
+                    "execution_provider": str(execution_provider or "")[:120],
+                    "execution_model": str(execution_model or "")[:300],
+                    "elapsed_ms": (
+                        max(0, min(int(elapsed_ms), 86_400_000))
+                        if elapsed_ms is not None else None
+                    ),
                 }
             )
             connection.execute(
                 "UPDATE scheduled_task_runs SET status = ?, result_summary = ?, error = ?, "
-                "completed_at = ? WHERE run_id = ?",
+                "completed_at = ?, execution_provider = ?, execution_model = ?, "
+                "elapsed_ms = ? WHERE run_id = ?",
                 (
                     run["status"], run["result_summary"], run["error"],
-                    run["completed_at"], run_id,
+                    run["completed_at"], run["execution_provider"],
+                    run["execution_model"], run["elapsed_ms"], run_id,
                 ),
             )
             task["active_run_id"] = None
@@ -760,5 +795,8 @@ class ScheduledTaskRuntimeMixin:
             success=success,
             result_summary=str(request.get("result_summary") or ""),
             error=str(request.get("error") or ""),
+            execution_provider=str(request.get("execution_provider") or ""),
+            execution_model=str(request.get("execution_model") or ""),
+            elapsed_ms=request.get("elapsed_ms"),
         )
         return {"status": "completed" if success else "failed", **result}

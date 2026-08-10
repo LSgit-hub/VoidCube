@@ -3,7 +3,7 @@ import re
 import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -79,6 +79,10 @@ class HealthCheckResult(BaseModel):
 class CompanionMessageRequest(BaseModel):
     text: str
     session_id: str = ""
+
+
+class CompanionWorkerTestRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
 
 
 class VoiceToggleRequest(BaseModel):
@@ -325,6 +329,16 @@ class Supervisor(
             self.set_provider_pool_worker_roles,
             methods=["PUT"],
         )
+        self.app.add_api_route(
+            "/provider-pool/worker-tests/{worker_role}",
+            self.create_provider_pool_worker_test,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/provider-pool/worker-tests/{test_id}",
+            self.get_provider_pool_worker_test,
+            methods=["GET"],
+        )
         self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
         self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
         self.app.add_api_route("/voice/fingerprint", self.set_voice_fingerprint, methods=["POST"])
@@ -494,6 +508,98 @@ class Supervisor(
             return self._provider_pool_service.save_worker_assignments(request)
         except (KeyError, ValueError, ProviderPoolManagedError) as exc:
             raise self._provider_pool_error(exc) from exc
+
+    @staticmethod
+    def _provider_pool_worker_assignment(
+        worker_role: str,
+        *,
+        strict: bool = False,
+    ) -> Dict[str, str]:
+        from VoidCube_app.companion_workers import (
+            companion_worker_roles,
+            resolve_companion_worker_role,
+        )
+        from VoidCube_app.config import load_config
+
+        config = load_config()
+        if strict and str(worker_role or "").strip().lower() not in companion_worker_roles(config):
+            raise ValueError("worker role is unknown or disabled")
+        role = resolve_companion_worker_role(config, worker_role)
+        providers = config.get("providers")
+        providers = providers if isinstance(providers, dict) else {}
+        provider_key = role.provider or str(
+            (config.get("runtime") or {}).get("active_provider") or ""
+        ).strip().lower()
+        provider = providers.get(provider_key)
+        provider = provider if isinstance(provider, dict) else {}
+        return {
+            "role": role.role,
+            "label": role.label,
+            "provider": provider_key,
+            "model": role.model or str(provider.get("selected_model") or "").strip(),
+        }
+
+    async def create_provider_pool_worker_test(
+        self,
+        worker_role: str,
+        request: CompanionWorkerTestRequest,
+    ) -> Dict[str, Any]:
+        try:
+            assignment = self._provider_pool_worker_assignment(worker_role, strict=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        task = self._scheduled_task_store.create(
+            {
+                "title": f"员工测试 · {assignment['label']}",
+                "instruction": request.instruction.strip(),
+                "schedule_type": "once",
+                "run_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": "api_b",
+                "requested_via": "provider_pool_test",
+                "worker_role": assignment["role"],
+            }
+        )
+        return {
+            "status": "queued",
+            "test_id": task["schedule_id"],
+            "worker_role": assignment["role"],
+            "worker_label": assignment["label"],
+            "provider": assignment["provider"],
+            "model": assignment["model"],
+            "created_at": task.get("created_at"),
+        }
+
+    async def get_provider_pool_worker_test(self, test_id: str) -> Dict[str, Any]:
+        task = self._scheduled_store_call("get", test_id)
+        if task.get("requested_via") != "provider_pool_test":
+            raise HTTPException(status_code=404, detail="worker test not found")
+        assignment = self._provider_pool_worker_assignment(str(task.get("worker_role") or ""))
+        runs = [
+            run for run in self._scheduled_task_store.recent_runs(limit=200)
+            if str(run.get("schedule_id") or "") == test_id
+        ]
+        run = runs[0] if runs else None
+        status = str((run or {}).get("status") or "queued")
+        elapsed_ms = (run or {}).get("elapsed_ms")
+        if elapsed_ms is None and run and run.get("claimed_at"):
+            start = datetime.fromisoformat(str(run["claimed_at"]).replace("Z", "+00:00"))
+            end_value = run.get("completed_at")
+            end = (
+                datetime.fromisoformat(str(end_value).replace("Z", "+00:00"))
+                if end_value else datetime.now(timezone.utc)
+            )
+            elapsed_ms = max(0, round((end - start).total_seconds() * 1000))
+        return {
+            "status": status,
+            "test_id": test_id,
+            "worker_role": assignment["role"],
+            "worker_label": assignment["label"],
+            "provider": str((run or {}).get("execution_provider") or assignment["provider"]),
+            "model": str((run or {}).get("execution_model") or assignment["model"]),
+            "elapsed_ms": elapsed_ms,
+            "result": str((run or {}).get("result_summary") or "")[:4000],
+            "error": str((run or {}).get("error") or "")[:1000],
+        }
 
     async def voice_status(self) -> Dict[str, Any]:
         return self._voice_manager.status()

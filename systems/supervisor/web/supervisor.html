@@ -2299,12 +2299,50 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-role-list { display: grid; gap: 6px; }
 .worker-role-row {
   display: grid;
-  grid-template-columns: minmax(140px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(120px, .7fr);
+  grid-template-columns: minmax(140px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(120px, .7fr) auto;
   align-items: center;
   gap: 9px;
   padding: 9px 0;
   border-bottom: 1px solid rgba(255,255,255,.05);
 }
+.worker-test-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(240px, 2fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.worker-test-row input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: rgba(0,0,0,.22);
+  font: inherit;
+  font-size: 10.5px;
+}
+.worker-test-result {
+  min-height: 0;
+  max-height: 90px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: rgba(0,0,0,.16);
+  font: inherit;
+  font-size: 9px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.worker-test-result:empty { display: none; }
+.worker-test-result.error { color: var(--coral); }
 .worker-role-identity { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
 .worker-role-identity input { grid-row: 1 / 3; align-self: center; accent-color: var(--mint); }
 .worker-role-identity strong { overflow: hidden; color: var(--text-primary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
@@ -2350,6 +2388,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   .provider-field.wide { grid-column: auto; }
   .worker-role-row { grid-template-columns: 1fr; }
   .worker-default-row { grid-template-columns: 1fr; }
+  .worker-test-row { grid-template-columns: 1fr; }
 }
 
 /* ── 游戏风格卡片(面板内用) ── */
@@ -3983,11 +4022,17 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
               <span>默认员工</span>
               <select class="worker-default-select" id="workerDefaultRole"></select>
             </label>
+            <label class="worker-test-row">
+              <span>测试指令</span>
+              <input id="workerTestInstruction" maxlength="2000" value="请回复：员工测试成功，并简要说明你使用的模型。"/>
+            </label>
             <div class="worker-role-list" id="workerRoleList"></div>
             <div class="worker-form-actions">
               <span class="provider-pool-status" id="workerAssignmentStatus" aria-live="polite"></span>
               <button class="provider-action primary" id="workerAssignmentSave" type="submit">保存</button>
             </div>
+            <div class="provider-pool-status" id="workerTestStatus" aria-live="polite"></div>
+            <pre class="worker-test-result" id="workerTestResult"></pre>
           </form>
         </div>
         <div class="settings-view panel-body" data-settings-panel="reminders" hidden>
@@ -4192,9 +4237,12 @@ const els = {
   providerSave: $('#providerSave'),
   workerAssignmentForm: $('#workerAssignmentForm'),
   workerDefaultRole: $('#workerDefaultRole'),
+  workerTestInstruction: $('#workerTestInstruction'),
   workerRoleList: $('#workerRoleList'),
   workerAssignmentStatus: $('#workerAssignmentStatus'),
   workerAssignmentSave: $('#workerAssignmentSave'),
+  workerTestStatus: $('#workerTestStatus'),
+  workerTestResult: $('#workerTestResult'),
   reminderPolicyForm: $('#reminderPolicyForm'),
   reminderPolicyEnabled: $('#reminderPolicyEnabled'),
   reminderPolicyTts: $('#reminderPolicyTts'),
@@ -6833,6 +6881,7 @@ function setProviderPoolBusy(busy) {
       control.disabled = busy || managed;
     });
   }
+  setWorkerTestBusy(false);
 }
 
 async function responseError(response, fallback) {
@@ -6955,7 +7004,9 @@ function renderWorkerAssignments() {
       '<label class="worker-role-field"><span>模型覆盖</span><input data-worker-model maxlength="300" value="' +
       escAttr(role.model || '') + '"/></label>' +
       '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
-      toolsetOptions + '</div></details></label></div>';
+      toolsetOptions + '</div></details></label>' +
+      '<button class="provider-action" type="button" data-worker-test' +
+      (role.enabled ? '' : ' disabled') + '>测试</button></div>';
   }).join('');
   syncWorkerDefaultOptions(providerPoolSnapshot.default_role);
   syncWorkerToolsetSummaries();
@@ -6983,6 +7034,68 @@ function syncWorkerToolsetSummaries() {
     const summary = $('summary', details);
     if (summary) summary.textContent = count ? count + ' 个' : '继承';
   });
+}
+
+function setWorkerTestStatus(message, error) {
+  if (!els.workerTestStatus) return;
+  els.workerTestStatus.textContent = message || '';
+  els.workerTestStatus.classList.toggle('error', Boolean(error));
+}
+
+function setWorkerTestBusy(busy) {
+  $$('#workerRoleList [data-worker-test]').forEach(button => {
+    button.disabled = Boolean(busy) || providerPoolBusy || Boolean(providerPoolSnapshot && providerPoolSnapshot.managed);
+  });
+}
+
+function workerTestAssignmentText(result) {
+  const provider = String(result.provider || '运行时 Provider').trim();
+  const model = String(result.model || '运行时模型').trim();
+  return provider + ' · ' + model;
+}
+
+async function runWorkerTest(workerRole) {
+  if (!workerRole || providerPoolBusy || !els.workerTestInstruction || !els.workerTestInstruction.value.trim()) return;
+  setWorkerTestBusy(true);
+  setWorkerTestStatus('排队中');
+  if (els.workerTestResult) els.workerTestResult.textContent = '';
+  try {
+    const response = await fetch('/provider-pool/worker-tests/' + encodeURIComponent(workerRole), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({instruction: els.workerTestInstruction.value.trim()}),
+    });
+    if (!response.ok) throw await responseError(response, '员工测试失败');
+    const queued = await response.json();
+    setWorkerTestStatus('已排队 · ' + workerTestAssignmentText(queued));
+    const testId = String(queued.test_id || '').trim();
+    if (!testId) return;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const statusResponse = await fetch('/provider-pool/worker-tests/' + encodeURIComponent(testId), {cache: 'no-store'});
+      if (!statusResponse.ok) throw await responseError(statusResponse, '读取测试状态失败');
+      const result = await statusResponse.json();
+      const state = String(result.status || 'queued');
+      const assignment = workerTestAssignmentText(result);
+      if (state === 'queued' || state === 'running') {
+        setWorkerTestStatus((state === 'running' ? '执行中' : '排队中') + ' · ' + assignment);
+        continue;
+      }
+      const elapsed = result.elapsed_ms == null ? '' : ' · ' + Number(result.elapsed_ms || 0) + ' ms';
+      const detail = state === 'completed' ? String(result.result || '员工测试完成') : String(result.error || '员工测试失败');
+      setWorkerTestStatus((state === 'completed' ? '完成' : '失败') + elapsed + ' · ' + assignment, state !== 'completed');
+      if (els.workerTestResult) {
+        els.workerTestResult.textContent = detail;
+        els.workerTestResult.classList.toggle('error', state !== 'completed');
+      }
+      return;
+    }
+    setWorkerTestStatus('测试等待超时，请查看任务状态', true);
+  } catch (error) {
+    setWorkerTestStatus(String(error.message || '员工测试失败'), true);
+  } finally {
+    setWorkerTestBusy(false);
+  }
 }
 
 function applyProviderPoolSnapshot(snapshot, preferredKey) {
@@ -7488,6 +7601,13 @@ if (els.workerAssignmentForm) {
   els.workerAssignmentForm.addEventListener('change', event => {
     if (event.target.matches('[data-worker-enabled]')) syncWorkerDefaultOptions();
     if (event.target.matches('[data-worker-toolset]')) syncWorkerToolsetSummaries();
+  });
+}
+if (els.workerRoleList) {
+  els.workerRoleList.addEventListener('click', event => {
+    const button = event.target.closest('[data-worker-test]');
+    const row = button && event.target.closest('[data-worker-role]');
+    if (row) runWorkerTest(row.dataset.workerRole);
   });
 }
 

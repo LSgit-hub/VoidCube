@@ -333,6 +333,7 @@ class ScheduledTaskExecutorRuntime:
             instruction = str(task.get("instruction") or "").strip()
             companion_media = task.get("requested_via") == "companion_media"
             companion_delegate = task.get("requested_via") == "companion_delegate"
+            provider_pool_test = task.get("requested_via") == "provider_pool_test"
             api_b_origin = (
                 str(task.get("created_by") or "").strip().lower() == "api_b"
                 or companion_media
@@ -358,6 +359,15 @@ class ScheduledTaskExecutorRuntime:
                 )
                 task_label = f"媒体请求 · {title}"
                 response_title = "> Voidcube（媒体播放）"
+            elif provider_pool_test:
+                prompt = (
+                    "这是 Provider 池中的员工连通性测试。你是隔离的 API-A 子代理，"
+                    "只需完成下面的测试指令并返回真实结果；不要创建定时任务，"
+                    "不要进入用户聊天链路，也不要把任务交给 Auto 自主链。\n\n"
+                    f"员工角色：{worker_role}\n测试指令：{instruction}"
+                )
+                task_label = f"员工测试 · {title}"
+                response_title = "> Voidcube（员工测试）"
             elif api_b_origin:
                 prompt = (
                     "这是日常模式下由 API-B 秘书安排并已到期的工作。你是隔离的 API-A 子代理，"
@@ -389,12 +399,20 @@ class ScheduledTaskExecutorRuntime:
                         "success": bool(success),
                         "result_summary": response_text,
                         "error": error,
+                        "execution_provider": str(execution_details.get("provider") or ""),
+                        "execution_model": str(execution_details.get("model") or ""),
+                        "elapsed_ms": max(
+                            0,
+                            round((time.monotonic() - execution_started_at) * 1000),
+                        ),
                     },
                 )
                 self._flush_writebacks()
                 self._release_execution_slot()
 
             try:
+                execution_details: Dict[str, Any] = {}
+                execution_started_at = time.monotonic()
                 started = self.ports.start_background_task(
                     prompt,
                     task_id=f"scheduled_{run_id}",
@@ -405,6 +423,7 @@ class ScheduledTaskExecutorRuntime:
                     persist_session=False,
                     on_complete=on_complete,
                     worker_role=worker_role,
+                    execution_details=execution_details,
                 )
             except Exception as exc:
                 on_complete(False, "", f"API-A worker route unavailable: {exc}")

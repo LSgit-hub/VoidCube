@@ -278,6 +278,73 @@ def test_supervisor_provider_pool_routes_reject_managed_writes(
     assert "managed by NixOS" in response.json()["detail"]
 
 
+def test_supervisor_worker_test_routes_queue_isolated_task_and_report_assignment(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    client = _supervisor_client(tmp_path)
+    saved = client.put(
+        "/provider-pool/providers/research-endpoint",
+        json=_provider_request().model_dump(),
+    )
+    assert saved.status_code == 200
+    assignments = _all_worker_assignments("research-endpoint")
+    assigned = client.put(
+        "/provider-pool/worker-roles",
+        json=assignments.model_dump(),
+    )
+    assert assigned.status_code == 200
+
+    queued = client.post(
+        "/provider-pool/worker-tests/research",
+        json={"instruction": "只回复：员工测试成功"},
+    )
+
+    assert queued.status_code == 200
+    payload = queued.json()
+    assert payload["status"] == "queued"
+    assert payload["worker_role"] == "research"
+    assert payload["provider"] == "research-endpoint"
+    assert payload["model"] == "research-override"
+
+    status = client.get("/provider-pool/worker-tests/" + payload["test_id"])
+    assert status.status_code == 200
+    status_payload = status.json()
+    assert status_payload["status"] == "queued"
+    assert status_payload["provider"] == "research-endpoint"
+    assert status_payload["result"] == ""
+    assert status_payload["error"] == ""
+
+    claim = client.post(
+        "/scheduled-tasks/claim",
+        json={"owner_session_id": "cli-test", "lease_seconds": 300},
+    ).json()["claim"]
+    finished = client.post(
+        "/scheduled-task-runs/" + claim["run"]["run_id"] + "/finish",
+        json={
+            "owner_session_id": "cli-test",
+            "success": True,
+            "result_summary": "员工测试成功",
+            "execution_provider": "actual-provider",
+            "execution_model": "actual-model",
+            "elapsed_ms": 845,
+        },
+    )
+    assert finished.status_code == 200
+    completed = client.get("/provider-pool/worker-tests/" + payload["test_id"]).json()
+    assert completed["status"] == "completed"
+    assert completed["provider"] == "actual-provider"
+    assert completed["model"] == "actual-model"
+    assert completed["elapsed_ms"] == 845
+    assert completed["result"] == "员工测试成功"
+
+    task = client.get("/scheduled-tasks/" + payload["test_id"])
+    assert task.status_code == 200
+    assert task.json()["task"]["requested_via"] == "provider_pool_test"
+    assert client.get("/scheduled-tasks").json()["tasks"] == []
+
+
 class _ProbeResponse:
     def __init__(self, payload, *, status_code: int = 200) -> None:
         self._payload = payload
