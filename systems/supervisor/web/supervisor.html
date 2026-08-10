@@ -2189,6 +2189,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.provider-list-health { color: var(--mint); }
 .provider-pool-status {
   min-height: 34px;
   padding: 8px 10px;
@@ -2344,9 +2345,12 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-test-result:empty { display: none; }
 .worker-test-result.error { color: var(--coral); }
 .worker-role-identity { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
-.worker-role-identity input { grid-row: 1 / 3; align-self: center; accent-color: var(--mint); }
+.worker-role-identity input { grid-row: 1 / 4; align-self: center; accent-color: var(--mint); }
 .worker-role-identity strong { overflow: hidden; color: var(--text-primary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .worker-role-identity span { overflow: hidden; color: var(--text-muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.worker-role-test-state { grid-column: 2; color: var(--text-muted); font-size: 8px; font-weight: 400; }
+.worker-role-test-state.ok { color: var(--mint); }
+.worker-role-test-state.error { color: var(--coral); }
 .worker-role-field { min-width: 0; display: grid; gap: 4px; color: var(--text-muted); font-size: 8.5px; }
 .worker-toolsets { position: relative; }
 .worker-toolsets summary {
@@ -6838,6 +6842,7 @@ async function runVoiceSession() {
 let providerPoolSnapshot = null;
 let providerPoolBusy = false;
 let selectedProviderKey = '';
+let workerTestHistory = {tests: [], provider_health: []};
 
 function setSettingsView(name) {
   const normalized = ['providers', 'workers', 'reminders'].includes(name) ? name : 'providers';
@@ -6924,12 +6929,16 @@ function renderProviderList() {
   els.providerPoolList.innerHTML = providers.map(provider => {
     const ready = provider.auth_mode === 'none' || provider.credential_configured;
     const meta = (provider.active ? 'API-A · ' : '') + (provider.selected_model || '未选择模型');
+    const health = (workerTestHistory.provider_health || []).find(item => item.provider === provider.key);
+    const healthText = health ? ' · 员工验证正常' : '';
     return '<button class="provider-list-row' +
       (provider.key === selectedProviderKey ? ' active' : '') +
       '" type="button" data-provider-key="' + escAttr(provider.key) + '">' +
       '<span class="provider-list-state' + (ready ? ' ready' : '') + '"></span>' +
       '<span class="provider-list-name">' + esc(provider.label || provider.key) + '</span>' +
-      '<span class="provider-list-meta">' + esc(meta) + '</span></button>';
+      '<span class="provider-list-meta">' + esc(meta) +
+      (healthText ? '<span class="provider-list-health">' + esc(healthText) + '</span>' : '') +
+      '</span></button>';
   }).join('');
 }
 
@@ -6998,10 +7007,10 @@ function renderWorkerAssignments() {
     return '<div class="worker-role-row" data-worker-role="' + escAttr(role.role) + '" data-worker-label="' + escAttr(role.label) + '">' +
       '<label class="worker-role-identity"><input type="checkbox" data-worker-enabled' +
       (role.enabled ? ' checked' : '') + '/><strong>' + esc(role.label || role.role) + '</strong><span>' +
-      esc(role.role) + '</span></label>' +
+      esc(role.role) + '</span><span class="worker-role-test-state" data-worker-test-state>未测试</span></label>' +
       '<label class="worker-role-field"><span>Provider</span><select data-worker-provider>' +
       providerOptions(role.provider) + '</select></label>' +
-      '<label class="worker-role-field"><span>模型覆盖</span><input data-worker-model maxlength="300" value="' +
+      '<label class="worker-role-field"><span>指定模型（可选）</span><input data-worker-model maxlength="300" placeholder="留空使用 Provider 默认模型" value="' +
       escAttr(role.model || '') + '"/></label>' +
       '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
       toolsetOptions + '</div></details></label>' +
@@ -7010,6 +7019,7 @@ function renderWorkerAssignments() {
   }).join('');
   syncWorkerDefaultOptions(providerPoolSnapshot.default_role);
   syncWorkerToolsetSummaries();
+  renderWorkerTestStates();
 }
 
 function syncWorkerDefaultOptions(preferred) {
@@ -7042,6 +7052,80 @@ function setWorkerTestStatus(message, error) {
   els.workerTestStatus.classList.toggle('error', Boolean(error));
 }
 
+function workerTestTime(elapsedMs) {
+  const elapsed = Number(elapsedMs);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return '';
+  return elapsed < 1000 ? Math.round(elapsed) + ' ms' : (elapsed / 1000).toFixed(1) + ' s';
+}
+
+function renderWorkerTestStates() {
+  if (!els.workerRoleList) return;
+  const tests = Array.isArray(workerTestHistory.tests) ? workerTestHistory.tests : [];
+  $$('[data-worker-role]', els.workerRoleList).forEach(row => {
+    const state = $('[data-worker-test-state]', row);
+    if (!state) return;
+    const result = tests.find(item => item.worker_role === row.dataset.workerRole);
+    state.classList.remove('ok', 'error');
+    if (!result) {
+      state.textContent = '未测试';
+      return;
+    }
+    const status = String(result.status || 'queued');
+    if (status === 'completed') {
+      const elapsed = workerTestTime(result.elapsed_ms);
+      state.textContent = '已验证' + (elapsed ? ' · ' + elapsed : '') + (result.model ? ' · ' + result.model : '');
+      state.classList.add('ok');
+    } else if (status === 'failed') {
+      state.textContent = '测试失败' + (result.model ? ' · ' + result.model : '');
+      state.classList.add('error');
+    } else {
+      state.textContent = status === 'running' ? '测试中' : '等待测试';
+    }
+  });
+}
+
+function updateWorkerTestHistory(result) {
+  if (!result || !result.worker_role) return;
+  const tests = Array.isArray(workerTestHistory.tests) ? workerTestHistory.tests.slice() : [];
+  const index = tests.findIndex(item => item.worker_role === result.worker_role);
+  if (index >= 0) tests[index] = result;
+  else tests.push(result);
+  workerTestHistory.tests = tests;
+  if (result.provider && ['completed', 'failed'].includes(String(result.status || ''))) {
+    const health = (Array.isArray(workerTestHistory.provider_health)
+      ? workerTestHistory.provider_health : []).filter(item => item.provider !== result.provider);
+    if (result.status === 'completed') {
+      health.push({
+        provider: result.provider,
+        status: 'healthy',
+        model: result.model || '',
+        elapsed_ms: result.elapsed_ms,
+        tested_at: result.recorded_at || '',
+        worker_role: result.worker_role,
+      });
+    }
+    workerTestHistory.provider_health = health;
+  }
+  renderWorkerTestStates();
+  renderProviderList();
+}
+
+async function loadWorkerTestHistory() {
+  try {
+    const response = await fetch('/provider-pool/worker-tests', {cache: 'no-store'});
+    if (!response.ok) throw await responseError(response, '读取员工测试状态失败');
+    const history = await response.json();
+    workerTestHistory = {
+      tests: Array.isArray(history.tests) ? history.tests : [],
+      provider_health: Array.isArray(history.provider_health) ? history.provider_health : [],
+    };
+    renderWorkerTestStates();
+    renderProviderList();
+  } catch (_error) {
+    workerTestHistory = {tests: [], provider_health: []};
+  }
+}
+
 function setWorkerTestBusy(busy) {
   $$('#workerRoleList [data-worker-test]').forEach(button => {
     button.disabled = Boolean(busy) || providerPoolBusy || Boolean(providerPoolSnapshot && providerPoolSnapshot.managed);
@@ -7067,6 +7151,7 @@ async function runWorkerTest(workerRole) {
     });
     if (!response.ok) throw await responseError(response, '员工测试失败');
     const queued = await response.json();
+    updateWorkerTestHistory(queued);
     setWorkerTestStatus('已排队 · ' + workerTestAssignmentText(queued));
     const testId = String(queued.test_id || '').trim();
     if (!testId) return;
@@ -7075,6 +7160,7 @@ async function runWorkerTest(workerRole) {
       const statusResponse = await fetch('/provider-pool/worker-tests/' + encodeURIComponent(testId), {cache: 'no-store'});
       if (!statusResponse.ok) throw await responseError(statusResponse, '读取测试状态失败');
       const result = await statusResponse.json();
+      updateWorkerTestHistory(result);
       const state = String(result.status || 'queued');
       const assignment = workerTestAssignmentText(result);
       if (state === 'queued' || state === 'running') {
@@ -7118,6 +7204,7 @@ async function loadProviderPool() {
     const response = await fetch('/provider-pool', {cache: 'no-store'});
     if (!response.ok) throw await responseError(response, '读取失败');
     applyProviderPoolSnapshot(await response.json());
+    await loadWorkerTestHistory();
   } catch (error) {
     setProviderPoolStatus(String(error.message || '读取失败'), true);
     setProviderPoolBusy(false);

@@ -339,6 +339,47 @@ def test_supervisor_worker_test_routes_queue_isolated_task_and_report_assignment
     assert completed["elapsed_ms"] == 845
     assert completed["result"] == "员工测试成功"
 
+    history = client.get("/provider-pool/worker-tests")
+    assert history.status_code == 200
+    history_payload = history.json()
+    assert history_payload["tests"] == [completed]
+    assert history_payload["provider_health"] == [
+        {
+            "provider": "actual-provider",
+            "status": "healthy",
+            "model": "actual-model",
+            "elapsed_ms": 845,
+            "tested_at": completed["recorded_at"],
+            "worker_role": "research",
+        }
+    ]
+
+    failed_test = client.post(
+        "/provider-pool/worker-tests/research",
+        json={"instruction": "返回测试失败"},
+    ).json()
+    failed_claim = client.post(
+        "/scheduled-tasks/claim",
+        json={"owner_session_id": "cli-test", "lease_seconds": 300},
+    ).json()["claim"]
+    client.post(
+        "/scheduled-task-runs/" + failed_claim["run"]["run_id"] + "/finish",
+        json={
+            "owner_session_id": "cli-test",
+            "success": False,
+            "error": "manual worker test failed",
+            "execution_provider": "actual-provider",
+            "execution_model": "actual-model",
+            "elapsed_ms": 300,
+        },
+    )
+    failed_result = client.get(
+        "/provider-pool/worker-tests/" + failed_test["test_id"]
+    ).json()
+    failed_history = client.get("/provider-pool/worker-tests").json()
+    assert failed_history["tests"] == [failed_result]
+    assert failed_history["provider_health"] == []
+
     task = client.get("/scheduled-tasks/" + payload["test_id"])
     assert task.status_code == 200
     assert task.json()["task"]["requested_via"] == "provider_pool_test"

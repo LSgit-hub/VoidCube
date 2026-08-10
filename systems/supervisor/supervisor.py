@@ -330,6 +330,11 @@ class Supervisor(
             methods=["PUT"],
         )
         self.app.add_api_route(
+            "/provider-pool/worker-tests",
+            self.list_provider_pool_worker_tests,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
             "/provider-pool/worker-tests/{worker_role}",
             self.create_provider_pool_worker_test,
             methods=["POST"],
@@ -569,16 +574,12 @@ class Supervisor(
             "created_at": task.get("created_at"),
         }
 
-    async def get_provider_pool_worker_test(self, test_id: str) -> Dict[str, Any]:
-        task = self._scheduled_store_call("get", test_id)
-        if task.get("requested_via") != "provider_pool_test":
-            raise HTTPException(status_code=404, detail="worker test not found")
+    def _provider_pool_worker_test_payload(
+        self,
+        task: Dict[str, Any],
+        run: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
         assignment = self._provider_pool_worker_assignment(str(task.get("worker_role") or ""))
-        runs = [
-            run for run in self._scheduled_task_store.recent_runs(limit=200)
-            if str(run.get("schedule_id") or "") == test_id
-        ]
-        run = runs[0] if runs else None
         status = str((run or {}).get("status") or "queued")
         elapsed_ms = (run or {}).get("elapsed_ms")
         if elapsed_ms is None and run and run.get("claimed_at"):
@@ -591,7 +592,7 @@ class Supervisor(
             elapsed_ms = max(0, round((end - start).total_seconds() * 1000))
         return {
             "status": status,
-            "test_id": test_id,
+            "test_id": str(task.get("schedule_id") or ""),
             "worker_role": assignment["role"],
             "worker_label": assignment["label"],
             "provider": str((run or {}).get("execution_provider") or assignment["provider"]),
@@ -599,7 +600,71 @@ class Supervisor(
             "elapsed_ms": elapsed_ms,
             "result": str((run or {}).get("result_summary") or "")[:4000],
             "error": str((run or {}).get("error") or "")[:1000],
+            "recorded_at": str(
+                (run or {}).get("completed_at")
+                or (run or {}).get("claimed_at")
+                or task.get("created_at")
+                or ""
+            ),
         }
+
+    async def list_provider_pool_worker_tests(self) -> Dict[str, Any]:
+        tasks = sorted(
+            (
+                task for task in self._scheduled_task_store.list(include_completed=True)
+                if task.get("requested_via") == "provider_pool_test"
+            ),
+            key=lambda task: str(task.get("created_at") or ""),
+            reverse=True,
+        )[:200]
+        runs_by_schedule = {
+            str(run.get("schedule_id") or ""): run
+            for run in self._scheduled_task_store.recent_runs(limit=200)
+        }
+        tests: Dict[str, Dict[str, Any]] = {}
+        provider_health: Dict[str, Dict[str, Any]] = {}
+        tested_providers: set[str] = set()
+        for task in tasks:
+            payload = self._provider_pool_worker_test_payload(
+                task,
+                runs_by_schedule.get(str(task.get("schedule_id") or "")),
+            )
+            tests.setdefault(payload["worker_role"], payload)
+            provider = payload["provider"]
+            if (
+                provider
+                and payload["status"] in {"completed", "failed"}
+                and provider not in tested_providers
+            ):
+                tested_providers.add(provider)
+                if payload["status"] == "completed":
+                    provider_health[provider] = {
+                        "provider": provider,
+                        "status": "healthy",
+                        "model": payload["model"],
+                        "elapsed_ms": payload["elapsed_ms"],
+                        "tested_at": payload["recorded_at"],
+                        "worker_role": payload["worker_role"],
+                    }
+        return {
+            "status": "ok",
+            "tests": list(tests.values()),
+            "provider_health": list(provider_health.values()),
+        }
+
+    async def get_provider_pool_worker_test(self, test_id: str) -> Dict[str, Any]:
+        task = self._scheduled_store_call("get", test_id)
+        if task.get("requested_via") != "provider_pool_test":
+            raise HTTPException(status_code=404, detail="worker test not found")
+        run = next(
+            (
+                candidate
+                for candidate in self._scheduled_task_store.recent_runs(limit=200)
+                if str(candidate.get("schedule_id") or "") == test_id
+            ),
+            None,
+        )
+        return self._provider_pool_worker_test_payload(task, run)
 
     async def voice_status(self) -> Dict[str, Any]:
         return self._voice_manager.status()

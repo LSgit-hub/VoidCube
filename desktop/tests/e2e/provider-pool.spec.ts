@@ -14,25 +14,54 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     contentType: 'application/json',
     body: JSON.stringify({ status: 'ok', count: 2, models: ['model-a', 'model-b'] })
   }))
-  await page.route('**/provider-pool/worker-tests/*', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(route.request().method() === 'POST'
-      ? {
-          status: 'queued',
-          test_id: 'worker-test-1',
-          provider: 'actual-provider',
-          model: 'actual-model'
-        }
-      : {
-          status: 'completed',
-          test_id: 'worker-test-1',
-          provider: 'actual-provider',
-          model: 'actual-model',
-          elapsed_ms: 845,
-          result: '员工测试成功',
-          error: ''
-        })
-  }))
+  await page.route(/\/provider-pool\/worker-tests(?:\/[^/?]+)?(?:\?.*)?$/, (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    let body: object
+    if (path === '/provider-pool/worker-tests') body = {
+      status: 'ok',
+      tests: [{
+        status: 'completed',
+        test_id: 'previous-worker-test',
+        worker_role: 'research',
+        worker_label: '调研员工',
+        provider: 'openrouter',
+        model: 'history-model',
+        elapsed_ms: 1200,
+        result: '历史测试成功',
+        error: '',
+        recorded_at: '2026-08-10T01:00:00+00:00'
+      }],
+      provider_health: [{
+        provider: 'openrouter',
+        status: 'healthy',
+        model: 'history-model',
+        elapsed_ms: 1200,
+        tested_at: '2026-08-10T01:00:00+00:00',
+        worker_role: 'research'
+      }]
+    }
+    else if (request.method() === 'POST') body = {
+      status: 'queued',
+      test_id: 'worker-test-1',
+      worker_role: 'general',
+      worker_label: '通用员工',
+      provider: 'actual-provider',
+      model: 'actual-model'
+    }
+    else body = {
+      status: 'completed',
+      test_id: 'worker-test-1',
+      worker_role: 'general',
+      worker_label: '通用员工',
+      provider: 'actual-provider',
+      model: 'actual-model',
+      elapsed_ms: 845,
+      result: '员工测试成功',
+      error: ''
+    }
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
+  })
 
   try {
     await page.goto('http://127.0.0.1:6002/ui', { waitUntil: 'domcontentloaded' })
@@ -40,6 +69,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(page.locator('#providerForm')).toBeInViewport()
     await expect(page.locator('#providerPoolList .provider-list-row')).toHaveCount(3)
+    await expect(page.locator('#providerPoolList')).toContainText('员工验证正常')
     await expect(page.locator('#providerKey')).toBeDisabled()
     await expect(page.locator('#providerDelete')).toBeDisabled()
     await expect(page.locator('#providerApiKey')).toHaveValue('')
@@ -60,6 +90,13 @@ test('provider pool and worker assignment panels stay usable across viewports', 
 
     await page.locator('[data-settings-view="workers"]').click()
     await expect(page.locator('#workerRoleList .worker-role-row')).toHaveCount(4)
+    await expect(page.locator('[data-worker-role="research"] [data-worker-test-state]')).toHaveText(
+      '已验证 · 1.2 s · history-model'
+    )
+    await expect(page.locator('[data-worker-model]').first()).toHaveAttribute(
+      'placeholder',
+      '留空使用 Provider 默认模型'
+    )
     const firstProviderSelect = page.locator('[data-worker-provider]').first()
     await expect(firstProviderSelect.locator('option')).toHaveCount(4)
     const selectedProvider = await firstProviderSelect.inputValue()
@@ -73,6 +110,9 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       { timeout: 5000 }
     )
     await expect(page.locator('#workerTestResult')).toHaveText('员工测试成功')
+    await expect(page.locator('[data-worker-test-state]').first()).toHaveText(
+      '已验证 · 845 ms · actual-model'
+    )
     await expect(page.locator('#workerRoleList .worker-role-row').first()).toBeInViewport()
     await page.screenshot({
       path: 'test-results/worker-roles-desktop.png',
