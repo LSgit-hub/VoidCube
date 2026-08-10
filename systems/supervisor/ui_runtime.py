@@ -413,6 +413,50 @@ class SupervisorUIRuntime:
             "accounts_revision": self.accounts_revision,
         }
 
+    async def import_account_endpoint(self, request: Request) -> JsonDict:
+        from systems.supervisor.account_store import (
+            account_for_api,
+            import_browser_cookies,
+            parse_cookie_string,
+            PlatformAccount,
+            save_account,
+        )
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON")
+
+        platform = str(body.get("platform") or "bilibili").strip()
+        label = str(body.get("label") or "").strip()
+
+        result = import_browser_cookies(platform)
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=result.get("error", "导入失败"))
+
+        cookies_raw = result["cookies_raw"]
+        parsed = parse_cookie_string(cookies_raw, platform)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="导入的 Cookie 解析失败")
+
+        account = PlatformAccount(
+            id=uuid.uuid4().hex[:12],
+            platform=platform,
+            label=label or result.get("account_hint", f"从 {result.get('source', '浏览器')} 导入"),
+            cookies_raw=cookies_raw,
+            parsed_cookies=parsed,
+            status="active",
+        )
+        save_account(account)
+        self._bump_accounts_revision()
+        logger.info("Account imported from browser: %s (%s)", platform, account.id)
+        return {
+            "status": "ok",
+            "account": account_for_api(account),
+            "source": result.get("source"),
+            "cookie_count": result.get("cookie_count", 0),
+            "accounts_revision": self.accounts_revision,
+        }
+
     async def verify_account_endpoint(self, request: Request) -> JsonDict:
         from systems.supervisor.account_store import (
             account_for_api,

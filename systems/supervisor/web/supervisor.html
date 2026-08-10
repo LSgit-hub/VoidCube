@@ -7849,6 +7849,13 @@ function renderAccountPanel(data) {
     }
   }
 
+  // 一键导入按钮
+  html += '<div class="account-add-bar" style="padding-bottom:4px;">';
+  html += '<button class="provider-action primary" onclick="importFromBrowser()" style="min-width:140px;">📥 从浏览器导入 Cookie</button>';
+  html += '<span style="font-size:9.5px;color:var(--text-muted);">自动读取 Chrome / Edge 中已登录的 B站 Cookie</span>';
+  html += '</div>';
+  html += '<div style="text-align:center;font-size:10px;color:var(--text-muted);margin:6px 0;">—— 或手动粘贴 ——</div>';
+
   // 添加账号表单
   html += '<div class="account-add-bar">';
   html += '<div class="provider-field">';
@@ -7884,6 +7891,31 @@ function renderAccountPanel(data) {
   els.panelAccountBody.innerHTML = html;
 }
 
+async function importFromBrowser() {
+  const platformEl = document.getElementById('accountPlatform');
+  const platform = platformEl ? platformEl.value : 'bilibili';
+  const labelEl = document.getElementById('accountLabel');
+  const label = (labelEl && labelEl.value || '').trim();
+  try {
+    const r = await fetch('/ui/accounts/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, label }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('导入失败: ' + (err.detail || 'HTTP ' + r.status) + '\n\n请确认已在 Chrome 或 Edge 浏览器中登录了 ' + (platform === 'bilibili' ? 'B站' : platform) + '。');
+      return;
+    }
+    const data = await r.json();
+    alert('✓ 导入成功！来源: ' + (data.source || '浏览器') + '\n共导入 ' + (data.cookie_count || '?') + ' 个 Cookie');
+    await loadAccounts();
+    try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
+  } catch (e) {
+    alert('导入失败: ' + e.message);
+  }
+}
+
 async function saveAccount() {
   const platformEl = document.getElementById('accountPlatform');
   const labelEl = document.getElementById('accountLabel');
@@ -7892,7 +7924,7 @@ async function saveAccount() {
   const platform = platformEl.value;
   const label = (labelEl && labelEl.value || '').trim();
   const cookiesRaw = cookiesEl.value.trim();
-  if (!cookiesRaw) { alert('请粘贴 Cookie 字符串'); return; }
+  if (!cookiesRaw) { alert('请粘贴 Cookie 字符串或使用"从浏览器导入"按钮'); return; }
   try {
     const r = await fetch('/ui/accounts', {
       method: 'POST',

@@ -31,6 +31,7 @@ class SupervisorUIRoutePorts:
     add_account: Callable[..., Any] | None = None
     delete_account: Callable[..., Any] | None = None
     verify_account: Callable[..., Any] | None = None
+    import_account: Callable[..., Any] | None = None
 
 
 def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
@@ -85,6 +86,8 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
         app.add_api_route("/ui/accounts/{account_id}", ports.delete_account, methods=["DELETE"])
     if ports.verify_account is not None:
         app.add_api_route("/ui/accounts/{account_id}/verify", ports.verify_account, methods=["POST"])
+    if ports.import_account is not None:
+        app.add_api_route("/ui/accounts/import", ports.import_account, methods=["POST"])
 
 
 __all__ = ["SupervisorUIRoutePorts", "mount_supervisor_ui_routes"]
