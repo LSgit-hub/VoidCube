@@ -70,6 +70,13 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('#providerForm')).toBeInViewport()
     await expect(page.locator('#providerPoolList .provider-list-row')).toHaveCount(3)
     await expect(page.locator('#providerPoolList')).toContainText('员工验证正常')
+    const providerRows = page.locator('#providerPoolList .provider-list-row')
+    await providerRows.nth(1).click()
+    await expect(page.locator('#panelSettings')).toHaveClass(/open/)
+    await expect(providerRows.nth(1)).toHaveClass(/active/)
+    await providerRows.first().click()
+    await expect(page.locator('#panelSettings')).toHaveClass(/open/)
+    const loadedProviderKey = await providerRows.first().getAttribute('data-provider-key')
     await expect(page.locator('#providerKey')).toBeDisabled()
     await expect(page.locator('#providerDelete')).toBeDisabled()
     await expect(page.locator('#providerApiKey')).toHaveValue('')
@@ -93,10 +100,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('[data-worker-role="research"] [data-worker-test-state]')).toHaveText(
       '已验证 · 1.2 s · history-model'
     )
-    await expect(page.locator('[data-worker-model]').first()).toHaveAttribute(
-      'placeholder',
-      '留空使用 Provider 默认模型'
-    )
+    await expect(page.locator('[data-worker-model]').first()).toHaveJSProperty('tagName', 'SELECT')
     await page.locator('#workerRecommendedApply').click()
     await expect(page.locator('[data-worker-role="general"] .worker-toolsets summary')).toHaveText('推荐 · 4 个')
     await expect(page.locator('[data-worker-role="research"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
@@ -110,6 +114,12 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       (options) => options.map((option) => (option as HTMLOptionElement).value)
     )
     expect(providerOptions).toContain(selectedProvider)
+    await firstProviderSelect.selectOption(String(loadedProviderKey))
+    const modelOptions = await page.locator('[data-worker-model]').first().locator('option').evaluateAll(
+      (options) => options.map((option) => (option as HTMLOptionElement).value)
+    )
+    expect(modelOptions).toContain('model-a')
+    expect(modelOptions).toContain('model-b')
     await page.locator('[data-worker-test]').first().click()
     await expect(page.locator('#workerTestStatus')).toHaveText(
       '完成 · 845 ms · actual-provider · actual-model',

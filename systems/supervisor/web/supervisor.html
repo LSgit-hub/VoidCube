@@ -4560,7 +4560,9 @@ document.addEventListener('click', e => {
   if (!panelOpen) return;
   const panel = dockPanelFor(panelOpen);
   if (!panel) return;
-  if (!panel.contains(e.target) && !e.target.closest('.bottom-dock')) {
+  const eventPath = typeof e.composedPath === 'function' ? e.composedPath() : [];
+  const insidePanel = eventPath.length ? eventPath.includes(panel) : panel.contains(e.target);
+  if (!insidePanel && !e.target.closest('.bottom-dock')) {
     closePanel(panelOpen);
   }
 });
@@ -6844,6 +6846,7 @@ async function runVoiceSession() {
 let providerPoolSnapshot = null;
 let providerPoolBusy = false;
 let selectedProviderKey = '';
+let workerModelCandidates = {};
 let workerTestHistory = {tests: [], provider_health: []};
 
 function setSettingsView(name) {
@@ -6920,6 +6923,35 @@ function renderProviderModelOptions(models) {
   ).join('');
 }
 
+function workerModelOptionMarkup(providerKey, currentModel) {
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  const provider = providers.find(item => item.key === providerKey) || null;
+  const selected = String(currentModel || '').trim();
+  const values = [];
+  const add = value => {
+    const normalized = String(value || '').trim();
+    if (normalized && !values.includes(normalized)) values.push(normalized);
+  };
+  add(provider && provider.selected_model);
+  (Array.isArray(workerModelCandidates[providerKey]) ? workerModelCandidates[providerKey] : []).forEach(add);
+  add(selected);
+  return '<option value=""' + (selected ? '' : ' selected') + '>使用 Provider 默认模型</option>' + values.map(model =>
+    '<option value="' + escAttr(model) + '"' + (model === selected ? ' selected' : '') + '>' + esc(model) + '</option>'
+  ).join('');
+}
+
+function syncWorkerModelOptions(row, preferredModel) {
+  if (!row) return;
+  const provider = $('[data-worker-provider]', row);
+  const select = $('[data-worker-model]', row);
+  if (!provider || !select) return;
+  const current = preferredModel === undefined ? select.value : preferredModel;
+  select.innerHTML = workerModelOptionMarkup(provider.value, current);
+  const values = $$('option', select).map(option => option.value);
+  select.value = values.includes(current) ? current : '';
+}
+
 function renderProviderList() {
   if (!els.providerPoolList) return;
   const providers = Array.isArray((providerPoolSnapshot || {}).providers)
@@ -6975,7 +7007,7 @@ function editProvider(providerKey) {
   els.providerAuthMode.value = provider ? provider.auth_mode : 'env';
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
-  renderProviderModelOptions([]);
+  renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
   els.providerApiKey.placeholder = provider && provider.credential_configured
     ? '已配置，留空保持不变' : '';
   els.providerMakeActive.checked = Boolean(provider && provider.active);
@@ -7012,8 +7044,8 @@ function renderWorkerAssignments() {
       esc(role.role) + '</span><span class="worker-role-test-state" data-worker-test-state>未测试</span></label>' +
       '<label class="worker-role-field"><span>Provider</span><select data-worker-provider>' +
       providerOptions(role.provider) + '</select></label>' +
-      '<label class="worker-role-field"><span>指定模型（可选）</span><input data-worker-model maxlength="300" placeholder="留空使用 Provider 默认模型" value="' +
-      escAttr(role.model || '') + '"/></label>' +
+      '<label class="worker-role-field"><span>指定模型（可选）</span><select data-worker-model>' +
+      workerModelOptionMarkup(role.provider, role.model) + '</select></label>' +
       '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
       toolsetOptions + '</div></details></label>' +
       '<button class="provider-action" type="button" data-worker-test' +
@@ -7317,7 +7349,13 @@ async function loadProviderModels() {
     );
     if (!response.ok) throw await responseError(response, '读取模型失败');
     const result = await response.json();
-    renderProviderModelOptions(result.models);
+    const models = Array.isArray(result.models) ? result.models : [];
+    workerModelCandidates[selectedProviderKey] = models;
+    renderProviderModelOptions(models);
+    $$('[data-worker-role]', els.workerRoleList).forEach(row => {
+      const provider = $('[data-worker-provider]', row);
+      if (provider && provider.value === selectedProviderKey) syncWorkerModelOptions(row);
+    });
     setProviderPoolStatus('已读取 ' + Number(result.count || 0) + ' 个模型');
     if (els.providerModel) els.providerModel.focus();
   } catch (error) {
@@ -7717,6 +7755,9 @@ if (els.workerAssignmentForm) {
     if (event.target.matches('[data-worker-enabled]')) {
       syncWorkerDefaultOptions();
       setWorkerTestBusy(false);
+    }
+    if (event.target.matches('[data-worker-provider]')) {
+      syncWorkerModelOptions(event.target.closest('[data-worker-role]'), '');
     }
     if (event.target.matches('[data-worker-toolset]')) syncWorkerToolsetSummaries();
   });
