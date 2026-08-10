@@ -7724,7 +7724,8 @@ async function loadAccounts() {
     accountsCache = data;
     renderAccountPanel(data);
   } catch (e) {
-    els.panelAccountBody.innerHTML = '<div class="panel-empty"><div class="pe-icon">⚠️</div><div class="pe-text">无法加载账号数据</div></div>';
+    // API 不可用时仍渲染表单（使用空列表和硬编码平台），让用户可以添加账号
+    renderAccountPanel({ accounts: [], supported_platforms: ['bilibili', 'netease_music'] });
   }
 }
 
