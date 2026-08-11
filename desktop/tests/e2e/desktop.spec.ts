@@ -89,6 +89,47 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
       const text = await window.locator('.xterm-rows').textContent() ?? ''
       return (text.match(/Git <[^>]+>/g) ?? []).length
     }).toBe(1)
+    const statusRow = window.locator('.xterm-rows > div').filter({ hasText: 'Git <' }).last()
+    await expect(statusRow).not.toContainText(/[💤🤔🧠💡📤🔧🔄🧩]/u)
+    const statusRowMetrics = await statusRow.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight)
+    }))
+    expect(statusRowMetrics.height).toBeGreaterThanOrEqual(17)
+    expect(statusRowMetrics.lineHeight).toBeGreaterThanOrEqual(17)
+
+    const supervisorFrame = window.frameLocator('#monitor-frame')
+    await supervisorFrame.locator('#mediaDockButton').click()
+    await expect(supervisorFrame.locator('#panelMedia')).toHaveClass(/open/)
+    await supervisorFrame.locator('#deliveryFullscreen').click()
+    await expect(supervisorFrame.locator('#panelMedia')).toHaveClass(/desktop-maximized/)
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'split')
+    await expect(window.locator('.terminal-pane')).toBeVisible()
+    const maximizedPanelGeometry = await supervisorFrame.locator('#panelMedia').evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight
+      }
+    })
+    expect(maximizedPanelGeometry.x).toBe(0)
+    expect(maximizedPanelGeometry.y).toBe(0)
+    expect(maximizedPanelGeometry.width).toBe(maximizedPanelGeometry.viewportWidth)
+    expect(maximizedPanelGeometry.height).toBe(maximizedPanelGeometry.viewportHeight)
+    await expect.poll(() => supervisorFrame.locator('html').evaluate(
+      () => document.fullscreenElement?.id ?? ''
+    )).toBe('')
+    await expect.poll(() => application.evaluate(({ BrowserWindow }) => (
+      BrowserWindow.getAllWindows()[0]?.isFullScreen() ?? false
+    ))).toBe(false)
+    await window.screenshot({ path: 'test-results/voidcube-delivery-web-maximized.png' })
+    await supervisorFrame.locator('#deliveryFullscreen').click()
+    await expect(supervisorFrame.locator('#panelMedia')).not.toHaveClass(/desktop-maximized/)
+    await expect(window.locator('#workspace')).toHaveAttribute('data-layout', 'split')
 
     await window.locator('#service-menu > summary').click()
     await expect(window.locator('#services-summary')).toHaveText('3/3 正常')

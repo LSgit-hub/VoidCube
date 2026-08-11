@@ -3617,6 +3617,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   height: min(740px, calc(100vh - 64px)); max-height: calc(100vh - 64px);
 }
 #panelMedia:fullscreen { width: 100vw; height: 100vh; max-width: none; max-height: none; border-radius: 0; }
+#panelMedia.desktop-maximized {
+  position: fixed; inset: 0; z-index: 1000;
+  width: 100vw; height: 100vh; max-width: none; max-height: none;
+  margin: 0; border-radius: 0; transform: none; animation: none;
+}
 .media-board {
   display: grid; grid-template-columns: minmax(0, 1fr) 290px;
   min-height: 0; flex: 1; overflow: hidden;
@@ -4750,6 +4755,9 @@ async function loadScheduledTasks() {
 function closePanel(name) {
   const panel = dockPanelFor(name);
   if (!panel) return;
+  if (name === 'media' && panel.classList.contains('desktop-maximized')) {
+    setDeliveryDesktopMaximized(false);
+  }
   panel.classList.remove('open');
   if (panelOpen === name) {
     panelOpen = null;
@@ -8181,12 +8189,19 @@ const deliveryOpenSource = document.getElementById('deliveryOpenSource');
 const deliveryFullscreen = document.getElementById('deliveryFullscreen');
 const deliveryClearHistory = document.getElementById('deliveryClearHistory');
 const mediaDockButton = document.getElementById('mediaDockButton');
+const deliveryPanel = document.getElementById('panelMedia');
+const deliveryPanelHome = deliveryPanel && deliveryPanel.parentNode;
+const deliveryPanelNextSibling = deliveryPanel && deliveryPanel.nextSibling;
 let currentMedia = null;
+let deliveryDesktopMaximized = false;
 let mediaQueue = [];
 let currentDelivery = null;
 let deliveryHistory = [];
 let activeSurface = 'delivery';
 let mountedContent = null;
+if (deliveryFullscreen && window.parent !== window) {
+  deliveryFullscreen.title = '最大化 WEB 面板';
+}
 let mountedSurfaceKey = '';
 let intrinsicMediaSize = null;
 let activeViewMode = 'fit';
@@ -8775,9 +8790,33 @@ if (deliveryOpenSource) {
     anchor.click();
   });
 }
+function setDeliveryDesktopMaximized(active) {
+  deliveryDesktopMaximized = Boolean(active && deliveryPanel);
+  if (deliveryPanel && deliveryDesktopMaximized) {
+    document.body.appendChild(deliveryPanel);
+    deliveryPanel.classList.add('desktop-maximized');
+  } else if (deliveryPanel) {
+    deliveryPanel.classList.remove('desktop-maximized');
+    if (deliveryPanelHome) {
+      if (deliveryPanelNextSibling && deliveryPanelNextSibling.parentNode === deliveryPanelHome) {
+        deliveryPanelHome.insertBefore(deliveryPanel, deliveryPanelNextSibling);
+      } else {
+        deliveryPanelHome.appendChild(deliveryPanel);
+      }
+    }
+  }
+  if (deliveryFullscreen) {
+    deliveryFullscreen.title = deliveryDesktopMaximized ? '恢复面板' : '最大化 WEB 面板';
+  }
+  applyMediaViewportLayout();
+}
 if (deliveryFullscreen) {
   deliveryFullscreen.addEventListener('click', async () => {
     const panel = document.getElementById('panelMedia');
+    if (window.parent !== window) {
+      setDeliveryDesktopMaximized(!deliveryDesktopMaximized);
+      return;
+    }
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (panel && panel.requestFullscreen) await panel.requestFullscreen();

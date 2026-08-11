@@ -83,7 +83,7 @@ const terminal = new Terminal({
   fontWeight: '400',
   fontWeightBold: '600',
   letterSpacing: 0,
-  lineHeight: 1.12,
+  lineHeight: 1.25,
   scrollback: 20_000,
   theme: {
     background: '#0d1117',
