@@ -7902,7 +7902,7 @@ function renderAccountPanel(data) {
   } else {
     for (const account of accounts) {
       const dotClass = account.status || 'error';
-      const statusText = { active: '已登录', expired: '已过期', error: '异常' }[dotClass] || dotClass;
+      const statusText = { active: '已登录', expired: '已过期', error: '验证受限' }[dotClass] || dotClass;
       const credentialCount = Math.max(0, Number(account.cookies_count || 0));
       const credentialText = credentialCount > 0 ? credentialCount + ' 项登录凭据' : '无登录凭据';
       html += '<div class="account-card">';
@@ -8014,8 +8014,11 @@ async function verifyAccount(id) {
   try {
     const r = await fetch('/ui/accounts/' + encodeURIComponent(id) + '/verify', { method: 'POST' });
     const data = await r.json();
+    if (!r.ok) throw new Error(String(data.detail || 'HTTP ' + r.status));
     const result = data.verify_result || {};
-    alert(result.status === 'active' ? '✓ Cookie 有效' : '✗ ' + (result.detail || '验证失败'));
+    const prefix = result.status === 'active' ? 'Cookie 有效：' :
+      result.status === 'expired' ? 'Cookie 已失效：' : '当前无法确认：';
+    alert(prefix + (result.detail || '平台未返回验证结果'));
     await loadAccounts();
   } catch (e) {
     alert('验证失败: ' + e.message);

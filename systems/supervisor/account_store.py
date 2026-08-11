@@ -30,18 +30,15 @@ PLATFORM_PRESETS: Dict[str, Dict[str, Any]] = {
         "name": "B站",
         "domain": ".bilibili.com",
         "verify_url": "https://api.bilibili.com/x/web-interface/nav",
-        "verify_method": "GET",
-        "verify_ok_status": 0,  # B站 API code=0 表示正常
-        "verify_field": "code",
+        "referer": "https://www.bilibili.com/",
+        "origin": "https://www.bilibili.com",
         "required_auth_cookies": ["SESSDATA"],
     },
     "netease_music": {
         "name": "网易云音乐",
         "domain": ".music.163.com",
-        "verify_url": "https://music.163.com/api/login/status",
-        "verify_method": "GET",
-        "verify_ok_status": 200,
-        "verify_field": "code",
+        "verify_url": "https://music.163.com/api/nuser/account/get",
+        "referer": "https://music.163.com/",
         "required_auth_cookies": ["MUSIC_U"],
     },
 }
@@ -277,43 +274,78 @@ async def verify_account(account: PlatformAccount) -> Dict[str, Any]:
     """发送 HTTP 请求验证账号 cookie 是否仍然有效。
 
     返回 ``{"status": "active"|"expired"|"error", "detail": ...}``。
+
+    ``expired`` 只表示平台明确返回未登录。反爬、限流、网络错误和未知响应
+    均返回 ``error``，调用方不能据此停用仍可工作的桌面登录会话。
     """
     preset = PLATFORM_PRESETS.get(account.platform)
     if not preset:
         return {"status": "error", "detail": f"未知平台: {account.platform}"}
 
     verify_url = preset["verify_url"]
-    method = preset.get("verify_method", "GET").upper()
-    ok_status = preset.get("verify_ok_status", 0)
-    field = preset.get("verify_field", "code")
-
-    # 构造 cookie header
     cookie_str = "; ".join(
         f"{c.name}={c.value}" for c in account.parsed_cookies if c.name and c.value
     )
     if not cookie_str:
         return {"status": "error", "detail": "没有可用的 cookie"}
 
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cookie": cookie_str,
+        "Referer": preset["referer"],
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+    }
+    if preset.get("origin"):
+        headers["Origin"] = preset["origin"]
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            if method == "GET":
-                resp = await client.get(verify_url, headers={"Cookie": cookie_str})
-            else:
-                resp = await client.post(verify_url, headers={"Cookie": cookie_str})
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(verify_url, headers=headers)
 
         if resp.status_code != 200:
-            return {"status": "error", "detail": f"HTTP {resp.status_code}"}
+            return {
+                "status": "error",
+                "detail": (
+                    f"平台暂时拒绝验证请求 (HTTP {resp.status_code})，"
+                    "无法确认 Cookie 是否失效"
+                ),
+            }
 
-        data = resp.json()
-        code = data.get(field)
-        if code == ok_status:
-            return {"status": "active", "detail": "cookie 有效"}
-        else:
-            return {"status": "expired", "detail": f"cookie 已过期 (code={code})"}
-    except httpx.ConnectError:
-        return {"status": "error", "detail": "无法连接验证服务器"}
-    except Exception as exc:
-        return {"status": "error", "detail": str(exc)}
+        try:
+            data = resp.json()
+        except ValueError:
+            return {"status": "error", "detail": "平台返回了无法识别的验证结果"}
+        if not isinstance(data, dict):
+            return {"status": "error", "detail": "平台返回了无法识别的验证结果"}
+
+        code = data.get("code")
+        if account.platform == "bilibili":
+            bili_data = data.get("data")
+            logged_in = isinstance(bili_data, dict) and bili_data.get("isLogin") is True
+            logged_out = isinstance(bili_data, dict) and bili_data.get("isLogin") is False
+            if code == 0 and logged_in:
+                return {"status": "active", "detail": "Cookie 有效"}
+            if code == -101 or (code == 0 and logged_out):
+                return {"status": "expired", "detail": "B站返回未登录，Cookie 已失效"}
+        elif account.platform == "netease_music":
+            if code == 200 and (data.get("account") or data.get("profile")):
+                return {"status": "active", "detail": "Cookie 有效"}
+            if code in {200, 301} and not data.get("account") and not data.get("profile"):
+                return {"status": "expired", "detail": "网易云音乐返回未登录，Cookie 已失效"}
+
+        return {
+            "status": "error",
+            "detail": f"平台返回未知验证结果 (code={code})，无法确认 Cookie 是否失效",
+        }
+    except httpx.TimeoutException:
+        return {"status": "error", "detail": "验证请求超时，无法确认 Cookie 是否失效"}
+    except httpx.RequestError:
+        return {"status": "error", "detail": "无法连接验证服务器，未改变当前登录状态"}
 
 
 # ── 脱敏 ────────────────────────────────────────────────

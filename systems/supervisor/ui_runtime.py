@@ -571,12 +571,14 @@ class SupervisorUIRuntime:
         if target is None:
             raise HTTPException(status_code=404, detail="账号不存在")
         result = await verify_account(target)
-        # 更新状态
-        from systems.supervisor.account_store import save_account
-        target.last_verified = datetime.now(timezone.utc).isoformat()
-        target.status = result["status"]
-        save_account(target)
-        self._bump_accounts_revision()
+        # 只有平台明确确认有效或失效时才改变会话。反爬和网络错误不能
+        # 把桌面端已经可用的登录状态覆盖掉。
+        if result["status"] in {"active", "expired"}:
+            from systems.supervisor.account_store import save_account
+            target.last_verified = datetime.now(timezone.utc).isoformat()
+            target.status = result["status"]
+            save_account(target)
+            self._bump_accounts_revision()
         return {
             "status": "ok",
             "account": account_for_api(target),
