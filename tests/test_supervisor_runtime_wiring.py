@@ -3556,7 +3556,7 @@ def test_auto_mode_disables_voice_controls_in_supervisor_ui():
     assert "scale(var(--room-scale-inverse)) scale(.98)" in UI_HTML
     assert ".drawer-mask.open .drawer" in UI_HTML
     assert "function resolveMediaType(media)" in UI_HTML
-    assert "const type = resolveMediaType(currentMedia);" in UI_HTML
+    assert "const item = activePanelItem();" in UI_HTML
 
 
 @pytest.mark.unit
@@ -3586,6 +3586,162 @@ def test_media_html_uses_sandboxed_srcdoc_rendering() -> None:
 
 
 @pytest.mark.unit
+def test_delivery_panel_uses_intrinsic_ratio_and_separate_history() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert 'id="deliveryHistoryList"' in ui_source
+    assert 'id="playbackQueueSection"' in ui_source
+    assert "function setIntrinsicMediaSize(width, height)" in ui_source
+    assert "img.naturalWidth, img.naturalHeight" in ui_source
+    assert "video.videoWidth, video.videoHeight" in ui_source
+    assert "function applyMediaViewportLayout()" in ui_source
+    assert "new EventSource('/ui/delivery-events')" in ui_source
+    assert "交付记录" in ui_source
+
+
+@pytest.mark.unit
+def test_delivery_http_api_uploads_displays_selects_and_persists(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    uploaded = client.post(
+        "/ui/delivery/assets",
+        content=b"%PDF-1.7\nVoidCube",
+        headers={
+            "Content-Type": "application/pdf",
+            "X-Artifact-Filename": "report.pdf",
+        },
+    )
+    assert uploaded.status_code == 200
+    uploaded_item = uploaded.json()
+    assert uploaded_item["type"] == "document"
+    assert uploaded_item["filename"] == "report.pdf"
+    assert uploaded_item["byte_size"] == len(b"%PDF-1.7\nVoidCube")
+
+    asset_path = uploaded_item["url"].split("http://testserver", 1)[-1]
+    downloaded = client.get(asset_path)
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"%PDF-1.7\nVoidCube"
+    assert downloaded.headers["content-type"].startswith("application/pdf")
+    assert downloaded.headers["content-disposition"].startswith("inline;")
+
+    uploaded_html = client.post(
+        "/ui/delivery/assets",
+        content=b"<!doctype html><script>top.document.body.remove()</script><h1>report</h1>",
+        headers={
+            "Content-Type": "text/html",
+            "X-Artifact-Filename": "report.html",
+        },
+    )
+    assert uploaded_html.status_code == 200
+    assert uploaded_html.json()["type"] == "html"
+    html_asset_path = uploaded_html.json()["url"].split("http://testserver", 1)[-1]
+    html_asset = client.get(html_asset_path)
+    assert html_asset.status_code == 200
+    assert html_asset.headers["content-security-policy"].startswith("sandbox;")
+
+    first = client.post(
+        "/ui/delivery/push",
+        json={
+            **uploaded_item,
+            "title": "PDF 交付",
+            "view_mode": "fit",
+            "width": 1600,
+            "height": 900,
+            "aspect_ratio": 16 / 9,
+        },
+    )
+    assert first.status_code == 200
+    first_item = first.json()["current"]
+    assert first_item["type"] == "document"
+    assert first_item["aspect_ratio"] == pytest.approx(16 / 9)
+
+    second = client.post(
+        "/ui/delivery/push",
+        json={
+            "content": "<!doctype html><h1>Agent 报告</h1>",
+            "title": "内联报告",
+            "type": "html",
+            "auto_open": True,
+        },
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["current"]["content"].endswith("</h1>")
+    assert len(second_payload["history"]) == 2
+    assert all("content" not in item for item in second_payload["history"])
+
+    selected = client.post(
+        "/ui/delivery/control",
+        json={"action": "select", "delivery_id": first_item["delivery_id"]},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["current"]["title"] == "PDF 交付"
+
+    restarted = _make_supervisor(tmp_path)
+    assert restarted._ui_runtime.current_delivery()["title"] == "PDF 交付"
+    assert len(restarted._ui_runtime.list_deliveries()) == 2
+
+    cleared = client.post("/ui/delivery/control", json={"action": "clear"})
+    assert cleared.status_code == 200
+    assert cleared.json()["current"] is None
+    assert cleared.json()["history"] == []
+    assert client.get(asset_path).status_code == 404
+
+
+@pytest.mark.unit
+def test_delivery_type_inference_distinguishes_previewable_and_downloadable_files():
+    from systems.supervisor.ui_delivery_adapters import infer_delivery_type
+
+    assert infer_delivery_type(filename="portrait.webp", mime_type="image/webp") == "image"
+    assert infer_delivery_type(filename="report.pdf", mime_type="application/pdf") == "document"
+    assert infer_delivery_type(filename="notes.md", mime_type="text/markdown") == "text"
+    assert infer_delivery_type(filename="report.html", mime_type="text/html", url="http://local/report.html") == "html"
+    assert infer_delivery_type(url="https://example.com/report.html", mime_type="text/html") == "webpage"
+    assert infer_delivery_type(url="https://example.com/report.docx") == "file"
+
+
+@pytest.mark.unit
+def test_delivery_history_retains_latest_items_and_removes_evicted_assets(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    uploaded = client.post(
+        "/ui/delivery/assets",
+        content=b"old artifact",
+        headers={"X-Artifact-Filename": "old.bin"},
+    ).json()
+    first = client.post(
+        "/ui/delivery/push",
+        json={**uploaded, "title": "oldest", "type": "file"},
+    ).json()["current"]
+    asset_path = uploaded["url"].split("http://testserver", 1)[-1]
+
+    for index in range(50):
+        supervisor._ui_runtime.push_delivery(
+            {
+                "content": f"delivery {index}",
+                "title": f"delivery-{index}",
+                "type": "text",
+                "auto_open": False,
+                "view_mode": "fit",
+            }
+        )
+
+    items = supervisor._ui_runtime.list_deliveries()
+    assert len(items) == 50
+    assert items[0]["title"] == "delivery-49"
+    assert items[-1]["title"] == "delivery-0"
+    assert all(item["delivery_id"] != first["delivery_id"] for item in items)
+    assert client.get(asset_path).status_code == 404
+
+    restarted = _make_supervisor(tmp_path)
+    assert restarted._ui_runtime.current_delivery()["title"] == "delivery-49"
+    assert [item["title"] for item in restarted._ui_runtime.list_deliveries()] == [
+        f"delivery-{index}" for index in range(49, -1, -1)
+    ]
+
+
+@pytest.mark.unit
 def test_ui_text_has_scale_compensated_readability_baseline() -> None:
     ui_source = load_supervisor_ui_html()
 
@@ -3599,12 +3755,16 @@ def test_account_panel_uses_existing_escape_helper() -> None:
     ui_source = load_supervisor_ui_html()
 
     account_source = ui_source.split("function renderAccountPanel(data)", 1)[1].split(
-        "async function importFromBrowser()", 1
+        "async function loginAccountInDesktop()", 1
     )[0]
     assert "esc(account.platform_name || account.platform)" in account_source
     assert "h(account.platform" not in account_source
-    assert "从剪贴板粘贴" in account_source
-    assert "looksLikeCookieString(label)" in ui_source
+    assert "在桌面应用中登录" in account_source
+    assert "/ui/accounts/import" not in ui_source
+    assert "accountCookies" not in account_source
+    assert "pasteAccountCookies" not in ui_source
+    assert "cookieNames" not in account_source
+    assert "credentialCount" in account_source
 
 
 @pytest.mark.unit
@@ -3627,7 +3787,7 @@ def test_account_api_rejects_cookie_string_without_login_cookie(
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert "SESSDATA" in detail
-    assert "HttpOnly" in detail
+    assert "在桌面应用中登录" in detail
     assert not (tmp_path / "home" / "accounts.json").exists()
 
 

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, Field
@@ -143,6 +145,46 @@ def missing_required_auth_cookies(
     return [str(name) for name in required if str(name) not in present]
 
 
+def sanitize_account_label(value: str) -> str:
+    """Keep credentials out of the user-visible account label."""
+    label = str(value or "").strip()
+    known_cookie = re.search(
+        r"(?:^|;\s*)(?:SESSDATA|bili_jct|DedeUserID|MUSIC_U)=",
+        label,
+        flags=re.IGNORECASE,
+    )
+    cookie_pairs = re.findall(r"(?:^|;\s*)[A-Za-z0-9_.-]+=[^;]+", label)
+    if known_cookie or len(cookie_pairs) >= 2:
+        return ""
+    return label[:40]
+
+
+def cookies_for_url(url: str) -> List[ParsedCookie]:
+    """Return active account cookies whose domain and path match ``url``."""
+    parsed_url = urlparse(url)
+    hostname = (parsed_url.hostname or "").casefold().rstrip(".")
+    request_path = parsed_url.path or "/"
+    if parsed_url.scheme not in {"http", "https"} or not hostname:
+        return []
+
+    matched: List[ParsedCookie] = []
+    for account in load_accounts():
+        if account.status != "active":
+            continue
+        for cookie in account.parsed_cookies:
+            domain = cookie.domain.casefold().lstrip(".").rstrip(".")
+            domain_matches = hostname == domain or hostname.endswith(f".{domain}")
+            path_matches = request_path.startswith(cookie.path or "/")
+            if domain and domain_matches and path_matches and cookie.name and cookie.value:
+                matched.append(cookie)
+    return matched
+
+
+def cookie_header_for_url(url: str) -> str:
+    """Build a Cookie request header for a matching saved local account."""
+    return "; ".join(f"{cookie.name}={cookie.value}" for cookie in cookies_for_url(url))
+
+
 # ── 存储读写 ───────────────────────────────────────────
 
 _storage_lock = threading.RLock()
@@ -150,17 +192,32 @@ _storage_lock = threading.RLock()
 
 def load_account_store() -> AccountStoreSnapshot:
     """从 accounts.json 加载全部账号数据。"""
-    path = _accounts_path()
-    if not path.exists():
-        return AccountStoreSnapshot()
-    try:
-        raw = path.read_text(encoding="utf-8")
-        if not raw.strip():
+    with _storage_lock:
+        path = _accounts_path()
+        if not path.exists():
             return AccountStoreSnapshot()
-        return AccountStoreSnapshot.model_validate_json(raw)
-    except Exception:
-        logger.warning("Failed to read accounts.json, returning empty store", exc_info=True)
-        return AccountStoreSnapshot()
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if not raw.strip():
+                return AccountStoreSnapshot()
+            snapshot = AccountStoreSnapshot.model_validate_json(raw)
+            labels_changed = False
+            for account in snapshot.accounts:
+                clean_label = sanitize_account_label(account.label)
+                if clean_label != account.label:
+                    account.label = clean_label
+                    labels_changed = True
+            if labels_changed:
+                atomic_json_write(
+                    path,
+                    snapshot.model_dump(mode="json"),
+                    indent=2,
+                    default=str,
+                )
+            return snapshot
+        except Exception:
+            logger.warning("Failed to read accounts.json, returning empty store", exc_info=True)
+            return AccountStoreSnapshot()
 
 
 def save_account_store(snapshot: AccountStoreSnapshot) -> None:
@@ -263,220 +320,14 @@ async def verify_account(account: PlatformAccount) -> Dict[str, Any]:
 
 
 def account_for_api(account: PlatformAccount) -> Dict[str, Any]:
-    """返回适合 API 响应的脱敏账号数据（隐藏完整 cookie 值）。"""
-    masked_cookies = [
-        {
-            "name": c.name,
-            "value": c.value[:4] + "****" if len(c.value) > 6 else "****",
-            "domain": c.domain,
-        }
-        for c in account.parsed_cookies
-    ]
+    """返回适合 UI 的账号摘要，不暴露 Cookie 名称或值。"""
     return {
         "id": account.id,
         "platform": account.platform,
         "platform_name": platform_name(account.platform),
-        "label": account.label,
+        "label": sanitize_account_label(account.label),
         "cookies_count": len(account.parsed_cookies),
-        "cookies": masked_cookies,
         "added_at": account.added_at,
         "last_verified": account.last_verified,
         "status": account.status,
     }
-
-
-# ── 浏览器 Cookie 自动导入 ─────────────────────────────
-
-
-def _find_browser_cookie_dbs() -> list[dict]:
-    """查找系统中可用的 Chromium 内核浏览器 Cookie 数据库。"""
-    import platform as _platform
-
-    browsers: list[dict] = []
-    localappdata = os.getenv("LOCALAPPDATA", "")
-    appdata = os.getenv("APPDATA", "")
-
-    if _platform.system() == "Windows" and localappdata:
-        # Chrome
-        chrome_path = os.path.join(localappdata, "Google", "Chrome", "User Data")
-        if os.path.isdir(chrome_path):
-            for profile in ["Default"] + [d for d in os.listdir(chrome_path) if d.startswith("Profile ")]:
-                db = os.path.join(chrome_path, profile, "Network", "Cookies")
-                local_state = os.path.join(chrome_path, "Local State")
-                if os.path.isfile(db) and os.path.getsize(db) > 0:
-                    browsers.append({"name": f"Chrome ({profile})", "db_path": db, "local_state": local_state})
-        # Edge
-        edge_path = os.path.join(localappdata, "Microsoft", "Edge", "User Data")
-        if os.path.isdir(edge_path):
-            for profile in ["Default"] + [d for d in os.listdir(edge_path) if d.startswith("Profile ")]:
-                db = os.path.join(edge_path, profile, "Network", "Cookies")
-                local_state = os.path.join(edge_path, "Local State")
-                if os.path.isfile(db) and os.path.getsize(db) > 0:
-                    browsers.append({"name": f"Edge ({profile})", "db_path": db, "local_state": local_state})
-    elif _platform.system() == "Darwin" and os.path.expanduser("~"):
-        home = os.path.expanduser("~")
-        chrome_db = os.path.join(home, "Library", "Application Support", "Google", "Chrome", "Default", "Cookies")
-        if os.path.isfile(chrome_db):
-            browsers.append({"name": "Chrome", "db_path": chrome_db, "local_state": ""})
-
-    return browsers
-
-
-def _decrypt_chrome_cookie(encrypted_value: bytes, aes_key: bytes | None) -> str | None:
-    """解密单个 Chromium cookie 值。
-
-    支持 Chromium 的 v10/v20 AES-256-GCM 格式和旧版 DPAPI 格式。
-    """
-    import platform as _platform
-
-    if not encrypted_value:
-        return None
-
-    # Chromium v10/v20: AES-256-GCM (master key from Local State).
-    if encrypted_value[:3] in {b"v10", b"v20"} and aes_key:
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-            nonce = encrypted_value[3:15]   # 12 bytes
-            ciphertext = encrypted_value[15:]  # ciphertext + 16-byte tag
-            aesgcm = AESGCM(aes_key)
-            plain = aesgcm.decrypt(nonce, ciphertext, None)
-            return plain.decode("utf-8", errors="replace")
-        except Exception:
-            return None
-
-    # Older format: DPAPI directly (pre-Chrome v80)
-    if _platform.system() == "Windows":
-        plain = _dpapi_decrypt(encrypted_value)
-        return plain.decode("utf-8", errors="replace") if plain else None
-
-    return None
-
-
-def _dpapi_decrypt(data: bytes) -> bytes | None:
-    """Windows DPAPI 解密。"""
-    import ctypes
-    import ctypes.wintypes
-
-    class DATA_BLOB(ctypes.Structure):
-        _fields_ = [
-            ("cbData", ctypes.wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_char)),
-        ]
-
-    blob_in = DATA_BLOB()
-    blob_in.cbData = len(data)
-    blob_in.pbData = ctypes.cast(
-        ctypes.create_string_buffer(data, len(data)),
-        ctypes.POINTER(ctypes.c_char),
-    )
-    blob_out = DATA_BLOB()
-
-    result = ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in),
-        None, None, None, None, 0,
-        ctypes.byref(blob_out),
-    )
-    if not result:
-        return None
-
-    decrypted = ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-    return decrypted
-
-
-def _load_aes_key_from_local_state(local_state_path: str) -> bytes | None:
-    """从 Chromium Local State 文件加载 AES 密钥。"""
-    import base64
-    import json as _json
-
-    try:
-        with open(local_state_path, "r", encoding="utf-8") as f:
-            state = _json.load(f)
-        encrypted_key_b64 = state.get("os_crypt", {}).get("encrypted_key", "")
-        if not encrypted_key_b64:
-            return None
-        encrypted_key = base64.b64decode(encrypted_key_b64)
-        # Chrome prefixes with "DPAPI" (5 bytes)
-        if encrypted_key[:5] == b"DPAPI":
-            decrypted = _dpapi_decrypt(encrypted_key[5:])
-            if decrypted:
-                return decrypted
-        return None
-    except Exception:
-        return None
-
-
-def import_browser_cookies(platform: str) -> dict:
-    """从系统浏览器自动导入指定平台的 Cookie。
-
-    返回 ``{ok, cookies_raw, source, account_hint, error}``。
-    """
-    browsers = _find_browser_cookie_dbs()
-    if not browsers:
-        return {"ok": False, "error": "未找到 Chrome 或 Edge 浏览器数据。仅支持 Windows/macOS 上的 Chromium 内核浏览器。"}
-
-    preset = PLATFORM_PRESETS.get(platform, {})
-    target_domain = preset.get("domain", "")
-    if not target_domain:
-        return {"ok": False, "error": f"不支持的平台: {platform}"}
-    # Strip leading dot
-    domain_filter = target_domain.lstrip(".")
-
-    import shutil
-    import sqlite3
-    import tempfile
-
-    for browser in browsers:
-        db_path = browser["db_path"]
-        local_state = browser.get("local_state", "")
-        aes_key = None
-        if local_state and os.path.isfile(local_state):
-            aes_key = _load_aes_key_from_local_state(local_state)
-
-        try:
-            # Chrome 锁住 Cookie DB，需复制到临时文件
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                with open(db_path, "rb") as src:
-                    shutil.copyfileobj(src, tmp)
-                tmp_path = tmp.name
-
-            try:
-                conn = sqlite3.connect(tmp_path)
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    "SELECT name, encrypted_value FROM cookies "
-                    "WHERE host_key = ? OR host_key LIKE ?",
-                    (domain_filter, f"%.{domain_filter}"),
-                ).fetchall()
-                conn.close()
-            finally:
-                os.unlink(tmp_path)
-
-            if not rows:
-                continue
-
-            cookies: list[str] = []
-            for row in rows:
-                name = row["name"]
-                encrypted_value = row["encrypted_value"]
-                if not isinstance(encrypted_value, bytes) or not encrypted_value:
-                    continue
-                value = _decrypt_chrome_cookie(encrypted_value, aes_key)
-                if value:
-                    cookies.append(f"{name}={value}")
-
-            if cookies:
-                # 只保留关键的认证 cookie
-                cookie_str = "; ".join(cookies)
-                return {
-                    "ok": True,
-                    "cookies_raw": cookie_str,
-                    "source": browser["name"],
-                    "account_hint": f"从 {browser['name']} 导入",
-                    "cookie_count": len(cookies),
-                }
-        except Exception:
-            continue
-
-    return {"ok": False, "error": f"未在浏览器中找到 {platform_name(platform)} 的登录 Cookie。请确认已在浏览器中登录 {platform_name(platform)}。"}

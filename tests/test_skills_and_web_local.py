@@ -348,3 +348,36 @@ def test_local_web_extract_resolves_relative_links(monkeypatch):
     assert result["links"] == [
         {"url": "https://example.com/guide/start", "text": "Start"}
     ]
+
+
+@pytest.mark.unit
+def test_local_web_extract_uses_matching_saved_account_cookie(monkeypatch):
+    captured_headers = {}
+
+    class FakeResponse:
+        text = "<html><head><title>Private</title></head><body><main>content</main></body></html>"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url, headers):
+            captured_headers.update(headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.supervisor.account_store.cookie_header_for_url",
+        lambda url: "SESSDATA=local-session" if url == "https://www.bilibili.com/private" else "",
+    )
+    monkeypatch.setattr(web_tools_local.httpx, "Client", lambda **_kwargs: FakeClient())
+
+    result = web_tools_local.local_web_extract("https://www.bilibili.com/private")
+
+    assert result["title"] == "Private"
+    assert captured_headers["Cookie"] == "SESSDATA=local-session"

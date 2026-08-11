@@ -108,6 +108,10 @@ def _request_html(url: str, timeout: float) -> str:
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     }
+    from systems.supervisor.account_store import cookie_header_for_url
+    cookie_header = cookie_header_for_url(url)
+    if cookie_header:
+        headers['Cookie'] = cookie_header
 
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         resp = client.get(url, headers=headers)
@@ -252,6 +256,10 @@ def local_web_extract(
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         }
+        from systems.supervisor.account_store import cookie_header_for_url
+        cookie_header = cookie_header_for_url(url)
+        if cookie_header:
+            headers['Cookie'] = cookie_header
         
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             resp = client.get(url, headers=headers)

@@ -65,6 +65,14 @@ export interface WorkspaceOpenResult {
   message?: string
 }
 
+export interface PlatformLoginResult {
+  ok: boolean
+  cookiesRaw?: string
+  cookieCount?: number
+  source?: string
+  error?: string
+}
+
 export interface VoidCubeDesktopApi {
   runtime: RuntimeInfo
   monitor: {
@@ -91,4 +99,5 @@ export interface VoidCubeDesktopApi {
   }
   cookiesRefresh: () => Promise<{ ok: boolean }>
   clipboardReadText: () => Promise<{ ok: boolean; text?: string; error?: string }>
+  platformLogin: (platform: string) => Promise<PlatformLoginResult>
 }

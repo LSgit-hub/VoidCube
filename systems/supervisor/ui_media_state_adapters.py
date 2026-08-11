@@ -9,6 +9,7 @@ from uuid import uuid4
 
 
 JsonDict = Dict[str, Any]
+VALID_PLAYBACK_TYPES = {"auto", "bilibili", "audio", "video"}
 
 
 def load_media_state(path: Any) -> tuple[Optional[JsonDict], list[JsonDict], int]:
@@ -23,9 +24,25 @@ def load_media_state(path: Any) -> tuple[Optional[JsonDict], list[JsonDict], int
             return None, [], 0
         current = payload.get("current")
         queue = payload.get("queue")
+        current_item = (
+            dict(current)
+            if isinstance(current, dict)
+            and str(current.get("type") or "auto").lower() in VALID_PLAYBACK_TYPES
+            else None
+        )
+        queue_items = (
+            [
+                dict(item)
+                for item in queue
+                if isinstance(item, dict)
+                and str(item.get("type") or "auto").lower() in VALID_PLAYBACK_TYPES
+            ]
+            if isinstance(queue, list)
+            else []
+        )
         return (
-            dict(current) if isinstance(current, dict) else None,
-            [dict(item) for item in queue if isinstance(item, dict)] if isinstance(queue, list) else [],
+            current_item,
+            queue_items,
             max(int(payload.get("revision") or 0), 0),
         )
     except Exception:
@@ -79,6 +96,9 @@ def _prepare_media(media: JsonDict) -> JsonDict:
     current.pop("queue_mode", None)
     current.setdefault("auto_play", True)
     current.setdefault("type", "auto")
+    current["type"] = str(current["type"] or "auto").lower()
+    if current["type"] not in VALID_PLAYBACK_TYPES:
+        raise ValueError(f"unsupported playback type: {current['type']}")
     current.setdefault("title", current.get("url", "未知"))
     current.setdefault("playback", "playing")
     current["media_id"] = str(current.get("media_id") or uuid4().hex)

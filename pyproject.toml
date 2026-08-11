@@ -45,7 +45,6 @@ dependencies = [
 local = [
     "beautifulsoup4>=4.12.0,<5",
     "lxml>=6.0.0,<7",
-    "cryptography>=42.0.0,<45",
 ]
 # 图像生成 (可选)
 image = [

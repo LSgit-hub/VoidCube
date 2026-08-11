@@ -38,11 +38,11 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
     },
     "media": {
         "label": "媒体员工",
-        "description": "负责查找、组织和播放音视频媒体",
+        "description": "负责生成、查找、组织、交付和播放媒体产物",
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["web"],
+        "toolsets": ["media", "web"],
         "concurrency_limit": 1,
     },
 }

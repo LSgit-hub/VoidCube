@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from systems.supervisor.ui_projection import format_supervisor_ui_event
+from systems.supervisor.ui_media_state_adapters import VALID_PLAYBACK_TYPES
 
 
 SSE_HEADERS = {
@@ -111,23 +112,15 @@ def media_events(
     return _sse_response(event_stream())
 
 
-VALID_MEDIA_TYPES = {"auto", "bilibili", "audio", "video", "image", "document", "webpage", "html"}
-
-
 def normalize_media_enqueue_body(body: Any) -> Dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="请求体必须是 JSON")
     url = (body.get("url") or "").strip()
-    content = (body.get("content") or "").strip()
     media_type = str(body.get("type") or "auto").strip().lower()
-    if media_type not in VALID_MEDIA_TYPES:
+    if media_type not in VALID_PLAYBACK_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的媒体类型: {media_type}")
 
-    # html type can use inline content instead of a URL
-    if media_type == "html":
-        if not url and not content:
-            raise HTTPException(status_code=400, detail="html 类型必须提供 url 或 content 字段")
-    elif not url:
+    if not url:
         raise HTTPException(status_code=400, detail="缺少 url 字段")
 
     if url:
@@ -149,11 +142,6 @@ def normalize_media_enqueue_body(body: Any) -> Dict[str, Any]:
     }
     if "queue_mode" in body:
         normalized["queue_mode"] = queue_mode
-    if content:
-        normalized["content"] = content
-    mime_type = (body.get("mime_type") or "").strip()
-    if mime_type:
-        normalized["mime_type"] = mime_type
     return normalized
 
 

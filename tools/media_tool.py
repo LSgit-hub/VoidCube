@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""
-媒体播放工具 — 将媒体 URL 推送到 VoidCube Web UI 播放。
-
-Agent 调用此工具后，Web UI 会自动弹出播放器。
-支持 B站和 http/https 直链音频、视频。
-"""
+"""VoidCube 的媒体播放与 Agent 产物交付工具。"""
 
 import json
 import logging
+import mimetypes
+from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import quote
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -35,6 +34,12 @@ def _supervisor_media_url(endpoint: str = "enqueue") -> str:
         pass
 
     return f"http://127.0.0.1:6002/ui/media/{endpoint}"
+
+
+def _supervisor_delivery_url(endpoint: str = "push") -> str:
+    media_url = _supervisor_media_url()
+    base_url = media_url.split("/ui/media/", 1)[0]
+    return f"{base_url}/ui/delivery/{endpoint.lstrip('/')}"
 
 
 def _post_media(target: str, payload: Dict[str, Any], *, operation: str) -> str:
@@ -131,46 +136,102 @@ def media_playlist(items: list[Dict[str, Any]], queue_mode: str = "replace") -> 
 def media_display(
     url: str = "",
     content: str = "",
+    file_path: str = "",
     title: str = "",
     media_type: str = "auto",
-    auto_play: bool = True,
+    auto_open: bool = True,
     mime_type: str = "",
+    view_mode: str = "fit",
 ) -> str:
-    """将任意内容推送到 VoidCube Web UI 多媒体展板展示。
+    """将 Agent 产物或远程内容推送到 VoidCube 交付面板。
 
-    这是通用展示板工具，Agent 可以用它向用户展示各种类型的媒体内容。
-    与 media_play 不同，media_display 专注于可视化展示而非后台播放。
+    本地文件会先复制到 Supervisor 管理的只读产物仓库，不会向浏览器暴露
+    原始文件路径。展示记录与播放器队列完全独立。
 
     适用场景：
-    - Agent 生成的图片：传 url + type="image"
+    - Agent 生成的图片或文件：传 file_path
+    - 远程图片：传 url + type="image"
     - 生成的报告/文档：传 content (HTML格式) + type="html"
     - 任意网页：传 url + type="webpage"
     - PDF 文档：传 url + type="document"
-    - 音乐/视频：同 media_play，传 url + type="audio"/"video"
+    - 音视频产物：传 file_path 或直链，不会加入播放队列
 
     Args:
         url: 媒体 URL（html 类型可省略，用 content 代替）
-        content: 内联 HTML 或文本内容（仅 html 类型有效）
-        title: 显示在展板上的标题
-        media_type: "image" | "document" | "webpage" | "html" | "audio" | "video" | "bilibili" | "auto"
-        auto_play: 是否自动展开展板，默认 True
-        mime_type: 显式指定 MIME 类型（可选，如 text/html）
+        content: 内联 HTML 或文本内容
+        file_path: Agent 已生成的本地文件路径
+        title: 显示在交付面板上的标题
+        media_type: "image" | "document" | "webpage" | "html" | "text" | "file" | "audio" | "video" | "auto"
+        auto_open: 是否自动展开交付面板，默认 True
+        mime_type: 显式指定 MIME 类型（可选）
+        view_mode: "fit" 保持比例适应、"actual" 原始尺寸、"fill" 填充
 
     Returns:
-        JSON 字符串，包含 status 和展示状态
+        JSON 字符串，包含 status、current 和交付历史
     """
+    if file_path and (url or content):
+        return json.dumps(
+            {"status": "error", "error": "file_path 不能与 url 或 content 同时使用"},
+            ensure_ascii=False,
+        )
+
+    artifact: Dict[str, Any] = {}
+    if file_path:
+        source = Path(file_path).expanduser().resolve()
+        if not source.is_file():
+            return json.dumps(
+                {"status": "error", "error": f"交付文件不存在: {source}"},
+                ensure_ascii=False,
+            )
+        detected_mime = mime_type or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+        try:
+            with source.open("rb") as file_handle:
+                response = httpx.post(
+                    _supervisor_delivery_url("assets"),
+                    content=file_handle,
+                    headers={
+                        "Content-Type": detected_mime,
+                        "X-Artifact-Filename": quote(source.name, safe=""),
+                    },
+                    timeout=120.0,
+                )
+            response.raise_for_status()
+            artifact = response.json()
+        except httpx.ConnectError:
+            target = _supervisor_delivery_url("assets")
+            return json.dumps(
+                {"status": "error", "error": f"无法连接 supervisor ({target})，请确认 VoidCube 已启动"},
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            logger.warning("delivery asset upload failed: %s", exc)
+            return json.dumps(
+                {"status": "error", "error": f"交付文件上传失败: {exc}"},
+                ensure_ascii=False,
+            )
+        url = str(artifact.get("url") or "")
+        mime_type = str(artifact.get("mime_type") or detected_mime)
+        if media_type == "auto":
+            media_type = str(artifact.get("type") or "auto")
+
     payload: Dict[str, Any] = {
         "url": url,
-        "title": title or url or "Agent 展示内容",
+        "title": title or str(artifact.get("filename") or "") or url or "Agent 交付内容",
         "type": media_type,
-        "auto_play": auto_play,
+        "auto_open": auto_open,
+        "view_mode": view_mode,
     }
     if content:
         payload["content"] = content
     if mime_type:
         payload["mime_type"] = mime_type
+    for key in ("artifact_id", "filename", "byte_size"):
+        if artifact.get(key):
+            payload[key] = artifact[key]
 
-    return _post_media(_supervisor_media_url(), payload, operation="media_display")
+    return _post_media(
+        _supervisor_delivery_url(), payload, operation="media_display"
+    )
 
 
 # ── Registry ──
@@ -199,7 +260,7 @@ MEDIA_PLAY_SCHEMA = {
             },
             "media_type": {
                 "type": "string",
-                "enum": ["bilibili", "audio", "video", "image", "document", "webpage", "html", "auto"],
+                "enum": ["bilibili", "audio", "video", "auto"],
                 "description": "媒体类型，默认 auto 自动识别",
             },
             "auto_play": {
@@ -219,10 +280,10 @@ MEDIA_PLAY_SCHEMA = {
 MEDIA_DISPLAY_SCHEMA = {
     "name": "media_display",
     "description": (
-        "向 VoidCube Web UI 多媒体展板推送任意可视化内容。"
-        "Agent 生成图片/文档/网页后调用此工具展示给用户。"
-        "图片传 url+type='image'；HTML 报告传 content+type='html'；"
-        "网页传 url+type='webpage'；PDF 传 url+type='document'。"
+        "向 VoidCube Agent 产物与文件交付面板推送内容。"
+        "本地产物优先传 file_path，工具会安全上传并自动识别类型；"
+        "HTML 报告传 content+type='html'；远程网页或媒体传 url。"
+        "交付历史独立于播放器队列。"
     ),
     "parameters": {
         "type": "object",
@@ -233,7 +294,11 @@ MEDIA_DISPLAY_SCHEMA = {
             },
             "content": {
                 "type": "string",
-                "description": "内联 HTML 或文本内容。仅 html 类型有效，支持完整 HTML/CSS",
+                "description": "内联 HTML 或文本内容",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Agent 已生成的本地文件路径；不能与 url/content 同时使用",
             },
             "title": {
                 "type": "string",
@@ -241,16 +306,21 @@ MEDIA_DISPLAY_SCHEMA = {
             },
             "media_type": {
                 "type": "string",
-                "enum": ["image", "document", "webpage", "html", "audio", "video", "bilibili", "auto"],
-                "description": "内容类型。image=图片, document=PDF, webpage=网页嵌入, html=富文本",
+                "enum": ["image", "document", "webpage", "html", "text", "file", "audio", "video", "auto"],
+                "description": "内容类型，auto 会按 MIME 和扩展名识别",
             },
-            "auto_play": {
+            "auto_open": {
                 "type": "boolean",
                 "description": "是否自动展开展板面板，默认 true",
             },
             "mime_type": {
                 "type": "string",
                 "description": "显式 MIME 类型（可选），如 text/html",
+            },
+            "view_mode": {
+                "type": "string",
+                "enum": ["fit", "actual", "fill"],
+                "description": "初始查看模式：fit 保持比例适应、actual 原始尺寸、fill 填充",
             },
         },
         "required": [],
@@ -342,10 +412,12 @@ registry.register(
     handler=lambda args, **kw: media_display(
         url=args.get("url", ""),
         content=args.get("content", ""),
+        file_path=args.get("file_path", ""),
         title=args.get("title", ""),
         media_type=args.get("media_type", "auto"),
-        auto_play=args.get("auto_play", True),
+        auto_open=args.get("auto_open", True),
         mime_type=args.get("mime_type", ""),
+        view_mode=args.get("view_mode", "fit"),
     ),
     emoji="🖼",
 )

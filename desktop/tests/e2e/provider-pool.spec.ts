@@ -146,7 +146,26 @@ test('provider pool and worker assignment panels stay usable across viewports', 
 
   try {
     await page.goto('http://127.0.0.1:6002/ui', { waitUntil: 'domcontentloaded' })
-    await page.locator('.dock-btn[data-panel="settings"]').click({ force: true })
+    await page.setViewportSize({ width: 1024, height: 768 })
+    await page.locator('.dock-btn[data-panel="account"]').click({ force: true })
+    await expect(page.locator('#panelAccount')).toHaveClass(/open/)
+    await expect(page.locator('#accountDesktopLogin')).toHaveText('在桌面应用中登录')
+    await expect(page.locator('#panelAccountBody')).not.toContainText('从浏览器导入 Cookie')
+    await expect(page.locator('#panelAccountBody')).not.toContainText(/SESSDATA|bili_jct|DedeUserID/)
+    await expect(page.locator('#accountPlatform')).toBeInViewport()
+    await expect(page.locator('#accountLabel')).toBeInViewport()
+    const accountPanelBox = await page.locator('#panelAccount').boundingBox()
+    expect(accountPanelBox).not.toBeNull()
+    expect(accountPanelBox!.x).toBeGreaterThanOrEqual(0)
+    expect(accountPanelBox!.x + accountPanelBox!.width).toBeLessThanOrEqual(1024)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({
+      path: 'test-results/account-center-desktop.png',
+      animations: 'disabled'
+    })
+    await page.locator('#panelAccount .panel-close').click()
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.locator('.dock-btn[data-panel="settings"]').dispatchEvent('click')
     await expect(page.locator('#panelSettings')).toHaveClass(/open/)
     await expect(page.locator('#providerForm')).toBeInViewport()
     const providerRows = page.locator('#providerPoolList .provider-list-row')

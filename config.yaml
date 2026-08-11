@@ -9,6 +9,7 @@ fallback_providers: []
 credential_pool_strategies: {}
 companion_workers:
   default_role: general
+  max_concurrent: 4
   roles:
     general:
       label: 通用员工
@@ -21,6 +22,7 @@ companion_workers:
       - file
       - skills
       - todo
+      concurrency_limit: 1
     research:
       label: 调研员工
       description: 负责检索、核实、比较和整理外部信息
@@ -29,6 +31,7 @@ companion_workers:
       model: ''
       toolsets:
       - learn
+      concurrency_limit: 1
     coding:
       label: 工程员工
       description: 负责读取项目、编写或修改代码并运行验证
@@ -41,14 +44,17 @@ companion_workers:
       - code_execution
       - skills
       - todo
+      concurrency_limit: 1
     media:
       label: 媒体员工
-      description: 负责查找、组织和播放音视频媒体
+      description: 负责生成、查找、组织、交付和播放媒体产物
       enabled: true
       provider: ''
       model: ''
       toolsets:
+      - media
       - web
+      concurrency_limit: 1
 image_generation:
   provider: agnes-ai
   api_key_env: AGNES_API_KEY

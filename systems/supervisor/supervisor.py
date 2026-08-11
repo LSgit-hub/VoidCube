@@ -195,6 +195,11 @@ class Supervisor(
                 enqueue_media=self._ui_runtime.enqueue_media_endpoint,
                 enqueue_media_playlist=self._ui_runtime.enqueue_media_playlist_endpoint,
                 control_media=self._ui_runtime.control_media_endpoint,
+                get_delivery_events=self._ui_runtime.get_delivery_events,
+                push_delivery=self._ui_runtime.push_delivery_endpoint,
+                control_delivery=self._ui_runtime.control_delivery_endpoint,
+                upload_delivery_asset=self._ui_runtime.upload_delivery_asset_endpoint,
+                get_delivery_asset=self._ui_runtime.get_delivery_asset_endpoint,
                 get_identity_archive=self._ui_runtime.get_identity_archive,
                 get_identity_turns=self._ui_runtime.get_identity_turns,
                 get_evolution_audit=self._ui_runtime.get_evolution_promotion_audit,
@@ -209,7 +214,6 @@ class Supervisor(
                 add_account=self._ui_runtime.add_account,
                 delete_account=self._ui_runtime.delete_account_endpoint,
                 verify_account=self._ui_runtime.verify_account_endpoint,
-                import_account=self._ui_runtime.import_account_endpoint,
             )
         )
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])

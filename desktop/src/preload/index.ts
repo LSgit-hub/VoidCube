@@ -51,7 +51,9 @@ const api: VoidCubeDesktopApi = {
   cookiesRefresh: () =>
     ipcRenderer.invoke('cookies:refresh') as Promise<{ ok: boolean }>,
   clipboardReadText: () =>
-    ipcRenderer.invoke('clipboard:read-text') as Promise<{ ok: boolean; text?: string; error?: string }>
+    ipcRenderer.invoke('clipboard:read-text') as Promise<{ ok: boolean; text?: string; error?: string }>,
+  platformLogin: (platform) =>
+    ipcRenderer.invoke('accounts:platform-login', platform)
 }
 
 contextBridge.exposeInMainWorld('voidcubeDesktop', api)

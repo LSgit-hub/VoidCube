@@ -31,7 +31,11 @@ class SupervisorUIRoutePorts:
     add_account: Callable[..., Any] | None = None
     delete_account: Callable[..., Any] | None = None
     verify_account: Callable[..., Any] | None = None
-    import_account: Callable[..., Any] | None = None
+    get_delivery_events: Callable[..., Any] | None = None
+    push_delivery: Callable[..., Any] | None = None
+    control_delivery: Callable[..., Any] | None = None
+    upload_delivery_asset: Callable[..., Any] | None = None
+    get_delivery_asset: Callable[..., Any] | None = None
 
 
 def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
@@ -48,6 +52,22 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
     app.add_api_route("/ui/media/playlist", ports.enqueue_media_playlist, methods=["POST"])
     if ports.control_media is not None:
         app.add_api_route("/ui/media/control", ports.control_media, methods=["POST"])
+    if ports.get_delivery_events is not None:
+        app.add_api_route("/ui/delivery-events", ports.get_delivery_events, methods=["GET"])
+    if ports.push_delivery is not None:
+        app.add_api_route("/ui/delivery/push", ports.push_delivery, methods=["POST"])
+    if ports.control_delivery is not None:
+        app.add_api_route("/ui/delivery/control", ports.control_delivery, methods=["POST"])
+    if ports.upload_delivery_asset is not None:
+        app.add_api_route(
+            "/ui/delivery/assets", ports.upload_delivery_asset, methods=["POST"]
+        )
+    if ports.get_delivery_asset is not None:
+        app.add_api_route(
+            "/ui/delivery/assets/{artifact_id}/{filename}",
+            ports.get_delivery_asset,
+            methods=["GET"],
+        )
     app.add_api_route(
         "/ui/identity/archive",
         ports.get_identity_archive,
@@ -86,8 +106,6 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
         app.add_api_route("/ui/accounts/{account_id}", ports.delete_account, methods=["DELETE"])
     if ports.verify_account is not None:
         app.add_api_route("/ui/accounts/{account_id}/verify", ports.verify_account, methods=["POST"])
-    if ports.import_account is not None:
-        app.add_api_route("/ui/accounts/import", ports.import_account, methods=["POST"])
 
 
 __all__ = ["SupervisorUIRoutePorts", "mount_supervisor_ui_routes"]

@@ -37,6 +37,23 @@ from systems.supervisor.ui_identity_proxy_adapters import (
     get_identity_turns,
     verify_identity_experience,
 )
+from systems.supervisor.ui_delivery_adapters import (
+    control_delivery_request,
+    delivery_events,
+    push_delivery_request,
+    remove_delivery_assets,
+    serve_delivery_asset,
+    upload_delivery_asset,
+)
+from systems.supervisor.ui_delivery_state_adapters import (
+    SupervisorUIDeliveryStateContext,
+    clear_delivery_state,
+    load_delivery_state,
+    persist_delivery_state,
+    push_delivery_state,
+    select_delivery_state,
+    selected_delivery,
+)
 from systems.supervisor.ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
     control_media_state,
@@ -138,6 +155,22 @@ class SupervisorUIRuntime:
         self.current_media = current
         self.media_queue.extend(queue)
         self.media_revision = revision
+        self.delivery_artifact_root = ports.runtime_root / "delivery-artifacts"
+        self.delivery_artifact_root.mkdir(parents=True, exist_ok=True)
+        self.delivery_state_path = ports.runtime_root / "supervisor-ui-deliveries.json"
+        selected_id, deliveries, delivery_revision = load_delivery_state(
+            self.delivery_state_path
+        )
+        self.delivery_items: deque[JsonDict] = deque(deliveries[:50], maxlen=50)
+        retained_ids = {
+            str(item.get("delivery_id") or "") for item in self.delivery_items
+        }
+        self.selected_delivery_id = (
+            selected_id
+            if selected_id in retained_ids
+            else str((self.delivery_items[0] if self.delivery_items else {}).get("delivery_id") or "")
+        )
+        self.delivery_revision = delivery_revision
 
     def _media_context(self) -> SupervisorUIMediaStateContext:
         return SupervisorUIMediaStateContext(
@@ -146,6 +179,65 @@ class SupervisorUIRuntime:
             media_queue=self.media_queue,
             set_revision=lambda revision: setattr(self, "media_revision", revision),
             set_current_media=lambda value: setattr(self, "current_media", value),
+        )
+
+    def _delivery_context(self) -> SupervisorUIDeliveryStateContext:
+        return SupervisorUIDeliveryStateContext(
+            current_revision=self.delivery_revision,
+            selected_id=self.selected_delivery_id,
+            items=self.delivery_items,
+            set_revision=lambda revision: setattr(self, "delivery_revision", revision),
+            set_selected_id=lambda value: setattr(self, "selected_delivery_id", value),
+        )
+
+    def _persist_deliveries(self) -> None:
+        persist_delivery_state(
+            self.delivery_state_path,
+            selected_id=self.selected_delivery_id,
+            items=self.delivery_items,
+            revision=self.delivery_revision,
+        )
+
+    def current_delivery(self) -> JsonDict | None:
+        return selected_delivery(self._delivery_context())
+
+    def list_deliveries(self) -> list[JsonDict]:
+        return [dict(item) for item in self.delivery_items]
+
+    def push_delivery(self, delivery: JsonDict) -> JsonDict:
+        evicted = (
+            dict(self.delivery_items[-1])
+            if self.delivery_items.maxlen
+            and len(self.delivery_items) >= self.delivery_items.maxlen
+            else None
+        )
+        current = push_delivery_state(
+            context=self._delivery_context(), delivery=delivery
+        )
+        self._persist_deliveries()
+        if evicted is not None and not any(
+            item.get("delivery_id") == evicted.get("delivery_id")
+            for item in self.delivery_items
+        ):
+            remove_delivery_assets(
+                [evicted], artifact_root=self.delivery_artifact_root
+            )
+        logger.info("Delivery pushed: %s (%s)", current.get("title"), current.get("type"))
+        return current
+
+    def select_delivery(self, delivery_id: str) -> JsonDict | None:
+        current = select_delivery_state(
+            context=self._delivery_context(), delivery_id=delivery_id
+        )
+        self._persist_deliveries()
+        return current
+
+    def clear_deliveries(self) -> None:
+        cleared_items = self.list_deliveries()
+        clear_delivery_state(context=self._delivery_context())
+        self._persist_deliveries()
+        remove_delivery_assets(
+            cleared_items, artifact_root=self.delivery_artifact_root
         )
 
     def enqueue_media(self, media: JsonDict) -> JsonDict:
@@ -287,6 +379,43 @@ class SupervisorUIRuntime:
             queue_items=self.media_queue_items,
         )
 
+    async def get_delivery_events(self, request: Request) -> StreamingResponse:
+        return delivery_events(
+            request,
+            current_delivery=self.current_delivery,
+            current_revision=lambda: self.delivery_revision,
+            delivery_items=self.list_deliveries,
+        )
+
+    async def push_delivery_endpoint(self, request: Request) -> JsonDict:
+        return await push_delivery_request(
+            request,
+            push_delivery=self.push_delivery,
+            delivery_items=self.list_deliveries,
+            current_revision=lambda: self.delivery_revision,
+        )
+
+    async def control_delivery_endpoint(self, request: Request) -> JsonDict:
+        return await control_delivery_request(
+            request,
+            select_delivery=self.select_delivery,
+            clear_deliveries=self.clear_deliveries,
+            delivery_items=self.list_deliveries,
+            current_revision=lambda: self.delivery_revision,
+        )
+
+    async def upload_delivery_asset_endpoint(self, request: Request) -> JsonDict:
+        return await upload_delivery_asset(
+            request, artifact_root=self.delivery_artifact_root
+        )
+
+    async def get_delivery_asset_endpoint(
+        self, artifact_id: str, filename: str
+    ):
+        return serve_delivery_asset(
+            artifact_id, filename, artifact_root=self.delivery_artifact_root
+        )
+
     async def enqueue_media_endpoint(self, request: Request) -> JsonDict:
         return await enqueue_media_request(
             request,
@@ -353,6 +482,7 @@ class SupervisorUIRuntime:
             missing_required_auth_cookies,
             parse_cookie_string,
             PlatformAccount,
+            sanitize_account_label,
             save_account,
         )
         try:
@@ -368,7 +498,7 @@ class SupervisorUIRuntime:
         if not cookies_raw:
             raise HTTPException(status_code=400, detail="缺少 cookies_raw 字段")
 
-        label = str(body.get("label") or "").strip()
+        label = sanitize_account_label(str(body.get("label") or ""))
         account_id = str(body.get("id") or "").strip()
 
         parsed = parse_cookie_string(cookies_raw, platform)
@@ -380,8 +510,7 @@ class SupervisorUIRuntime:
                 status_code=400,
                 detail=(
                     f"缺少登录所需 Cookie: {', '.join(missing)}。"
-                    "请从浏览器 Application/应用 → Cookies 中复制，"
-                    "document.cookie 无法读取 HttpOnly 登录 Cookie。"
+                    "请重新点击账号中心的“在桌面应用中登录”完成登录。"
                 ),
             )
 
@@ -396,7 +525,7 @@ class SupervisorUIRuntime:
         account = PlatformAccount(
             id=account_id or (existing_account.id if existing_account else uuid.uuid4().hex[:12]),
             platform=platform,
-            label=label or (existing_account.label if existing_account else ""),
+            label=label,
             cookies_raw=cookies_raw,
             parsed_cookies=parsed,
             status="active",
@@ -421,57 +550,6 @@ class SupervisorUIRuntime:
         return {
             "status": "ok",
             "accounts_remaining": len(remaining),
-            "accounts_revision": self.accounts_revision,
-        }
-
-    async def import_account_endpoint(self, request: Request) -> JsonDict:
-        from systems.supervisor.account_store import (
-            account_for_api,
-            import_browser_cookies,
-            missing_required_auth_cookies,
-            parse_cookie_string,
-            PlatformAccount,
-            save_account,
-        )
-        try:
-            body = await request.json()
-        except Exception:
-            raise HTTPException(status_code=400, detail="请求体必须是 JSON")
-
-        platform = str(body.get("platform") or "bilibili").strip()
-        label = str(body.get("label") or "").strip()
-
-        result = import_browser_cookies(platform)
-        if not result.get("ok"):
-            raise HTTPException(status_code=404, detail=result.get("error", "导入失败"))
-
-        cookies_raw = result["cookies_raw"]
-        parsed = parse_cookie_string(cookies_raw, platform)
-        if not parsed:
-            raise HTTPException(status_code=400, detail="导入的 Cookie 解析失败")
-        missing = missing_required_auth_cookies(parsed, platform)
-        if missing:
-            raise HTTPException(
-                status_code=400,
-                detail=f"浏览器中缺少登录所需 Cookie: {', '.join(missing)}",
-            )
-
-        account = PlatformAccount(
-            id=uuid.uuid4().hex[:12],
-            platform=platform,
-            label=label or result.get("account_hint", f"从 {result.get('source', '浏览器')} 导入"),
-            cookies_raw=cookies_raw,
-            parsed_cookies=parsed,
-            status="active",
-        )
-        save_account(account)
-        self._bump_accounts_revision()
-        logger.info("Account imported from browser: %s (%s)", platform, account.id)
-        return {
-            "status": "ok",
-            "account": account_for_api(account),
-            "source": result.get("source"),
-            "cookie_count": result.get("cookie_count", 0),
             "accounts_revision": self.accounts_revision,
         }
 

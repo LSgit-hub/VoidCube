@@ -534,13 +534,15 @@ window.addEventListener('message', (event) => {
     api.cookiesRefresh?.().catch(() => {})
     return
   }
-  if (data.type === 'clipboard:read-text') {
+  if (data.type === 'accounts:platform-login') {
     const source = event.source as WindowProxy | null
     if (!source || source !== monitorFrame.contentWindow) return
-    api.clipboardReadText()
-      .then((result) => source.postMessage({ type: 'clipboard:read-text-result', ...result }, '*'))
+    const platform = typeof data.platform === 'string' ? data.platform : ''
+    source.postMessage({ type: 'accounts:platform-login-state', state: 'started' }, '*')
+    api.platformLogin(platform)
+      .then((result) => source.postMessage({ type: 'accounts:platform-login-result', ...result }, '*'))
       .catch((error: unknown) => source.postMessage({
-        type: 'clipboard:read-text-result',
+        type: 'accounts:platform-login-result',
         ok: false,
         error: error instanceof Error ? error.message : String(error)
       }, '*'))

@@ -1418,6 +1418,45 @@ def _truncate_snapshot(snapshot_text: str, max_chars: int = 8000) -> str:
     return '\n'.join(result)
 
 
+def _inject_saved_account_cookies(
+    task_id: str,
+    url: str,
+    session_info: Dict[str, Any],
+) -> None:
+    """Inject matching local credentials once per domain and browser task."""
+    if not _is_local_mode():
+        return
+    from systems.supervisor.account_store import cookies_for_url
+
+    cookies = cookies_for_url(url)
+    if not cookies:
+        return
+    domains = frozenset(cookie.domain.casefold() for cookie in cookies)
+    injected_domains = session_info.setdefault("_account_cookie_domains", set())
+    if domains.issubset(injected_domains):
+        return
+
+    all_succeeded = True
+    for cookie in cookies:
+        args = [
+            "set",
+            cookie.name,
+            cookie.value,
+            "--domain",
+            cookie.domain,
+            "--path",
+            cookie.path or "/",
+        ]
+        if cookie.http_only:
+            args.append("--httpOnly")
+        if cookie.secure:
+            args.append("--secure")
+        result = _run_browser_command(task_id, "cookies", args)
+        all_succeeded = all_succeeded and bool(result.get("success"))
+    if all_succeeded:
+        injected_domains.update(domains)
+
+
 # ============================================================================
 # Browser Tool Functions
 # ============================================================================
@@ -1478,6 +1517,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     # (will create one with features logged if not exists)
     session_info = _get_session_info(effective_task_id)
     is_first_nav = session_info.get("_first_nav", True)
+
+    _inject_saved_account_cookies(effective_task_id, url, session_info)
     
     # Auto-start recording if configured and this is first navigation
     if is_first_nav:

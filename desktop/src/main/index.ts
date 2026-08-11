@@ -5,6 +5,7 @@ import { app, BrowserWindow, clipboard, ipcMain, session, shell } from 'electron
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './runtime-locator'
 import { ServiceController } from './service-controller'
 import { TerminalSession } from './terminal-session'
+import { loginToPlatform } from './platform-login'
 import type { MonitorProbe, ServiceLifecycleAction } from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
@@ -156,6 +157,11 @@ function registerIpc(): void {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
+  })
+  ipcMain.handle('accounts:platform-login', (_event, platform: unknown) => {
+    if (!mainWindow) return { ok: false, error: '桌面窗口不可用' }
+    if (typeof platform !== 'string') return { ok: false, error: '平台参数无效' }
+    return loginToPlatform(mainWindow, platform)
   })
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
   ipcMain.on('window:close', () => mainWindow?.close())

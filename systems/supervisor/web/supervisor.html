@@ -1945,7 +1945,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .dock-btn.active .db-label {
   color: var(--gold);
 }
-/* 播放器是动作条的独立中心控件，不参与两侧按钮排布 */
+/* 交付面板是动作条的独立中心控件，不参与两侧按钮排布 */
 .dock-btn.media-dock-btn {
   position: absolute;
   left: 50%;
@@ -3351,7 +3351,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   line-height: 1.5;
 }
 /* 账号中心 */
-#panelAccount { max-width: 820px; max-height: min(560px, calc(100vh - 72px)); }
+#panelAccount { max-width: 920px; max-height: min(560px, calc(100vh - 72px)); }
 .account-card {
   border-radius: 10px; padding: 14px 16px;
   background: rgba(0,0,0,.22);
@@ -3404,30 +3404,14 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border-top: 1px solid rgba(255,255,255,.06);
 }
 .account-add-bar .provider-field { flex: 1; min-width: 0; }
-.account-add-bar .provider-field textarea {
-  width: 100%;
-  min-height: 56px; resize: vertical;
-  padding: 6px 8px;
-  border: 1px solid rgba(255,255,255,.11);
-  border-radius: 5px;
-  color: var(--text-primary);
-  background: rgba(0,0,0,.22);
-  font: inherit; font-size: 10.5px;
-  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+.account-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
 }
-.account-add-bar .provider-field textarea:focus {
-  outline: 1px solid var(--accent-blue);
-  border-color: var(--accent-blue);
-}
-.account-help-note {
-  font-size: 9.5px; color: var(--text-muted);
-  margin-top: 6px; line-height: 1.6;
-}
-.account-help-note code {
-  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 9px;
-  background: rgba(255,255,255,.06);
-  padding: 1px 4px; border-radius: 3px;
+@media (max-width: 720px) {
+  .account-fields { grid-template-columns: 1fr; }
+  .account-add-bar { flex-wrap: wrap; align-items: center; }
 }
 /* 自主链路观测 */
 .segment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -3620,7 +3604,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .drill-link:hover { background: rgba(226,176,74,.24); }
 
-/* ── Dock 媒体展板 ── */
+/* ── Agent 产物与文件交付面板 ── */
 .dock-btn.media-dock-btn::after {
   content: ""; position: absolute; right: 12px; top: 8px;
   width: 6px; height: 6px; border-radius: 50%;
@@ -3628,55 +3612,74 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   opacity: 0; transform: scale(.6); transition: opacity .2s, transform .2s;
 }
 .dock-btn.media-dock-btn.has-media::after { opacity: 1; transform: scale(1); }
-#panelMedia { max-width: 1080px; max-height: min(620px, calc(100vh - 64px)); }
+#panelMedia {
+  width: min(1180px, calc(100vw - 32px)); max-width: 1180px;
+  height: min(740px, calc(100vh - 64px)); max-height: calc(100vh - 64px);
+}
+#panelMedia:fullscreen { width: 100vw; height: 100vh; max-width: none; max-height: none; border-radius: 0; }
 .media-board {
-  display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .8fr);
-  min-height: 360px; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1fr) 290px;
+  min-height: 0; flex: 1; overflow: hidden;
 }
 .media-stage {
-  min-width: 0; padding: 14px; display: grid; grid-template-rows: minmax(220px, 1fr) auto; gap: 12px;
+  min-width: 0; min-height: 0; padding: 14px; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 12px;
   background: #100f0d; border-right: 1px solid rgba(255,255,255,.07);
 }
-.media-viewport {
-  display: flex; align-items: center; justify-content: center; min-height: 220px;
-  background: #080808; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; overflow: hidden;
+.delivery-canvas {
+  min-width: 0; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+  background: #080808; border: 1px solid rgba(255,255,255,.08); border-radius: 8px;
 }
-.media-viewport iframe, .media-viewport video { width: 100%; height: 100%; min-height: 300px; border: 0; background: #000; }
+.delivery-canvas[data-view-mode="actual"] { overflow: auto; align-items: flex-start; justify-content: flex-start; }
+.delivery-canvas[data-view-mode="actual"] .media-viewport { flex: 0 0 auto; }
+.media-viewport {
+  display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0;
+  width: 100%; height: 100%; overflow: hidden; background: #080808;
+}
+.media-viewport iframe, .media-viewport video { width: 100%; height: 100%; min-width: 0; min-height: 0; border: 0; background: #000; object-fit: contain; }
 .media-viewport audio { width: min(480px, 90%); }
-.media-viewport img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; cursor: zoom-in; transition: transform .15s; }
-.media-viewport img.zoomed { cursor: zoom-out; position: fixed; inset: 0; z-index: 9999; max-width: 98vw; max-height: 98vh; margin: auto; background: rgba(0,0,0,.92); padding: 12px; border-radius: 12px; object-fit: contain; }
-.media-viewport .media-html-content { width: 100%; height: 100%; overflow-y: auto; padding: 14px 18px; color: var(--text-primary); font-size: 12px; line-height: 1.7; }
-.media-viewport .media-html-content h2, .media-viewport .media-html-content h3 { color: var(--mint); margin: 12px 0 6px; }
-.media-viewport .media-html-content p { margin: 4px 0 8px; color: var(--text-secondary); }
-.media-viewport .media-html-content code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 10.5px; }
-.media-viewport .media-html-content pre { background: rgba(0,0,0,.3); padding: 10px 14px; border-radius: 6px; overflow-x: auto; font-family: Consolas, monospace; font-size: 10.5px; line-height: 1.5; }
-.media-viewport .media-html-content a { color: var(--accent-yellow); }
-.media-viewport .media-html-content table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 10.5px; }
-.media-viewport .media-html-content th, .media-viewport .media-html-content td { border: 1px solid rgba(255,255,255,.12); padding: 5px 8px; text-align: left; }
-.media-viewport .media-html-content th { background: rgba(255,255,255,.06); font-weight: 700; }
+.media-viewport img { width: 100%; height: 100%; object-fit: contain; }
+.delivery-canvas[data-view-mode="fill"] .media-viewport { width: 100% !important; height: 100% !important; }
+.delivery-canvas[data-view-mode="fill"] .media-viewport :is(img, video) { object-fit: cover; }
+.media-viewport .media-html-content { width: 100%; height: 100%; background: #fff; }
 .media-empty { color: var(--text-muted); text-align: center; font-size: 11px; line-height: 1.6; padding: 24px; }
 .media-empty strong { display: block; color: var(--text-primary); font-size: 13px; margin-bottom: 4px; }
-.media-now { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.media-empty a, .delivery-file-open { color: var(--accent-yellow); }
+.delivery-file-card { width: min(520px, calc(100% - 32px)); padding: 24px; text-align: center; }
+.delivery-file-icon { font-size: 34px; margin-bottom: 10px; }
+.delivery-file-name { color: var(--text-primary); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.delivery-file-meta { color: var(--text-muted); font-size: 10px; margin: 6px 0 16px; }
+.delivery-file-open { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border: 1px solid rgba(226,176,74,.28); border-radius: 6px; background: rgba(226,176,74,.1); font-weight: 700; text-decoration: none; }
+.media-now { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 36px; }
 .media-now-icon { font-size: 20px; flex: 0 0 auto; }
 .media-now-copy { min-width: 0; flex: 1; }
 .media-now-title { color: var(--text-primary); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .media-now-meta { color: var(--text-muted); font-size: 9.5px; margin-top: 3px; }
-.media-controls { display: flex; align-items: center; gap: 4px; }
+.delivery-view-modes { display: inline-flex; align-items: center; padding: 2px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: rgba(0,0,0,.18); }
+.delivery-view-modes[hidden], .media-controls[hidden], .playback-queue-section[hidden] { display: none !important; }
+.delivery-view-mode { height: 28px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); font-size: 9.5px; cursor: pointer; }
+.delivery-view-mode.active { background: rgba(226,176,74,.16); color: var(--text-primary); }
+.media-controls, .delivery-actions { display: flex; align-items: center; gap: 4px; }
 .media-control {
   width: 34px; height: 32px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
   background: rgba(255,255,255,.05); color: var(--text-primary); cursor: pointer; font-size: 15px;
 }
 .media-control:hover { background: rgba(226,176,74,.15); border-color: rgba(226,176,74,.3); }
 .media-control.danger:hover { background: rgba(232,130,110,.18); border-color: rgba(232,130,110,.4); }
-.media-queue-pane { min-width: 0; display: grid; grid-template-rows: auto 1fr; background: rgba(255,255,255,.018); }
+.delivery-side-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,.018); }
 .media-queue-head { padding: 13px 14px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.media-queue-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .media-queue-title { color: var(--text-primary); font-size: 11px; font-weight: 700; }
+.delivery-clear-history { border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: 9px; cursor: pointer; }
+.delivery-clear-history:hover { color: var(--coral); }
 .media-queue-count { color: var(--text-muted); font-size: 9.5px; margin-top: 3px; }
-.media-queue-list { overflow-y: auto; padding: 8px; display: grid; align-content: start; gap: 6px; }
+.delivery-history-list, .media-queue-list { overflow-y: auto; padding: 8px; display: grid; align-content: start; gap: 6px; }
+.delivery-history-list { flex: 1 1 auto; min-height: 100px; }
+.playback-queue-section { flex: 0 1 42%; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,.08); }
+.playback-queue-section .media-queue-list { flex: 1; min-height: 0; }
 .media-queue-item {
   width: 100%; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px;
   padding: 9px; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; background: rgba(255,255,255,.03);
-  color: inherit; text-align: left; font-family: inherit; cursor: pointer;
+  color: var(--text-primary); text-align: left; font-family: inherit; cursor: pointer;
 }
 .media-queue-item.current { border-color: rgba(111,198,160,.35); background: rgba(111,198,160,.08); cursor: default; }
 .media-queue-item:not(.current):hover { background: rgba(255,255,255,.065); border-color: rgba(226,176,74,.25); }
@@ -3686,13 +3689,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .media-queue-item-meta { color: var(--text-muted); font-size: 8.5px; margin-top: 2px; }
 .media-queue-item-state { color: var(--mint); font-size: 8.5px; white-space: nowrap; }
 @media (max-width: 720px) {
-  #panelMedia { max-height: calc(100vh - 54px); }
-  .media-board { grid-template-columns: 1fr; grid-template-rows: auto minmax(130px, 1fr); min-height: 0; }
-  .media-stage { min-height: 280px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); padding: 10px; }
-  .media-viewport iframe, .media-viewport video { min-height: 210px; }
+  #panelMedia { width: calc(100vw - 16px); height: calc(100vh - 54px); max-height: calc(100vh - 54px); }
+  .media-board { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) minmax(120px, .45fr); }
+  .media-stage { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); padding: 10px; }
   .media-now { display: flex; flex-wrap: wrap; }
   .media-now-copy { flex: 1 1 calc(100% - 40px); }
-  .media-controls { flex: 0 0 100%; width: 100%; justify-content: flex-end; }
+  .delivery-view-modes { order: 3; }
+  .media-controls, .delivery-actions { justify-content: flex-end; }
 }
 
 /* ── Desktop readability baseline ──
@@ -4051,34 +4054,55 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         </div>
       </div>
 
-      <!-- 播放器与播放列表 -->
+      <!-- Agent 产物交付面板与独立播放队列 -->
       <div class="dock-panel" id="panelMedia">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">▶</span>播放器</div>
+          <div class="panel-title"><span class="pt-icon">▣</span>Agent 交付面板</div>
           <button class="panel-close" data-panel="media" title="关闭">×</button>
         </div>
         <div class="media-board">
-          <section class="media-stage" aria-label="媒体播放区域">
-            <div class="media-viewport" id="mediaViewport"></div>
+          <section class="media-stage" aria-label="Agent 交付内容查看区域">
+            <div class="delivery-canvas" id="deliveryCanvas" data-view-mode="fit">
+              <div class="media-viewport" id="mediaViewport"></div>
+            </div>
             <div class="media-now">
-              <span class="media-now-icon" id="mediaNowIcon">▶</span>
+              <span class="media-now-icon" id="mediaNowIcon">▣</span>
               <div class="media-now-copy">
-                <div class="media-now-title" id="mediaNowTitle">没有正在播放的内容</div>
-                <div class="media-now-meta" id="mediaNowMeta">支持图片、文档、网页、音视频等多种格式</div>
+                <div class="media-now-title" id="mediaNowTitle">暂无交付内容</div>
+                <div class="media-now-meta" id="mediaNowMeta">等待 Agent 交付产物或文件</div>
               </div>
-              <div class="media-controls">
+              <div class="delivery-view-modes" id="deliveryViewModes" hidden role="group" aria-label="查看模式">
+                <button class="delivery-view-mode active" type="button" data-view-mode="fit" title="保持原比例并适应可用区域">适应</button>
+                <button class="delivery-view-mode" type="button" data-view-mode="actual" title="按内容原始尺寸查看">原始</button>
+                <button class="delivery-view-mode" type="button" data-view-mode="fill" title="填满可用区域">填充</button>
+              </div>
+              <div class="media-controls" id="mediaPlaybackControls" hidden>
                 <button class="media-control" id="mediaPlayToggle" title="播放或暂停">⏯</button>
                 <button class="media-control" id="mediaNext" title="下一项">⏭</button>
                 <button class="media-control danger" id="mediaStop" title="停止并清空列表">■</button>
               </div>
+              <div class="delivery-actions">
+                <button class="media-control" id="deliveryOpenSource" title="打开或下载原文件" disabled>↗</button>
+                <button class="media-control" id="deliveryFullscreen" title="全屏查看">⛶</button>
+              </div>
             </div>
           </section>
-          <aside class="media-queue-pane" aria-label="播放列表">
+          <aside class="delivery-side-pane" aria-label="交付记录和播放队列">
             <div class="media-queue-head">
-              <div class="media-queue-title">播放列表</div>
-              <div class="media-queue-count" id="mediaQueueCount">0 项</div>
+              <div class="media-queue-head-row">
+                <div class="media-queue-title">交付记录</div>
+                <button class="delivery-clear-history" id="deliveryClearHistory" type="button" title="清空交付记录和受管文件副本">清空</button>
+              </div>
+              <div class="media-queue-count" id="deliveryHistoryCount">0 项</div>
             </div>
-            <div class="media-queue-list" id="mediaQueueList"></div>
+            <div class="delivery-history-list" id="deliveryHistoryList"></div>
+            <section class="playback-queue-section" id="playbackQueueSection" hidden aria-label="播放队列">
+              <div class="media-queue-head">
+                <div class="media-queue-title">播放队列</div>
+                <div class="media-queue-count" id="mediaQueueCount">0 项</div>
+              </div>
+              <div class="media-queue-list" id="mediaQueueList"></div>
+            </section>
           </aside>
         </div>
       </div>
@@ -4306,9 +4330,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">判断</span>
       </button>
       <span class="dock-sep media-sep"></span>
-      <button class="dock-btn media-dock-btn" id="mediaDockButton" data-panel="media" title="播放器和播放列表">
-        <span class="db-icon">▶</span>
-        <span class="db-label">播放</span>
+      <button class="dock-btn media-dock-btn" id="mediaDockButton" data-panel="media" title="Agent 产物与文件交付面板">
+        <span class="db-icon">▣</span>
+        <span class="db-label">交付</span>
       </button>
       <span class="dock-sep media-sep"></span>
       <button class="dock-btn" data-panel="observation" title="观察">
@@ -4654,8 +4678,8 @@ function openPanel(name) {
     loadProviderPool();
   }
   if (name === 'media') {
-    renderMediaBoard();
-    mountCurrentMedia();
+    renderDeliveryPanel();
+    mountActivePanelItem();
   }
   if (name === 'account') {
     loadAccounts();
@@ -7879,7 +7903,8 @@ function renderAccountPanel(data) {
     for (const account of accounts) {
       const dotClass = account.status || 'error';
       const statusText = { active: '已登录', expired: '已过期', error: '异常' }[dotClass] || dotClass;
-      const cookieNames = (account.cookies || []).map(c => c.name).join(', ');
+      const credentialCount = Math.max(0, Number(account.cookies_count || 0));
+      const credentialText = credentialCount > 0 ? credentialCount + ' 项登录凭据' : '无登录凭据';
       html += '<div class="account-card">';
       html += '<div class="account-card-icon">' + (account.platform === 'bilibili' ? '📺' : '🎵') + '</div>';
       html += '<div class="account-card-meta">';
@@ -7888,7 +7913,7 @@ function renderAccountPanel(data) {
       html += esc(account.platform_name || account.platform);
       if (account.label) html += ' <span style="font-weight:400;color:var(--text-muted);">· ' + esc(account.label) + '</span>';
       html += '</div>';
-      html += '<div class="account-card-detail">' + esc(cookieNames || '无 cookie') + ' · ' + statusText + '</div>';
+      html += '<div class="account-card-detail">' + statusText + ' · ' + credentialText + '</div>';
       html += '</div>';
       html += '<div class="account-card-actions">';
       html += '<button title="验证登录状态" onclick="verifyAccount(\'' + account.id + '\')">✓</button>';
@@ -7898,15 +7923,8 @@ function renderAccountPanel(data) {
     }
   }
 
-  // 一键导入按钮
-  html += '<div class="account-add-bar" style="padding-bottom:4px;">';
-  html += '<button class="provider-action primary" onclick="importFromBrowser()" style="min-width:140px;">📥 从浏览器导入 Cookie</button>';
-  html += '<span style="font-size:9.5px;color:var(--text-muted);">自动读取 Chrome / Edge 中已登录的 B站 Cookie</span>';
-  html += '</div>';
-  html += '<div style="text-align:center;font-size:10px;color:var(--text-muted);margin:6px 0;">—— 或手动粘贴 ——</div>';
-
-  // 添加账号表单
-  html += '<div class="account-add-bar">';
+  // 桌面受控登录
+  html += '<div class="account-add-bar account-fields">';
   html += '<div class="provider-field">';
   html += '<span>平台</span>';
   html += '<select id="accountPlatform">';
@@ -7918,148 +7936,66 @@ function renderAccountPanel(data) {
   html += '</div>';
   html += '<div class="provider-field">';
   html += '<span>标签（可选）</span>';
-  html += '<input id="accountLabel" placeholder="如：我的主号" maxlength="40">';
+  html += '<input id="accountLabel" placeholder="如：我的主号" maxlength="40" autocomplete="off">';
   html += '</div>';
   html += '</div>';
   html += '<div class="account-add-bar" style="border-top:none; padding-top:4px;">';
-  html += '<div class="provider-field wide">';
-  html += '<span>Cookie 字符串（请粘贴到这里）</span>';
-  html += '<textarea id="accountCookies" placeholder="SESSDATA=xxx; bili_jct=yyy; DedeUserID=zzz"></textarea>';
-  html += '<div class="account-help-note">';
-  html += '如何获取：浏览器打开 bilibili.com 并登录 → F12 DevTools → Application → Cookies → bilibili.com → ';
-  html += '复制 <code>SESSDATA</code>、<code>bili_jct</code>、<code>DedeUserID</code> 的值，';
-  html += '格式为 <code>名称=值; 名称=值</code>';
-  html += '</div>';
-  html += '</div>';
-  html += '</div>';
-  html += '<div class="account-add-bar" style="border-top:none; padding-top:0;">';
-  html += '<button class="provider-action" type="button" onclick="pasteAccountCookies()" style="min-width:120px;">从剪贴板粘贴</button>';
-  html += '<button class="provider-action primary" onclick="saveAccount()" style="min-width:80px;">保存</button>';
-  html += '<span style="font-size:9.5px;color:var(--text-muted);">Cookie 仅本地存储，不会上传到任何服务器</span>';
+  html += '<button id="accountDesktopLogin" class="provider-action primary" onclick="loginAccountInDesktop()" style="min-width:140px;">在桌面应用中登录</button>';
+  html += '<span style="font-size:9.5px;color:var(--text-muted);">登录状态保存在本机，并提供给本地 Agent 工具</span>';
   html += '</div>';
 
   els.panelAccountBody.innerHTML = html;
-  const accountLabel = document.getElementById('accountLabel');
-  if (accountLabel) {
-    accountLabel.addEventListener('paste', event => {
-      const pasted = event.clipboardData && event.clipboardData.getData('text');
-      if (!looksLikeCookieString(pasted)) return;
-      event.preventDefault();
-      setAccountCookies(pasted);
-    });
-  }
 }
 
-function looksLikeCookieString(value) {
-  const text = String(value || '').trim();
-  return text.includes(';') && /(?:^|;\s*)[A-Za-z0-9_.-]+=[^;]+/.test(text);
-}
-
-function setAccountCookies(value) {
-  const cookiesEl = document.getElementById('accountCookies');
-  if (!cookiesEl) return false;
-  cookiesEl.value = String(value || '').trim();
-  cookiesEl.focus();
-  cookiesEl.setSelectionRange(cookiesEl.value.length, cookiesEl.value.length);
-  return Boolean(cookiesEl.value);
-}
-
-function readDesktopClipboard() {
+function requestDesktopAccountLogin(platform) {
   return new Promise((resolve, reject) => {
-    let settled = false;
+    let acknowledged = false;
     const cleanup = () => window.removeEventListener('message', receive);
     const receive = event => {
       if (event.source !== window.parent) return;
       const data = event.data || {};
-      if (data.type !== 'clipboard:read-text-result') return;
-      settled = true;
+      if (data.type === 'accounts:platform-login-state' && data.state === 'started') {
+        acknowledged = true;
+        return;
+      }
+      if (data.type !== 'accounts:platform-login-result') return;
       cleanup();
-      data.ok ? resolve(String(data.text || '')) : reject(new Error(String(data.error || '读取剪贴板失败')));
+      data.ok ? resolve(data) : reject(new Error(String(data.error || '登录未完成')));
     };
     window.addEventListener('message', receive);
-    window.parent.postMessage({ type: 'clipboard:read-text' }, '*');
+    window.parent.postMessage({ type: 'accounts:platform-login', platform }, '*');
     setTimeout(() => {
-      if (settled) return;
+      if (acknowledged) return;
       cleanup();
-      reject(new Error('桌面剪贴板没有响应'));
+      reject(new Error('请在 VoidCube 桌面应用中使用此功能'));
     }, 1500);
   });
 }
 
-async function pasteAccountCookies() {
-  try {
-    let text = '';
-    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-      try { text = await navigator.clipboard.readText(); } catch (error) {}
-    }
-    if (!text && window.parent !== window) text = await readDesktopClipboard();
-    if (!text) { alert('剪贴板中没有文本'); return; }
-    if (!looksLikeCookieString(text)) {
-      alert('剪贴板内容不像 Cookie 字符串，请确认包含“名称=值; 名称=值”');
-      return;
-    }
-    setAccountCookies(text);
-  } catch (error) {
-    alert('无法读取剪贴板，请直接点击 Cookie 输入框后按 Ctrl+V。');
-  }
-}
-
-async function importFromBrowser() {
+async function loginAccountInDesktop() {
   const platformEl = document.getElementById('accountPlatform');
   const platform = platformEl ? platformEl.value : 'bilibili';
   const labelEl = document.getElementById('accountLabel');
   const label = (labelEl && labelEl.value || '').trim();
+  const button = document.getElementById('accountDesktopLogin');
+  if (button) { button.disabled = true; button.textContent = '等待登录'; }
   try {
-    const r = await fetch('/ui/accounts/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, label }),
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      alert('导入失败: ' + (err.detail || 'HTTP ' + r.status) + '\n\n请确认已在 Chrome 或 Edge 浏览器中登录了 ' + (platform === 'bilibili' ? 'B站' : platform) + '。');
-      return;
-    }
-    const data = await r.json();
-    alert('✓ 导入成功！来源: ' + (data.source || '浏览器') + '\n共导入 ' + (data.cookie_count || '?') + ' 个 Cookie');
-    await loadAccounts();
-    try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
-  } catch (e) {
-    alert('导入失败: ' + e.message);
-  }
-}
-
-async function saveAccount() {
-  const platformEl = document.getElementById('accountPlatform');
-  const labelEl = document.getElementById('accountLabel');
-  const cookiesEl = document.getElementById('accountCookies');
-  if (!platformEl || !cookiesEl) return;
-  const platform = platformEl.value;
-  let label = (labelEl && labelEl.value || '').trim();
-  let cookiesRaw = cookiesEl.value.trim();
-  if (!cookiesRaw && looksLikeCookieString(label)) {
-    cookiesRaw = label;
-    label = '';
-    labelEl.value = '';
-    setAccountCookies(cookiesRaw);
-  }
-  if (!cookiesRaw) { alert('请粘贴 Cookie 字符串或使用"从浏览器导入"按钮'); return; }
-  try {
+    const login = await requestDesktopAccountLogin(platform);
     const r = await fetch('/ui/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, label, cookies_raw: cookiesRaw }),
+      body: JSON.stringify({ platform, label, cookies_raw: login.cookiesRaw }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      alert('保存失败: ' + (err.detail || 'HTTP ' + r.status));
-      return;
+      throw new Error(String(err.detail || 'HTTP ' + r.status));
     }
     await loadAccounts();
-    // 通知 Electron 刷新 cookie（如果运行在桌面端）
     try { window.parent.postMessage({ type: 'cookies:refresh' }, '*'); } catch(e) {}
   } catch (e) {
-    alert('保存失败: ' + e.message);
+    alert('登录状态保存失败: ' + e.message);
+  } finally {
+    if (button && button.isConnected) { button.disabled = false; button.textContent = '在桌面应用中登录'; }
   }
 }
 
@@ -8225,21 +8161,35 @@ function syncClock() {
 syncClock();
 setInterval(syncClock, 1000);
 
-/* ── Dock 媒体播放器 ── */
+/* ── Agent 交付面板与独立播放器 ── */
 const mediaViewport = document.getElementById('mediaViewport');
+const deliveryCanvas = document.getElementById('deliveryCanvas');
 const mediaNowTitle = document.getElementById('mediaNowTitle');
 const mediaNowMeta = document.getElementById('mediaNowMeta');
 const mediaNowIcon = document.getElementById('mediaNowIcon');
 const mediaQueueList = document.getElementById('mediaQueueList');
 const mediaQueueCount = document.getElementById('mediaQueueCount');
+const playbackQueueSection = document.getElementById('playbackQueueSection');
+const deliveryHistoryList = document.getElementById('deliveryHistoryList');
+const deliveryHistoryCount = document.getElementById('deliveryHistoryCount');
+const deliveryViewModes = document.getElementById('deliveryViewModes');
+const mediaPlaybackControls = document.getElementById('mediaPlaybackControls');
+const deliveryOpenSource = document.getElementById('deliveryOpenSource');
+const deliveryFullscreen = document.getElementById('deliveryFullscreen');
+const deliveryClearHistory = document.getElementById('deliveryClearHistory');
 const mediaDockButton = document.getElementById('mediaDockButton');
 let currentMedia = null;
 let mediaQueue = [];
-let embeddedPlayer = null;
-let mountedMediaId = '';
+let currentDelivery = null;
+let deliveryHistory = [];
+let activeSurface = 'delivery';
+let mountedContent = null;
+let mountedSurfaceKey = '';
+let intrinsicMediaSize = null;
+let activeViewMode = 'fit';
 
 function mediaTypeIcon(t) {
-  const map = { bilibili: '▶', video: '🎬', audio: '🎵', image: '🖼', document: '📄', webpage: '🌐', html: '📝' };
+  const map = { bilibili: '▶', video: '🎬', audio: '♫', image: '▧', document: '▤', webpage: '◎', html: '▦', text: '≡', file: '▣' };
   return map[t] || '📄';
 }
 
@@ -8251,15 +8201,16 @@ function classifyMedia(url) {
   const path = parsed.pathname.toLowerCase();
   if (host === 'bilibili.com' || host.endsWith('.bilibili.com') || host === 'b23.tv') return 'bilibili';
   if (/\.(mp3|m4a|ogg|wav|flac|aac|opus)$/.test(path)) return 'audio';
-  if (/\.(mp4|webm|mkv|mov|avi|m4v)$/.test(path)) return 'video';
-  if (/\.(png|jpg|jpeg|gif|svg|webp|bmp|ico)$/.test(path)) return 'image';
+  if (/\.(mp4|webm|mov|m4v)$/.test(path)) return 'video';
+  if (/\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|avif)$/.test(path)) return 'image';
   if (/\.(pdf)$/.test(path)) return 'document';
+  if (/\.(txt|md|markdown|rst|log|csv|json|xml|ya?ml|toml|ini|cfg|py|js|ts|tsx|jsx|css|sql|sh|ps1)$/.test(path)) return 'text';
   return 'webpage';
 }
 
 function resolveMediaType(media) {
   const requested = String((media || {}).type || 'auto').toLowerCase();
-  if (['bilibili', 'audio', 'video', 'image', 'document', 'webpage', 'html'].includes(requested)) return requested;
+  if (['bilibili', 'audio', 'video', 'image', 'document', 'webpage', 'html', 'text', 'file'].includes(requested)) return requested;
   return classifyMedia((media || {}).url || '');
 }
 
@@ -8271,16 +8222,25 @@ function bilibiliEmbedUrl(url) {
   return null;
 }
 
-function teardownMediaPlayer() {
-  if (embeddedPlayer) {
-    try { embeddedPlayer.pause(); } catch(e) {}
-    embeddedPlayer = null;
+function teardownPanelContent() {
+  if (mountedContent) {
+    try { mountedContent.pause(); } catch(e) {}
+    mountedContent = null;
   }
-  mountedMediaId = '';
+  mountedSurfaceKey = '';
+  intrinsicMediaSize = null;
+  if (deliveryCanvas) {
+    deliveryCanvas.dataset.viewMode = 'fit';
+    deliveryCanvas.scrollTo(0, 0);
+  }
+  if (mediaViewport) {
+    mediaViewport.style.width = '100%';
+    mediaViewport.style.height = '100%';
+  }
   if (mediaViewport) mediaViewport.replaceChildren();
 }
 
-function setMediaMessage(message, link, title) {
+function setPanelMessage(message, link, title) {
   if (!mediaViewport) return;
   mediaViewport.replaceChildren();
   const box = document.createElement('div');
@@ -8303,12 +8263,60 @@ function setMediaMessage(message, link, title) {
 
 function mediaTypeLabel(media) {
   const type = resolveMediaType(media);
-  return ({bilibili:'B 站视频', video:'直链视频', audio:'直链音频', image:'图片', document:'文档', webpage:'网页', html:'富文本'})[type] || '网页';
+  return ({bilibili:'B 站视频', video:'视频', audio:'音频', image:'图片', document:'PDF 文档', webpage:'网页', html:'HTML 报告', text:'文本', file:'文件'})[type] || '文件';
+}
+
+function formatDeliveryBytes(value) {
+  const size = Number(value || 0);
+  if (!size) return '';
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + ' KiB';
+  return (size / (1024 * 1024)).toFixed(1) + ' MiB';
+}
+
+function renderDeliveryHistory() {
+  if (!deliveryHistoryList || !deliveryHistoryCount) return;
+  deliveryHistoryCount.textContent = deliveryHistory.length + ' 项';
+  deliveryHistoryList.replaceChildren();
+  if (!deliveryHistory.length) {
+    const empty = document.createElement('div');
+    empty.className = 'media-empty';
+    empty.textContent = '暂无交付记录';
+    deliveryHistoryList.appendChild(empty);
+    return;
+  }
+  deliveryHistory.forEach((item, index) => {
+    const isCurrent = Boolean(currentDelivery && item.delivery_id === currentDelivery.delivery_id && activeSurface === 'delivery');
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'media-queue-item' + (isCurrent ? ' current' : '');
+    row.disabled = isCurrent;
+    row.title = isCurrent ? '当前查看内容' : '查看此交付内容';
+    const icon = document.createElement('span');
+    icon.className = 'media-queue-item-icon';
+    icon.textContent = mediaTypeIcon(resolveMediaType(item));
+    const copy = document.createElement('span');
+    copy.className = 'media-queue-item-copy';
+    const title = document.createElement('span');
+    title.className = 'media-queue-item-title';
+    title.textContent = item.title || item.filename || item.url || '未命名交付内容';
+    const meta = document.createElement('span');
+    meta.className = 'media-queue-item-meta';
+    meta.textContent = [mediaTypeLabel(item), formatDeliveryBytes(item.byte_size)].filter(Boolean).join(' · ');
+    const state = document.createElement('span');
+    state.className = 'media-queue-item-state';
+    state.textContent = isCurrent ? '查看中' : String(index + 1).padStart(2, '0');
+    copy.append(title, meta);
+    row.append(icon, copy, state);
+    if (!isCurrent) row.addEventListener('click', () => requestDeliveryControl('select', item.delivery_id));
+    deliveryHistoryList.appendChild(row);
+  });
 }
 
 function renderMediaQueue() {
   if (!mediaQueueList || !mediaQueueCount) return;
   const items = currentMedia ? [currentMedia, ...mediaQueue] : mediaQueue.slice();
+  if (playbackQueueSection) playbackQueueSection.hidden = items.length === 0;
   mediaQueueCount.textContent = items.length + ' 项' + (mediaQueue.length ? ' · 待播 ' + mediaQueue.length : '');
   mediaQueueList.replaceChildren();
   if (!items.length) {
@@ -8407,38 +8415,121 @@ setInterval(() => {
   if (panelOpen === 'settings' && schedulerTab) loadWorkerSchedulerState();
 }, 3000);
 
-function renderMediaBoard() {
-  if (mediaDockButton) mediaDockButton.classList.toggle('has-media', Boolean(currentMedia || mediaQueue.length));
-  if (!currentMedia) {
-    if (mediaNowIcon) mediaNowIcon.textContent = '▶';
-    if (mediaNowTitle) mediaNowTitle.textContent = '没有正在播放的内容';
-    if (mediaNowMeta) mediaNowMeta.textContent = '支持图片、文档、网页、音视频等多种格式';
-    if (panelOpen === 'media') setMediaMessage('Agent 可以将图片、文档、网页等内容推送到这里展示。', '', '等待内容');
+function renderDeliveryPanel() {
+  const hasPlayback = Boolean(currentMedia || mediaQueue.length);
+  const hasDelivery = Boolean(currentDelivery || deliveryHistory.length);
+  if (mediaDockButton) mediaDockButton.classList.toggle('has-media', hasPlayback || hasDelivery);
+  if (activeSurface === 'playback' && !currentMedia && currentDelivery) activeSurface = 'delivery';
+  const item = activeSurface === 'playback' ? currentMedia : currentDelivery;
+  if (!item) {
+    if (mediaNowIcon) mediaNowIcon.textContent = '▣';
+    if (mediaNowTitle) mediaNowTitle.textContent = '暂无交付内容';
+    if (mediaNowMeta) mediaNowMeta.textContent = '等待 Agent 交付产物或文件';
+    if (deliveryViewModes) deliveryViewModes.hidden = true;
+    if (mediaPlaybackControls) mediaPlaybackControls.hidden = true;
+    if (deliveryOpenSource) deliveryOpenSource.disabled = true;
+    if (panelOpen === 'media') setPanelMessage('暂无可查看内容。', '', '等待交付');
   } else {
-    const type = resolveMediaType(currentMedia);
+    const type = resolveMediaType(item);
     if (mediaNowIcon) mediaNowIcon.textContent = mediaTypeIcon(type);
-    if (mediaNowTitle) mediaNowTitle.textContent = currentMedia.title || currentMedia.url;
-    if (mediaNowMeta) mediaNowMeta.textContent = mediaTypeLabel(currentMedia) + ' · ' + (currentMedia.playback === 'paused' ? '已暂停' : '正在播放');
+    if (mediaNowTitle) mediaNowTitle.textContent = item.title || item.filename || item.url;
+    if (mediaNowMeta) {
+      mediaNowMeta.textContent = activeSurface === 'playback'
+        ? mediaTypeLabel(item) + ' · ' + (item.playback === 'paused' ? '已暂停' : '播放中')
+        : [mediaTypeLabel(item), formatDeliveryBytes(item.byte_size), '已交付'].filter(Boolean).join(' · ');
+    }
+    const ratioAware = ['image', 'video', 'bilibili'].includes(type);
+    if (deliveryViewModes) deliveryViewModes.hidden = !ratioAware;
+    if (mediaPlaybackControls) mediaPlaybackControls.hidden = activeSurface !== 'playback';
+    if (deliveryOpenSource) deliveryOpenSource.disabled = !item.url;
   }
+  renderDeliveryHistory();
   renderMediaQueue();
 }
 
+function activePanelItem() {
+  return activeSurface === 'playback' ? currentMedia : currentDelivery;
+}
+
+function panelItemTimestamp(item) {
+  const raw = String((item || {}).delivered_at || (item || {}).enqueued_at || '');
+  const timestamp = Date.parse(raw);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function setViewMode(mode) {
+  activeViewMode = ['fit', 'actual', 'fill'].includes(mode) ? mode : 'fit';
+  if (deliveryCanvas) {
+    deliveryCanvas.dataset.viewMode = activeViewMode;
+    deliveryCanvas.scrollTo(0, 0);
+  }
+  if (deliveryViewModes) {
+    deliveryViewModes.querySelectorAll('[data-view-mode]').forEach(button => {
+      button.classList.toggle('active', button.dataset.viewMode === activeViewMode);
+    });
+  }
+  applyMediaViewportLayout();
+}
+
+function setIntrinsicMediaSize(width, height) {
+  const normalizedWidth = Number(width || 0);
+  const normalizedHeight = Number(height || 0);
+  if (normalizedWidth > 0 && normalizedHeight > 0) {
+    intrinsicMediaSize = {width: normalizedWidth, height: normalizedHeight};
+    applyMediaViewportLayout();
+  }
+}
+
+function applyMediaViewportLayout() {
+  if (!deliveryCanvas || !mediaViewport) return;
+  const item = activePanelItem();
+  const type = resolveMediaType(item);
+  const supportsRatio = ['image', 'video', 'bilibili'].includes(type);
+  const width = (intrinsicMediaSize && intrinsicMediaSize.width) || Number((item || {}).width || 0);
+  const height = (intrinsicMediaSize && intrinsicMediaSize.height) || Number((item || {}).height || 0);
+  const ratio = Number((item || {}).aspect_ratio || 0) || (width > 0 && height > 0 ? width / height : (type === 'bilibili' ? 16 / 9 : 0));
+  if (!supportsRatio || activeViewMode === 'fill' || !ratio) {
+    mediaViewport.style.width = '100%';
+    mediaViewport.style.height = '100%';
+    return;
+  }
+  if (activeViewMode === 'actual' && width > 0 && height > 0) {
+    mediaViewport.style.width = Math.round(width) + 'px';
+    mediaViewport.style.height = Math.round(height) + 'px';
+    return;
+  }
+  const availableWidth = Math.max(deliveryCanvas.clientWidth, 1);
+  const availableHeight = Math.max(deliveryCanvas.clientHeight, 1);
+  let fittedWidth = availableWidth;
+  let fittedHeight = fittedWidth / ratio;
+  if (fittedHeight > availableHeight) {
+    fittedHeight = availableHeight;
+    fittedWidth = fittedHeight * ratio;
+  }
+  mediaViewport.style.width = Math.max(1, Math.round(fittedWidth)) + 'px';
+  mediaViewport.style.height = Math.max(1, Math.round(fittedHeight)) + 'px';
+}
+
+if ('ResizeObserver' in window && deliveryCanvas) {
+  new ResizeObserver(() => applyMediaViewportLayout()).observe(deliveryCanvas);
+}
+
 function applyPlaybackState() {
-  if (!embeddedPlayer || !currentMedia) return;
+  if (activeSurface !== 'playback' || !mountedContent || !currentMedia) return;
   const paused = currentMedia.playback === 'paused';
-  if (embeddedPlayer.tagName === 'IFRAME') {
+  if (mountedContent.tagName === 'IFRAME') {
     if (paused) {
-      embeddedPlayer.remove();
-      embeddedPlayer = null;
-      mountedMediaId = '';
-      setMediaMessage('继续播放时会重新载入视频。', '', 'B 站播放已暂停');
+      mountedContent.remove();
+      mountedContent = null;
+      mountedSurfaceKey = '';
+      setPanelMessage('继续播放时会重新载入视频。', '', 'B 站播放已暂停');
     }
     return;
   }
   if (paused) {
-    embeddedPlayer.pause();
+    mountedContent.pause();
   } else {
-    embeddedPlayer.play().catch(() => {
+    mountedContent.play().catch(() => {
       if (mediaNowMeta) mediaNowMeta.textContent = mediaTypeLabel(currentMedia) + ' · 点击播放';
     });
   }
@@ -8458,20 +8549,52 @@ async function requestMediaControl(action, mediaId) {
   }
 }
 
-function mountCurrentMedia() {
-  if (!currentMedia || panelOpen !== 'media') return;
-  if (mountedMediaId === currentMedia.media_id && embeddedPlayer) {
+async function requestDeliveryControl(action, deliveryId) {
+  try {
+    const response = await fetch('/ui/delivery/control', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, delivery_id: deliveryId || ''})
+    });
+    if (!response.ok) throw new Error('delivery control failed');
+    const payload = await response.json();
+    updateDeliveryState(payload.current || null, payload.history || [], true);
+  } catch(e) {
+    if (mediaNowMeta) mediaNowMeta.textContent = '交付面板控制失败';
+  }
+}
+
+function escapedText(value) {
+  return String(value || '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
+function textDocument(content, title) {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<style>body{margin:0;padding:24px;background:#fff;color:#1d232a;font:14px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}' +
+    'h1{font:700 16px/1.4 system-ui,sans-serif;margin:0 0 16px}pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body>' +
+    (title ? '<h1>' + escapedText(title) + '</h1>' : '') + '<pre>' + escapedText(content) + '</pre></body></html>';
+}
+
+function mountActivePanelItem() {
+  const item = activePanelItem();
+  if (!item || panelOpen !== 'media') return;
+  const isPlayback = activeSurface === 'playback';
+  const surfaceId = isPlayback ? item.media_id : item.delivery_id;
+  const surfaceKey = activeSurface + ':' + String(surfaceId || '') + ':' + String(item._revision || '');
+  if (mountedSurfaceKey === surfaceKey && mountedContent) {
     applyPlaybackState();
     return;
   }
-  teardownMediaPlayer();
-  const type = resolveMediaType(currentMedia);
-  mountedMediaId = currentMedia.media_id || '';
+  teardownPanelContent();
+  const type = resolveMediaType(item);
+  mountedSurfaceKey = surfaceKey;
+  setViewMode(item.view_mode || 'fit');
 
   if (type === 'bilibili') {
-    const embedUrl = bilibiliEmbedUrl(currentMedia.url);
+    const embedUrl = bilibiliEmbedUrl(item.url);
     if (!embedUrl) {
-      setMediaMessage('需要完整的 B 站视频链接（BV 号或 av 号）。', currentMedia.url, '无法嵌入');
+      setPanelMessage('需要完整的 B 站视频链接（BV 号或 av 号）。', item.url, '无法嵌入');
     } else {
       const iframe = document.createElement('iframe');
       iframe.src = embedUrl;
@@ -8479,91 +8602,137 @@ function mountCurrentMedia() {
       iframe.allowFullscreen = true;
       iframe.referrerPolicy = 'no-referrer-when-downgrade';
       mediaViewport.appendChild(iframe);
-      embeddedPlayer = iframe;
+      mountedContent = iframe;
     }
   } else if (type === 'video') {
     const video = document.createElement('video');
-    const mediaId = currentMedia.media_id;
-    video.src = currentMedia.url;
+    const mediaId = item.media_id;
+    video.src = item.url;
     video.controls = true;
-    video.autoplay = true;
+    video.autoplay = isPlayback;
     video.preload = 'metadata';
-    video.addEventListener('ended', () => requestMediaControl('ended', mediaId));
+    video.addEventListener('loadedmetadata', () => setIntrinsicMediaSize(video.videoWidth, video.videoHeight));
+    if (isPlayback) video.addEventListener('ended', () => requestMediaControl('ended', mediaId));
     video.addEventListener('error', () => { if (mediaNowMeta) mediaNowMeta.textContent = '视频无法播放'; });
     mediaViewport.appendChild(video);
-    embeddedPlayer = video;
+    mountedContent = video;
   } else if (type === 'audio') {
     const audio = document.createElement('audio');
-    const mediaId = currentMedia.media_id;
-    audio.src = currentMedia.url;
+    const mediaId = item.media_id;
+    audio.src = item.url;
     audio.controls = true;
-    audio.autoplay = true;
+    audio.autoplay = isPlayback;
     audio.preload = 'metadata';
-    audio.addEventListener('ended', () => requestMediaControl('ended', mediaId));
+    if (isPlayback) audio.addEventListener('ended', () => requestMediaControl('ended', mediaId));
     audio.addEventListener('error', () => { if (mediaNowMeta) mediaNowMeta.textContent = '音频无法播放'; });
     mediaViewport.appendChild(audio);
-    embeddedPlayer = audio;
+    mountedContent = audio;
   } else if (type === 'image') {
     const img = document.createElement('img');
-    img.src = currentMedia.url;
-    img.alt = currentMedia.title || '';
+    img.src = item.url;
+    img.alt = item.title || '';
     img.loading = 'lazy';
-    img.addEventListener('click', () => img.classList.toggle('zoomed'));
-    img.addEventListener('error', () => { setMediaMessage('图片无法加载，请检查链接是否有效。', currentMedia.url, '图片加载失败'); });
+    img.addEventListener('load', () => setIntrinsicMediaSize(img.naturalWidth, img.naturalHeight));
+    img.addEventListener('error', () => { setPanelMessage('图片无法加载，请检查来源。', item.url, '图片加载失败'); });
     mediaViewport.appendChild(img);
-    embeddedPlayer = img;
+    mountedContent = img;
   } else if (type === 'document') {
     const iframe = document.createElement('iframe');
-    iframe.src = currentMedia.url;
+    iframe.src = item.url;
     iframe.allow = 'fullscreen';
-    iframe.sandbox = 'allow-scripts allow-same-origin';
-    iframe.addEventListener('error', () => { setMediaMessage('文档无法加载。', currentMedia.url, '文档加载失败'); });
+    iframe.sandbox = 'allow-scripts allow-same-origin allow-downloads';
+    iframe.addEventListener('error', () => { setPanelMessage('文档无法加载。', item.url, '文档加载失败'); });
     mediaViewport.appendChild(iframe);
-    embeddedPlayer = iframe;
+    mountedContent = iframe;
   } else if (type === 'webpage') {
     const iframe = document.createElement('iframe');
-    iframe.src = currentMedia.url;
-    iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups';
+    iframe.src = item.url;
+    let webpageSandbox = 'allow-scripts allow-forms allow-popups';
+    try {
+      if (new URL(item.url, window.location.href).origin !== window.location.origin) {
+        webpageSandbox += ' allow-same-origin';
+      }
+    } catch(e) {}
+    iframe.sandbox = webpageSandbox;
     iframe.allow = 'fullscreen';
-    iframe.addEventListener('error', () => { setMediaMessage('网页无法嵌入，可能被目标站点拒绝。', currentMedia.url, '嵌入受限'); });
+    iframe.addEventListener('error', () => { setPanelMessage('网页无法嵌入，可能被目标站点拒绝。', item.url, '嵌入受限'); });
     mediaViewport.appendChild(iframe);
-    embeddedPlayer = iframe;
+    mountedContent = iframe;
   } else if (type === 'html') {
-    // Render agent-supplied markup in a sandboxed document. This preserves
-    // report formatting while preventing scripts and event handlers from
-    // executing in the Supervisor page origin.
     const iframe = document.createElement('iframe');
     iframe.className = 'media-html-content';
     iframe.sandbox = '';
     iframe.referrerPolicy = 'no-referrer';
-    const content = (currentMedia.content || currentMedia.url || '').trim();
+    const content = String(item.content || '').trim();
     if (content) {
       if (content.startsWith('<') || content.startsWith('<!')) {
         iframe.srcdoc = content;
       } else {
-        const escaped = content.replace(/[&<>"']/g, character => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-        })[character]);
-        iframe.srcdoc = '<!doctype html><meta charset="utf-8"><pre>' + escaped + '</pre>';
+        iframe.srcdoc = textDocument(content, item.title);
       }
+    } else if (item.url) {
+      iframe.src = item.url;
     } else {
-      iframe.srcdoc = '<!doctype html><meta charset="utf-8"><p>没有可渲染的内容</p>';
+      iframe.srcdoc = textDocument('', item.title);
     }
-    iframe.addEventListener('error', () => { setMediaMessage('内容无法加载。', '', '内容加载失败'); });
+    iframe.addEventListener('error', () => { setPanelMessage('内容无法加载。', '', '内容加载失败'); });
     mediaViewport.appendChild(iframe);
-    embeddedPlayer = iframe;
+    mountedContent = iframe;
+  } else if (type === 'text') {
+    const iframe = document.createElement('iframe');
+    iframe.className = 'media-html-content';
+    iframe.sandbox = '';
+    iframe.referrerPolicy = 'no-referrer';
+    if (item.content) {
+      iframe.srcdoc = textDocument(item.content, item.title);
+    } else if (item.url) {
+      const expectedKey = mountedSurfaceKey;
+      iframe.srcdoc = textDocument('正在读取内容...', item.title);
+      fetch(item.url).then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.text();
+      }).then(content => {
+        if (mountedSurfaceKey === expectedKey) iframe.srcdoc = textDocument(content, item.title);
+      }).catch(() => {
+        if (mountedSurfaceKey === expectedKey) setPanelMessage('文本内容无法读取。', item.url, '读取失败');
+      });
+    }
+    mediaViewport.appendChild(iframe);
+    mountedContent = iframe;
+  } else if (type === 'file') {
+    const card = document.createElement('div');
+    card.className = 'delivery-file-card';
+    const icon = document.createElement('div');
+    icon.className = 'delivery-file-icon';
+    icon.textContent = '▣';
+    const name = document.createElement('div');
+    name.className = 'delivery-file-name';
+    name.textContent = item.filename || item.title || '交付文件';
+    const meta = document.createElement('div');
+    meta.className = 'delivery-file-meta';
+    meta.textContent = [item.mime_type || '文件', formatDeliveryBytes(item.byte_size)].filter(Boolean).join(' · ');
+    const link = document.createElement('a');
+    link.className = 'delivery-file-open';
+    link.href = item.url;
+    link.download = item.filename || '';
+    link.textContent = '下载文件';
+    card.append(icon, name, meta, link);
+    mediaViewport.appendChild(card);
+    mountedContent = card;
   } else {
-    setMediaMessage('Agent 可以通过展板展示图片、文档、网页、音视频等多种内容。', currentMedia.url, '等待内容');
+    setPanelMessage('当前内容没有可用预览。', item.url, item.title || '交付文件');
   }
   applyPlaybackState();
+  applyMediaViewportLayout();
 }
 
 function togglePlayPause() {
-  if (!embeddedPlayer) {
+  if (activeSurface !== 'playback' || !currentMedia) return;
+  if (!mountedContent) {
     if (currentMedia && currentMedia.playback === 'paused') {
       requestMediaControl('resume');
     } else {
-      mountCurrentMedia();
+      mountActivePanelItem();
     }
     return;
   }
@@ -8571,13 +8740,13 @@ function togglePlayPause() {
   const playableTypes = ['bilibili', 'video', 'audio'];
   if (currentMedia && !playableTypes.includes(resolveMediaType(currentMedia))) return;
   try {
-    if (embeddedPlayer.tagName === 'IFRAME') {
+    if (mountedContent.tagName === 'IFRAME') {
       requestMediaControl('pause');
-    } else if (embeddedPlayer.paused) {
-      embeddedPlayer.play();
+    } else if (mountedContent.paused) {
+      mountedContent.play();
       requestMediaControl('resume');
     } else {
-      embeddedPlayer.pause();
+      mountedContent.pause();
       requestMediaControl('pause');
     }
   } catch(e) {}
@@ -8586,31 +8755,112 @@ function togglePlayPause() {
 document.getElementById('mediaPlayToggle').addEventListener('click', togglePlayPause);
 document.getElementById('mediaNext').addEventListener('click', () => requestMediaControl('next'));
 document.getElementById('mediaStop').addEventListener('click', () => requestMediaControl('stop'));
+if (deliveryViewModes) {
+  deliveryViewModes.addEventListener('click', event => {
+    const button = event.target.closest('[data-view-mode]');
+    if (button) setViewMode(button.dataset.viewMode);
+  });
+}
+if (deliveryOpenSource) {
+  deliveryOpenSource.addEventListener('click', () => {
+    const item = activePanelItem();
+    if (!item || !item.url) return;
+    const anchor = document.createElement('a');
+    anchor.href = item.url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+    anchor.click();
+  });
+}
+if (deliveryFullscreen) {
+  deliveryFullscreen.addEventListener('click', async () => {
+    const panel = document.getElementById('panelMedia');
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (panel && panel.requestFullscreen) await panel.requestFullscreen();
+    } catch(e) {
+      if (mediaNowMeta) mediaNowMeta.textContent = '当前环境不允许全屏';
+    }
+  });
+}
+if (deliveryClearHistory) {
+  deliveryClearHistory.addEventListener('click', () => {
+    if (!deliveryHistory.length) return;
+    if (window.confirm('清空交付记录并删除受管文件副本？')) {
+      requestDeliveryControl('clear');
+    }
+  });
+}
+document.addEventListener('fullscreenchange', () => {
+  if (deliveryFullscreen) deliveryFullscreen.title = document.fullscreenElement ? '退出全屏' : '全屏查看';
+  applyMediaViewportLayout();
+});
 
 function updateMediaState(media, queue) {
   const previousId = currentMedia && currentMedia.media_id;
   const previousPlayback = currentMedia && currentMedia.playback;
   currentMedia = media || null;
   mediaQueue = Array.isArray(queue) ? queue : [];
-  renderMediaBoard();
   if (!currentMedia) {
-    teardownMediaPlayer();
+    if (activeSurface === 'playback') {
+      teardownPanelContent();
+      activeSurface = currentDelivery ? 'delivery' : 'playback';
+    }
+    renderDeliveryPanel();
+    if (activeSurface === 'delivery') mountActivePanelItem();
     return;
   }
   const changed = previousId !== currentMedia.media_id;
   if (changed) {
-    teardownMediaPlayer();
-    if (currentMedia.auto_play !== false) openPanel('media');
-    mountCurrentMedia();
-  } else if (previousPlayback === 'paused' && currentMedia.playback === 'playing' && !embeddedPlayer) {
-    mountCurrentMedia();
+    const shouldActivate = !currentDelivery || panelItemTimestamp(currentMedia) > panelItemTimestamp(currentDelivery);
+    if (shouldActivate) {
+      activeSurface = 'playback';
+      teardownPanelContent();
+      if (currentMedia.auto_play !== false) openPanel('media');
+    }
+    renderDeliveryPanel();
+    if (shouldActivate) mountActivePanelItem();
+  } else if (previousPlayback === 'paused' && currentMedia.playback === 'playing' && !mountedContent) {
+    mountActivePanelItem();
   } else {
+    renderDeliveryPanel();
     applyPlaybackState();
   }
 }
 
-/* ── SSE: 媒体事件 ── */
+function updateDeliveryState(delivery, history, forceActive) {
+  const previousId = currentDelivery && currentDelivery.delivery_id;
+  currentDelivery = delivery || null;
+  deliveryHistory = Array.isArray(history) ? history : [];
+  const changed = Boolean(currentDelivery && previousId !== currentDelivery.delivery_id);
+  const shouldActivate = Boolean(
+    currentDelivery && (
+      forceActive || (changed && (!currentMedia || panelItemTimestamp(currentDelivery) >= panelItemTimestamp(currentMedia)))
+    )
+  );
+  if (shouldActivate) {
+    activeSurface = 'delivery';
+    teardownPanelContent();
+    if (currentDelivery.auto_open !== false) openPanel('media');
+    renderDeliveryPanel();
+    mountActivePanelItem();
+    return;
+  }
+  if (!currentDelivery && activeSurface === 'delivery') {
+    teardownPanelContent();
+    activeSurface = currentMedia ? 'playback' : 'delivery';
+  }
+  renderDeliveryPanel();
+  if (panelOpen === 'media' && activePanelItem() && !mountedContent) mountActivePanelItem();
+}
+
+/* ── SSE: 交付与播放事件 ── */
 if ('EventSource' in window) {
+  const deliveryES = new EventSource('/ui/delivery-events');
+  deliveryES.addEventListener('delivery', function(ev) {
+    const payload = JSON.parse(ev.data || '{}');
+    updateDeliveryState(payload.current || null, payload.history || [], false);
+  });
   const mediaES = new EventSource('/ui/media-events');
   mediaES.addEventListener('play', function(ev) {
     const media = JSON.parse(ev.data);
@@ -8626,7 +8876,7 @@ if ('EventSource' in window) {
 
 /* ── 键盘快捷键 ── */
 document.addEventListener('keydown', function(e) {
-  if (e.key === ' ' && currentMedia && e.target === document.body) {
+  if (e.key === ' ' && activeSurface === 'playback' && currentMedia && e.target === document.body) {
     e.preventDefault();
     togglePlayPause();
   }

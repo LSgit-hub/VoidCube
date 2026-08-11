@@ -42,7 +42,7 @@ def test_default_worker_catalog_exposes_secret_free_roles() -> None:
         "general": ["web", "file", "skills", "todo"],
         "research": ["learn"],
         "coding": ["file", "terminal", "code_execution", "skills", "todo"],
-        "media": ["web"],
+        "media": ["media", "web"],
     }
 
 

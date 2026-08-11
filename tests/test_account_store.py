@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import json
-from unittest.mock import Mock, patch
-
-import pytest
-
 from systems.supervisor.account_store import (
     AccountStoreSnapshot,
     ParsedCookie,
@@ -17,10 +11,12 @@ from systems.supervisor.account_store import (
     platform_name,
     save_account,
     delete_account,
+    cookie_header_for_url,
+    cookies_for_url,
+    load_account_store,
     load_accounts,
     missing_required_auth_cookies,
-    _decrypt_chrome_cookie,
-    _load_aes_key_from_local_state,
+    sanitize_account_label,
 )
 
 
@@ -89,7 +85,7 @@ class TestAccountStoreSnapshot:
 
 
 class TestAccountForApi:
-    def test_masks_cookie_values(self) -> None:
+    def test_returns_cookie_count_without_cookie_details(self) -> None:
         account = PlatformAccount(
             id="test001",
             platform="bilibili",
@@ -105,10 +101,7 @@ class TestAccountForApi:
         assert result["platform_name"] == "B站"
         assert result["label"] == "主号"
         assert result["cookies_count"] == 2
-        # SESSDATA has 14 chars, should mask: abcd****
-        assert result["cookies"][0]["value"] == "abcd****"
-        # bili_jct has 3 chars, should mask: ****
-        assert result["cookies"][1]["value"] == "****"
+        assert "cookies" not in result
 
     def test_hides_raw_cookies(self) -> None:
         account = PlatformAccount(
@@ -118,6 +111,14 @@ class TestAccountForApi:
         result = account_for_api(account)
         assert "cookies_raw" not in result
 
+    def test_hides_cookie_string_accidentally_saved_as_label(self) -> None:
+        account = PlatformAccount(
+            platform="bilibili",
+            label="SESSDATA=secret; bili_jct=csrf-token",
+        )
+
+        assert account_for_api(account)["label"] == ""
+
 
 class TestPlatformName:
     def test_known_platforms(self) -> None:
@@ -126,6 +127,54 @@ class TestPlatformName:
 
     def test_unknown_platform(self) -> None:
         assert platform_name("unknown_xyz") == "unknown_xyz"
+
+
+def test_sanitize_account_label_rejects_credentials() -> None:
+    assert sanitize_account_label("我的主号") == "我的主号"
+    assert sanitize_account_label("SESSDATA=secret") == ""
+    assert sanitize_account_label("first=value; second=value") == ""
+
+
+def test_loading_store_permanently_cleans_credential_label(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VOIDCUBE_HOME", str(tmp_path))
+    path = tmp_path / "accounts.json"
+    path.write_text(
+        AccountStoreSnapshot(
+            accounts=[
+                PlatformAccount(
+                    platform="bilibili",
+                    label="SESSDATA=secret; bili_jct=csrf-token",
+                )
+            ]
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert load_account_store().accounts[0].label == ""
+    assert "SESSDATA=secret" not in path.read_text(encoding="utf-8")
+
+
+def test_cookie_lookup_matches_only_platform_domain(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VOIDCUBE_HOME", str(tmp_path))
+    save_account(
+        PlatformAccount(
+            platform="bilibili",
+            parsed_cookies=[
+                ParsedCookie(name="SESSDATA", value="session-token", domain=".bilibili.com"),
+                ParsedCookie(name="bili_jct", value="csrf-token", domain=".bilibili.com"),
+            ],
+        )
+    )
+
+    assert {cookie.name for cookie in cookies_for_url("https://api.bilibili.com/x/web-interface/nav")} == {
+        "SESSDATA",
+        "bili_jct",
+    }
+    assert cookie_header_for_url("https://www.bilibili.com/video/BV1") == (
+        "SESSDATA=session-token; bili_jct=csrf-token"
+    )
+    assert cookie_header_for_url("https://evilbilibili.com/") == ""
+    assert cookie_header_for_url("https://example.com/?next=bilibili.com") == ""
 
 
 class TestSaveAndDelete:
@@ -185,30 +234,3 @@ class TestSaveAndDelete:
         finally:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
-
-
-def test_chromium_v10_cookie_uses_aes_master_key() -> None:
-    AESGCM = pytest.importorskip(
-        "cryptography.hazmat.primitives.ciphers.aead"
-    ).AESGCM
-
-    key = AESGCM.generate_key(bit_length=256)
-    nonce = b"0123456789ab"
-    encrypted = b"v10" + nonce + AESGCM(key).encrypt(nonce, b"cookie-value", None)
-
-    assert _decrypt_chrome_cookie(encrypted, key) == "cookie-value"
-
-
-def test_local_state_keeps_dpapi_master_key_as_bytes(tmp_path, monkeypatch) -> None:
-    key = bytes(range(256))
-    state = tmp_path / "Local State"
-    state.write_text(
-        json.dumps({"os_crypt": {"encrypted_key": base64.b64encode(b"DPAPI" + b"wrapped").decode()}}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "systems.supervisor.account_store._dpapi_decrypt",
-        lambda value: key if value == b"wrapped" else None,
-    )
-
-    assert _load_aes_key_from_local_state(str(state)) == key
