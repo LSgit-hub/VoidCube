@@ -2123,13 +2123,13 @@ class VoidcubeCLI:
     def _use_ascii_fallback() -> bool:
         """Detect terminals that may not render emoji correctly (e.g. legacy conhost)."""
         import sys, os
-        if sys.platform != "win32":
-            return False
         # Electron xterm renders color emoji as oversized fallback glyphs. The
         # one-cell status symbols remain aligned when the desktop PTY uses the
         # existing ASCII presentation, regardless of its parent terminal.
         if os.environ.get("VOIDCUBE_DESKTOP") == "1":
             return True
+        if sys.platform != "win32":
+            return False
         if os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"):
             return False
         if os.environ.get("ConEmuANSI") or os.environ.get("ConEmuTask"):

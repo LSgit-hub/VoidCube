@@ -225,7 +225,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     await expect(page.locator('[data-worker-role="general"] .worker-toolsets summary')).toHaveText('推荐 · 4 个')
     await expect(page.locator('[data-worker-role="research"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
     await expect(page.locator('[data-worker-role="coding"] .worker-toolsets summary')).toHaveText('推荐 · 5 个')
-    await expect(page.locator('[data-worker-role="media"] .worker-toolsets summary')).toHaveText('推荐 · 1 个')
+    await expect(page.locator('[data-worker-role="media"] .worker-toolsets summary')).toHaveText('推荐 · 2 个')
     await expect(page.locator('#workerAssignmentStatus')).toHaveText('已应用推荐，请保存')
     const firstProviderSelect = page.locator('[data-worker-provider]').first()
     await expect(firstProviderSelect.locator('option')).toHaveCount(providerCount + 1)
