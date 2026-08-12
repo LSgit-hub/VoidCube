@@ -59,6 +59,7 @@ class ScheduledTaskExecutorPorts:
     set_execution_active: Callable[[bool], None]
     set_companion_active: Callable[[bool], None]
     start_background_task: Callable[..., bool]
+    cancel_background_task: Callable[[str, str], bool] | None = None
 
 
 def _scheduled_timeout_seconds(
@@ -176,7 +177,7 @@ class ScheduledTaskExecutorRuntime:
         *,
         poll_interval_seconds: float = 2.0,
         lease_seconds: int = 300,
-        lease_renew_interval_seconds: float = 60.0,
+        lease_renew_interval_seconds: float = 15.0,
         request_timeout_seconds: float | None = None,
         execution_timeout_seconds: float | None = None,
         outbox_path: str | Path | None = None,
@@ -204,6 +205,7 @@ class ScheduledTaskExecutorRuntime:
         self._state_lock = threading.RLock()
         self._active_run_ids: set[str] = set()
         self._companion_run_ids: set[str] = set()
+        self._run_task_ids: dict[str, str] = {}
         self._execution_gate_acquired = False
         self._outbox = ScheduledWritebackOutbox(
             outbox_path
@@ -253,6 +255,7 @@ class ScheduledTaskExecutorRuntime:
             if run_id:
                 self._active_run_ids.discard(run_id)
                 self._companion_run_ids.discard(run_id)
+                self._run_task_ids.pop(run_id, None)
             active = bool(self._active_run_ids)
             self.ports.set_execution_active(active)
             self.ports.set_companion_active(bool(self._companion_run_ids))
@@ -298,6 +301,7 @@ class ScheduledTaskExecutorRuntime:
         *,
         run_id: str,
         owner_session_id: str,
+        task_id: str,
         stop_event: threading.Event,
     ) -> None:
         def renew_loop() -> None:
@@ -310,6 +314,14 @@ class ScheduledTaskExecutorRuntime:
                             "lease_seconds": self.lease_seconds,
                         },
                     )
+                except urllib.error.HTTPError as exc:
+                    if exc.code in {400, 404, 409}:
+                        cancel = self.ports.cancel_background_task
+                        if cancel is not None:
+                            cancel(task_id, "任务已被星子取消")
+                        stop_event.set()
+                        return
+                    logger.warning("Scheduled task lease renewal failed for %s: %s", run_id, exc)
                 except Exception as exc:
                     logger.warning("Scheduled task lease renewal failed for %s: %s", run_id, exc)
 
@@ -374,10 +386,13 @@ class ScheduledTaskExecutorRuntime:
 
             claimed_run_id = run_id
             self._mark_execution_started(run_id)
+            task_id = f"scheduled_{run_id}"
+            self._run_task_ids[run_id] = task_id
             heartbeat_stop = threading.Event()
             self._start_lease_heartbeat(
                 run_id=run_id,
                 owner_session_id=owner_session_id,
+                task_id=task_id,
                 stop_event=heartbeat_stop,
             )
             title = str(task.get("title") or "定时任务").strip()
@@ -474,7 +489,7 @@ class ScheduledTaskExecutorRuntime:
                 execution_started_at = time.monotonic()
                 started = self.ports.start_background_task(
                     prompt,
-                    task_id=f"scheduled_{run_id}",
+                    task_id=task_id,
                     task_label=task_label,
                     response_title=response_title,
                     request_timeout_seconds=self.request_timeout_seconds,

@@ -1466,6 +1466,9 @@ class VoidcubeCLI:
                 set_companion_active=lambda active: setattr(
                     self, "_scheduled_companion_active", bool(active)
                 ),
+                cancel_background_task=lambda task_id, reason: self._background_task_runtime().ports.state.cancel(
+                    task_id, reason
+                ),
                 start_background_task=self._start_scheduled_execution_task,
             )
         )

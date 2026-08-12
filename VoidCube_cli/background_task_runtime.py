@@ -31,6 +31,7 @@ class BackgroundTaskState:
 
     _tasks: dict[str, Thread] = field(default_factory=dict)
     _info: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _agents: dict[str, Any] = field(default_factory=dict)
     _counter: int = 0
     _lock: RLock = field(default_factory=RLock)
 
@@ -51,6 +52,23 @@ class BackgroundTaskState:
         with self._lock:
             self._tasks.pop(task_id, None)
             self._info.pop(task_id, None)
+            self._agents.pop(task_id, None)
+
+    def register_agent(self, task_id: str, agent: Any) -> None:
+        with self._lock:
+            self._agents[task_id] = agent
+
+    def cancel(self, task_id: str, reason: str = "cancelled") -> bool:
+        with self._lock:
+            agent = self._agents.get(task_id)
+        interrupt = getattr(agent, "interrupt", None)
+        if not callable(interrupt):
+            return False
+        try:
+            interrupt(reason)
+        except Exception:
+            return False
+        return True
 
     def has_running_tasks(self) -> bool:
         with self._lock:
@@ -172,6 +190,7 @@ class BackgroundTaskRuntime:
                     persist_session,
                 )
                 active_agent["value"] = bg_agent
+                state.register_agent(task_id, bg_agent)
                 if timed_out.is_set():
                     raise TimeoutError(timeout_error)
                 bg_agent._print_fn = lambda *_args, **_kwargs: None

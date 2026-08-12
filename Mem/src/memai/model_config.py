@@ -98,9 +98,25 @@ class MemModelConfig:
 
         provider = str(llm.get("provider") or "openai")
         defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
+        providers = config.get("providers")
+        pool_entry = providers.get(provider) if isinstance(providers, dict) else None
+        if isinstance(pool_entry, dict):
+            defaults = {
+                **defaults,
+                "base_url": str(pool_entry.get("base_url") or defaults["base_url"]),
+                "api_key_env": str(pool_entry.get("api_key_env") or defaults["api_key_env"]),
+            }
         model = llm.get("model") or None
-        configured_base_url = str(llm.get("base_url") or "").strip()
-        configured_api_key_env = str(llm.get("api_key_env") or "").strip()
+        configured_base_url = (
+            str(pool_entry.get("base_url") or "").strip()
+            if isinstance(pool_entry, dict)
+            else str(llm.get("base_url") or "").strip()
+        )
+        configured_api_key_env = (
+            str(pool_entry.get("api_key_env") or "").strip()
+            if isinstance(pool_entry, dict)
+            else str(llm.get("api_key_env") or "").strip()
+        )
         base_url = configured_base_url or str(defaults["base_url"])
         api_key_env = configured_api_key_env or str(defaults["api_key_env"])
         if (
@@ -297,6 +313,27 @@ def resolve_mem_llm_client(role: str = "default"):
 
 
 def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
+    try:
+        from VoidCube_app.config import load_config
+
+        providers = load_config().get("providers")
+        entry = providers.get(str(mem_cfg.provider).strip().lower()) if isinstance(providers, dict) else None
+        if isinstance(entry, dict):
+            stored = _first_usable_secret(entry.get("api_key"))
+            if stored:
+                return stored
+            env_name = str(entry.get("api_key_env") or "").strip()
+            if env_name:
+                from VoidCube_app.config import get_env_value
+
+                env_key = _first_usable_secret(get_env_value(env_name) or "")
+                if env_key:
+                    return env_key
+            if str(entry.get("auth_mode") or "").strip().lower() == "none":
+                return "no-key-required"
+    except Exception:
+        pass
+
     if mem_cfg.api_key_env:
         try:
             from VoidCube_app.config import get_env_value

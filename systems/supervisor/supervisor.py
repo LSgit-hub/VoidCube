@@ -292,6 +292,7 @@ class Supervisor(
         self.app.add_api_route("/scheduled-tasks/{schedule_id}", self.delete_scheduled_task, methods=["DELETE"])
         self.app.add_api_route("/scheduled-tasks/{schedule_id}/pause", self.pause_scheduled_task, methods=["POST"])
         self.app.add_api_route("/scheduled-tasks/{schedule_id}/resume", self.resume_scheduled_task, methods=["POST"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}/cancel", self.cancel_scheduled_task, methods=["POST"])
         self.app.add_api_route(
             "/scheduled-task-runs/{run_id}/renew",
             self.renew_scheduled_task_run,

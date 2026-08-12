@@ -162,25 +162,17 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
         )
         return issues
 
-    try:
-        from VoidCube_cli.api_config import (
-            memory_llm_provider_defaults,
-            memory_llm_provider_options,
-        )
-
-        supported_providers = {key for key, _label in memory_llm_provider_options()}
-        defaults = memory_llm_provider_defaults(provider)
-    except Exception:
-        supported_providers = {"openrouter", "deepseek", "openai", "ollama", "custom"}
-        defaults = {}
+    providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
+    supported_providers = set(providers)
+    defaults = providers.get(provider) if isinstance(providers.get(provider), dict) else {}
 
     if provider not in supported_providers:
         issues.append(
             ConfigIssue(
                 severity=Severity.ERROR,
                 key_path="memory.llm.provider",
-                message=f"API-B Provider '{provider}' 不在 Mem 支持列表中",
-                suggestion="运行 /api -> 3 记忆系统模型配置，选择内置或自定义 Provider",
+                message=f"API-B Provider '{provider}' 不在共享 Provider 池中",
+                suggestion="运行 /api -> 1 添加 Provider，再运行 /api -> 3 选择 API-B 模型",
             )
         )
         return issues
@@ -196,7 +188,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
             )
         )
 
-    base_url = str(llm_cfg.get("base_url") or defaults.get("base_url") or "").strip()
+    base_url = str(defaults.get("base_url") or "").strip()
     parsed_base_url = urlparse(base_url)
     if not base_url or parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
         issues.append(
@@ -217,10 +209,10 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
             )
         )
 
-    if provider == "ollama":
+    if str(defaults.get("auth_mode") or "").strip().lower() == "none":
         return issues
 
-    api_key_env = str(llm_cfg.get("api_key_env") or defaults.get("api_key_env") or "").strip()
+    api_key_env = str(defaults.get("api_key_env") or "").strip()
     if not api_key_env:
         issues.append(
             ConfigIssue(

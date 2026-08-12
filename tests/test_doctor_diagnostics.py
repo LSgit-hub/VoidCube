@@ -191,16 +191,20 @@ def _valid_api_a_api_b_config() -> dict:
                 "selected_model": "agnes-2.0-flash",
                 "api_key": "sk-agnes-user-chat-token-123456",
                 "auth_mode": "stored",
-            }
+            },
+            "deepseek": {
+                "label": "DeepSeek",
+                "selected_model": "deepseek-v4-flash",
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "base_url": "https://api.deepseek.com/v1",
+                "auth_mode": "env",
+            },
         },
         "memory": {
             "provider": "mem",
             "llm": {
                 "provider": "deepseek",
                 "model": "deepseek-v4-flash",
-                "api_key_env": "DEEPSEEK_API_KEY",
-                "base_url": "https://api.deepseek.com/v1",
-                "provider_profile": "openai",
             },
         },
     }
@@ -249,7 +253,7 @@ def test_validate_config_does_not_use_api_a_agnes_key_for_api_b(monkeypatch):
 
     assert any(
         issue.key_path == "memory.llm.api_key_env"
-        and "agnes-ai" in issue.suggestion
+        and "DEEPSEEK_API_KEY" in issue.message
         for issue in issues
     )
 
@@ -281,10 +285,13 @@ def test_validate_config_accepts_custom_api_b_provider(monkeypatch):
         {
             "provider": "custom",
             "model": "memory-reasoner",
-            "base_url": "https://memory.example/v1",
-            "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
         }
     )
+    cfg["providers"]["custom"] = {
+        "base_url": "https://memory.example/v1",
+        "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        "auth_mode": "env",
+    }
     monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
     _stub_api_b_key_sources(monkeypatch, env_value="sk-real-memory-token-123456789")
 
@@ -300,10 +307,13 @@ def test_validate_config_rejects_custom_api_b_without_valid_base_url(monkeypatch
         {
             "provider": "custom",
             "model": "memory-reasoner",
-            "base_url": "memory.example/v1",
-            "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
         }
     )
+    cfg["providers"]["custom"] = {
+        "base_url": "memory.example/v1",
+        "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+        "auth_mode": "env",
+    }
     monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
     _stub_api_b_key_sources(monkeypatch, env_value="sk-real-memory-token-123456789")
 
@@ -330,7 +340,7 @@ def test_validate_config_rejects_unsupported_api_b_provider(monkeypatch):
 @pytest.mark.unit
 def test_validate_config_rejects_api_b_gateway_loopback_base_url(monkeypatch):
     cfg = _valid_api_a_api_b_config()
-    cfg["memory"]["llm"]["base_url"] = "http://127.0.0.1:6000/v1"
+    cfg["providers"]["deepseek"]["base_url"] = "http://127.0.0.1:6000/v1"
     monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
     _stub_api_b_key_sources(monkeypatch, env_value="sk-real-deepseek-token-123456789")
 

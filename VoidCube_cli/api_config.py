@@ -11,23 +11,6 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-API_A_ENV_VAR_MAP = {
-    "openai": "OPENAI_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "agnes-ai": "AGNES_API_KEY",
-}
-
-API_A_PROVIDER_LABELS = {
-    "openai": "OpenAI",
-    "deepseek": "DeepSeek",
-    "agnes-ai": "Agnes-AI",
-    "openrouter": "OpenRouter",
-    "ollama": "Ollama",
-}
-
-API_B_CUSTOM_API_KEY_ENV = "VOIDCUBE_MEMORY_CUSTOM_API_KEY"
-
-
 @dataclass(frozen=True, slots=True)
 class ApiConfigRuntime:
     """Optional CLI runtime updates applied after a successful wizard save."""
@@ -59,26 +42,26 @@ def _provider_key_from_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-") or "provider"
 
 
-def save_provider_config(
+def save_provider_pool_entry(
     provider_key: str,
     *,
     label: str,
-    selected_model: str,
+    model_catalog: list[str],
     provider_type: str,
     base_url: str = "",
     api_key_env: str = "",
     api_key: str = "",
     auth_mode: str = "",
 ) -> bool:
-    """Persist API-A/user-interaction provider config and set it active."""
+    """Persist one shared Provider entry without changing any call site."""
     try:
         from VoidCube_app.config import load_config, save_config
 
-        cfg = persist_api_a_config(
+        cfg = persist_provider_pool_entry(
             load_config(),
             provider_key=provider_key,
             label=label,
-            selected_model=selected_model,
+            model_catalog=model_catalog,
             provider_type=provider_type,
             base_url=base_url,
             api_key_env=api_key_env,
@@ -91,23 +74,36 @@ def save_provider_config(
         return False
 
 
-def persist_api_a_config(
+def persist_provider_pool_entry(
     config: dict[str, Any],
     *,
     provider_key: str,
     label: str,
-    selected_model: str,
+    model_catalog: list[str],
     provider_type: str,
     base_url: str = "",
     api_key_env: str = "",
     api_key: str = "",
     auth_mode: str = "",
 ) -> dict[str, Any]:
-    """Return config with only API-A/user-interaction provider fields updated."""
-    from VoidCube_app.config import set_active_provider, upsert_provider
+    """Return config with one shared Provider credential/catalog entry updated."""
+    from datetime import datetime, timezone
+
+    from VoidCube_app.config import upsert_provider
     from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
 
-    cfg = upsert_provider(
+    models = list(
+        dict.fromkeys(
+            str(model_id or "").strip()
+            for model_id in model_catalog
+            if str(model_id or "").strip()
+        )
+    )
+    current_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    current = current_providers.get(provider_key) if isinstance(current_providers, dict) else {}
+    current_model = str(current.get("selected_model") or "").strip() if isinstance(current, dict) else ""
+    selected_model = current_model if current_model in models else (models[0] if models else "")
+    return upsert_provider(
         dict(config or {}),
         provider_key,
         {
@@ -118,47 +114,95 @@ def persist_api_a_config(
             "api_key_env": api_key_env,
             "api_key": api_key,
             "auth_mode": auth_mode,
+            "model_catalog": {
+                "models": models,
+                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            },
         },
-        make_active=True,
+        make_active=False,
     )
-    return set_active_provider(cfg, provider_key)
 
 
-def memory_llm_provider_defaults(provider_key: str) -> dict:
-    """Return the persisted Mem/API-B LLM fields for a provider choice."""
-    try:
-        from memai.model_config import PROVIDER_DEFAULTS
-
-        defaults = dict(PROVIDER_DEFAULTS.get(provider_key) or {})
-    except Exception:
-        defaults = {}
-    return {
-        "api_key_env": str(defaults.get("api_key_env") or "").strip(),
-        "base_url": str(defaults.get("base_url") or "").strip(),
-        "provider_profile": str(defaults.get("provider_profile") or "openai").strip() or "openai",
-    }
-
-
-def memory_llm_provider_options() -> list[tuple[str, str]]:
-    """Providers supported by Mem/API-B's OpenAI-compatible resolver."""
-    try:
-        from memai.model_config import PROVIDER_DEFAULTS
-    except Exception:
+def provider_model_catalog(provider_cfg: dict[str, Any]) -> list[str]:
+    """Return the de-duplicated cached model IDs for one Provider entry."""
+    catalog = provider_cfg.get("model_catalog")
+    raw_models = catalog.get("models") if isinstance(catalog, dict) else []
+    if not isinstance(raw_models, list):
         return []
-    labels = {
-        "openrouter": "OpenRouter",
-        "deepseek": "DeepSeek",
-        "openai": "OpenAI",
-        "ollama": "Ollama",
+    return list(
+        dict.fromkeys(
+            str(model_id or "").strip()
+            for model_id in raw_models
+            if str(model_id or "").strip()
+        )
+    )
+
+
+def provider_pool_api_key(provider_cfg: dict[str, Any]) -> str:
+    """Resolve the credential owned by one Provider pool entry."""
+    try:
+        from VoidCube_app.provider_auth import has_usable_secret
+
+        stored = str(provider_cfg.get("api_key") or "").strip()
+        if has_usable_secret(stored):
+            return stored
+        api_key_env = str(provider_cfg.get("api_key_env") or "").strip()
+        if api_key_env:
+            from VoidCube_app.config import get_env_value
+
+            resolved = str(get_env_value(api_key_env) or "").strip()
+            if has_usable_secret(resolved):
+                return resolved
+    except Exception:
+        pass
+    return ""
+
+
+def refresh_provider_pool_catalog(
+    config: dict[str, Any], provider_key: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Fetch and persist one existing Provider's live model catalog."""
+    from datetime import datetime, timezone
+
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    provider_cfg = providers.get(provider_key)
+    if not isinstance(provider_cfg, dict):
+        return config, []
+    models = get_provider_models_from_api(
+        provider_key,
+        api_key=provider_pool_api_key(provider_cfg),
+        base_url=str(provider_cfg.get("base_url") or ""),
+    )
+    model_ids = [model_id for model_id, _ in models]
+    if not model_ids:
+        return config, []
+
+    cfg = dict(config)
+    updated_providers = dict(providers)
+    updated_entry = dict(provider_cfg)
+    updated_entry["model_catalog"] = {
+        "models": model_ids,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    preferred_order = ["openrouter", "deepseek", "openai", "ollama"]
-    options = [
-        (provider, labels.get(provider, provider.title()))
-        for provider in preferred_order
-        if provider in PROVIDER_DEFAULTS
-    ]
-    options.append(("custom", "自定义 Provider（OpenAI 兼容）"))
-    return options
+    selected_model = str(updated_entry.get("selected_model") or "").strip()
+    if selected_model not in model_ids:
+        updated_entry["selected_model"] = model_ids[0]
+    updated_providers[provider_key] = updated_entry
+    cfg["providers"] = updated_providers
+    return cfg, model_ids
+
+
+def persist_api_a_selection(
+    config: dict[str, Any], *, provider: str, model: str
+) -> dict[str, Any]:
+    """Select an existing Provider/model for API-A without changing credentials."""
+    from VoidCube_app.config import set_active_provider, set_provider_model
+
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    if provider not in providers:
+        raise ValueError(f"Unknown Provider: {provider}")
+    cfg = set_provider_model(dict(config), provider, model, make_active=False)
+    return set_active_provider(cfg, provider)
 
 
 def persist_api_b_config(
@@ -166,56 +210,19 @@ def persist_api_b_config(
     *,
     provider: str,
     model: str,
-    base_url: str = "",
-    api_key_env: str = "",
-    provider_profile: str = "",
 ) -> dict[str, Any]:
-    """Return config with only API-B/Mem ``memory.llm.*`` fields updated."""
-    from urllib.parse import urlsplit
-
-    from VoidCube_app.provider_auth import normalize_openai_compatible_base_url
-
+    """Select an existing Provider/model for API-B without copying credentials."""
     provider = str(provider or "").strip().lower()
-    defaults = memory_llm_provider_defaults(provider)
-    is_custom = provider == "custom"
-    if not is_custom and not defaults.get("api_key_env") and provider != "ollama":
-        raise ValueError(f"Unsupported API-B provider: {provider}")
-
-    resolved_base_url = normalize_openai_compatible_base_url(
-        base_url if is_custom else defaults.get("base_url", "")
-    )
-    resolved_api_key_env = str(
-        api_key_env if is_custom else defaults.get("api_key_env", "")
-    ).strip()
-    if is_custom:
-        parsed_base_url = urlsplit(resolved_base_url)
-        if (
-            parsed_base_url.scheme not in {"http", "https"}
-            or not parsed_base_url.netloc
-            or not resolved_api_key_env
-        ):
-            raise ValueError(
-                "Custom API-B provider requires a valid http(s) base_url and api_key_env"
-            )
-
-    resolved_provider_profile = (
-        str(provider_profile or "openai").strip() or "openai"
-        if is_custom
-        else defaults.get("provider_profile", "openai")
-    )
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    if provider not in providers:
+        raise ValueError(f"Unknown Provider: {provider}")
 
     cfg = dict(config or {})
     memory = dict(cfg.get("memory") or {})
     llm = dict(memory.get("llm") or {})
-    llm.update(
-        {
-            "provider": provider,
-            "model": str(model or "").strip(),
-            "api_key_env": resolved_api_key_env,
-            "base_url": resolved_base_url,
-            "provider_profile": resolved_provider_profile,
-        }
-    )
+    for stale_key in ("api_key_env", "base_url", "provider_profile"):
+        llm.pop(stale_key, None)
+    llm.update({"provider": provider, "model": str(model or "").strip()})
     memory["llm"] = llm
     cfg["memory"] = memory
     return cfg
@@ -338,12 +345,8 @@ def save_video_generation_config(
 def save_memory_llm_config(
     provider: str,
     model: str,
-    *,
-    base_url: str = "",
-    api_key_env: str = "",
-    provider_profile: str = "",
 ) -> bool:
-    """Persist API-B/Mem model config without touching API-A."""
+    """Persist API-B's Provider/model reference without touching API-A."""
     try:
         from VoidCube_app.config import load_config, save_config
 
@@ -351,9 +354,6 @@ def save_memory_llm_config(
             load_config(),
             provider=provider,
             model=model,
-            base_url=base_url,
-            api_key_env=api_key_env,
-            provider_profile=provider_profile,
         )
         save_config(cfg)
         return True
@@ -597,18 +597,14 @@ def api_a_key_configured(provider_cfg: dict[str, Any]) -> bool:
     return has_configured_api_key(str(provider_cfg.get("api_key_env") or ""))
 
 
-def api_b_key_configured(memory_llm_cfg: dict[str, Any]) -> bool:
+def api_b_key_configured(
+    memory_llm_cfg: dict[str, Any], providers: dict[str, Any] | None = None
+) -> bool:
     provider = str(memory_llm_cfg.get("provider") or "").strip().lower()
-    if provider == "ollama":
-        return True
-    defaults = memory_llm_provider_defaults(provider) if provider else {}
-    api_key_env = str(
-        memory_llm_cfg.get("api_key_env") or defaults.get("api_key_env") or ""
-    )
-    return provider_has_usable_credential(
-        provider,
-        api_key_env,
-    )
+    provider_cfg = (providers or {}).get(provider)
+    if not isinstance(provider_cfg, dict):
+        return False
+    return api_a_key_configured(provider_cfg)
 
 
 def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
@@ -624,9 +620,12 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     memory = cfg.get("memory") if isinstance(cfg.get("memory"), dict) else {}
     llm = memory.get("llm") if isinstance(memory.get("llm"), dict) else {}
     api_b_provider = str(llm.get("provider") or "").strip().lower()
-    api_b_defaults = memory_llm_provider_defaults(api_b_provider)
+    api_b_provider_cfg = providers.get(api_b_provider)
+    if not isinstance(api_b_provider_cfg, dict):
+        api_b_provider_cfg = {}
     api_b_key_env = str(
-        llm.get("api_key_env") or api_b_defaults.get("api_key_env") or ""
+        api_b_provider_cfg.get("api_key_env")
+        or ""
     ).strip()
     image_generation = (
         cfg.get("image_generation")
@@ -657,11 +656,8 @@ def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "provider": api_b_provider or "未设置",
             "model": str(llm.get("model") or "").strip() or "未设置",
             "api_key_env": api_b_key_env or "无",
-            "base_url": str(llm.get("base_url") or api_b_defaults.get("base_url") or "").strip() or "未设置",
-            "provider_profile": str(
-                llm.get("provider_profile") or api_b_defaults.get("provider_profile") or "openai"
-            ).strip() or "openai",
-            "key_configured": api_b_key_configured(llm),
+            "base_url": str(api_b_provider_cfg.get("base_url") or "").strip() or "未设置",
+            "key_configured": api_b_key_configured(llm, providers),
             "credential_sources": provider_credential_sources(api_b_provider, api_b_key_env),
         },
         "image_generation": {
@@ -724,7 +720,6 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
         f"  Model: {api_b['model']}",
         f"  Key: {'已配置' if api_b['key_configured'] else '未配置'} ({api_b['api_key_env']})",
         f"  Base URL: {api_b['base_url']}",
-        f"  Provider profile: {api_b['provider_profile']}",
         "  Credential sources:",
         *_render_credential_sources(api_b.get("credential_sources") or []),
         "",
@@ -746,20 +741,6 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
     ]
 
 
-def test_api_connection(provider: str, api_key: str, base_url: str = "") -> bool:
-    """测试 API 连接"""
-    try:
-        import httpx
-        
-        headers = {"Authorization": f"Bearer {api_key}"}
-        url = base_url or "https://openrouter.ai/api/v1/models"
-        
-        response = httpx.get(url, headers=headers, timeout=10)
-        return response.status_code == 200
-    except Exception:
-        return False
-
-
 def get_provider_models_from_api(
     provider: str,
     *,
@@ -769,18 +750,16 @@ def get_provider_models_from_api(
     """从 Provider API 获取模型列表，不使用静态回退。"""
     try:
         from VoidCube_app.provider_auth import PROVIDER_REGISTRY
-        from VoidCube_app.models import curated_models_for_provider, fetch_api_models
+        from VoidCube_app.models import fetch_api_models
 
-        if api_key or base_url:
-            provider_config = PROVIDER_REGISTRY.get(provider)
-            endpoint = base_url.strip()
-            if not endpoint and provider_config is not None:
-                endpoint = str(provider_config.get("inference_base_url") or "").strip()
-            if not endpoint:
-                return []
-            model_ids = fetch_api_models(api_key.strip(), endpoint) or []
-            return [(model_id, "") for model_id in model_ids]
-        return curated_models_for_provider(provider)
+        provider_config = PROVIDER_REGISTRY.get(provider)
+        endpoint = base_url.strip()
+        if not endpoint and provider_config is not None:
+            endpoint = str(provider_config.get("inference_base_url") or "").strip()
+        if not endpoint:
+            return []
+        model_ids = fetch_api_models(api_key.strip(), endpoint) or []
+        return [(model_id, "") for model_id in model_ids]
     except Exception:
         return []
 
@@ -1462,9 +1441,9 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     memory_llm_config = memory_config.get("llm", {})
     memory_provider = memory_llm_config.get("provider", "未设置")
     memory_model = memory_llm_config.get("model", "未设置")
-    memory_defaults = memory_llm_provider_defaults(str(memory_provider or "").strip().lower())
-    memory_key_env = memory_llm_config.get("api_key_env") or memory_defaults.get("api_key_env") or "无"
-    memory_key_state = "已配置" if api_b_key_configured(memory_llm_config) else "未配置"
+    memory_provider_cfg = providers_config.get(str(memory_provider or "").strip().lower(), {})
+    memory_key_env = memory_provider_cfg.get("api_key_env") or "无"
+    memory_key_state = "已配置" if api_b_key_configured(memory_llm_config, providers_config) else "未配置"
     p(f"   API-B Provider: {memory_provider}")
     p(f"   API-B Model: {memory_model}")
     p(f"   API-B Key: {memory_key_state} ({memory_key_env})")
@@ -1488,9 +1467,9 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     # 主菜单循环
     while True:
         p("\n请选择配置模式：")
-        p("   [1] 快速配置 (推荐) - 使用 OpenRouter")
-        p("   [2] 自定义配置 - 添加其他 Provider")
-        p("   [3] 记忆系统模型配置")
+        p("   [1] 添加 Provider")
+        p("   [2] Agent 模型配置（API-A）")
+        p("   [3] 记忆模型配置（API-B）")
         p("   [4] 图像模型配置")
         p("   [5] 视频模型配置")
         p("   [6] 查看当前配置")
@@ -1503,457 +1482,126 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             break
         
         elif choice == "1":
-            # OpenRouter 配置
+            # Shared Provider pool entry
             while True:
-                ph("OpenRouter 配置")
-                
-                p("\n📝 OpenRouter 是一个聚合多个 AI 模型的平台")
-                p("   优点：支持多种模型，一个 API Key 通用")
-                p("   获取地址：https://openrouter.ai/keys\n")
-                
-                p("   [0] 返回")
-                
-                api_key = inp("请输入 OpenRouter API Key")
-                
-                if api_key == "0":
+                ph("添加 Provider")
+                p("\n直接添加支持 OpenAI 兼容 /models 的 Provider。输入 0 返回。")
+                provider_name = inp("Provider 名称")
+                if provider_name == "0":
                     break
-                
-                if not api_key:
-                    pe("API Key 不能为空")
+                if not provider_name:
+                    pe("Provider 名称不能为空")
                     continue
-                
-                pi("正在验证 API Key...")
-                
-                if test_api_connection("openrouter", api_key):
-                    ps("API Key 验证成功！")
-                else:
-                    pe("API Key 验证失败，请检查是否正确")
-                    if inp("是否继续？ (y/n)", "n").lower() != "y":
-                        continue
-                
-                # 从API获取模型列表
-                p("\n📦 正在获取可用模型...")
-                models_with_labels = get_provider_models_from_api("openrouter")
-                
-                if not models_with_labels:
-                    pe("无法从 API 获取模型列表，请稍后重试")
+                provider_key = inp(
+                    "Provider 标识", _provider_key_from_name(provider_name)
+                ).strip().lower()
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider_key):
+                    pe("Provider 标识只能包含小写字母、数字、连字符或下划线")
                     continue
-                
-                p(f"\n可用模型 (共 {len(models_with_labels)} 个)：")
-                for i, (model_id, desc) in enumerate(models_with_labels[:20], 1):
-                    if desc:
-                        p(f"   [{i}] {model_id} ({desc})")
-                    else:
-                        p(f"   [{i}] {model_id}")
-                if len(models_with_labels) > 20:
-                    p(f"   ... 还有 {len(models_with_labels) - 20} 个模型")
-                
-                p(f"\n请选择默认模型：")
-                p("   [0] 返回")
-                model_choice = inp("请输入数字")
-                
-                if model_choice == "0":
-                    break
-                
-                try:
-                    idx = int(model_choice) - 1
-                    if 0 <= idx < len(models_with_labels):
-                        selected_model = models_with_labels[idx][0]
-                    else:
-                        selected_model = models_with_labels[0][0]
-                except (ValueError, IndexError):
-                    selected_model = models_with_labels[0][0]
-                
-                p(f"\n选择的模型: {selected_model}")
-                
-                p("\n💾 保存配置...")
-
-                if save_provider_config(
-                    "openrouter",
-                    label="OpenRouter",
-                    selected_model=selected_model,
-                    provider_type="openrouter",
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key_env="OPENROUTER_API_KEY",
-                    auth_mode="env",
+                base_url = inp("Base URL")
+                if not base_url:
+                    pe("Base URL 不能为空")
+                    continue
+                api_key_env = inp(
+                    "API Key 环境变量",
+                    f"VOIDCUBE_PROVIDER_{provider_key.upper().replace('-', '_')}_API_KEY",
+                ).strip()
+                api_key = secret_inp("API Key（本地无需鉴权可留空）")
+                auth_mode = "env" if api_key else "none"
+                if auth_mode == "env" and not re.fullmatch(
+                    r"[A-Z_][A-Z0-9_]*", api_key_env
                 ):
-                    ps("Provider 配置保存成功")
-                    ps("默认模型保存成功")
-                
-                apply_runtime_updates(selected_model, "openrouter")
-                
-                if save_env_value("OPENROUTER_API_KEY", api_key):
-                    ps("API Key 保存成功")
-                
-                try:
-                    from VoidCube_app.configuration import reload_application_config
-                    from VoidCube_app.config import load_config
-
-                    reload_application_config(load_config)
-                    ps("配置已重新加载")
-                except Exception as e:
-                    pi(f"重新加载配置时出错: {e}")
-                
-                ph("配置完成")
-                ps("OpenRouter 配置完成！")
-                p("\n运行 /doctor 检查配置状态")
+                    pe("API Key 环境变量必须使用大写字母、数字和下划线")
+                    continue
+                models = get_provider_models_from_api(
+                    provider_key, api_key=api_key, base_url=base_url
+                )
+                model_ids = [model_id for model_id, _ in models]
+                if not model_ids:
+                    pe("无法从 Provider /models 获取模型列表；请检查 Base URL 和 Key")
+                    continue
+                for i, model_id in enumerate(model_ids[:50], 1): p(f"   [{i}] {model_id}")
+                try: selected_model = model_ids[int(inp("选择默认模型", "1")) - 1]
+                except (ValueError, IndexError): selected_model = model_ids[0]
+                if api_key_env and api_key and not save_env_value(api_key_env, api_key):
+                    pe("API Key 保存失败")
+                    continue
+                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env if auth_mode == "env" else "", auth_mode=auth_mode):
+                    pe("Provider 配置保存失败")
+                    continue
+                ps(f"Provider {provider_key} 与 {len(model_ids)} 个模型已保存")
+                current_config = load_current_config()
+                providers_config = current_config.get("providers", {})
                 break
         
         elif choice == "2":
-            # 自定义 Provider 配置
+            # API-A selection
             while True:
-                ph("自定义 Provider 配置")
-                
-                p("\n支持的 Provider：")
-                providers = [
-                    ("openai", "OpenAI (GPT)"),
-                    ("deepseek", "DeepSeek"),
-                    ("agnes-ai", "Agnes-AI"),
-                    ("ollama", "Ollama (本地)"),
-                    ("custom", "自定义 Provider"),
-                ]
-                
-                for i, (pid, desc) in enumerate(providers, 1):
-                    p(f"   [{i}] {desc}")
+                ph("Agent 模型配置（API-A）")
+                entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
+                if not entries: pe("请先使用 [1] 添加 Provider"); break
+                for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
-                
-                provider_choice = inp("\n请选择 Provider")
-                
-                if provider_choice == "0":
-                    break
-                
-                try:
-                    idx = int(provider_choice) - 1
-                    if 0 <= idx < len(providers):
-                        selected_provider = providers[idx][0]
-                    else:
-                        selected_provider = providers[0][0]
-                except (ValueError, IndexError):
-                    selected_provider = providers[0][0]
-                
-                p(f"\n选择的 Provider: {selected_provider}")
-                
-                if selected_provider == "ollama":
-                    base_url = inp("Ollama Base URL", "http://localhost:11434")
-                    api_key = ""
-                    pi("Ollama 本地部署，无需 API Key")
-                    model_name = inp("模型名称 (如 llama3, qwen2)")
-                    if not model_name:
-                        pe("模型名称不能为空")
-                        continue
-                    selected_model = model_name
-                elif selected_provider == "custom":
-                    provider_name = inp("Provider 名称")
-                    base_url = inp("Base URL")
-                    api_key = inp("API Key")
-                    model_name = inp("模型名称")
-                    if not model_name:
-                        pe("模型名称不能为空")
-                        continue
-                    selected_model = model_name
-                else:
-                    base_url = (
-                        "https://api.agnes-ai.cn/v1"
-                        if selected_provider == "agnes-ai"
-                        else ""
+                try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
+                except (ValueError, IndexError): break
+                model_ids = provider_model_catalog(provider_cfg)
+                if not model_ids:
+                    pi("该 Provider 尚无模型目录，正在从 /models 获取...")
+                    refreshed, model_ids = refresh_provider_pool_catalog(
+                        load_current_config(), provider_key
                     )
-                    api_key = inp("API Key")
-                    
-                    if not api_key:
-                        pe("API Key 不能为空")
-                        continue
-                    
-                    # 从API获取模型列表
-                    p("\n📦 正在获取可用模型...")
-                    models_with_labels = get_provider_models_from_api(
-                        selected_provider,
-                        api_key=api_key,
-                        base_url=base_url,
-                    )
-                    
-                    if models_with_labels:
-                        p(f"\n{selected_provider.title()} 可用模型 (共 {len(models_with_labels)} 个)：")
-                        for i, (mid, mdesc) in enumerate(models_with_labels[:20], 1):
-                            if mdesc:
-                                p(f"   [{i}] {mid} ({mdesc})")
-                            else:
-                                p(f"   [{i}] {mid}")
-                        if len(models_with_labels) > 20:
-                            p(f"   ... 还有 {len(models_with_labels) - 20} 个模型")
-                        p("   [0] 手动输入模型名称")
-                        
-                        model_choice = inp("\n请选择模型")
-                        
-                        if model_choice == "0":
-                            model_name = inp("请输入模型名称")
-                            if not model_name:
-                                pe("模型名称不能为空")
-                                continue
-                            selected_model = model_name
-                        else:
-                            try:
-                                midx = int(model_choice) - 1
-                                if 0 <= midx < len(models_with_labels):
-                                    selected_model = models_with_labels[midx][0]
-                                else:
-                                    model_name = inp("请输入模型名称")
-                                    if not model_name:
-                                        pe("模型名称不能为空")
-                                        continue
-                                    selected_model = model_name
-                            except (ValueError, IndexError):
-                                model_name = inp("请输入模型名称")
-                                if not model_name:
-                                    pe("模型名称不能为空")
-                                    continue
-                                selected_model = model_name
+                    if model_ids:
+                        from VoidCube_app.config import save_config
+
+                        save_config(refreshed)
+                        current_config = refreshed
+                        providers_config = refreshed.get("providers", {})
                     else:
-                        p("\n无法从API获取模型列表")
-                        model_name = inp("请输入模型名称")
-                        if not model_name:
-                            pe("模型名称不能为空")
-                            continue
-                        selected_model = model_name
-                
-                p(f"\n将使用模型: {selected_model}")
-                
-                env_var = API_A_ENV_VAR_MAP.get(selected_provider, "")
-                
-                p("\n💾 保存配置...")
-                
-                provider_key = selected_provider
-                provider_label = API_A_PROVIDER_LABELS.get(selected_provider, selected_provider.title())
-                provider_type = selected_provider
-                auth_mode = "env"
-                api_key_env = env_var
-
-                if selected_provider == "ollama":
-                    provider_key = "ollama"
-                    provider_label = "Ollama"
-                    provider_type = "ollama"
-                    auth_mode = "none"
-                    api_key_env = ""
-                elif selected_provider == "custom":
-                    provider_key = _provider_key_from_name(provider_name)
-                    provider_label = provider_name
-                    provider_type = "openai_compatible"
-                    auth_mode = "stored" if api_key else "none"
-                    api_key_env = ""
-
-                if save_provider_config(
-                    provider_key,
-                    label=provider_label,
-                    selected_model=selected_model,
-                    provider_type=provider_type,
-                    base_url=base_url,
-                    api_key_env=api_key_env,
-                    api_key=api_key if selected_provider == "custom" else "",
-                    auth_mode=auth_mode,
-                ):
-                    ps("Provider 配置保存成功")
-                    ps(f"默认模型保存成功: {selected_model}")
-                
+                        pe("模型目录获取失败，请检查该 Provider 的 Base URL 和 Key")
+                        break
+                for i, model_id in enumerate(model_ids, 1): p(f"   [{i}] {model_id}")
+                try: selected_model = model_ids[int(inp("选择模型", "1")) - 1]
+                except (ValueError, IndexError): selected_model = model_ids[0]
+                current_config = persist_api_a_selection(load_current_config(), provider=provider_key, model=selected_model)
+                from VoidCube_app.config import save_config
+                save_config(current_config)
                 apply_runtime_updates(selected_model, provider_key)
-                
-                if env_var and api_key:
-                    if save_env_value(env_var, api_key):
-                        ps(f"{env_var} 保存成功")
-                    else:
-                        pe(f"保存 {env_var} 失败")
-                
-                if selected_provider == "custom" and api_key and provider_name:
-                        custom_env_var = f"{provider_name.upper()}_API_KEY"
-                        if save_env_value(custom_env_var, api_key):
-                            ps(f"{custom_env_var} 保存成功")
-                
-                ph("配置完成")
-                ps("自定义 Provider 配置完成！")
-                p("\n运行 /doctor 检查配置状态")
+                ps(f"API-A 已选择 {provider_key} / {selected_model}")
                 break
         
         elif choice == "3":
-            # 记忆系统模型配置
+            # API-B selection
             while True:
-                ph("记忆系统模型配置")
-                
-                memory_config = current_config.get("memory", {})
-                memory_llm_config = memory_config.get("llm", {})
-                current_memory_provider = memory_llm_config.get("provider", "未设置")
-                current_memory_model = memory_llm_config.get("model", "未设置")
-                
-                p(f"\n当前记忆系统配置：")
-                p(f"   API-B Provider: {current_memory_provider}")
-                p(f"   API-B Model: {current_memory_model}")
-                
-                p("\nAPI-B 是 Mem / Supervisor 自主链路专用模型配置。")
-                p("它与 API-A 用户交互模型独立，不会读取 agnes-ai 或主 CLI Provider。\n")
-                
-                memory_providers = memory_llm_provider_options()
-                if not memory_providers:
-                    pe("没有可用的 API-B Provider 默认配置")
-                    break
-                
-                p("请选择记忆系统 Provider：")
-                for i, (pid, desc) in enumerate(memory_providers, 1):
-                    p(f"   [{i}] {desc}")
+                ph("记忆模型配置（API-B）")
+                entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
+                if not entries: pe("请先使用 [1] 添加 Provider"); break
+                for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
-                
-                mem_provider_choice = inp("\n请选择")
-                
-                if mem_provider_choice == "0":
+                try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
+                except (ValueError, IndexError): break
+                model_ids = provider_model_catalog(provider_cfg)
+                if not model_ids:
+                    pi("该 Provider 尚无模型目录，正在从 /models 获取...")
+                    refreshed, model_ids = refresh_provider_pool_catalog(
+                        load_current_config(), provider_key
+                    )
+                    if model_ids:
+                        from VoidCube_app.config import save_config
+
+                        save_config(refreshed)
+                        current_config = refreshed
+                        providers_config = refreshed.get("providers", {})
+                    else:
+                        pe("模型目录获取失败，请检查该 Provider 的 Base URL 和 Key")
+                        break
+                for i, model_id in enumerate(model_ids, 1): p(f"   [{i}] {model_id}")
+                try: memory_model = model_ids[int(inp("选择模型", "1")) - 1]
+                except (ValueError, IndexError): memory_model = model_ids[0]
+                if not save_memory_llm_config(provider_key, memory_model):
+                    pe("保存 API-B Provider/模型引用失败")
                     break
-                
-                try:
-                    idx = int(mem_provider_choice) - 1
-                    if 0 <= idx < len(memory_providers):
-                        mem_provider = memory_providers[idx][0]
-                    else:
-                        mem_provider = "openrouter"
-                except (ValueError, IndexError):
-                    mem_provider = "openrouter"
-                
-                p(f"\n选择的 Provider: {mem_provider}")
-
-                if mem_provider == "custom":
-                    current_custom = (
-                        memory_llm_config
-                        if str(current_memory_provider).strip().lower() == "custom"
-                        else {}
-                    )
-                    custom_base_url = inp(
-                        "OpenAI 兼容 Base URL",
-                        str(current_custom.get("base_url") or ""),
-                    )
-                    if not custom_base_url:
-                        pe("Base URL 不能为空")
-                        continue
-                    memory_model = inp(
-                        "模型名称",
-                        str(current_custom.get("model") or ""),
-                    )
-                    if not memory_model:
-                        pe("模型名称不能为空")
-                        continue
-
-                    custom_key_env = str(
-                        current_custom.get("api_key_env") or API_B_CUSTOM_API_KEY_ENV
-                    ).strip()
-                    existing_custom_key = ""
-                    try:
-                        from VoidCube_app.config import get_env_value
-
-                        existing_custom_key = str(get_env_value(custom_key_env) or "").strip()
-                    except Exception:
-                        existing_custom_key = ""
-                    p(
-                        f"\nAPI Key 将保存到 {custom_key_env}"
-                        "（输入时不回显，留空保留已有 Key）"
-                    )
-                    custom_api_key = secret_inp(
-                        "请输入自定义 API-B Key",
-                        existing_custom_key,
-                    )
-
-                    p("\n💾 保存配置...")
-                    if not save_memory_llm_config(
-                        mem_provider,
-                        memory_model,
-                        base_url=custom_base_url,
-                        api_key_env=custom_key_env,
-                        provider_profile="openai",
-                    ):
-                        pe("保存 API-B / memory.llm 自定义配置失败")
-                        continue
-                    ps("记忆系统自定义 Provider 保存成功")
-                    ps(f"记忆系统模型保存成功: {memory_model}")
-
-                    if custom_api_key:
-                        if save_env_value(custom_key_env, custom_api_key):
-                            ps(f"{custom_key_env} 保存成功")
-                        else:
-                            pe(f"保存 {custom_key_env} 失败")
-                    else:
-                        pi("已跳过 API-B key 保存；自主链路会显示 LLM 未启用")
-
-                    current_config = load_current_config()
-                    ph("配置完成")
-                    ps("记忆系统自定义模型配置完成！")
-                    break
-                
-                # 从API获取模型列表
-                p("\n📦 正在获取可用模型...")
-                models_with_labels = get_provider_models_from_api(mem_provider)
-                
-                if models_with_labels:
-                    p(f"\n{mem_provider.title()} 可用模型 (共 {len(models_with_labels)} 个)：")
-                    for i, (mid, mdesc) in enumerate(models_with_labels[:20], 1):
-                        if mdesc:
-                            p(f"   [{i}] {mid} ({mdesc})")
-                        else:
-                            p(f"   [{i}] {mid}")
-                    if len(models_with_labels) > 20:
-                        p(f"   ... 还有 {len(models_with_labels) - 20} 个模型")
-                    p("   [0] 手动输入模型名称")
-                    
-                    model_choice = inp("\n请选择模型")
-                    
-                    if model_choice == "0":
-                        memory_model = inp("请输入模型名称")
-                        if not memory_model:
-                            pe("模型名称不能为空")
-                            continue
-                    else:
-                        try:
-                            midx = int(model_choice) - 1
-                            if 0 <= midx < len(models_with_labels):
-                                memory_model = models_with_labels[midx][0]
-                            else:
-                                memory_model = inp("请输入模型名称")
-                                if not memory_model:
-                                    pe("模型名称不能为空")
-                                    continue
-                        except (ValueError, IndexError):
-                            memory_model = inp("请输入模型名称")
-                            if not memory_model:
-                                pe("模型名称不能为空")
-                                continue
-                else:
-                    p("\n无法从API获取模型列表")
-                    memory_model = inp("请输入模型名称")
-                    if not memory_model:
-                        pe("模型名称不能为空")
-                        continue
-                
-                p(f"\n将使用记忆模型: {memory_model}")
-                
-                p("\n💾 保存配置...")
-                
-                if save_memory_llm_config(mem_provider, memory_model):
-                    ps("记忆系统 Provider 保存成功")
-                    ps(f"记忆系统模型保存成功: {memory_model}")
-                else:
-                    pe("保存 API-B / memory.llm 配置失败")
-                    continue
-
-                provider_defaults = memory_llm_provider_defaults(mem_provider)
-
-                mem_api_key_env = provider_defaults.get("api_key_env", "")
-                if mem_api_key_env:
-                    if provider_has_usable_credential(mem_provider, mem_api_key_env):
-                        ps(f"API-B 凭据已存在: {mem_api_key_env}")
-                    else:
-                        p(f"\nAPI-B 凭据未配置: {mem_api_key_env}")
-                        mem_api_key = inp(f"请输入 {mem_provider} API Key（留空跳过）")
-                        if mem_api_key:
-                            if save_env_value(mem_api_key_env, mem_api_key):
-                                ps(f"{mem_api_key_env} 保存成功")
-                            else:
-                                pe(f"保存 {mem_api_key_env} 失败")
-                        else:
-                            pi("已跳过 API-B key 保存；自主链路会显示 LLM 未启用")
-                
-                ph("配置完成")
-                ps("记忆系统模型配置完成！")
+                current_config = load_current_config()
+                ps(f"API-B 已选择 {provider_key} / {memory_model}")
                 break
         
         elif choice == "4":

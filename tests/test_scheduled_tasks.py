@@ -43,6 +43,7 @@ def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
         set_companion_active=lambda active: setattr(
             host, "_scheduled_companion_active", bool(active)
         ),
+        cancel_background_task=lambda _task_id, _reason: False,
         start_background_task=getattr(
             host,
             "_start_scheduled_execution_task",
@@ -123,6 +124,89 @@ def test_auto_mode_claim_skips_companion_work_but_keeps_user_schedule_runnable(t
 
     assert claim is not None
     assert claim["task"]["schedule_id"] == user_task["schedule_id"]
+
+
+def test_pause_and_cancel_release_queued_or_running_worker_task(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    queued = store.create(
+        {
+            "title": "排队员工任务",
+            "instruction": "执行",
+            "run_at": now.isoformat(),
+            "created_by": "api_b",
+            "requested_via": "companion_delegate",
+        },
+        now=now,
+    )
+    paused = store.cancel(queued["schedule_id"], pause=True, now=now)
+    assert paused["status"] == "paused"
+    assert paused["next_run_at"] is not None
+    assert store.claim_due(owner_session_id="cli", now=now) is None
+
+    running = store.create(
+        {
+            "title": "运行员工任务",
+            "instruction": "执行",
+            "run_at": now.isoformat(),
+            "created_by": "api_b",
+            "requested_via": "companion_delegate",
+        },
+        now=now,
+    )
+    claim = store.claim_due(owner_session_id="cli", now=now)
+    assert claim is not None and claim["task"]["schedule_id"] == running["schedule_id"]
+    cancelled = store.cancel(running["schedule_id"], now=now)
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["active_run_id"] is None
+    assert store.get(running["schedule_id"])["status"] == "cancelled"
+
+
+def test_background_task_state_cancel_interrupts_running_agent() -> None:
+    state = BackgroundTaskState()
+    interrupted = []
+
+    class Agent:
+        def interrupt(self, reason):
+            interrupted.append(reason)
+
+    state.register_agent("scheduled-run", Agent())
+
+    assert state.cancel("scheduled-run", "星子取消任务") is True
+    assert interrupted == ["星子取消任务"]
+
+
+@pytest.mark.asyncio
+async def test_companion_can_cancel_worker_using_task_id(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._scheduled_task_store.create(
+        {
+            "title": "卡住的员工任务",
+            "instruction": "执行",
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": "api_b",
+            "requested_via": "companion_delegate",
+            "worker_role": "general",
+        }
+    )
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "已取消",
+            "schedule_action": {
+                "action": "cancel",
+                "task_id": task["schedule_id"],
+            },
+            "execution_action": {"action": "none"},
+            "media_action": {"action": "none"},
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="取消刚才的员工任务")
+
+    assert result["schedule_action_result"]["ok"] is True
+    assert result["schedule_action_result"]["task"]["status"] == "cancelled"
 
 
 def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) -> None:

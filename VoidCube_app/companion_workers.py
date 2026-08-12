@@ -1,4 +1,4 @@
-"""Configuration and routing for API-B managed API-A worker roles."""
+"""Configuration and routing for API-B managed employee roles."""
 
 from __future__ import annotations
 
@@ -193,7 +193,7 @@ def resolve_companion_worker_route(
         route["runtime"] = base_runtime
 
     if not model:
-        raise ValueError(f"worker role '{role.role}' cannot resolve an API-A model")
+        raise ValueError(f"worker role '{role.role}' cannot resolve an employee model")
     route["model"] = model
     route["worker_role"] = role.role
     route["worker_label"] = role.label

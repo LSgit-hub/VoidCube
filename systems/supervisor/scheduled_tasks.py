@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
-TERMINAL_SCHEDULE_STATUSES = frozenset({"completed", "failed"})
+TERMINAL_SCHEDULE_STATUSES = frozenset({"completed", "failed", "cancelled"})
 INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset(
     {"companion_delegate", "companion_media", "provider_pool_test"}
 )
@@ -503,6 +503,38 @@ class ScheduledTaskStore:
             self._replace_task(connection, task)
             return dict(task)
 
+    def cancel(
+        self,
+        schedule_id: str,
+        *,
+        reason: str = "cancelled by user",
+        pause: bool = False,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Cancel a queued/running task and release its dispatch slot."""
+        current = (now or _utc_now()).astimezone(timezone.utc)
+        completed_at = _iso_utc(current)
+        with self._transaction() as connection:
+            task = self._task(connection, schedule_id)
+            run_id = str(task.get("active_run_id") or "").strip()
+            if run_id:
+                run = self._run(connection, run_id)
+                if run.get("status") == "running":
+                    connection.execute(
+                        "UPDATE scheduled_task_runs SET status = 'cancelled', error = ?, completed_at = ? "
+                        "WHERE run_id = ? AND status = 'running'",
+                        (str(reason or "cancelled by user")[:2000], completed_at, run_id),
+                    )
+            task["active_run_id"] = None
+            task["last_run_at"] = completed_at if run_id else task.get("last_run_at")
+            task["last_run_status"] = "cancelled" if run_id else task.get("last_run_status")
+            task["updated_at"] = completed_at
+            task["status"] = "paused" if pause else "cancelled"
+            if not pause:
+                task["next_run_at"] = None
+            self._replace_task(connection, task)
+            return dict(task)
+
     def delete(self, schedule_id: str) -> Dict[str, Any]:
         with self._transaction() as connection:
             task = self._task(connection, schedule_id)
@@ -881,6 +913,9 @@ class ScheduledTaskStore:
             if str(run.get("owner_session_id") or "") != owner:
                 raise ValueError("run belongs to another CLI session")
             if run.get("status") != "running":
+                if run.get("status") == "cancelled":
+                    task = self._task(connection, str(run.get("schedule_id") or ""))
+                    return {"task": task, "run": run}
                 if run.get("status") != expected_status:
                     raise ValueError("run is already finished with a different result")
                 try:
@@ -1066,7 +1101,13 @@ class ScheduledTaskRuntimeMixin:
     async def pause_scheduled_task(self, schedule_id: str) -> Dict[str, Any]:
         return {
             "status": "paused",
-            "task": self._scheduled_store_call("set_status", schedule_id, "paused"),
+            "task": self._scheduled_store_call("cancel", schedule_id, pause=True),
+        }
+
+    async def cancel_scheduled_task(self, schedule_id: str) -> Dict[str, Any]:
+        return {
+            "status": "cancelled",
+            "task": self._scheduled_store_call("cancel", schedule_id),
         }
 
     async def resume_scheduled_task(self, schedule_id: str) -> Dict[str, Any]:

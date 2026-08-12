@@ -7,14 +7,15 @@ from VoidCube_cli.api_config import (
     api_b_key_configured,
     api_config_summary,
     has_configured_api_key,
-    memory_llm_provider_defaults,
-    memory_llm_provider_options,
-    persist_api_a_config,
+    persist_api_a_selection,
     persist_api_b_config,
     persist_image_generation_config,
     persist_video_generation_config,
+    persist_provider_pool_entry,
     provider_credential_sources,
     provider_has_usable_credential,
+    provider_pool_api_key,
+    refresh_provider_pool_catalog,
     render_api_config_summary,
 )
 from VoidCube_cli.config import (
@@ -22,22 +23,6 @@ from VoidCube_cli.config import (
     get_active_model_config,
     set_provider_model,
 )
-
-
-def test_memory_llm_provider_defaults_uses_builtin_provider_fields():
-    defaults = memory_llm_provider_defaults("deepseek")
-
-    assert defaults["api_key_env"] == "DEEPSEEK_API_KEY"
-    assert defaults["base_url"] == "https://api.deepseek.com/v1"
-    assert defaults["provider_profile"] == "openai"
-
-
-def test_memory_llm_provider_defaults_does_not_read_user_chat_provider_entries():
-    defaults = memory_llm_provider_defaults("agnes-ai")
-
-    assert defaults["api_key_env"] == ""
-    assert defaults["base_url"] == ""
-    assert defaults["provider_profile"] == "openai"
 
 
 def test_has_configured_api_key_rejects_template_placeholder(monkeypatch):
@@ -68,7 +53,8 @@ def test_api_b_key_configured_uses_memory_llm_key_env(monkeypatch):
         {
             "provider": "deepseek",
             "api_key_env": "DEEPSEEK_API_KEY",
-        }
+        },
+        {"deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "auth_mode": "env"}},
     ) is True
 
 
@@ -81,22 +67,22 @@ def test_api_b_key_configured_uses_provider_default_key_env(monkeypatch):
 
     monkeypatch.setattr("VoidCube_cli.config.get_env_value", fake_get_env_value)
 
-    assert api_b_key_configured({"provider": "deepseek"}) is True
+    assert api_b_key_configured(
+        {"provider": "deepseek"},
+        {"deepseek": {"api_key_env": "DEEPSEEK_API_KEY", "auth_mode": "env"}},
+    ) is True
     assert seen == ["DEEPSEEK_API_KEY"]
 
 
-def test_api_b_key_configured_uses_matching_provider_auth_store(monkeypatch):
-    monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: "")
-    monkeypatch.setattr(
-        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
-        lambda provider: {"api_key": "sk-deepseek-auth-store-token-123456"},
-    )
-
+def test_api_b_key_configured_uses_shared_provider_stored_key():
     assert api_b_key_configured(
+        {"provider": "deepseek"},
         {
-            "provider": "deepseek",
-            "api_key_env": "DEEPSEEK_API_KEY",
-        }
+            "deepseek": {
+                "api_key": "sk-deepseek-provider-pool-token-123456",
+                "auth_mode": "stored",
+            }
+        },
     ) is True
 
 
@@ -144,7 +130,7 @@ def test_provider_credential_sources_reports_voidcube_env_without_secret(tmp_pat
     assert "sk-real" not in rendered
 
 
-def test_persist_api_a_config_does_not_touch_memory_llm():
+def test_persist_api_a_selection_does_not_touch_memory_llm():
     cfg = {
         "runtime": {"active_provider": "agnes-ai"},
         "providers": {
@@ -153,7 +139,11 @@ def test_persist_api_a_config_does_not_touch_memory_llm():
                 "selected_model": "agnes-2.0-flash",
                 "api_key": "sk-agnes-user-chat-token-123456",
                 "auth_mode": "stored",
-            }
+            },
+            "deepseek": {
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "auth_mode": "env",
+            },
         },
         "memory": {
             "provider": "mem",
@@ -166,15 +156,20 @@ def test_persist_api_a_config_does_not_touch_memory_llm():
         },
     }
 
-    updated = persist_api_a_config(
+    cfg = persist_provider_pool_entry(
         cfg,
         provider_key="openrouter",
         label="OpenRouter",
-        selected_model="deepseek/deepseek-chat",
+        model_catalog=["deepseek/deepseek-chat"],
         provider_type="openrouter",
         base_url="https://openrouter.ai/api/v1",
         api_key_env="OPENROUTER_API_KEY",
         auth_mode="env",
+    )
+    updated = persist_api_a_selection(
+        cfg,
+        provider="openrouter",
+        model="deepseek/deepseek-chat",
     )
 
     assert updated["runtime"]["active_provider"] == "openrouter"
@@ -183,18 +178,60 @@ def test_persist_api_a_config_does_not_touch_memory_llm():
     assert updated["memory"]["llm"]["model"] == "deepseek-v4-flash"
 
 
-def test_persist_api_a_config_normalizes_chat_completions_url():
-    updated = persist_api_a_config(
+def test_persist_provider_pool_entry_normalizes_chat_completions_url():
+    updated = persist_provider_pool_entry(
         {},
         provider_key="agnes-ai",
         label="Agnes-AI",
-        selected_model="agnes-2.5-flash",
+        model_catalog=["agnes-2.5-flash"],
         provider_type="custom",
         base_url="https://api.agnes-ai.cn/v1/chat/completions",
         api_key_env="OPENAI_API_KEY",
     )
 
     assert updated["providers"]["agnes-ai"]["base_url"] == "https://api.agnes-ai.cn/v1"
+
+
+def test_refresh_provider_pool_catalog_uses_existing_env_key(monkeypatch):
+    cfg = {
+        "providers": {
+            "agnes-ai": {
+                "label": "Agnes-AI",
+                "base_url": "https://api.agnes-ai.cn/v1",
+                "api_key_env": "AGNES_API_KEY",
+                "auth_mode": "env",
+                "selected_model": "old-model",
+            }
+        }
+    }
+    monkeypatch.setattr(
+        "VoidCube_app.config.get_env_value",
+        lambda key: "sk-agnes-provider-token-123456" if key == "AGNES_API_KEY" else "",
+    )
+    seen = {}
+
+    def fake_models(provider, *, api_key="", base_url=""):
+        seen.update(provider=provider, api_key=api_key, base_url=base_url)
+        return [("agnes-2.5-pro", ""), ("agnes-2.5-flash", "")]
+
+    monkeypatch.setattr("VoidCube_cli.api_config.get_provider_models_from_api", fake_models)
+
+    updated, models = refresh_provider_pool_catalog(cfg, "agnes-ai")
+
+    assert models == ["agnes-2.5-pro", "agnes-2.5-flash"]
+    assert seen == {
+        "provider": "agnes-ai",
+        "api_key": "sk-agnes-provider-token-123456",
+        "base_url": "https://api.agnes-ai.cn/v1",
+    }
+    assert updated["providers"]["agnes-ai"]["selected_model"] == "agnes-2.5-pro"
+    assert updated["providers"]["agnes-ai"]["model_catalog"]["models"] == models
+
+
+def test_provider_pool_api_key_accepts_stored_pool_key():
+    assert provider_pool_api_key(
+        {"api_key": "sk-stored-provider-token-123456", "auth_mode": "stored"}
+    ) == "sk-stored-provider-token-123456"
 
 
 def test_persist_api_b_config_does_not_touch_api_a_provider():
@@ -206,7 +243,11 @@ def test_persist_api_b_config_does_not_touch_api_a_provider():
                 "selected_model": "agnes-2.0-flash",
                 "api_key": "sk-agnes-user-chat-token-123456",
                 "auth_mode": "stored",
-            }
+            },
+            "deepseek": {
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "auth_mode": "env",
+            },
         },
         "memory": {"provider": "mem", "llm": {}},
     }
@@ -219,19 +260,20 @@ def test_persist_api_b_config_does_not_touch_api_a_provider():
 
     assert updated["runtime"]["active_provider"] == "agnes-ai"
     assert updated["providers"]["agnes-ai"]["selected_model"] == "agnes-2.0-flash"
-    assert updated["memory"]["llm"] == {
-        "provider": "deepseek",
-        "model": "deepseek-v4-flash",
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com/v1",
-        "provider_profile": "openai",
-    }
+    assert updated["memory"]["llm"] == {"provider": "deepseek", "model": "deepseek-v4-flash"}
 
 
 def test_persist_custom_api_b_config_is_isolated_and_normalizes_url():
     cfg = {
         "runtime": {"active_provider": "agnes-ai"},
-        "providers": {"agnes-ai": {"selected_model": "agnes-2.5-flash"}},
+        "providers": {
+            "agnes-ai": {"selected_model": "agnes-2.5-flash"},
+            "custom": {
+                "base_url": "https://memory.example/v1",
+                "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
+                "auth_mode": "env",
+            },
+        },
         "memory": {"provider": "mem", "llm": {}},
     }
 
@@ -239,20 +281,11 @@ def test_persist_custom_api_b_config_is_isolated_and_normalizes_url():
         cfg,
         provider="custom",
         model="memory-reasoner",
-        base_url="https://memory.example/v1/chat/completions",
-        api_key_env="VOIDCUBE_MEMORY_CUSTOM_API_KEY",
-        provider_profile="openai",
     )
 
     assert updated["runtime"] == cfg["runtime"]
     assert updated["providers"] == cfg["providers"]
-    assert updated["memory"]["llm"] == {
-        "provider": "custom",
-        "model": "memory-reasoner",
-        "api_key_env": "VOIDCUBE_MEMORY_CUSTOM_API_KEY",
-        "base_url": "https://memory.example/v1",
-        "provider_profile": "openai",
-    }
+    assert updated["memory"]["llm"] == {"provider": "custom", "model": "memory-reasoner"}
 
 
 def test_image_and_video_generation_config_updates_are_isolated():
@@ -297,18 +330,6 @@ def test_image_and_video_generation_config_updates_are_isolated():
     assert with_video["memory"] == original["memory"]
 
 
-@pytest.mark.parametrize("base_url", ["", "memory.example/v1"])
-def test_persist_custom_api_b_config_requires_endpoint_and_key_env(base_url):
-    with pytest.raises(ValueError, match=r"requires a valid http\(s\) base_url"):
-        persist_api_b_config(
-            {},
-            provider="custom",
-            model="memory-reasoner",
-            base_url=base_url,
-            api_key_env="VOIDCUBE_MEMORY_CUSTOM_API_KEY",
-        )
-
-
 def test_api_config_summary_redacts_secret_values(monkeypatch):
     monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: "")
     cfg = {
@@ -325,8 +346,6 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
             "llm": {
                 "provider": "deepseek",
                 "model": "deepseek-v4-flash",
-                "api_key_env": "DEEPSEEK_API_KEY",
-                "base_url": "https://api.deepseek.com/v1",
             }
         },
         "model": {"api_key": "sk-old-model-token-123456"},
@@ -355,18 +374,12 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
     assert "sk-" not in combined
     assert summary["api_a"]["provider"] == "agnes-ai"
     assert summary["api_b"]["provider"] == "deepseek"
-    assert summary["api_b"]["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert summary["api_b"]["api_key_env"] != "DEEPSEEK_API_KEY"
     assert summary["image_generation"]["model"] == "image-model"
     assert summary["video_generation"]["model"] == "video-model"
     assert "language_model" not in combined
     assert "multimodal" not in summary
     assert summary["retired_fields_present"] == ["model", "custom_providers"]
-
-
-def test_memory_llm_provider_options_only_lists_supported_mem_providers():
-    provider_ids = [provider for provider, _ in memory_llm_provider_options()]
-
-    assert provider_ids == ["openrouter", "deepseek", "openai", "ollama", "custom"]
 
 
 def test_normalized_runtime_config_drops_old_model_mirror_without_migration():

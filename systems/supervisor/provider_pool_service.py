@@ -35,7 +35,6 @@ _PROVIDER_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _ALLOWED_PROVIDER_TYPES = frozenset(PROVIDER_REGISTRY) | {"openai_compatible"}
 
-
 class ProviderPoolConflictError(ValueError):
     """Raised when a Provider is still referenced by active configuration."""
 
