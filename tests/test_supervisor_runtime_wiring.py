@@ -828,6 +828,13 @@ def test_supervisor_room_frontend_manages_provider_pool_and_worker_assignments()
     assert "encodeURIComponent(selectedProviderKey) + '/test'" in UI_HTML
     assert "encodeURIComponent(selectedProviderKey) + '/models'" in UI_HTML
     assert "provider.model_catalog" in UI_HTML
+    assert "autoRefreshProviderModelCatalog" in UI_HTML
+    assert "workerModelCatalogRefreshes" in UI_HTML
+    assert "workerModelCandidates[providerKey]" in UI_HTML
+    assert "'<span class=\"provider-list-name\">' + esc(provider.key)" in UI_HTML
+    assert "esc(item.key) + ((item.label && item.label !== item.key)" in UI_HTML
+    assert "label: els.providerLabel.value.trim() || key" in UI_HTML
+    assert "els.providerLabel.value.trim()) els.providerLabel.value = preset.label" not in UI_HTML
     assert "api_key: els.providerApiKey.value" in UI_HTML
     assert "provider.credential_configured" in UI_HTML
 

@@ -4172,8 +4172,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <select id="providerType" name="provider_type"></select>
                 </label>
                 <label class="provider-field wide">
-                  <span>名称</span>
-                  <input id="providerLabel" name="provider_label" required maxlength="80" autocomplete="off"/>
+                  <span>名称（可选）</span>
+                  <input id="providerLabel" name="provider_label" maxlength="80" autocomplete="off"/>
                 </label>
                 <label class="provider-field wide">
                   <span>API 地址</span>
@@ -7082,6 +7082,7 @@ let providerPoolSnapshot = null;
 let providerPoolBusy = false;
 let selectedProviderKey = '';
 let workerModelCandidates = {};
+const workerModelCatalogRefreshes = new Set();
 let workerTestHistory = {tests: [], provider_health: []};
 let workerSchedulerSnapshot = {active_count: 0, queued_count: 0, roles: [], providers: []};
 let workerSchedulerLoading = false;
@@ -7211,8 +7212,11 @@ function workerModelOptionMarkup(providerKey, currentModel) {
     const normalized = String(value || '').trim();
     if (normalized && !values.includes(normalized)) values.push(normalized);
   };
-  add(provider && provider.selected_model);
-  (Array.isArray(workerModelCandidates[providerKey]) ? workerModelCandidates[providerKey] : []).forEach(add);
+  const catalogModels = Array.isArray(workerModelCandidates[providerKey])
+    ? workerModelCandidates[providerKey] : [];
+  catalogModels.forEach(add);
+  // A Provider default is only a fallback while its live catalog is empty.
+  if (!catalogModels.length) add(provider && provider.selected_model);
   add(selected);
   return '<option value=""' + (selected ? '' : ' selected') + '>使用 Provider 默认模型</option>' + values.map(model =>
     '<option value="' + escAttr(model) + '"' + (model === selected ? ' selected' : '') + '>' + esc(model) + '</option>'
@@ -7228,6 +7232,31 @@ function syncWorkerModelOptions(row, preferredModel) {
   select.innerHTML = workerModelOptionMarkup(provider.value, current);
   const values = $$('option', select).map(option => option.value);
   select.value = values.includes(current) ? current : '';
+}
+
+function autoRefreshProviderModelCatalog(providerKey) {
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  const provider = providers.find(item => item.key === providerKey) || null;
+  if (!provider || providerModelCatalog(provider).models.length || workerModelCatalogRefreshes.has(providerKey)) return;
+  workerModelCatalogRefreshes.add(providerKey);
+  fetch('/provider-pool/providers/' + encodeURIComponent(providerKey) + '/models', {method: 'POST'})
+    .then(async response => {
+      if (!response.ok) throw await responseError(response, '读取模型失败');
+      return response.json();
+    })
+    .then(result => {
+      const models = Array.isArray(result.models) ? result.models : [];
+      provider.model_catalog = {models, updated_at: String(result.updated_at || '')};
+      workerModelCandidates[providerKey] = models;
+      renderWorkerAssignments();
+      if (selectedProviderKey === providerKey) {
+        renderProviderModelOptions(models);
+        renderProviderModelCatalogMeta(provider);
+      }
+    })
+    .catch(() => {})
+    .finally(() => workerModelCatalogRefreshes.delete(providerKey));
 }
 
 function renderProviderList() {
@@ -7254,8 +7283,9 @@ function renderProviderList() {
       (provider.key === selectedProviderKey ? ' active' : '') +
       '" type="button" data-provider-key="' + escAttr(provider.key) + '">' +
       '<span class="provider-list-state' + (ready ? ' ready' : '') + '"></span>' +
-      '<span class="provider-list-name">' + esc(provider.label || provider.key) + '</span>' +
-      '<span class="provider-list-meta">' + esc(meta) +
+      '<span class="provider-list-name">' + esc(provider.key) + '</span>' +
+      '<span class="provider-list-meta">' +
+      ((provider.label && provider.label !== provider.key) ? esc(provider.label) + ' · ' : '') + esc(meta) +
       (healthText ? '<span class="provider-list-health">' + esc(healthText) + '</span>' : '') + esc(occupancyText) +
       '</span></button>';
   }).join('');
@@ -7291,7 +7321,6 @@ function renderProviderRuntimeMetrics(provider) {
 function applyProviderPreset() {
   const preset = providerPreset(els.providerType ? els.providerType.value : '');
   if (!preset) return;
-  if (els.providerLabel && !els.providerLabel.value.trim()) els.providerLabel.value = preset.label || '';
   if (els.providerBaseUrl) els.providerBaseUrl.value = preset.base_url || '';
   if (els.providerAuthMode) els.providerAuthMode.value = preset.auth_mode || 'env';
   if (els.providerApiKeyEnv) els.providerApiKeyEnv.value = preset.api_key_env || '';
@@ -7334,6 +7363,7 @@ function editProvider(providerKey) {
   syncProviderAuthFields();
   renderProviderList();
   setProviderPoolBusy(providerPoolBusy);
+  autoRefreshProviderModelCatalog(selectedProviderKey);
 }
 
 function renderWorkerAssignments() {
@@ -7344,7 +7374,7 @@ function renderWorkerAssignments() {
   const providerOptions = provider =>
     '<option value="">继承 API-A</option>' + providers.map(item =>
       '<option value="' + escAttr(item.key) + '"' + (item.key === provider ? ' selected' : '') + '>' +
-      esc(item.label || item.key) + '</option>'
+      esc(item.key) + ((item.label && item.label !== item.key) ? ' · ' + esc(item.label) : '') + '</option>'
     ).join('');
   els.workerRoleList.innerHTML = roles.map(role => {
     const selectedToolsets = new Set(Array.isArray(role.toolsets) ? role.toolsets : []);
@@ -7609,6 +7639,7 @@ function applyProviderPoolSnapshot(snapshot, preferredKey) {
   providerPoolSnapshot = snapshot || {};
   const providers = Array.isArray(providerPoolSnapshot.providers) ? providerPoolSnapshot.providers : [];
   hydrateWorkerModelCandidates(providers);
+  providers.forEach(provider => autoRefreshProviderModelCatalog(provider.key));
   if (els.workerMaxConcurrent) els.workerMaxConcurrent.value = String(providerPoolSnapshot.max_concurrent || 4);
   const candidate = preferredKey || selectedProviderKey;
   const selected = providers.some(item => item.key === candidate)
@@ -7616,6 +7647,7 @@ function applyProviderPoolSnapshot(snapshot, preferredKey) {
   renderWorkerAssignments();
   editProvider(selected);
   setProviderPoolBusy(false);
+  autoRefreshProviderModelCatalog(selected);
   setProviderPoolStatus(providerPoolSnapshot.managed ? '托管配置，只读' : '');
 }
 
@@ -7644,7 +7676,7 @@ async function saveProviderPoolEntry() {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        label: els.providerLabel.value.trim(),
+        label: els.providerLabel.value.trim() || key,
         type: els.providerType.value,
         base_url: els.providerBaseUrl.value.trim(),
         selected_model: els.providerModel.value.trim(),
