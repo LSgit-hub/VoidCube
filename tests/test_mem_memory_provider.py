@@ -67,6 +67,30 @@ def test_mem_provider_remember_uses_canonical_service(monkeypatch):
 
 
 @pytest.mark.unit
+def test_mem_provider_forwards_explicit_supersession(monkeypatch):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    calls = []
+    monkeypatch.setattr(
+        provider,
+        "_request_json",
+        lambda method, path, payload=None: calls.append((method, path, payload)) or {},
+    )
+
+    provider.handle_tool_call(
+        "mem_remember",
+        {
+            "title": "Current diagnosis",
+            "summary": "The repair is verified.",
+            "evidence_refs": ["turn:new"],
+            "supersedes_memory_ids": ["durable-old"],
+        },
+    )
+
+    assert calls[0][2]["supersedes_memory_ids"] == ["durable-old"]
+
+
+@pytest.mark.unit
 def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
     provider = MemMemoryProvider()
     provider._initialized = True
@@ -162,6 +186,28 @@ def test_mem_provider_writes_explicit_session_and_deduplicated_turn_pair(monkeyp
             },
         )
     ]
+
+
+@pytest.mark.unit
+def test_mem_provider_timeline_only_filters_an_explicit_session(monkeypatch):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._session_id = "current-session"
+    calls = []
+    monkeypatch.setattr(
+        provider,
+        "_request_json",
+        lambda method, path, payload=None: calls.append((method, path, payload)) or {},
+    )
+
+    provider.handle_tool_call("mem_timeline", {"date": "2026-08-05"})
+    provider.handle_tool_call(
+        "mem_timeline",
+        {"date": "2026-08-05", "session_id": "chosen-session"},
+    )
+
+    assert "session_id" not in calls[0][2]
+    assert calls[1][2]["session_id"] == "chosen-session"
 
 
 @pytest.mark.unit
@@ -306,21 +352,21 @@ def test_mem_provider_reports_service_unavailable_without_local_fallback(monkeyp
 
 
 @pytest.mark.unit
-def test_mem_provider_makes_empty_recall_explicit(monkeypatch):
+def test_mem_provider_makes_recall_miss_explicit(monkeypatch):
     provider = MemMemoryProvider()
     provider._initialized = True
     monkeypatch.setattr(
         provider,
         "_request_json",
         lambda *args, **kwargs: {
-            "trace_id": "trace-empty",
-            "recall_status": "empty",
+            "trace_id": "trace-miss",
+            "recall_status": "miss",
             "context": "",
         },
     )
 
     assert provider.prefetch("unmatched") == (
-        "Memory recall status: empty (trace_id=trace-empty). "
+        "Memory recall status: miss (trace_id=trace-miss). "
         "No recalled evidence matched this turn.\n"
         "This status only describes evidence retrieval for the current turn. "
         "Do not infer or claim that no prior memory was ever saved."
@@ -366,7 +412,7 @@ def test_mem_provider_identity_empty_is_retrieval_uncertainty_not_memory_absence
         "_request_json",
         lambda *args, **kwargs: {
             "trace_id": "trace-identity-empty",
-            "recall_status": "empty",
+            "recall_status": "miss",
             "query_plan": {"intent": "identity"},
             "context": "",
         },

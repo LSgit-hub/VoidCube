@@ -29,9 +29,8 @@ logger = logging.getLogger(__name__)
 EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 
 def _calibrate_local_similarity(raw_similarity: float) -> float:
-    """Map sparse local cosine scores without linearly promoting weak noise."""
-    positive = max(0.0, float(raw_similarity))
-    return min(1.0, 20.0 * positive * positive)
+    """Map collision-free local feature overlap to the shared recall scale."""
+    return min(1.0, 10.0 * max(0.0, float(raw_similarity)))
 
 _VEC0_TABLE = "memory_embeddings_vec"
 _vec0_load_attempted = False
@@ -331,6 +330,14 @@ class SemanticMemoryIndex:
         if not self.enabled or not str(query or "").strip():
             return {}
         try:
+            if self._local_fallback:
+                return self._search_local_exact(
+                    str(query),
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    source_domains=source_domains,
+                    limit=limit,
+                )
             query_vector = self._embed([str(query)])[0]
             self._validate_vector(query_vector)
             bounded_limit = max(1, min(int(limit), 500))
@@ -394,6 +401,75 @@ class SemanticMemoryIndex:
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             return {}
+
+    def _search_local_exact(
+        self,
+        query: str,
+        *,
+        owner_id: str,
+        workspace_id: str,
+        source_domains: Sequence[str],
+        limit: int,
+    ) -> dict[tuple[str, str], float]:
+        from systems.memory.local_embedding import CharNgramEmbedder
+
+        domains = tuple(dict.fromkeys(str(item) for item in source_domains))
+        if not domains:
+            return {}
+        placeholders = ",".join("?" for _ in domains)
+        scope_params = (
+            owner_id,
+            workspace_id,
+            GLOBAL_SCOPE_ID,
+            GLOBAL_SCOPE_ID,
+            *domains,
+        )
+        conn = open_memory_sqlite(self.db_path)
+        try:
+            rows = conn.execute(
+                "WITH source_records(source_type, memory_id, owner_id, workspace_id, "
+                "memory_domain, content) AS ("
+                "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, text "
+                "FROM turns WHERE compressed_to_tier2 = 0 "
+                "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, "
+                "memory_domain, COALESCE(original_text, text_summary, '') "
+                "FROM turns_archive "
+                "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, "
+                "memory_domain, COALESCE(title, '') || ' ' || COALESCE(summary, '') || "
+                "' ' || COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
+                "FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                "AND COALESCE(identity_layer, '') != 'founding' "
+                "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, "
+                "memory_domain, COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || "
+                "' ' || COALESCE(value, '') || ' ' || COALESCE(summary, '') "
+                "FROM profile_memories WHERE status = 'active') "
+                "SELECT source_type, memory_id, content FROM source_records "
+                "WHERE ((owner_id = ? AND workspace_id = ?) OR "
+                "(owner_id = ? AND workspace_id = ?)) "
+                f"AND memory_domain IN ({placeholders})",
+                scope_params,
+            ).fetchall()
+        finally:
+            conn.close()
+        ranked = sorted(
+            (
+                (
+                    (str(source_type), str(memory_id)),
+                    _calibrate_local_similarity(
+                        CharNgramEmbedder.exact_similarity(query, str(content or ""))
+                    ),
+                )
+                for source_type, memory_id, content in rows
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        self._last_error = ""
+        return {
+            key: round(score, 6)
+            for key, score in ranked[: max(1, min(int(limit), 500))]
+            if score > 0.0
+        }
 
     def _search_vec0(
         self,

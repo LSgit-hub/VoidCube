@@ -18,6 +18,7 @@ from systems.memory.memory_service import (
     RecallFeedbackCreate,
     RecallRequest,
     SessionCreate,
+    TimelineQuery,
     TurnCreate,
     TurnPairCreate,
 )
@@ -167,6 +168,64 @@ def test_multilingual_plan_extracts_concepts_instead_of_only_the_whole_sentence(
     assert "决定" in plan.terms
     assert plan.recency_intent is True
     assert normalize_text(plan.query) == plan.normalized_query
+
+
+@pytest.mark.asyncio
+async def test_timeline_queries_all_sessions_and_includes_fractional_day_end(tmp_path):
+    service = _service(tmp_path)
+    for turn_id, session_id, stamp in (
+        ("first", "session-a", datetime.fromisoformat("2026-08-05T09:00:00+08:00")),
+        ("last", "session-b", datetime.fromisoformat("2026-08-05T23:59:59.999999+08:00")),
+        ("next", "session-c", datetime.fromisoformat("2026-08-06T00:00:00+08:00")),
+    ):
+        _insert_turn(
+            service,
+            turn_id=turn_id,
+            session_id=session_id,
+            text=turn_id,
+            timestamp=stamp,
+        )
+
+    result = await service.timeline_view(TimelineQuery(date="2026-08-05"))
+    filtered = await service.timeline_view(
+        TimelineQuery(date="2026-08-05", session_id="session-b")
+    )
+
+    assert [turn["turn_id"] for turn in result["turns"]] == ["first", "last"]
+    assert [turn["turn_id"] for turn in filtered["turns"]] == ["last"]
+
+
+def test_recall_deduplicates_text_that_mostly_contains_another_result(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="short",
+        session_id="session-a",
+        text="请你再次检查一下自己的记忆系统看看它是否存在问题？",
+        timestamp=now,
+    )
+    _insert_turn(
+        service,
+        turn_id="long",
+        session_id="session-b",
+        text="我在修理记忆系统请你再次检查一下自己的记忆系统看看它是否存在问题给我提供参考",
+        timestamp=now - timedelta(minutes=10),
+    )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        from systems.memory.recall import recall_memories
+
+        result = recall_memories(
+            conn,
+            build_recall_plan("检查记忆系统是否存在问题"),
+            min_score=0.0,
+        )
+    finally:
+        conn.close()
+
+    assert result["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -524,6 +583,81 @@ async def test_explicit_durable_memory_is_idempotent_and_recallable(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_explicit_durable_memory_supersedes_old_conclusion(tmp_path):
+    service = _service(tmp_path)
+    old = await service.remember(
+        DurableMemoryCreate(
+            title="Memory diagnosis",
+            summary="The service is still failing.",
+            evidence_refs=["turn:old"],
+            event_kind="blocker",
+        )
+    )
+    old_id = old["memory"]["memory_id"]
+
+    new = await service.remember(
+        DurableMemoryCreate(
+            title="Memory diagnosis repaired",
+            summary="The service repair is verified.",
+            evidence_refs=["turn:new"],
+            event_kind="completion",
+            supersedes_memory_ids=[old_id],
+        )
+    )
+    retried = await service.remember(
+        DurableMemoryCreate(
+            title="Memory diagnosis repaired",
+            summary="The service repair is verified.",
+            evidence_refs=["turn:new"],
+            event_kind="completion",
+            supersedes_memory_ids=[old_id],
+        )
+    )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        old_status = conn.execute(
+            "SELECT status, superseded_by FROM compressed_memories WHERE memory_id = ?",
+            (old_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    recalled = await service.recall(
+        RecallRequest(query="memory diagnosis service", include_tier1=False)
+    )
+
+    assert old_status == ("superseded", new["memory"]["memory_id"])
+    assert retried["memory"]["memory_id"] == new["memory"]["memory_id"]
+    assert [item["id"] for item in recalled["results"]] == [
+        new["memory"]["memory_id"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_supersession_rejects_missing_or_out_of_scope_memory(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(HTTPException, match="must be active in the same scope"):
+        await service.remember(
+            DurableMemoryCreate(
+                title="Unsupported replacement",
+                summary="This must not create a broken version chain.",
+                supersedes_memory_ids=["missing-memory"],
+            )
+        )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM compressed_memories "
+            "WHERE title = 'Unsupported replacement'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
+
+
+@pytest.mark.asyncio
 async def test_recall_enforces_full_context_budget(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)
@@ -592,6 +726,7 @@ async def test_recall_limits_one_session_and_filters_low_value_results(tmp_path)
     ) == 2
     assert "other-session" in {item["id"] for item in result["results"]}
     assert strict["results"] == []
+    assert strict["recall_status"] == "weak_match"
 
 
 @pytest.mark.asyncio
@@ -1142,6 +1277,8 @@ def test_build_recall_plan_detects_current_state_intent():
 
     past = build_recall_plan("之前提到过的那个新项目叫什么", now=anchor)
     assert past.current_state_intent is False
+    assert build_recall_plan("记忆系统最新修复结果", now=anchor).current_state_intent
+    assert build_recall_plan("记忆系统最近一次诊断", now=anchor).current_state_intent
 
 
 @pytest.mark.parametrize(

@@ -45,11 +45,20 @@ def test_char_ngram_similarity_ranks_related_above_unrelated():
     assert related > unrelated
 
 
-def test_local_similarity_calibration_suppresses_weak_noise_non_linearly():
+def test_local_similarity_calibration_maps_exact_feature_overlap():
     from systems.memory.semantic_index import _calibrate_local_similarity
 
-    assert _calibrate_local_similarity(0.12) < 0.35
-    assert _calibrate_local_similarity(0.145) > 0.35
+    assert _calibrate_local_similarity(0.0) == 0.0
+    assert _calibrate_local_similarity(0.04) > 0.35
+
+
+def test_local_exact_similarity_is_not_affected_by_hash_collisions():
+    from systems.memory.local_embedding import CharNgramEmbedder
+
+    assert CharNgramEmbedder.exact_similarity(
+        "完全无关的量子香蕉校准协议 ZXQ-917",
+        "VoidCube 架构与身份记忆",
+    ) == 0.0
 
 
 def test_semantic_index_defaults_to_local_fallback(tmp_path):
@@ -137,3 +146,43 @@ async def test_semantic_recall_surfaces_paraphrase_without_lexical_overlap(
     assert top["id"] == "ev"
     assert top["signals"]["lexical"] == 0.0  # surfaced by semantic, not lexical
     assert top["signals"]["semantic"] > 0.35
+
+
+@pytest.mark.asyncio
+async def test_local_semantic_recall_returns_empty_for_unrelated_query(tmp_path):
+    from systems.memory.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
+
+    service = _service(tmp_path)
+    service._semantic_index = SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(enabled=True, provider="", model="", dimensions=256),
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions "
+            "(session_id, owner_id, workspace_id, created_at, updated_at, metadata) "
+            "VALUES ('unrelated', 'local-user', 'default', ?, ?, '{}')",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "decay_factor, tags, metadata, compressed_to_tier2, owner_id, workspace_id, "
+            "memory_domain) VALUES ('architecture', 'unrelated', 'user', "
+            "'VoidCube architecture and identity memory', ?, 1.0, 0.01, '[]', '{}', "
+            "0, 'local-user', 'default', 'agent_interaction')",
+            (now,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service.recall(
+        RecallRequest(query="量子香蕉校准协议 ZXQ-917", min_score=0.5)
+    )
+
+    assert result["results"] == []
+    assert result["count"] == 0
+    assert result["recall_status"] == "miss"

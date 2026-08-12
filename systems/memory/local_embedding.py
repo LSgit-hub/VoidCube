@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections import Counter
 from typing import Sequence
 
 _CJK_RE = re.compile(r"[㐀-䶿一-鿿]+")
@@ -37,15 +38,7 @@ class CharNgramEmbedder:
 
     def _embed_one(self, text: str) -> list[float]:
         vector = [0.0] * self.dimensions
-        normalized = str(text or "").lower()
-        tokens: list[str] = []
-        tokens.extend(_LATIN_RE.findall(normalized))
-        for run in _CJK_RE.findall(normalized):
-            tokens.append(run)
-            for size in (2, 3):
-                for index in range(len(run) - size + 1):
-                    tokens.append(run[index : index + size])
-        for token in tokens:
+        for token in _tokens(text):
             if not token:
                 continue
             digest = hashlib.blake2b(token.encode("utf-8"), digest_size=4).digest()
@@ -55,3 +48,31 @@ class CharNgramEmbedder:
         if magnitude > 0:
             return [value / magnitude for value in vector]
         return vector
+
+    @staticmethod
+    def exact_similarity(left: str, right: str) -> float:
+        """Return collision-free cosine similarity over the local features."""
+        left_features = Counter(_tokens(left))
+        right_features = Counter(_tokens(right))
+        if not left_features or not right_features:
+            return 0.0
+        dot = sum(
+            count * right_features.get(token, 0)
+            for token, count in left_features.items()
+        )
+        left_magnitude = math.sqrt(sum(count * count for count in left_features.values()))
+        right_magnitude = math.sqrt(sum(count * count for count in right_features.values()))
+        return dot / (left_magnitude * right_magnitude)
+
+
+def _tokens(text: str) -> list[str]:
+    normalized = str(text or "").lower()
+    tokens = list(_LATIN_RE.findall(normalized))
+    for run in _CJK_RE.findall(normalized):
+        tokens.append(run)
+        for size in (2, 3):
+            tokens.extend(
+                run[index : index + size]
+                for index in range(len(run) - size + 1)
+            )
+    return tokens

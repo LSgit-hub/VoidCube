@@ -47,6 +47,8 @@ _IMMEDIATE_RECENCY_MARKERS = ("刚才", "刚刚", "方才")
 # For these, recency matters more than for historical/past queries, because the
 # latest statement about a topic supersedes older ones (knowledge updates).
 _CURRENT_STATE_MARKERS = (
+    "最新",
+    "最近一次",
     "现在",
     "目前",
     "当前",
@@ -1609,7 +1611,11 @@ def _deduplicate_and_rank(
         if not fingerprint or fingerprint in seen:
             continue
         shingles = _text_shingles(fingerprint)
-        if any(_jaccard(shingles, previous) >= 0.88 for previous in seen_shingles):
+        if any(
+            _jaccard(shingles, previous) >= 0.88
+            or _overlap_coefficient(shingles, previous) >= 0.92
+            for previous in seen_shingles
+        ):
             continue
         session_id = str(item.get("session_id") or "")
         if session_id and per_session.get(session_id, 0) >= per_session_limit:
@@ -1681,6 +1687,12 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _overlap_coefficient(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
 
 
 def _record_tier2_accesses(

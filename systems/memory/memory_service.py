@@ -7,7 +7,7 @@ import os
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
@@ -185,7 +185,7 @@ class TurnResponse(BaseModel):
 
 
 class TimelineQuery(BaseModel):
-    date: str  # ISO date e.g. "2026-06-24"
+    date: date
     session_id: Optional[str] = None
     speaker: Optional[str] = None
     limit: int = 100
@@ -284,6 +284,7 @@ class DurableMemoryCreate(BaseModel):
     topics: List[str] = Field(default_factory=list, max_length=30)
     entities: List[str] = Field(default_factory=list, max_length=30)
     evidence_refs: List[str] = Field(default_factory=list, max_length=50)
+    supersedes_memory_ids: List[str] = Field(default_factory=list, max_length=50)
     event_kind: str = Field(default="decision", min_length=1, max_length=50)
     importance: float = Field(default=0.8, ge=0.0, le=1.0)
     source_actor: str = Field(default="agent", min_length=1, max_length=100)
@@ -2518,10 +2519,11 @@ class MemoryApplicationService:
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains
         )
-        date_start = f"{request.date}T00:00:00"
-        date_end = f"{request.date}T23:59:59"
+        requested_date = request.date.isoformat()
+        date_start = f"{requested_date}T00:00:00"
+        date_end = f"{(request.date + timedelta(days=1)).isoformat()}T00:00:00"
         sql = "SELECT turn_id, session_id, speaker, text, timestamp FROM turns " \
-              "WHERE timestamp >= ? AND timestamp <= ? " \
+              "WHERE timestamp >= ? AND timestamp < ? " \
               "AND owner_id = ? AND workspace_id = ?"
         placeholders = ",".join("?" for _ in source_domains)
         sql += f" AND memory_domain IN ({placeholders})"
@@ -2539,7 +2541,7 @@ class MemoryApplicationService:
         rows = conn.execute(sql, params).fetchall()
         conn.close()
         return {
-            "date": request.date,
+            "date": requested_date,
             "turns": [
                 {
                     "turn_id": r[0], "session_id": r[1], "speaker": r[2],
@@ -3075,7 +3077,15 @@ class MemoryApplicationService:
                 )
             payload["context"] = format_recall_context(payload["results"])
             payload["trace_id"] = trace_id
-            payload["recall_status"] = "hit" if payload["count"] else "empty"
+            payload["recall_status"] = (
+                "hit"
+                if payload["count"]
+                else (
+                    "weak_match"
+                    if int(payload.get("candidate_count") or 0) > 0
+                    else "miss"
+                )
+            )
             payload["request_source"] = request.request_source
             payload["source_domains"] = list(source_domains)
             self._last_recall_count = int(payload["count"])
@@ -3096,7 +3106,11 @@ class MemoryApplicationService:
             self._last_recall_status = (
                 "failure"
                 if failure is not None
-                else ("hit" if payload and payload.get("count") else "empty")
+                else (
+                    str(payload.get("recall_status"))
+                    if payload
+                    else "miss"
+                )
             )
             self._persist_recall_trace(
                 trace_id=trace_id,
@@ -3598,6 +3612,12 @@ class MemoryApplicationService:
             dict.fromkeys(str(item).strip() for item in request.evidence_refs)
         )
         evidence_refs = [item for item in evidence_refs if item]
+        supersedes_memory_ids = list(
+            dict.fromkeys(
+                str(item).strip() for item in request.supersedes_memory_ids
+            )
+        )
+        supersedes_memory_ids = [item for item in supersedes_memory_ids if item]
         topics = list(dict.fromkeys(_redact_for_memory_storage(request.topics)))
         entities = list(dict.fromkeys(_redact_for_memory_storage(request.entities)))
         identity = json.dumps(
@@ -3605,6 +3625,7 @@ class MemoryApplicationService:
                 "title": title,
                 "summary": summary,
                 "evidence_refs": evidence_refs,
+                "supersedes_memory_ids": supersedes_memory_ids,
                 "source_actor": request.source_actor.strip(),
                 "owner_id": scope.owner_id,
                 "workspace_id": scope.workspace_id,
@@ -3623,6 +3644,35 @@ class MemoryApplicationService:
         ]
         conn = open_memory_sqlite(self._db_path)
         try:
+            if supersedes_memory_ids:
+                placeholders = ",".join("?" for _ in supersedes_memory_ids)
+                rows = conn.execute(
+                    "SELECT memory_id, status, superseded_by FROM compressed_memories "
+                    f"WHERE memory_id IN ({placeholders}) "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (
+                        *supersedes_memory_ids,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                    ),
+                ).fetchall()
+                valid = {
+                    str(row[0])
+                    for row in rows
+                    if str(row[1]) == "active" or str(row[2] or "") == memory_id
+                }
+                missing = [
+                    target_id
+                    for target_id in supersedes_memory_ids
+                    if target_id not in valid
+                ]
+                if missing:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Superseded memories must be active in the same scope: "
+                        + ", ".join(missing),
+                    )
             conn.execute(
                 "INSERT INTO compressed_memories "
                 "(memory_id, memory_domain, memory_type, title, summary, timespan_start, timespan_end, "
@@ -3658,6 +3708,20 @@ class MemoryApplicationService:
                     now,
                 ),
             )
+            if supersedes_memory_ids:
+                conn.execute(
+                    "UPDATE compressed_memories SET status = 'superseded', "
+                    "superseded_by = ?, weight = weight * 0.3 "
+                    f"WHERE memory_id IN ({placeholders}) AND owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ? AND status = 'active'",
+                    (
+                        memory_id,
+                        *supersedes_memory_ids,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                    ),
+                )
             from systems.memory.entity_graph import update_entity_graph
 
             update_entity_graph(
@@ -3676,6 +3740,9 @@ class MemoryApplicationService:
                 "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
                 (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
             ).fetchone()
+        except HTTPException:
+            conn.rollback()
+            raise
         finally:
             conn.close()
         self._semantic_wake.set()

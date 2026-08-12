@@ -141,8 +141,8 @@ class MemMemoryProvider(MemoryProvider):
             "explicit durable fact, preference, decision, or verified outcome. "
             "Use mem_feedback for explicit relevance or correctness feedback. "
             "Use mem_forget only after the user explicitly requests permanent deletion. "
-            "Treat empty or unavailable results as an explicit lack of recalled "
-            "evidence."
+            "Treat miss, weak_match, or unavailable results as an explicit lack "
+            "of recalled evidence."
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
@@ -206,6 +206,13 @@ class MemMemoryProvider(MemoryProvider):
                         "evidence_refs": {
                             "type": "array",
                             "items": {"type": "string"},
+                        },
+                        "supersedes_memory_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Existing durable memory IDs replaced by this conclusion."
+                            ),
                         },
                         "event_kind": {
                             "type": "string",
@@ -293,11 +300,12 @@ class MemMemoryProvider(MemoryProvider):
             elif tool_name == "mem_timeline":
                 params = {
                     "date": args.get("date"),
-                    "session_id": args.get("session_id") or self._session_id,
-                    "speaker": args.get("speaker"),
                     "limit": args.get("limit", 100),
                     **self._scope_payload(),
                 }
+                for key in ("session_id", "speaker"):
+                    if args.get(key) not in (None, ""):
+                        params[key] = args[key]
                 result = self._request_json("POST", "/turns/timeline", params)
             elif tool_name == "mem_remember":
                 payload = {
@@ -308,6 +316,7 @@ class MemMemoryProvider(MemoryProvider):
                         "topics",
                         "entities",
                         "evidence_refs",
+                        "supersedes_memory_ids",
                         "event_kind",
                         "importance",
                     )
@@ -378,7 +387,7 @@ class MemMemoryProvider(MemoryProvider):
             )
 
         trace_id = str(result.get("trace_id") or "unknown")
-        status = str(result.get("recall_status") or "empty")
+        status = str(result.get("recall_status") or "miss")
         context = str(result.get("context") or "").strip()
         query_plan = result.get("query_plan") or {}
         identity_recall = (
