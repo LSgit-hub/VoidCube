@@ -16,6 +16,7 @@ import tools.model_tools as model_tools
 assert registry.list_tools() == []
 names = set(model_tools.get_all_tool_names())
 assert {"terminal", "read_file", "write_file", "patch", "search_files"} <= names
+assert "mixture_of_agents" in names
 """
 
     result = subprocess.run(

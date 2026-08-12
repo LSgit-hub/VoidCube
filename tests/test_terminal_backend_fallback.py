@@ -242,6 +242,11 @@ def test_terminal_tool_reports_backend_fallback(monkeypatch):
         )
 
     monkeypatch.setattr(terminal_tool_module, "_get_env_config", fake_get_env_config)
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_check_tirith_security",
+        lambda command: {"action": "allow", "findings": []},
+    )
     monkeypatch.setattr(terminal_tool_module, "_check_all_guards", fake_check_all_guards)
     monkeypatch.setattr(terminal_tool_module, "_create_environment_once", fake_create_once)
     monkeypatch.setattr(terminal_tool_module, "_start_cleanup_thread", lambda: None)
@@ -319,6 +324,11 @@ def test_terminal_tool_reports_podman_backend_fallback(monkeypatch):
         )
 
     monkeypatch.setattr(terminal_tool_module, "_get_env_config", fake_get_env_config)
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_check_tirith_security",
+        lambda command: {"action": "allow", "findings": []},
+    )
     monkeypatch.setattr(terminal_tool_module, "_check_all_guards", fake_check_all_guards)
     monkeypatch.setattr(terminal_tool_module, "_create_environment_once", fake_create_once)
     monkeypatch.setattr(terminal_tool_module, "_start_cleanup_thread", lambda: None)

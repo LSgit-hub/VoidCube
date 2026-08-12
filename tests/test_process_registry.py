@@ -214,6 +214,11 @@ def test_terminal_background_execution_uses_process_registry(monkeypatch, tmp_pa
     task_id = "terminal-background-integration"
     monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_check_tirith_security",
+        lambda command: {"action": "allow", "findings": []},
+    )
     monkeypatch.setattr(terminal_tool_module, "_start_cleanup_thread", lambda: None)
 
     try:

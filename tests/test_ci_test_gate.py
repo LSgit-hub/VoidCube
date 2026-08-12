@@ -72,7 +72,7 @@ def test_gitee_ci_uses_python_314_and_unified_gate():
         "python3 -m pip install --upgrade pip",
         'python3 -m pip install -e ".[all,dev]"',
         "python3 -m ruff check .",
-        "python3 -m ruff check . --select F821 --exit-zero",
+        "python3 -m ruff check . --select F821",
         "python3 -m pip_audit --vulnerability-service osv --progress-spinner off",
         "python3 scripts/run_ci_tests.py -- tests Mem/tests -q --cov "
         "--cov-report=term --cov-report=xml:coverage.xml",

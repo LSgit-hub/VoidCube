@@ -146,6 +146,7 @@ def _discover_tools():
         "tools.media_tool",
         "tools.todo_tool",
         "tools.session_search_tool",
+        "tools.mixture_of_agents_tool",
         "tools.clarify_tool",
         "tools.scheduled_task_tool",
         "tools.code_execution_tool",

@@ -148,6 +148,13 @@ def _check_all_guards(command: str, env_type: str) -> dict:
     return _check_all_guards_impl(command, env_type, approval_sink=_approval_sink)
 
 
+def _check_tirith_security(command: str) -> dict:
+    """Run the content-level scanner before a command reaches any backend."""
+    from tools.tirith_security import check_command_security
+
+    return check_command_security(command)
+
+
 # Allowlist: characters that can legitimately appear in directory paths.
 # Covers alphanumeric, path separators, tilde, dot, hyphen, underscore, space,
 # plus, at, equals, and comma.  Everything else is rejected.
@@ -1482,11 +1489,59 @@ def terminal_tool(
                 "status": "error",
             }, ensure_ascii=False)
 
+        tirith_result = _check_tirith_security(command)
+        tirith_action = tirith_result["action"]
+        tirith_summary = tirith_result.get("summary") or ""
+        tirith_findings = tirith_result.get("findings") or []
+        if tirith_action == "block":
+            return json.dumps({
+                "output": "",
+                "exit_code": -1,
+                "error": tirith_summary or "Command blocked by Tirith security scan",
+                "status": "blocked",
+                "security_scanner": "tirith",
+                "security_findings": tirith_findings,
+            }, ensure_ascii=False)
+        tirith_warning = None
+        if tirith_action == "warn":
+            tirith_warning = tirith_summary or "Tirith reported a security warning"
+        elif tirith_action != "allow":
+            return json.dumps({
+                "output": "",
+                "exit_code": -1,
+                "error": f"Invalid Tirith security verdict: {tirith_action!r}",
+                "status": "error",
+                "security_scanner": "tirith",
+            }, ensure_ascii=False)
+
         # Get configuration
         config = _get_env_config()
         requested_env_type = config["env_type"]
         active_env_type = requested_env_type
         backend_warning = None
+
+        # force=True only bypasses interactive dangerous-command approval.
+        # Tirith always runs above so user approval cannot disable content scanning.
+        approval_note = None
+        if not force:
+            approval = _check_all_guards(command, requested_env_type)
+            if not approval["allowed"]:
+                desc = approval.get("reason") or "command flagged"
+                decision_reason = approval.get("approval_reason")
+                fallback_msg = (
+                    f"Command denied: {desc}. "
+                    "Use the approval prompt to allow it, or rephrase the command."
+                )
+                return json.dumps({
+                    "output": "",
+                    "exit_code": -1,
+                    "error": decision_reason or fallback_msg,
+                    "status": "blocked",
+                    "approval_status": approval["approval_status"],
+                }, ensure_ascii=False)
+            if approval["approval_required"]:
+                desc = approval.get("reason") or "flagged as dangerous"
+                approval_note = f"Command required approval ({desc}) and was approved by the user."
 
         # Use task_id for environment isolation
         effective_task_id = task_id or "default"
@@ -1633,29 +1688,6 @@ def terminal_tool(
                     backend_warning = getattr(env, "_voidcube_backend_warning", None)
                     logger.info("%s environment ready for task %s", active_env_type, effective_task_id[:8])
 
-        # Pre-exec security checks (tirith + dangerous command detection)
-        # Skip check if force=True (user has confirmed they want to run it)
-        approval_note = None
-        if not force:
-            approval = _check_all_guards(command, active_env_type)
-            if not approval["allowed"]:
-                desc = approval.get("reason") or "command flagged"
-                decision_reason = approval.get("approval_reason")
-                fallback_msg = (
-                    f"Command denied: {desc}. "
-                    "Use the approval prompt to allow it, or rephrase the command."
-                )
-                return json.dumps({
-                    "output": "",
-                    "exit_code": -1,
-                    "error": decision_reason or fallback_msg,
-                    "status": "blocked",
-                    "approval_status": approval["approval_status"],
-                }, ensure_ascii=False)
-            if approval["approval_required"]:
-                desc = approval.get("reason") or "flagged as dangerous"
-                approval_note = f"Command required approval ({desc}) and was approved by the user."
-
         # Validate workdir against shell injection
         if workdir:
             workdir_error = _validate_workdir(workdir)
@@ -1705,6 +1737,9 @@ def terminal_tool(
                 }
                 if approval_note:
                     result_data["approval"] = approval_note
+                if tirith_warning:
+                    result_data["security_warning"] = tirith_warning
+                    result_data["security_findings"] = tirith_findings
                 if requested_env_type != active_env_type:
                     result_data["requested_backend"] = requested_env_type
                     result_data["active_backend"] = active_env_type
@@ -1803,6 +1838,9 @@ def terminal_tool(
             }
             if approval_note:
                 result_dict["approval"] = approval_note
+            if tirith_warning:
+                result_dict["security_warning"] = tirith_warning
+                result_dict["security_findings"] = tirith_findings
             if exit_note:
                 result_dict["exit_code_meaning"] = exit_note
             if requested_env_type != active_env_type:
