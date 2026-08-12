@@ -29,16 +29,19 @@ from VoidCube_cli.input_process_loop import run_input_process_loop
 
 
 def _executor_ports(host: SimpleNamespace) -> ScheduledTaskExecutorPorts:
-    def auto_task_running() -> bool:
-        component = getattr(host, "_autonomous_execution_host", None)
-        return bool(component is not None and getattr(component, "_agent_running", False))
-
     return ScheduledTaskExecutorPorts(
-        auto_task_running=auto_task_running,
+        autonomous_mode_active=lambda: bool(
+            getattr(host, "_autonomous_gate_active", False)
+            or getattr(host, "_autonomous_activation_pending", False)
+        ),
+        autonomous_mode_lock=getattr(host, "_autonomous_mode_lock", None),
         execution_gate=getattr(host, "_scheduled_execution_gate", None),
         get_session_id=lambda: str(getattr(host, "session_id", "") or ""),
         set_execution_active=lambda active: setattr(
             host, "_scheduled_execution_active", bool(active)
+        ),
+        set_companion_active=lambda active: setattr(
+            host, "_scheduled_companion_active", bool(active)
         ),
         start_background_task=getattr(
             host,
@@ -87,6 +90,39 @@ def test_once_schedule_claim_and_api_a_writeback(tmp_path) -> None:
     assert result["run"]["elapsed_ms"] == 1250
     with pytest.raises(ValueError, match="must be updated"):
         store.set_status(task["schedule_id"], "active")
+
+
+def test_auto_mode_claim_skips_companion_work_but_keeps_user_schedule_runnable(tmp_path) -> None:
+    store = ScheduledTaskStore(tmp_path / "scheduled_tasks.db")
+    now = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+    store.create(
+        {
+            "title": "辅助模式员工任务",
+            "instruction": "执行员工任务",
+            "run_at": now.isoformat(),
+            "created_by": "api_a",
+            "requested_via": "companion_delegate",
+        },
+        now=now,
+    )
+    user_task = store.create(
+        {
+            "title": "用户定时任务",
+            "instruction": "执行用户定时任务",
+            "run_at": now.isoformat(),
+            "created_by": "api_a",
+        },
+        now=now,
+    )
+
+    claim = store.claim_due(
+        owner_session_id="cli-main",
+        now=now,
+        exclude_companion_work=True,
+    )
+
+    assert claim is not None
+    assert claim["task"]["schedule_id"] == user_task["schedule_id"]
 
 
 def test_dispatch_skips_saturated_role_and_reports_provider_occupancy(tmp_path) -> None:
@@ -687,7 +723,7 @@ def test_main_cli_scheduled_executor_keeps_multiple_workers_active(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_schedule_ui(
+async def test_companion_media_request_is_delegated_to_worker_and_hidden_from_schedule_ui(
     tmp_path,
 ) -> None:
     supervisor = _make_supervisor(tmp_path)
@@ -695,7 +731,7 @@ async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_sch
     supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
     supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
         return_value={
-            "reply_text": "我已交给 API-A 查找并播放。",
+            "reply_text": "我已交给媒体员工查找并播放。",
             "reason": "explicit_media_request",
             "schedule_action": {"action": "none"},
             "media_action": {"action": "delegate", "query": "播放测试视频"},
@@ -705,7 +741,9 @@ async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_sch
     result = await supervisor.handle_companion_message(text="帮我播放测试视频")
 
     assert result["media_action_result"]["ok"] is True
-    assert result["disposition"] == "delegate_to_api_a"
+    assert result["disposition"] == "delegate_to_worker"
+    assert "媒体员工" in result["reply_text"]
+    assert "API-A" not in result["reply_text"]
     stored = supervisor._scheduled_task_store.list(include_completed=True)
     assert len(stored) == 1
     assert stored[0]["requested_via"] == "companion_media"
@@ -717,7 +755,7 @@ async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_sch
 
 
 @pytest.mark.asyncio
-async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path) -> None:
+async def test_companion_tool_request_is_planned_and_delegated_to_worker(tmp_path) -> None:
     supervisor = _make_supervisor(tmp_path)
     supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
     supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
@@ -741,7 +779,7 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
 
     result = await supervisor.handle_companion_message(text="检查这个项目的测试")
 
-    assert result["disposition"] == "delegate_to_api_a"
+    assert result["disposition"] == "delegate_to_worker"
     assert result["execution_action_result"]["ok"] is True
     assert result["execution_action_result"]["worker_role"] == "coding"
     assert "计划：1. 读取项目配置；2. 运行相关测试" in result["reply_text"]
@@ -758,7 +796,8 @@ async def test_companion_tool_request_is_planned_and_delegated_to_api_a(tmp_path
     prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
     assert "秘书和工作协调者" in prompt
     assert "上层智能秘书和工作协调者" in prompt
-    assert "API-A 隔离子代理是下属执行模型" in prompt
+    assert "各角色的员工 Agent 是下属执行模型" in prompt
+    assert "各自配置的 Provider 和模型" in prompt
     assert "调用真实工具完成工作并回写结果" in prompt
     assert "execution_action" in prompt
     assert "不得把计划说成结果" in prompt
@@ -875,7 +914,9 @@ async def test_explicit_media_request_is_delegated_when_api_b_omits_media_action
     result = await supervisor.handle_companion_message(text="帮我播放周杰伦的晴天")
 
     assert result["media_action_result"]["ok"] is True
-    assert result["reply_text"] == "我已交给 API-A 查找并播放，执行状态会显示在主 CLI。"
+    assert result["reply_text"] == (
+        "我已交给媒体员工查找并播放，执行状态会显示在自主链路迷你 CLI。"
+    )
     tasks = supervisor._scheduled_task_store.list(include_completed=True)
     assert len(tasks) == 1
     assert tasks[0]["requested_via"] == "companion_media"
@@ -918,8 +959,10 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
     def start_background(prompt, **kwargs):
         callbacks.append(kwargs["on_complete"])
         assert "即时媒体播放请求" in prompt
+        assert "隔离媒体员工 Agent" in prompt
+        assert "API-A 的正常工具能力" not in prompt
         assert "media_play" in prompt
-        assert kwargs["task_label"].startswith("媒体请求 ·")
+        assert kwargs["task_label"].startswith("自主媒体 ·")
         assert kwargs["response_title"] == "> Voidcube（媒体播放）"
         assert kwargs["persist_session"] is False
         assert kwargs["worker_role"] == "media"
@@ -955,7 +998,7 @@ def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_p
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/media-run-1/finish"
 
 
-def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> None:
+def test_main_cli_companion_delegate_uses_isolated_worker_prompt(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(
         session_id="main-cli",
@@ -967,10 +1010,10 @@ def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> Non
     def start_background(prompt, **kwargs):
         callbacks.append(kwargs["on_complete"])
         assert "API-B 制定计划后转交" in prompt
-        assert "隔离的 API-A 子代理" in prompt
+        assert "隔离员工 Agent" in prompt
         assert "不要创建新的定时任务" in prompt
         assert "不要把请求交给 Auto 自主链" in prompt
-        assert kwargs["task_label"] == "API-B 指令 · 检查项目测试"
+        assert kwargs["task_label"] == "自主指令 · 检查项目测试"
         assert kwargs["persist_session"] is False
         assert kwargs["worker_role"] == "general"
         return True
@@ -1005,7 +1048,7 @@ def test_main_cli_companion_delegate_uses_isolated_api_a_prompt(tmp_path) -> Non
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/delegate-run-1/finish"
 
 
-def test_provider_pool_worker_test_uses_isolated_api_a_prompt(tmp_path) -> None:
+def test_provider_pool_worker_test_uses_isolated_worker_prompt(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(
         session_id="main-cli",
@@ -1020,7 +1063,7 @@ def test_provider_pool_worker_test_uses_isolated_api_a_prompt(tmp_path) -> None:
             {"provider": "research-endpoint", "model": "research-model"}
         )
         assert "Provider 池中的员工连通性测试" in prompt
-        assert "隔离的 API-A 子代理" in prompt
+        assert "隔离的员工 Agent" in prompt
         assert "不要进入用户聊天链路" in prompt
         assert kwargs["task_label"] == "员工测试 · 调研员工"
         assert kwargs["response_title"] == "> Voidcube（员工测试）"
@@ -1064,7 +1107,7 @@ def test_provider_pool_worker_test_uses_isolated_api_a_prompt(tmp_path) -> None:
     assert writeback["elapsed_ms"] >= 0
 
 
-def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) -> None:
+def test_api_b_scheduled_work_is_projected_as_worker_instruction(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(
         session_id="main-cli",
@@ -1077,8 +1120,8 @@ def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) 
         callbacks.append(kwargs["on_complete"])
         assert "由 API-B 秘书安排并已到期" in prompt
         assert "API-B 只负责传达和安排" in prompt
-        assert kwargs["task_label"] == "API-B 指令 · 整理项目进展"
-        assert kwargs["response_title"] == "> Voidcube（API-A 子代理）"
+        assert kwargs["task_label"] == "自主指令 · 整理项目进展"
+        assert kwargs["response_title"] == "> Voidcube（员工 Agent）"
         assert kwargs["worker_role"] == "general"
         return True
 
@@ -1115,32 +1158,38 @@ def test_api_b_scheduled_work_is_projected_as_child_agent_instruction(tmp_path) 
     )
 
 
-def test_scheduled_execution_projection_is_compact() -> None:
+def test_autonomous_worker_projection_uses_shared_mini_cli_events() -> None:
     from VoidCube_cli.app import VoidcubeCLI
 
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    output = []
-    with patch("VoidCube_cli.app._cprint", side_effect=output.append):
-        cli._announce_scheduled_execution_start(
-            1,
-            "scheduled-run",
-            "full prompt must not be rendered",
-            "API-B 指令 · 检查项目测试",
-        )
-        cli._render_scheduled_execution_completion(
-            True,
-            "第一行\n第二行 " + "结果" * 120,
-            "",
-            1,
-            "API-B 指令 · 检查项目测试",
-            None,
-            "full prompt must not be rendered",
-        )
+    cli._autonomous_gate_active = False
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+    cli._invalidate = Mock()
+    cli._announce_scheduled_execution_start(
+        1,
+        "scheduled-run",
+        "full prompt must not be rendered",
+        "自主指令 · 检查项目测试",
+    )
+    cli._render_scheduled_execution_completion(
+        True,
+        "第一行\n第二行 " + "结果" * 120,
+        "",
+        1,
+        "自主指令 · 检查项目测试",
+        None,
+        "full prompt must not be rendered",
+    )
 
-    assert output[0] == "  ◇ API-B → API-A 子代理  检查项目测试"
-    assert output[1].startswith("  ✓ API-A 子代理  第一行 第二行")
-    assert len(output[1]) <= 220
-    assert "full prompt" not in "".join(output)
+    assert [event["stage"] for event in cli._autonomous_execution_events] == [
+        "companion_started",
+        "companion_completed",
+    ]
+    assert cli._autonomous_execution_events[-1]["message"].startswith(
+        "执行完成: 第一行 第二行"
+    )
+    assert "full prompt" not in str(cli._autonomous_execution_events)
 
 
 def test_scheduled_host_projects_resolved_worker_label() -> None:
@@ -1181,15 +1230,15 @@ def test_scheduled_host_projects_resolved_worker_label() -> None:
 
     assert host.start(
         "查询资料",
-        task_label="API-B 指令 · 核实资料",
+        task_label="自主指令 · 核实资料",
         worker_role="research",
         persist_session=False,
         execution_details=execution_details,
     )
     assert completed.wait(2)
 
-    assert starts[0][3] == "API-B 指令 · 调研员工 · 核实资料"
-    assert completions[0][4] == "API-B 指令 · 调研员工 · 核实资料"
+    assert starts[0][3] == "自主指令 · 调研员工 · 核实资料"
+    assert completions[0][4] == "自主指令 · 调研员工 · 核实资料"
     assert captured_route["worker_role"] == "research"
     assert execution_details == {"provider": "", "model": "worker-model"}
 
@@ -1284,12 +1333,12 @@ def test_scheduled_worker_route_failure_is_written_back(tmp_path) -> None:
     assert host._scheduled_execution_active is False
 
 
-def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> None:
+def test_main_cli_scheduled_executor_excludes_api_b_work_while_auto_mode_is_active(tmp_path) -> None:
     host = SimpleNamespace(
         session_id="main-cli",
         _scheduled_execution_active=False,
         _background_task_state=BackgroundTaskState(),
-        _autonomous_execution_host=SimpleNamespace(_agent_running=True),
+        _autonomous_gate_active=True,
         _start_background_agent_task=Mock(),
     )
     runtime = ScheduledTaskExecutorRuntime(
@@ -1297,12 +1346,129 @@ def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> No
         poll_interval_seconds=0.5,
         outbox_path=tmp_path / "writebacks.db",
     )
-    runtime._post = Mock()  # type: ignore[method-assign]
+    runtime._post = Mock(return_value={"status": "idle", "claim": None})  # type: ignore[method-assign]
 
     runtime.poll_workflow()
 
-    runtime._post.assert_not_called()
+    assert runtime._post.call_args.args[0] == "/scheduled-tasks/claim"
+    assert runtime._post.call_args.args[1]["exclude_companion_work"] is True
     host._start_background_agent_task.assert_not_called()
+
+
+def test_auto_activation_reservation_excludes_companion_claim(monkeypatch, tmp_path) -> None:
+    from VoidCube_cli import autonomous_gate as autonomous_gate_module
+
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _autonomous_gate_active=False,
+        _autonomous_activation_pending=False,
+        _autonomous_mode_lock=threading.Lock(),
+        _scheduled_companion_active=False,
+        _scheduled_execution_active=False,
+        _start_background_agent_task=Mock(),
+    )
+    queued_threads = []
+
+    class _QueuedThread:
+        def __init__(self, **kwargs):
+            queued_threads.append(kwargs)
+
+        def start(self):
+            return None
+
+    autonomous_gate_module.handle_auto_command(
+        host,
+        "/auto",
+        event_ports=Mock(),
+        cprint=Mock(),
+        refresh_gateway_cli_presence_callback=Mock(),
+        thread_factory=_QueuedThread,
+    )
+
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host), outbox_path=tmp_path / "writebacks.db"
+    )
+    runtime._post = Mock(return_value={"status": "idle", "claim": None})  # type: ignore[method-assign]
+    runtime.poll_workflow()
+
+    assert host._autonomous_activation_pending is True
+    assert len(queued_threads) == 1
+    assert runtime._post.call_args.args[1]["exclude_companion_work"] is True
+
+
+def test_companion_claim_wins_race_and_blocks_auto_activation(tmp_path) -> None:
+    from VoidCube_cli import autonomous_gate as autonomous_gate_module
+
+    claim_entered = threading.Event()
+    allow_claim = threading.Event()
+    completion_callbacks = []
+    activation_threads = []
+    printed = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _autonomous_gate_active=False,
+        _autonomous_activation_pending=False,
+        _autonomous_mode_lock=threading.Lock(),
+        _scheduled_companion_active=False,
+        _scheduled_execution_active=False,
+    )
+
+    def start_background(_prompt, **kwargs):
+        completion_callbacks.append(kwargs["on_complete"])
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        _executor_ports(host), outbox_path=tmp_path / "writebacks.db"
+    )
+
+    def post(path, _payload):
+        if path == "/scheduled-tasks/claim":
+            claim_entered.set()
+            assert allow_claim.wait(2)
+            return {
+                "claim": {
+                    "task": {
+                        "title": "辅助任务",
+                        "instruction": "执行",
+                        "created_by": "api_b",
+                        "requested_via": "companion_delegate",
+                    },
+                    "run": {"run_id": "companion-race-run"},
+                }
+            }
+        return {"status": "completed"}
+
+    runtime._post = post  # type: ignore[method-assign]
+    runtime._start_lease_heartbeat = Mock()  # type: ignore[method-assign]
+    poll_thread = threading.Thread(target=runtime.poll_workflow)
+    poll_thread.start()
+    assert claim_entered.wait(2)
+
+    auto_thread = threading.Thread(
+        target=lambda: autonomous_gate_module.handle_auto_command(
+            host,
+            "/auto",
+            event_ports=Mock(),
+            cprint=lambda text: printed.append(str(text)),
+            refresh_gateway_cli_presence_callback=Mock(),
+            thread_factory=lambda **kwargs: activation_threads.append(kwargs),
+        )
+    )
+    auto_thread.start()
+    allow_claim.set()
+    poll_thread.join(2)
+    auto_thread.join(2)
+
+    assert not poll_thread.is_alive()
+    assert not auto_thread.is_alive()
+    assert host._scheduled_companion_active is True
+    assert host._autonomous_activation_pending is False
+    assert activation_threads == []
+    assert any("辅助模式员工任务仍在执行" in line for line in printed)
+
+    completion_callbacks[0](True, "完成", "")
+    assert host._scheduled_companion_active is False
 
 
 def test_api_a_schedule_tool_only_calls_management_surface() -> None:
@@ -1652,7 +1818,11 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
 
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._scheduled_execution_gate = threading.Lock()
+    cli._autonomous_mode_lock = threading.Lock()
+    cli._autonomous_activation_pending = False
     cli._scheduled_execution_active = False
+    cli._scheduled_companion_active = False
+    cli._autonomous_gate_active = False
     cli._autonomous_execution_host = SimpleNamespace(_agent_running=False)
     cli._scheduled_execution_host = None
     cli.session_id = "main-cli"
@@ -1662,6 +1832,33 @@ def test_cli_composes_scheduled_runtime_with_dedicated_gate_and_route():
 
     assert runtime.ports.execution_gate is cli._scheduled_execution_gate
     assert runtime.ports.start_background_task is cli._start_scheduled_execution_task
+
+
+def test_shared_mini_cli_only_reads_autonomous_companion_tasks():
+    from VoidCube_cli.app import VoidcubeCLI
+
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = False
+    cli._autonomous_execution_host = None
+    cli._autonomous_execution_events = []
+    cli.session_id = "main-cli"
+    cli._scheduled_execution_host = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(
+            active_tasks=(
+                SimpleNamespace(prompt_preview="自主指令 · 调研员工 · 核实资料"),
+                SimpleNamespace(prompt_preview="自主媒体 · 媒体员工 · 播放音乐"),
+                SimpleNamespace(prompt_preview="定时任务 · 用户日报"),
+                SimpleNamespace(prompt_preview="员工测试 · 调研员工"),
+            )
+        )
+    )
+
+    tasks = cli._autonomous_panel_state_ports().companion_tasks()
+
+    assert [task.prompt_preview for task in tasks] == [
+        "自主指令 · 调研员工 · 核实资料",
+        "自主媒体 · 媒体员工 · 播放音乐",
+    ]
 
 
 def test_scheduled_gate_does_not_stop_foreground_input_loop():

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from dataclasses import dataclass
+import time
 from typing import Any, Dict
 
 
@@ -24,20 +25,22 @@ def append_autonomous_execution_event(
     message: str,
     tone: str = "info",
     stage: str = "",
+    visible_seconds: float | None = None,
 ) -> None:
     """Record a short autonomous execution event for the foreground panel."""
     compact = " ".join(str(message or "").split()).strip()
     if not compact:
         return
     events = list(event_ports.execution_events() or [])
-    events.append(
-        {
+    event: dict[str, object] = {
             "at": datetime.now().strftime("%H:%M:%S"),
             "message": event_ports.trim_status_bar_text(compact, 96),
             "tone": str(tone or "info"),
             "stage": str(stage or "").strip().lower(),
         }
-    )
+    if visible_seconds is not None:
+        event["visible_until"] = time.monotonic() + max(0.0, float(visible_seconds))
+    events.append(event)
     event_ports.set_execution_events(events[-6:])
 
 

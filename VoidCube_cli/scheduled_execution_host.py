@@ -65,12 +65,12 @@ class ScheduledExecutionHost:
             )
         worker_label = str(route.get("worker_label") or "").strip()
         task_label = str(kwargs.get("task_label") or "")
-        if worker_label and task_label.startswith("API-B 指令 · "):
-            title = task_label.removeprefix("API-B 指令 · ")
-            kwargs["task_label"] = f"API-B 指令 · {worker_label} · {title}"
-        elif worker_label and task_label.startswith("媒体请求 · "):
-            title = task_label.removeprefix("媒体请求 · ")
-            kwargs["task_label"] = f"媒体请求 · {worker_label} · {title}"
+        if worker_label and task_label.startswith("自主指令 · "):
+            title = task_label.removeprefix("自主指令 · ")
+            kwargs["task_label"] = f"自主指令 · {worker_label} · {title}"
+        elif worker_label and task_label.startswith("自主媒体 · "):
+            title = task_label.removeprefix("自主媒体 · ")
+            kwargs["task_label"] = f"自主媒体 · {worker_label} · {title}"
         return self._runtime.start(prompt, route_override=route, **kwargs)
 
     def snapshot(self) -> ScheduledExecutionSnapshot:

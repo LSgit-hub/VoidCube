@@ -1281,6 +1281,8 @@ class VoidcubeCLI:
         # These must exist before any direct chat() call because single-query
         # mode does not go through run().
         self._autonomous_gate_active: bool = False
+        self._autonomous_activation_pending: bool = False
+        self._autonomous_mode_lock = threading.Lock()
         self._should_exit = False
         self._clarify_state = None
         self._clarify_freetext = False
@@ -1349,6 +1351,7 @@ class VoidcubeCLI:
         self._scheduled_execution_host = None
         self._scheduled_execution_gate = threading.Lock()
         self._scheduled_execution_active = False
+        self._scheduled_companion_active = False
         self._scheduled_executor_runtime = self._create_scheduled_executor_runtime()
         _initialize_autonomous_status_caches_view(self)
 
@@ -1450,17 +1453,18 @@ class VoidcubeCLI:
         """Assemble scheduled execution from explicit CLI-owned state ports."""
         return ScheduledTaskExecutorRuntime(
             ScheduledTaskExecutorPorts(
-                auto_task_running=lambda: bool(
-                    getattr(
-                        getattr(self, "_autonomous_execution_host", None),
-                        "_agent_running",
-                        False,
-                    )
+                autonomous_mode_active=lambda: bool(
+                    self._autonomous_gate_active
+                    or self._autonomous_activation_pending
                 ),
+                autonomous_mode_lock=self._autonomous_mode_lock,
                 execution_gate=self._scheduled_execution_gate,
                 get_session_id=lambda: str(self.session_id or ""),
                 set_execution_active=lambda active: setattr(
                     self, "_scheduled_execution_active", bool(active)
+                ),
+                set_companion_active=lambda active: setattr(
+                    self, "_scheduled_companion_active", bool(active)
                 ),
                 start_background_task=self._start_scheduled_execution_task,
             )
@@ -1555,15 +1559,16 @@ class VoidcubeCLI:
         _prompt: str,
         task_label: str,
     ) -> None:
-        if not self._should_emit_scrollback_output():
+        if task_label.startswith(("自主指令 · ", "自主媒体 · ")):
+            _append_autonomous_execution_event_view(
+                event_ports=self._autonomous_panel_event_ports(),
+                message=f"开始执行: {task_label}",
+                tone="info",
+                stage="companion_started",
+            )
+            self._invalidate(min_interval=0)
             return
-        if task_label.startswith("API-B 指令 · "):
-            label = task_label.removeprefix("API-B 指令 · ")
-            _cprint(f"  ◇ API-B → API-A 子代理  {label}")
-        elif task_label.startswith("媒体请求 · "):
-            label = task_label.removeprefix("媒体请求 · ")
-            _cprint(f"  ◇ API-B → API-A 子代理  {label}")
-        else:
+        if self._should_emit_scrollback_output():
             label = task_label.removeprefix("定时任务 · ")
             _cprint(f"  ◇ API-A 定时任务  {label}")
 
@@ -1577,17 +1582,21 @@ class VoidcubeCLI:
         _response_title: str | None,
         _prompt: str,
     ) -> None:
-        if not self._should_emit_scrollback_output():
-            return
-        source = (
-            "API-A 子代理"
-            if task_label.startswith(("API-B 指令 · ", "媒体请求 · "))
-            else "API-A 定时任务"
-        )
         summary = self._scheduled_execution_display_text(
             (response or "执行完成") if success else error or response or "执行失败"
         )
-        _cprint(f"  {'✓' if success else '!'} {source}  {summary}")
+        if task_label.startswith(("自主指令 · ", "自主媒体 · ")):
+            _append_autonomous_execution_event_view(
+                event_ports=self._autonomous_panel_event_ports(),
+                message=f"{'执行完成' if success else '执行失败'}: {summary}",
+                tone="success" if success else "error",
+                stage="companion_completed" if success else "companion_failed",
+                visible_seconds=12.0,
+            )
+            self._invalidate(min_interval=0)
+            return
+        if self._should_emit_scrollback_output():
+            _cprint(f"  {'✓' if success else '!'} API-A 定时任务  {summary}")
 
     def _start_scheduled_execution_task(self, prompt: str, **kwargs: Any) -> bool:
         """Run scheduled work through the isolated scheduled Host runtime."""
@@ -1966,13 +1975,25 @@ class VoidcubeCLI:
             owner = getattr(self, "_autonomous_execution_host", None)
             return owner.snapshot() if owner is not None else None
 
+        def companion_tasks():
+            owner = getattr(self, "_scheduled_execution_host", None)
+            if owner is None:
+                return ()
+            return tuple(
+                task
+                for task in owner.snapshot().active_tasks
+                if str(getattr(task, "prompt_preview", "") or "").startswith(
+                    ("自主指令 · ", "自主媒体 · ")
+                )
+            )
+
         def pending_input_nonempty() -> bool:
             state = snapshot()
             return bool(state and state.pending_input_count)
 
         return AutonomousPanelStatePorts(
             gate_active=lambda: bool(self._autonomous_gate_active),
-            session_id=lambda: snapshot().session_id if snapshot() else "",
+            session_id=lambda: snapshot().session_id if snapshot() else str(self.session_id or ""),
             current_task=lambda: snapshot().current_task if snapshot() else None,
             current_task_started_at=lambda: (
                 snapshot().current_task_started_at if snapshot() else 0.0
@@ -1986,8 +2007,7 @@ class VoidcubeCLI:
                 getattr(self, "_autonomous_execution_events", []) or []
             ),
             spinner_text=lambda: snapshot().spinner_text if snapshot() else "",
-            scheduler_snapshot=self._scheduler_display_snapshot,
-            scheduler_events=self._scheduler_display_events,
+            companion_tasks=companion_tasks,
         )
 
     def _autonomous_panel_event_ports(self) -> AutonomousPanelEventPorts:

@@ -77,6 +77,13 @@ def _panel_state_ports(host) -> AutonomousPanelStatePorts:
             getattr(state_host, "_autonomous_execution_events", []) or []
         ),
         spinner_text=lambda: str(getattr(state_host, "_spinner_text", "") or ""),
+        companion_tasks=lambda: tuple(
+            getattr(
+                getattr(host, "_scheduled_execution_snapshot", None),
+                "active_tasks",
+                (),
+            )
+        ),
     )
 
 
@@ -1136,16 +1143,15 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "API-A 迷你CLI" in rendered
+    assert "自主链路迷你 CLI" in rendered
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
     assert "工具启动: web_search" in rendered
     assert "API-B handed task off for API-A claim." in rendered
-    # Lease row: own session with healthy status
-    assert "执行面: 本会话" in rendered
+    assert "执行面:" not in rendered
 
 
-def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
+def test_autonomous_panel_does_not_duplicate_gateway_lease_monitoring(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1170,12 +1176,11 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "执行面: 会话" in rendered
-    assert "陈旧" in rendered
-    assert "静默 120s" in rendered
+    assert "执行面:" not in rendered
+    assert "静默 120s" not in rendered
 
 
-def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
+def test_autonomous_panel_does_not_expand_api_b_judgement_reason(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1236,7 +1241,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     assert "API-B 判断中" in rendered
     assert "暂无被认领的链路项" in rendered
-    assert "仍由 API-B 判断" in rendered
+    assert "仍由 API-B 判断" not in rendered
 
 
 def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
@@ -1522,7 +1527,7 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
     assert "以 stage_cards 正式投影为准" in rendered
 
 
-def test_autonomous_panel_is_visible_for_api_b_state_without_api_a_task(monkeypatch):
+def test_autonomous_panel_keeps_api_b_planning_details_out_of_mini_cli(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1570,13 +1575,13 @@ def test_autonomous_panel_is_visible_for_api_b_state_without_api_a_task(monkeypa
     ) is True
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "LM生成: 关闭" in rendered
-    assert "候选 1" in rendered
-    assert "判断 0" in rendered
-    assert "Review endogenous cognition" in rendered
+    assert "AUTO 模式" in rendered
+    assert "LM生成" not in rendered
+    assert "候选 1" not in rendered
+    assert "Review endogenous cognition" not in rendered
 
 
-def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
+def test_autonomous_panel_keeps_api_b_model_health_in_web_monitor(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1611,8 +1616,9 @@ def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli, state_ports=_panel_state_ports(cli), render_ports=_panel_render_ports(cli)))
 
-    assert "模型异常" in rendered
-    assert "HTTPError" in rendered
+    assert "AUTO 模式" in rendered
+    assert "模型异常" not in rendered
+    assert "HTTPError" not in rendered
 
 
 def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):
@@ -2086,6 +2092,31 @@ def test_auto_command_activates_gate_and_execution_loop(monkeypatch):
     assert any("组件已接入当前 CLI" in line for line in printed)
 
 
+def test_auto_command_waits_for_active_companion_worker(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = False
+    cli._scheduled_companion_active = True
+    cli._autonomous_activation_pending = False
+    cli._autonomous_mode_lock = threading.Lock()
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+    printed = []
+    threads = []
+
+    autonomous_gate_module.handle_auto_command(
+        cli,
+        "/auto",
+        event_ports=_panel_event_ports(cli),
+        cprint=lambda text: printed.append(str(text)),
+        refresh_gateway_cli_presence_callback=lambda **_kwargs: None,
+        thread_factory=lambda **kwargs: threads.append(kwargs),
+    )
+
+    assert cli._autonomous_gate_active is False
+    assert threads == []
+    assert any("辅助模式员工任务仍在执行" in line for line in printed)
+
+
 def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = False
@@ -2182,7 +2213,7 @@ def test_activate_autonomous_execution_reuses_running_thread(monkeypatch):
 
     assert launched is True
     assert starts == ["start"]
-    assert "当前 CLI" in message
+    assert "自主链路迷你 CLI" in message
 
 
 def test_activate_autonomous_execution_reports_start_failure():

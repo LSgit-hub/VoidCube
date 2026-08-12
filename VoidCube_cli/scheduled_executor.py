@@ -52,10 +52,12 @@ def _rate_limit_writeback(error: str) -> Dict[str, Any]:
 class ScheduledTaskExecutorPorts:
     """Explicit CLI operations required by scheduled execution."""
 
-    auto_task_running: Callable[[], bool]
+    autonomous_mode_active: Callable[[], bool]
+    autonomous_mode_lock: Any | None
     execution_gate: Any | None
     get_session_id: Callable[[], str]
     set_execution_active: Callable[[bool], None]
+    set_companion_active: Callable[[bool], None]
     start_background_task: Callable[..., bool]
 
 
@@ -201,6 +203,7 @@ class ScheduledTaskExecutorRuntime:
         self._delivery_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._active_run_ids: set[str] = set()
+        self._companion_run_ids: set[str] = set()
         self._execution_gate_acquired = False
         self._outbox = ScheduledWritebackOutbox(
             outbox_path
@@ -220,8 +223,8 @@ class ScheduledTaskExecutorRuntime:
             decoded = json.loads(response.read().decode("utf-8"))
             return dict(decoded) if isinstance(decoded, dict) else {}
 
-    def _auto_task_is_running(self) -> bool:
-        return bool(self.ports.auto_task_running())
+    def _autonomous_mode_is_active(self) -> bool:
+        return bool(self.ports.autonomous_mode_active())
 
     def _acquire_execution_gate(self) -> bool:
         with self._state_lock:
@@ -240,12 +243,19 @@ class ScheduledTaskExecutorRuntime:
             self._active_run_ids.add(run_id)
             self.ports.set_execution_active(True)
 
+    def _mark_companion_started(self, run_id: str) -> None:
+        with self._state_lock:
+            self._companion_run_ids.add(run_id)
+            self.ports.set_companion_active(True)
+
     def _release_execution_slot(self, run_id: str = "") -> None:
         with self._state_lock:
             if run_id:
                 self._active_run_ids.discard(run_id)
+                self._companion_run_ids.discard(run_id)
             active = bool(self._active_run_ids)
             self.ports.set_execution_active(active)
+            self.ports.set_companion_active(bool(self._companion_run_ids))
             if not active and self._execution_gate_acquired:
                 gate = self.ports.execution_gate
                 self._execution_gate_acquired = False
@@ -320,17 +330,20 @@ class ScheduledTaskExecutorRuntime:
         # The scheduled Host owns its own Agent and execution gate.  Foreground
         # chat, commands, and manual background work live on another Host and
         # must never delay this poller or vice versa.
-        if self._auto_task_is_running() or not self._poll_lock.acquire(blocking=False):
+        if not self._poll_lock.acquire(blocking=False):
             return
 
         execution_started = False
         heartbeat_stop: threading.Event | None = None
         claimed_run_id = ""
+        mode_lock_acquired = False
         try:
+            mode_lock = self.ports.autonomous_mode_lock
+            if mode_lock is not None:
+                mode_lock_acquired = bool(mode_lock.acquire(blocking=False))
+                if not mode_lock_acquired:
+                    return
             if not self._acquire_execution_gate():
-                return
-            if self._auto_task_is_running():
-                self._release_execution_slot()
                 return
             owner_session_id = str(self.ports.get_session_id() or "").strip()
             if not owner_session_id:
@@ -342,6 +355,7 @@ class ScheduledTaskExecutorRuntime:
                     {
                         "owner_session_id": owner_session_id,
                         "lease_seconds": self.lease_seconds,
+                        "exclude_companion_work": self._autonomous_mode_is_active(),
                     },
                 )
             except (OSError, ValueError, urllib.error.HTTPError):
@@ -377,28 +391,31 @@ class ScheduledTaskExecutorRuntime:
                 or companion_delegate
             )
             worker_role = str(task.get("worker_role") or "").strip().lower()
+            if api_b_origin and not provider_pool_test:
+                self._mark_companion_started(run_id)
             if companion_delegate:
                 prompt = (
-                    "这是日常模式下 API-B 制定计划后转交的执行请求。你是隔离的 API-A 子代理，"
+                    "这是日常模式下 API-B 制定计划后转交的执行请求。你是自主链路中的隔离员工 Agent，"
                     "必须使用正常工具和技能完成请求并给出真实结果。API-B 只负责规划，尚未执行任何步骤。"
                     "不要创建新的定时任务，也不要把请求交给 Auto 自主链。\n\n"
                     f"员工角色：{worker_role}\n请求：{title}\nAPI-B 的执行说明：{instruction}"
                 )
-                task_label = f"API-B 指令 · {title}"
-                response_title = "> Voidcube（API-A 子代理）"
+                task_label = f"自主指令 · {title}"
+                response_title = "> Voidcube（员工 Agent）"
             elif companion_media:
                 prompt = (
-                    "这是日常模式下星子转交的即时媒体播放请求。请使用 API-A 的正常工具能力"
+                    "这是日常模式下星子转交的即时媒体播放请求。你是自主链路中的隔离媒体员工 Agent，"
+                    "请使用当前角色可用的正常工具能力"
                     "查找可靠、可播放的媒体 URL；歌单优先一次调用 media_playlist，单项才调用 media_play。"
                     "media_playlist 返回 status=ok 即表示整张歌单已入队，不要再调用浏览器、端口检查或其他验证工具。"
                     "不要创建定时任务，也不要把请求交给 Auto 自主链。\n\n"
                     f"员工角色：{worker_role}\n请求：{title}\n播放要求：{instruction}"
                 )
-                task_label = f"媒体请求 · {title}"
+                task_label = f"自主媒体 · {title}"
                 response_title = "> Voidcube（媒体播放）"
             elif provider_pool_test:
                 prompt = (
-                    "这是 Provider 池中的员工连通性测试。你是隔离的 API-A 子代理，"
+                    "这是 Provider 池中的员工连通性测试。你是隔离的员工 Agent，"
                     "只需完成下面的测试指令并返回真实结果；不要创建定时任务，"
                     "不要进入用户聊天链路，也不要把任务交给 Auto 自主链。\n\n"
                     f"员工角色：{worker_role}\n测试指令：{instruction}"
@@ -407,13 +424,13 @@ class ScheduledTaskExecutorRuntime:
                 response_title = "> Voidcube（员工测试）"
             elif api_b_origin:
                 prompt = (
-                    "这是日常模式下由 API-B 秘书安排并已到期的工作。你是隔离的 API-A 子代理，"
+                    "这是日常模式下由 API-B 秘书安排并已到期的工作。你是自主链路中的隔离执行 Agent，"
                     "必须使用正常工具和技能完成任务并给出真实结果。API-B 只负责传达和安排，"
                     "尚未执行任务。不要创建新的定时任务，也不要把任务交给 Auto 自主链。\n\n"
                     f"员工角色：{worker_role}\n任务：{title}\nAPI-B 的工作指令：{instruction}"
                 )
-                task_label = f"API-B 指令 · {title}"
-                response_title = "> Voidcube（API-A 子代理）"
+                task_label = f"自主指令 · {title}"
+                response_title = "> Voidcube（员工 Agent）"
             else:
                 prompt = (
                     "这是用户预先安排并已到期的定时任务。请使用 API-A 的正常工具能力完成任务，"
@@ -484,4 +501,6 @@ class ScheduledTaskExecutorRuntime:
                 self._release_execution_slot(claimed_run_id)
             elif not claimed_run_id:
                 self._release_execution_slot()
+            if mode_lock_acquired:
+                self.ports.autonomous_mode_lock.release()
             self._poll_lock.release()

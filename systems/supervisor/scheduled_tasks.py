@@ -543,6 +543,7 @@ class ScheduledTaskStore:
         role_limits: Optional[Dict[str, int]] = None,
         role_providers: Optional[Dict[str, str]] = None,
         provider_limits: Optional[Dict[str, int]] = None,
+        exclude_companion_work: bool = False,
     ) -> Optional[Dict[str, Any]]:
         owner = str(owner_session_id or "").strip()
         if not owner:
@@ -589,6 +590,21 @@ class ScheduledTaskStore:
             ).fetchall()
 
             def candidate_available(candidate: sqlite3.Row) -> bool:
+                requested_via = str(
+                    candidate["requested_via"] or ""
+                ).strip().lower()
+                companion_work = requested_via in {
+                    "companion_delegate",
+                    "companion_media",
+                } or (
+                    str(candidate["created_by"] or "").strip().lower() == "api_b"
+                    and requested_via != "provider_pool_test"
+                )
+                if (
+                    exclude_companion_work
+                    and companion_work
+                ):
+                    return False
                 role = str(candidate["worker_role"] or "").strip().lower()
                 try:
                     role_limit = max(1, min(int(limits.get(role, 1)), 8))
@@ -1071,6 +1087,7 @@ class ScheduledTaskRuntimeMixin:
             "claim_due",
             owner_session_id=str(request.get("owner_session_id") or ""),
             lease_seconds=int(request.get("lease_seconds") or 300),
+            exclude_companion_work=bool(request.get("exclude_companion_work", False)),
             **policy,
         )
         return {"status": "claimed" if claimed else "idle", "claim": claimed}

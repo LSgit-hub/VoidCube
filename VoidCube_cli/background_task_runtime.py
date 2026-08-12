@@ -227,6 +227,7 @@ class BackgroundTaskRuntime:
         )
         state.register_thread(task_id, thread)
         thread.start()
+        self.ports.invalidate()
         return True
 
     @staticmethod

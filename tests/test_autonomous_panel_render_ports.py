@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import time
 
 import VoidCube_cli.autonomous_panel as panel_module
 from VoidCube_cli.autonomous_events import (
@@ -84,34 +85,36 @@ def test_panel_events_use_explicit_event_ports():
     assert last_key[0].endswith("已通过监督者裁决")
 
 
-def test_panel_projects_scheduler_cancellation_and_request_id():
-    snapshot = SimpleNamespace(
-        active=SimpleNamespace(
-            lane=SimpleNamespace(value="supervisor_task"),
-            state=SimpleNamespace(value="cancelling"),
-            request_id="auto-123456789",
-        ),
-        queued=(),
-        autonomous_gate=True,
-        blocked_reason="",
-    )
-    result = panel_module._build_scheduler_rows(
-        snapshot,
-        60,
-        trim=lambda text, _width: text,
-        events=[
-            {
-                "kind": "cancel_requested",
-                "request_id": "auto-123456789",
-                "reason": "auto-q",
-            }
-        ],
+def test_companion_completion_keeps_shared_panel_visible_temporarily():
+    events = [
+        {
+            "stage": "companion_completed",
+            "tone": "success",
+            "message": "执行完成",
+            "visible_until": time.monotonic() + 5,
+        }
+    ]
+    state_ports = AutonomousPanelStatePorts(
+        gate_active=lambda: False,
+        session_id=lambda: "main-cli",
+        current_task=lambda: None,
+        current_task_started_at=lambda: 0.0,
+        agent_running=lambda: False,
+        last_agent_turn_result=lambda: None,
+        pending_input_nonempty=lambda: False,
+        execution_events=lambda: events,
+        spinner_text=lambda: "",
+        companion_tasks=lambda: (),
     )
 
-    rendered = "\n".join(text for _, text in result)
-    assert "自主取消中" in rendered
-    assert "23456789" in rendered
-    assert "cancel_requested" in rendered
+    assert panel_module.has_visible_autonomous_work(
+        SimpleNamespace(), state_ports=state_ports
+    ) is True
+
+    events[0]["visible_until"] = time.monotonic() - 1
+    assert panel_module.has_visible_autonomous_work(
+        SimpleNamespace(), state_ports=state_ports
+    ) is False
 
 
 def test_panel_fits_a_narrow_terminal_without_forcing_a_minimum_width(monkeypatch):

@@ -24,12 +24,13 @@ def _enter_autonomous_gate_locally(
     refresh_gateway_cli_presence_callback: Any,
 ) -> None:
     host._autonomous_gate_active = True
+    host._autonomous_activation_pending = False
     scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
     if scheduler_runtime is not None:
         scheduler_runtime.enable_autonomous()
     append_autonomous_execution_event(
         event_ports=event_ports,
-        message="自主链路已激活，API-A 自主执行面等待任务",
+        message="自主链路已激活，迷你 CLI 等待 AUTO 任务",
         tone="success",
         stage="autonomous_gate",
     )
@@ -56,6 +57,7 @@ def _exit_autonomous_gate_locally(
             timeout=interrupt_timeout,
         )
     host._autonomous_gate_active = False
+    host._autonomous_activation_pending = False
     scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
     if scheduler_runtime is not None:
         scheduler_runtime.cancel_autonomous()
@@ -89,17 +91,17 @@ def _resolve_supervisor_url() -> str:
 
 
 def activate_autonomous_execution(host: Any) -> Tuple[bool, str]:
-    """Activate the API-A autonomous execution loop."""
+    """Activate the Auto-mode execution loop."""
     starter = getattr(host, "_start_autonomous_execution", None)
     if callable(starter):
         try:
             started = bool(starter())
         except Exception as exc:
             logger.warning("Failed to start autonomous execution loop: %s", exc)
-            return False, f"API-A 自主执行链路启动失败: {exc}"
+            return False, f"AUTO 模式执行链路启动失败: {exc}"
         if not started:
-            return False, "API-A 自主执行链路未启动。"
-    return True, "API-A 自主执行链路已在当前 CLI 中启动；有链路项执行时会自动显示。"
+            return False, "AUTO 模式执行链路未启动。"
+    return True, "AUTO 模式执行链路已启动；任务会进入自主链路迷你 CLI。"
 
 
 def handle_auto_command(
@@ -117,6 +119,22 @@ def handle_auto_command(
     cprint("  🧠 正在启用自主链路...")
     if focus:
         cprint(f"     聚焦: {focus}")
+
+    mode_lock = getattr(host, "_autonomous_mode_lock", None)
+    if mode_lock is not None:
+        mode_lock.acquire()
+    try:
+        if bool(getattr(host, "_scheduled_companion_active", False)):
+            cprint("  ⚠️  辅助模式员工任务仍在执行，暂不能切换到 AUTO 模式。")
+            cprint("     等待当前员工任务完成后再使用 /auto。")
+            return
+        if bool(getattr(host, "_autonomous_activation_pending", False)):
+            cprint("  ⚠️  AUTO 模式正在启用，请等待当前请求完成。")
+            return
+        host._autonomous_activation_pending = True
+    finally:
+        if mode_lock is not None:
+            mode_lock.release()
 
     def _ensure_supervisor_runtime() -> bool:
         try:
@@ -154,6 +172,7 @@ def handle_auto_command(
                     raise first_exc
         except Exception as exc:
             host._autonomous_gate_active = False
+            host._autonomous_activation_pending = False
             cprint(f"  ⚠️  Supervisor unreachable: {exc}")
             cprint("     Ensure daemons are running (auto-started in interactive mode).")
             cprint("     Or run: voidcube serve start")
@@ -186,17 +205,25 @@ def handle_auto_command(
                 cprint("     使用 /auto-q 临时停用自主链路。")
                 cprint(f"     监视地址: {supervisor_url}/ui")
             else:
+                host._autonomous_activation_pending = False
                 cprint("  ⚠️  自主链路激活失败。")
                 if not resp.get("endogenous_drive_enabled", True):
                     cprint("     配置中的 endogenous_drive_enabled 为 False。")
-        except Exception:
-            pass
+        except Exception as exc:
+            if not bool(getattr(host, "_autonomous_gate_active", False)):
+                host._autonomous_activation_pending = False
+            logger.warning("Failed to apply autonomous activation response: %s", exc)
+            cprint(f"  ⚠️  自主链路激活响应处理失败: {exc}")
 
-    thread_factory(
-        target=_call_activate_autonomous_chain_gate,
-        daemon=True,
-        name="autonomous-chain-gate-activate",
-    ).start()
+    try:
+        thread_factory(
+            target=_call_activate_autonomous_chain_gate,
+            daemon=True,
+            name="autonomous-chain-gate-activate",
+        ).start()
+    except Exception:
+        host._autonomous_activation_pending = False
+        raise
 
 
 def handle_auto_q_command(
