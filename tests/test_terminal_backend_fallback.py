@@ -118,7 +118,7 @@ def test_terminal_tool_reports_backend_fallback(monkeypatch):
         }
 
     def fake_check_all_guards(command, env_type):
-        return {"approved": True, "user_approved": False, "smart_approved": False}
+        return {"allowed": True, "approval_required": False, "approval_status": "approved"}
 
     def fake_create_once(env_type, *args, **kwargs):
         if env_type == "docker":
@@ -195,7 +195,7 @@ def test_terminal_tool_reports_podman_backend_fallback(monkeypatch):
         }
 
     def fake_check_all_guards(command, env_type):
-        return {"approved": True, "user_approved": False, "smart_approved": False}
+        return {"allowed": True, "approval_required": False, "approval_status": "approved"}
 
     def fake_create_once(env_type, *args, **kwargs):
         if env_type == "podman":

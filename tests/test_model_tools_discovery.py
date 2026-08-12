@@ -94,6 +94,25 @@ def test_static_toolsets_only_reference_registered_tools():
     assert missing == {}
 
 
+def test_registered_toolsets_are_statically_resolvable():
+    from tools.model_tools import get_all_tool_names
+    from tools.registry import registry
+    from tools.toolsets import TOOLSETS, resolve_toolset
+
+    get_all_tool_names()
+    unresolved = {}
+    for toolset in registry.list_toolsets():
+        registered_tools = set(registry.get_toolset_tools(toolset))
+        if toolset not in TOOLSETS or not registered_tools.issubset(
+            resolve_toolset(toolset)
+        ):
+            unresolved[toolset] = sorted(registered_tools)
+
+    assert unresolved == {}
+    assert "mixture_of_agents" in resolve_toolset("moa")
+    assert "mixture_of_agents" in resolve_toolset("full")
+
+
 def test_learn_toolset_has_no_mutating_or_code_execution_entry_points():
     from tools.toolsets import resolve_toolset
 

@@ -49,6 +49,12 @@ TOOLSETS = {
         "includes": []
     },
 
+    "moa": {
+        "description": "Collaborative reasoning with multiple frontier models",
+        "tools": ["mixture_of_agents"],
+        "includes": [],
+    },
+
     "assistant": {
         "description": "Interactive assistance and clarification tools",
         "tools": ["clarify"],
@@ -136,7 +142,7 @@ TOOLSETS = {
     "full": {
         "description": "All available tools",
         "tools": [],
-        "includes": ["voidcube", "session_search"]
+        "includes": ["voidcube", "session_search", "moa"]
     },
     "learn": {
         "description": (

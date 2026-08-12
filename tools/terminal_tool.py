@@ -1467,20 +1467,9 @@ def terminal_tool(
         approval_note = None
         if not force:
             approval = _check_all_guards(command, active_env_type)
-            if not approval["approved"]:
-                # Check if this is an approval_required (gateway ask mode)
-                if approval.get("status") == "approval_required":
-                    return json.dumps({
-                        "output": "",
-                        "exit_code": -1,
-                        "error": approval.get("message", "Waiting for user approval"),
-                        "status": "approval_required",
-                        "command": approval.get("command", command),
-                        "description": approval.get("description", "command flagged"),
-                        "pattern_key": approval.get("pattern_key", ""),
-                    }, ensure_ascii=False)
-                # Command was blocked
-                desc = approval.get("description", "command flagged")
+            if not approval["allowed"]:
+                desc = approval.get("reason") or "command flagged"
+                decision_reason = approval.get("approval_reason")
                 fallback_msg = (
                     f"Command denied: {desc}. "
                     "Use the approval prompt to allow it, or rephrase the command."
@@ -1488,16 +1477,13 @@ def terminal_tool(
                 return json.dumps({
                     "output": "",
                     "exit_code": -1,
-                    "error": approval.get("message", fallback_msg),
-                    "status": "blocked"
+                    "error": decision_reason or fallback_msg,
+                    "status": "blocked",
+                    "approval_status": approval["approval_status"],
                 }, ensure_ascii=False)
-            # Track whether approval was explicitly granted by the user
-            if approval.get("user_approved"):
-                desc = approval.get("description", "flagged as dangerous")
+            if approval["approval_required"]:
+                desc = approval.get("reason") or "flagged as dangerous"
                 approval_note = f"Command required approval ({desc}) and was approved by the user."
-            elif approval.get("smart_approved"):
-                desc = approval.get("description", "flagged as dangerous")
-                approval_note = f"Command was flagged ({desc}) and auto-approved by smart approval."
 
         # Validate workdir against shell injection
         if workdir:

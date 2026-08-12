@@ -60,7 +60,8 @@ def test_safe_command_does_not_request_approval() -> None:
     )
 
     assert result["allowed"] is True
-    assert result["approved"] is True
+    assert result["approval_required"] is False
+    assert result["approval_status"] == "approved"
 
 
 @pytest.mark.parametrize(
@@ -75,7 +76,7 @@ def test_dangerous_command_denies_missing_rejected_or_invalid_decisions(sink, st
     result = check_all_command_guards("rm -rf target", approval_sink=sink)
 
     assert result["allowed"] is False
-    assert result["approved"] is False
+    assert result["approval_required"] is True
     assert result["approval_status"] == status
 
 
@@ -91,6 +92,6 @@ def test_dangerous_command_runs_only_after_explicit_approval() -> None:
     )
 
     assert result["allowed"] is True
-    assert result["approved"] is True
+    assert result["approval_required"] is True
     assert result["approval_status"] == "approved"
     assert requests[0].command == "rm -rf target"

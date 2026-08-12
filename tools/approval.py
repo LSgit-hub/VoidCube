@@ -56,8 +56,10 @@ def check_all_command_guards(
     if dangerous_check["safe"]:
         return {
             "allowed": True,
+            "approval_required": False,
+            "approval_status": "approved",
             "reason": "",
-            "approved": True,
+            "approval_reason": "",
             "command": command,
         }
 
@@ -70,9 +72,9 @@ def check_all_command_guards(
     )
     return {
         "allowed": decision.approved,
-        "reason": dangerous_check["reason"],
-        "approved": decision.approved,
+        "approval_required": True,
         "approval_status": decision.status.value,
+        "reason": dangerous_check["reason"],
         "approval_reason": decision.reason,
         "command": command,
     }
