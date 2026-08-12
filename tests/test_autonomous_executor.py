@@ -86,7 +86,8 @@ def test_body_improvement_prompt_captures_body_context():
     )
 
     assert prompt.startswith(f"{AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX} Improve shell memory display")
-    assert "Worktree path: F:/worktree/slot-B" in prompt
+    assert "Worktree path inside the sandbox: /workspace" in prompt
+    assert "F:/worktree/slot-B" not in prompt
     assert "Editable dirs: agent/, tools/" in prompt
     assert "Approved target paths: agent/memory_manager.py" in prompt
     assert "learning-memory-1: Verified memory display finding" in prompt

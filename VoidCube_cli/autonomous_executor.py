@@ -31,6 +31,8 @@ class AutonomousExecutorPorts:
     agent_running: Callable[[], bool]
     autonomous_gate_active: Callable[[], bool]
     append_execution_event: Callable[..., None]
+    prepare_body_worktree: Callable[[str, str, str], None]
+    release_task_environment: Callable[[str], None]
 
 
 def autonomous_task_execution_kind(task: Dict[str, Any]) -> str:
@@ -117,7 +119,7 @@ def build_autonomous_task_prompt(
             prompt_parts.append(summary)
         prompt_parts.append("Edit the shell body code directly and implement the approved improvement.")
         if worktree_path:
-            prompt_parts.append(f"Worktree path: {worktree_path}")
+            prompt_parts.append("Worktree path inside the sandbox: /workspace")
         if editable_dirs:
             prompt_parts.append(f"Editable dirs: {', '.join(str(x) for x in editable_dirs)}")
         if target_paths:
@@ -281,6 +283,12 @@ class AutonomousExecutorRuntime:
                 execution_kind,
                 git_head_commit=self._git_head_commit,
             )
+            if execution_kind == "body_improvement":
+                self.ports.prepare_body_worktree(
+                    self.ports.get_session_id(),
+                    str(task.get("_improvement_worktree") or ""),
+                    str(task.get("_baseline_head") or ""),
+                )
             run_id = bind_autonomous_execution_start(task, prompt)
             self.ports.set_current_task_run_id(run_id)
             self.ports.enqueue_pending_input(prompt)
@@ -290,10 +298,31 @@ class AutonomousExecutorRuntime:
                 stage="autonomous_execution_started",
             )
             return True
-        except Exception:
+        except Exception as exc:
+            if execution_kind == "body_improvement":
+                try:
+                    self.ports.release_task_environment(self.ports.get_session_id())
+                except Exception:
+                    pass
+            for key in (
+                "_autonomous_task_run_id",
+                "_autonomous_execution_start_text",
+                "_autonomous_execution_started",
+            ):
+                task.pop(key, None)
+            self.ports.set_current_task_run_id("")
+            self.ports.append_execution_event(
+                f"自主执行环境准备失败: {str(exc)[:300]}",
+                tone="error",
+                stage="autonomous_environment_failed",
+            )
             return False
 
     def clear_current_task_state(self) -> None:
+        try:
+            self.ports.release_task_environment(self.ports.get_session_id())
+        except Exception:
+            pass
         self.ports.set_current_task(None)
         self.ports.set_current_task_started_at(0)
         self.ports.set_current_task_run_id("")
@@ -708,7 +737,12 @@ class AutonomousExecutorRuntime:
 
         if not self.inject_execution_prompt(task, execution_kind):
             task_label = autonomous_task_label(execution_kind)
-            self._cprint(f"  ⚠️  Autonomous {task_label} execution failed to start {task_id[:8]}...")
+            try:
+                self._cprint(
+                    f"  ⚠️  Autonomous {task_label} execution failed to start {task_id[:8]}..."
+                )
+            except Exception:
+                pass
             self.ports.append_execution_event(
                 f"任务 {task_id[:8]} 自主执行启动失败",
                 tone="error",

@@ -7,6 +7,7 @@ from VoidCube_cli.autonomous_executor import (
     AutonomousExecutorPorts,
     AutonomousExecutorRuntime,
 )
+from tools.terminal_tool import prepare_task_git_worktree, release_task_environment
 
 
 def autonomous_executor_runtime(
@@ -49,6 +50,12 @@ def autonomous_executor_runtime(
                 tone=tone,
                 stage=stage,
             ),
+            prepare_body_worktree=lambda task_id, worktree_path, expected_head: prepare_task_git_worktree(
+                task_id,
+                worktree_path,
+                expected_head=expected_head,
+            ),
+            release_task_environment=release_task_environment,
         )
         runtime = AutonomousExecutorRuntime(
             ports,

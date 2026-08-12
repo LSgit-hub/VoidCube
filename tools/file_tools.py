@@ -166,6 +166,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                 image = ""
 
             cwd = overrides.get("cwd") or config["cwd"]
+            host_cwd = overrides.get("host_cwd", config.get("host_cwd"))
             logger.info("Creating new %s environment for task %s...", env_type, task_id[:8])
 
             container_config = None
@@ -175,7 +176,19 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                     "container_memory": config.get("container_memory", 5120),
                     "container_disk": config.get("container_disk", 51200),
                     "container_persistent": config.get("container_persistent", True),
-                    "docker_volumes": config.get("docker_volumes", []),
+                    "docker_volumes": overrides.get(
+                        "docker_volumes", config.get("docker_volumes", [])
+                    ),
+                    "docker_mount_cwd_to_workspace": overrides.get(
+                        "docker_mount_cwd_to_workspace",
+                        config.get("docker_mount_cwd_to_workspace", False),
+                    ),
+                    "docker_forward_env": overrides.get(
+                        "docker_forward_env", config.get("docker_forward_env", [])
+                    ),
+                    "docker_env": overrides.get(
+                        "docker_env", config.get("docker_env", {})
+                    ),
                 }
 
             ssh_config = None
@@ -203,8 +216,10 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                 container_config=container_config,
                 local_config=local_config,
                 task_id=task_id,
-                host_cwd=config.get("host_cwd"),
-                fallback_to_local=config.get("fallback_to_local", True),
+                host_cwd=host_cwd,
+                fallback_to_local=overrides.get(
+                    "fallback_to_local", config.get("fallback_to_local", True)
+                ),
             )
 
             with _env_lock:

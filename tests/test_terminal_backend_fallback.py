@@ -1,10 +1,21 @@
 import json
 import os
+import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 import tools.terminal_tool as terminal_tool_module
+
+
+def _git(*args, cwd=None):
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 @pytest.mark.unit
@@ -48,6 +59,108 @@ def test_terminal_process_env_overrides_canonical_config(monkeypatch):
     )
 
     assert terminal_tool_module._get_env_config()["env_type"] == "local"
+
+
+@pytest.mark.unit
+def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
+    monkeypatch,
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "candidate"
+    repo.mkdir()
+    _git("init", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "VoidCube Test", cwd=repo)
+    (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    _git("add", "tracked.txt", cwd=repo)
+    _git("commit", "-m", "baseline", cwd=repo)
+    _git("worktree", "add", "--detach", str(worktree), cwd=repo)
+    head = _git("rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    captured = {}
+
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_get_env_config",
+        lambda: {
+            "env_type": "podman",
+            "docker_volumes": ["cache-volume:/cache"],
+            "docker_env": {"EXISTING": "1"},
+        },
+    )
+    monkeypatch.setattr(terminal_tool_module, "cleanup_vm", lambda task_id: None)
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "clear_task_env_overrides",
+        lambda task_id: captured.setdefault("cleared", []).append(task_id),
+    )
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "register_task_env_overrides",
+        lambda task_id, overrides: captured.update(
+            {"task_id": task_id, "overrides": overrides}
+        ),
+    )
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "terminal_tool",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "output": f"/workspace\n/workspace\n{head}\n",
+                "exit_code": 0,
+                "error": None,
+            }
+        ),
+    )
+
+    terminal_tool_module.prepare_task_git_worktree(
+        "autonomous-session",
+        str(worktree),
+        expected_head=head,
+    )
+
+    overrides = captured["overrides"]
+    assert captured["task_id"] == "autonomous-session"
+    assert overrides["host_cwd"] == str(worktree.resolve())
+    assert overrides["cwd"] == "/workspace"
+    assert overrides["fallback_to_local"] is False
+    assert "cache-volume:/cache" in overrides["docker_volumes"]
+    assert any(
+        volume.endswith(":/voidcube-git/common")
+        for volume in overrides["docker_volumes"]
+    )
+    assert overrides["docker_env"]["GIT_WORK_TREE"] == "/workspace"
+    assert overrides["docker_env"]["GIT_DIR"].startswith(
+        "/voidcube-git/common/worktrees/"
+    )
+    assert overrides["docker_env"]["EXISTING"] == "1"
+
+
+@pytest.mark.unit
+def test_prepare_task_git_worktree_rejects_primary_worktree(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "VoidCube Test", cwd=repo)
+    (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    _git("add", "tracked.txt", cwd=repo)
+    _git("commit", "-m", "baseline", cwd=repo)
+    head = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+
+    monkeypatch.setattr(terminal_tool_module, "cleanup_vm", lambda task_id: None)
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_get_env_config",
+        lambda: {"env_type": "podman", "docker_volumes": []},
+    )
+
+    with pytest.raises(ValueError, match="isolated linked Git worktree"):
+        terminal_tool_module.prepare_task_git_worktree(
+            "autonomous-session",
+            str(repo),
+            expected_head=head,
+        )
 
 
 @pytest.mark.unit

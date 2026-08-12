@@ -477,6 +477,15 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
 
     prompts = []
     requested_urls = []
+    prepared_worktrees = []
+
+    monkeypatch.setattr(
+        autonomous_runtime_host_module,
+        "prepare_task_git_worktree",
+        lambda task_id, path, *, expected_head: prepared_worktrees.append(
+            (task_id, path, expected_head)
+        ),
+    )
 
     def fake_urlopen(request, timeout=0):
         del timeout
@@ -519,6 +528,9 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
     assert cli._current_autonomous_task["task_id"] == "body-1"
     assert prompts
     assert prompts[0].startswith("[Autonomous Body Improvement Task]")
+    assert prepared_worktrees == [
+        (cli.session_id, "F:/tmp/worktree", ""),
+    ]
 
 
 def test_cli_autonomous_gate_running_decision_records_owner_session(monkeypatch):

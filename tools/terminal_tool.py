@@ -552,6 +552,10 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
         - modal_image: str -- Path to Dockerfile or Docker Hub image name
         - docker_image: str -- Docker image name
         - cwd: str -- Working directory inside the sandbox
+        - host_cwd: str -- Host directory mounted at /workspace for containers
+        - docker_volumes: list[str] -- Per-task container volume mounts
+        - docker_env: dict[str, str] -- Per-task container environment variables
+        - fallback_to_local: bool -- Whether sandbox startup may use the host
 
     Args:
         task_id: The rollout's unique task identifier
@@ -567,6 +571,159 @@ def clear_task_env_overrides(task_id: str):
     Called during cleanup to avoid stale entries accumulating.
     """
     _task_env_overrides.pop(task_id, None)
+
+
+def _volume_target(volume: object) -> str:
+    """Return the container target from one Docker-style volume specification."""
+    if not isinstance(volume, str):
+        return ""
+    parts = volume.rsplit(":", 2)
+    if len(parts) < 2:
+        return ""
+    if len(parts) == 3 and parts[-1] in {"ro", "rw", "z", "Z"}:
+        return parts[-2]
+    return parts[-1]
+
+
+def _git_path(worktree: Path, argument: str) -> Path:
+    result = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", argument],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(
+            f"Cannot resolve {argument} for autonomous worktree: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = worktree / path
+    return path.resolve()
+
+
+def prepare_task_git_worktree(
+    task_id: str,
+    worktree_path: str,
+    *,
+    expected_head: str,
+) -> None:
+    """Bind and verify an isolated linked worktree for one sandbox task.
+
+    Linked worktrees on Windows contain host-only paths in their ``.git`` file.
+    The sandbox therefore receives the common Git directory separately and uses
+    ``GIT_DIR``/``GIT_WORK_TREE`` with Linux container paths.
+    """
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ValueError("Autonomous worktree binding requires a task id")
+    cleanup_vm(normalized_task_id)
+    clear_task_env_overrides(normalized_task_id)
+    worktree = Path(str(worktree_path or "").strip()).expanduser().resolve()
+    if not worktree.is_dir():
+        raise ValueError(f"Autonomous worktree does not exist: {worktree}")
+    if not (worktree / ".git").is_file():
+        raise ValueError("Autonomous body tasks require an isolated linked Git worktree")
+
+    config = _get_env_config()
+    backend = str(config.get("env_type") or "").strip().lower()
+    if backend not in {"docker", "podman"}:
+        raise ValueError(
+            "Autonomous body tasks require a Docker or Podman sandbox backend"
+        )
+
+    configured_volumes = list(config.get("docker_volumes") or [])
+    if any(_volume_target(volume) == "/workspace" for volume in configured_volumes):
+        raise ValueError(
+            "Autonomous worktree binding conflicts with a configured /workspace volume"
+        )
+
+    top_level = _git_path(worktree, "--show-toplevel")
+    if os.path.normcase(str(top_level)) != os.path.normcase(str(worktree)):
+        raise ValueError(
+            f"Autonomous worktree root mismatch: expected {worktree}, got {top_level}"
+        )
+    git_dir = _git_path(worktree, "--absolute-git-dir")
+    common_dir = _git_path(worktree, "--git-common-dir")
+    try:
+        git_dir_relative = git_dir.relative_to(common_dir).as_posix()
+    except ValueError as exc:
+        raise ValueError("Linked worktree Git metadata is outside its common directory") from exc
+    if not git_dir_relative or git_dir_relative == ".":
+        raise ValueError("Autonomous body tasks cannot edit the primary Git worktree")
+
+    head_result = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    host_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    if not expected_head or host_head != expected_head:
+        raise ValueError("Autonomous worktree HEAD does not match the captured baseline")
+
+    container_git_dir = f"/voidcube-git/common/{git_dir_relative}"
+    register_task_env_overrides(
+        normalized_task_id,
+        {
+            "cwd": "/workspace",
+            "host_cwd": str(worktree),
+            "docker_mount_cwd_to_workspace": True,
+            "docker_volumes": [
+                *configured_volumes,
+                f"{common_dir}:/voidcube-git/common",
+            ],
+            "docker_env": {
+                **dict(config.get("docker_env") or {}),
+                "GIT_DIR": container_git_dir,
+                "GIT_WORK_TREE": "/workspace",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": "/workspace",
+            },
+            "fallback_to_local": False,
+        },
+    )
+
+    try:
+        probe = json.loads(
+            terminal_tool(
+                "pwd && git rev-parse --show-toplevel && git rev-parse HEAD && git status --short",
+                task_id=normalized_task_id,
+                timeout=30,
+            )
+        )
+        output_lines = str(probe.get("output") or "").splitlines()
+        probe_ok = (
+            probe.get("exit_code") == 0
+            and len(output_lines) >= 3
+            and output_lines[0].strip() == "/workspace"
+            and output_lines[1].strip() == "/workspace"
+            and output_lines[2].strip() == expected_head
+        )
+        if not probe_ok:
+            raise RuntimeError(
+                str(
+                    probe.get("error")
+                    or probe.get("output")
+                    or "invalid Git probe output"
+                )[:500]
+            )
+    except Exception as exc:
+        cleanup_vm(normalized_task_id)
+        clear_task_env_overrides(normalized_task_id)
+        raise RuntimeError(f"Autonomous worktree sandbox probe failed: {exc}") from exc
+
+
+def release_task_environment(task_id: str) -> None:
+    """Destroy a task sandbox and remove its environment overrides."""
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        return
+    cleanup_vm(normalized_task_id)
+    clear_task_env_overrides(normalized_task_id)
+
 
 # Configuration from environment variables
 
@@ -1353,6 +1510,7 @@ def terminal_tool(
             image = ""
 
         cwd = overrides.get("cwd") or config["cwd"]
+        host_cwd = overrides.get("host_cwd", config.get("host_cwd"))
         default_timeout = config["timeout"]
         effective_timeout = timeout or default_timeout
 
@@ -1424,8 +1582,19 @@ def terminal_tool(
                                 "container_disk": config.get("container_disk", 51200),
                                 "container_persistent": config.get("container_persistent", True),
                                 "modal_mode": config.get("modal_mode", "auto"),
-                                "docker_volumes": config.get("docker_volumes", []),
-                                "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
+                                "docker_volumes": overrides.get(
+                                    "docker_volumes", config.get("docker_volumes", [])
+                                ),
+                                "docker_mount_cwd_to_workspace": overrides.get(
+                                    "docker_mount_cwd_to_workspace",
+                                    config.get("docker_mount_cwd_to_workspace", False),
+                                ),
+                                "docker_forward_env": overrides.get(
+                                    "docker_forward_env", config.get("docker_forward_env", [])
+                                ),
+                                "docker_env": overrides.get(
+                                    "docker_env", config.get("docker_env", {})
+                                ),
                             }
 
                         local_config = None
@@ -1443,8 +1612,10 @@ def terminal_tool(
                             container_config=container_config,
                             local_config=local_config,
                             task_id=effective_task_id,
-                            host_cwd=config.get("host_cwd"),
-                            fallback_to_local=config.get("fallback_to_local", True),
+                            host_cwd=host_cwd,
+                            fallback_to_local=overrides.get(
+                                "fallback_to_local", config.get("fallback_to_local", True)
+                            ),
                         )
                     except ImportError as e:
                         return json.dumps({
