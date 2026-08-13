@@ -61,11 +61,24 @@ def test_old_attempt_is_rejected_after_same_session_reclaims(tmp_path):
     first_generation = first.execution_lease.generation
     first_attempt = str(first.execution_lease.attempt_id)
 
-    store.begin_reconcile(task.task_id, reason="owner expired")
+    fenced = store.begin_reconcile(
+        task.task_id,
+        expected_generation=first_generation,
+        expected_attempt_id=first_attempt,
+        reason="owner expired",
+    )
+    assert fenced.execution_lease.generation == first_generation + 1
+    assert fenced.execution_lease.attempt_id != first_attempt
+    with pytest.raises(StaleExecutionLeaseError):
+        store.validate_execution_lease(
+            task.task_id,
+            generation=first_generation,
+            attempt_id=first_attempt,
+        )
     store.update_status(task.task_id, status="approved", reason="reconciled as not dispatched")
     second = store.claim_execution(task.task_id, owner_session_id="same-session")
 
-    assert second.execution_lease.generation == first_generation + 1
+    assert second.execution_lease.generation == first_generation + 2
     assert second.execution_lease.attempt_id != first_attempt
     with pytest.raises(StaleExecutionLeaseError, match="stale_execution_lease"):
         store.finalize_execution(

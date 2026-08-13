@@ -534,7 +534,7 @@ def test_supervisor_recovery_failure_degrades_health_and_readiness(tmp_path, mon
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_recovery_gate_blocks_new_claim_but_allows_existing_lease_updates(tmp_path):
+async def test_recovery_gate_blocks_new_claim_and_existing_lease_updates(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor._autonomous_chain_planning_service.plan(
         {
@@ -565,27 +565,20 @@ async def test_recovery_gate_blocks_new_claim_but_allows_existing_lease_updates(
     lease = claimed["task"]["execution_lease"]
     supervisor._service_runtime.recovery.mark_failed(RuntimeError("late degradation"))
 
-    renewed = await supervisor.decide_autonomous_chain_task(
-        task_id,
-        {
-            "decision": "running",
-            "actor": "cli_agent",
-            "session_id": "existing-owner",
-            "execution_lease": lease,
-            "reason": "renew existing ownership",
-        },
-    )
-    finalized = await supervisor.decide_autonomous_chain_task(
-        task_id,
-        {
-            "decision": "completed",
-            "actor": "cli_agent",
-            "session_id": "existing-owner",
-            "execution_lease": renewed["task"]["execution_lease"],
-            "reason": "finish existing ownership",
-        },
-    )
-    assert finalized["task"]["status"] == "completed"
+    for decision in ("running", "completed"):
+        with pytest.raises(Exception) as existing_exc:
+            await supervisor.decide_autonomous_chain_task(
+                task_id,
+                {
+                    "decision": decision,
+                    "actor": "cli_agent",
+                    "session_id": "existing-owner",
+                    "execution_lease": lease,
+                    "reason": "must be gated after degradation",
+                },
+            )
+        assert getattr(existing_exc.value, "status_code", None) == 503
+        assert existing_exc.value.detail["code"] == "supervisor_recovery_not_healthy"
 
     second = await supervisor._autonomous_chain_planning_service.plan(
         {

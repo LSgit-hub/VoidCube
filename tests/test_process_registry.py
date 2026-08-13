@@ -208,7 +208,7 @@ def test_completed_session_and_output_survive_registry_restart(tmp_path):
 
 
 @pytest.mark.unit
-def test_live_local_session_recovers_as_unknown_then_converges_from_marker(tmp_path):
+def test_live_local_session_recovers_as_running_then_converges_from_marker(tmp_path):
     storage = tmp_path / "live-recovery"
     first = ProcessRegistry(storage)
     session = first.spawn_local(
@@ -221,8 +221,8 @@ def test_live_local_session_recovers_as_unknown_then_converges_from_marker(tmp_p
     restarted = ProcessRegistry(storage)
     recovered_session = restarted.get(session.id)
 
-    assert recovered_session.status == "unknown"
-    assert "local control was lost" in recovered_session.error
+    assert recovered_session.status == "running"
+    assert "control restored" in recovered_session.error
     assert recovered_session._done.wait(5)
     recovered = restarted.poll(session.id)
     assert recovered["status"] == "succeeded"
@@ -306,6 +306,46 @@ def test_concurrent_spool_observers_do_not_duplicate_output(tmp_path):
         assert session._observed_bytes == len(b"single")
     finally:
         registry.kill(session.id)
+
+
+@pytest.mark.unit
+def test_spool_observer_preserves_utf8_character_split_across_reads(tmp_path):
+    registry = ProcessRegistry(tmp_path / "utf8-spool")
+    session = registry.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="utf8-split",
+    )
+    encoded = "中".encode("utf-8")
+    try:
+        session.spool_path.write_bytes(encoded[:2])
+        registry._observe_spool(session)
+        assert session._output == ""
+
+        with session.spool_path.open("ab") as handle:
+            handle.write(encoded[2:])
+        registry._observe_spool(session)
+
+        assert session._output == "中"
+        assert session._pending_utf8 == b""
+    finally:
+        registry.kill(session.id)
+
+
+@pytest.mark.unit
+def test_verified_recovered_process_can_be_killed(tmp_path):
+    storage = tmp_path / "recovered-kill"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="recovered-kill",
+    )
+    restarted = ProcessRegistry(storage)
+    recovered = restarted.get(session.id)
+
+    assert recovered.status == "running"
+    assert restarted.kill(session.id)["status"] == "cancelled"
 
 
 @pytest.mark.unit

@@ -200,15 +200,15 @@ class AutonomousTaskReviewService:
         session_id = self._request_agent_session_id(request)
         generation, attempt_id = self._lease_token(request)
         try:
+            if not self._recovery_healthy():
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "supervisor_recovery_not_healthy",
+                        "message": "Autonomous execution writes are disabled until recovery is healthy.",
+                    },
+                )
             if decision == "running" and task.status in {"approved", "retry"}:
-                if not self._recovery_healthy():
-                    raise HTTPException(
-                        status_code=503,
-                        detail={
-                            "code": "supervisor_recovery_not_healthy",
-                            "message": "New autonomous claims are disabled until recovery is healthy.",
-                        },
-                    )
                 return self._task_state.claim_execution(
                     task.task_id,
                     owner_session_id=session_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from queue import Queue
+import json
 
 from VoidCube_cli.autonomous_executor import (
     AutonomousExecutorPorts,
@@ -159,3 +160,65 @@ def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
     assert task.get("_autonomous_task_run_id") is None
     assert state["run_id"] == ""
     assert released == ["autonomous-session-2"]
+
+
+def test_current_task_lease_heartbeat_updates_persisted_task(monkeypatch):
+    current = {
+        "task_id": "task-heartbeat",
+        "execution_lease": {
+            "generation": 2,
+            "attempt_id": "attempt-2",
+            "state": "active",
+        },
+    }
+    state = {"task": current}
+    requests = []
+
+    class Response:
+        def read(self):
+            return json.dumps(
+                {
+                    "task": {
+                        **current,
+                        "execution_lease": {
+                            **current["execution_lease"],
+                            "heartbeat_at": "2026-08-13T00:00:00+00:00",
+                        },
+                    }
+                }
+            ).encode()
+
+    def urlopen(request, timeout=0):
+        requests.append(json.loads(request.data.decode()))
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    runtime = AutonomousExecutorRuntime(
+        AutonomousExecutorPorts(
+            get_session_id=lambda: "session-1",
+            get_current_task=lambda: state["task"],
+            set_current_task=lambda value: state.__setitem__("task", value),
+            get_current_task_started_at=lambda: 0.0,
+            set_current_task_started_at=lambda _value: None,
+            set_current_task_run_id=lambda _value: None,
+            get_last_agent_turn_result=lambda: None,
+            set_last_agent_turn_result=lambda _value: None,
+            enqueue_pending_input=lambda _value: None,
+            agent_running=lambda: True,
+            autonomous_gate_active=lambda: True,
+            append_execution_event=lambda *_args, **_kwargs: None,
+            prepare_body_worktree=lambda *_args: None,
+            release_task_environment=lambda _value: None,
+        ),
+        push_cli_agent_scene=lambda *args, **kwargs: None,
+        git_head_commit=lambda _path: "",
+        git_improvement_diff=lambda _path, _head: None,
+        cprint=lambda _message: None,
+    )
+
+    assert runtime.renew_current_task_lease_if_due(now=100.0) is True
+    assert requests[0]["decision"] == "running"
+    assert requests[0]["execution_lease"]["attempt_id"] == "attempt-2"
+    assert state["task"]["execution_lease"]["heartbeat_at"]
+    assert runtime.renew_current_task_lease_if_due(now=120.0) is True
+    assert len(requests) == 1

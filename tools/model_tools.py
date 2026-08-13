@@ -26,6 +26,8 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 
 from tools.registry import registry
 from tools.toolsets import resolve_toolset, validate_toolset
+from agent.tool_execution import classify_tool_result
+from VoidCube_app.contracts.execution import ExecutionState
 
 logger = logging.getLogger(__name__)
 
@@ -463,6 +465,8 @@ def handle_function_call(
     user_task: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
     main_runtime: Optional[Dict[str, Any]] = None,
+    dynamic_handler: Optional[Any] = None,
+    dynamic_effect: Optional[str] = None,
 ) -> str:
     """
     Main function call dispatcher that routes calls to the tool registry.
@@ -513,7 +517,7 @@ def handle_function_call(
         except (ImportError, RuntimeError):
             pass
 
-        effect = registry.get_effect(function_name)
+        effect = dynamic_effect or registry.get_effect(function_name)
         if effect != "read_only":
             from agent.action_journal import get_action_journal
 
@@ -560,6 +564,7 @@ def handle_function_call(
                 ),
                 attempt_id=str(lease.get("attempt_id") or "") or None,
                 call_id=tool_call_id,
+                operation_id=str(function_args.get("operation_id") or "") or None,
             )
             if not journal.claim_dispatch(
                 prepared_action.action_id,
@@ -575,7 +580,9 @@ def handle_function_call(
                     ensure_ascii=False,
                 )
 
-        if function_name == "execute_code":
+        if dynamic_handler is not None:
+            result = dynamic_handler(function_name, function_args)
+        elif function_name == "execute_code":
             # Prefer the caller-provided list so subagents can't overwrite
             # the parent's tool set via the process-global.
             sandbox_enabled = enabled_tools if enabled_tools is not None else _last_resolved_tool_names
@@ -596,13 +603,8 @@ def handle_function_call(
             )
 
         if prepared_action is not None and journal is not None:
-            is_error = False
-            try:
-                payload = json.loads(result) if isinstance(result, str) else result
-                if isinstance(payload, dict):
-                    is_error = payload.get("success") is False or bool(payload.get("error"))
-            except (TypeError, ValueError, json.JSONDecodeError):
-                is_error = str(result).lstrip().lower().startswith("error")
+            result_state, _ = classify_tool_result(result)
+            is_error = result_state is ExecutionState.FAILED
             journal.transition(
                 prepared_action.action_id,
                 "failed" if is_error else "succeeded",

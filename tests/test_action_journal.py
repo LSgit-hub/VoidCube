@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -64,6 +65,46 @@ def test_same_idempotency_key_reuses_action(tmp_path):
     )
 
     assert replay == first
+
+
+def test_new_protocol_call_id_reuses_stable_task_operation(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    first = journal.prepare(
+        tool_name="mem_remember",
+        arguments={"title": "fact", "summary": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        attempt_id="attempt-1",
+        call_id="protocol-call-1",
+    )
+    replay = journal.prepare(
+        tool_name="mem_remember",
+        arguments={"summary": "stable", "title": "fact"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        attempt_id="attempt-1",
+        call_id="protocol-call-2",
+    )
+
+    assert replay == first
+    assert journal.get(first.action_id)["operation_id"]
+
+
+def test_startup_recovery_moves_stale_dispatched_to_unknown(tmp_path):
+    path = tmp_path / "actions.db"
+    journal = ActionJournal(path)
+    action = journal.prepare(
+        tool_name="terminal",
+        arguments={"command": "create-resource"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+    )
+    assert journal.claim_dispatch(action.action_id)
+
+    recovered = journal.recover_stale_dispatched(stale_after_seconds=0, now=time.time() + 1)
+
+    assert recovered == 1
+    assert journal.get(action.action_id)["state"] == "unknown"
 
 
 def test_claim_dispatch_is_single_winner(tmp_path):
@@ -155,6 +196,27 @@ def test_handler_exception_after_dispatch_records_unknown(monkeypatch, tmp_path)
     assert "lost response" in result["error"]
     assert action is not None
     assert action.state == "unknown"
+
+
+def test_dynamic_memory_write_uses_journal_and_stable_operation(monkeypatch, tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    invoked = []
+    monkeypatch.setattr("agent.action_journal.get_action_journal", lambda: journal)
+
+    result = handle_function_call(
+        "mem_remember",
+        {"title": "fact", "summary": "detail"},
+        task_id="task-memory",
+        tool_call_id="call-memory",
+        dynamic_handler=lambda name, args: invoked.append((name, args)) or '{"success": true}',
+        dynamic_effect="non_idempotent_write",
+    )
+
+    action = journal.find_by_call_id("call-memory", task_id="task-memory")
+    assert json.loads(result)["success"] is True
+    assert invoked == [("mem_remember", {"title": "fact", "summary": "detail"})]
+    assert action is not None
+    assert action.state == "succeeded"
 
 
 def test_unclassified_tool_defaults_to_non_idempotent_write():

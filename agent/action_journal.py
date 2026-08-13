@@ -60,7 +60,8 @@ class ActionRef:
 
 
 class ActionJournal:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
+    DEFAULT_DISPATCH_STALE_SECONDS = 300.0
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
@@ -71,6 +72,7 @@ class ActionJournal:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._init_schema()
+        self.recover_stale_dispatched()
 
     def _init_schema(self) -> None:
         with self._conn:
@@ -106,8 +108,13 @@ class ActionJournal:
             }
             if "call_id" not in columns:
                 self._conn.execute("ALTER TABLE actions ADD COLUMN call_id TEXT")
+            if "operation_id" not in columns:
+                self._conn.execute("ALTER TABLE actions ADD COLUMN operation_id TEXT")
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_actions_call_id ON actions(call_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_actions_operation_id ON actions(operation_id)"
             )
             self._conn.execute(
                 "INSERT OR REPLACE INTO action_meta(key, value) VALUES('schema_version', ?)",
@@ -149,13 +156,20 @@ class ActionJournal:
         self, *, tool_name: str, arguments: dict[str, Any], effect: EffectClass,
         task_id: str | None = None, lease_generation: int | None = None,
         attempt_id: str | None = None, call_id: str | None = None,
+        operation_id: str | None = None,
     ) -> PreparedAction:
         canonical_arguments = self._canonical(arguments)
         normalized = self._canonical(self._redact(arguments))
         arguments_hash = hashlib.sha256(canonical_arguments.encode()).hexdigest()
-        stable_source = call_id or str(uuid.uuid4())
+        stable_operation = str(operation_id or "").strip()
+        if not stable_operation and task_id:
+            stable_operation = hashlib.sha256(
+                f"{task_id}:{attempt_id or ''}:{tool_name}:{arguments_hash}".encode()
+            ).hexdigest()
+        stable_source = stable_operation or call_id or str(uuid.uuid4())
         idempotency_key = hashlib.sha256(
-            f"{task_id or ''}:{lease_generation or 0}:{stable_source}:{tool_name}:{arguments_hash}".encode()
+            f"{task_id or ''}:{lease_generation or 0}:{attempt_id or ''}:"
+            f"{stable_source}:{tool_name}:{arguments_hash}".encode()
         ).hexdigest()
         retryability = "safe" if effect == "idempotent_write" else "reconcile_first"
         action_id = f"act_{uuid.uuid4().hex}"
@@ -163,11 +177,12 @@ class ActionJournal:
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 """INSERT OR IGNORE INTO actions(
-                action_id, task_id, lease_generation, attempt_id, call_id,
+                action_id, task_id, lease_generation, attempt_id, call_id, operation_id,
                 tool_name, normalized_arguments, arguments_hash, idempotency_key,
                 risk_level, target_resource, state, retryability, prepared_at, schema_version)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
-                (action_id, task_id, lease_generation, attempt_id, call_id, tool_name, normalized,
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
+                (action_id, task_id, lease_generation, attempt_id, call_id,
+                 stable_operation or None, tool_name, normalized,
                  arguments_hash, idempotency_key, effect, self._target(arguments),
                  retryability, now, self.SCHEMA_VERSION),
             )
@@ -351,6 +366,44 @@ class ActionJournal:
             return [dict(row) for row in self._conn.execute(
                 "SELECT * FROM actions WHERE state = 'unknown' ORDER BY prepared_at"
             ).fetchall()]
+
+    def recover_stale_dispatched(
+        self,
+        *,
+        stale_after_seconds: float | None = None,
+        now: float | None = None,
+    ) -> int:
+        """Fence dispatches whose process may have died before recording an outcome."""
+        stale_after = (
+            self.DEFAULT_DISPATCH_STALE_SECONDS
+            if stale_after_seconds is None
+            else max(0.0, float(stale_after_seconds))
+        )
+        cutoff = (time.time() if now is None else float(now)) - stale_after
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                "SELECT action_id FROM actions WHERE state = 'dispatched' "
+                "AND dispatched_at IS NOT NULL AND dispatched_at <= ?",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                action_id = str(row["action_id"])
+                cursor = self._conn.execute(
+                    "UPDATE actions SET state = 'unknown', finished_at = ?, "
+                    "error_code = 'stale_dispatch', "
+                    "error_summary = 'Process ended before dispatch outcome was recorded' "
+                    "WHERE action_id = ? AND state = 'dispatched'",
+                    (time.time(), action_id),
+                )
+                if cursor.rowcount == 1:
+                    self._transition_row(
+                        action_id,
+                        "dispatched",
+                        "unknown",
+                        "recovery",
+                        "stale_dispatch_recovered",
+                    )
+            return len(rows)
 
     def begin_reconcile(self, action_id: str, *, reason: str) -> None:
         self.transition(action_id, "reconciling", reason=reason)

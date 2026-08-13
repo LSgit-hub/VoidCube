@@ -11,6 +11,7 @@ from agent.session_persistence import (
     apply_user_message_override,
     clean_session_content,
 )
+from VoidCube_core.state import SessionDB
 
 
 pytestmark = [pytest.mark.smoke, pytest.mark.unit]
@@ -21,12 +22,25 @@ class _SessionDB:
         self.ensured: list[tuple[str, str, str]] = []
         self.messages: list[dict] = []
         self.sequences: dict[str, int] = {}
+        self.revisions: dict[str, int] = {}
 
     def ensure_session(self, session_id: str, *, source: str, model: str) -> None:
         self.ensured.append((session_id, source, model))
 
     def get_flush_sequence(self, session_id: str) -> int:
         return self.sequences.get(session_id, 0)
+
+    def get_session(self, session_id: str) -> dict:
+        return {"transcript_revision": self.revisions.get(session_id, 0)}
+
+    def get_transcript_snapshot(self, session_id: str) -> dict:
+        messages = self.get_messages_as_conversation(session_id)
+        return {
+            "flush_sequence": self.sequences.get(session_id, 0),
+            "transcript_revision": self.revisions.get(session_id, 0),
+            "transcript_hash": SessionDB.transcript_hash(messages),
+            "messages": messages,
+        }
 
     @staticmethod
     def stable_message_id(session_id, sequence_no, message) -> str:
@@ -39,10 +53,19 @@ class _SessionDB:
         messages: list[dict],
         *,
         expected_flush_sequence: int | None = None,
+        expected_revision: int | None = None,
+        expected_prefix_hash: str | None = None,
         allocate_sequences: bool = False,
     ) -> None:
         current = self.sequences.get(session_id, 0)
         assert expected_flush_sequence in {None, current}
+        assert expected_revision in {None, self.revisions.get(session_id, 0)}
+        assert expected_prefix_hash in {
+            None,
+            SessionDB.transcript_hash(
+                self.get_messages_as_conversation(session_id)
+            ),
+        }
         prepared = []
         for offset, message in enumerate(messages, 1):
             message = dict(message)
@@ -59,6 +82,7 @@ class _SessionDB:
             self.sequences[session_id] = max(
                 message["sequence_no"] for message in prepared
             )
+            self.revisions[session_id] = self.revisions.get(session_id, 0) + 1
 
     def get_messages_as_conversation(self, session_id: str) -> list[dict]:
         return [
@@ -152,11 +176,71 @@ def test_sqlite_flush_sequence_prevents_duplicate_db_writes(tmp_path):
     history = [{"role": "user", "content": "already stored"}]
     messages = [*history, {"role": "assistant", "content": "new"}]
     session_db.sequences["session-1"] = 1
+    session_db.messages.append(
+        {
+            "session_id": "session-1",
+            "sequence_no": 1,
+            "message_id": "existing",
+            **history[0],
+        }
+    )
 
     persistence.persist(messages, history)
     persistence.persist(messages, history)
 
-    assert [message["content"] for message in session_db.messages] == ["new"]
+    assert [message["content"] for message in session_db.messages] == [
+        "already stored",
+        "new",
+    ]
+
+
+def test_divergent_local_prefix_is_rejected_without_mixing_transcripts(tmp_path):
+    session_db = SessionDB(tmp_path / "sessions.db")
+    session_db.create_session("session-1", source="cli")
+    persistence, _ = _persistence(tmp_path, session_db=session_db)
+    persistence.persist([{"role": "user", "content": "committed A"}])
+
+    result = persistence.flush_to_db(
+        [
+            {"role": "user", "content": "divergent B"},
+            {"role": "assistant", "content": "B answer"},
+        ]
+    )
+
+    assert result is False
+    assert [
+        message["content"]
+        for message in session_db.get_messages_as_conversation("session-1")
+    ] == ["committed A"]
+
+
+def test_json_mirror_retries_when_database_revision_changes_mid_refresh(
+    tmp_path,
+    monkeypatch,
+):
+    session_db = SessionDB(tmp_path / "sessions.db")
+    session_db.create_session("session-1", source="cli")
+    session_db.append_message("session-1", "user", "first")
+    persistence, _ = _persistence(tmp_path, session_db=session_db)
+    original_write = persistence._write_log
+    changed = False
+
+    def write_then_change(messages, **kwargs):
+        nonlocal changed
+        if not changed:
+            changed = True
+            session_db.append_message("session-1", "assistant", "second")
+        original_write(messages, **kwargs)
+
+    monkeypatch.setattr(persistence, "_write_log", write_then_change)
+    persistence.refresh_json_mirror()
+
+    saved = json.loads(persistence.session_log_file.read_text(encoding="utf-8"))
+    assert saved["transcript_revision"] == 2
+    assert [message["content"] for message in saved["messages"]] == [
+        "first",
+        "second",
+    ]
 
 
 def test_json_mirror_failure_does_not_rollback_sqlite_batch(tmp_path, monkeypatch):

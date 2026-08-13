@@ -14,6 +14,7 @@ from difflib import unified_diff
 from pathlib import Path
 
 from VoidCube_core.utils import safe_json_loads
+from VoidCube_app.contracts.execution import ExecutionState
 
 # ANSI escape codes for coloring tool failure indicators
 _RED = "\033[31m"
@@ -678,30 +679,11 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
     like ``" [exit 1]"`` for terminal failures, or ``" [error]"`` for generic
     failures.  On success, returns ``(False, "")``.
     """
-    if result is None:
-        return False, ""
+    del tool_name
+    from agent.tool_execution import classify_tool_result
 
-    if tool_name == "terminal":
-        data = safe_json_loads(result)
-        if isinstance(data, dict):
-            exit_code = data.get("exit_code")
-            if exit_code is not None and exit_code != 0:
-                return True, f" [exit {exit_code}]"
-        return False, ""
-
-    # Memory-specific: distinguish "full" from real errors
-    if tool_name == "memory":
-        data = safe_json_loads(result)
-        if isinstance(data, dict):
-            if data.get("success") is False and "exceed the limit" in data.get("error", ""):
-                return True, " [full]"
-
-    # Generic heuristic for non-terminal tools
-    lower = result[:500].lower()
-    if '"error"' in lower or '"failed"' in lower or result.startswith("Error"):
-        return True, " [error]"
-
-    return False, ""
+    state, suffix = classify_tool_result(result)
+    return state is ExecutionState.FAILED, suffix
 
 
 def get_cute_tool_message(

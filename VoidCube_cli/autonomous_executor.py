@@ -225,6 +225,9 @@ def autonomous_task_run_id_for_message(
 class AutonomousExecutorRuntime:
     """Runtime bridge for API-A autonomous tasks, hosted by the interactive CLI."""
 
+    _LEASE_RENEW_INTERVAL_SECONDS = 60.0
+    _LEASE_SECONDS = 300.0
+
     def __init__(
         self,
         ports: AutonomousExecutorPorts,
@@ -239,6 +242,7 @@ class AutonomousExecutorRuntime:
         self._git_head_commit = git_head_commit
         self._git_improvement_diff = git_improvement_diff
         self._cprint = cprint
+        self._last_lease_renewal_at = 0.0
 
     def find_owned_running_task(self) -> Dict[str, Any] | None:
         """Recover the running autonomous task owned by this CLI session, if any."""
@@ -396,6 +400,15 @@ class AutonomousExecutorRuntime:
         elapsed = current_time - started_at
         if elapsed <= 1800:
             return False
+        lease = dict(current.get("execution_lease") or {})
+        heartbeat_raw = str(lease.get("heartbeat_at") or "").strip()
+        if heartbeat_raw:
+            try:
+                heartbeat_at = datetime.fromisoformat(heartbeat_raw).timestamp()
+                if current_time - heartbeat_at <= self._LEASE_SECONDS:
+                    return False
+            except ValueError:
+                pass
 
         task_id = str(current.get("task_id") or "").strip()
         if not task_id:
@@ -475,6 +488,60 @@ class AutonomousExecutorRuntime:
             )
             try:
                 self._cprint(f"  ⚠️  Autonomous task writeback failed for {task_id[:8]}: {exc}")
+            except Exception:
+                pass
+            return False
+
+    def renew_current_task_lease_if_due(
+        self,
+        *,
+        gateway_base: str | None = None,
+        now: float | None = None,
+    ) -> bool:
+        """Renew the active autonomous lease from the CLI poll heartbeat."""
+        current = self.ports.get_current_task()
+        if not isinstance(current, dict):
+            return False
+        lease = dict(current.get("execution_lease") or {})
+        if lease.get("state") != "active" or not lease.get("attempt_id"):
+            return False
+        current_time = time.time() if now is None else float(now)
+        if current_time - self._last_lease_renewal_at < self._LEASE_RENEW_INTERVAL_SECONDS:
+            return True
+        task_id = str(current.get("task_id") or "").strip()
+        if not task_id:
+            return False
+        payload = {
+            "decision": "running",
+            "actor": "cli_agent",
+            "reason": "API-A autonomous executor heartbeat.",
+            "session_id": str(self.ports.get_session_id() or ""),
+            "lease_seconds": self._LEASE_SECONDS,
+            "execution_lease": lease,
+            "context": {"source": "cli_agent_pull", "heartbeat": True},
+        }
+        try:
+            request = urllib.request.Request(
+                f"{(gateway_base or default_gateway_url()).rstrip('/')}/v1/tasks/{task_id}/decision",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            response = json.loads(urllib.request.urlopen(request, timeout=15).read())
+            renewed = response.get("task") if isinstance(response, dict) else None
+            if not isinstance(renewed, dict):
+                return False
+            self.ports.set_current_task(renewed)
+            self._last_lease_renewal_at = current_time
+            return True
+        except Exception as exc:
+            self.ports.append_execution_event(
+                f"任务 {task_id[:8]} lease 续租失败",
+                tone="error",
+                stage="lease_renew_failed",
+            )
+            try:
+                self._cprint(f"  ⚠️  Autonomous task lease renewal failed for {task_id[:8]}: {exc}")
             except Exception:
                 pass
             return False
@@ -565,6 +632,8 @@ class AutonomousExecutorRuntime:
 
         current = self.ports.get_current_task()
         if current is not None:
+            self.renew_current_task_lease_if_due(gateway_base=gateway_base)
+            current = self.ports.get_current_task() or current
             task_id = current.get("task_id", "")
             execution_kind = autonomous_task_execution_kind(current)
             task_label = autonomous_task_label(execution_kind)

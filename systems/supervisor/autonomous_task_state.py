@@ -128,6 +128,17 @@ class AutonomousTaskStateService:
         self._notify_status(task, "execution_reconcile")
         return task
 
+    def expire_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        task = self._store.expire_execution(
+            task_id,
+            **kwargs,
+            before_commit=lambda updated: self._record_transition(
+                updated, transition_kind="execution_timeout"
+            ),
+        )
+        self._notify_status(task, "execution_timeout")
+        return task
+
     def _notify_status(self, task: AutonomousChainTask, event_type: str) -> None:
         if self._on_status_change is not None:
             self._on_status_change(task, event_type)

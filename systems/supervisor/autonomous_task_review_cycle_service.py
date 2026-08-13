@@ -7,7 +7,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
+from systems.supervisor.autonomous_chain_store import (
+    AutonomousChainTask,
+    StaleExecutionLeaseError,
+)
 from systems.supervisor.autonomous_task_review import is_agent_pull_task
 from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
@@ -104,7 +107,8 @@ class AutonomousTaskReviewCycleService:
                 continue
 
             metadata = dict(task.metadata or {})
-            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
+            lease = task.execution_lease
+            owner_session_id = str(lease.owner_session_id or "").strip()
             execution_source = str(metadata.get("execution_source") or "").strip().lower()
             if execution_source and execution_source != "cli_agent_pull":
                 continue
@@ -121,39 +125,52 @@ class AutonomousTaskReviewCycleService:
                 )
                 continue
 
-            try:
-                owner_session = await self._fetch_cli_session(owner_session_id)
-            except Exception as exc:
-                logger.warning(
-                    "跳过链路项 %s 的孤儿恢复：无法从网关确认 owner CLI 会话 %s（%s）；当前保守地不做恢复。",
-                    task.task_id,
-                    owner_session_id,
-                    exc,
-                )
-                continue
+            expires_at = lease.expires_at
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            lease_expired = expires_at is None or expires_at <= self._now()
+            owner_session: Dict[str, Any] = {}
+            if not lease_expired:
+                try:
+                    owner_session = await self._fetch_cli_session(owner_session_id)
+                except Exception as exc:
+                    logger.warning(
+                        "跳过链路项 %s 的孤儿恢复：无法从网关确认 owner CLI 会话 %s（%s）；当前保守地不做恢复。",
+                        task.task_id,
+                        owner_session_id,
+                        exc,
+                    )
+                    continue
 
             owner_missing = bool(owner_session.get("missing"))
             owner_stale = bool(owner_session.get("is_stale")) or str(
                 owner_session.get("lease_status") or ""
             ).strip().lower() == "stale"
+            owner_stale = owner_stale or lease_expired
             if not owner_missing and not owner_stale:
                 continue
 
-            self._task_state.begin_reconcile(
-                task.task_id,
-                reason=(
-                    "Agent-pull owner is missing or stale; execution outcome must be "
-                    "reconciled before this task can be claimed again."
-                ),
-                context={
-                    "recovered": True,
-                    "previous_owner_session_id": owner_session_id,
-                    "owner_session_missing": owner_missing,
-                    "owner_session_stale": owner_stale,
-                    "owner_lease_status": owner_session.get("lease_status"),
-                    "active_cli_session_id": owner_session.get("active_cli_session_id"),
-                },
-            )
+            try:
+                self._task_state.begin_reconcile(
+                    task.task_id,
+                    expected_generation=lease.generation,
+                    expected_attempt_id=str(lease.attempt_id or ""),
+                    reason=(
+                        "Agent-pull owner is missing, stale, or its execution lease expired; "
+                        "the outcome must be reconciled before this task can be claimed again."
+                    ),
+                    context={
+                        "recovered": True,
+                        "previous_owner_session_id": owner_session_id,
+                        "owner_session_missing": owner_missing,
+                        "owner_session_stale": owner_stale,
+                        "execution_lease_expired": lease_expired,
+                        "owner_lease_status": owner_session.get("lease_status"),
+                        "active_cli_session_id": owner_session.get("active_cli_session_id"),
+                    },
+                )
+            except StaleExecutionLeaseError:
+                continue
             self._task_state.update_metadata(
                 task.task_id,
                 metadata={
@@ -167,7 +184,7 @@ class AutonomousTaskReviewCycleService:
         stale_running = 0
         now = self._now()
         for task in self._list_execution_lane_tasks("running"):
-            started = dict(task.metadata or {}).get("executed_at") or dict(
+            started = task.execution_lease.heartbeat_at or dict(task.metadata or {}).get("executed_at") or dict(
                 task.metadata or {}
             ).get("execution_started_at")
             if not started:
@@ -177,14 +194,15 @@ class AutonomousTaskReviewCycleService:
                 if started_at.tzinfo is None:
                     started_at = started_at.replace(tzinfo=timezone.utc)
                 if (now - started_at).total_seconds() > self._STALE_RUNNING_SECONDS:
-                    self._task_state.update_status(
+                    self._task_state.expire_execution(
                         task.task_id,
-                        status="failed",
+                        expected_generation=task.execution_lease.generation,
+                        expected_attempt_id=str(task.execution_lease.attempt_id or ""),
+                        expected_heartbeat_at=task.execution_lease.heartbeat_at,
                         reason="timeout: stuck >30min",
-                        event_type="timeout",
                     )
                     stale_running += 1
-            except Exception:
+            except (StaleExecutionLeaseError, ValueError, TypeError):
                 continue
         return stale_running
 

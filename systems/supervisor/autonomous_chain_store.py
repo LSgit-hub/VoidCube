@@ -618,7 +618,7 @@ class AutonomousChainStore:
             lease.generation != int(generation)
             or not attempt_id
             or lease.attempt_id != attempt_id
-            or lease.state not in {"active", "reconciling"}
+            or lease.state != "active"
             or expires_at <= now
         ):
             raise StaleExecutionLeaseError(
@@ -747,7 +747,7 @@ class AutonomousChainStore:
                     raise StaleExecutionLeaseError(
                         "stale_execution_lease: owner mismatch"
                     )
-                if task.status not in {"running", "awaiting_user_consent", "reconciling"}:
+                if task.status not in {"running", "awaiting_user_consent"}:
                     raise StaleExecutionLeaseError(
                         f"stale_execution_lease: task {task_id} is {task.status}"
                     )
@@ -807,7 +807,7 @@ class AutonomousChainStore:
                 lease = self._require_lease(
                     task, generation=generation, attempt_id=attempt_id
                 )
-                if task.status not in {"running", "awaiting_user_consent", "reconciling"}:
+                if task.status not in {"running", "awaiting_user_consent"}:
                     raise StaleExecutionLeaseError(
                         f"stale_execution_lease: task {task_id} cannot finalize from {task.status}"
                     )
@@ -845,6 +845,8 @@ class AutonomousChainStore:
         self,
         task_id: str,
         *,
+        expected_generation: int,
+        expected_attempt_id: str,
         reason: str,
         context: Optional[Dict[str, Any]] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
@@ -854,15 +856,28 @@ class AutonomousChainStore:
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
                     continue
-                if task.status != "running" or task.execution_lease.state not in {
-                    "active",
-                    "released",
-                }:
-                    raise ValueError(f"Task {task_id} is not actively running")
+                lease = task.execution_lease
+                if (
+                    task.status != "running"
+                    or lease.state != "active"
+                    or lease.generation != int(expected_generation)
+                    or lease.attempt_id != str(expected_attempt_id or "").strip()
+                ):
+                    raise StaleExecutionLeaseError(
+                        f"stale_execution_lease: task {task_id} changed before reconciliation"
+                    )
+                previous_generation = lease.generation
+                previous_attempt_id = lease.attempt_id
                 task.status = "reconciling"
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
-                task.execution_lease.state = "reconciling"
+                task.execution_lease = AutonomousChainExecutionLease(
+                    generation=previous_generation + 1,
+                    attempt_id=str(uuid.uuid4()),
+                    heartbeat_at=datetime.now(timezone.utc),
+                    expires_at=datetime.now(timezone.utc),
+                    state="reconciling",
+                )
                 task.decision_history.append(
                     AutonomousChainTaskDecision(
                         status="reconciling",
@@ -873,7 +888,71 @@ class AutonomousChainStore:
                         trace_id=task.trace_id,
                         actor="supervisor",
                         reason=reason,
-                        context=dict(context or {}),
+                        context={
+                            **dict(context or {}),
+                            "previous_generation": previous_generation,
+                            "previous_attempt_id": previous_attempt_id,
+                            "fence_generation": task.execution_lease.generation,
+                        },
+                    )
+                )
+                snapshot.tasks[index] = task
+                if before_commit is not None:
+                    before_commit(task)
+                self._write_snapshot(snapshot)
+                return task
+        raise KeyError(task_id)
+
+    def expire_execution(
+        self,
+        task_id: str,
+        *,
+        expected_generation: int,
+        expected_attempt_id: str,
+        expected_heartbeat_at: datetime | None,
+        reason: str,
+        before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
+    ) -> AutonomousChainTask:
+        """Fail a stale execution only if its observed lease is still current."""
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
+            snapshot = self._load_snapshot()
+            for index, task in enumerate(snapshot.tasks):
+                if task.task_id != task_id:
+                    continue
+                lease = task.execution_lease
+                if (
+                    task.status != "running"
+                    or lease.state != "active"
+                    or lease.generation != int(expected_generation)
+                    or lease.attempt_id != str(expected_attempt_id or "").strip()
+                    or lease.heartbeat_at != expected_heartbeat_at
+                ):
+                    raise StaleExecutionLeaseError(
+                        f"stale_execution_lease: task {task_id} changed before timeout"
+                    )
+                task.status = "failed"
+                task.updated_at = datetime.utcnow()
+                task.decision_reason = reason
+                lease.state = "expired"
+                task.decision_history.append(
+                    AutonomousChainTaskDecision(
+                        status="failed",
+                        task_type=task.task_type,
+                        governance_task_type=task.governance_task_type,
+                        task_family=task.task_family,
+                        execution_kind=task.execution_kind,
+                        trace_id=task.trace_id,
+                        actor="supervisor",
+                        reason=reason,
+                        context={
+                            "lease_generation": expected_generation,
+                            "attempt_id": expected_attempt_id,
+                            "heartbeat_at": (
+                                expected_heartbeat_at.isoformat()
+                                if expected_heartbeat_at is not None
+                                else None
+                            ),
+                        },
                     )
                 )
                 snapshot.tasks[index] = task

@@ -21,6 +21,40 @@ class ToolExecutionResult:
 
     content: str
     artifacts: tuple[Artifact, ...] = ()
+    state: ExecutionState = ExecutionState.UNKNOWN
+
+
+_FAILED_RESULT_STATES = frozenset(
+    {"blocked", "cancelled", "error", "failed", "failure", "timed_out", "timeout"}
+)
+
+
+def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
+    """Classify every tool surface with one structured failure contract."""
+    if isinstance(content, ToolExecutionResult):
+        if content.state is not ExecutionState.UNKNOWN:
+            return content.state, " [error]" if content.state is ExecutionState.FAILED else ""
+        content = content.content
+    text = content if isinstance(content, str) else str(content)
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        exit_code = payload.get("exit_code")
+        if exit_code is not None:
+            try:
+                if int(exit_code) != 0:
+                    return ExecutionState.FAILED, f" [exit {exit_code}]"
+            except (TypeError, ValueError):
+                return ExecutionState.FAILED, " [error]"
+        status = str(payload.get("status") or payload.get("state") or "").strip().lower()
+        if payload.get("success") is False or bool(payload.get("error")) or status in _FAILED_RESULT_STATES:
+            return ExecutionState.FAILED, " [error]"
+        return ExecutionState.SUCCEEDED, ""
+    if text.lstrip().lower().startswith("error"):
+        return ExecutionState.FAILED, " [error]"
+    return ExecutionState.SUCCEEDED, ""
 
 
 @dataclass(frozen=True)
@@ -202,6 +236,7 @@ class ToolExecutionCoordinator:
 
     def _run(self, call: PreparedToolCall) -> ToolCallOutcome:
         started = self._clock()
+        raw_result: Any = None
         try:
             raw_result = self._invoke(call)
             if isinstance(raw_result, ToolExecutionResult):
@@ -220,16 +255,22 @@ class ToolExecutionCoordinator:
                 exc_info=True,
             )
         duration = max(0.0, self._clock() - started)
-        is_error, _ = self._classify_failure(call.name, content)
+        explicit_state = (
+            raw_result.state
+            if isinstance(raw_result, ToolExecutionResult)
+            else ExecutionState.UNKNOWN
+        )
+        if explicit_state is ExecutionState.UNKNOWN:
+            explicit_state, _ = classify_tool_result(content)
+        if explicit_state is ExecutionState.SUCCEEDED:
+            legacy_error, _ = self._classify_failure(call.name, content)
+            if legacy_error:
+                explicit_state = ExecutionState.FAILED
         return ToolCallOutcome(
             call=call,
             content=content,
             duration=duration,
-            state=(
-                ExecutionState.FAILED
-                if is_error
-                else ExecutionState.SUCCEEDED
-            ),
+            state=explicit_state,
             artifacts=tuple(artifacts),
         )
 

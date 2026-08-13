@@ -18162,9 +18162,9 @@ async def test_autonomous_task_review_cycle_recovers_orphaned_agent_pull_running
         actor="test",
         reason="ready",
     )
-    supervisor._autonomous_chain_store.update_status(
+    supervisor._autonomous_chain_store.claim_execution(
         task_id,
-        status="running",
+        owner_session_id="stale-cli-session",
         actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "stale-cli-session"},
@@ -18172,7 +18172,6 @@ async def test_autonomous_task_review_cycle_recovers_orphaned_agent_pull_running
     supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
-            "owner_session_id": "stale-cli-session",
             "execution_source": "cli_agent_pull",
             "execution_started_at": "2026-06-26T14:00:00+00:00",
         },
@@ -18235,15 +18234,14 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     supervisor._autonomous_chain_store.update_status(
         task_id, status="approved", actor="test", reason="ready",
     )
-    supervisor._autonomous_chain_store.update_status(
-        task_id, status="running", actor="cli_agent",
+    supervisor._autonomous_chain_store.claim_execution(
+        task_id, owner_session_id="live-cli-session", actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "live-cli-session"},
     )
     supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
-            "owner_session_id": "live-cli-session",
             "execution_source": "cli_agent_pull",
         },
     )
@@ -18282,9 +18280,9 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
     supervisor._autonomous_chain_store.update_status(
         task_id, status="approved", actor="test", reason="ready",
     )
-    supervisor._autonomous_chain_store.update_status(
+    supervisor._autonomous_chain_store.claim_execution(
         task_id,
-        status="running",
+        owner_session_id="deleted-cli-session",
         actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "deleted-cli-session"},
@@ -18292,7 +18290,6 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
     supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
-            "owner_session_id": "deleted-cli-session",
             "execution_source": "cli_agent_pull",
         },
     )
@@ -18309,6 +18306,60 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
     assert recovered == 1
     assert updated["status"] == "reconciling"
     assert updated["decision_history"][-1]["context"]["owner_session_missing"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recovery_fences_expired_lease_without_trusting_healthy_gateway(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Expired execution lease",
+            "summary": "An expired lease must be reconciled independently of gateway health",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id, status="approved", actor="test", reason="ready"
+    )
+    claimed = supervisor._autonomous_chain_store.claim_execution(
+        task_id,
+        owner_session_id="healthy-cli-session",
+        actor="cli_agent",
+        reason="claimed",
+    )
+    supervisor._autonomous_chain_store.update_metadata(
+        task_id,
+        metadata={"execution_source": "cli_agent_pull"},
+    )
+    snapshot = supervisor._autonomous_chain_store._load_snapshot()
+    persisted = next(item for item in snapshot.tasks if item.task_id == task_id)
+    persisted.execution_lease.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    supervisor._autonomous_chain_store._write_snapshot(snapshot)
+
+    fetch_owner = AsyncMock(
+        return_value={
+            "session_id": "healthy-cli-session",
+            "is_stale": False,
+            "lease_status": "healthy",
+        }
+    )
+    supervisor._autonomous_task_review_cycle_service._fetch_cli_session = fetch_owner
+
+    recovered = await supervisor._autonomous_task_review_cycle_service.recover_orphaned_agent_pull_tasks()
+    updated = await supervisor.get_autonomous_chain_task(task_id)
+
+    assert recovered == 1
+    assert updated["status"] == "reconciling"
+    assert updated["execution_lease"]["generation"] == claimed.execution_lease.generation + 1
+    assert updated["decision_history"][-1]["context"]["execution_lease_expired"] is True
+    fetch_owner.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -19241,14 +19292,19 @@ async def test_autonomous_task_review_cycle_times_out_agent_pull_execution_start
         actor="test",
         reason="ready",
     )
-    supervisor._autonomous_chain_store.update_status(
+    supervisor._autonomous_chain_store.claim_execution(
         task_id,
-        status="running",
+        owner_session_id="live-cli-session",
         actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "live-cli-session"},
     )
     started_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+    snapshot = supervisor._autonomous_chain_store._load_snapshot()
+    persisted = next(item for item in snapshot.tasks if item.task_id == task_id)
+    persisted.execution_lease.heartbeat_at = datetime.fromisoformat(started_at)
+    persisted.execution_lease.expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    supervisor._autonomous_chain_store._write_snapshot(snapshot)
     supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={

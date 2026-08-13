@@ -37,7 +37,7 @@ class SessionSequenceConflictError(RuntimeError):
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     pricing_version TEXT,
     title TEXT,
     flush_sequence INTEGER DEFAULT 0,
+    transcript_revision INTEGER NOT NULL DEFAULT 0,
+    transcript_hash TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
@@ -410,6 +412,36 @@ class SessionDB:
                 except sqlite3.OperationalError:
                     pass
                 cursor.execute("UPDATE schema_version SET version = 9")
+            if current_version < 10:
+                for name, column_type in (
+                    ("transcript_revision", "INTEGER NOT NULL DEFAULT 0"),
+                    ("transcript_hash", "TEXT NOT NULL DEFAULT ''"),
+                ):
+                    try:
+                        cursor.execute(
+                            f'ALTER TABLE sessions ADD COLUMN "{name}" {column_type}'
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                session_rows = cursor.execute("SELECT id FROM sessions").fetchall()
+                for session_row in session_rows:
+                    session_id = str(session_row[0])
+                    message_count = int(
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                            (session_id,),
+                        ).fetchone()[0]
+                    )
+                    cursor.execute(
+                        "UPDATE sessions SET transcript_revision = ?, "
+                        "transcript_hash = ? WHERE id = ?",
+                        (
+                            1 if message_count else 0,
+                            self._transcript_hash_from_connection(cursor, session_id),
+                            session_id,
+                        ),
+                    )
+                cursor.execute("UPDATE schema_version SET version = 10")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
@@ -625,6 +657,78 @@ class SessionDB:
                 (session_id,),
             ).fetchone()
         return int(row[0] or 0) if row else 0
+
+    @staticmethod
+    def transcript_hash(messages: List[Dict[str, Any]]) -> str:
+        """Return a stable hash for the semantic transcript fields."""
+        fields = (
+            "role",
+            "content",
+            "tool_call_id",
+            "tool_calls",
+            "tool_name",
+            "finish_reason",
+            "reasoning",
+            "reasoning_details",
+            "action_refs",
+        )
+        normalized = [
+            {field: message.get(field) for field in fields}
+            for message in messages
+        ]
+        canonical = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _transcript_hash_from_connection(
+        cls,
+        conn: sqlite3.Connection,
+        session_id: str,
+    ) -> str:
+        rows = conn.execute(
+            "SELECT role, content, tool_call_id, tool_calls, tool_name, "
+            "finish_reason, reasoning, reasoning_details, action_refs "
+            "FROM messages WHERE session_id = ? ORDER BY sequence_no",
+            (session_id,),
+        ).fetchall()
+        messages: List[Dict[str, Any]] = []
+        json_fields = {"tool_calls", "reasoning_details", "action_refs"}
+        for row in rows:
+            message = dict(row)
+            for field in json_fields:
+                value = message.get(field)
+                if value is not None:
+                    try:
+                        message[field] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            messages.append(message)
+        return cls.transcript_hash(messages)
+
+    def get_transcript_snapshot(self, session_id: str) -> Dict[str, Any]:
+        """Read transcript metadata and messages from one SQLite snapshot."""
+        with self._lock:
+            session = self._conn.execute(
+                "SELECT flush_sequence, transcript_revision, transcript_hash "
+                "FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"Unknown session: {session_id}")
+            messages = self._get_messages_as_conversation(self._conn, session_id)
+        return {
+            "flush_sequence": int(session["flush_sequence"] or 0),
+            "transcript_revision": int(session["transcript_revision"] or 0),
+            "transcript_hash": str(session["transcript_hash"] or "")
+            or self.transcript_hash(messages),
+            "messages": messages,
+        }
 
     def get_session_goal(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Return the one goal owned by a session, if present."""
@@ -1014,6 +1118,8 @@ class SessionDB:
         messages: List[Dict[str, Any]],
         *,
         expected_flush_sequence: int | None = None,
+        expected_revision: int | None = None,
+        expected_prefix_hash: str | None = None,
         allocate_sequences: bool = False,
     ) -> List[int]:
         """Atomically append an idempotent ordered message batch."""
@@ -1029,12 +1135,17 @@ class SessionDB:
 
         def _do(conn):
             session = conn.execute(
-                "SELECT id, flush_sequence FROM sessions WHERE id = ?",
+                "SELECT id, flush_sequence, transcript_revision, transcript_hash "
+                "FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             if session is None:
                 raise KeyError(f"Unknown session: {session_id}")
             current_sequence = int(session["flush_sequence"] or 0)
+            current_revision = int(session["transcript_revision"] or 0)
+            current_hash = str(session["transcript_hash"] or "")
+            if not current_hash and current_sequence == 0:
+                current_hash = self.transcript_hash([])
             if (
                 expected_flush_sequence is not None
                 and current_sequence != int(expected_flush_sequence)
@@ -1042,6 +1153,20 @@ class SessionDB:
                 raise SessionSequenceConflictError(
                     f"stale session cursor for {session_id}: "
                     f"expected {expected_flush_sequence}, current {current_sequence}"
+                )
+            if expected_revision is not None and current_revision != int(
+                expected_revision
+            ):
+                raise SessionSequenceConflictError(
+                    f"stale transcript revision for {session_id}: "
+                    f"expected {expected_revision}, current {current_revision}"
+                )
+            if (
+                expected_prefix_hash is not None
+                and current_hash != expected_prefix_hash
+            ):
+                raise SessionSequenceConflictError(
+                    f"transcript prefix mismatch for {session_id}"
                 )
             if allocate_sequences:
                 for offset, message in enumerate(batch, 1):
@@ -1061,6 +1186,7 @@ class SessionDB:
                     )
 
             row_ids: List[int] = []
+            inserted = False
             for message in batch:
                 sequence_no = int(message["sequence_no"])
                 message_id = str(message["message_id"])
@@ -1130,6 +1256,7 @@ class SessionDB:
                     ),
                 )
                 row_ids.append(int(cursor.lastrowid))
+                inserted = True
 
             counts = conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(sequence_no), 0) "
@@ -1148,10 +1275,19 @@ class SessionDB:
                     tool_call_count += len(calls) if isinstance(calls, list) else 1
                 except (json.JSONDecodeError, TypeError):
                     tool_call_count += 1
+            transcript_hash = self._transcript_hash_from_connection(conn, session_id)
             conn.execute(
                 "UPDATE sessions SET message_count = ?, tool_call_count = ?, "
-                "flush_sequence = ? WHERE id = ?",
-                (int(counts[0]), tool_call_count, int(counts[1]), session_id),
+                "flush_sequence = ?, transcript_revision = ?, transcript_hash = ? "
+                "WHERE id = ?",
+                (
+                    int(counts[0]),
+                    tool_call_count,
+                    int(counts[1]),
+                    current_revision + (1 if inserted else 0),
+                    transcript_hash,
+                    session_id,
+                ),
             )
             return row_ids
 
@@ -1192,13 +1328,19 @@ class SessionDB:
         Used by the gateway to restore conversation history.
         """
         with self._lock:
-            cursor = self._conn.execute(
-                "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-                "reasoning, reasoning_details, action_refs, timestamp "
-                "FROM messages WHERE session_id = ? ORDER BY sequence_no",
-                (session_id,),
-            )
-            rows = cursor.fetchall()
+            return self._get_messages_as_conversation(self._conn, session_id)
+
+    @staticmethod
+    def _get_messages_as_conversation(
+        conn: sqlite3.Connection,
+        session_id: str,
+    ) -> List[Dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT role, content, tool_call_id, tool_calls, tool_name, "
+            "finish_reason, reasoning, reasoning_details, action_refs, timestamp "
+            "FROM messages WHERE session_id = ? ORDER BY sequence_no",
+            (session_id,),
+        ).fetchall()
         messages = []
         for row in rows:
             msg = {"role": row["role"], "content": row["content"]}
@@ -1208,6 +1350,8 @@ class SessionDB:
                 msg["tool_call_id"] = row["tool_call_id"]
             if row["tool_name"]:
                 msg["tool_name"] = row["tool_name"]
+            if row["finish_reason"]:
+                msg["finish_reason"] = row["finish_reason"]
             if row["action_refs"]:
                 try:
                     msg["action_refs"] = json.loads(row["action_refs"])
@@ -1271,12 +1415,14 @@ class SessionDB:
             ).fetchone()
             conn.execute(
                 "UPDATE sessions SET message_count = ?, tool_call_count = ?, "
-                "flush_sequence = ? "
+                "flush_sequence = ?, transcript_revision = transcript_revision + 1, "
+                "transcript_hash = ? "
                 "WHERE id = ?",
                 (
                     int(message_count[0]),
                     tool_call_count,
                     int(message_count[1]),
+                    self._transcript_hash_from_connection(conn, session_id),
                     session_id,
                 ),
             )

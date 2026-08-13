@@ -204,6 +204,25 @@ def test_structured_tool_result_preserves_artifacts_in_outcome():
     assert outcome.artifacts == (artifact,)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"success": false}',
+        '{"error": "denied"}',
+        '{"exit_code": 2}',
+        '{"status": "blocked"}',
+    ],
+)
+def test_structured_failure_payloads_share_one_failed_outcome(content):
+    coordinator = _coordinator(invoke=lambda _call: content)
+    call = coordinator.prepare([_tool_call("call-failed", "tool", {})])
+
+    outcome = coordinator.execute(call, parallel=False)[0]
+
+    assert outcome.state is ExecutionState.FAILED
+    assert outcome.failed is True
+
+
 def test_sequential_delay_runs_only_between_started_calls():
     sleeps: list[float] = []
     coordinator = _coordinator(

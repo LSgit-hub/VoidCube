@@ -190,5 +190,49 @@ def test_action_refs_migrate_and_round_trip_in_authoritative_session_store(tmp_p
     message["message_id"] = migrated.stable_message_id("session", 1, message)
     migrated.append_messages_batch("session", [message])
 
-    assert migrated._conn.execute("SELECT version FROM schema_version").fetchone()[0] == 9
+    assert migrated._conn.execute("SELECT version FROM schema_version").fetchone()[0] == 10
     assert migrated.get_messages_as_conversation("session")[0]["action_refs"] == message["action_refs"]
+
+
+def test_transcript_revision_rejects_stale_writer_after_truncate_aba(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    stale = db.get_transcript_snapshot("session")
+    db.append_message("session", "user", "removed")
+    db.truncate_last_user_turn("session")
+
+    replacement = _message(db, "session", 1, "stale replacement")
+    with pytest.raises(SessionSequenceConflictError, match="stale transcript revision"):
+        db.append_messages_batch(
+            "session",
+            [replacement],
+            expected_flush_sequence=stale["flush_sequence"],
+            expected_revision=stale["transcript_revision"],
+            expected_prefix_hash=stale["transcript_hash"],
+        )
+
+    session = db.get_session("session")
+    assert session["flush_sequence"] == 0
+    assert session["transcript_revision"] == 2
+    assert db.get_messages("session") == []
+
+
+def test_transcript_revision_and_hash_migrate_from_v9(tmp_path):
+    path = tmp_path / "v9.db"
+    db = SessionDB(path)
+    db.create_session("session", source="cli")
+    db.append_message("session", "user", "kept")
+    db._conn.execute("UPDATE schema_version SET version = 9")
+    db._conn.commit()
+    db.close()
+
+    migrated = SessionDB(path)
+    session = migrated.get_session("session")
+
+    assert session["transcript_revision"] == 1
+    assert session["transcript_hash"] == SessionDB.transcript_hash(
+        migrated.get_messages_as_conversation("session")
+    )
+    assert migrated._conn.execute(
+        "SELECT version FROM schema_version"
+    ).fetchone()[0] == SCHEMA_VERSION

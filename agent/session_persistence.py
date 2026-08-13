@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from VoidCube_core.state import SessionSequenceConflictError
-from VoidCube_core.utils import atomic_json_write
+from VoidCube_core.state import SessionDB, SessionSequenceConflictError
+from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
 
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,10 @@ class SessionPersistence:
     def session_log_file(self) -> Path:
         return self.logs_dir / f"session_{self._session_id()}.json"
 
+    @property
+    def session_log_lock_file(self) -> Path:
+        return self.logs_dir / f".session_{self._session_id()}.json.lock"
+
     def persist(
         self,
         messages: list[Message],
@@ -108,9 +112,10 @@ class SessionPersistence:
             )
             del conversation_history
             for attempt in range(3):
-                flush_from = self.session_db.get_flush_sequence(self._session_id())
-                batch = []
-                for message in messages[flush_from:]:
+                snapshot = self.session_db.get_transcript_snapshot(self._session_id())
+                flush_from = snapshot["flush_sequence"]
+                persisted_messages = []
+                for message in messages:
                     role = message.get("role", "unknown")
                     tool_calls = None
                     if hasattr(message, "tool_calls") and message.tool_calls:
@@ -140,12 +145,23 @@ class SessionPersistence:
                             else None
                         ),
                     }
-                    batch.append(persisted_message)
+                    persisted_messages.append(persisted_message)
+                local_prefix_hash = SessionDB.transcript_hash(
+                    persisted_messages[:flush_from]
+                )
+                if local_prefix_hash != snapshot["transcript_hash"]:
+                    raise SessionSequenceConflictError(
+                        f"local transcript diverges from committed prefix for "
+                        f"{self._session_id()}"
+                    )
+                batch = persisted_messages[flush_from:]
                 try:
                     self.session_db.append_messages_batch(
                         self._session_id(),
                         batch,
                         expected_flush_sequence=flush_from,
+                        expected_revision=snapshot["transcript_revision"],
+                        expected_prefix_hash=local_prefix_hash,
                         allocate_sequences=True,
                     )
                     return True
@@ -162,10 +178,26 @@ class SessionPersistence:
         if not self.enabled or not self.session_db:
             return
         try:
-            messages = self.session_db.get_messages_as_conversation(
-                self._session_id()
-            )
-            self.save_log(messages, allow_truncate=True)
+            with interprocess_file_lock(self.session_log_lock_file):
+                while True:
+                    snapshot = self.session_db.get_transcript_snapshot(
+                        self._session_id()
+                    )
+                    existing_revision = self._existing_mirror_revision()
+                    if existing_revision > snapshot["transcript_revision"]:
+                        return
+                    self._write_log(
+                        snapshot["messages"],
+                        allow_truncate=True,
+                        transcript_revision=snapshot["transcript_revision"],
+                    )
+                    current = self.session_db.get_session(self._session_id())
+                    if current is None:
+                        return
+                    if int(current["transcript_revision"] or 0) == snapshot[
+                        "transcript_revision"
+                    ]:
+                        return
         except Exception as exc:
             if self.verbose_logging:
                 logger.warning("Failed to refresh session JSON mirror: %s", exc)
@@ -186,47 +218,62 @@ class SessionPersistence:
             return
 
         try:
-            cleaned: list[Message] = []
-            for message in active_messages:
-                if message.get("role") == "assistant" and message.get("content"):
-                    message = dict(message)
-                    message["content"] = clean_session_content(message["content"])
-                cleaned.append(message)
-
-            session_log_file = self.session_log_file
-            if session_log_file.exists():
-                try:
-                    existing = json.loads(session_log_file.read_text(encoding="utf-8"))
-                    existing_count = existing.get(
-                        "message_count", len(existing.get("messages", []))
-                    )
-                    if existing_count > len(cleaned) and not allow_truncate:
-                        logger.debug(
-                            "Skipping session log overwrite: existing has %d messages, current has %d",
-                            existing_count,
-                            len(cleaned),
-                        )
-                        return
-                except Exception:
-                    pass
-
-            atomic_json_write(
-                session_log_file,
-                {
-                    "session_id": self._session_id(),
-                    "model": self._model(),
-                    "base_url": self._base_url(),
-                    "platform": self._platform(),
-                    "session_start": self.session_start.isoformat(),
-                    "last_updated": datetime.now().isoformat(),
-                    "system_prompt": self._system_prompt() or "",
-                    "tools": list(self._tools() or []),
-                    "message_count": len(cleaned),
-                    "messages": cleaned,
-                },
-                indent=2,
-                default=str,
-            )
+            with interprocess_file_lock(self.session_log_lock_file):
+                self._write_log(active_messages, allow_truncate=allow_truncate)
         except Exception as exc:
             if self.verbose_logging:
                 logger.warning("Failed to save session log: %s", exc)
+
+    def _existing_mirror_revision(self) -> int:
+        try:
+            existing = json.loads(self.session_log_file.read_text(encoding="utf-8"))
+            return int(existing.get("transcript_revision", -1))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return -1
+
+    def _write_log(
+        self,
+        messages: Sequence[Message],
+        *,
+        allow_truncate: bool,
+        transcript_revision: int | None = None,
+    ) -> None:
+        cleaned: list[Message] = []
+        for message in messages:
+            if message.get("role") == "assistant" and message.get("content"):
+                message = dict(message)
+                message["content"] = clean_session_content(message["content"])
+            cleaned.append(message)
+
+        session_log_file = self.session_log_file
+        if session_log_file.exists() and transcript_revision is None:
+            try:
+                existing = json.loads(session_log_file.read_text(encoding="utf-8"))
+                existing_count = existing.get(
+                    "message_count", len(existing.get("messages", []))
+                )
+                if existing_count > len(cleaned) and not allow_truncate:
+                    logger.debug(
+                        "Skipping session log overwrite: existing has %d messages, current has %d",
+                        existing_count,
+                        len(cleaned),
+                    )
+                    return
+            except Exception:
+                pass
+
+        payload = {
+            "session_id": self._session_id(),
+            "model": self._model(),
+            "base_url": self._base_url(),
+            "platform": self._platform(),
+            "session_start": self.session_start.isoformat(),
+            "last_updated": datetime.now().isoformat(),
+            "system_prompt": self._system_prompt() or "",
+            "tools": list(self._tools() or []),
+            "message_count": len(cleaned),
+            "messages": cleaned,
+        }
+        if transcript_revision is not None:
+            payload["transcript_revision"] = transcript_revision
+        atomic_json_write(session_log_file, payload, indent=2, default=str)

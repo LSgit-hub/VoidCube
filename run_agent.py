@@ -3129,20 +3129,20 @@ class AIAgent:
                     {"error": f"Context engine tool '{function_name}' failed: {exc}"}
                 )
         elif self._memory_manager and self._memory_manager.has_tool(function_name):
-            try:
-                return self._memory_manager.handle_tool_call(
-                    function_name, function_args
-                )
-            except Exception as exc:
-                logger.error(
-                    "memory_manager.handle_tool_call raised for %s: %s",
-                    function_name,
-                    exc,
-                    exc_info=True,
-                )
-                return json.dumps(
-                    {"error": f"Memory tool '{function_name}' failed: {exc}"}
-                )
+            return handle_function_call(
+                function_name,
+                function_args,
+                effective_task_id,
+                tool_call_id=call.call_id,
+                session_id=self.session_id or "",
+                main_runtime=self._current_main_runtime(),
+                dynamic_handler=self._memory_manager.handle_tool_call,
+                dynamic_effect=(
+                    "read_only"
+                    if function_name in {"mem_search", "mem_timeline"}
+                    else "non_idempotent_write"
+                ),
+            )
         elif function_name == "clarify":
             from tools.clarify_tool import clarify_tool as _clarify_tool
             return _clarify_tool(

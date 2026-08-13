@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import codecs
 import os
 import queue
 import shlex
@@ -64,6 +65,7 @@ class ProcessSession:
     _output: str = field(default="", repr=False)
     _watch_buffer: str = field(default="", repr=False)
     _observed_bytes: int = field(default=0, repr=False)
+    _pending_utf8: bytes = field(default=b"", repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -276,7 +278,9 @@ class ProcessRegistry:
         except FileNotFoundError:
             raw = b""
         with session._lock:
-            session._output = raw.decode("utf-8", errors="replace")
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            session._output = decoder.decode(raw, final=False)
+            session._pending_utf8 = decoder.getstate()[0]
             session._observed_bytes = len(raw)
             session.output_cursor = min(session.output_cursor, len(session._output))
 
@@ -324,9 +328,13 @@ class ProcessRegistry:
                 )
             else:
                 identity_valid = self._identity_matches(session)
-                session.status = ExecutionState.UNKNOWN.value
+                session.status = (
+                    "running"
+                    if identity_valid
+                    else ExecutionState.UNKNOWN.value
+                )
                 session.error = (
-                    "Recovered process is still alive but local control was lost"
+                    "Recovered process control restored from verified PID identity"
                     if identity_valid
                     else "Recovered process identity could not be verified"
                 )
@@ -502,7 +510,11 @@ class ProcessRegistry:
             if not raw:
                 return
             session._observed_bytes += len(raw)
-            self._append_output(session, raw.decode("utf-8", errors="replace"))
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            text = decoder.decode(session._pending_utf8 + raw, final=False)
+            session._pending_utf8 = decoder.getstate()[0]
+            if text:
+                self._append_output(session, text)
 
     def _refresh_proven_terminal_state(self, session: ProcessSession) -> None:
         with self._connect() as connection:
@@ -683,6 +695,12 @@ class ProcessRegistry:
         with session._lock:
             if session._done.is_set():
                 return
+            if session._pending_utf8:
+                self._append_output(
+                    session,
+                    session._pending_utf8.decode("utf-8", errors="replace"),
+                )
+                session._pending_utf8 = b""
             if session._watch_buffer:
                 events = self._watch_events(session, session._watch_buffer)
                 session._watch_buffer = ""
@@ -808,6 +826,19 @@ class ProcessRegistry:
                     process.kill()
                 except OSError:
                     pass
+        elif session.pid is not None and self._identity_matches(session):
+            try:
+                recovered = psutil.Process(session.pid)
+                children = recovered.children(recursive=True)
+                for child in children:
+                    child.terminate()
+                recovered.terminate()
+                _, alive = psutil.wait_procs([*children, recovered], timeout=1)
+                for item in alive:
+                    item.kill()
+            except (psutil.Error, OSError):
+                pass
+            self._finish(session, None, ExecutionState.CANCELLED, None)
         return True
 
     def kill_all(self, task_id: str | None = None) -> int:
