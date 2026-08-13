@@ -94,6 +94,57 @@ def test_delegate_task_enables_rich_display_when_cli_print_fn_exists(monkeypatch
 
 
 @pytest.mark.unit
+def test_delegate_call_forwards_declared_execution_overrides(monkeypatch):
+    _patch_common_runtime_helpers(monkeypatch)
+    captured = {}
+
+    def fake_delegate_task(**kwargs):
+        captured.update(kwargs)
+        return json.dumps({"results": []})
+
+    monkeypatch.setattr("tools.delegate_tool.delegate_task", fake_delegate_task)
+    agent = _build_minimal_agent(print_fn=lambda *_args, **_kwargs: None)
+    call = _build_delegate_tool_call()
+    call.function.arguments = json.dumps(
+        {
+            "goal": "inspect codebase",
+            "worktree_path": "F:/repo",
+            "acp_command": "agent-command",
+            "acp_args": ["--stdio"],
+        }
+    )
+
+    agent._execute_tool_calls(
+        SimpleNamespace(tool_calls=[call]),
+        [],
+        "task-overrides",
+    )
+
+    assert captured["worktree_path"] == "F:/repo"
+    assert captured["acp_command"] == "agent-command"
+    assert captured["acp_args"] == ["--stdio"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"results": [{"status": "completed"}]}, ExecutionState.SUCCEEDED),
+        ({"results": [{"status": "failed"}]}, ExecutionState.FAILED),
+        ({"results": [{"status": "timed_out"}]}, ExecutionState.TIMED_OUT),
+        (
+            {"results": [{"status": "completed"}, {"status": "interrupted"}]},
+            ExecutionState.FAILED,
+        ),
+        ({"results": [{"status": "interrupted"}]}, ExecutionState.CANCELLED),
+        ({"success": False, "error": "invalid worktree"}, ExecutionState.FAILED),
+    ],
+)
+def test_delegate_result_state_aggregates_child_outcomes(payload, expected):
+    assert run_agent.AIAgent._delegation_result_state(json.dumps(payload)) is expected
+
+
+@pytest.mark.unit
 def test_delegate_task_falls_back_to_legacy_spinner_without_cli_print_fn(monkeypatch):
     _patch_common_runtime_helpers(monkeypatch)
 
@@ -257,5 +308,8 @@ def test_rich_subagent_sink_maps_structured_events() -> None:
     assert calls[1][1][:2] == ("task-1", "read_file")
     assert calls[1][2]["args_preview"] == "README.md"
     assert calls[2][0] == "completed"
-    assert calls[2][2] == {"result_preview": "failed", "status": "failed"}
+    assert calls[2][2] == {
+        "result_preview": "failed",
+        "state": ExecutionState.FAILED,
+    }
     assert len(calls) == 3

@@ -311,11 +311,7 @@ def _build_subagent_display_sink(task_id: str, task_index: int, display_manager,
                     if event.state is not ExecutionState.SUCCEEDED
                     else ""
                 ),
-                status=(
-                    "ok"
-                    if event.state is ExecutionState.SUCCEEDED
-                    else event.state.value
-                ),
+                state=event.state or ExecutionState.UNKNOWN,
             )
     
     return _sink
@@ -866,6 +862,7 @@ def delegate_task(
                         task_index=i,
                         max_iterations=effective_max_iter,
                     )
+                    display_manager.on_start(task_id)
 
                 child = _build_child_agent(
                     task_index=i, goal=t["goal"], context=t.get("context"),
@@ -932,12 +929,14 @@ def delegate_task(
             
             # Update display manager with completion status for single task
             if display_manager:
-                if result.get("status") == "error":
+                result_state = _subagent_result_state(result)
+                if result_state is not ExecutionState.SUCCEEDED:
                     display_manager.on_complete(
                         _task_id,
                         summary="",
                         error=result.get("error", "Unknown error"),
                         exit_reason="error",
+                        state=result_state,
                     )
                 else:
                     display_manager.on_complete(
@@ -982,12 +981,14 @@ def delegate_task(
                     if display_manager:
                         task_info = futures[future]
                         _, t, child, task_id = task_info
-                        if entry.get("status") == "error":
+                        entry_state = _subagent_result_state(entry)
+                        if entry_state is not ExecutionState.SUCCEEDED:
                             display_manager.on_complete(
                                 task_id,
                                 summary="",
                                 error=entry.get("error", "Unknown error"),
                                 exit_reason="error",
+                                state=entry_state,
                             )
                         else:
                             display_manager.on_complete(
@@ -1055,6 +1056,17 @@ def delegate_task(
         "results": results,
         "total_duration_seconds": total_duration,
     }, ensure_ascii=False)
+
+
+def _subagent_result_state(entry: Dict[str, Any]) -> ExecutionState:
+    status = str(entry.get("status") or "").strip().lower()
+    if status == "completed":
+        return ExecutionState.SUCCEEDED
+    if status == "interrupted":
+        return ExecutionState.CANCELLED
+    if status in {"timed_out", "timeout"}:
+        return ExecutionState.TIMED_OUT
+    return ExecutionState.FAILED
 
 
 def _resolve_child_credential_pool(effective_provider: Optional[str], parent_agent):

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
+from VoidCube_app.contracts.execution import ExecutionState
+
 # ANSI color codes for terminal styling
 class Colors:
     # Status colors
@@ -285,14 +287,12 @@ class SubagentDisplayManager:
     # =====================================================================
     
     def on_start(self, task_id: str) -> None:
-        """Mark task as started."""
+        """Mark task as started without adding scrollback noise."""
         task = self._tasks.get(task_id)
         if task:
             with self._lock:
                 task.status = SubagentStatus.STARTING
                 task.started_at = time.time()
-            
-            self._print_status_header(task)
     
     def on_thinking(self, task_id: str, thinking: str, iteration: int = 0) -> None:
         """Record thinking/reasoning step."""
@@ -352,24 +352,26 @@ class SubagentDisplayManager:
         task_id: str,
         tool_name: str,
         result_preview: str = "",
-        status: str = "ok",
+        state: ExecutionState = ExecutionState.SUCCEEDED,
         error: str = "",
     ) -> None:
         """Record tool call completion."""
         task = self._tasks.get(task_id)
         if not task:
             return
-        
+
+        matched = False
         # Find and update the tool call
         with self._lock:
             # Find most recent matching tool call
             for tc in reversed(task.tool_calls):
                 if tc.tool_name == tool_name and tc.status == "running":
-                    tc.status = "error" if status == "error" else "completed"
+                    tc.status = state.value
                     tc.result_preview = result_preview[:200] if result_preview else ""
                     if error:
                         tc.result_preview = error[:200]
                     tc.duration_ms = (time.time() - tc.timestamp) * 1000
+                    matched = True
                     
                     # Remove from nesting tracker
                     if self._active_tools.get(task_id) and tc.depth > 1:
@@ -378,9 +380,11 @@ class SubagentDisplayManager:
                         except ValueError:
                             pass
                     break
-        
-        # Print completion line
-        self._print_tool_completion(task, tool_name, result_preview, status)
+
+        # Ignore orphaned or duplicate terminal events. Printing them was the
+        # source of repeated subagent CLI completion lines.
+        if matched:
+            self._print_tool_completion(task, tool_name, state)
     
     def on_api_call(self, task_id: str, iteration: int = 0) -> None:
         """Record an API call (iteration)."""
@@ -396,6 +400,7 @@ class SubagentDisplayManager:
         summary: str = "",
         error: str = "",
         exit_reason: str = "completed",
+        state: ExecutionState = ExecutionState.SUCCEEDED,
         tokens: Optional[Dict[str, int]] = None,
         model: str = "",
     ) -> None:
@@ -405,7 +410,12 @@ class SubagentDisplayManager:
             return
         
         with self._lock:
-            if error:
+            if state is ExecutionState.CANCELLED:
+                task.status = SubagentStatus.CANCELLED
+            elif state is ExecutionState.TIMED_OUT:
+                task.status = SubagentStatus.FAILED
+                task.error = error or "Subagent timed out."
+            elif state is ExecutionState.FAILED or error:
                 task.status = SubagentStatus.FAILED
                 task.error = error
             else:
@@ -420,8 +430,10 @@ class SubagentDisplayManager:
                 task.model = model
             
 
-        # Print final summary
-        self._print_final_summary(task)
+        if task.status is SubagentStatus.CANCELLED:
+            self._print_cancel(task)
+        else:
+            self._print_final_summary(task)
     
     def on_interrupt(self, task_id: str) -> None:
         """Mark task as interrupted."""
@@ -466,27 +478,28 @@ class SubagentDisplayManager:
     # Print Helpers
     # =====================================================================
     
-    def _print_status_header(self, task: SubagentTask) -> None:
-        """Print task start header."""
-        prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        self.print_fn(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} 🔀 Subagent started{Colors.RESET}")
-        self.print_fn(f"{Colors.DIM}  Task: {task.goal_preview}{Colors.RESET}")
-        self.print_fn(f"{Colors.DIM}  Model: {task.model or 'inherited'}{Colors.RESET}")
-    
     def _print_tool_completion(
         self,
         task: SubagentTask,
         tool_name: str,
-        result_preview: str,
-        status: str,
+        state: ExecutionState,
     ) -> None:
         """Print tool completion inline."""
         emoji = self.TOOL_EMOJIS.get(tool_name, "🔧")
-        
-        if status == "error":
-            self.print_fn(f"  {Colors.ERROR}✗{Colors.RESET} {emoji} {tool_name} {Colors.ERROR}failed{Colors.RESET}")
-        else:
+
+        if state is ExecutionState.SUCCEEDED:
             self.print_fn(f"  {Colors.SUCCESS}✓{Colors.RESET} {emoji} {tool_name}")
+            return
+        marker = {
+            ExecutionState.FAILED: "✗",
+            ExecutionState.CANCELLED: "⊘",
+            ExecutionState.TIMED_OUT: "⌛",
+            ExecutionState.UNKNOWN: "?",
+        }[state]
+        self.print_fn(
+            f"  {Colors.ERROR}{marker}{Colors.RESET} {emoji} {tool_name} "
+            f"{Colors.ERROR}{state.value}{Colors.RESET}"
+        )
     
     def _print_final_summary(self, task: SubagentTask) -> None:
         """Print final task summary."""

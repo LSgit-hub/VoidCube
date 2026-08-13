@@ -851,9 +851,17 @@ def get_cute_tool_message(
         return _wrap(f"┊ 🐍 {_pad('代码执行', 8)}{_trunc(first_line, 35)}  {dur}")
     if tool_name == "delegate_task":
         tasks = args.get("tasks")
+        error_preview = ""
+        if result:
+            try:
+                payload = json.loads(result)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict) and payload.get("error"):
+                error_preview = f"  {_trunc(payload['error'], 60)}"
         if tasks and isinstance(tasks, list):
-            return _wrap(f"┊ 🔀 {_pad('委派', 8)}{len(tasks)} 个并行任务  {dur}")
-        return _wrap(f"┊ 🔀 {_pad('委派', 8)}{_trunc(args.get('goal', ''), 35)}  {dur}")
+            return _wrap(f"┊ 🔀 {_pad('委派', 8)}{len(tasks)} 个并行任务  {dur}{error_preview}")
+        return _wrap(f"┊ 🔀 {_pad('委派', 8)}{_trunc(args.get('goal', ''), 35)}  {dur}{error_preview}")
 
     _OPS_MESSAGES = {
         "system_info": lambda a: "┊ 📊 系统信息   概览",

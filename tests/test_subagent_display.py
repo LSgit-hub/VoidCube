@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent.subagent_display import SubagentDisplayManager, SubagentStatus
+from VoidCube_app.contracts.execution import ExecutionState
 
 
 def test_resolve_task_ref_accepts_task_id_and_one_based_index():
@@ -75,3 +76,49 @@ def test_progress_updates_are_event_driven_and_do_not_render_snapshots():
     assert len(rendered) == 1
     assert "read_file" in rendered[0]
     assert manager.get_task("delegate-1").iteration == 2
+
+
+def test_duplicate_or_orphaned_tool_terminals_do_not_repeat_output():
+    rendered: list[str] = []
+    manager = SubagentDisplayManager()
+    manager.print_fn = lambda *args, **kwargs: rendered.append(str(args[0]))
+    manager.create_task("delegate-1", "Inspect display", task_index=0)
+
+    manager.on_tool_complete(
+        "delegate-1",
+        "read_file",
+        state=ExecutionState.FAILED,
+    )
+    manager.on_tool_start("delegate-1", "read_file")
+    manager.on_tool_complete(
+        "delegate-1",
+        "read_file",
+        state=ExecutionState.FAILED,
+    )
+    manager.on_tool_complete(
+        "delegate-1",
+        "read_file",
+        state=ExecutionState.FAILED,
+    )
+
+    assert len(rendered) == 1
+    assert "failed" in rendered[0]
+
+
+def test_start_and_cancel_use_real_lifecycle_duration():
+    rendered: list[str] = []
+    manager = SubagentDisplayManager()
+    manager.print_fn = lambda *args, **kwargs: rendered.append(str(args[0]))
+    task = manager.create_task("delegate-1", "Inspect display", task_index=0)
+
+    manager.on_start(task.task_id)
+    manager.on_complete(
+        task.task_id,
+        error="interrupted",
+        state=ExecutionState.CANCELLED,
+    )
+
+    assert task.started_at > 0
+    assert task.duration_seconds >= 0
+    assert task.status is SubagentStatus.CANCELLED
+    assert sum("Subagent cancelled" in line for line in rendered) == 1

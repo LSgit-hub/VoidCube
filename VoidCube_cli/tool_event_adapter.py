@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from typing import Any, Callable
 
@@ -76,7 +77,10 @@ def _project_terminal(
 
     progress_mode = getattr(host, "tool_progress_mode", "off")
     last_tool_name = getattr(host, "_last_scrollback_tool", "")
-    if should_emit_tool_completion(progress_mode, event.name, last_tool_name):
+    if (
+        not _is_delegation_batch_result(event)
+        and should_emit_tool_completion(progress_mode, event.name, last_tool_name)
+    ):
         host._last_scrollback_tool = event.name
         if host._should_emit_scrollback_output():
             try:
@@ -117,6 +121,17 @@ def _project_terminal(
                     exc_info=True,
                 )
     host._invalidate()
+
+
+def _is_delegation_batch_result(event: ToolEvent) -> bool:
+    """Rich subagent output already owns successful batch lifecycle lines."""
+    if event.name != "delegate_task":
+        return False
+    try:
+        payload = json.loads(event.result)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("results"), list)
 
 
 def _project_started(

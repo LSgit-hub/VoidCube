@@ -124,6 +124,56 @@ def test_completed_error_has_explicit_failure_marker(monkeypatch) -> None:
     assert lines == ["  ✗ shell command"]
 
 
+def test_delegate_batch_terminal_is_not_rendered_twice(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent.display.get_cute_tool_message",
+        lambda *_args, **_kwargs: "delegate batch",
+    )
+    host, _ = _host(tool_progress_mode="all")
+    lines = []
+
+    project_tool_event(
+        host,
+        ToolEvent.terminal(
+            call_id="call-delegate",
+            name="delegate_task",
+            arguments={"tasks": [{"goal": "one"}, {"goal": "two"}]},
+            result='{"results":[{"status":"completed"}]}',
+            duration=10.0,
+            state=ExecutionState.SUCCEEDED,
+        ),
+        append_autonomous_event=lambda *_args, **_kwargs: None,
+        emit_line=lines.append,
+    )
+
+    assert lines == []
+
+
+def test_delegate_preflight_error_remains_visible(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "agent.display.get_cute_tool_message",
+        lambda *_args, **_kwargs: "delegate invalid worktree",
+    )
+    host, _ = _host(tool_progress_mode="all")
+    lines = []
+
+    project_tool_event(
+        host,
+        ToolEvent.terminal(
+            call_id="call-delegate-error",
+            name="delegate_task",
+            arguments={"tasks": [{"goal": "one"}]},
+            result='{"success":false,"error":"invalid worktree"}',
+            duration=0.0,
+            state=ExecutionState.FAILED,
+        ),
+        append_autonomous_event=lambda *_args, **_kwargs: None,
+        emit_line=lines.append,
+    )
+
+    assert lines == ["  ✗ delegate invalid worktree"]
+
+
 def test_reasoning_and_subagent_events_do_not_mutate_cli_state() -> None:
     host, invalidations = _host()
 

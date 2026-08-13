@@ -42,6 +42,7 @@ from VoidCube_core.constants import get_VoidCube_home
 # User-managed env files should override stale shell exports on restart.
 from VoidCube_app.environment import load_VoidCube_dotenv
 from VoidCube_app.interaction_contract import ClarificationSink
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent, ToolEventSink
 from systems.memory.scope import CLI_WORKSPACE_ID
 
@@ -3159,7 +3160,7 @@ class AIAgent:
                 main_runtime=self._current_main_runtime(),
             )
 
-    def _invoke_delegate_tool(self, call: PreparedToolCall) -> str:
+    def _invoke_delegate_tool(self, call: PreparedToolCall) -> ToolExecutionResult:
         from tools.delegate_tool import delegate_task as _delegate_task
 
         tasks = call.arguments.get("tasks")
@@ -3193,11 +3194,17 @@ class AIAgent:
                 toolsets=call.arguments.get("toolsets"),
                 tasks=tasks,
                 max_iterations=call.arguments.get("max_iterations"),
+                acp_command=call.arguments.get("acp_command"),
+                acp_args=call.arguments.get("acp_args"),
+                worktree_path=call.arguments.get("worktree_path"),
                 parent_agent=self,
                 enable_display=use_rich_display,
             )
             result = raw_result if isinstance(raw_result, str) else str(raw_result)
-            return result
+            return ToolExecutionResult(
+                content=result,
+                state=self._delegation_result_state(result),
+            )
         except Exception as exc:
             result = f"Error executing tool 'delegate_task': {exc}"
             raise
@@ -3213,6 +3220,32 @@ class AIAgent:
                 spinner.stop(cute_message)
             elif not use_rich_display and self._should_emit_quiet_tool_messages():
                 self._vprint(f"  {cute_message}")
+
+    @staticmethod
+    def _delegation_result_state(result: str) -> ExecutionState:
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return ExecutionState.FAILED
+        if not isinstance(payload, dict) or payload.get("error"):
+            return ExecutionState.FAILED
+        entries = payload.get("results")
+        if not isinstance(entries, list):
+            return ExecutionState.SUCCEEDED
+        states = [
+            str(entry.get("status") or "").strip().lower()
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+        if any(state in {"error", "failed", "failure"} for state in states):
+            return ExecutionState.FAILED
+        if any(state in {"timed_out", "timeout"} for state in states):
+            return ExecutionState.TIMED_OUT
+        if states and all(state == "interrupted" for state in states):
+            return ExecutionState.CANCELLED
+        if any(state == "interrupted" for state in states):
+            return ExecutionState.FAILED
+        return ExecutionState.SUCCEEDED
 
     def _complete_tool_call(
         self,
