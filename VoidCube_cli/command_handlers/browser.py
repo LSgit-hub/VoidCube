@@ -72,9 +72,9 @@ def _connect_browser(request: ParsedCliCommand, *, ports: BrowserCommandPorts) -
     port = _cdp_port(cdp_url)
     already_open = ports.probe_port(port)
     if already_open:
-        ports.emit(f"   ✓ Chrome is already listening on port {port}")
+        ports.emit(f"   ✓ Chrome 已在端口 {port} 监听")
     elif cdp_url == _DEFAULT_CDP_URL:
-        ports.emit("   Chrome isn't running with remote debugging — attempting to launch...")
+        ports.emit("   Chrome 未启用远程调试，正在尝试启动……")
         if ports.launch_chrome_debug(port):
             for _ in range(10):
                 if ports.probe_port(port):
@@ -82,23 +82,23 @@ def _connect_browser(request: ParsedCliCommand, *, ports: BrowserCommandPorts) -
                     break
                 ports.sleep(0.5)
             if already_open:
-                ports.emit(f"   ✓ Chrome launched and listening on port {port}")
+                ports.emit(f"   ✓ Chrome 已启动并在端口 {port} 监听")
             else:
-                ports.emit(f"   ⚠ Chrome launched but port {port} isn't responding yet")
+                ports.emit(f"   ⚠ Chrome 已启动，但端口 {port} 暂无响应")
                 ports.emit(
-                    "     Try again in a few seconds — the debug instance may still be starting"
+                    "     请稍后重试，调试实例可能仍在启动"
                 )
         else:
-            ports.emit("   ⚠ Could not auto-launch Chrome")
-            ports.emit("     Launch Chrome manually:")
+            ports.emit("   ⚠ 无法自动启动 Chrome")
+            ports.emit("     请手动启动 Chrome：")
             ports.emit(f"     {_manual_chrome_command(ports.system_name(), ports.chrome_data_dir())}")
     else:
-        ports.emit(f"   ⚠ Port {port} is not reachable at {cdp_url}")
+        ports.emit(f"   ⚠ 端口 {port} 无法访问：{cdp_url}")
 
     ports.set_cdp_url(cdp_url)
     ports.emit("")
-    ports.emit("🌐 Browser connected to live Chrome via CDP")
-    ports.emit(f"   Endpoint: {cdp_url}")
+    ports.emit("🌐 浏览器已通过 CDP 连接到当前 Chrome")
+    ports.emit(f"   端点：{cdp_url}")
     ports.emit("")
     ports.enqueue_system_note(_LIVE_BROWSER_CONNECTED_NOTE)
 
@@ -106,15 +106,15 @@ def _connect_browser(request: ParsedCliCommand, *, ports: BrowserCommandPorts) -
 def _disconnect_browser(current: str, *, ports: BrowserCommandPorts) -> None:
     if not current:
         ports.emit("")
-        ports.emit("Browser is not connected to live Chrome (already using default mode)")
+        ports.emit("浏览器未连接当前 Chrome（已经在使用默认模式）")
         ports.emit("")
         return
 
     ports.clear_cdp_url()
     ports.cleanup_browsers()
     ports.emit("")
-    ports.emit("🌐 Browser disconnected from live Chrome")
-    ports.emit("   Browser tools reverted to default mode (local headless or cloud provider)")
+    ports.emit("🌐 浏览器已断开当前 Chrome")
+    ports.emit("   浏览器工具已恢复默认模式（本地无头或云端提供商）")
     ports.emit("")
     ports.enqueue_system_note(_LIVE_BROWSER_DISCONNECTED_NOTE)
 
@@ -122,31 +122,31 @@ def _disconnect_browser(current: str, *, ports: BrowserCommandPorts) -> None:
 def _show_browser_status(current: str, *, ports: BrowserCommandPorts) -> None:
     ports.emit("")
     if current:
-        ports.emit("🌐 Browser: connected to live Chrome via CDP")
-        ports.emit(f"   Endpoint: {current}")
+        ports.emit("🌐 浏览器：已通过 CDP 连接当前 Chrome")
+        ports.emit(f"   端点：{current}")
         if ports.probe_port(_cdp_port(current)):
-            ports.emit("   Status: ✓ reachable")
+            ports.emit("   状态：✓ 可访问")
         else:
-            ports.emit("   Status: ⚠ not reachable (Chrome may not be running)")
+            ports.emit("   状态：⚠ 无法访问（Chrome 可能未运行）")
     else:
         provider = ports.cloud_provider()
         if provider is not None:
-            ports.emit(f"🌐 Browser: {provider.provider_name()} (cloud)")
+            ports.emit(f"🌐 浏览器：{provider.provider_name()}（云端）")
         else:
-            ports.emit("🌐 Browser: local headless Chromium (agent-browser)")
+            ports.emit("🌐 浏览器：本地无头 Chromium（agent-browser）")
     ports.emit("")
-    ports.emit("   /browser connect      — connect to your live Chrome")
-    ports.emit("   /browser disconnect   — revert to default")
+    ports.emit("   /browser connect      — 连接当前 Chrome")
+    ports.emit("   /browser disconnect   — 恢复默认模式")
     ports.emit("")
 
 
 def _show_browser_usage(emit: Callable[[str], None]) -> None:
     emit("")
-    emit("Usage: /browser connect|disconnect|status")
+    emit("用法：/browser connect|disconnect|status")
     emit("")
-    emit("   connect      Connect browser tools to your live Chrome session")
-    emit("   disconnect   Revert to default browser backend")
-    emit("   status       Show current browser mode")
+    emit("   connect      连接浏览器工具到当前 Chrome")
+    emit("   disconnect   恢复默认浏览器后端")
+    emit("   status       显示当前浏览器模式")
     emit("")
 
 

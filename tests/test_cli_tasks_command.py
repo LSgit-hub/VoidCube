@@ -104,7 +104,7 @@ def test_tasks_handler_falls_back_to_background_summary():
 
     handle_tasks_command(parse_cli_command("/tasks"), ports=ports)
 
-    assert "CLI Background Tasks" in output[0]
+    assert "CLI 后台任务" in output[0]
     assert "Summarize the repo" in output[0]
 
 

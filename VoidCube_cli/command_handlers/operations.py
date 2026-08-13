@@ -136,9 +136,9 @@ def reload_mcp_servers(*, ports: McpReloadRuntimePorts) -> None:
             )
         )
         ports.persist_reload_note()
-        ports.emit(f"  ✅ Agent updated — {agent_tool_count} tool(s) available")
+        ports.emit(f"  ✅ 智能体已更新，可用工具：{agent_tool_count} 个")
     except Exception as exc:
-        ports.emit(f"  ❌ MCP reload failed: {exc}")
+        ports.emit(f"  ❌ MCP 重新加载失败：{exc}")
 
 
 def _reload_note(
@@ -192,14 +192,14 @@ def handle_cancel_command(
     """Cancel the active user turn through an explicit CLI command."""
     del request
     if ports.cancel_scheduler is not None and ports.cancel_scheduler():
-        ports.emit("  Cancellation requested for the active user turn.")
+        ports.emit("  已请求取消当前用户任务。")
         return
     if not ports.agent_running():
-        ports.emit("  No active user turn to cancel.")
+        ports.emit("  当前没有可取消的用户任务。")
         return
     try:
         ports.interrupt_agent()
     except Exception as exc:
-        ports.emit(f"  Failed to cancel the active user turn: {exc}")
+        ports.emit(f"  取消当前用户任务失败：{exc}")
         return
-    ports.emit("  Cancellation requested for the active user turn.")
+    ports.emit("  已请求取消当前用户任务。")

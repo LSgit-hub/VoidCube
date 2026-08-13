@@ -67,20 +67,20 @@ def slow_command_status(command: str | ParsedCliCommand) -> str:
     request = command if isinstance(command, ParsedCliCommand) else parse_cli_command(command)
     normalized = request.normalized
     if normalized.startswith("/skills search"):
-        return "Searching skills..."
+        return "正在搜索技能……"
     if normalized.startswith("/skills browse"):
-        return "Loading skills..."
+        return "正在加载技能……"
     if normalized.startswith("/skills inspect"):
-        return "Inspecting skill..."
+        return "正在查看技能……"
     if normalized.startswith("/skills install"):
-        return "Installing skill..."
+        return "正在安装技能……"
     if request.canonical == "skills":
-        return "Processing skills command..."
+        return "正在处理技能命令……"
     if request.canonical == "reload-mcp":
-        return "Reloading MCP servers..."
+        return "正在重新加载 MCP 服务……"
     if request.canonical == "browser":
-        return "Configuring browser..."
-    return "Processing command..."
+        return "正在配置浏览器……"
+    return "正在处理命令……"
 
 
 def resolve_dynamic_command(

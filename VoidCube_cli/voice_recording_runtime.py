@@ -45,7 +45,7 @@ def start_terminal_voice_recording(ports: VoiceRecordingPorts) -> None:
         if state.recording:
             return
         state.recording = True
-    ports.emit("\nRecording...")
+    ports.emit("\n录音中……")
     ports.invalidate()
     try:
         result = voice.transcribe_once()
@@ -75,7 +75,7 @@ def stop_terminal_voice_recording(ports: VoiceRecordingPorts) -> None:
         state.recording = False
     if ports.voice is not None:
         ports.voice.interrupt()
-    ports.emit("\nRecording cancelled.")
+    ports.emit("\n录音已取消。")
     ports.invalidate()
 
 
@@ -89,19 +89,19 @@ def _finish_voice_result(ports: VoiceRecordingPorts, result: dict[str, object]) 
         ports.invalidate()
         return
     if status == "empty":
-        ports.emit("No speech detected.")
+        ports.emit("未检测到语音。")
     elif status == "interrupted":
         return
     elif status == "rejected":
-        ports.emit("Voice sample was not recognized as the owner voice.")
+        ports.emit("语音样本未通过所有者声音验证。")
     else:
-        ports.emit(f"\nTranscription failed: {result.get('reason', 'Unknown error')}")
+        ports.emit(f"\n语音转写失败：{result.get('reason', '未知错误')}")
 
     state = ports.state
     state.no_speech_count += 1
     if state.no_speech_count >= 3:
         state.continuous = False
         state.no_speech_count = 0
-        ports.emit("No speech detected 3 times, continuous mode stopped.")
+        ports.emit("连续 3 次未检测到语音，已停止连续模式。")
         state.stop_continuous = True
     ports.invalidate()

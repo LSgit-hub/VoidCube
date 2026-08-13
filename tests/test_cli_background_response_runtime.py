@@ -41,10 +41,10 @@ def test_background_response_runtime_renders_success_panel_and_prompt_preview():
     )
 
     assert events == ["invalidate", ("sleep", 0.05), "blank"]
-    assert any("Background task #3 complete" in line for line in output)
-    assert any('Prompt: "' + "p" * 60 + '..."' in line for line in output)
+    assert any("后台任务 #3 已完成" in line for line in output)
+    assert any('提示词："' + "p" * 60 + '..."' in line for line in output)
     assert len(console.items) == 3
-    assert "background #3" in console.items[-1].title
+    assert "后台任务 #3" in console.items[-1].title
 
 
 def test_background_response_runtime_renders_failure_without_panel():
@@ -60,6 +60,6 @@ def test_background_response_runtime_renders_failure_without_panel():
         "question",
     )
 
-    assert any("Job #4 failed: timeout" in line for line in output)
-    assert any("(No response generated)" in line for line in output)
+    assert any("任务 #4 失败：timeout" in line for line in output)
+    assert any("（未生成响应）" in line for line in output)
     assert len(console.items) == 2

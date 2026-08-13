@@ -290,7 +290,7 @@ def show_status(args):
         from datetime import datetime, timezone
         print(f"    Access exp: {datetime.fromtimestamp(int(qwen_exp) / 1000, tz=timezone.utc).isoformat()}")
     if qwen_status.get("error") and not qwen_logged_in:
-        print(f"    Error:      {qwen_status.get('error')}")
+        print(f"    错误：      {qwen_status.get('error')}")
 
     # =========================================================================
     # Nous Subscription Features
@@ -298,30 +298,30 @@ def show_status(args):
     if managed_nous_tools_enabled():
         features = get_nous_subscription_features(config)
         print()
-        print(color("◆ Nous Subscription Features", Colors.CYAN, Colors.BOLD))
+        print(color("◆ Nous 订阅功能", Colors.CYAN, Colors.BOLD))
         if not features.nous_auth_present:
-            print("  Nous Portal   ✗ not logged in")
+            print("  Nous 门户      ✗ 未登录")
         else:
-            print("  Nous Portal   ✓ managed tools available")
+            print("  Nous 门户      ✓ 托管工具可用")
         for feature in features.items():
             if feature.managed_by_nous:
-                state = "active via Nous subscription"
+                state = "通过 Nous 订阅启用"
             elif feature.active:
                 current = feature.current_provider or "configured provider"
-                state = f"active via {current}"
+                state = f"通过 {current} 启用"
             elif feature.included_by_default and features.nous_auth_present:
-                state = "included by subscription, not currently selected"
+                state = "订阅已包含，当前未选择"
             elif feature.key == "modal" and features.nous_auth_present:
-                state = "available via subscription (optional)"
+                state = "订阅可用（可选）"
             else:
-                state = "not configured"
+                state = "未配置"
             print(f"  {feature.label:<15} {check_mark(feature.available or feature.active or feature.managed_by_nous)} {state}")
 
     # =========================================================================
     # API-Key Providers
     # =========================================================================
     print()
-    print(color("◆ API-Key Providers", Colors.CYAN, Colors.BOLD))
+    print(color("◆ API 密钥提供商", Colors.CYAN, Colors.BOLD))
 
     apikey_providers = {
         "Z.AI / GLM":       ("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
@@ -336,14 +336,14 @@ def show_status(args):
             if has_usable_secret(key_val):
                 break
         configured = has_usable_secret(key_val)
-        label = "configured" if configured else "not configured (run: VoidCube model)"
+        label = "已配置" if configured else "未配置（运行：VoidCube model）"
         print(f"  {pname:<16} {check_mark(configured)} {label}")
 
     # =========================================================================
     # Terminal Configuration
     # =========================================================================
     print()
-    print(color("◆ Terminal Backend", Colors.CYAN, Colors.BOLD))
+    print(color("◆ 终端后端", Colors.CYAN, Colors.BOLD))
     
     terminal_env = os.getenv("TERMINAL_ENV", "")
     if not terminal_env:
@@ -372,13 +372,13 @@ def show_status(args):
         print(f"  Daytona Image: {daytona_image}")
     
     sudo_password = os.getenv("SUDO_PASSWORD", "")
-    print(f"  Sudo:         {check_mark(bool(sudo_password))} {'enabled' if sudo_password else 'disabled'}")
+    print(f"  Sudo：        {check_mark(bool(sudo_password))} {'已启用' if sudo_password else '已禁用'}")
     
     # =========================================================================
     # Gateway Status
     # =========================================================================
     print()
-    print(color("◆ Gateway Service", Colors.CYAN, Colors.BOLD))
+    print(color("◆ 网关服务", Colors.CYAN, Colors.BOLD))
 
     # Three-segment scene bar (baseline §8.1) — supervisor / agent / executor.
     # Rendered *before* the rest of the gateway block so users always see
@@ -392,16 +392,16 @@ def show_status(args):
         except Exception:
             gateway_pids = []
         is_running = bool(gateway_pids)
-        print(f"  Status:       {check_mark(is_running)} {'running' if is_running else 'stopped'}")
-        print("  Manager:      Termux / manual process")
+        print(f"  状态：        {check_mark(is_running)} {'运行中' if is_running else '已停止'}")
+        print("  管理器：      Termux / 手动进程")
         if gateway_pids:
             rendered = ", ".join(str(pid) for pid in gateway_pids[:3])
             if len(gateway_pids) > 3:
                 rendered += ", ..."
             print(f"  PID(s):       {rendered}")
         else:
-            print("  Start with:   VoidCube gateway")
-            print("  Note:         Android may stop background jobs when Termux is suspended")
+            print("  启动方式：    VoidCube gateway")
+            print("  注意：        Termux 挂起时 Android 可能停止后台任务")
 
     elif sys.platform.startswith('linux'):
         from VoidCube_core.constants import is_container
@@ -413,8 +413,8 @@ def show_status(args):
                 is_active = len(gateway_pids) > 0
             except Exception:
                 is_active = False
-            print(f"  Status:       {check_mark(is_active)} {'running' if is_active else 'stopped'}")
-            print("  Manager:      docker (foreground)")
+            print(f"  状态：        {check_mark(is_active)} {'运行中' if is_active else '已停止'}")
+            print("  管理器：      docker（前台）")
         else:
             try:
                 from VoidCube_cli.gateway import get_service_name
@@ -431,8 +431,8 @@ def show_status(args):
                 is_active = result.stdout.strip() == "active"
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 is_active = False
-            print(f"  Status:       {check_mark(is_active)} {'running' if is_active else 'stopped'}")
-            print("  Manager:      systemd (user)")
+            print(f"  状态：        {check_mark(is_active)} {'运行中' if is_active else '已停止'}")
+            print("  管理器：      systemd（用户）")
         
     elif sys.platform == 'darwin':
         from VoidCube_cli.gateway import get_launchd_label
@@ -446,17 +446,17 @@ def show_status(args):
             is_loaded = result.returncode == 0
         except subprocess.TimeoutExpired:
             is_loaded = False
-        print(f"  Status:       {check_mark(is_loaded)} {'loaded' if is_loaded else 'not loaded'}")
-        print("  Manager:      launchd")
+        print(f"  状态：        {check_mark(is_loaded)} {'已加载' if is_loaded else '未加载'}")
+        print("  管理器：      launchd")
     else:
-        print(f"  Status:       {color('N/A', Colors.DIM)}")
-        print("  Manager:      (not supported on this platform)")
+        print(f"  状态：        {color('不适用', Colors.DIM)}")
+        print("  管理器：      （当前平台不支持）")
     
     # =========================================================================
     # Sessions
     # =========================================================================
     print()
-    print(color("◆ Sessions", Colors.CYAN, Colors.BOLD))
+    print(color("◆ 会话", Colors.CYAN, Colors.BOLD))
     
     sessions_file = get_VoidCube_home() / "sessions" / "sessions.json"
     if sessions_file.exists():
@@ -464,18 +464,18 @@ def show_status(args):
         try:
             with open(sessions_file, encoding="utf-8") as f:
                 data = json.load(f)
-                print(f"  Active:       {len(data)} session(s)")
+                print(f"  活跃：        {len(data)} 个会话")
         except Exception:
-            print("  Active:       (error reading sessions file)")
+            print("  活跃：        （读取会话文件时出错）")
     else:
-        print("  Active:       0")
+        print("  活跃：        0")
     
     # =========================================================================
     # Deep checks
     # =========================================================================
     if deep:
         print()
-        print(color("◆ Deep Checks", Colors.CYAN, Colors.BOLD))
+        print(color("◆ 深度检查", Colors.CYAN, Colors.BOLD))
         
         # Check OpenRouter connectivity
         openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
@@ -488,9 +488,9 @@ def show_status(args):
                     timeout=10
                 )
                 ok = response.status_code == 200
-                print(f"  OpenRouter:   {check_mark(ok)} {'reachable' if ok else f'error ({response.status_code})'}")
+                print(f"  OpenRouter：   {check_mark(ok)} {'可访问' if ok else f'错误（{response.status_code}）'}")
             except Exception as e:
-                print(f"  OpenRouter:   {check_mark(False)} error: {e}")
+                print(f"  OpenRouter：   {check_mark(False)} 错误：{e}")
         
         # Check gateway port
         try:
@@ -502,7 +502,7 @@ def show_status(args):
             # Port in use = gateway likely running
             port_in_use = result == 0
             # This is informational, not necessarily bad
-            print(f"  Port 18789:   {'in use' if port_in_use else 'available'}")
+            print(f"  端口 18789：   {'使用中' if port_in_use else '可用'}")
         except OSError:
             pass
     

@@ -1312,7 +1312,7 @@ def test_mcp_reload_operation_projects_changes_refreshes_and_persists() -> None:
         "  ♻️  Reconnected: alpha",
         "  ➕ Added: beta",
         "  🔧 2 tool(s) available from 2 server(s)",
-        "  ✅ Agent updated — 3 tool(s) available",
+        "  ✅ 智能体已更新，可用工具：3 个",
     ]
     assert notes == [
         "[SYSTEM: MCP servers have been reloaded. Added servers: beta. "
@@ -1333,7 +1333,7 @@ def test_mcp_reload_operation_projects_changes_refreshes_and_persists() -> None:
             emit=failures.append,
         )
     )
-    assert failures == ["  ❌ MCP reload failed: offline"]
+    assert failures == ["  ❌ MCP 重新加载失败：offline"]
 
 
 def test_mcp_handler_lists_mutates_and_tests_servers_through_ports() -> None:
@@ -1426,10 +1426,10 @@ def test_browser_handler_connects_and_notifies_the_agent_after_launch() -> None:
     assert launches == [9222]
     assert sleeps == [0.5]
     assert configured == ["http://localhost:9222"]
-    assert "   ✓ Chrome launched and listening on port 9222" in output
+    assert "   ✓ Chrome 已启动并在端口 9222 监听" in output
     assert output[-3:] == [
-        "🌐 Browser connected to live Chrome via CDP",
-        "   Endpoint: http://localhost:9222",
+        "🌐 浏览器已通过 CDP 连接到当前 Chrome",
+        "   端点：http://localhost:9222",
         "",
     ]
     assert len(notes) == 1
@@ -1461,13 +1461,13 @@ def test_browser_handler_projects_status_disconnect_and_invalid_usage() -> None:
     handle_browser_command(parse_cli_command("/browser invalid"), ports=ports)
     handle_browser_command(parse_cli_command("/browser status"), ports=ports)
 
-    assert "   Status: ✓ reachable" in output
+    assert "   状态：✓ 可访问" in output
     assert state["url"] == ""
     assert cleanup_calls == ["cleanup"]
     assert len(notes) == 1
     assert "disconnected the browser tools" in notes[0]
-    assert "Usage: /browser connect|disconnect|status" in output
-    assert "🌐 Browser: Browserbase (cloud)" in output
+    assert "用法：/browser connect|disconnect|status" in output
+    assert "🌐 浏览器：Browserbase（云端）" in output
 
 
 def test_browser_handler_reports_manual_and_custom_endpoint_fallbacks() -> None:
@@ -1498,7 +1498,7 @@ def test_browser_handler_reports_manual_and_custom_endpoint_fallbacks() -> None:
         'open -a "Google Chrome" --args --remote-debugging-port=9222' in line
         for line in output
     )
-    assert "   ⚠ Port 9444 is not reachable at ws://remote.example:9444/devtools" in output
+    assert "   ⚠ 端口 9444 无法访问：ws://remote.example:9444/devtools" in output
     assert configured == [
         "http://localhost:9222",
         "ws://remote.example:9444/devtools",

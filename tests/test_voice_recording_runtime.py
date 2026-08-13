@@ -43,4 +43,4 @@ def test_stop_terminal_voice_recording_interrupts_canonical_session() -> None:
     assert state.recording is False
     assert state.processing is False
     assert state.continuous is False
-    assert ("emit", "\nRecording cancelled.") in calls
+    assert ("emit", "\n录音已取消。") in calls

@@ -34,7 +34,7 @@ def test_cancel_handler_interrupts_only_an_active_user_turn() -> None:
 
     assert events == [
         "interrupt",
-        "  Cancellation requested for the active user turn.",
+        "  已请求取消当前用户任务。",
     ]
 
 
@@ -50,7 +50,7 @@ def test_cancel_handler_reports_when_no_user_turn_is_active() -> None:
         ),
     )
 
-    assert output == ["  No active user turn to cancel."]
+    assert output == ["  当前没有可取消的用户任务。"]
 
 
 def test_stop_handler_reports_when_no_process_is_running() -> None:

@@ -378,7 +378,7 @@ def test_cli_process_routes_cancel_to_the_active_user_agent() -> None:
     assert app.process_command("/cancel") is True
     assert events == [
         None,
-        "  Cancellation requested for the active user turn.",
+        "  已请求取消当前用户任务。",
     ]
 
 
@@ -768,7 +768,7 @@ def test_mcp_reload_registry_ports_refresh_agent_and_persist_history(monkeypatch
         "  ➕ Added: new",
         "  ➖ Removed: old",
         "  🔧 1 tool(s) available from 1 server(s)",
-        "  ✅ Agent updated — 1 tool(s) available",
+        "  ✅ 智能体已更新，可用工具：1 个",
     ]
 
 
@@ -801,7 +801,7 @@ def test_cli_process_routes_browser_through_explicit_ports(monkeypatch) -> None:
 
     assert app.process_command("/browser connect ws://example.test:9333") is True
     assert configured == ["ws://example.test:9333"]
-    assert "   ✓ Chrome is already listening on port 9333" in output
+    assert "   ✓ Chrome 已在端口 9333 监听" in output
 
 
 def test_browser_ports_bind_environment_and_host_launch_operation(monkeypatch) -> None:
@@ -1181,7 +1181,7 @@ def test_busy_spec_wraps_handler_and_restores_state() -> None:
     )
 
     assert result.handled is True
-    assert observed == [(True, "Searching skills...", "/skills search MixedCase")]
+    assert observed == [(True, "正在搜索技能……", "/skills search MixedCase")]
     assert (host._command_running, host._command_status) == (False, "")
 
 

@@ -43,17 +43,21 @@ class CliBackgroundResponseRuntime:
         self.ports.emit_blank_line()
         console = self.ports.create_console()
         console.print("[#34D399]" + "~" * 40 + "[/]")
+        display_task_label = {
+            "Background task": "后台任务",
+            "Job": "任务",
+        }.get(task_label, task_label)
         if success:
-            self.ports.emit(f"  ✅ {task_label} #{task_num} complete")
+            self.ports.emit(f"  ✅ {display_task_label} #{task_num} 已完成")
         else:
-            self.ports.emit(f"  ❌ {task_label} #{task_num} failed: {error}")
+            self.ports.emit(f"  ❌ {display_task_label} #{task_num} 失败：{error}")
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
-        self.ports.emit(f'  Prompt: "{preview}"')
+        self.ports.emit(f'  提示词："{preview}"')
         console.print("[#34D399]" + "~" * 40 + "[/]")
         if response:
             color = "#CD7F32"
             label = "> Voidcube"
-            title = response_title or f"{label} (background #{task_num})"
+            title = response_title or f"{label}（后台任务 #{task_num}）"
             console.print(
                 Panel(
                     self.ports.rich_text_from_ansi(response),
@@ -66,4 +70,4 @@ class CliBackgroundResponseRuntime:
                 )
             )
         else:
-            self.ports.emit("  (No response generated)")
+            self.ports.emit("  （未生成响应）")

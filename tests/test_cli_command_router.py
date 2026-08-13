@@ -52,14 +52,14 @@ def test_parse_preserves_arguments_and_rejects_removed_registry_alias() -> None:
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
-        ("/skills search logs", "Searching skills..."),
-        ("/skills browse", "Loading skills..."),
-        ("/skills inspect item", "Inspecting skill..."),
-        ("/skills install item", "Installing skill..."),
-        ("/skills list", "Processing skills command..."),
-        ("/reload-mcp", "Reloading MCP servers..."),
-        ("/browser status", "Configuring browser..."),
-        ("/other", "Processing command..."),
+        ("/skills search logs", "正在搜索技能……"),
+        ("/skills browse", "正在加载技能……"),
+        ("/skills inspect item", "正在查看技能……"),
+        ("/skills install item", "正在安装技能……"),
+        ("/skills list", "正在处理技能命令……"),
+        ("/reload-mcp", "正在重新加载 MCP 服务……"),
+        ("/browser status", "正在配置浏览器……"),
+        ("/other", "正在处理命令……"),
     ],
 )
 def test_slow_command_status_is_derived_from_parsed_command(

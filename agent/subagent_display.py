@@ -57,6 +57,16 @@ class SubagentStatus(Enum):
     CANCELLED = "cancelled"  # Cancelled
 
 
+def _execution_state_label(state: ExecutionState) -> str:
+    """Return the Chinese label used for a tool's terminal state."""
+    return {
+        ExecutionState.FAILED: "失败",
+        ExecutionState.CANCELLED: "已取消",
+        ExecutionState.TIMED_OUT: "超时",
+        ExecutionState.UNKNOWN: "未知状态",
+    }.get(state, state.value)
+
+
 @dataclass
 class ToolCallEntry:
     """A single tool call with metadata."""
@@ -488,7 +498,7 @@ class SubagentDisplayManager:
         emoji = self.TOOL_EMOJIS.get(tool_name, "🔧")
 
         if state is ExecutionState.SUCCEEDED:
-            self.print_fn(f"  {Colors.SUCCESS}✓{Colors.RESET} {emoji} {tool_name}")
+            self.print_fn(f"  {Colors.SUCCESS}✓{Colors.RESET} {emoji} {tool_name} 已完成")
             return
         marker = {
             ExecutionState.FAILED: "✗",
@@ -498,39 +508,38 @@ class SubagentDisplayManager:
         }[state]
         self.print_fn(
             f"  {Colors.ERROR}{marker}{Colors.RESET} {emoji} {tool_name} "
-            f"{Colors.ERROR}{state.value}{Colors.RESET}"
+            f"{Colors.ERROR}{_execution_state_label(state)}{Colors.RESET}"
         )
-    
     def _print_final_summary(self, task: SubagentTask) -> None:
         """Print final task summary."""
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
         
         if task.status == SubagentStatus.COMPLETED:
-            self.print_fn(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ Subagent completed{Colors.RESET}")
-            self.print_fn(f"  {Colors.DIM}Duration: {task.duration_seconds:.1f}s{Colors.RESET}")
-            self.print_fn(f"  {Colors.DIM}API calls: {task.api_calls}{Colors.RESET}")
+            self.print_fn(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ 子代理已完成{Colors.RESET}")
+            self.print_fn(f"  {Colors.DIM}耗时: {task.duration_seconds:.1f}s{Colors.RESET}")
+            self.print_fn(f"  {Colors.DIM}模型调用: {task.api_calls} 次{Colors.RESET}")
             
             if task.summary:
                 # Truncate summary for display
                 summary = task.summary[:500]
                 if len(task.summary) > 500:
                     summary += "..."
-                self.print_fn(f"\n{Colors.BOLD}Summary:{Colors.RESET}")
+                self.print_fn(f"\n{Colors.BOLD}摘要:{Colors.RESET}")
                 self.print_fn(f"  {summary}")
         else:
-            self.print_fn(f"\n{Colors.ERROR}{Colors.BOLD}{prefix} ✗ Subagent failed{Colors.RESET}")
+            self.print_fn(f"\n{Colors.ERROR}{Colors.BOLD}{prefix} ✗ 子代理执行失败{Colors.RESET}")
             if task.error:
                 self.print_fn(f"  {Colors.ERROR}{task.error[:200]}{Colors.RESET}")
     
     def _print_interrupt(self, task: SubagentTask) -> None:
         """Print task interrupt notification."""
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        self.print_fn(f"\n{Colors.WAITING}{Colors.BOLD}{prefix} ⊘ Subagent interrupted{Colors.RESET}")
+        self.print_fn(f"\n{Colors.WAITING}{Colors.BOLD}{prefix} ⊘ 子代理已中断{Colors.RESET}")
     
     def _print_cancel(self, task: SubagentTask) -> None:
         """Print task cancel notification."""
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        self.print_fn(f"\n{Colors.DIM}{prefix} ⊗ Subagent cancelled{Colors.RESET}")
+        self.print_fn(f"\n{Colors.DIM}{prefix} ⊗ 子代理已取消{Colors.RESET}")
     
     # =====================================================================
     # Tasks Command (/tasks)
@@ -543,33 +552,33 @@ class SubagentDisplayManager:
         """
         lines = []
         lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-        lines.append(f"{Colors.BOLD}Subagent Tasks{Colors.RESET}\n")
+        lines.append(f"{Colors.BOLD}子代理任务{Colors.RESET}\n")
 
         foreground_tasks = self.list_tasks(include_background=False)
         background_tasks = self.list_background_tasks()
 
         if not foreground_tasks and not background_tasks:
-            lines.append(f"{Colors.DIM}  No active subagent tasks{Colors.RESET}")
+            lines.append(f"{Colors.DIM}  当前没有运行中的子代理任务{Colors.RESET}")
         else:
             if foreground_tasks:
-                lines.append(f"{Colors.INFO}Foreground{Colors.RESET}")
+                lines.append(f"{Colors.INFO}前台任务{Colors.RESET}")
                 for task in foreground_tasks:
                     lines.append(self._render_task_summary_line(task))
             if background_tasks:
                 if foreground_tasks:
                     lines.append("")
-                lines.append(f"{Colors.INFO}Background{Colors.RESET}")
+                lines.append(f"{Colors.INFO}后台任务{Colors.RESET}")
                 for task in sorted(background_tasks, key=lambda t: t.task_index):
                     lines.append(self._render_task_summary_line(task))
         
         lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}\n")
         
         # Tips
-        lines.append(f"{Colors.DIM}Notes:{Colors.RESET}")
-        lines.append(f"  API-A will manage subagents automatically during multi-step work.")
-        lines.append(f"  {Colors.INFO}/tasks{Colors.RESET}        - Observe current subagent state")
-        lines.append(f"  {Colors.DIM}/tasks bg <task>{Colors.RESET} - Advanced debug: move a foreground task to background")
-        lines.append(f"  {Colors.DIM}/tasks fg <task>{Colors.RESET} - Advanced debug: bring a background task back")
+        lines.append(f"{Colors.DIM}说明:{Colors.RESET}")
+        lines.append(f"  API-A 会在多步骤工作中自动管理子代理。")
+        lines.append(f"  {Colors.INFO}/tasks{Colors.RESET}        - 查看当前子代理状态")
+        lines.append(f"  {Colors.DIM}/tasks bg <任务>{Colors.RESET} - 调试操作：将前台任务转入后台")
+        lines.append(f"  {Colors.DIM}/tasks fg <任务>{Colors.RESET} - 调试操作：将后台任务调回前台")
         
         return "\n".join(lines)
     
@@ -589,7 +598,7 @@ class SubagentDisplayManager:
         
         # Status line
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        lane = "BG" if task.is_background else "FG"
+        lane = "后台" if task.is_background else "前台"
         line = f"  {status_color}{status_icon}{Colors.RESET} {prefix} {task.goal_preview}"
         line += f"{Colors.DIM}{duration_str}{Colors.RESET}"
         line += f" {Colors.DIM}({lane} id={task.task_id}){Colors.RESET}"
@@ -624,8 +633,8 @@ class SubagentDisplayManager:
             task.is_background = True
             self._background_tasks[task_id] = task
         
-        self.print_fn(f"\n{Colors.INFO}→ Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
-        self.print_fn(f"{Colors.DIM}  Task is now running in the background; use /tasks to observe it{Colors.RESET}")
+        self.print_fn(f"\n{Colors.INFO}→ 已应用调试操作: {task.goal_preview}{Colors.RESET}")
+        self.print_fn(f"{Colors.DIM}  任务已转入后台运行，可使用 /tasks 查看{Colors.RESET}")
         
         return True
     
@@ -640,7 +649,7 @@ class SubagentDisplayManager:
             if task_id in self._background_tasks:
                 del self._background_tasks[task_id]
         
-        self.print_fn(f"\n{Colors.INFO}← Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
+        self.print_fn(f"\n{Colors.INFO}← 已应用调试操作: {task.goal_preview}{Colors.RESET}")
         
         return True
     

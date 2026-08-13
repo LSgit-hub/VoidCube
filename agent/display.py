@@ -135,15 +135,15 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         todos_arg = args.get("todos")
         merge = args.get("merge", False)
         if todos_arg is None:
-            return "reading task list"
+            return "读取任务列表"
         elif merge:
-            return f"updating {len(todos_arg)} task(s)"
+            return f"更新 {len(todos_arg)} 项任务"
         else:
-            return f"planning {len(todos_arg)} task(s)"
+            return f"规划 {len(todos_arg)} 项任务"
 
     if tool_name == "session_search":
         query = _oneline(args.get("query", ""))
-        return f"recall: \"{query[:25]}{'...' if len(query) > 25 else ''}\""
+        return f"检索记忆: \"{query[:25]}{'...' if len(query) > 25 else ''}\""
 
     if tool_name == "memory":
         action = args.get("action", "")
@@ -159,15 +159,15 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
 
     if tool_name.startswith("rl_"):
         rl_previews = {
-            "rl_list_environments": "listing envs",
+            "rl_list_environments": "列出环境",
             "rl_select_environment": args.get("name", ""),
-            "rl_get_current_config": "reading config",
+            "rl_get_current_config": "读取配置",
             "rl_edit_config": f"{args.get('field', '')}={args.get('value', '')}",
-            "rl_start_training": "starting",
+            "rl_start_training": "开始训练",
             "rl_check_status": args.get("run_id", "")[:16],
-            "rl_stop_training": f"stopping {args.get('run_id', '')[:16]}",
+            "rl_stop_training": f"停止 {args.get('run_id', '')[:16]}",
             "rl_get_results": args.get("run_id", "")[:16],
-            "rl_list_runs": "listing runs",
+            "rl_list_runs": "列出运行记录",
             "rl_test_inference": f"{args.get('num_steps', 3)} steps",
         }
         return rl_previews.get(tool_name)
@@ -355,7 +355,7 @@ def _emit_inline_diff(diff_text: str, print_fn) -> bool:
     if print_fn is None or not diff_text:
         return False
     try:
-        print_fn("  ┊ review diff")
+        print_fn("  ┊ 查看变更差异")
         for line in diff_text.rstrip("\n").splitlines():
             print_fn(line)
         return True
@@ -451,9 +451,9 @@ def _summarize_rendered_diff_sections(
         break
 
     if omitted_files or omitted_lines:
-        summary = f"… omitted {omitted_lines} diff line(s)"
+        summary = f"… 已省略 {omitted_lines} 行差异"
         if omitted_files:
-            summary += f" across {omitted_files} additional file(s)/section(s)"
+            summary += f"，另有 {omitted_files} 个文件或区块"
         rendered.append(f"{_diff_hunk()}{summary}{_ANSI_RESET}")
 
     return rendered

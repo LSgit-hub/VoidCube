@@ -23,12 +23,12 @@ def test_render_tasks_command_separates_foreground_and_background_sections():
 
     panel = manager.render_tasks_command()
 
-    assert "Foreground" in panel
-    assert "Background" in panel
+    assert "前台任务" in panel
+    assert "后台任务" in panel
     assert "delegate-fg" in panel
     assert "delegate-bg" in panel
-    assert "API-A will manage subagents automatically" in panel
-    assert "Advanced debug" in panel
+    assert "API-A 会在多步骤工作中自动管理子代理" in panel
+    assert "调试操作" in panel
 
 
 def test_get_active_count_excludes_background_tasks():
@@ -51,12 +51,12 @@ def test_background_foreground_notifications_use_advanced_debug_wording():
     task.status = SubagentStatus.THINKING
 
     assert manager.send_to_background("delegate-fg") is True
-    assert any("Advanced debug action applied" in line for line in rendered)
-    assert any("use /tasks to observe it" in line for line in rendered)
+    assert any("已应用调试操作" in line for line in rendered)
+    assert any("使用 /tasks 查看" in line for line in rendered)
 
     rendered.clear()
     assert manager.bring_to_foreground("delegate-fg") is True
-    assert any("Advanced debug action applied" in line for line in rendered)
+    assert any("已应用调试操作" in line for line in rendered)
 
 
 def test_progress_updates_are_event_driven_and_do_not_render_snapshots():
@@ -102,7 +102,7 @@ def test_duplicate_or_orphaned_tool_terminals_do_not_repeat_output():
     )
 
     assert len(rendered) == 1
-    assert "failed" in rendered[0]
+    assert "失败" in rendered[0]
 
 
 def test_start_and_cancel_use_real_lifecycle_duration():
@@ -121,4 +121,4 @@ def test_start_and_cancel_use_real_lifecycle_duration():
     assert task.started_at > 0
     assert task.duration_seconds >= 0
     assert task.status is SubagentStatus.CANCELLED
-    assert sum("Subagent cancelled" in line for line in rendered) == 1
+    assert sum("子代理已取消" in line for line in rendered) == 1

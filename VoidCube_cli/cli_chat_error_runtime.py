@@ -39,7 +39,7 @@ class CliChatErrorRuntime:
             error_result.update(
                 {
                     "interrupted": True,
-                    "error": "Autonomous task timed out after 30 minutes.",
+                    "error": "自主任务运行超过 30 分钟，已超时。",
                 }
             )
         if (
@@ -51,5 +51,5 @@ class CliChatErrorRuntime:
         elif ports.current_autonomous_task() is None:
             ports.set_last_agent_turn_result(error_result)
         if ports.should_emit():
-            ports.emit(f"Error: {error}")
+            ports.emit(f"错误：{error}")
         return error_result

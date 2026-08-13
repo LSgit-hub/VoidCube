@@ -514,12 +514,12 @@ class AIAgent:
         self.base_url = client_initialization.base_url
         self._client_lifecycle = client_initialization.lifecycle
         if not self.quiet_mode:
-            print(f"🤖 AI Agent initialized with model: {self.model}")
+            print(f"🤖 智能体已初始化，模型：{self.model}")
             if base_url:
-                print(f"🔗 Using custom base URL: {base_url}")
+                print(f"🔗 使用自定义接口地址：{base_url}")
             key_used = client_kwargs.get("api_key", "none")
             if key_used and key_used != "dummy-key" and len(key_used) > 12:
-                print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
+                print(f"🔑 使用 API 密钥：{key_used[:8]}...{key_used[-4:]}")
             else:
                 print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
         self._chat_transport = ChatTransport(
@@ -553,9 +553,9 @@ class AIAgent:
         if self._fallback_chain and not self.quiet_mode:
             if len(self._fallback_chain) == 1:
                 fb = self._fallback_chain[0]
-                print(f"🔄 Fallback model: {fb['model']} ({fb['provider']})")
+                print(f"🔄 备用模型：{fb['model']}（{fb['provider']}）")
             else:
-                print(f"🔄 Fallback chain ({len(self._fallback_chain)} providers): " +
+                print(f"🔄 备用链（{len(self._fallback_chain)} 个提供商）：" +
                       " → ".join(f"{f['model']} ({f['provider']})" for f in self._fallback_chain))
 
         # Get available tools with filtering
@@ -572,7 +572,7 @@ class AIAgent:
             self.valid_tool_names = {tool["function"]["name"] for tool in self.tools}
             tool_names = sorted(self.valid_tool_names)
             if not self.quiet_mode:
-                print(f"🛠️  Loaded {len(self.tools)} tools: {', '.join(tool_names)}")
+                print(f"🛠️  已加载 {len(self.tools)} 个工具：{', '.join(tool_names)}")
                 
                 # Show filtering info if applied
                 if enabled_toolsets:
@@ -3648,7 +3648,7 @@ class AIAgent:
         self._persist_user_message_idx = current_turn_user_idx
         
         if not self.quiet_mode:
-            self._safe_print(f"💬 Starting conversation: '{user_message[:60]}{'...' if len(user_message) > 60 else ''}'")
+            self._safe_print(f"💬 开始对话：'{user_message[:60]}{'...' if len(user_message) > 60 else ''}'")
         
         # ── System prompt (cached per session for prefix caching) ──
         # Built once on first call, reused for all subsequent calls.
@@ -3834,7 +3834,7 @@ class AIAgent:
                 turn_state.interrupted = True
                 turn_state.exit_reason = "interrupted_by_user"
                 if not self.quiet_mode:
-                    self._safe_print("\n🔧 Breaking out of tool loop due to interrupt...")
+                    self._safe_print("\n🔧 收到中断，正在退出工具循环……")
                 break
 
             iteration_started = turn_state.begin_iteration(self.iteration_budget)
@@ -4007,7 +4007,7 @@ class AIAgent:
                         self.thinking_callback("")
                     
                     if not self.quiet_mode:
-                        self._vprint(f"{self.log_prefix}⏱️  API call completed in {api_duration:.2f}s")
+                        self._vprint(f"{self.log_prefix}⏱️  API 调用完成，耗时 {api_duration:.2f}s")
                     
                     if self.verbose_logging:
                         # Log response with provider info if available
