@@ -2,28 +2,20 @@
 """
 Subagent Display System - structured subagent visualization
 
-Provides rich CLI display for subagent execution including:
-- Real-time status panel with animated indicators
-- Tree-view tool call visualization
-- Thinking/reasoning process display
+Provides CLI tracking for subagent execution including:
+- Event-driven tool completion output
+- Thinking/reasoning state
 - Background task management (/tasks command)
 - Color-coded output with depth indicators
 
 Provides compact progress and result rendering for child agents.
 """
 
-import asyncio
-import logging
-import os
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-
-logger = logging.getLogger(__name__)
 
 # ANSI color codes for terminal styling
 class Colors:
@@ -123,12 +115,11 @@ class SubagentTask:
 
 class SubagentDisplayManager:
     """
-    Manages real-time display of subagent execution.
+    Tracks subagent execution and emits bounded lifecycle events.
     
     Features:
-    - Real-time status panel with animated indicators
-    - Tree-view tool call visualization
-    - Thinking/reasoning process display  
+    - Event-driven progress output
+    - Tool call and reasoning state
     - Background task tracking
     - Color-coded output with depth indicators
     
@@ -142,12 +133,7 @@ class SubagentDisplayManager:
         manager.on_tool_complete(task_id, "read_file")
         manager.on_complete(task_id, summary="Found 3 issues...")
         
-        # Render display
-        manager.render()
     """
-    
-    # Spinner frames for animated indicators
-    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     
     # Status indicators
     STATUS_ICONS = {
@@ -184,45 +170,23 @@ class SubagentDisplayManager:
     
     def __init__(
         self,
-        show_thinking: bool = True,
-        show_tool_args: bool = False,
         max_tool_args_len: int = 50,
-        tree_indent: str = "│  ",
-        auto_refresh: bool = True,
-        refresh_interval: float = 0.1,
         output_lock: Optional[threading.Lock] = None,
     ):
-        self.show_thinking = show_thinking
-        self.show_tool_args = show_tool_args
         self.max_tool_args_len = max_tool_args_len
-        self.tree_indent = tree_indent
-        self.auto_refresh = auto_refresh
-        self.refresh_interval = refresh_interval
         
         # Task storage
         self._tasks: Dict[str, SubagentTask] = {}
         self._background_tasks: Dict[str, SubagentTask] = {}  # Background tasks
         
         # Output control
-        self._lock = output_lock or threading.Lock()
-        self._last_render_lines: int = 0
-        self._render_lock = threading.Lock()
-        
-        # Refresh thread
-        self._refresh_thread: Optional[threading.Thread] = None
-        self._stop_refresh = threading.Event()
+        self._lock = output_lock or threading.RLock()
         
         # Print function (can be overridden)
         self._print_fn: Optional[Callable] = None
         
-        # Terminal dimensions
-        self._terminal_width: int = 120
-        
         # Track active tools for each task (for nesting)
         self._active_tools: Dict[str, List[str]] = {}
-        
-        # Track completion time for memory cleanup
-        self._completed_tasks: Dict[str, float] = {}
         
     @property
     def print_fn(self) -> Callable:
@@ -241,22 +205,6 @@ class SubagentDisplayManager:
         kwargs.setdefault("flush", True)
         with self._lock:
             print(*args, **kwargs)
-    
-    def _move_cursor_up(self, lines: int) -> None:
-        """Move cursor up n lines."""
-        self.print_fn(f"\033[{lines}A")
-    
-    def _clear_line(self) -> None:
-        """Clear current line."""
-        self.print_fn("\033[2K\r", end="")
-    
-    def _get_terminal_width(self) -> int:
-        """Get terminal width."""
-        try:
-            size = os.get_terminal_size()
-            return size.columns
-        except (OSError, AttributeError):
-            return 120
     
     # =====================================================================
     # Task Management
@@ -440,6 +388,7 @@ class SubagentDisplayManager:
         if task:
             with self._lock:
                 task.api_calls = iteration
+                task.iteration = iteration
     
     def on_complete(
         self,
@@ -470,9 +419,7 @@ class SubagentDisplayManager:
             if model:
                 task.model = model
             
-            # Track completion time for cleanup
-            self._completed_tasks[task_id] = time.time()
-        
+
         # Print final summary
         self._print_final_summary(task)
     
@@ -485,8 +432,7 @@ class SubagentDisplayManager:
                 task.completed_at = time.time()
                 task.duration_seconds = task.completed_at - task.started_at
                 task.exit_reason = "interrupted"
-                self._completed_tasks[task_id] = time.time()
-        
+
         self._print_interrupt(task)
     
     def on_cancel(self, task_id: str) -> None:
@@ -498,166 +444,8 @@ class SubagentDisplayManager:
                 task.completed_at = time.time()
                 task.duration_seconds = task.completed_at - task.started_at
                 task.exit_reason = "cancelled"
-                self._completed_tasks[task_id] = time.time()
-        
+
         self._print_cancel(task)
-    
-    # =====================================================================
-    # Display Rendering
-    # =====================================================================
-    
-    def render(self, clear: bool = True) -> None:
-        """Render the current state of all tasks."""
-        with self._render_lock:
-            with self._lock:
-                tasks = self.list_tasks(include_background=False)
-                active_tasks = [t for t in tasks if t.status not in 
-                              (SubagentStatus.COMPLETED, SubagentStatus.FAILED, 
-                               SubagentStatus.INTERRUPTED, SubagentStatus.CANCELLED)]
-            
-            if not tasks:
-                if clear and self._last_render_lines > 0:
-                    self.clear()
-                return
-            
-            # Clear previous output
-            if clear and self._last_render_lines > 0:
-                self._move_cursor_up(self._last_render_lines)
-            
-            lines = []
-            
-            # Header
-            lines.append(self._render_header(active_tasks))
-            
-            # Task panels (rendering doesn't need lock since we already copied tasks)
-            for task in tasks:
-                lines.extend(self._render_task(task))
-            
-            # Print all lines
-            with self._lock:
-                for line in lines:
-                    self.print_fn(line)
-                self._last_render_lines = len(lines)
-    
-    def _render_header(self, active_tasks: List[SubagentTask]) -> str:
-        """Render the display header."""
-        width = self._get_terminal_width()
-        
-        if not active_tasks:
-            return f"{Colors.DIM}{'─' * width}{Colors.RESET}"
-        
-        # Spinner for active animation
-        frame_idx = int(time.time() * 10) % len(self.SPINNER_FRAMES)
-        spinner = self.SPINNER_FRAMES[frame_idx]
-        
-        active_count = len(active_tasks)
-        if active_count == 1:
-            task = active_tasks[0]
-            status_text = f"{Colors.ACTIVE}{spinner}{Colors.RESET} 1 subagent running"
-            if task.current_tool:
-                status_text += f" - {Colors.PURPLE}{task.current_tool}{Colors.RESET}"
-        else:
-            status_text = f"{Colors.ACTIVE}{spinner}{Colors.RESET} {active_count} subagents running"
-        
-        # Background tasks count
-        bg_count = len(self.list_background_tasks())
-        if bg_count > 0:
-            status_text += f"  {Colors.DIM}|{Colors.RESET} {Colors.INFO}{bg_count} in background{Colors.RESET}"
-        
-        return f"{Colors.DIM}{'─' * width}{Colors.RESET}\n{status_text}"
-    
-    def _render_task(self, task: SubagentTask) -> List[str]:
-        """Render a single task panel."""
-        lines = []
-        width = self._get_terminal_width()
-        
-        # Status color and icon
-        status_color = self._get_status_color(task.status)
-        status_icon = self.STATUS_ICONS.get(task.status, "○")
-        
-        # Task header line
-        prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        header = f"{Colors.PURPLE}{prefix} {status_icon}{status_color} {task.goal_preview}{Colors.RESET}"
-        
-        # Add status-specific info
-        if task.status == SubagentStatus.THINKING and task.current_thinking:
-            thinking_preview = task.current_thinking[:50]
-            header += f"\n  {Colors.CYAN}💭 {thinking_preview}{Colors.RESET}"
-        
-        elif task.status == SubagentStatus.TOOL_CALL and task.current_tool:
-            emoji = self.TOOL_EMOJIS.get(task.current_tool, "🔧")
-            header += f"\n  {emoji} {task.current_tool}"
-            if task.current_tool_preview:
-                header += f" {Colors.DIM}{task.current_tool_preview}{Colors.RESET}"
-        
-        elif task.status == SubagentStatus.COMPLETED:
-            header += f" {Colors.SUCCESS}✓{Colors.RESET}"
-            header += f" {Colors.DIM}({task.duration_seconds:.1f}s){Colors.RESET}"
-        
-        elif task.status == SubagentStatus.FAILED:
-            header += f" {Colors.ERROR}✗{Colors.RESET}"
-            if task.error:
-                header += f" {Colors.ERROR}{task.error[:50]}{Colors.RESET}"
-        
-        lines.append(header)
-        
-        # Tool call tree (for non-completed tasks)
-        if task.tool_calls and task.status not in (SubagentStatus.COMPLETED, SubagentStatus.FAILED):
-            lines.extend(self._render_tool_tree(task))
-        
-        # Progress bar for running tasks
-        if task.status in (SubagentStatus.RUNNING, SubagentStatus.THINKING, SubagentStatus.TOOL_CALL):
-            progress = min(task.iteration / task.max_iterations, 1.0)
-            bar_width = 30
-            filled = int(progress * bar_width)
-            bar = "█" * filled + "░" * (bar_width - filled)
-            lines.append(f"  {Colors.DIM}[{bar}] {task.iteration}/{task.max_iterations}{Colors.RESET}")
-        
-        # Separator
-        lines.append(f"{Colors.DIM}{'─' * width}{Colors.RESET}")
-        
-        return lines
-    
-    def _render_tool_tree(self, task: SubagentTask) -> List[str]:
-        """Render tool call tree visualization."""
-        lines = []
-        indent = "  "
-        
-        # Group tools by depth
-        tools_by_depth: Dict[int, List[ToolCallEntry]] = {}
-        for tc in task.tool_calls:
-            tools_by_depth.setdefault(tc.depth, []).append(tc)
-        
-        # Render last N tools (up to 8)
-        recent_tools = task.tool_calls[-8:] if len(task.tool_calls) > 8 else task.tool_calls
-        
-        for i, tc in enumerate(recent_tools):
-            is_last = (i == len(recent_tools) - 1)
-            branch_char = Colors.VERTICAL if not is_last else Colors.SPACE
-            
-            emoji = self.TOOL_EMOJIS.get(tc.tool_name, "🔧")
-            status_color = Colors.SUCCESS if tc.status == "completed" else (
-                          Colors.ERROR if tc.status == "error" else Colors.ACTIVE)
-            
-            if tc.status == "running":
-                frame_idx = int(time.time() * 10) % len(self.SPINNER_FRAMES)
-                icon = self.SPINNER_FRAMES[frame_idx]
-            else:
-                icon = "✓" if tc.status == "completed" else "✗"
-            
-            tool_line = f"{indent}{branch_char}{status_color}{icon}{Colors.RESET} {emoji} {tc.tool_name}"
-            
-            # Add args preview
-            if self.show_tool_args and tc.args_preview:
-                tool_line += f" {Colors.DIM}{tc.args_preview}{Colors.RESET}"
-            
-            # Add duration for completed tools
-            if tc.duration_ms > 0:
-                tool_line += f" {Colors.DIM}({tc.duration_ms:.0f}ms){Colors.RESET}"
-            
-            lines.append(tool_line)
-        
-        return lines
     
     def _get_status_color(self, status: SubagentStatus) -> str:
         """Get ANSI color for status."""
@@ -822,7 +610,6 @@ class SubagentDisplayManager:
         with self._lock:
             task.is_background = True
             self._background_tasks[task_id] = task
-        self.clear()
         
         self.print_fn(f"\n{Colors.INFO}→ Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
         self.print_fn(f"{Colors.DIM}  Task is now running in the background; use /tasks to observe it{Colors.RESET}")
@@ -839,69 +626,10 @@ class SubagentDisplayManager:
             task.is_background = False
             if task_id in self._background_tasks:
                 del self._background_tasks[task_id]
-        self.render(clear=False)
         
         self.print_fn(f"\n{Colors.INFO}← Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
         
         return True
-    
-    # =====================================================================
-    # Lifecycle
-    # =====================================================================
-    
-    def start(self) -> None:
-        """Start the display manager."""
-        self._stop_refresh.clear()
-        if self.auto_refresh and not self._refresh_thread:
-            self._refresh_thread = threading.Thread(
-                target=self._refresh_loop,
-                daemon=True,
-                name="subagent-display"
-            )
-            self._refresh_thread.start()
-    
-    def stop(self) -> None:
-        """Stop the display manager."""
-        self._stop_refresh.set()
-        if self._refresh_thread:
-            self._refresh_thread.join(timeout=1.0)
-            self._refresh_thread = None
-    
-    def _refresh_loop(self) -> None:
-        """Background refresh loop for real-time updates."""
-        CLEANUP_AFTER_SECONDS = 30  # Clean up completed tasks after 30 seconds
-        
-        while not self._stop_refresh.is_set():
-            try:
-                # Clean up completed tasks that are older than cleanup threshold
-                current_time = time.time()
-                with self._lock:
-                    to_remove = [
-                        tid for tid, completed_at in self._completed_tasks.items()
-                        if current_time - completed_at > CLEANUP_AFTER_SECONDS
-                    ]
-                    for tid in to_remove:
-                        self._tasks.pop(tid, None)
-                        self._background_tasks.pop(tid, None)
-                        self._active_tools.pop(tid, None)
-                        self._completed_tasks.pop(tid, None)
-                
-                # Only render if there are active tasks
-                if self.get_active_count() > 0:
-                    self.render(clear=True)
-                time.sleep(self.refresh_interval)
-            except Exception as e:
-                logger.debug("Refresh loop error: %s", e)
-    
-    def clear(self) -> None:
-        """Clear the display."""
-        with self._lock:
-            # Clear rendered lines
-            if self._last_render_lines > 0:
-                self._move_cursor_up(self._last_render_lines)
-                for _ in range(self._last_render_lines):
-                    self.print_fn("\033[2K\r", end="")
-                self._last_render_lines = 0
     
     def reset(self) -> None:
         """Reset all tracked tasks."""
@@ -909,4 +637,3 @@ class SubagentDisplayManager:
             self._tasks.clear()
             self._background_tasks.clear()
             self._active_tools.clear()
-            self._last_render_lines = 0

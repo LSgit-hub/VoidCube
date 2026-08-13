@@ -229,7 +229,7 @@ def test_rich_subagent_sink_maps_structured_events() -> None:
         on_tool_complete=lambda *args, **kwargs: calls.append(
             ("completed", args, kwargs)
         ),
-        render=lambda **kwargs: calls.append(("render", kwargs)),
+        get_task=lambda _task_id: SimpleNamespace(iteration=3),
     )
     sink = delegate_tool._build_subagent_display_sink("task-1", 0, manager)
 
@@ -252,12 +252,10 @@ def test_rich_subagent_sink_maps_structured_events() -> None:
             state=ExecutionState.FAILED,
         )
     )
-    sink._flush()
-
-    assert calls[0] == ("thinking", ("task-1", "checking", 0))
+    assert calls[0] == ("thinking", ("task-1", "checking", 3))
     assert calls[1][0] == "started"
     assert calls[1][1][:2] == ("task-1", "read_file")
     assert calls[1][2]["args_preview"] == "README.md"
     assert calls[2][0] == "completed"
     assert calls[2][2] == {"result_preview": "failed", "status": "failed"}
-    assert calls[3] == ("render", {"clear": False})
+    assert len(calls) == 3

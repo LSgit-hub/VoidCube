@@ -4,7 +4,7 @@ from agent.subagent_display import SubagentDisplayManager, SubagentStatus
 
 
 def test_resolve_task_ref_accepts_task_id_and_one_based_index():
-    manager = SubagentDisplayManager(auto_refresh=False)
+    manager = SubagentDisplayManager()
     task = manager.create_task("delegate-100", "Inspect the parser", task_index=0)
 
     assert manager.resolve_task_ref("delegate-100") is task
@@ -13,7 +13,7 @@ def test_resolve_task_ref_accepts_task_id_and_one_based_index():
 
 
 def test_render_tasks_command_separates_foreground_and_background_sections():
-    manager = SubagentDisplayManager(auto_refresh=False)
+    manager = SubagentDisplayManager()
     fg = manager.create_task("delegate-fg", "Foreground task", task_index=0)
     bg = manager.create_task("delegate-bg", "Background task", task_index=1)
     fg.status = SubagentStatus.THINKING
@@ -31,7 +31,7 @@ def test_render_tasks_command_separates_foreground_and_background_sections():
 
 
 def test_get_active_count_excludes_background_tasks():
-    manager = SubagentDisplayManager(auto_refresh=False)
+    manager = SubagentDisplayManager()
     fg = manager.create_task("delegate-fg", "Foreground task", task_index=0)
     bg = manager.create_task("delegate-bg", "Background task", task_index=1)
     fg.status = SubagentStatus.THINKING
@@ -43,7 +43,7 @@ def test_get_active_count_excludes_background_tasks():
 
 def test_background_foreground_notifications_use_advanced_debug_wording():
     rendered: list[str] = []
-    manager = SubagentDisplayManager(auto_refresh=False)
+    manager = SubagentDisplayManager()
     manager.print_fn = lambda *args, **kwargs: rendered.append(str(args[0] if args else ""))
 
     task = manager.create_task("delegate-fg", "Foreground task", task_index=0)
@@ -56,3 +56,22 @@ def test_background_foreground_notifications_use_advanced_debug_wording():
     rendered.clear()
     assert manager.bring_to_foreground("delegate-fg") is True
     assert any("Advanced debug action applied" in line for line in rendered)
+
+
+def test_progress_updates_are_event_driven_and_do_not_render_snapshots():
+    rendered: list[str] = []
+    manager = SubagentDisplayManager()
+    manager.print_fn = lambda *args, **kwargs: rendered.append(str(args[0] if args else ""))
+    manager.create_task("delegate-1", "Inspect display", task_index=0)
+
+    manager.on_api_call("delegate-1", 2)
+    manager.on_thinking("delegate-1", "checking", iteration=2)
+    manager.on_tool_start("delegate-1", "read_file", iteration=2)
+
+    assert rendered == []
+
+    manager.on_tool_complete("delegate-1", "read_file")
+
+    assert len(rendered) == 1
+    assert "read_file" in rendered[0]
+    assert manager.get_task("delegate-1").iteration == 2

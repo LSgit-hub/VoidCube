@@ -186,7 +186,7 @@ def _build_child_event_sink(
     """Build a sink that relays child tool events to the parent display.
 
     Three display paths (in order of priority):
-      1. SubagentDisplayManager: Rich CLI visualization (tree view, status panel)
+      1. SubagentDisplayManager: bounded CLI lifecycle and tool events
       2. CLI spinner: Tree-view lines above the parent's delegation spinner
       3. Gateway: Batches tool names and relays to the parent's event sink
 
@@ -273,24 +273,23 @@ def _build_child_event_sink(
 
 
 def _build_subagent_display_sink(task_id: str, task_index: int, display_manager, goal: str = ""):
-    """Build a structured event sink for rich subagent visualization.
+    """Build a structured event sink for subagent tracking.
     
-    This provides a structured display with:
-    - Real-time status panel
-    - Tree-view tool call visualization
-    - Thinking/reasoning display
+    This provides structured tracking with:
+    - Event-driven tool completion output
+    - Thinking/reasoning state
     - Background task management
     
     Note: Task entry is typically created by delegate_task() before this sink
     is built, so we don't create it here to avoid duplicates.
     """
     _tool_depth = 1  # Current tool nesting depth
-    _iteration = 0   # Current iteration
     
     def _sink(event: ToolEvent) -> None:
-        nonlocal _tool_depth, _iteration
+        task = display_manager.get_task(task_id)
+        iteration = task.iteration if task is not None else 0
         if event.kind is ToolEventKind.REASONING:
-            display_manager.on_thinking(task_id, event.text, _iteration)
+            display_manager.on_thinking(task_id, event.text, iteration)
         
         # Tool execution started
         elif event.kind is ToolEventKind.STARTED:
@@ -299,7 +298,7 @@ def _build_subagent_display_sink(task_id: str, task_index: int, display_manager,
                 event.name,
                 args_preview=event.preview,
                 depth=_tool_depth,
-                iteration=_iteration,
+                iteration=iteration,
             )
         
         # Tool execution completed
@@ -319,12 +318,6 @@ def _build_subagent_display_sink(task_id: str, task_index: int, display_manager,
                 ),
             )
     
-    def _flush():
-        """Called when subagent completes."""
-        # Render final state
-        display_manager.render(clear=False)
-    
-    _sink._flush = _flush
     return _sink
 
 
@@ -415,6 +408,13 @@ def _build_child_agent(
 
         child_thinking_cb = _child_thinking
 
+    child_step_cb = None
+    if display_manager is not None and task_id:
+        def _child_step(iteration: int, _previous_tools: list[str]) -> None:
+            display_manager.on_api_call(task_id, iteration)
+
+        child_step_cb = _child_step
+
     # Resolve effective credentials: config override > parent inherit
     effective_model = model or (parent_agent.model if parent_agent else None)
     effective_provider = override_provider or getattr(parent_agent, "provider", None)
@@ -461,6 +461,7 @@ def _build_child_agent(
         skip_context_files=True,
         skip_memory=True,
         thinking_callback=child_thinking_cb,
+        step_callback=child_step_cb,
         session_db=getattr(parent_agent, '_session_db', None) if parent_agent else None,
         parent_session_id=getattr(parent_agent, 'session_id', None) if parent_agent else None,
         providers_allowed=getattr(parent_agent, 'providers_allowed', None) if parent_agent else None,
@@ -746,11 +747,7 @@ def delegate_task(
     Returns JSON with results array, one entry per task.
     
     When enable_display=True (default), uses SubagentDisplayManager for
-    Rich CLI visualization including:
-    - Real-time status panel with animated indicators
-    - Tree-view tool call visualization
-    - Thinking/reasoning process display
-    - Background task management (/tasks command)
+    bounded lifecycle output and state exposed through /tasks.
     """
     if parent_agent is None:
         return tool_error("delegate_task requires a parent agent context.")
@@ -831,12 +828,9 @@ def delegate_task(
         try:
             from agent.subagent_display import SubagentDisplayManager
             display_manager = SubagentDisplayManager(
-                show_thinking=True,
-                show_tool_args=False,
                 max_tool_args_len=50,
             )
             display_manager.print_fn = getattr(parent_agent, "_print_fn", None) or print
-            display_manager.start()
         except ImportError:
             logger.debug("SubagentDisplayManager not available, using legacy display")
             display_manager = None
@@ -918,11 +912,6 @@ def delegate_task(
                         child.close()
                 except Exception:
                     logger.debug("Failed to close child after build failure", exc_info=True)
-            if display_manager:
-                try:
-                    display_manager.stop()
-                except Exception:
-                    logger.debug("Display manager build-failure stop failed", exc_info=True)
             if parent_agent is not None:
                 managers = getattr(parent_agent, "_subagent_display_managers", None)
                 if isinstance(managers, dict):
@@ -1035,13 +1024,6 @@ def delegate_task(
             # Sort by task_index so results match input order
             results.sort(key=lambda r: r["task_index"])
     finally:
-        # Stop display manager and render final state
-        if display_manager:
-            try:
-                display_manager.stop()
-                display_manager.render(clear=False)
-            except Exception as e:
-                logger.debug("Display manager cleanup failed: %s", e)
         if parent_agent is not None and getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
             parent_agent._subagent_display_manager = None
         managers = getattr(parent_agent, "_subagent_display_managers", None) if parent_agent is not None else None
