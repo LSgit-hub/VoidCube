@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 
 import pytest
 
-from VoidCube_core.state import SCHEMA_VERSION, SessionDB
+from VoidCube_core.state import SCHEMA_VERSION, SessionDB, SessionSequenceConflictError
 
 
 def _message(db: SessionDB, session_id: str, sequence_no: int, content: str):
@@ -114,6 +115,53 @@ def test_sequences_remain_unique_when_timestamps_match(tmp_path):
     assert json.loads(json.dumps(db.get_messages_as_conversation("session")))[0][
         "content"
     ] == "first"
+
+
+def test_concurrent_instances_allocate_contiguous_sequences_atomically(tmp_path):
+    path = tmp_path / "sessions.db"
+    first = SessionDB(path)
+    first.create_session("session", source="cli")
+    second = SessionDB(path)
+    barrier = threading.Barrier(3)
+    errors = []
+
+    def append(db: SessionDB, content: str) -> None:
+        barrier.wait()
+        try:
+            db.append_message("session", "user", content)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=append, args=(first, "first")),
+        threading.Thread(target=append, args=(second, "second")),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    rows = first.get_messages("session")
+    assert [row["sequence_no"] for row in rows] == [1, 2]
+    assert {row["content"] for row in rows} == {"first", "second"}
+
+
+def test_stale_expected_cursor_is_rejected_without_dropping_message(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    db.append_message("session", "user", "committed")
+    message = _message(db, "session", 1, "stale")
+
+    with pytest.raises(SessionSequenceConflictError, match="stale session cursor"):
+        db.append_messages_batch(
+            "session",
+            [message],
+            expected_flush_sequence=0,
+        )
+
+    assert [row["content"] for row in db.get_messages("session")] == ["committed"]
 
 
 def test_action_refs_migrate_and_round_trip_in_authoritative_session_store(tmp_path):

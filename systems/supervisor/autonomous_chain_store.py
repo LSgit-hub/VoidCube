@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from VoidCube_core.utils import atomic_json_write
+from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
 from systems.runtime_task_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_type,
@@ -299,8 +299,14 @@ class AutonomousChainStore:
         self.storage_path = Path(storage_path).resolve()
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        if not self.storage_path.exists():
-            self._write_snapshot(AutonomousChainStoreSnapshot())
+        self._storage_lock_path = self.storage_path.with_suffix(
+            f"{self.storage_path.suffix}.lock"
+        )
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
+            if not self.storage_path.exists():
+                self._write_snapshot(AutonomousChainStoreSnapshot())
+            else:
+                self._load_snapshot()
 
     def list_tasks(self, *, status: Optional[AutonomousChainTaskStatus] = None) -> List[AutonomousChainTask]:
         snapshot = self._load_snapshot()
@@ -400,7 +406,7 @@ class AutonomousChainStore:
         return None
 
     def clear_tasks(self) -> None:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             self._write_snapshot(AutonomousChainStoreSnapshot())
 
     def create_task(
@@ -417,7 +423,7 @@ class AutonomousChainStore:
         constraints: Optional[Dict[str, Any]] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             task = AutonomousChainTask(
                 title=title,
@@ -472,7 +478,7 @@ class AutonomousChainStore:
         }
         target = status.value if hasattr(status, 'value') else str(status)
 
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -535,7 +541,7 @@ class AutonomousChainStore:
         execution_request: Optional[AutonomousChainExecutionRequest] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -563,7 +569,7 @@ class AutonomousChainStore:
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         normalized_priority = str(priority or "").strip().lower() or "normal"
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -600,11 +606,20 @@ class AutonomousChainStore:
         attempt_id: str,
     ) -> AutonomousChainExecutionLease:
         lease = task.execution_lease
+        now = datetime.now(timezone.utc)
+        expires_at = lease.expires_at
+        if expires_at is None:
+            raise StaleExecutionLeaseError(
+                f"stale_execution_lease: task={task.task_id} lease has no expiry"
+            )
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
         if (
             lease.generation != int(generation)
             or not attempt_id
             or lease.attempt_id != attempt_id
             or lease.state not in {"active", "reconciling"}
+            or expires_at <= now
         ):
             raise StaleExecutionLeaseError(
                 f"stale_execution_lease: task={task.task_id} "
@@ -628,7 +643,7 @@ class AutonomousChainStore:
         if not owner:
             raise ValueError("owner_session_id is required")
         now = datetime.now(timezone.utc)
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -685,7 +700,7 @@ class AutonomousChainStore:
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         now = datetime.now(timezone.utc)
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -717,7 +732,7 @@ class AutonomousChainStore:
         attempt_id: str,
         owner_session_id: str | None = None,
     ) -> AutonomousChainTask:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for task in snapshot.tasks:
                 if task.task_id != task_id:
@@ -732,6 +747,10 @@ class AutonomousChainStore:
                     raise StaleExecutionLeaseError(
                         "stale_execution_lease: owner mismatch"
                     )
+                if task.status not in {"running", "awaiting_user_consent", "reconciling"}:
+                    raise StaleExecutionLeaseError(
+                        f"stale_execution_lease: task {task_id} is {task.status}"
+                    )
                 return task
         raise KeyError(task_id)
 
@@ -743,7 +762,7 @@ class AutonomousChainStore:
         attempt_id: str,
         operation: str,
     ) -> None:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -780,7 +799,7 @@ class AutonomousChainStore:
         metadata: Optional[Dict[str, Any]] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -830,7 +849,7 @@ class AutonomousChainStore:
         context: Optional[Dict[str, Any]] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
@@ -910,7 +929,7 @@ class AutonomousChainStore:
         ]
         recovered_tasks = [task for task in recovered_tasks if task is not None]
 
-        with self._lock:
+        with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = AutonomousChainStoreSnapshot() if replace else self._load_snapshot()
             existing_indexes = {
                 task.task_id: index for index, task in enumerate(snapshot.tasks)

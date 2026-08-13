@@ -1,10 +1,13 @@
 """Shared utility functions for VoidCube-agent."""
 
+import errno
 import json
 import logging
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
@@ -14,6 +17,49 @@ logger = logging.getLogger(__name__)
 
 
 TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+
+_INTERPROCESS_LOCKS: dict[str, threading.RLock] = {}
+_INTERPROCESS_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def interprocess_file_lock(path: Union[str, Path]):
+    """Serialize a file-backed read/modify/write section across processes."""
+    lock_path = Path(path).resolve()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = os.path.normcase(str(lock_path))
+    with _INTERPROCESS_LOCKS_GUARD:
+        local_lock = _INTERPROCESS_LOCKS.setdefault(key, threading.RLock())
+
+    with local_lock, lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def is_truthy_value(value: Any, default: bool = False) -> bool:

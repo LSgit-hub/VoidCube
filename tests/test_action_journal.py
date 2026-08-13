@@ -66,6 +66,29 @@ def test_same_idempotency_key_reuses_action(tmp_path):
     assert replay == first
 
 
+def test_claim_dispatch_is_single_winner(tmp_path):
+    path = tmp_path / "actions.db"
+    journal = ActionJournal(path)
+    replay_journal = ActionJournal(path)
+    action = journal.prepare(
+        tool_name="write_file",
+        arguments={"path": "a.txt", "content": "x"},
+        effect="idempotent_write",
+        call_id="call-claim",
+    )
+    replay = replay_journal.prepare(
+        tool_name="write_file",
+        arguments={"content": "x", "path": "a.txt"},
+        effect="idempotent_write",
+        call_id="call-claim",
+    )
+
+    assert replay == action
+    assert journal.claim_dispatch(action.action_id)
+    assert not replay_journal.claim_dispatch(action.action_id)
+    assert journal.get(action.action_id)["state"] == "dispatched"
+
+
 def test_journal_prepare_failure_blocks_side_effect(monkeypatch):
     invoked = []
     registry.register(
@@ -95,6 +118,43 @@ def test_journal_prepare_failure_blocks_side_effect(monkeypatch):
 
     assert invoked == []
     assert "journal unavailable" in result["error"]
+
+
+def test_handler_exception_after_dispatch_records_unknown(monkeypatch, tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+
+    def raise_after_effect(args):
+        del args
+        raise RuntimeError("lost response")
+
+    registry.register(
+        name="raise_after_effect_test",
+        handler=raise_after_effect,
+        effect="non_idempotent_write",
+    )
+    monkeypatch.setattr(
+        "agent.action_journal.get_action_journal",
+        lambda: journal,
+    )
+    try:
+        result = json.loads(
+            handle_function_call(
+                "raise_after_effect_test",
+                {"resource": "target"},
+                task_id="task-unknown",
+                tool_call_id="call-unknown-after-dispatch",
+            )
+        )
+    finally:
+        registry.unregister("raise_after_effect_test")
+
+    action = journal.find_by_call_id(
+        "call-unknown-after-dispatch",
+        task_id="task-unknown",
+    )
+    assert "lost response" in result["error"]
+    assert action is not None
+    assert action.state == "unknown"
 
 
 def test_unclassified_tool_defaults_to_non_idempotent_write():

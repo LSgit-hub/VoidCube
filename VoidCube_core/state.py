@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+
+class SessionSequenceConflictError(RuntimeError):
+    """A transcript writer used a stale committed sequence cursor."""
+
+
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
 SCHEMA_VERSION = 9
@@ -968,9 +973,7 @@ class SessionDB:
         action_refs: Any = None,
     ) -> int:
         """Append one message through the transactional batch contract."""
-        sequence_no = self.get_flush_sequence(session_id) + 1
         message = {
-            "sequence_no": sequence_no,
             "role": role,
             "content": content,
             "tool_name": tool_name,
@@ -982,12 +985,10 @@ class SessionDB:
             "reasoning_details": reasoning_details,
             "action_refs": action_refs,
         }
-        message["message_id"] = self.stable_message_id(
-            session_id, sequence_no, message
-        )
         row_ids = self.append_messages_batch(
             session_id,
             [message],
+            allocate_sequences=True,
         )
         return row_ids[0]
 
@@ -1011,28 +1012,82 @@ class SessionDB:
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
+        *,
+        expected_flush_sequence: int | None = None,
+        allocate_sequences: bool = False,
     ) -> List[int]:
         """Atomically append an idempotent ordered message batch."""
         batch = [dict(message) for message in messages]
         if not batch:
             return []
-        for message in batch:
-            if not message.get("message_id") or not message.get("sequence_no"):
-                raise ValueError(
-                    "Batch messages require stable message_id and sequence_no"
-                )
+        if not allocate_sequences:
+            for message in batch:
+                if not message.get("message_id") or not message.get("sequence_no"):
+                    raise ValueError(
+                        "Batch messages require stable message_id and sequence_no"
+                    )
 
         def _do(conn):
             session = conn.execute(
-                "SELECT id FROM sessions WHERE id = ?",
+                "SELECT id, flush_sequence FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             if session is None:
                 raise KeyError(f"Unknown session: {session_id}")
+            current_sequence = int(session["flush_sequence"] or 0)
+            if (
+                expected_flush_sequence is not None
+                and current_sequence != int(expected_flush_sequence)
+            ):
+                raise SessionSequenceConflictError(
+                    f"stale session cursor for {session_id}: "
+                    f"expected {expected_flush_sequence}, current {current_sequence}"
+                )
+            if allocate_sequences:
+                for offset, message in enumerate(batch, 1):
+                    sequence_no = current_sequence + offset
+                    message["sequence_no"] = sequence_no
+                    message["message_id"] = self.stable_message_id(
+                        session_id, sequence_no, message
+                    )
+            elif expected_flush_sequence is not None:
+                expected_numbers = list(
+                    range(current_sequence + 1, current_sequence + len(batch) + 1)
+                )
+                actual_numbers = [int(item["sequence_no"]) for item in batch]
+                if actual_numbers != expected_numbers:
+                    raise SessionSequenceConflictError(
+                        "Batch sequence numbers are not contiguous from the committed cursor"
+                    )
+
             row_ids: List[int] = []
             for message in batch:
                 sequence_no = int(message["sequence_no"])
                 message_id = str(message["message_id"])
+                existing = conn.execute(
+                    "SELECT id, session_id, sequence_no FROM messages "
+                    "WHERE message_id = ?",
+                    (message_id,),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        str(existing["session_id"]) != session_id
+                        or int(existing["sequence_no"]) != sequence_no
+                    ):
+                        raise SessionSequenceConflictError(
+                            f"message_id {message_id} is bound to another sequence"
+                        )
+                    row_ids.append(int(existing["id"]))
+                    continue
+                occupied = conn.execute(
+                    "SELECT message_id FROM messages "
+                    "WHERE session_id = ? AND sequence_no = ?",
+                    (session_id, sequence_no),
+                ).fetchone()
+                if occupied is not None:
+                    raise SessionSequenceConflictError(
+                        f"sequence {sequence_no} for {session_id} is already committed"
+                    )
                 tool_calls = message.get("tool_calls")
                 tool_calls_json = (
                     json.dumps(tool_calls, ensure_ascii=False)
@@ -1051,8 +1106,8 @@ class SessionDB:
                     if action_refs is not None
                     else None
                 )
-                conn.execute(
-                    """INSERT OR IGNORE INTO messages (
+                cursor = conn.execute(
+                    """INSERT INTO messages (
                        message_id, session_id, sequence_no, role, content,
                        tool_call_id, tool_calls, tool_name, timestamp, token_count,
                        finish_reason, reasoning, reasoning_details, action_refs
@@ -1074,11 +1129,7 @@ class SessionDB:
                         action_refs_json,
                     ),
                 )
-                row = conn.execute(
-                    "SELECT id FROM messages WHERE message_id = ?",
-                    (message_id,),
-                ).fetchone()
-                row_ids.append(int(row[0]))
+                row_ids.append(int(cursor.lastrowid))
 
             counts = conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(sequence_no), 0) "
@@ -1188,9 +1239,9 @@ class SessionDB:
         """Delete the latest user message and all later messages atomically."""
         def _do(conn):
             boundary = conn.execute(
-                "SELECT id, timestamp FROM messages "
+                "SELECT sequence_no FROM messages "
                 "WHERE session_id = ? AND role = 'user' "
-                "ORDER BY timestamp DESC, id DESC LIMIT 1",
+                "ORDER BY sequence_no DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
             if boundary is None:
@@ -1198,13 +1249,8 @@ class SessionDB:
 
             cursor = conn.execute(
                 "DELETE FROM messages WHERE session_id = ? AND "
-                "(timestamp > ? OR (timestamp = ? AND id >= ?))",
-                (
-                    session_id,
-                    boundary["timestamp"],
-                    boundary["timestamp"],
-                    boundary["id"],
-                ),
+                "sequence_no >= ?",
+                (session_id, boundary["sequence_no"]),
             )
             remaining_tool_calls = conn.execute(
                 "SELECT tool_calls FROM messages "
@@ -1219,13 +1265,20 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     continue
             message_count = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                "SELECT COUNT(*), COALESCE(MAX(sequence_no), 0) "
+                "FROM messages WHERE session_id = ?",
                 (session_id,),
-            ).fetchone()[0]
+            ).fetchone()
             conn.execute(
-                "UPDATE sessions SET message_count = ?, tool_call_count = ? "
+                "UPDATE sessions SET message_count = ?, tool_call_count = ?, "
+                "flush_sequence = ? "
                 "WHERE id = ?",
-                (message_count, tool_call_count, session_id),
+                (
+                    int(message_count[0]),
+                    tool_call_count,
+                    int(message_count[1]),
+                    session_id,
+                ),
             )
             return cursor.rowcount
 

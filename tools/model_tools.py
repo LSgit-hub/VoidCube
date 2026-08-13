@@ -523,6 +523,31 @@ def handle_function_call(
                 if isinstance(main_runtime, dict)
                 else {}
             )
+            lease_validator = (
+                main_runtime.get("validate_execution_lease")
+                if isinstance(main_runtime, dict)
+                else None
+            )
+            autonomous_task = (
+                main_runtime.get("autonomous_task")
+                if isinstance(main_runtime, dict)
+                else None
+            )
+            if autonomous_task is not None:
+                if not callable(lease_validator):
+                    raise ValueError(
+                        "stale_execution_lease: trusted lease validator unavailable"
+                    )
+                if not lease:
+                    raise ValueError("stale_execution_lease: execution lease required")
+                lease_validator(
+                    task_id=str(autonomous_task.get("task_id") or task_id or ""),
+                    generation=int(lease.get("generation") or 0),
+                    attempt_id=str(lease.get("attempt_id") or ""),
+                    owner_session_id=str(
+                        lease.get("owner_session_id") or session_id or ""
+                    ),
+                )
             if lease and str(lease.get("state") or "") != "active":
                 raise ValueError("stale_execution_lease: side effect dispatch rejected")
             prepared_action = journal.prepare(
@@ -536,11 +561,19 @@ def handle_function_call(
                 attempt_id=str(lease.get("attempt_id") or "") or None,
                 call_id=tool_call_id,
             )
-            journal.transition(
+            if not journal.claim_dispatch(
                 prepared_action.action_id,
-                "dispatched",
                 reason="tool_dispatch_started",
-            )
+            ):
+                record = journal.get(prepared_action.action_id) or {}
+                return json.dumps(
+                    {
+                        "error": "duplicate_or_in_flight_action",
+                        "action_id": prepared_action.action_id,
+                        "state": str(record.get("state") or "unknown"),
+                    },
+                    ensure_ascii=False,
+                )
 
         if function_name == "execute_code":
             # Prefer the caller-provided list so subagents can't overwrite
@@ -548,6 +581,7 @@ def handle_function_call(
             sandbox_enabled = enabled_tools if enabled_tools is not None else _last_resolved_tool_names
             result = registry.dispatch(
                 function_name, function_args,
+                raise_exceptions=True,
                 task_id=task_id,
                 enabled_tools=sandbox_enabled,
                 main_runtime=main_runtime,
@@ -555,6 +589,7 @@ def handle_function_call(
         else:
             result = registry.dispatch(
                 function_name, function_args,
+                raise_exceptions=True,
                 task_id=task_id,
                 user_task=user_task,
                 main_runtime=main_runtime,
@@ -595,7 +630,7 @@ def handle_function_call(
 
         return result
 
-    except (RuntimeError, ValueError, TypeError) as e:
+    except Exception as e:
         if prepared_action is not None and journal is not None:
             try:
                 journal.transition(

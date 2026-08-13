@@ -161,14 +161,9 @@ class ActionJournal:
         action_id = f"act_{uuid.uuid4().hex}"
         now = time.time()
         with self._lock, self._conn:
-            existing = self._conn.execute(
-                "SELECT action_id, idempotency_key FROM actions WHERE idempotency_key = ?",
-                (idempotency_key,),
-            ).fetchone()
-            if existing:
-                return PreparedAction(existing["action_id"], existing["idempotency_key"])
-            self._conn.execute(
-                """INSERT INTO actions(action_id, task_id, lease_generation, attempt_id, call_id,
+            cursor = self._conn.execute(
+                """INSERT OR IGNORE INTO actions(
+                action_id, task_id, lease_generation, attempt_id, call_id,
                 tool_name, normalized_arguments, arguments_hash, idempotency_key,
                 risk_level, target_resource, state, retryability, prepared_at, schema_version)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
@@ -176,8 +171,18 @@ class ActionJournal:
                  arguments_hash, idempotency_key, effect, self._target(arguments),
                  retryability, now, self.SCHEMA_VERSION),
             )
-            self._transition_row(action_id, None, "prepared", "coordinator", "write_before_dispatch")
-        return PreparedAction(action_id, idempotency_key)
+            if cursor.rowcount == 1:
+                self._transition_row(
+                    action_id, None, "prepared", "coordinator", "write_before_dispatch"
+                )
+                return PreparedAction(action_id, idempotency_key)
+            existing = self._conn.execute(
+                "SELECT action_id, idempotency_key FROM actions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError("action_prepare_conflict_without_existing_record")
+            return PreparedAction(existing["action_id"], existing["idempotency_key"])
 
     @staticmethod
     def _target(arguments: dict[str, Any]) -> str:
@@ -219,6 +224,26 @@ class ActionJournal:
                     (str(uuid.uuid4()), action_id, "execution_result", payload,
                      hashlib.sha256(payload.encode()).hexdigest(), now),
                 )
+
+    def claim_dispatch(self, action_id: str, *, reason: str = "") -> bool:
+        """原子抢占 prepared 动作的实际执行权。"""
+        with self._lock, self._conn:
+            now = time.time()
+            cursor = self._conn.execute(
+                "UPDATE actions SET state = 'dispatched', dispatched_at = ? "
+                "WHERE action_id = ? AND state = 'prepared'",
+                (now, action_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            self._transition_row(
+                action_id,
+                "prepared",
+                "dispatched",
+                "coordinator",
+                reason or "tool_dispatch_started",
+            )
+            return True
 
     def _transition_row(self, action_id, from_state, to_state, actor, reason) -> None:
         details_hash = hashlib.sha256(str(reason).encode()).hexdigest()

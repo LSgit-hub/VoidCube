@@ -33,10 +33,32 @@ class _SessionDB:
         del message
         return f"msg:{session_id}:{sequence_no}"
 
-    def append_messages_batch(self, session_id: str, messages: list[dict]) -> None:
-        self.messages.extend({"session_id": session_id, **message} for message in messages)
-        if messages:
-            self.sequences[session_id] = max(message["sequence_no"] for message in messages)
+    def append_messages_batch(
+        self,
+        session_id: str,
+        messages: list[dict],
+        *,
+        expected_flush_sequence: int | None = None,
+        allocate_sequences: bool = False,
+    ) -> None:
+        current = self.sequences.get(session_id, 0)
+        assert expected_flush_sequence in {None, current}
+        prepared = []
+        for offset, message in enumerate(messages, 1):
+            message = dict(message)
+            if allocate_sequences:
+                message["sequence_no"] = current + offset
+                message["message_id"] = self.stable_message_id(
+                    session_id,
+                    message["sequence_no"],
+                    message,
+                )
+            prepared.append({"session_id": session_id, **message})
+        self.messages.extend(prepared)
+        if prepared:
+            self.sequences[session_id] = max(
+                message["sequence_no"] for message in prepared
+            )
 
     def get_messages_as_conversation(self, session_id: str) -> list[dict]:
         return [

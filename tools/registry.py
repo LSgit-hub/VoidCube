@@ -392,7 +392,14 @@ class ToolRegistry:
                 return toolset
         return None
     
-    def dispatch(self, name: str, args: dict, **kwargs) -> str:
+    def dispatch(
+        self,
+        name: str,
+        args: dict,
+        *,
+        raise_exceptions: bool = False,
+        **kwargs,
+    ) -> str:
         """分发工具调用
         
         Args:
@@ -469,6 +476,8 @@ class ToolRegistry:
             else:
                 return tool_error(f"Tool '{name}' is not callable")
         except Exception as e:
+            if raise_exceptions:
+                raise
             return tool_error(f"Error executing tool '{name}': {str(e)}")
     
     def get_all_tool_names(self) -> List[str]:

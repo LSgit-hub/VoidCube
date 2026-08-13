@@ -26,6 +26,7 @@ from VoidCube_core.runtime_paths import get_runtime_layout
 
 _IS_WINDOWS = os.name == "nt"
 _FINAL_STATUSES = {state.value for state in ExecutionState}
+_PROVEN_TERMINAL_STATUSES = _FINAL_STATUSES - {ExecutionState.UNKNOWN.value}
 _CLEANABLE_STATUSES = _FINAL_STATUSES - {ExecutionState.UNKNOWN.value}
 _DEFAULT_SPOOL_BYTES = 1_000_000
 _DEFAULT_TOTAL_SPOOL_BYTES = 32_000_000
@@ -193,13 +194,47 @@ class ProcessRegistry:
                     watch_patterns_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
-                    finished_at=excluded.finished_at,
-                    status=excluded.status,
-                    exit_code=excluded.exit_code,
-                    error=excluded.error,
-                    output_cursor=excluded.output_cursor,
-                    output_truncated=excluded.output_truncated,
-                    notification_consumed=excluded.notification_consumed
+                    finished_at=CASE
+                        WHEN process_sessions.status IN
+                            ('succeeded', 'failed', 'cancelled', 'timed_out')
+                        THEN process_sessions.finished_at
+                        ELSE excluded.finished_at
+                    END,
+                    status=CASE
+                        WHEN process_sessions.status IN
+                            ('succeeded', 'failed', 'cancelled', 'timed_out')
+                        THEN process_sessions.status
+                        ELSE excluded.status
+                    END,
+                    exit_code=CASE
+                        WHEN process_sessions.status IN
+                            ('succeeded', 'failed', 'cancelled', 'timed_out')
+                        THEN process_sessions.exit_code
+                        ELSE excluded.exit_code
+                    END,
+                    error=CASE
+                        WHEN process_sessions.status IN
+                            ('succeeded', 'failed', 'cancelled', 'timed_out')
+                        THEN process_sessions.error
+                        ELSE excluded.error
+                    END,
+                    output_cursor=MAX(
+                        process_sessions.output_cursor,
+                        excluded.output_cursor
+                    ),
+                    output_truncated=CASE
+                        WHEN process_sessions.status IN
+                            ('succeeded', 'failed', 'cancelled', 'timed_out')
+                        THEN process_sessions.output_truncated
+                        ELSE MAX(
+                            process_sessions.output_truncated,
+                            excluded.output_truncated
+                        )
+                    END,
+                    notification_consumed=MAX(
+                        process_sessions.notification_consumed,
+                        excluded.notification_consumed
+                    )
                 """,
                 (
                     session.id,
@@ -226,7 +261,10 @@ class ProcessRegistry:
 
     def _store(self, session: ProcessSession) -> None:
         with self._lock:
-            active = sum(item.status not in _FINAL_STATUSES for item in self._sessions.values())
+            active = sum(
+                item.status not in _PROVEN_TERMINAL_STATUSES
+                for item in self._sessions.values()
+            )
             if active * self.max_spool_bytes >= self.max_total_spool_bytes:
                 raise RuntimeError("Process spool capacity is exhausted by active sessions")
             self._sessions[session.id] = session
@@ -270,7 +308,7 @@ class ProcessRegistry:
                 watch_patterns=tuple(json.loads(row["watch_patterns_json"])),
             )
             self._load_output(session)
-            was_terminal = session.status in _FINAL_STATUSES
+            was_terminal = session.status in _PROVEN_TERMINAL_STATUSES
             with self._lock:
                 self._sessions[session.id] = session
             if was_terminal:
@@ -454,16 +492,64 @@ class ProcessRegistry:
         self._observe_spool(session)
 
     def _observe_spool(self, session: ProcessSession) -> None:
-        try:
-            with session.spool_path.open("rb") as handle:
-                handle.seek(session._observed_bytes)
-                raw = handle.read()
-        except FileNotFoundError:
+        with session._lock:
+            try:
+                with session.spool_path.open("rb") as handle:
+                    handle.seek(session._observed_bytes)
+                    raw = handle.read()
+            except FileNotFoundError:
+                return
+            if not raw:
+                return
+            session._observed_bytes += len(raw)
+            self._append_output(session, raw.decode("utf-8", errors="replace"))
+
+    def _refresh_proven_terminal_state(self, session: ProcessSession) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT status, exit_code, error, finished_at, output_truncated "
+                "FROM process_sessions WHERE session_id = ?",
+                (session.id,),
+            ).fetchone()
+        if row is None or str(row["status"]) not in _PROVEN_TERMINAL_STATUSES:
             return
-        if not raw:
-            return
-        session._observed_bytes += len(raw)
-        self._append_output(session, raw.decode("utf-8", errors="replace"))
+        with session._lock:
+            session.status = str(row["status"])
+            session.exit_code = row["exit_code"]
+            session.error = row["error"]
+            session.finished_at = _parse_datetime(row["finished_at"])
+            session.output_truncated = bool(row["output_truncated"])
+            session._done.set()
+
+    def _snapshot_incremental(self, session: ProcessSession) -> dict[str, Any]:
+        with session._lock:
+            output_end = len(session._output)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT output_cursor FROM process_sessions "
+                    "WHERE session_id = ?",
+                    (session.id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"Unknown process session: {session.id}")
+                output_start = min(int(row["output_cursor"] or 0), output_end)
+                connection.execute(
+                    "UPDATE process_sessions SET output_cursor = MAX(output_cursor, ?) "
+                    "WHERE session_id = ?",
+                    (output_end, session.id),
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        with session._lock:
+            output = session._output[output_start:output_end]
+            session.output_cursor = max(session.output_cursor, output_end)
+            result = session.snapshot()
+            result["output"] = output
+            return result
 
     def _wait_local(self, session: ProcessSession, observer: threading.Thread) -> None:
         process = session._process
@@ -506,6 +592,8 @@ class ProcessRegistry:
             return
         with session._lock:
             cancelled = session.status == ExecutionState.CANCELLED.value
+            if session.status == ExecutionState.UNKNOWN.value:
+                session._done.clear()
         self._finish(
             session,
             exit_code,
@@ -625,26 +713,37 @@ class ProcessRegistry:
         with self._lock:
             sessions = list(self._sessions.values())
         return any(
-            session.task_id == task_id and session.status == "running"
+            session.task_id == task_id
+            and session.status not in _PROVEN_TERMINAL_STATUSES
             for session in sessions
         )
 
     def poll(self, session_id: str) -> dict[str, Any]:
         session = self._require(session_id)
+        self._refresh_proven_terminal_state(session)
+        if (
+            session.status == ExecutionState.UNKNOWN.value
+            and session.marker_path.exists()
+        ):
+            self._finish_from_marker(session)
         self._observe_spool(session)
-        result = session.snapshot(incremental=True)
-        self._persist(session)
-        if result["status"] in _FINAL_STATUSES:
+        result = self._snapshot_incremental(session)
+        if result["status"] in _PROVEN_TERMINAL_STATUSES:
             self.mark_completion_consumed(session_id)
         return result
 
     def wait(self, session_id: str, timeout: float | None = None) -> dict[str, Any]:
         session = self._require(session_id)
+        self._refresh_proven_terminal_state(session)
+        if (
+            session.status == ExecutionState.UNKNOWN.value
+            and session.marker_path.exists()
+        ):
+            self._finish_from_marker(session)
         finished = session._done.wait(timeout)
         self._observe_spool(session)
-        result = session.snapshot(incremental=True)
+        result = self._snapshot_incremental(session)
         result["timed_out"] = not finished
-        self._persist(session)
         if finished:
             self.mark_completion_consumed(session_id)
         return result
@@ -658,7 +757,7 @@ class ProcessRegistry:
             raise ValueError("Process stdin is not available")
         process.stdin.write(data.encode("utf-8"))
         process.stdin.flush()
-        return session.snapshot(incremental=True)
+        return self._snapshot_incremental(session)
 
     def close(self, session_id: str) -> dict[str, Any]:
         session = self._require(session_id)
@@ -668,14 +767,14 @@ class ProcessRegistry:
         if process is None or process.stdin is None or process.stdin.closed:
             raise ValueError("Process stdin is not available")
         process.stdin.close()
-        return session.snapshot(incremental=True)
+        return self._snapshot_incremental(session)
 
     def kill(self, session_id: str) -> dict[str, Any]:
         session = self._require(session_id)
         self._kill_session(session)
         session._done.wait(2)
         self.mark_completion_consumed(session_id)
-        return session.snapshot(incremental=True)
+        return self._snapshot_incremental(session)
 
     def _kill_session(self, session: ProcessSession) -> bool:
         with session._lock:
@@ -725,14 +824,24 @@ class ProcessRegistry:
         return len(targets)
 
     def is_completion_consumed(self, session_id: str) -> bool:
-        session = self.get(session_id)
-        return bool(session and session.notification_consumed)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT notification_consumed FROM process_sessions "
+                "WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return bool(row and row["notification_consumed"])
 
     def mark_completion_consumed(self, session_id: str) -> None:
         session = self._require(session_id)
         with session._lock:
             session.notification_consumed = True
-        self._persist(session)
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE process_sessions SET notification_consumed = 1 "
+                "WHERE session_id = ?",
+                (session_id,),
+            )
 
     def cleanup(self) -> int:
         now = utc_now()

@@ -296,6 +296,8 @@ class AIAgent:
         checkpoint_max_snapshots: int = 50,
         pass_session_id: bool = False,
         persist_session: bool = True,
+        autonomous_task_provider=None,
+        validate_execution_lease=None,
     ):
         """
         Initialize the AI Agent.
@@ -356,6 +358,8 @@ class AIAgent:
         self.skip_context_files = skip_context_files
         self.pass_session_id = pass_session_id
         self._credential_pool = credential_pool
+        self.autonomous_task_provider = autonomous_task_provider
+        self.validate_execution_lease = validate_execution_lease
         self.log_prefix_chars = log_prefix_chars
         self.log_prefix = f"{log_prefix} " if log_prefix else ""
         # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
@@ -1183,6 +1187,8 @@ class AIAgent:
             "provider": getattr(self, "provider", "") or "",
             "base_url": getattr(self, "base_url", "") or "",
             "api_key": getattr(self, "api_key", "") or "",
+            "autonomous_task": self.autonomous_task_provider() if callable(self.autonomous_task_provider) else None,
+            "validate_execution_lease": self.validate_execution_lease,
         }
 
     def _check_compression_model_feasibility(self) -> None:

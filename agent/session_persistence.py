@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from VoidCube_core.state import SessionSequenceConflictError
 from VoidCube_core.utils import atomic_json_write
 
 
@@ -106,23 +107,23 @@ class SessionPersistence:
                 model=self._model(),
             )
             del conversation_history
-            flush_from = self.session_db.get_flush_sequence(self._session_id())
-            batch = []
-            for index, message in enumerate(messages[flush_from:], flush_from + 1):
-                role = message.get("role", "unknown")
-                tool_calls = None
-                if hasattr(message, "tool_calls") and message.tool_calls:
-                    tool_calls = [
-                        {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
-                        }
-                        for tool_call in message.tool_calls
-                    ]
-                elif isinstance(message.get("tool_calls"), list):
-                    tool_calls = message["tool_calls"]
-                persisted_message = {
-                        "sequence_no": index,
+            for attempt in range(3):
+                flush_from = self.session_db.get_flush_sequence(self._session_id())
+                batch = []
+                for message in messages[flush_from:]:
+                    role = message.get("role", "unknown")
+                    tool_calls = None
+                    if hasattr(message, "tool_calls") and message.tool_calls:
+                        tool_calls = [
+                            {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments,
+                            }
+                            for tool_call in message.tool_calls
+                        ]
+                    elif isinstance(message.get("tool_calls"), list):
+                        tool_calls = message["tool_calls"]
+                    persisted_message = {
                         "role": role,
                         "content": message.get("content"),
                         "tool_name": message.get("tool_name"),
@@ -134,17 +135,24 @@ class SessionPersistence:
                             message.get("reasoning") if role == "assistant" else None
                         ),
                         "reasoning_details": (
-                        message.get("reasoning_details")
-                        if role == "assistant"
-                        else None
+                            message.get("reasoning_details")
+                            if role == "assistant"
+                            else None
                         ),
                     }
-                persisted_message["message_id"] = self.session_db.stable_message_id(
-                    self._session_id(), index, persisted_message
-                )
-                batch.append(persisted_message)
-            self.session_db.append_messages_batch(self._session_id(), batch)
-            return True
+                    batch.append(persisted_message)
+                try:
+                    self.session_db.append_messages_batch(
+                        self._session_id(),
+                        batch,
+                        expected_flush_sequence=flush_from,
+                        allocate_sequences=True,
+                    )
+                    return True
+                except SessionSequenceConflictError:
+                    if attempt == 2:
+                        raise
+            return False
         except Exception as exc:
             logger.warning("Session DB batch append failed: %s", exc)
             return False

@@ -45,6 +45,8 @@ class CliAgentInitializationPorts:
     persist_session: Optional[bool] = None
     skip_memory: Optional[bool] = None
     skip_context_files: Optional[bool] = None
+    autonomous_task_provider: Any = None
+    validate_execution_lease: Any = None
 
 
 class CliAgentInitializationRuntime:
@@ -99,4 +101,8 @@ class CliAgentInitializationRuntime:
             kwargs["skip_memory"] = ports.skip_memory
         if ports.skip_context_files is not None:
             kwargs["skip_context_files"] = ports.skip_context_files
+        if ports.autonomous_task_provider is not None:
+            kwargs["autonomous_task_provider"] = ports.autonomous_task_provider
+        if ports.validate_execution_lease is not None:
+            kwargs["validate_execution_lease"] = ports.validate_execution_lease
         return ports.agent_factory(**kwargs)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -76,6 +77,51 @@ def test_old_attempt_is_rejected_after_same_session_reclaims(tmp_path):
             reason="late result",
         )
     assert store.get_task(task.task_id).status == "running"
+
+
+def test_expired_active_lease_is_rejected(tmp_path):
+    store = AutonomousChainStore(tmp_path / "chain.json")
+    task = _approved_task(store)
+    claimed = store.claim_execution(task.task_id, owner_session_id="owner")
+    snapshot = store._load_snapshot()
+    snapshot.tasks[0].execution_lease.expires_at = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+    store._write_snapshot(snapshot)
+
+    with pytest.raises(StaleExecutionLeaseError, match="stale_execution_lease"):
+        store.validate_execution_lease(
+            task.task_id,
+            generation=claimed.execution_lease.generation,
+            attempt_id=str(claimed.execution_lease.attempt_id),
+            owner_session_id="owner",
+        )
+
+
+def test_two_store_instances_do_not_lose_concurrent_creates(tmp_path):
+    path = tmp_path / "chain.json"
+    stores = [AutonomousChainStore(path), AutonomousChainStore(path)]
+    barrier = threading.Barrier(3)
+
+    def create(store: AutonomousChainStore, title: str) -> None:
+        barrier.wait()
+        store.create_task(title=title)
+
+    threads = [
+        threading.Thread(target=create, args=(stores[0], "first")),
+        threading.Thread(target=create, args=(stores[1], "second")),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert {task.title for task in AutonomousChainStore(path).list_tasks()} == {
+        "first",
+        "second",
+    }
 
 
 def test_legacy_snapshot_migrates_to_unclaimed_generation_zero(tmp_path):

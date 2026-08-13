@@ -230,6 +230,144 @@ def test_live_local_session_recovers_as_unknown_then_converges_from_marker(tmp_p
 
 
 @pytest.mark.unit
+def test_unknown_session_is_rechecked_on_later_restart(tmp_path):
+    storage = tmp_path / "unknown-restart"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf recovered",
+        cwd=str(tmp_path),
+        task_id="unknown-restart",
+    )
+    assert first.wait(session.id, timeout=5)["status"] == "succeeded"
+    with first._connect() as connection:
+        connection.execute(
+            "UPDATE process_sessions SET status = 'unknown', exit_code = NULL "
+            "WHERE session_id = ?",
+            (session.id,),
+        )
+
+    restarted = ProcessRegistry(storage)
+
+    assert restarted.poll(session.id)["status"] == "succeeded"
+
+
+@pytest.mark.unit
+def test_unknown_session_converges_when_marker_arrives_after_recovery(tmp_path):
+    storage = tmp_path / "late-marker"
+    registry = ProcessRegistry(storage)
+    session = registry.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="late-marker",
+    )
+    registry.kill(session.id)
+    session.marker_path.unlink(missing_ok=True)
+    with registry._connect() as connection:
+        connection.execute(
+            "UPDATE process_sessions SET status = 'unknown', exit_code = NULL "
+            "WHERE session_id = ?",
+            (session.id,),
+        )
+
+    recovered = ProcessRegistry(storage)
+    recovered_session = recovered.get(session.id)
+    recovered_session.marker_path.write_text(
+        json.dumps({"exit_code": 0, "output_truncated": False, "error": ""}),
+        encoding="utf-8",
+    )
+
+    assert recovered.poll(session.id)["status"] == "succeeded"
+
+
+@pytest.mark.unit
+def test_concurrent_spool_observers_do_not_duplicate_output(tmp_path):
+    storage = tmp_path / "concurrent-spool"
+    registry = ProcessRegistry(storage)
+    session = registry.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="spool-race",
+    )
+    session.spool_path.write_text("single", encoding="utf-8")
+    barrier = threading.Barrier(3)
+
+    def observe() -> None:
+        barrier.wait()
+        registry._observe_spool(session)
+
+    threads = [threading.Thread(target=observe), threading.Thread(target=observe)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+    try:
+        assert session._output == "single"
+        assert session._observed_bytes == len(b"single")
+    finally:
+        registry.kill(session.id)
+
+
+@pytest.mark.unit
+def test_stale_registry_cannot_overwrite_proven_terminal_state(tmp_path):
+    storage = tmp_path / "terminal-monotonic"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf done",
+        cwd=str(tmp_path),
+        task_id="terminal-monotonic",
+    )
+    stale = ProcessRegistry(storage)
+    assert first.wait(session.id, timeout=5)["status"] == "succeeded"
+
+    stale_session = stale.get(session.id)
+    stale_session.status = "unknown"
+    stale_session.output_cursor = 0
+    stale._persist(stale_session)
+
+    with first._connect() as connection:
+        row = connection.execute(
+            "SELECT status, exit_code FROM process_sessions WHERE session_id = ?",
+            (session.id,),
+        ).fetchone()
+    assert row["status"] == "succeeded"
+    assert row["exit_code"] == 0
+
+
+@pytest.mark.unit
+def test_two_registries_atomically_claim_incremental_output(tmp_path):
+    storage = tmp_path / "cursor-claim"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf shared",
+        cwd=str(tmp_path),
+        task_id="cursor-claim",
+    )
+    assert session._done.wait(5)
+    second = ProcessRegistry(storage)
+    first._load_output(first.get(session.id))
+    second._load_output(second.get(session.id))
+    barrier = threading.Barrier(3)
+    outputs = []
+
+    def poll(registry: ProcessRegistry) -> None:
+        barrier.wait()
+        outputs.append(registry.poll(session.id)["output"])
+
+    threads = [
+        threading.Thread(target=poll, args=(first,)),
+        threading.Thread(target=poll, args=(second,)),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert sorted(outputs) == ["", "shared"]
+
+
+@pytest.mark.unit
 def test_recovery_rejects_reused_or_unverifiable_pid_identity(tmp_path, monkeypatch):
     storage = tmp_path / "identity-recovery"
     first = ProcessRegistry(storage)
