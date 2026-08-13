@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Callable
 
+from VoidCube_app.contracts.execution import ExecutionState
+
 
 def normalize_tool_progress_mode(value: Any) -> str:
     """Return one of the supported display modes."""
@@ -32,7 +34,7 @@ def format_tool_completion(
     duration: float,
     *,
     result: str | None = None,
-    is_error: bool = False,
+    state: ExecutionState = ExecutionState.SUCCEEDED,
     get_message: Callable[..., str] | None = None,
 ) -> str:
     """Format one compact completion with an explicit terminal status.
@@ -51,7 +53,13 @@ def format_tool_completion(
         max(0.0, float(duration)),
         result,
     )
-    marker = "✗" if is_error else "✓"
+    marker = {
+        ExecutionState.SUCCEEDED: "✓",
+        ExecutionState.FAILED: "✗",
+        ExecutionState.CANCELLED: "⊘",
+        ExecutionState.TIMED_OUT: "⌛",
+        ExecutionState.UNKNOWN: "?",
+    }[state]
     return f"{marker} {base}"
 
 

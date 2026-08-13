@@ -55,6 +55,7 @@ _SUMMARY_TOKENS_CEILING = 12_000
 
 # Placeholder used when pruning old tool results
 _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
+_ACTION_REFS_HEADING = "Action references retained from compacted turns:"
 
 # Chars per token rough estimate
 _CHARS_PER_TOKEN = 4
@@ -484,14 +485,51 @@ class ContextCompressor(ContextEngine):
             if msg.get("role") != "tool":
                 continue
             content = msg.get("content", "")
-            if not content or content == _PRUNED_TOOL_PLACEHOLDER:
+            if not content or content.startswith(_PRUNED_TOOL_PLACEHOLDER):
                 continue
             # Only prune if the content is substantial (>200 chars)
             if len(content) > 200:
-                result[i] = {**msg, "content": _PRUNED_TOOL_PLACEHOLDER}
+                action_refs = self._collect_action_refs([msg])
+                suffix = self._format_action_refs(action_refs)
+                result[i] = {
+                    **msg,
+                    "content": _PRUNED_TOOL_PLACEHOLDER + suffix,
+                }
                 pruned += 1
 
         return result, pruned
+
+    @staticmethod
+    def _collect_action_refs(messages: List[Dict[str, Any]]) -> list[dict[str, Any]]:
+        refs: dict[str, dict[str, Any]] = {}
+        for message in messages:
+            for item in message.get("action_refs") or []:
+                if not isinstance(item, dict):
+                    continue
+                action_id = str(item.get("action_id") or "").strip()
+                if action_id:
+                    refs[action_id] = dict(item)
+        return list(refs.values())
+
+    @staticmethod
+    def _format_action_refs(action_refs: list[dict[str, Any]]) -> str:
+        if not action_refs:
+            return ""
+        lines = ["", "", _ACTION_REFS_HEADING]
+        for item in action_refs:
+            evidence_ids = [
+                str(ref.get("evidence_id"))
+                for ref in item.get("evidence_refs") or []
+                if isinstance(ref, dict) and ref.get("evidence_id")
+            ]
+            line = (
+                f"- {item.get('action_id')} state={item.get('state') or 'unknown'}"
+                f" target={item.get('target_summary') or '-'}"
+            )
+            if evidence_ids:
+                line += f" evidence={','.join(evidence_ids)}"
+            lines.append(line)
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Summarization
@@ -966,6 +1004,7 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             return messages
 
         turns_to_summarize = messages[compress_start:compress_end]
+        action_refs = self._collect_action_refs(turns_to_summarize)
 
         if not self.quiet_mode:
             logger.info(
@@ -1016,6 +1055,7 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 f"turns contained earlier work in this session. Continue based on the "
                 f"recent messages below and the current state of any files or resources."
             )
+        summary += self._format_action_refs(action_refs)
 
         _merge_summary_into_tail = False
         last_head_role = messages[compress_start - 1].get("role", "user") if compress_start > 0 else "user"
@@ -1039,7 +1079,13 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 # of inserting a standalone message that breaks alternation.
                 _merge_summary_into_tail = True
         if not _merge_summary_into_tail:
-            compressed.append({"role": summary_role, "content": summary})
+            compressed.append(
+                {
+                    "role": summary_role,
+                    "content": summary,
+                    **({"action_refs": action_refs} if action_refs else {}),
+                }
+            )
 
         for i in range(compress_end, n_messages):
             msg = messages[i].copy()
@@ -1051,6 +1097,10 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                     "respond to the message below, not the summary above ---\n\n"
                     + original
                 )
+                if action_refs:
+                    msg["action_refs"] = self._collect_action_refs(
+                        [{"action_refs": action_refs}, msg]
+                    )
                 _merge_summary_into_tail = False
             compressed.append(msg)
 

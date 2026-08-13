@@ -1075,7 +1075,6 @@ def _history_mutation_ports(
 ) -> HistoryMutationPorts:
     def synchronize_agent_history(history: list[dict[str, Any]]) -> None:
         if host.agent:
-            host.agent.mark_session_history_persisted(len(history))
             host.agent.replace_persisted_session_history(history)
 
     return HistoryMutationPorts(

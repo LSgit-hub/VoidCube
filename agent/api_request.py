@@ -225,6 +225,7 @@ def prepare_chat_messages(
         for field_name in tuple(api_message):
             if (
                 field_name in INTERNAL_CHAT_MESSAGE_FIELDS
+                or field_name == "action_refs"
                 or field_name.startswith("_")
             ):
                 api_message.pop(field_name, None)

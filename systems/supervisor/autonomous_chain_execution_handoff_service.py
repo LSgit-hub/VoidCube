@@ -63,6 +63,14 @@ class AutonomousChainExecutionHandoffService:
             return None
 
         await self._propose_memory_promotion(task)
+        if task.status == "retry":
+            task = self._task_state.update_status(
+                task.task_id,
+                status="approved",
+                actor="supervisor",
+                reason="Retry was explicitly rescheduled for execution handoff",
+                event_type="execution_handoff_retry_approved",
+            )
         self._task_state.update_status(
             task.task_id,
             status="running",
@@ -200,7 +208,7 @@ class AutonomousChainExecutionHandoffService:
         terminal = failure_count >= max_retries
         self._task_state.update_status(
             task.task_id,
-            status="failed" if terminal else "approved",
+            status="failed" if terminal else "retry",
             actor=actor,
             reason=(
                 f"Execution handoff failed after {failure_count}/{max_retries} attempt(s); "

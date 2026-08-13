@@ -7,6 +7,7 @@ import pytest
 
 from VoidCube_app.application import ApplicationRuntime
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.contracts.events import SessionEventKind, TurnEventKind
 from VoidCube_app.session_lifecycle import SessionLifecycleState
 from VoidCube_app.interaction_contract import (
@@ -168,13 +169,13 @@ def test_application_runtime_promotes_tool_artifacts_to_application_events() -> 
     )
 
     runtime.tool_event_sink(
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-1",
             name="browser_vision",
             arguments={},
             result="ok",
             duration=1.0,
-            is_error=False,
+            state=ExecutionState.SUCCEEDED,
             artifacts=(artifact,),
         )
     )

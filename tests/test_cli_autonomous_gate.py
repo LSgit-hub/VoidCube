@@ -491,6 +491,27 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
         del timeout
         if isinstance(request, Request):
             requested_urls.append(request.full_url)
+            if request.full_url.endswith("/v1/tasks/body-1/decision"):
+                return _FakeUrlopenResponse({
+                    "task": {
+                        "task_id": "body-1",
+                        "title": "改进 shell 替身",
+                        "summary": "把学习到的重构应用到 shell 替身",
+                        "execution_kind": "body_improvement",
+                        "constraints": {
+                            "worktree_path": "F:/tmp/worktree",
+                            "editable_dirs": ["agent/", "tools/"],
+                            "forbidden_patterns": ["systems/**"],
+                            "max_files_changed": 3,
+                        },
+                        "execution_lease": {
+                            "generation": 1,
+                            "attempt_id": "attempt-body-1",
+                            "owner_session_id": cli.session_id,
+                            "state": "active",
+                        },
+                    }
+                })
             return _FakeUrlopenResponse({})
         requested_urls.append(str(request))
         url = str(request)
@@ -554,7 +575,20 @@ def test_cli_autonomous_gate_running_decision_records_owner_session(monkeypatch)
                     "data": json.loads((request.data or b"{}").decode("utf-8")) if request.data else None,
                 }
             )
-            return _FakeUrlopenResponse({})
+            return _FakeUrlopenResponse({
+                "task": {
+                    "task_id": "learn-7",
+                    "title": "Study one unresolved thread",
+                    "summary": "Produce evidence-backed learning notes",
+                    "task_type": "self_learning",
+                    "execution_lease": {
+                        "generation": 1,
+                        "attempt_id": "attempt-learn-7",
+                        "owner_session_id": "cli-owner-1",
+                        "state": "active",
+                    },
+                }
+            })
         url = str(request)
         if "task_type=self_learning" in url:
             return _FakeUrlopenResponse(
@@ -580,7 +614,8 @@ def test_cli_autonomous_gate_running_decision_records_owner_session(monkeypatch)
     run_request = next(item for item in requests if item["url"].endswith("/v1/tasks/learn-7/decision"))
     assert run_request["data"]["decision"] == "running"
     assert run_request["data"]["context"]["session_id"] == "cli-owner-1"
-    assert run_request["data"]["metadata"]["owner_session_id"] == "cli-owner-1"
+    assert "owner_session_id" not in run_request["data"]["metadata"]
+    assert cli._current_autonomous_task["execution_lease"]["attempt_id"] == "attempt-learn-7"
     assert prompts
     assert "Shell slot baseline:" not in prompts[0]
 
@@ -598,7 +633,25 @@ def test_cli_autonomous_gate_learning_prompt_includes_shell_baseline_when_presen
     def fake_urlopen(request, timeout=0):
         del timeout
         if isinstance(request, Request):
-            return _FakeUrlopenResponse({})
+            return _FakeUrlopenResponse({
+                "task": {
+                    "task_id": "learn-shell-1",
+                    "title": "Understand the current shell body codebase",
+                    "summary": "Inspect the shell body codebase and record its baseline.",
+                    "task_type": "self_learning",
+                    "metadata": {"learning_branch": "codebase_baseline"},
+                    "constraints": {
+                        "baseline_slot_id": "slot-B",
+                        "baseline_worktree_path": "F:/tmp/shell-worktree",
+                    },
+                    "execution_lease": {
+                        "generation": 1,
+                        "attempt_id": "attempt-shell",
+                        "owner_session_id": "cli-owner-2",
+                        "state": "active",
+                    },
+                }
+            })
         url = str(request)
         if "task_type=self_learning" in url:
             return _FakeUrlopenResponse(
@@ -647,7 +700,21 @@ def test_cli_autonomous_gate_learning_prompt_shows_exploratory_branch(monkeypatc
     def fake_urlopen(request, timeout=0):
         del timeout
         if isinstance(request, Request):
-            return _FakeUrlopenResponse({})
+            return _FakeUrlopenResponse({
+                "task": {
+                    "task_id": "learn-explore-1",
+                    "title": "Research: current open-source memory compaction strategies",
+                    "summary": "Survey external references and identify promising directions.",
+                    "task_type": "self_learning",
+                    "metadata": {"learning_branch": "exploratory"},
+                    "execution_lease": {
+                        "generation": 1,
+                        "attempt_id": "attempt-explore",
+                        "owner_session_id": "cli-owner-3",
+                        "state": "active",
+                    },
+                }
+            })
         url = str(request)
         if "task_type=self_learning" in url:
             return _FakeUrlopenResponse(
@@ -699,10 +766,11 @@ def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_write
         "title": "Recovered autonomous task",
         "summary": "Continue and write back completion",
         "task_type": "self_learning",
-        "metadata": {
+        "execution_lease": {
+            "generation": 4,
+            "attempt_id": "attempt-restore",
             "owner_session_id": "cli-owner-restore",
-            "execution_source": "cli_agent_pull",
-            "execution_started_at": "2026-06-27T11:00:00+08:00",
+            "state": "active",
         },
     }
 
@@ -733,6 +801,7 @@ def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_write
         item for item in requests if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
     )
     assert complete_request["data"]["decision"] == "completed"
+    assert complete_request["data"]["execution_lease"]["generation"] == 4
     assert "API-A 自主执行面已完成学习链路项" in complete_request["data"]["reason"]
     assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
@@ -754,10 +823,11 @@ def test_cli_autonomous_gate_replays_recovered_running_task_prompt(monkeypatch):
         "title": "Replay recovered autonomous task",
         "summary": "Recovered task must run again after restart",
         "task_type": "self_learning",
-        "metadata": {
+        "execution_lease": {
+            "generation": 2,
+            "attempt_id": "attempt-replay",
             "owner_session_id": "cli-owner-replay",
-            "execution_source": "cli_agent_pull",
-            "execution_started_at": "2026-06-27T11:00:00+08:00",
+            "state": "active",
         },
     }
 

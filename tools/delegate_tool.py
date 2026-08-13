@@ -27,7 +27,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tools.toolsets import TOOLSETS
-from VoidCube_app.tool_events import ToolEvent, ToolEventKind
+from VoidCube_app.tool_events import (
+    TERMINAL_TOOL_EVENT_KINDS,
+    ToolEvent,
+    ToolEventKind,
+)
+from VoidCube_app.contracts.execution import ExecutionState
 
 
 # Tools that children must never have access to
@@ -225,7 +230,7 @@ def _build_child_event_sink(
             # Don't relay thinking to gateway (too noisy for chat)
             return
 
-        if event.kind is ToolEventKind.COMPLETED:
+        if event.kind in TERMINAL_TOOL_EVENT_KINDS:
             return
         if event.kind is not ToolEventKind.STARTED:
             return
@@ -298,12 +303,20 @@ def _build_subagent_display_sink(task_id: str, task_index: int, display_manager,
             )
         
         # Tool execution completed
-        elif event.kind is ToolEventKind.COMPLETED:
+        elif event.kind in TERMINAL_TOOL_EVENT_KINDS:
             display_manager.on_tool_complete(
                 task_id,
                 event.name,
-                result_preview=event.result if event.is_error else "",
-                status="error" if event.is_error else "ok",
+                result_preview=(
+                    event.result
+                    if event.state is not ExecutionState.SUCCEEDED
+                    else ""
+                ),
+                status=(
+                    "ok"
+                    if event.state is ExecutionState.SUCCEEDED
+                    else event.state.value
+                ),
             )
     
     def _flush():

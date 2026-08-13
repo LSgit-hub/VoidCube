@@ -1995,7 +1995,7 @@ class InternalGateway:
         ).strip().lower()
         return governance_type == "self_learning" or execution_kind == "body_improvement"
 
-    def _validate_task_writeback_owner(
+    def _validate_agent_pull_session(
         self,
         *,
         task_id: str,
@@ -2023,34 +2023,6 @@ class InternalGateway:
                 detail=f"无法识别该链路写回对应的 CLI 会话: {session_id}",
             )
 
-        metadata = dict(task.get("metadata") or {})
-        owner_session_id = str(metadata.get("owner_session_id") or "").strip()
-        if decision == "running":
-            if owner_session_id and owner_session_id != session_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"链路项 {task_id} 已被 CLI 会话 {owner_session_id} 认领。"
-                    ),
-                )
-            return session_id
-
-        if not owner_session_id:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"链路项 {task_id} 处于运行中但缺少 owner_session_id；"
-                    "当前终态写回已被拒绝。"
-                ),
-            )
-        if owner_session_id != session_id:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"链路项 {task_id} 当前归属 {owner_session_id}，"
-                    f"并非请求方 {session_id}。"
-                ),
-            )
         return session_id
 
     async def complete_task(self, task_id: str, request: Request):
@@ -2114,6 +2086,10 @@ class InternalGateway:
             "context": data.get("context", {}),
             "metadata": data.get("metadata", {}),
         }
+        if isinstance(data.get("execution_lease"), dict):
+            payload["execution_lease"] = dict(data["execution_lease"])
+        if data.get("lease_seconds") is not None:
+            payload["lease_seconds"] = data["lease_seconds"]
         final_response = str(data.get("final_response") or "").strip()
         if final_response:
             payload["final_response"] = final_response[:4000]
@@ -2135,7 +2111,7 @@ class InternalGateway:
                     if isinstance(task_result, dict) and isinstance(task_result.get("task"), dict)
                     else dict(task_result or {})
                 )
-                session_id = self._validate_task_writeback_owner(
+                session_id = self._validate_agent_pull_session(
                     task_id=task_id,
                     task=task_payload,
                     data=data,
@@ -2147,11 +2123,6 @@ class InternalGateway:
                     context = dict(payload.get("context") or {})
                     context.setdefault("session_id", session_id)
                     payload["context"] = context
-                    metadata = dict(payload.get("metadata") or {})
-                    if decision == "running":
-                        metadata.setdefault("owner_session_id", session_id)
-                        metadata.setdefault("execution_source", "cli_agent_pull")
-                    payload["metadata"] = metadata
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")

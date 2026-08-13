@@ -2088,4 +2088,5 @@ registry.register(
     check_fn=check_terminal_requirements,
     emoji="💻",
     max_result_size_chars=100_000,
+    effect="non_idempotent_write",
 )

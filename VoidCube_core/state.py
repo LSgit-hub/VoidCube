@@ -15,6 +15,7 @@ Key design decisions:
 """
 
 import json
+import hashlib
 import logging
 import random
 import re
@@ -31,7 +32,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     cost_source TEXT,
     pricing_version TEXT,
     title TEXT,
+    flush_sequence INTEGER DEFAULT 0,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
 );
 
@@ -80,7 +82,10 @@ CREATE TABLE IF NOT EXISTS messages (
     token_count INTEGER,
     finish_reason TEXT,
     reasoning TEXT,
-    reasoning_details TEXT
+    reasoning_details TEXT,
+    action_refs TEXT,
+    message_id TEXT,
+    sequence_no INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
@@ -354,6 +359,52 @@ class SessionDB:
                     "ON session_goals(status)"
                 )
                 cursor.execute("UPDATE schema_version SET version = 7")
+            if current_version < 8:
+                for table, name, column_type in (
+                    ("sessions", "flush_sequence", "INTEGER DEFAULT 0"),
+                    ("messages", "message_id", "TEXT"),
+                    ("messages", "sequence_no", "INTEGER"),
+                ):
+                    try:
+                        cursor.execute(
+                            f'ALTER TABLE "{table}" ADD COLUMN "{name}" {column_type}'
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                session_rows = cursor.execute(
+                    "SELECT DISTINCT session_id FROM messages"
+                ).fetchall()
+                for session_row in session_rows:
+                    session_id = session_row[0]
+                    message_rows = cursor.execute(
+                        "SELECT id FROM messages WHERE session_id = ? ORDER BY id",
+                        (session_id,),
+                    ).fetchall()
+                    for sequence_no, message_row in enumerate(message_rows, 1):
+                        row_id = message_row[0]
+                        cursor.execute(
+                            "UPDATE messages SET message_id = ?, sequence_no = ? WHERE id = ?",
+                            (f"legacy:{session_id}:{row_id}", sequence_no, row_id),
+                        )
+                    cursor.execute(
+                        "UPDATE sessions SET flush_sequence = ? WHERE id = ?",
+                        (len(message_rows), session_id),
+                    )
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id "
+                    "ON messages(message_id)"
+                )
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_sequence "
+                    "ON messages(session_id, sequence_no)"
+                )
+                cursor.execute("UPDATE schema_version SET version = 8")
+            if current_version < 9:
+                try:
+                    cursor.execute("ALTER TABLE messages ADD COLUMN action_refs TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                cursor.execute("UPDATE schema_version SET version = 9")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
@@ -364,6 +415,14 @@ class SessionDB:
             )
         except sqlite3.OperationalError:
             pass  # Index already exists
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id "
+            "ON messages(message_id)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_sequence "
+            "ON messages(session_id, sequence_no)"
+        )
 
         # FTS5 setup (separate because CREATE VIRTUAL TABLE can't be in executescript with IF NOT EXISTS reliably)
         try:
@@ -553,6 +612,14 @@ class SessionDB:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    def get_flush_sequence(self, session_id: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT flush_sequence FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        return int(row[0] or 0) if row else 0
 
     def get_session_goal(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Return the one goal owned by a session, if present."""
@@ -898,60 +965,144 @@ class SessionDB:
         finish_reason: str = None,
         reasoning: str = None,
         reasoning_details: Any = None,
+        action_refs: Any = None,
     ) -> int:
-        """
-        Append a message to a session. Returns the message row ID.
-
-        Also increments the session's message_count (and tool_call_count
-        if role is 'tool' or tool_calls is present).
-        """
-        # Serialize structured fields to JSON before entering the write txn
-        reasoning_details_json = (
-            json.dumps(reasoning_details, ensure_ascii=False)
-            if reasoning_details else None
+        """Append one message through the transactional batch contract."""
+        sequence_no = self.get_flush_sequence(session_id) + 1
+        message = {
+            "sequence_no": sequence_no,
+            "role": role,
+            "content": content,
+            "tool_name": tool_name,
+            "tool_calls": tool_calls,
+            "tool_call_id": tool_call_id,
+            "token_count": token_count,
+            "finish_reason": finish_reason,
+            "reasoning": reasoning,
+            "reasoning_details": reasoning_details,
+            "action_refs": action_refs,
+        }
+        message["message_id"] = self.stable_message_id(
+            session_id, sequence_no, message
         )
-        tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
+        row_ids = self.append_messages_batch(
+            session_id,
+            [message],
+        )
+        return row_ids[0]
 
-        # Pre-compute tool call count
-        num_tool_calls = 0
-        if tool_calls is not None:
-            num_tool_calls = len(tool_calls) if isinstance(tool_calls, list) else 1
+    @staticmethod
+    def stable_message_id(
+        session_id: str,
+        sequence_no: int,
+        message: Dict[str, Any],
+    ) -> str:
+        canonical = json.dumps(
+            message,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return f"msg:{session_id}:{sequence_no}:{digest}"
+
+    def append_messages_batch(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> List[int]:
+        """Atomically append an idempotent ordered message batch."""
+        batch = [dict(message) for message in messages]
+        if not batch:
+            return []
+        for message in batch:
+            if not message.get("message_id") or not message.get("sequence_no"):
+                raise ValueError(
+                    "Batch messages require stable message_id and sequence_no"
+                )
 
         def _do(conn):
-            cursor = conn.execute(
-                """INSERT INTO messages (session_id, role, content, tool_call_id,
-                   tool_calls, tool_name, timestamp, token_count, finish_reason,
-                   reasoning, reasoning_details)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    session_id,
-                    role,
-                    content,
-                    tool_call_id,
-                    tool_calls_json,
-                    tool_name,
-                    time.time(),
-                    token_count,
-                    finish_reason,
-                    reasoning,
-                    reasoning_details_json,
-                ),
-            )
-            msg_id = cursor.lastrowid
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"Unknown session: {session_id}")
+            row_ids: List[int] = []
+            for message in batch:
+                sequence_no = int(message["sequence_no"])
+                message_id = str(message["message_id"])
+                tool_calls = message.get("tool_calls")
+                tool_calls_json = (
+                    json.dumps(tool_calls, ensure_ascii=False)
+                    if tool_calls is not None
+                    else None
+                )
+                reasoning_details = message.get("reasoning_details")
+                reasoning_details_json = (
+                    json.dumps(reasoning_details, ensure_ascii=False)
+                    if reasoning_details is not None
+                    else None
+                )
+                action_refs = message.get("action_refs")
+                action_refs_json = (
+                    json.dumps(action_refs, ensure_ascii=False)
+                    if action_refs is not None
+                    else None
+                )
+                conn.execute(
+                    """INSERT OR IGNORE INTO messages (
+                       message_id, session_id, sequence_no, role, content,
+                       tool_call_id, tool_calls, tool_name, timestamp, token_count,
+                       finish_reason, reasoning, reasoning_details, action_refs
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        message_id,
+                        session_id,
+                        sequence_no,
+                        str(message.get("role") or "unknown"),
+                        message.get("content"),
+                        message.get("tool_call_id"),
+                        tool_calls_json,
+                        message.get("tool_name"),
+                        float(message.get("timestamp") or time.time()),
+                        message.get("token_count"),
+                        message.get("finish_reason"),
+                        message.get("reasoning"),
+                        reasoning_details_json,
+                        action_refs_json,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT id FROM messages WHERE message_id = ?",
+                    (message_id,),
+                ).fetchone()
+                row_ids.append(int(row[0]))
 
-            # Update counters
-            if num_tool_calls > 0:
-                conn.execute(
-                    """UPDATE sessions SET message_count = message_count + 1,
-                       tool_call_count = tool_call_count + ? WHERE id = ?""",
-                    (num_tool_calls, session_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?",
-                    (session_id,),
-                )
-            return msg_id
+            counts = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(sequence_no), 0) "
+                "FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            tool_rows = conn.execute(
+                "SELECT tool_calls FROM messages WHERE session_id = ? "
+                "AND tool_calls IS NOT NULL",
+                (session_id,),
+            ).fetchall()
+            tool_call_count = 0
+            for row in tool_rows:
+                try:
+                    calls = json.loads(row[0])
+                    tool_call_count += len(calls) if isinstance(calls, list) else 1
+                except (json.JSONDecodeError, TypeError):
+                    tool_call_count += 1
+            conn.execute(
+                "UPDATE sessions SET message_count = ?, tool_call_count = ?, "
+                "flush_sequence = ? WHERE id = ?",
+                (int(counts[0]), tool_call_count, int(counts[1]), session_id),
+            )
+            return row_ids
 
         return self._execute_write(_do)
 
@@ -960,8 +1111,9 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT id, session_id, role, content, tool_call_id, tool_calls, "
-                "tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_details "
-                "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
+                "tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_details, "
+                "action_refs, message_id, sequence_no FROM messages WHERE session_id = ? "
+                "ORDER BY sequence_no",
                 (session_id,),
             )
             rows = cursor.fetchall()
@@ -974,6 +1126,12 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     logger.warning("Failed to deserialize tool_calls in get_messages, falling back to []")
                     msg["tool_calls"] = []
+            if msg.get("action_refs"):
+                try:
+                    msg["action_refs"] = json.loads(msg["action_refs"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to deserialize action_refs in get_messages")
+                    msg["action_refs"] = []
             result.append(msg)
         return result
 
@@ -985,8 +1143,8 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-                "reasoning, reasoning_details, timestamp "
-                "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
+                "reasoning, reasoning_details, action_refs, timestamp "
+                "FROM messages WHERE session_id = ? ORDER BY sequence_no",
                 (session_id,),
             )
             rows = cursor.fetchall()
@@ -999,6 +1157,12 @@ class SessionDB:
                 msg["tool_call_id"] = row["tool_call_id"]
             if row["tool_name"]:
                 msg["tool_name"] = row["tool_name"]
+            if row["action_refs"]:
+                try:
+                    msg["action_refs"] = json.loads(row["action_refs"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to deserialize action_refs in conversation replay")
+                    msg["action_refs"] = []
             if row["tool_calls"]:
                 try:
                     msg["tool_calls"] = json.loads(row["tool_calls"])

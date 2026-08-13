@@ -16,9 +16,11 @@ from VoidCube_app.contracts.events import (
     TurnEvent,
     TurnEventKind,
 )
-from VoidCube_app.tool_events import ToolEvent, ToolEventKind
-
-
+from VoidCube_app.tool_events import (
+    TERMINAL_TOOL_EVENT_KINDS,
+    ToolEvent,
+    ToolEventKind,
+)
 @dataclass(frozen=True, slots=True)
 class ChatBlock:
     """A renderer-neutral piece of one CLI conversation."""
@@ -34,7 +36,6 @@ class ChatBlock:
     arguments: Mapping[str, Any] = field(default_factory=dict)
     result: str = ""
     duration: float = 0.0
-    is_error: bool = False
     visible: bool = True
     metadata: Mapping[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -240,9 +241,12 @@ class ChatBlockStore:
                     )
                 )
                 return
-            if event.kind is ToolEventKind.COMPLETED:
+            if event.kind in TERMINAL_TOOL_EVENT_KINDS:
                 index = self._find_index(kind="tool_call", call_id=event.call_id)
-                status = "failed" if event.is_error else "completed"
+                state = event.state
+                if state is None:
+                    return
+                status = state.value
                 if index is None:
                     result_index = self._find_index(kind="tool_result", call_id=event.call_id)
                     if result_index is not None:
@@ -257,7 +261,6 @@ class ChatBlockStore:
                             name=event.name,
                             result=event.result,
                             duration=event.duration,
-                            is_error=event.is_error,
                             status="orphaned",
                             metadata={"artifacts": _artifact_records(event)},
                         )
@@ -269,7 +272,6 @@ class ChatBlockStore:
                     kind="tool_result",
                     result=event.result,
                     duration=event.duration,
-                    is_error=event.is_error,
                     status=status,
                     metadata={**block.metadata, "artifacts": _artifact_records(event)},
                     updated_at=_now(),

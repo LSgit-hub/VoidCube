@@ -375,6 +375,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         record_activity=record_ui_activity,
         touch_activity=supervisor._touch_gateway_activity,
         get_active_tasks=supervisor._active_autonomous_chain_tasks,
+        recovery_healthy=lambda: supervisor._service_runtime.recovery.healthy,
         get_review_statuses=lambda: ["planned", "deferred", "paused"],
         review_adviser=supervisor._autonomous_task_governance_review_service.review,
         planning_activity_kind_for_task=supervisor._planning_activity_kind_for_task,

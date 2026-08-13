@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from systems.body_registry import BodyImprovementReport
+from systems.supervisor.autonomous_chain_store import StaleExecutionLeaseError
 from systems.governor import GovernorRequest
 from systems.supervisor.autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_CYCLE_ROUTE,
@@ -149,9 +150,19 @@ class Supervisor(
         assemble_supervisor_ui_runtime(self)
         assemble_supervisor_execution_runtime(self)
         try:
-            self._autonomous_chain_recovery_service.recover()
-        except Exception:
-            logger.debug("Autonomous-chain Mem governance recovery skipped", exc_info=True)
+            recovery_result = self._autonomous_chain_recovery_service.recover()
+            recovery = self._service_runtime.recovery
+            recovery.mark_healthy(
+                recovery_cursor=str(recovery_result.get("event_count") or 0),
+                last_successful_event=str(
+                    recovery_result.get("updated_task_count")
+                    or recovery_result.get("added_task_count")
+                    or 0
+                ),
+            )
+        except Exception as exc:
+            self._service_runtime.recovery.mark_failed(exc)
+            logger.error("Autonomous-chain Mem governance recovery failed", exc_info=True)
         # Proxy supervisor._watch_window_runtime → adapter._state
         if hasattr(self, '_watch_window_executor'):
             self._watch_window_runtime = self._watch_window_executor._state
@@ -227,6 +238,8 @@ class Supervisor(
         self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/cognition", self.get_endogenous_cognition_state, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/state", self.get_endogenous_governance_state, methods=["GET"])
+        self.app.add_api_route("/health", self.health_check, methods=["GET"])
+        self.app.add_api_route("/ready", self.readiness_check, methods=["GET"])
         self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.list_autonomous_chain_tasks, methods=["GET"])
         self.app.add_api_route(
             AUTONOMOUS_CHAIN_TASKS_ROUTE,
@@ -806,6 +819,24 @@ class Supervisor(
     async def receive_improvement_report(self, report: dict) -> Dict[str, Any]:
         """Agent 提交替身改进报告 → 监督者审查评分"""
         from systems.body_registry import BodyImprovementReport
+        task_id = str(report.get("task_id") or "").strip()
+        lease = report.get("execution_lease")
+        lease = lease if isinstance(lease, dict) else {}
+        try:
+            self._autonomous_chain_store.validate_execution_lease(
+                task_id,
+                generation=int(lease.get("generation") or 0),
+                attempt_id=str(lease.get("attempt_id") or ""),
+                owner_session_id=str(report.get("session_id") or ""),
+            )
+        except (KeyError, TypeError, ValueError, StaleExecutionLeaseError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "stale_execution_lease", "message": str(exc)},
+            ) from exc
+        report = dict(report)
+        report.pop("execution_lease", None)
+        report.pop("session_id", None)
         parsed = BodyImprovementReport(**report)
         result = await self._body_improvement_review_service.review(parsed)
         return {"status": "reviewed", **result}

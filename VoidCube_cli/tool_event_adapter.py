@@ -6,7 +6,12 @@ import logging
 import time
 from typing import Any, Callable
 
-from VoidCube_app.tool_events import ToolEvent, ToolEventKind
+from VoidCube_app.tool_events import (
+    TERMINAL_TOOL_EVENT_KINDS,
+    ToolEvent,
+    ToolEventKind,
+)
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_cli.cli_tool_progress import (
     emit_diff_line,
     format_tool_completion,
@@ -27,8 +32,8 @@ def project_tool_event(
     """Project one tool event into CLI-owned view and audio state."""
     if event.kind in {ToolEventKind.REASONING, ToolEventKind.SUBAGENT_PROGRESS}:
         return
-    if event.kind is ToolEventKind.COMPLETED:
-        _project_completed(
+    if event.kind in TERMINAL_TOOL_EVENT_KINDS:
+        _project_terminal(
             host,
             event,
             append_autonomous_event=append_autonomous_event,
@@ -42,7 +47,7 @@ def project_tool_event(
         )
 
 
-def _project_completed(
+def _project_terminal(
     host: Any,
     event: ToolEvent,
     *,
@@ -60,9 +65,13 @@ def _project_completed(
         suffix = f" ({event.duration:.1f}s)" if event.duration else ""
         append_autonomous_event(
             host,
-            f"工具完成: {event.name}{suffix}",
-            tone="error" if event.is_error else "success",
-            stage="tool_completed",
+            f"工具终止: {event.name}{suffix}",
+            tone=(
+                "success"
+                if event.state is ExecutionState.SUCCEEDED
+                else "error"
+            ),
+            stage=f"tool_{event.state.value}",
         )
 
     progress_mode = getattr(host, "tool_progress_mode", "off")
@@ -78,7 +87,7 @@ def _project_completed(
                     dict(event.arguments),
                     event.duration,
                     result=event.result,
-                    is_error=event.is_error,
+                    state=event.state or ExecutionState.UNKNOWN,
                     get_message=get_cute_tool_message,
                 )
                 emit_line(f"  {line}")

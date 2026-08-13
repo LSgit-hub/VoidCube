@@ -8,10 +8,15 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 
 class ToolEventKind(str, Enum):
     STARTED = "tool.started"
-    COMPLETED = "tool.completed"
+    SUCCEEDED = "tool.succeeded"
+    FAILED = "tool.failed"
+    CANCELLED = "tool.cancelled"
+    TIMED_OUT = "tool.timed_out"
+    UNKNOWN = "tool.unknown"
     REASONING = "reasoning.available"
     SUBAGENT_PROGRESS = "subagent.progress"
 
@@ -27,7 +32,7 @@ class ToolEvent:
     preview: str = ""
     result: str = ""
     duration: float = 0.0
-    is_error: bool = False
+    state: ExecutionState | None = None
     text: str = ""
     artifacts: tuple[Artifact, ...] = ()
 
@@ -49,7 +54,7 @@ class ToolEvent:
         )
 
     @classmethod
-    def completed(
+    def terminal(
         cls,
         *,
         call_id: str,
@@ -57,17 +62,24 @@ class ToolEvent:
         arguments: Mapping[str, Any],
         result: str,
         duration: float,
-        is_error: bool,
+        state: ExecutionState,
         artifacts: tuple[Artifact, ...] = (),
     ) -> "ToolEvent":
+        kinds = {
+            ExecutionState.SUCCEEDED: ToolEventKind.SUCCEEDED,
+            ExecutionState.FAILED: ToolEventKind.FAILED,
+            ExecutionState.CANCELLED: ToolEventKind.CANCELLED,
+            ExecutionState.TIMED_OUT: ToolEventKind.TIMED_OUT,
+            ExecutionState.UNKNOWN: ToolEventKind.UNKNOWN,
+        }
         return cls(
-            kind=ToolEventKind.COMPLETED,
+            kind=kinds[state],
             call_id=call_id,
             name=name,
             arguments=MappingProxyType(dict(arguments)),
             result=result,
             duration=max(0.0, float(duration)),
-            is_error=bool(is_error),
+            state=state,
             artifacts=tuple(artifacts),
         )
 
@@ -82,3 +94,14 @@ class ToolEvent:
 
 class ToolEventSink(Protocol):
     def __call__(self, event: ToolEvent) -> None: ...
+
+
+TERMINAL_TOOL_EVENT_KINDS = frozenset(
+    {
+        ToolEventKind.SUCCEEDED,
+        ToolEventKind.FAILED,
+        ToolEventKind.CANCELLED,
+        ToolEventKind.TIMED_OUT,
+        ToolEventKind.UNKNOWN,
+    }
+)

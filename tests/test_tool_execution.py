@@ -10,6 +10,7 @@ import pytest
 
 from agent.tool_execution import ToolExecutionCoordinator, ToolExecutionResult
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 from run_agent import AIAgent
 from VoidCube_app.tool_events import ToolEventKind
 
@@ -179,7 +180,7 @@ def test_invocation_exception_becomes_an_error_outcome():
 
     outcome = coordinator.execute(calls, parallel=False)[0]
 
-    assert outcome.is_error is True
+    assert outcome.state is ExecutionState.FAILED
     assert outcome.content == "Error executing tool 'web_search': backend unavailable"
 
 
@@ -272,12 +273,12 @@ def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch
     ]
     assert [event.kind for event in events] == [
         ToolEventKind.STARTED,
-        ToolEventKind.COMPLETED,
+        ToolEventKind.SUCCEEDED,
     ]
     assert [event.call_id for event in events] == ["call-1", "call-1"]
     assert events[0].arguments == {"value": 3}
     assert events[1].result == "raw-result"
-    assert events[1].is_error is False
+    assert events[1].state is ExecutionState.SUCCEEDED
     assert messages == [
         {
             "role": "tool",
@@ -286,6 +287,58 @@ def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch
         }
     ]
     assert budgeted == [messages]
+
+
+def test_agent_tool_message_binds_action_ref_from_journal(monkeypatch):
+    import run_agent
+    import agent.action_journal as action_journal_module
+
+    agent = _agent()
+    monkeypatch.setattr(
+        run_agent,
+        "handle_function_call",
+        lambda *_args, **_kwargs: "created",
+    )
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+
+    class _ActionRef:
+        def as_dict(self):
+            return {
+                "action_id": "act-bound",
+                "state": "succeeded",
+                "target_summary": "resource-1",
+                "evidence_refs": [],
+            }
+
+    class _Journal:
+        def find_by_call_id(self, call_id, *, task_id=None):
+            assert (call_id, task_id) == ("call-write", "task-write")
+            return _ActionRef()
+
+    monkeypatch.setattr(action_journal_module, "get_action_journal", lambda: _Journal())
+    messages: list[dict] = []
+    agent._execute_tool_calls(
+        SimpleNamespace(
+            tool_calls=[_tool_call("call-write", "custom_tool", {"value": 1})]
+        ),
+        messages,
+        "task-write",
+    )
+
+    assert messages[0]["action_refs"] == [
+        {
+            "action_id": "act-bound",
+            "state": "succeeded",
+            "target_summary": "resource-1",
+            "evidence_refs": [],
+        }
+    ]
 
 
 def test_agent_canonical_path_keeps_structured_artifacts_on_tool_event(monkeypatch):
@@ -405,8 +458,8 @@ def test_agent_parallel_path_writes_results_in_assistant_order(monkeypatch):
     assert [(event.kind, event.call_id) for event in events] == [
         (ToolEventKind.STARTED, "call-1"),
         (ToolEventKind.STARTED, "call-2"),
-        (ToolEventKind.COMPLETED, "call-1"),
-        (ToolEventKind.COMPLETED, "call-2"),
+        (ToolEventKind.SUCCEEDED, "call-1"),
+        (ToolEventKind.SUCCEEDED, "call-2"),
     ]
 
 
@@ -456,7 +509,10 @@ def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
 
     agent._execute_tool_calls(assistant, messages, "task-interrupt")
 
-    assert events == []
+    assert [event.kind for event in events] == [
+        ToolEventKind.CANCELLED,
+        ToolEventKind.CANCELLED,
+    ]
     assert [message["tool_call_id"] for message in messages] == [
         "call-1",
         "call-2",

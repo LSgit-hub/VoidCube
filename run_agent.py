@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 import os
 import random
 import re
+import sqlite3
 import sys
 import time
 import threading
@@ -966,26 +967,18 @@ class AIAgent:
         self.session_start = session_start
         self.reset_session_state()
         self._session_persistence.session_start = session_start
-        self._session_persistence.reset_flush_cursor()
 
         from tools.todo_tool import TodoStore
 
         self._todo_store = TodoStore()
         self._invalidate_system_prompt()
 
-    def mark_session_history_persisted(self, message_count: int) -> None:
-        """Align persistence after the application truncates session history."""
-        self._session_persistence.set_flush_cursor(message_count)
-
     def replace_persisted_session_history(
         self,
         conversation_history: List[Dict[str, Any]],
     ) -> None:
         """Replace the JSON transcript after an explicit history mutation."""
-        self._session_persistence.save_log(
-            conversation_history,
-            allow_truncate=True,
-        )
+        self._session_persistence.refresh_json_mirror()
 
     def persist_compressed_session_history(
         self,
@@ -2797,7 +2790,6 @@ class AIAgent:
                     except (ValueError, Exception) as e:
                         logger.debug("Could not propagate title on compression: %s", e)
                 self._session_db.update_system_prompt(self.session_id, new_system_prompt)
-                self._session_persistence.reset_flush_cursor()
             except Exception as e:
                 logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
 
@@ -3240,11 +3232,38 @@ class AIAgent:
                     "tool_call_id": call.call_id,
                 }
             )
+            self._emit_tool_event(
+                ToolEvent.terminal(
+                    call_id=call.call_id,
+                    name=call.name,
+                    arguments=call.arguments,
+                    result=outcome.content,
+                    duration=outcome.duration,
+                    state=outcome.state,
+                    artifacts=outcome.artifacts,
+                )
+            )
             return
 
         result = outcome.content
+        action_refs = []
+        try:
+            from agent.action_journal import get_action_journal
+
+            action_ref = get_action_journal().find_by_call_id(
+                call.call_id,
+                task_id=effective_task_id,
+            )
+            if action_ref is not None:
+                action_refs.append(action_ref.as_dict())
+        except (OSError, RuntimeError, sqlite3.Error):
+            logger.warning(
+                "Could not resolve ActionRef for tool call %s",
+                call.call_id,
+                exc_info=True,
+            )
         preview = result if self.verbose_logging else result[:200]
-        if outcome.is_error:
+        if outcome.failed:
             logger.warning(
                 "Tool %s returned error (%.2fs): %s",
                 call.name,
@@ -3264,13 +3283,13 @@ class AIAgent:
             f"tool completed: {call.name} ({outcome.duration:.1f}s)"
         )
         self._emit_tool_event(
-            ToolEvent.completed(
+            ToolEvent.terminal(
                 call_id=call.call_id,
                 name=call.name,
                 arguments=call.arguments,
                 result=result,
                 duration=outcome.duration,
-                is_error=outcome.is_error,
+                state=outcome.state,
                 artifacts=outcome.artifacts,
             )
         )
@@ -3296,6 +3315,7 @@ class AIAgent:
                 "role": "tool",
                 "content": result,
                 "tool_call_id": call.call_id,
+                **({"action_refs": action_refs} if action_refs else {}),
             }
         )
 

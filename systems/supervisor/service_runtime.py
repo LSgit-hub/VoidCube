@@ -26,6 +26,51 @@ class StellarMode(str, Enum):
 
 
 @dataclass(slots=True)
+class RecoveryStatus:
+    state: str = "pending"
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: Optional[datetime] = None
+    recovery_cursor: str = ""
+    last_successful_event: str = ""
+    error_code: str = ""
+    error_summary: str = ""
+
+    @property
+    def healthy(self) -> bool:
+        return self.state == "healthy"
+
+    def mark_healthy(
+        self,
+        *,
+        recovery_cursor: str,
+        last_successful_event: str,
+    ) -> None:
+        self.state = "healthy"
+        self.finished_at = datetime.now(timezone.utc)
+        self.recovery_cursor = recovery_cursor
+        self.last_successful_event = last_successful_event
+        self.error_code = ""
+        self.error_summary = ""
+
+    def mark_failed(self, exc: Exception) -> None:
+        self.state = "failed"
+        self.finished_at = datetime.now(timezone.utc)
+        self.error_code = type(exc).__name__
+        self.error_summary = str(exc)[:1000]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "state": self.state,
+            "started_at": self.started_at.isoformat(),
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "recovery_cursor": self.recovery_cursor,
+            "last_successful_event": self.last_successful_event,
+            "error_code": self.error_code,
+            "error_summary": self.error_summary,
+        }
+
+
+@dataclass(slots=True)
 class ServiceRuntimeState:
     health_check_task: Optional[asyncio.Task[Any]] = None
     companion_observation_task: Optional[asyncio.Task[Any]] = None
@@ -51,6 +96,7 @@ class ServiceRuntimeState:
     last_drive_at: Optional[datetime] = None
     next_drive_at: Optional[datetime] = None
     suppress_candidate_refresh: bool = False
+    recovery: RecoveryStatus = field(default_factory=RecoveryStatus)
 
 
 class ServiceRuntimeMixin:
@@ -125,7 +171,11 @@ class ServiceRuntimeMixin:
         body_integrity = self._body_registry.inspect_layout()
         registry = dict(body_integrity.get("registry") or {})
         return {
-            "status": "healthy" if body_integrity["healthy"] else "degraded",
+            "status": (
+                "healthy"
+                if body_integrity["healthy"] and self._service_runtime.recovery.healthy
+                else "degraded"
+            ),
             "service": "supervisor",
             "stellar": self._stellar_mode_status(),
             "agents": len(self._agents),
@@ -136,7 +186,16 @@ class ServiceRuntimeMixin:
                 "healthy": body_integrity["healthy"],
                 "violations": body_integrity["violations"],
             },
+            "recovery": self._service_runtime.recovery.as_dict(),
         }
+
+    async def readiness_check(self) -> Dict[str, Any]:
+        health = await self.health_check()
+        if health["status"] != "healthy":
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=503, detail=health)
+        return {"status": "ready", "recovery": health["recovery"]}
 
     async def run_health_checks(self, request: dict | None = None) -> Dict[str, Any]:
         results = []

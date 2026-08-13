@@ -139,13 +139,11 @@ class AutonomousTaskReviewCycleService:
             if not owner_missing and not owner_stale:
                 continue
 
-            self._task_state.update_status(
+            self._task_state.begin_reconcile(
                 task.task_id,
-                status="approved",
-                actor="supervisor",
                 reason=(
-                    "Recovered orphaned agent-pull task because its owning autonomous "
-                    "executor session is missing or stale."
+                    "Agent-pull owner is missing or stale; execution outcome must be "
+                    "reconciled before this task can be claimed again."
                 ),
                 context={
                     "recovered": True,
@@ -155,13 +153,11 @@ class AutonomousTaskReviewCycleService:
                     "owner_lease_status": owner_session.get("lease_status"),
                     "active_cli_session_id": owner_session.get("active_cli_session_id"),
                 },
-                event_type="recovery",
             )
             self._task_state.update_metadata(
                 task.task_id,
                 metadata={
-                    "recovered_from_orphaned_running": True,
-                    "last_recovered_at": self._now().isoformat(),
+                    "reconcile_started_at": self._now().isoformat(),
                 },
             )
             recovered += 1

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent
 from VoidCube_cli.tool_event_adapter import project_tool_event
 
@@ -51,13 +52,13 @@ def test_started_and_completed_events_update_cli_view_state() -> None:
 
     project_tool_event(
         host,
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-1",
             name="shell",
             arguments={"command": "echo ok"},
             result="ok",
             duration=1.5,
-            is_error=False,
+            state=ExecutionState.SUCCEEDED,
         ),
         append_autonomous_event=append_event,
         emit_line=lambda _line: None,
@@ -82,13 +83,13 @@ def test_completed_event_uses_its_own_arguments_for_scrollback(monkeypatch) -> N
 
     project_tool_event(
         host,
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-2",
             name="read_file",
             arguments={"path": "README.md"},
             result="content",
             duration=0.25,
-            is_error=False,
+            state=ExecutionState.SUCCEEDED,
         ),
         append_autonomous_event=lambda *_args, **_kwargs: None,
         emit_line=lines.append,
@@ -108,13 +109,13 @@ def test_completed_error_has_explicit_failure_marker(monkeypatch) -> None:
 
     project_tool_event(
         host,
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-error",
             name="shell",
             arguments={"command": "false"},
             result="failed",
             duration=0.4,
-            is_error=True,
+            state=ExecutionState.FAILED,
         ),
         append_autonomous_event=lambda *_args, **_kwargs: None,
         emit_line=lines.append,

@@ -358,6 +358,7 @@ registry.register(
     handler=lambda args, **kw: image_generate(**dict(args or {})),
     check_fn=image_generation_configured,
     emoji="🎨",
+    effect="non_idempotent_write",
 )
 registry.register(
     name="image_edit",
@@ -366,6 +367,7 @@ registry.register(
     handler=lambda args, **kw: image_edit(**dict(args or {})),
     check_fn=image_generation_configured,
     emoji="🖼️",
+    effect="non_idempotent_write",
 )
 registry.register(
     name="video_generate",
@@ -374,6 +376,7 @@ registry.register(
     handler=lambda args, **kw: video_generate(**dict(args or {})),
     check_fn=video_generation_configured,
     emoji="🎬",
+    effect="non_idempotent_write",
 )
 
 

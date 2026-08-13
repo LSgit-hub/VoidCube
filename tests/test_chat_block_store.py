@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from VoidCube_app.contracts.events import MessageDelta, TurnEvent, TurnEventKind
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent
 from VoidCube_cli.chat_block_store import ChatBlockStore
 
@@ -13,12 +14,12 @@ def test_store_correlates_turn_stream_and_tool_lifecycle() -> None:
     store.record_user_message("inspect files", turn_id="turn-1")
     store.consume(ToolEvent.started(call_id="call-1", name="read_file", arguments={"path": "a.py"}, preview="a.py"))
     store.consume(MessageDelta("session-1", "turn-1", "answer"))
-    store.consume(ToolEvent.completed(call_id="call-1", name="read_file", arguments={"path": "a.py"}, result="ok", duration=0.3, is_error=False))
+    store.consume(ToolEvent.terminal(call_id="call-1", name="read_file", arguments={"path": "a.py"}, result="ok", duration=0.3, state=ExecutionState.SUCCEEDED))
     store.consume(TurnEvent(TurnEventKind.COMPLETED, "session-1", "turn-1"))
 
     blocks = store.blocks()
     assert [block.kind for block in blocks] == ["user", "tool_result", "assistant"]
-    assert blocks[1].status == "completed"
+    assert blocks[1].status == "succeeded"
     assert blocks[1].call_id == "call-1"
     assert blocks[2].text == "answer"
     assert blocks[2].status == "completed"
@@ -27,7 +28,7 @@ def test_store_correlates_turn_stream_and_tool_lifecycle() -> None:
 def test_store_keeps_orphaned_tool_result_and_resets_session() -> None:
     store = ChatBlockStore()
     store.bind_session("session-1")
-    store.consume(ToolEvent.completed(call_id="missing", name="shell", arguments={}, result="failed", duration=1, is_error=True))
+    store.consume(ToolEvent.terminal(call_id="missing", name="shell", arguments={}, result="failed", duration=1, state=ExecutionState.FAILED))
     assert store.blocks()[0].status == "orphaned"
     store.bind_session("session-2")
     assert store.blocks() == ()
@@ -50,20 +51,20 @@ def test_store_does_not_duplicate_repeated_tool_events() -> None:
     store.bind_session("session-1")
     store.consume(TurnEvent(TurnEventKind.STARTED, "session-1", "turn-1"))
     started = ToolEvent.started(call_id="call-1", name="shell", arguments={})
-    completed = ToolEvent.completed(
+    completed = ToolEvent.terminal(
         call_id="call-1",
         name="shell",
         arguments={},
         result="ok",
         duration=0.1,
-        is_error=False,
+        state=ExecutionState.SUCCEEDED,
     )
     store.consume(started)
     store.consume(started)
     store.consume(completed)
     store.consume(completed)
     assert len(store.blocks()) == 1
-    assert store.blocks()[0].status == "completed"
+    assert store.blocks()[0].status == "succeeded"
 
 
 def test_store_ignores_late_events_from_another_session() -> None:
@@ -79,13 +80,13 @@ def test_store_keeps_full_tool_result_and_artifact_metadata() -> None:
     store.bind_session("session-1")
     store.consume(TurnEvent(TurnEventKind.STARTED, "session-1", "turn-1"))
     store.consume(
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-1",
             name="write_file",
             arguments={"path": "report.txt"},
             result="x" * 20_000,
             duration=0.5,
-            is_error=False,
+            state=ExecutionState.SUCCEEDED,
             artifacts=(
                 Artifact(
                     kind="file",

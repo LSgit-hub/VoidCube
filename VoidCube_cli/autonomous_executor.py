@@ -258,12 +258,11 @@ class AutonomousExecutorRuntime:
 
         tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
         for task in tasks:
-            metadata = dict(task.get("metadata") or {})
-            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
-            execution_source = str(metadata.get("execution_source") or "").strip().lower()
+            lease = dict(task.get("execution_lease") or {})
+            owner_session_id = str(lease.get("owner_session_id") or "").strip()
             if owner_session_id != session_id:
                 continue
-            if execution_source and execution_source != "cli_agent_pull":
+            if lease.get("state") != "active":
                 continue
             return task
         return None
@@ -454,6 +453,11 @@ class AutonomousExecutorRuntime:
         }
         if final_response:
             payload["final_response"] = final_response[:4000]
+        current = self.ports.get_current_task()
+        if isinstance(current, dict) and current.get("task_id") == task_id:
+            lease = current.get("execution_lease")
+            if isinstance(lease, dict):
+                payload["execution_lease"] = dict(lease)
         try:
             request = urllib.request.Request(
                 f"{gateway_base}/v1/tasks/{task_id}/decision",
@@ -682,7 +686,6 @@ class AutonomousExecutorRuntime:
                     "execution_kind": execution_kind,
                 },
                 "metadata": {
-                    "owner_session_id": self.ports.get_session_id() or None,
                     "execution_started_at": datetime.now().astimezone().isoformat(),
                     "execution_source": "cli_agent_pull",
                 },
@@ -693,7 +696,16 @@ class AutonomousExecutorRuntime:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            urllib.request.urlopen(request, timeout=15)
+            claim_response = json.loads(
+                urllib.request.urlopen(request, timeout=15).read()
+            )
+            claimed_task = claim_response.get("task")
+            if not isinstance(claimed_task, dict):
+                return
+            lease = claimed_task.get("execution_lease")
+            if not isinstance(lease, dict) or not lease.get("attempt_id"):
+                return
+            task = claimed_task
         except Exception:
             return
 
@@ -798,6 +810,8 @@ class AutonomousExecutorRuntime:
             "changed_files": diff["changed_files"],
             "learning_refs": learning_refs,
             "improvement_description": improvement_description,
+            "session_id": str(self.ports.get_session_id() or ""),
+            "execution_lease": dict(task.get("execution_lease") or {}),
         }
         try:
             request = urllib.request.Request(

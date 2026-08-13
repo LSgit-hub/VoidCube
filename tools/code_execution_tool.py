@@ -221,4 +221,5 @@ registry.register(
     toolset="code_execution",
     schema=EXECUTE_CODE_SCHEMA,
     handler=_handle_execute_code,
+    effect="non_idempotent_write",
 )

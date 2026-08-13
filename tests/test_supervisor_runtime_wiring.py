@@ -27,6 +27,9 @@ from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainStore,
 )
+from systems.supervisor.autonomous_chain_recovery_service import (
+    AutonomousChainRecoveryService,
+)
 from systems.supervisor.service_runtime import StellarMode
 from systems.supervisor.ui_assets import load_supervisor_ui_html
 from systems.supervisor.ui_autonomous_projection import project_autonomous_observation
@@ -491,6 +494,128 @@ async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtim
     assert health["body_runtime"]["healthy"] is True
     assert health["body_runtime"]["violations"] == []
     assert "transitional_interfaces" not in health
+
+
+@pytest.mark.unit
+def test_supervisor_recovery_success_is_shared_by_health_and_readiness(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    health = client.get("/health")
+    ready = client.get("/ready")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+    assert health.json()["recovery"] == ready.json()["recovery"]
+    assert health.json()["recovery"]["state"] == "healthy"
+    assert health.json()["recovery"]["finished_at"]
+
+
+@pytest.mark.unit
+def test_supervisor_recovery_failure_degrades_health_and_readiness(tmp_path, monkeypatch):
+    def fail_recovery(self, *, replace=False):
+        raise RuntimeError("governance stream unavailable")
+
+    monkeypatch.setattr(AutonomousChainRecoveryService, "recover", fail_recovery)
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    client = TestClient(supervisor.app)
+
+    health = client.get("/health")
+    ready = client.get("/ready")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "degraded"
+    assert health.json()["recovery"]["state"] == "failed"
+    assert health.json()["recovery"]["error_code"] == "RuntimeError"
+    assert health.json()["recovery"]["error_summary"] == "governance stream unavailable"
+    assert ready.status_code == 503
+    assert ready.json()["detail"] == health.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recovery_gate_blocks_new_claim_but_allows_existing_lease_updates(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Recovery-gated task",
+            "summary": "Keep existing ownership safe during recovery degradation",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "ready"},
+    )
+    claimed = await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "session_id": "existing-owner",
+            "reason": "claimed while recovery was healthy",
+        },
+    )
+    lease = claimed["task"]["execution_lease"]
+    supervisor._service_runtime.recovery.mark_failed(RuntimeError("late degradation"))
+
+    renewed = await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "session_id": "existing-owner",
+            "execution_lease": lease,
+            "reason": "renew existing ownership",
+        },
+    )
+    finalized = await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "completed",
+            "actor": "cli_agent",
+            "session_id": "existing-owner",
+            "execution_lease": renewed["task"]["execution_lease"],
+            "reason": "finish existing ownership",
+        },
+    )
+    assert finalized["task"]["status"] == "completed"
+
+    second = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Blocked new task",
+            "summary": "A degraded supervisor must not issue new work",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    second_id = second["tasks"][0]["task_id"]
+    await supervisor.decide_autonomous_chain_task(
+        second_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "queued"},
+    )
+    with pytest.raises(Exception) as exc_info:
+        await supervisor.decide_autonomous_chain_task(
+            second_id,
+            {
+                "decision": "running",
+                "actor": "cli_agent",
+                "session_id": "new-owner",
+                "reason": "must be gated",
+            },
+        )
+    assert getattr(exc_info.value, "status_code", None) == 503
+    assert exc_info.value.detail["code"] == "supervisor_recovery_not_healthy"
 
 
 @pytest.mark.asyncio
@@ -4062,7 +4187,7 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
     task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
 
     assert cycle["handed_off"] == [{"task_id": task_id, "status": "accepted"}]
-    assert task_snapshot["status"] == "approved"
+    assert task_snapshot["status"] == "retry"
     assert task_snapshot["metadata"]["execution_failed"] is True
     assert task_snapshot["metadata"]["execution_failure_count"] == 1
     assert task_snapshot["metadata"]["execution_result"]["status"] == "accepted"

@@ -57,5 +57,7 @@ def drain_process_notifications(enqueue_pending_input: Callable[[str], None]) ->
             synthesized = _format_process_notification(event)
             if synthesized:
                 enqueue_pending_input(synthesized)
+                if event.get("type") == "completion" and session_id:
+                    process_registry.mark_completion_consumed(session_id)
     except Exception:
         pass

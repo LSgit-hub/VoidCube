@@ -1,24 +1,40 @@
-"""Tracked background command sessions for the terminal and process tools."""
+"""Persistent background-command registry with bounded output spools."""
 
 from __future__ import annotations
 
-import codecs
 import json
 import os
 import queue
 import shlex
 import signal
+import sqlite3
 import subprocess
+import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
+
+import psutil
+
+from VoidCube_app.contracts.execution import ExecutionState, state_from_exit_code, utc_now
+from VoidCube_core.runtime_paths import get_runtime_layout
 
 
 _IS_WINDOWS = os.name == "nt"
-_FINAL_STATUSES = {"completed", "failed", "killed"}
-_MAX_OUTPUT_CHARS = 1_000_000
-_MAX_RETAINED_SESSIONS = 128
+_FINAL_STATUSES = {state.value for state in ExecutionState}
+_CLEANABLE_STATUSES = _FINAL_STATUSES - {ExecutionState.UNKNOWN.value}
+_DEFAULT_SPOOL_BYTES = 1_000_000
+_DEFAULT_TOTAL_SPOOL_BYTES = 32_000_000
+_DEFAULT_RETAINED_SESSIONS = 128
+_DEFAULT_RETENTION_DAYS = 7
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
 
 
 @dataclass
@@ -28,48 +44,119 @@ class ProcessSession:
     cwd: str
     task_id: str
     kind: str
+    spool_path: Path
+    marker_path: Path
     pid: int | None = None
+    process_create_time: float | None = None
     notify_on_complete: bool = False
     watch_patterns: tuple[str, ...] = ()
     status: str = "running"
     exit_code: int | None = None
     error: str | None = None
+    started_at: datetime = field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    output_cursor: int = 0
+    notification_consumed: bool = False
+    output_truncated: bool = False
     _process: subprocess.Popen | None = field(default=None, repr=False)
     _env: Any = field(default=None, repr=False)
     _output: str = field(default="", repr=False)
-    _output_truncated: bool = field(default=False, repr=False)
-    _poll_cursor: int = field(default=0, repr=False)
     _watch_buffer: str = field(default="", repr=False)
+    _observed_bytes: int = field(default=0, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def snapshot(self, *, incremental: bool = False) -> dict[str, Any]:
         with self._lock:
+            output = self._output[self.output_cursor:] if incremental else self._output
             if incremental:
-                output = self._output[self._poll_cursor:]
-                self._poll_cursor = len(self._output)
-            else:
-                output = self._output
+                self.output_cursor = len(self._output)
             return {
                 "session_id": self.id,
                 "status": self.status,
                 "pid": self.pid,
                 "command": self.command,
                 "output": output,
-                "output_truncated": self._output_truncated,
+                "output_truncated": self.output_truncated,
                 "exit_code": self.exit_code,
                 "error": self.error,
+                "started_at": self.started_at.isoformat(),
+                "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             }
 
 
 class ProcessRegistry:
-    """Thread-safe lifecycle manager for local and remote background commands."""
+    """Thread-safe lifecycle manager backed by SQLite and bounded spool files."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        storage_dir: str | Path | None = None,
+        *,
+        max_spool_bytes: int = _DEFAULT_SPOOL_BYTES,
+        max_total_spool_bytes: int = _DEFAULT_TOTAL_SPOOL_BYTES,
+        max_retained_sessions: int = _DEFAULT_RETAINED_SESSIONS,
+        retention_days: int = _DEFAULT_RETENTION_DAYS,
+    ) -> None:
+        root = Path(storage_dir) if storage_dir is not None else (
+            get_runtime_layout().runtime_root / "processes"
+        )
+        self.storage_dir = root.resolve()
+        self.spool_dir = self.storage_dir / "spool"
+        self.db_path = self.storage_dir / "registry.db"
+        self.max_spool_bytes = max(1, int(max_spool_bytes))
+        self.max_total_spool_bytes = max(self.max_spool_bytes, int(max_total_spool_bytes))
+        self.max_retained_sessions = max(1, int(max_retained_sessions))
+        self.retention = timedelta(days=max(0, int(retention_days)))
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.spool_dir.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, ProcessSession] = {}
         self._lock = threading.RLock()
-        self._completion_consumed: set[str] = set()
         self.completion_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._initialize_database()
+        self._recover_sessions()
+        self.cleanup()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize_database(self) -> None:
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS process_registry_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO process_registry_meta(key, value)
+                VALUES ('schema_version', '1');
+                CREATE TABLE IF NOT EXISTS process_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    command TEXT NOT NULL,
+                    cwd TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    pid INTEGER,
+                    process_create_time REAL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    status TEXT NOT NULL,
+                    exit_code INTEGER,
+                    error TEXT,
+                    spool_path TEXT NOT NULL,
+                    marker_path TEXT NOT NULL,
+                    output_cursor INTEGER NOT NULL DEFAULT 0,
+                    output_truncated INTEGER NOT NULL DEFAULT 0,
+                    notify_on_complete INTEGER NOT NULL DEFAULT 0,
+                    notification_consumed INTEGER NOT NULL DEFAULT 0,
+                    watch_patterns_json TEXT NOT NULL DEFAULT '[]'
+                );
+                CREATE INDEX IF NOT EXISTS idx_process_sessions_task
+                ON process_sessions(task_id, started_at);
+                """
+            )
 
     @staticmethod
     def _new_id() -> str:
@@ -79,16 +166,164 @@ class ProcessRegistry:
     def _patterns(patterns: list[str] | None) -> tuple[str, ...]:
         return tuple(dict.fromkeys(p for p in (patterns or []) if p))
 
+    @staticmethod
+    def _process_identity(pid: int | None) -> float | None:
+        if not pid:
+            return None
+        try:
+            return float(psutil.Process(pid).create_time())
+        except (psutil.Error, OSError, ValueError):
+            return None
+
+    @classmethod
+    def _identity_matches(cls, session: ProcessSession) -> bool:
+        actual = cls._process_identity(session.pid)
+        expected = session.process_create_time
+        return actual is not None and expected is not None and abs(actual - expected) < 0.01
+
+    def _persist(self, session: ProcessSession) -> None:
+        with session._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO process_sessions(
+                    session_id, command, cwd, task_id, kind, pid,
+                    process_create_time, started_at, finished_at, status,
+                    exit_code, error, spool_path, marker_path, output_cursor,
+                    output_truncated, notify_on_complete, notification_consumed,
+                    watch_patterns_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    finished_at=excluded.finished_at,
+                    status=excluded.status,
+                    exit_code=excluded.exit_code,
+                    error=excluded.error,
+                    output_cursor=excluded.output_cursor,
+                    output_truncated=excluded.output_truncated,
+                    notification_consumed=excluded.notification_consumed
+                """,
+                (
+                    session.id,
+                    session.command[:4000],
+                    session.cwd,
+                    session.task_id,
+                    session.kind,
+                    session.pid,
+                    session.process_create_time,
+                    session.started_at.isoformat(),
+                    session.finished_at.isoformat() if session.finished_at else None,
+                    session.status,
+                    session.exit_code,
+                    session.error,
+                    str(session.spool_path),
+                    str(session.marker_path),
+                    session.output_cursor,
+                    int(session.output_truncated),
+                    int(session.notify_on_complete),
+                    int(session.notification_consumed),
+                    json.dumps(session.watch_patterns),
+                ),
+            )
+
     def _store(self, session: ProcessSession) -> None:
         with self._lock:
-            if len(self._sessions) >= _MAX_RETAINED_SESSIONS:
-                for session_id, old in list(self._sessions.items()):
-                    if old.status in _FINAL_STATUSES:
-                        self._sessions.pop(session_id)
-                        self._completion_consumed.discard(session_id)
-                        if len(self._sessions) < _MAX_RETAINED_SESSIONS:
-                            break
+            active = sum(item.status not in _FINAL_STATUSES for item in self._sessions.values())
+            if active * self.max_spool_bytes >= self.max_total_spool_bytes:
+                raise RuntimeError("Process spool capacity is exhausted by active sessions")
             self._sessions[session.id] = session
+        self._persist(session)
+
+    def _load_output(self, session: ProcessSession) -> None:
+        try:
+            raw = session.spool_path.read_bytes()
+        except FileNotFoundError:
+            raw = b""
+        with session._lock:
+            session._output = raw.decode("utf-8", errors="replace")
+            session._observed_bytes = len(raw)
+            session.output_cursor = min(session.output_cursor, len(session._output))
+
+    def _recover_sessions(self) -> None:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM process_sessions ORDER BY started_at"
+            ).fetchall()
+        for row in rows:
+            session = ProcessSession(
+                id=row["session_id"],
+                command=row["command"],
+                cwd=row["cwd"],
+                task_id=row["task_id"],
+                kind=row["kind"],
+                pid=row["pid"],
+                process_create_time=row["process_create_time"],
+                started_at=_parse_datetime(row["started_at"]) or utc_now(),
+                finished_at=_parse_datetime(row["finished_at"]),
+                status=row["status"],
+                exit_code=row["exit_code"],
+                error=row["error"],
+                spool_path=Path(row["spool_path"]),
+                marker_path=Path(row["marker_path"]),
+                output_cursor=int(row["output_cursor"]),
+                output_truncated=bool(row["output_truncated"]),
+                notify_on_complete=bool(row["notify_on_complete"]),
+                notification_consumed=bool(row["notification_consumed"]),
+                watch_patterns=tuple(json.loads(row["watch_patterns_json"])),
+            )
+            self._load_output(session)
+            was_terminal = session.status in _FINAL_STATUSES
+            with self._lock:
+                self._sessions[session.id] = session
+            if was_terminal:
+                session._done.set()
+            elif session.marker_path.exists():
+                self._finish_from_marker(session)
+            elif session.kind == "remote":
+                self._finish(
+                    session,
+                    None,
+                    ExecutionState.UNKNOWN,
+                    "Remote execution has no persistent resume token",
+                )
+            else:
+                identity_valid = self._identity_matches(session)
+                session.status = ExecutionState.UNKNOWN.value
+                session.error = (
+                    "Recovered process is still alive but local control was lost"
+                    if identity_valid
+                    else "Recovered process identity could not be verified"
+                )
+                self._persist(session)
+                if identity_valid:
+                    self._start_recovery_monitor(session)
+                else:
+                    session._done.set()
+            if (
+                was_terminal
+                and session.notify_on_complete
+                and not session.notification_consumed
+            ):
+                self.completion_queue.put(self._completion_event(session))
+
+    def _start_recovery_monitor(self, session: ProcessSession) -> None:
+        threading.Thread(
+            target=self._monitor_recovered_local,
+            args=(session,),
+            name=f"process-recover-{session.id}",
+            daemon=True,
+        ).start()
+
+    def _monitor_recovered_local(self, session: ProcessSession) -> None:
+        while self._identity_matches(session):
+            self._observe_spool(session)
+            if session.marker_path.exists():
+                break
+            time.sleep(0.05)
+        self._observe_spool(session)
+        if session.marker_path.exists():
+            self._finish_from_marker(session)
+        else:
+            session._done.set()
+            self._persist(session)
 
     def get(self, session_id: str) -> ProcessSession | None:
         with self._lock:
@@ -106,16 +341,36 @@ class ProcessRegistry:
     ) -> ProcessSession:
         from tools.environments.local import _find_persistent_bash, _make_run_env
 
+        self.cleanup()
+        session_id = self._new_id()
+        spool_path = self.spool_dir / f"{session_id}.log"
+        marker_path = self.spool_dir / f"{session_id}.done.json"
         effective_cwd = cwd or os.getcwd()
         script = (
             f"if builtin cd -- {shlex.quote(effective_cwd)}; then\n"
             f"{command}\n"
             "else exit 126; fi"
         )
+        wrapper_command = [
+            sys.executable,
+            "-m",
+            "tools.process_spool_wrapper",
+            "--spool",
+            str(spool_path),
+            "--marker",
+            str(marker_path),
+            "--max-bytes",
+            str(self.max_spool_bytes),
+            "--",
+            _find_persistent_bash(),
+            "-l",
+            "-c",
+            script,
+        ]
         popen_kwargs: dict[str, Any] = {
             "stdin": subprocess.PIPE,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.STDOUT,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
             "env": _make_run_env(env_vars or {}),
             "bufsize": 0,
         }
@@ -123,34 +378,36 @@ class ProcessRegistry:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["preexec_fn"] = os.setsid
-
-        process = subprocess.Popen(
-            [_find_persistent_bash(), "-l", "-c", script],
-            **popen_kwargs,
-        )
+        process = subprocess.Popen(wrapper_command, **popen_kwargs)
         session = ProcessSession(
-            id=self._new_id(),
+            id=session_id,
             command=command,
             cwd=effective_cwd,
             task_id=task_id,
             kind="local",
             pid=process.pid,
+            process_create_time=self._process_identity(process.pid),
             notify_on_complete=notify_on_complete,
             watch_patterns=self._patterns(watch_patterns),
+            spool_path=spool_path,
+            marker_path=marker_path,
             _process=process,
         )
-        self._store(session)
-
-        reader = threading.Thread(
-            target=self._read_local_output,
+        try:
+            self._store(session)
+        except Exception:
+            process.kill()
+            raise
+        observer = threading.Thread(
+            target=self._observe_until_exit,
             args=(session,),
             name=f"process-output-{session.id}",
             daemon=True,
         )
-        reader.start()
+        observer.start()
         threading.Thread(
             target=self._wait_local,
-            args=(session, reader),
+            args=(session, observer),
             name=f"process-wait-{session.id}",
             daemon=True,
         ).start()
@@ -166,14 +423,18 @@ class ProcessRegistry:
         notify_on_complete: bool = False,
         watch_patterns: list[str] | None = None,
     ) -> ProcessSession:
+        self.cleanup()
+        session_id = self._new_id()
         session = ProcessSession(
-            id=self._new_id(),
+            id=session_id,
             command=command,
             cwd=cwd,
             task_id=task_id,
             kind="remote",
             notify_on_complete=notify_on_complete,
             watch_patterns=self._patterns(watch_patterns),
+            spool_path=self.spool_dir / f"{session_id}.log",
+            marker_path=self.spool_dir / f"{session_id}.done.json",
             _env=env,
         )
         self._store(session)
@@ -185,83 +446,106 @@ class ProcessRegistry:
         ).start()
         return session
 
-    def _read_local_output(self, session: ProcessSession) -> None:
+    def _observe_until_exit(self, session: ProcessSession) -> None:
         process = session._process
-        if process is None or process.stdout is None:
-            return
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        try:
-            while True:
-                chunk = process.stdout.read(65536)
-                if not chunk:
-                    break
-                self._append_output(session, decoder.decode(chunk))
-            tail = decoder.decode(b"", final=True)
-            if tail:
-                self._append_output(session, tail)
-        except (OSError, ValueError) as exc:
-            with session._lock:
-                if session.status == "running":
-                    session.error = str(exc)
+        while process is not None and process.poll() is None:
+            self._observe_spool(session)
+            time.sleep(0.02)
+        self._observe_spool(session)
 
-    def _wait_local(self, session: ProcessSession, reader: threading.Thread) -> None:
+    def _observe_spool(self, session: ProcessSession) -> None:
+        try:
+            with session.spool_path.open("rb") as handle:
+                handle.seek(session._observed_bytes)
+                raw = handle.read()
+        except FileNotFoundError:
+            return
+        if not raw:
+            return
+        session._observed_bytes += len(raw)
+        self._append_output(session, raw.decode("utf-8", errors="replace"))
+
+    def _wait_local(self, session: ProcessSession, observer: threading.Thread) -> None:
         process = session._process
         if process is None:
-            self._finish(session, None, "failed", "Process was not started")
+            self._finish(session, None, ExecutionState.FAILED, "Process was not started")
             return
         try:
-            exit_code = process.wait()
-            reader.join(timeout=2)
-            with session._lock:
-                killed = session.status == "killed"
-            self._finish(
-                session,
-                exit_code,
-                "killed" if killed else "completed",
-                None,
-            )
+            process.wait()
+            observer.join(timeout=2)
+            self._observe_spool(session)
+            if session.marker_path.exists():
+                self._finish_from_marker(session)
+            else:
+                with session._lock:
+                    cancelled = session.status == ExecutionState.CANCELLED.value
+                self._finish(
+                    session,
+                    None,
+                    ExecutionState.CANCELLED if cancelled else ExecutionState.UNKNOWN,
+                    None if cancelled else "Process exited without a completion marker",
+                )
         except Exception as exc:
-            self._finish(session, None, "failed", str(exc))
+            self._finish(session, None, ExecutionState.UNKNOWN, str(exc))
         finally:
-            for stream in (process.stdin, process.stdout):
-                try:
-                    stream.close()
-                except (AttributeError, OSError, ValueError):
-                    pass
+            try:
+                process.stdin.close()
+            except (AttributeError, OSError, ValueError):
+                pass
+
+    def _finish_from_marker(self, session: ProcessSession) -> None:
+        try:
+            marker = json.loads(session.marker_path.read_text(encoding="utf-8"))
+            exit_code = marker.get("exit_code")
+            exit_code = int(exit_code) if exit_code is not None else None
+            session.output_truncated = bool(marker.get("output_truncated"))
+            state = state_from_exit_code(exit_code)
+            error = str(marker.get("error") or "") or None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._finish(session, None, ExecutionState.UNKNOWN, f"Invalid completion marker: {exc}")
+            return
+        with session._lock:
+            cancelled = session.status == ExecutionState.CANCELLED.value
+        self._finish(
+            session,
+            exit_code,
+            ExecutionState.CANCELLED if cancelled else state,
+            error,
+        )
 
     def _run_remote(self, session: ProcessSession) -> None:
         try:
             result = session._env.execute(session.command, cwd=session.cwd)
             output = str(result.get("output", ""))
             if output:
-                self._append_output(session, output)
+                encoded = output.encode("utf-8")
+                accepted = encoded[: self.max_spool_bytes]
+                session.spool_path.write_bytes(accepted)
+                session._observed_bytes = len(accepted)
+                session.output_truncated = len(encoded) > len(accepted)
+                self._append_output(session, accepted.decode("utf-8", errors="replace"))
             with session._lock:
-                killed = session.status == "killed"
+                cancelled = session.status == ExecutionState.CANCELLED.value
             self._finish(
                 session,
                 result.get("returncode"),
-                "killed" if killed else "completed",
+                ExecutionState.CANCELLED if cancelled else state_from_exit_code(result.get("returncode")),
                 None,
             )
         except Exception as exc:
             with session._lock:
-                killed = session.status == "killed"
+                cancelled = session.status == ExecutionState.CANCELLED.value
             self._finish(
                 session,
                 None,
-                "killed" if killed else "failed",
-                None if killed else str(exc),
+                ExecutionState.CANCELLED if cancelled else ExecutionState.UNKNOWN,
+                None if cancelled else str(exc),
             )
 
     def _append_output(self, session: ProcessSession, text: str) -> None:
         events: list[dict[str, Any]] = []
         with session._lock:
             session._output += text
-            overflow = len(session._output) - _MAX_OUTPUT_CHARS
-            if overflow > 0:
-                session._output = session._output[overflow:]
-                session._poll_cursor = max(0, session._poll_cursor - overflow)
-                session._output_truncated = True
             combined = session._watch_buffer + text
             lines = combined.splitlines(keepends=True)
             if lines and not lines[-1].endswith(("\n", "\r")):
@@ -288,11 +572,23 @@ class ProcessRegistry:
             if pattern in line
         ]
 
+    @staticmethod
+    def _completion_event(session: ProcessSession) -> dict[str, Any]:
+        return {
+            "type": "completion",
+            "session_id": session.id,
+            "command": session.command,
+            "exit_code": session.exit_code,
+            "state": session.status,
+            "output": session._output,
+            "output_truncated": session.output_truncated,
+        }
+
     def _finish(
         self,
         session: ProcessSession,
         exit_code: int | None,
-        status: str,
+        state: ExecutionState,
         error: str | None,
     ) -> None:
         events: list[dict[str, Any]] = []
@@ -303,18 +599,13 @@ class ProcessRegistry:
                 events = self._watch_events(session, session._watch_buffer)
                 session._watch_buffer = ""
             session.exit_code = exit_code
-            session.status = status
+            session.status = state.value
             session.error = error or session.error
+            session.finished_at = utc_now()
             session._done.set()
             if session.notify_on_complete:
-                events.append({
-                    "type": "completion",
-                    "session_id": session.id,
-                    "command": session.command,
-                    "exit_code": exit_code,
-                    "output": session._output,
-                    "output_truncated": session._output_truncated,
-                })
+                events.append(self._completion_event(session))
+        self._persist(session)
         for event in events:
             self.completion_queue.put(event)
 
@@ -340,18 +631,22 @@ class ProcessRegistry:
 
     def poll(self, session_id: str) -> dict[str, Any]:
         session = self._require(session_id)
+        self._observe_spool(session)
         result = session.snapshot(incremental=True)
+        self._persist(session)
         if result["status"] in _FINAL_STATUSES:
-            self._mark_completion_consumed(session_id)
+            self.mark_completion_consumed(session_id)
         return result
 
     def wait(self, session_id: str, timeout: float | None = None) -> dict[str, Any]:
         session = self._require(session_id)
         finished = session._done.wait(timeout)
+        self._observe_spool(session)
         result = session.snapshot(incremental=True)
         result["timed_out"] = not finished
+        self._persist(session)
         if finished:
-            self._mark_completion_consumed(session_id)
+            self.mark_completion_consumed(session_id)
         return result
 
     def write(self, session_id: str, data: str) -> dict[str, Any]:
@@ -379,24 +674,23 @@ class ProcessRegistry:
         session = self._require(session_id)
         self._kill_session(session)
         session._done.wait(2)
-        self._mark_completion_consumed(session_id)
+        self.mark_completion_consumed(session_id)
         return session.snapshot(incremental=True)
 
     def _kill_session(self, session: ProcessSession) -> bool:
         with session._lock:
             if session.status != "running":
                 return False
-            session.status = "killed"
+            session.status = ExecutionState.CANCELLED.value
             process = session._process
-
+        self._persist(session)
         if session.kind == "remote":
             try:
                 from tools.terminal_tool import cleanup_vm
                 cleanup_vm(session.task_id)
             finally:
-                self._finish(session, None, "killed", None)
+                self._finish(session, None, ExecutionState.CANCELLED, None)
             return True
-
         if process is not None:
             try:
                 if _IS_WINDOWS:
@@ -408,17 +702,8 @@ class ProcessRegistry:
                     )
                     if result.returncode != 0 and process.poll() is None:
                         process.kill()
-                    try:
-                        process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=1)
                 else:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                    try:
-                        process.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             except (OSError, subprocess.SubprocessError):
                 try:
                     process.kill()
@@ -430,7 +715,8 @@ class ProcessRegistry:
         with self._lock:
             sessions = list(self._sessions.values())
         targets = [
-            session for session in sessions
+            session
+            for session in sessions
             if session.status == "running"
             and (task_id is None or session.task_id == task_id)
         ]
@@ -439,12 +725,64 @@ class ProcessRegistry:
         return len(targets)
 
     def is_completion_consumed(self, session_id: str) -> bool:
-        with self._lock:
-            return session_id in self._completion_consumed
+        session = self.get(session_id)
+        return bool(session and session.notification_consumed)
 
-    def _mark_completion_consumed(self, session_id: str) -> None:
+    def mark_completion_consumed(self, session_id: str) -> None:
+        session = self._require(session_id)
+        with session._lock:
+            session.notification_consumed = True
+        self._persist(session)
+
+    def cleanup(self) -> int:
+        now = utc_now()
         with self._lock:
-            self._completion_consumed.add(session_id)
+            terminal = sorted(
+                (
+                    item
+                    for item in self._sessions.values()
+                    if item.status in _CLEANABLE_STATUSES
+                ),
+                key=lambda item: item.finished_at or item.started_at,
+            )
+            total_bytes = sum(
+                path.stat().st_size
+                for path in self.spool_dir.glob("*.log")
+                if path.is_file()
+            )
+            delete: list[ProcessSession] = []
+            retained_count = len(self._sessions)
+            for session in terminal:
+                expired = bool(
+                    session.finished_at and now - session.finished_at > self.retention
+                )
+                oversized = total_bytes > self.max_total_spool_bytes
+                over_count = retained_count > self.max_retained_sessions
+                if not (expired or oversized or over_count):
+                    continue
+                try:
+                    size = session.spool_path.stat().st_size
+                except FileNotFoundError:
+                    size = 0
+                total_bytes -= size
+                retained_count -= 1
+                delete.append(session)
+            for session in delete:
+                self._sessions.pop(session.id, None)
+        if not delete:
+            return 0
+        with self._connect() as connection:
+            connection.executemany(
+                "DELETE FROM process_sessions WHERE session_id = ?",
+                [(session.id,) for session in delete],
+            )
+        for session in delete:
+            for path in (session.spool_path, session.marker_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+        return len(delete)
 
     def _require(self, session_id: str) -> ProcessSession:
         session = self.get(session_id)
@@ -518,4 +856,5 @@ registry.register(
     schema=PROCESS_SCHEMA,
     handler=process_tool,
     max_result_size_chars=100_000,
+    effect="non_idempotent_write",
 )

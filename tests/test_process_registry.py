@@ -14,8 +14,8 @@ from tools.process_registry import ProcessRegistry
 
 
 @pytest.fixture
-def process_registry():
-    registry = ProcessRegistry()
+def process_registry(tmp_path):
+    registry = ProcessRegistry(tmp_path / "process-registry")
     yield registry
     registry.kill_all()
     for session in registry._sessions.values():
@@ -46,7 +46,7 @@ def test_local_process_wait_returns_output_and_exit_code(process_registry, tmp_p
 
     result = process_registry.wait(session.id, timeout=5)
 
-    assert result["status"] == "completed"
+    assert result["status"] == "succeeded"
     assert result["output"] == "completed"
     assert result["exit_code"] == 0
     assert result["timed_out"] is False
@@ -81,7 +81,7 @@ def test_write_and_close_deliver_stdin_and_eof(process_registry, tmp_path):
     process_registry.close(session.id)
     result = process_registry.wait(session.id, timeout=5)
 
-    assert result["status"] == "completed"
+    assert result["status"] == "succeeded"
     assert result["output"] == "input text"
 
 
@@ -95,7 +95,7 @@ def test_kill_stops_local_process(process_registry, tmp_path):
 
     result = process_registry.kill(session.id)
 
-    assert result["status"] == "killed"
+    assert result["status"] == "cancelled"
     assert process_registry.has_active_processes("kill-one") is False
 
 
@@ -111,7 +111,7 @@ def test_kill_all_only_targets_requested_task(process_registry, tmp_path):
     assert process_registry.kill_all(task_id="target") == 1
     first._done.wait(5)
 
-    assert process_registry.get(first.id).status == "killed"
+    assert process_registry.get(first.id).status == "cancelled"
     assert process_registry.get(second.id).status == "running"
     assert process_registry.kill_all() == 1
     assert second._done.wait(5)
@@ -131,7 +131,7 @@ def test_completion_and_watch_notifications_are_emitted_once(process_registry, t
     result = process_registry.wait(session.id, timeout=5)
     events = [process_registry.completion_queue.get(timeout=1) for _ in range(2)]
 
-    assert result["status"] == "completed"
+    assert result["status"] == "succeeded"
     assert [event["type"] for event in events] == ["watch_match", "completion"]
     assert events[0]["pattern"] == "ready"
     assert process_registry.is_completion_consumed(session.id) is True
@@ -170,6 +170,167 @@ def test_remote_process_runs_in_background_and_rejects_stdin(process_registry):
     result = process_registry.wait(session.id, timeout=5)
     assert result["output"] == "/workspace:remote command"
     assert result["exit_code"] == 7
+    assert result["status"] == "failed"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("exit_code", [1, 126])
+def test_local_nonzero_exit_is_failed(process_registry, tmp_path, exit_code):
+    session = process_registry.spawn_local(
+        command=f"exit {exit_code}",
+        cwd=str(tmp_path),
+        task_id=f"local-failure-{exit_code}",
+    )
+
+    result = process_registry.wait(session.id, timeout=5)
+
+    assert result["status"] == "failed"
+    assert result["exit_code"] == exit_code
+
+
+@pytest.mark.unit
+def test_completed_session_and_output_survive_registry_restart(tmp_path):
+    storage = tmp_path / "persistent-registry"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf persisted",
+        cwd=str(tmp_path),
+        task_id="restart-complete",
+    )
+    assert first.wait(session.id, timeout=5)["status"] == "succeeded"
+
+    restarted = ProcessRegistry(storage)
+    recovered = restarted.poll(session.id)
+
+    assert recovered["status"] == "succeeded"
+    assert recovered["output"] == ""
+    assert restarted.get(session.id).spool_path.read_text(encoding="utf-8") == "persisted"
+
+
+@pytest.mark.unit
+def test_live_local_session_recovers_as_unknown_then_converges_from_marker(tmp_path):
+    storage = tmp_path / "live-recovery"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf before; sleep 0.4; printf after",
+        cwd=str(tmp_path),
+        task_id="restart-running",
+    )
+    assert _wait_for_output(first, session.id) == "before"
+
+    restarted = ProcessRegistry(storage)
+    recovered_session = restarted.get(session.id)
+
+    assert recovered_session.status == "unknown"
+    assert "local control was lost" in recovered_session.error
+    assert recovered_session._done.wait(5)
+    recovered = restarted.poll(session.id)
+    assert recovered["status"] == "succeeded"
+    assert recovered["output"] == "after"
+
+
+@pytest.mark.unit
+def test_recovery_rejects_reused_or_unverifiable_pid_identity(tmp_path, monkeypatch):
+    storage = tmp_path / "identity-recovery"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="identity",
+    )
+    expected = session.process_create_time
+    monkeypatch.setattr(
+        ProcessRegistry,
+        "_process_identity",
+        staticmethod(lambda _pid: (expected or 0.0) + 100.0),
+    )
+
+    restarted = ProcessRegistry(storage)
+    recovered = restarted.get(session.id)
+    try:
+        assert recovered.status == "unknown"
+        assert "identity could not be verified" in recovered.error
+        assert recovered._done.is_set()
+    finally:
+        first.kill(session.id)
+
+
+@pytest.mark.unit
+def test_completion_notification_consumption_survives_restart(tmp_path):
+    storage = tmp_path / "notification-recovery"
+    first = ProcessRegistry(storage)
+    session = first.spawn_local(
+        command="printf notification",
+        cwd=str(tmp_path),
+        task_id="notification",
+        notify_on_complete=True,
+    )
+    assert session._done.wait(5)
+
+    restarted = ProcessRegistry(storage)
+    event = restarted.completion_queue.get(timeout=1)
+    assert event["type"] == "completion"
+    assert event["session_id"] == session.id
+    restarted.mark_completion_consumed(session.id)
+
+    second_restart = ProcessRegistry(storage)
+    with pytest.raises(queue.Empty):
+        second_restart.completion_queue.get_nowait()
+
+
+@pytest.mark.unit
+def test_spool_is_bounded_per_session(tmp_path):
+    registry = ProcessRegistry(
+        tmp_path / "bounded-spool",
+        max_spool_bytes=64,
+        max_total_spool_bytes=128,
+    )
+    session = registry.spawn_local(
+        command="printf 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789--overflow'",
+        cwd=str(tmp_path),
+        task_id="bounded",
+    )
+
+    result = registry.wait(session.id, timeout=5)
+
+    assert result["status"] == "succeeded"
+    assert result["output_truncated"] is True
+    assert session.spool_path.stat().st_size == 64
+    assert len(result["output"].encode("utf-8")) == 64
+
+
+@pytest.mark.unit
+def test_capacity_never_removes_active_or_unknown_sessions(tmp_path):
+    storage = tmp_path / "capacity"
+    registry = ProcessRegistry(
+        storage,
+        max_spool_bytes=64,
+        max_total_spool_bytes=64,
+        max_retained_sessions=1,
+        retention_days=0,
+    )
+    active = registry.spawn_local(
+        command="sleep 30",
+        cwd=str(tmp_path),
+        task_id="active",
+    )
+    with pytest.raises(RuntimeError, match="capacity is exhausted"):
+        registry.spawn_local(
+            command="printf blocked",
+            cwd=str(tmp_path),
+            task_id="blocked",
+        )
+    registry.kill(active.id)
+
+    with registry._connect() as connection:
+        connection.execute(
+            "UPDATE process_sessions SET status = 'unknown' WHERE session_id = ?",
+            (active.id,),
+        )
+    registry.get(active.id).status = "unknown"
+
+    assert registry.cleanup() == 0
+    assert registry.get(active.id) is not None
 
 
 @pytest.mark.unit

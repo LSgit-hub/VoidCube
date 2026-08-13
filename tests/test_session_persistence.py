@@ -20,12 +20,35 @@ class _SessionDB:
     def __init__(self) -> None:
         self.ensured: list[tuple[str, str, str]] = []
         self.messages: list[dict] = []
+        self.sequences: dict[str, int] = {}
 
     def ensure_session(self, session_id: str, *, source: str, model: str) -> None:
         self.ensured.append((session_id, source, model))
 
-    def append_message(self, **message) -> None:
-        self.messages.append(message)
+    def get_flush_sequence(self, session_id: str) -> int:
+        return self.sequences.get(session_id, 0)
+
+    @staticmethod
+    def stable_message_id(session_id, sequence_no, message) -> str:
+        del message
+        return f"msg:{session_id}:{sequence_no}"
+
+    def append_messages_batch(self, session_id: str, messages: list[dict]) -> None:
+        self.messages.extend({"session_id": session_id, **message} for message in messages)
+        if messages:
+            self.sequences[session_id] = max(message["sequence_no"] for message in messages)
+
+    def get_messages_as_conversation(self, session_id: str) -> list[dict]:
+        return [
+            {
+                key: value
+                for key, value in message.items()
+                if key not in {"session_id", "sequence_no", "message_id"}
+                and value is not None
+            }
+            for message in self.messages
+            if message["session_id"] == session_id
+        ]
 
 
 def _persistence(tmp_path, *, session_db=None, enabled=True, override=(None, None)):
@@ -101,11 +124,12 @@ def test_persist_restores_user_text_and_flushes_only_new_messages(tmp_path):
     assert saved["messages"][1] == {**messages[1], "content": "answer"}
 
 
-def test_conversation_history_and_cursor_prevent_duplicate_db_writes(tmp_path):
+def test_sqlite_flush_sequence_prevents_duplicate_db_writes(tmp_path):
     session_db = _SessionDB()
     persistence, _ = _persistence(tmp_path, session_db=session_db)
     history = [{"role": "user", "content": "already stored"}]
     messages = [*history, {"role": "assistant", "content": "new"}]
+    session_db.sequences["session-1"] = 1
 
     persistence.persist(messages, history)
     persistence.persist(messages, history)
@@ -113,13 +137,27 @@ def test_conversation_history_and_cursor_prevent_duplicate_db_writes(tmp_path):
     assert [message["content"] for message in session_db.messages] == ["new"]
 
 
-def test_reset_flush_cursor_writes_new_session_from_first_message(tmp_path):
+def test_json_mirror_failure_does_not_rollback_sqlite_batch(tmp_path, monkeypatch):
+    session_db = _SessionDB()
+    persistence, _ = _persistence(tmp_path, session_db=session_db)
+    monkeypatch.setattr(
+        persistence,
+        "save_log",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    persistence.persist([{"role": "user", "content": "committed"}])
+
+    assert [message["content"] for message in session_db.messages] == ["committed"]
+    assert session_db.sequences["session-1"] == 1
+
+
+def test_new_session_flush_sequence_starts_from_first_message(tmp_path):
     session_db = _SessionDB()
     persistence, state = _persistence(tmp_path, session_db=session_db)
     persistence.persist([{"role": "user", "content": "old"}])
 
     state["session_id"] = "session-2"
-    persistence.reset_flush_cursor()
     persistence.persist([{"role": "user", "content": "new"}])
 
     assert [message["session_id"] for message in session_db.messages] == [
@@ -206,14 +244,10 @@ def test_agent_class_does_not_keep_legacy_session_persistence_methods():
     assert not hasattr(AIAgent, "_save_session_log")
 
 
-def test_agent_activate_session_resets_runtime_and_persistence_cursor(monkeypatch):
+def test_agent_activate_session_resets_runtime(monkeypatch):
     class _Persistence:
         def __init__(self) -> None:
             self.session_start = datetime(2026, 7, 1)
-            self.reset_count = 0
-
-        def reset_flush_cursor(self) -> None:
-            self.reset_count += 1
 
     class _TodoStore:
         pass
@@ -232,35 +266,18 @@ def test_agent_activate_session_resets_runtime_and_persistence_cursor(monkeypatc
     assert agent.session_id == "new-session"
     assert agent.session_start == started_at
     assert agent._session_persistence.session_start == started_at
-    assert agent._session_persistence.reset_count == 1
     assert isinstance(agent._todo_store, _TodoStore)
     assert agent._cached_system_prompt is None
     assert agent.session_total_tokens == 0
 
 
-def test_agent_marks_mutated_history_as_persisted() -> None:
-    persistence = type(
-        "Persistence",
-        (),
-        {"set_flush_cursor": lambda self, count: setattr(self, "cursor", count)},
-    )()
-    agent = AIAgent.__new__(AIAgent)
-    agent._session_persistence = persistence
-
-    agent.mark_session_history_persisted(3)
-
-    assert persistence.cursor == 3
-
-
-def test_agent_replaces_json_history_after_mutation() -> None:
-    calls: list[tuple[list[dict], bool]] = []
+def test_agent_refreshes_json_mirror_after_history_mutation() -> None:
+    calls: list[bool] = []
     persistence = type(
         "Persistence",
         (),
         {
-            "save_log": lambda self, messages, *, allow_truncate=False: calls.append(
-                (messages, allow_truncate)
-            )
+            "refresh_json_mirror": lambda self: calls.append(True)
         },
     )()
     agent = AIAgent.__new__(AIAgent)
@@ -269,7 +286,7 @@ def test_agent_replaces_json_history_after_mutation() -> None:
 
     agent.replace_persisted_session_history(history)
 
-    assert calls == [(history, True)]
+    assert calls == [True]
 
 
 def test_agent_persists_compressed_continuation_history() -> None:

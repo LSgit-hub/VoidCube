@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind
 
 
@@ -29,19 +30,19 @@ def test_started_event_copies_arguments_and_preserves_identity() -> None:
         event.arguments["path"] = "mutated.txt"
 
 
-def test_completed_event_normalizes_duration_and_error_state() -> None:
-    event = ToolEvent.completed(
+def test_failed_event_normalizes_duration_and_exposes_state() -> None:
+    event = ToolEvent.terminal(
         call_id="call-2",
         name="shell",
         arguments={"command": "exit 1"},
         result="failed",
         duration=-1,
-        is_error=True,
+        state=ExecutionState.FAILED,
     )
 
-    assert event.kind is ToolEventKind.COMPLETED
+    assert event.kind is ToolEventKind.FAILED
     assert event.duration == 0
-    assert event.is_error is True
+    assert event.state is ExecutionState.FAILED
     assert event.result == "failed"
 
 
@@ -52,17 +53,40 @@ def test_completed_event_carries_structured_artifacts() -> None:
         mime_type="image/png",
     )
 
-    event = ToolEvent.completed(
+    event = ToolEvent.terminal(
         call_id="call-3",
         name="browser_vision",
         arguments={},
         result='{"success": true}',
         duration=1.0,
-        is_error=False,
+        state=ExecutionState.SUCCEEDED,
         artifacts=(artifact,),
     )
 
     assert event.artifacts == (artifact,)
+
+
+@pytest.mark.parametrize(
+    ("state", "kind"),
+    [
+        (ExecutionState.SUCCEEDED, ToolEventKind.SUCCEEDED),
+        (ExecutionState.FAILED, ToolEventKind.FAILED),
+        (ExecutionState.CANCELLED, ToolEventKind.CANCELLED),
+        (ExecutionState.TIMED_OUT, ToolEventKind.TIMED_OUT),
+        (ExecutionState.UNKNOWN, ToolEventKind.UNKNOWN),
+    ],
+)
+def test_terminal_event_kind_matches_execution_state(state, kind) -> None:
+    event = ToolEvent.terminal(
+        call_id="call-terminal",
+        name="shell",
+        arguments={},
+        result="",
+        duration=0,
+        state=state,
+    )
+
+    assert event.kind is kind
 
 
 def test_reasoning_and_subagent_progress_are_distinct_events() -> None:

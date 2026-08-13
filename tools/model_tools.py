@@ -16,6 +16,7 @@ Public API (signatures preserved from the original 2,400-line version):
     check_tool_availability(quiet) -> tuple
 """
 
+import hashlib
 import json
 import asyncio
 import logging
@@ -493,6 +494,8 @@ def handle_function_call(
         except ImportError:
             pass  # file_tools may not be loaded yet
 
+    prepared_action = None
+    journal = None
     try:
         if function_name in _AGENT_LOOP_TOOLS:
             return json.dumps({"error": f"{function_name} must be handled by the agent loop"})
@@ -509,6 +512,35 @@ def handle_function_call(
             )
         except (ImportError, RuntimeError):
             pass
+
+        effect = registry.get_effect(function_name)
+        if effect != "read_only":
+            from agent.action_journal import get_action_journal
+
+            journal = get_action_journal()
+            lease = (
+                dict(main_runtime.get("execution_lease") or {})
+                if isinstance(main_runtime, dict)
+                else {}
+            )
+            if lease and str(lease.get("state") or "") != "active":
+                raise ValueError("stale_execution_lease: side effect dispatch rejected")
+            prepared_action = journal.prepare(
+                tool_name=function_name,
+                arguments=function_args,
+                effect=effect,
+                task_id=task_id,
+                lease_generation=(
+                    int(lease.get("generation") or 0) if lease else None
+                ),
+                attempt_id=str(lease.get("attempt_id") or "") or None,
+                call_id=tool_call_id,
+            )
+            journal.transition(
+                prepared_action.action_id,
+                "dispatched",
+                reason="tool_dispatch_started",
+            )
 
         if function_name == "execute_code":
             # Prefer the caller-provided list so subagents can't overwrite
@@ -528,6 +560,25 @@ def handle_function_call(
                 main_runtime=main_runtime,
             )
 
+        if prepared_action is not None and journal is not None:
+            is_error = False
+            try:
+                payload = json.loads(result) if isinstance(result, str) else result
+                if isinstance(payload, dict):
+                    is_error = payload.get("success") is False or bool(payload.get("error"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                is_error = str(result).lstrip().lower().startswith("error")
+            journal.transition(
+                prepared_action.action_id,
+                "failed" if is_error else "succeeded",
+                reason="tool_dispatch_finished",
+                error_code="tool_error" if is_error else None,
+                error_summary=str(result)[:1000] if is_error else None,
+                evidence={
+                    "result_hash": hashlib.sha256(str(result).encode()).hexdigest(),
+                },
+            )
+
         try:
             from VoidCube_cli.plugins import invoke_hook
             invoke_hook(
@@ -545,6 +596,17 @@ def handle_function_call(
         return result
 
     except (RuntimeError, ValueError, TypeError) as e:
+        if prepared_action is not None and journal is not None:
+            try:
+                journal.transition(
+                    prepared_action.action_id,
+                    "unknown",
+                    reason="dispatcher_exception_after_dispatch",
+                    error_code=type(e).__name__,
+                    error_summary=str(e),
+                )
+            except (KeyError, ValueError):
+                pass
         error_msg = f"Error executing {function_name}: {str(e)}"
         logger.error(error_msg)
         return json.dumps({"error": error_msg}, ensure_ascii=False)

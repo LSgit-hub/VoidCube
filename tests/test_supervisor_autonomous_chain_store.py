@@ -18202,8 +18202,8 @@ async def test_autonomous_task_review_cycle_recovers_orphaned_agent_pull_running
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert result["recovered_orphaned"] == 1
-    assert updated["status"] == "approved"
-    assert updated["metadata"]["recovered_from_orphaned_running"] is True
+    assert updated["status"] == "reconciling"
+    assert updated["metadata"]["reconcile_started_at"]
     assert updated["decision_history"][-1]["context"]["previous_owner_session_id"] == "stale-cli-session"
     assert updated["decision_history"][-1]["context"]["active_cli_session_id"] == "fresh-cli-session"
 
@@ -18306,7 +18306,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
     updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 1
-    assert updated["status"] == "approved"
+    assert updated["status"] == "reconciling"
     assert updated["decision_history"][-1]["context"]["owner_session_missing"] is True
 
 
@@ -18352,7 +18352,7 @@ async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tmp_path):
+async def test_late_agent_pull_completion_without_current_lease_is_rejected(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor._autonomous_chain_planning_service.plan(
         {
@@ -18379,20 +18379,20 @@ async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tm
         },
     )
 
-    result = await supervisor.decide_autonomous_chain_task(
-        task_id,
-        {
-            "decision": "completed",
-            "actor": "cli_agent",
-            "reason": "Agent finished while supervisor had reset task to approved.",
-            "session_id": "cli-session-owner",
-        },
-    )
+    with pytest.raises(HTTPException) as exc:
+        await supervisor.decide_autonomous_chain_task(
+            task_id,
+            {
+                "decision": "completed",
+                "actor": "cli_agent",
+                "reason": "late result without fencing token",
+                "session_id": "cli-session-owner",
+            },
+        )
 
-    assert result["status"] == "completed"
-    statuses = [entry["status"] for entry in result["task"]["decision_history"]]
-    assert statuses[-2:] == ["running", "completed"]
-    assert result["task"]["decision_history"][-2]["context"]["late_agent_pull_writeback"] is True
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "stale_execution_lease"
+    assert (await supervisor.get_autonomous_chain_task(task_id))["status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -18428,7 +18428,8 @@ async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
     )
     assert first["status"] == "running"
     after_first_claim = await supervisor.get_autonomous_chain_task(task_id)
-    assert after_first_claim["metadata"]["owner_session_id"] == "cli-owner-1"
+    lease = after_first_claim["execution_lease"]
+    assert lease["owner_session_id"] == "cli-owner-1"
 
     with pytest.raises(HTTPException) as exc:
         await supervisor.decide_autonomous_chain_task(
@@ -18444,7 +18445,8 @@ async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
     assert exc.value.status_code == 409
     updated = await supervisor.get_autonomous_chain_task(task_id)
     assert updated["status"] == "running"
-    assert updated["metadata"]["owner_session_id"] == "cli-owner-1"
+    assert updated["execution_lease"]["owner_session_id"] == "cli-owner-1"
+    assert updated["metadata"]["stale_lease_rejections"][-1]["operation"] == "running"
 
 
 def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_path):
@@ -19143,7 +19145,7 @@ async def test_execution_handoff_exception_retries_then_forms_failed_terminal_st
 
     assert first["status"] == "execution_handoff_error"
     assert first["error_type"] == "ConnectionError"
-    assert after_first.status == "approved"
+    assert after_first.status == "retry"
     assert after_first.metadata["execution_failure_count"] == 1
 
     second = await supervisor._autonomous_chain_execution_handoff_service.handoff(

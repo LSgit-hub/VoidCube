@@ -40,7 +40,7 @@ def clean_session_content(content: str) -> str:
 
 
 class SessionPersistence:
-    """Own JSON transcript writes and the SQLite incremental write cursor."""
+    """Persist SQLite-authoritative transcripts and refresh their JSON mirror."""
 
     def __init__(
         self,
@@ -72,19 +72,10 @@ class SessionPersistence:
         self._user_message_override = user_message_override
         self.verbose_logging = verbose_logging
         self.messages: list[Message] = []
-        self._last_flushed_db_idx = 0
 
     @property
     def session_log_file(self) -> Path:
         return self.logs_dir / f"session_{self._session_id()}.json"
-
-    def reset_flush_cursor(self) -> None:
-        """Start SQLite persistence at the first message of a new session."""
-        self._last_flushed_db_idx = 0
-
-    def set_flush_cursor(self, persisted_message_count: int) -> None:
-        """Align incremental persistence after application history mutation."""
-        self._last_flushed_db_idx = max(0, int(persisted_message_count))
 
     def persist(
         self,
@@ -97,26 +88,27 @@ class SessionPersistence:
         override_index, override = self._user_message_override()
         apply_user_message_override(messages, override_index, override)
         self.messages = messages
-        self.save_log(messages)
-        self.flush_to_db(messages, conversation_history)
+        if self.flush_to_db(messages, conversation_history):
+            self.refresh_json_mirror()
 
     def flush_to_db(
         self,
         messages: list[Message],
         conversation_history: Sequence[Message] | None = None,
-    ) -> None:
+    ) -> bool:
         """Append messages not yet written to the SQLite session store."""
         if not self.enabled or not self.session_db:
-            return
+            return False
         try:
             self.session_db.ensure_session(
                 self._session_id(),
                 source=self._platform() or "cli",
                 model=self._model(),
             )
-            history_length = len(conversation_history) if conversation_history else 0
-            flush_from = max(history_length, self._last_flushed_db_idx)
-            for message in messages[flush_from:]:
+            del conversation_history
+            flush_from = self.session_db.get_flush_sequence(self._session_id())
+            batch = []
+            for index, message in enumerate(messages[flush_from:], flush_from + 1):
                 role = message.get("role", "unknown")
                 tool_calls = None
                 if hasattr(message, "tool_calls") and message.tool_calls:
@@ -129,24 +121,46 @@ class SessionPersistence:
                     ]
                 elif isinstance(message.get("tool_calls"), list):
                     tool_calls = message["tool_calls"]
-                self.session_db.append_message(
-                    session_id=self._session_id(),
-                    role=role,
-                    content=message.get("content"),
-                    tool_name=message.get("tool_name"),
-                    tool_calls=tool_calls,
-                    tool_call_id=message.get("tool_call_id"),
-                    finish_reason=message.get("finish_reason"),
-                    reasoning=message.get("reasoning") if role == "assistant" else None,
-                    reasoning_details=(
+                persisted_message = {
+                        "sequence_no": index,
+                        "role": role,
+                        "content": message.get("content"),
+                        "tool_name": message.get("tool_name"),
+                        "tool_calls": tool_calls,
+                        "tool_call_id": message.get("tool_call_id"),
+                        "action_refs": message.get("action_refs"),
+                        "finish_reason": message.get("finish_reason"),
+                        "reasoning": (
+                            message.get("reasoning") if role == "assistant" else None
+                        ),
+                        "reasoning_details": (
                         message.get("reasoning_details")
                         if role == "assistant"
                         else None
-                    ),
+                        ),
+                    }
+                persisted_message["message_id"] = self.session_db.stable_message_id(
+                    self._session_id(), index, persisted_message
                 )
-            self._last_flushed_db_idx = len(messages)
+                batch.append(persisted_message)
+            self.session_db.append_messages_batch(self._session_id(), batch)
+            return True
         except Exception as exc:
-            logger.warning("Session DB append_message failed: %s", exc)
+            logger.warning("Session DB batch append failed: %s", exc)
+            return False
+
+    def refresh_json_mirror(self) -> None:
+        """Refresh the compatibility JSON mirror from committed SQLite rows."""
+        if not self.enabled or not self.session_db:
+            return
+        try:
+            messages = self.session_db.get_messages_as_conversation(
+                self._session_id()
+            )
+            self.save_log(messages, allow_truncate=True)
+        except Exception as exc:
+            if self.verbose_logging:
+                logger.warning("Failed to refresh session JSON mirror: %s", exc)
 
     def save_log(
         self,

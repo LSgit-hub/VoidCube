@@ -37,7 +37,12 @@ def test_prepare_chat_messages_builds_api_copy_and_preserves_history():
                 }
             ],
         },
-        {"role": "tool", "tool_call_id": "call-1", "content": " result "},
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": " result ",
+            "action_refs": [{"action_id": "act-1", "state": "succeeded"}],
+        },
     ]
 
     prepared = prepare_chat_messages(
@@ -69,6 +74,8 @@ def test_prepare_chat_messages_builds_api_copy_and_preserves_history():
     assert history[1]["tool_calls"][0]["function"]["arguments"] == (
         '{"b": 2, "a": 1}'
     )
+    assert "action_refs" not in prepared[4]
+    assert history[2]["action_refs"][0]["action_id"] == "act-1"
 
 
 def test_sanitize_chat_messages_repairs_tool_pairs_and_invalid_roles():

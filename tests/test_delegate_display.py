@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_agent
 from tools import delegate_tool
+from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent, ToolEventKind
 
 
@@ -242,13 +243,13 @@ def test_rich_subagent_sink_maps_structured_events() -> None:
         )
     )
     sink(
-        ToolEvent.completed(
+        ToolEvent.terminal(
             call_id="call-1",
             name="read_file",
             arguments={"path": "README.md"},
             result="failed",
             duration=0.5,
-            is_error=True,
+            state=ExecutionState.FAILED,
         )
     )
     sink._flush()
@@ -258,5 +259,5 @@ def test_rich_subagent_sink_maps_structured_events() -> None:
     assert calls[1][1][:2] == ("task-1", "read_file")
     assert calls[1][2]["args_preview"] == "README.md"
     assert calls[2][0] == "completed"
-    assert calls[2][2] == {"result_preview": "failed", "status": "error"}
+    assert calls[2][2] == {"result_preview": "failed", "status": "failed"}
     assert calls[3] == ("render", {"clear": False})

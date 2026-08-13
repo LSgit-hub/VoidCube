@@ -86,6 +86,52 @@ class AutonomousTaskStateService:
             ),
         )
 
+    def claim_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        task = self._store.claim_execution(
+            task_id,
+            **kwargs,
+            before_commit=lambda updated: self._record_transition(
+                updated, transition_kind="execution_claim"
+            ),
+        )
+        self._notify_status(task, "execution_claim")
+        return task
+
+    def renew_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        return self._store.renew_execution(
+            task_id,
+            **kwargs,
+            before_commit=lambda updated: self._record_transition(
+                updated, transition_kind="execution_renew"
+            ),
+        )
+
+    def finalize_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        task = self._store.finalize_execution(
+            task_id,
+            **kwargs,
+            before_commit=lambda updated: self._record_transition(
+                updated, transition_kind="execution_finalize"
+            ),
+        )
+        self._notify_status(task, "execution_finalize")
+        return task
+
+    def begin_reconcile(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        task = self._store.begin_reconcile(
+            task_id,
+            **kwargs,
+            before_commit=lambda updated: self._record_transition(
+                updated, transition_kind="execution_reconcile"
+            ),
+        )
+        self._notify_status(task, "execution_reconcile")
+        return task
+
+    def _notify_status(self, task: AutonomousChainTask, event_type: str) -> None:
+        if self._on_status_change is not None:
+            self._on_status_change(task, event_type)
+
     def update_status(
         self,
         task_id: str,

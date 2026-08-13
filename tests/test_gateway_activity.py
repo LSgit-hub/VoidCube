@@ -1856,7 +1856,7 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
     assert called["n"] == 0
 
 
-def test_gateway_rejects_agent_pull_writeback_from_non_owner(monkeypatch):
+def test_gateway_forwards_execution_lease_for_supervisor_cas(monkeypatch):
     gateway = InternalGateway(GatewayConfig())
     _register_supervisor(gateway)
     gateway._agent_session_cache["cli-session-wrong"] = {
@@ -1864,7 +1864,7 @@ def test_gateway_rejects_agent_pull_writeback_from_non_owner(monkeypatch):
         "last_used_at": datetime.now(),
     }
     client = TestClient(gateway.app)
-    posted = {"called": False}
+    posted = {"called": False, "json": None}
 
     class _FakeResponse:
         status = 200
@@ -1901,17 +1901,26 @@ def test_gateway_rejects_agent_pull_writeback_from_non_owner(monkeypatch):
 
         def post(self, url, json=None, timeout=None):
             posted["called"] = True
+            posted["json"] = json
             return _FakeResponse()
 
     monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
 
     response = client.post(
         "/v1/tasks/learn-44/complete",
-        json={"decision": "completed", "session_id": "cli-session-wrong"},
+        json={
+            "decision": "completed",
+            "session_id": "cli-session-wrong",
+            "execution_lease": {"generation": 7, "attempt_id": "attempt-old"},
+        },
     )
 
-    assert response.status_code == 409
-    assert posted["called"] is False
+    assert response.status_code == 200
+    assert posted["called"] is True
+    assert posted["json"]["execution_lease"] == {
+        "generation": 7,
+        "attempt_id": "attempt-old",
+    }
 
 
 def test_improvement_report_forwards_to_supervisor(monkeypatch):

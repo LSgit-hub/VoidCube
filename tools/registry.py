@@ -26,11 +26,13 @@ class ToolRegistry:
         self._is_async: Dict[str, bool] = {}
         self._schemas: Dict[str, Any] = {}
         self._check_fns: Dict[str, Any] = {}
+        self._effects: Dict[str, str] = {}
     
     def register(self, name: str, tool: Any = None, toolset: str = None, 
                  schema: Any = None, handler: Any = None, check_fn: Any = None,
                  emoji: str = None, max_result_size_chars: int = None,
                  is_async: bool = False,
+                 effect: str = "non_idempotent_write",
                  **kwargs) -> None:
         """注册工具
         
@@ -54,6 +56,9 @@ class ToolRegistry:
         
         self._tools[name] = tool
         self._is_async[name] = is_async
+        if effect not in {"read_only", "idempotent_write", "non_idempotent_write"}:
+            raise ValueError(f"Unsupported tool effect: {effect}")
+        self._effects[name] = effect
         if check_fn is None:
             self._check_fns.pop(name, None)
         else:
@@ -69,6 +74,9 @@ class ToolRegistry:
     def get(self, name: str) -> Optional[Any]:
         """获取工具"""
         return self._tools.get(name)
+
+    def get_effect(self, name: str) -> str:
+        return self._effects.get(name, "non_idempotent_write")
     
     def list_tools(self) -> List[str]:
         """列出所有工具"""
@@ -319,6 +327,7 @@ class ToolRegistry:
             if name in self._schemas:
                 del self._schemas[name]
             self._check_fns.pop(name, None)
+            self._effects.pop(name, None)
             # 从工具集中移除
             for toolset in self._toolsets:
                 if name in self._toolsets[toolset]:
@@ -333,6 +342,7 @@ class ToolRegistry:
         self._is_async.clear()
         self._schemas.clear()
         self._check_fns.clear()
+        self._effects.clear()
     
     def check_tool_availability(self, quiet: bool = False) -> tuple:
         """检查工具可用性

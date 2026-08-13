@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 
 from VoidCube_app.contracts.artifacts import Artifact
+from VoidCube_app.contracts.execution import ExecutionState
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +41,17 @@ class ToolCallOutcome:
     call: PreparedToolCall
     content: str
     duration: float
-    is_error: bool
+    state: ExecutionState
     skip_reason: Literal["before_batch", "after_call"] | None = None
     artifacts: tuple[Artifact, ...] = ()
 
     @property
     def skipped(self) -> bool:
         return self.skip_reason is not None
+
+    @property
+    def failed(self) -> bool:
+        return self.state is ExecutionState.FAILED
 
 
 class ToolExecutionCoordinator:
@@ -220,7 +225,11 @@ class ToolExecutionCoordinator:
             call=call,
             content=content,
             duration=duration,
-            is_error=is_error,
+            state=(
+                ExecutionState.FAILED
+                if is_error
+                else ExecutionState.SUCCEEDED
+            ),
             artifacts=tuple(artifacts),
         )
 
@@ -244,7 +253,7 @@ class ToolExecutionCoordinator:
             call=call,
             content=content,
             duration=0.0,
-            is_error=False,
+            state=ExecutionState.CANCELLED,
             skip_reason=reason,
             artifacts=(),
         )
