@@ -1616,7 +1616,6 @@ def test_cli_reuses_one_shared_hydration_result(monkeypatch) -> None:
 
 
 def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
-    calls: list[int] = []
     repository = SimpleNamespace(truncate_last_user_turn=lambda _session_id: 2)
     app = VoidcubeCLI.__new__(VoidcubeCLI)
     app._session_db = repository
@@ -1629,7 +1628,6 @@ def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
     ]
     json_history: list[list[dict]] = []
     app.agent = SimpleNamespace(
-        mark_session_history_persisted=calls.append,
         replace_persisted_session_history=lambda history: json_history.append(
             list(history)
         ),
@@ -1653,7 +1651,6 @@ def test_cli_history_mutation_updates_agent_cursor_and_hydration() -> None:
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "one"},
     ]
-    assert calls == [2]
     assert json_history == [app.conversation_history]
     assert app._session_hydration.metadata["title"] == "Work"
     assert app._session_hydration.conversation_history == tuple(app.conversation_history)
@@ -1668,7 +1665,6 @@ def test_cli_process_routes_rollback_through_registry_then_shared_undo(
 ) -> None:
     output: list[str] = []
     restores: list[tuple[str, str, str | None]] = []
-    persisted_counts: list[int] = []
     persisted_history: list[list[dict[str, object]]] = []
     manager = SimpleNamespace(
         enabled=True,
@@ -1684,7 +1680,6 @@ def test_cli_process_routes_rollback_through_registry_then_shared_undo(
     )
     agent = SimpleNamespace(
         _checkpoint_mgr=manager,
-        mark_session_history_persisted=persisted_counts.append,
         replace_persisted_session_history=lambda history: persisted_history.append(
             list(history)
         ),
@@ -1711,7 +1706,6 @@ def test_cli_process_routes_rollback_through_registry_then_shared_undo(
     assert app.process_command("/rollback 1") is True
     assert restores == [("rollback-workspace", "checkpoint-one", None)]
     assert app.conversation_history == []
-    assert persisted_counts == [0]
     assert persisted_history == [[]]
     assert output == [
         "  ✅ prompts.rollback_restored",

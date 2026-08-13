@@ -1387,7 +1387,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         task_id,
         {"decision": "approve", "actor": "supervisor", "reason": "ready"},
     )
-    await supervisor.decide_autonomous_chain_task(
+    claimed = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "running",
@@ -1404,6 +1404,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
             "actor": "cli_agent",
             "reason": "API-A 自主执行面已完成学习链路项",
             "session_id": "cli-autonomous-1",
+            "execution_lease": claimed["task"]["execution_lease"],
             "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
             "final_response": final_response,
         },
@@ -1414,7 +1415,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         outcome
         for outcome in history["outcomes"]
         if outcome.get("task_id") == task_id
-        and outcome.get("event_type") == "decision"
+        and outcome.get("event_type") == "execution_finalize"
         and outcome.get("status") == "completed"
     )
     assert completed_outcome["autonomous_executor_final_response"] == final_response
@@ -18849,7 +18850,7 @@ async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(t
             "reason": "ready for agent pull",
         },
     )
-    await supervisor.decide_autonomous_chain_task(
+    claimed = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "running",
@@ -18865,6 +18866,7 @@ async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(t
             "actor": "cli_agent",
             "session_id": "owner-session",
             "reason": "completed",
+            "execution_lease": claimed["task"]["execution_lease"],
             "metadata": {"execution_result": {"status": "completed", "value": 7}},
         },
     )
@@ -18894,7 +18896,7 @@ async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(t
     assert result["added_task_count"] == 1
     assert recovered is not None
     assert recovered.status == "completed"
-    assert recovered.metadata["owner_session_id"] == "owner-session"
+    assert recovered.execution_lease.owner_session_id == "owner-session"
     assert recovered.metadata["execution_result"] == {"status": "completed", "value": 7}
     assert recovered.metadata["recovered_from_mem_governance"] is True
 

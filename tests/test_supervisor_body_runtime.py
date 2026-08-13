@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -111,12 +112,19 @@ def _create_running_body_improvement_task(
         actor="test",
         reason="approved for API-A",
     )
-    return supervisor._autonomous_chain_store.update_status(
+    return supervisor._autonomous_chain_store.claim_execution(
         task.task_id,
-        status="running",
+        owner_session_id="body-improvement-test-session",
         actor="cli_agent",
         reason="claimed by API-A",
     )
+
+
+def _body_improvement_execution_context(task) -> dict:
+    return {
+        "session_id": task.execution_lease.owner_session_id,
+        "execution_lease": task.execution_lease.model_dump(mode="json"),
+    }
 
 
 async def _mark_body_candidate(supervisor: Supervisor, slot_id: str, request: dict | None = None):
@@ -213,6 +221,7 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
 
     result = await supervisor.receive_improvement_report(
         {
+            **_body_improvement_execution_context(governed_task),
             "slot_id": "slot-B",
             "task_id": governed_task.task_id,
             "baseline_commit": "b" * 40,
@@ -245,6 +254,7 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
 
     duplicate = await supervisor.receive_improvement_report(
         {
+            **_body_improvement_execution_context(governed_task),
             "slot_id": "slot-B",
             "task_id": governed_task.task_id,
             "baseline_commit": "b" * 40,
@@ -347,6 +357,7 @@ async def test_body_improvement_report_rejects_unverifiable_commit_without_mutat
 
     result = await supervisor.receive_improvement_report(
         {
+            **_body_improvement_execution_context(governed_task),
             "slot_id": "slot-B",
             "task_id": governed_task.task_id,
             "baseline_commit": "b" * 40,
@@ -373,23 +384,26 @@ async def test_body_improvement_report_rejects_unverifiable_commit_without_mutat
 async def test_body_improvement_report_rejects_unknown_governance_task(tmp_path):
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
 
-    result = await supervisor.receive_improvement_report(
-        {
-            "slot_id": "slot-B",
-            "task_id": "unknown-body-improvement",
-            "baseline_commit": "b" * 40,
-            "commit_hash": "a" * 40,
-            "diff_summary": "Ungoverned change",
-            "changed_files": ["agent/stream_handler.py"],
-            "improvement_description": "Must not affect health.",
-        }
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await supervisor.receive_improvement_report(
+            {
+                "slot_id": "slot-B",
+                "task_id": "unknown-body-improvement",
+                "session_id": "unknown-session",
+                "execution_lease": {
+                    "generation": 1,
+                    "attempt_id": "unknown-attempt",
+                },
+                "baseline_commit": "b" * 40,
+                "commit_hash": "a" * 40,
+                "diff_summary": "Ungoverned change",
+                "changed_files": ["agent/stream_handler.py"],
+                "improvement_description": "Must not affect health.",
+            }
+        )
 
-    assert result == {
-        "status": "reviewed",
-        "score_delta": 0,
-        "reject_reason": "governed_task_not_found",
-    }
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "stale_execution_lease"
     slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
     assert slot_meta.health_score == 0
     assert slot_meta.health_history == []
@@ -504,6 +518,7 @@ async def test_body_improvement_report_rejects_untrusted_file_scope(
 
     result = await supervisor.receive_improvement_report(
         {
+            **_body_improvement_execution_context(governed_task),
             "slot_id": "slot-B",
             "task_id": governed_task.task_id,
             "baseline_commit": "b" * 40,
