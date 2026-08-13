@@ -183,6 +183,7 @@ from VoidCube_cli.cli_agent_initialization_runtime import (
     CliAgentInitializationPorts,
     CliAgentInitializationRuntime,
 )
+from VoidCube_cli.execution_lease_validator import validate_execution_lease
 from VoidCube_cli.cli_session_browser_runtime import (
     CliSessionBrowserPorts,
     CliSessionBrowserRuntime,
@@ -2489,6 +2490,8 @@ class VoidcubeCLI:
                         else None
                     ),
                     tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
+                    autonomous_task_provider=lambda: self._current_autonomous_task,
+                    validate_execution_lease=validate_execution_lease,
                 )
             ).create()
             # Store reference for atexit memory provider shutdown
@@ -3912,6 +3915,8 @@ class VoidcubeCLI:
                     tool_event_sink=owner._application_runtime.tool_event_sink,
                     stream_delta_callback=None,
                     tool_gen_callback=None,
+                    autonomous_task_provider=lambda: owner._current_autonomous_task,
+                    validate_execution_lease=validate_execution_lease,
                 )
             ).create()
             owner.agent._print_fn = self._quiet_autonomous_cprint

@@ -990,7 +990,7 @@ class AIAgent:
         conversation_history: List[Dict[str, Any]],
     ) -> None:
         """Persist a complete transcript after compression creates a continuation."""
-        self._session_persistence.persist(conversation_history)
+        self._session_persistence.replace_transcript(conversation_history)
     
     def switch_model(self, new_model, new_provider, api_key='', base_url=''):
         """Switch the model/provider in-place for a live agent.
@@ -1181,14 +1181,24 @@ class AIAgent:
             except Exception:
                 logger.debug("status_callback error in _emit_status", exc_info=True)
 
-    def _current_main_runtime(self) -> Dict[str, str]:
+    def _current_main_runtime(self) -> Dict[str, Any]:
         """Return the live main runtime for session-scoped auxiliary routing."""
+        autonomous_task = (
+            self.autonomous_task_provider()
+            if callable(self.autonomous_task_provider)
+            else None
+        )
         return {
             "model": getattr(self, "model", "") or "",
             "provider": getattr(self, "provider", "") or "",
             "base_url": getattr(self, "base_url", "") or "",
             "api_key": getattr(self, "api_key", "") or "",
-            "autonomous_task": self.autonomous_task_provider() if callable(self.autonomous_task_provider) else None,
+            "autonomous_task": autonomous_task,
+            "execution_lease": (
+                dict(autonomous_task.get("execution_lease") or {})
+                if isinstance(autonomous_task, dict)
+                else {}
+            ),
             "validate_execution_lease": self.validate_execution_lease,
         }
 

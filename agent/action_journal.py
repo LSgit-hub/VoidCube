@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from VoidCube_core.constants import get_VoidCube_home
 
@@ -25,7 +25,9 @@ _TRANSITIONS = {
     "prepared": {"dispatched", "cancelled"},
     "dispatched": {"succeeded", "failed", "cancelled", "timed_out", "unknown"},
     "unknown": {"reconciling"},
-    "reconciling": {"succeeded", "failed", "unknown"},
+    "reconciling": {
+        "succeeded", "failed", "cancelled", "timed_out", "unknown"
+    },
 }
 
 
@@ -60,8 +62,7 @@ class ActionRef:
 
 
 class ActionJournal:
-    SCHEMA_VERSION = 3
-    DEFAULT_DISPATCH_STALE_SECONDS = 300.0
+    SCHEMA_VERSION = 4
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
@@ -72,7 +73,6 @@ class ActionJournal:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._init_schema()
-        self.recover_stale_dispatched()
 
     def _init_schema(self) -> None:
         with self._conn:
@@ -82,6 +82,7 @@ class ActionJournal:
                 CREATE TABLE IF NOT EXISTS actions(
                     action_id TEXT PRIMARY KEY, task_id TEXT,
                     lease_generation INTEGER, attempt_id TEXT,
+                    call_id TEXT, operation_id TEXT, owner_session_id TEXT,
                     tool_name TEXT NOT NULL, normalized_arguments TEXT NOT NULL,
                     arguments_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
                     risk_level TEXT NOT NULL, target_resource TEXT,
@@ -110,6 +111,10 @@ class ActionJournal:
                 self._conn.execute("ALTER TABLE actions ADD COLUMN call_id TEXT")
             if "operation_id" not in columns:
                 self._conn.execute("ALTER TABLE actions ADD COLUMN operation_id TEXT")
+            if "owner_session_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE actions ADD COLUMN owner_session_id TEXT"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_actions_call_id ON actions(call_id)"
             )
@@ -157,6 +162,7 @@ class ActionJournal:
         task_id: str | None = None, lease_generation: int | None = None,
         attempt_id: str | None = None, call_id: str | None = None,
         operation_id: str | None = None,
+        owner_session_id: str | None = None,
     ) -> PreparedAction:
         canonical_arguments = self._canonical(arguments)
         normalized = self._canonical(self._redact(arguments))
@@ -164,12 +170,11 @@ class ActionJournal:
         stable_operation = str(operation_id or "").strip()
         if not stable_operation and task_id:
             stable_operation = hashlib.sha256(
-                f"{task_id}:{attempt_id or ''}:{tool_name}:{arguments_hash}".encode()
+                f"{task_id}:{tool_name}:{arguments_hash}".encode()
             ).hexdigest()
         stable_source = stable_operation or call_id or str(uuid.uuid4())
         idempotency_key = hashlib.sha256(
-            f"{task_id or ''}:{lease_generation or 0}:{attempt_id or ''}:"
-            f"{stable_source}:{tool_name}:{arguments_hash}".encode()
+            f"{task_id or ''}:{stable_source}:{tool_name}".encode()
         ).hexdigest()
         retryability = "safe" if effect == "idempotent_write" else "reconcile_first"
         action_id = f"act_{uuid.uuid4().hex}"
@@ -178,11 +183,12 @@ class ActionJournal:
             cursor = self._conn.execute(
                 """INSERT OR IGNORE INTO actions(
                 action_id, task_id, lease_generation, attempt_id, call_id, operation_id,
+                owner_session_id,
                 tool_name, normalized_arguments, arguments_hash, idempotency_key,
                 risk_level, target_resource, state, retryability, prepared_at, schema_version)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)""",
                 (action_id, task_id, lease_generation, attempt_id, call_id,
-                 stable_operation or None, tool_name, normalized,
+                 stable_operation or None, owner_session_id, tool_name, normalized,
                  arguments_hash, idempotency_key, effect, self._target(arguments),
                  retryability, now, self.SCHEMA_VERSION),
             )
@@ -192,11 +198,29 @@ class ActionJournal:
                 )
                 return PreparedAction(action_id, idempotency_key)
             existing = self._conn.execute(
-                "SELECT action_id, idempotency_key FROM actions WHERE idempotency_key = ?",
+                "SELECT action_id, idempotency_key, state, arguments_hash FROM actions "
+                "WHERE idempotency_key = ?",
                 (idempotency_key,),
             ).fetchone()
             if existing is None:
                 raise RuntimeError("action_prepare_conflict_without_existing_record")
+            if str(existing["arguments_hash"]) != arguments_hash:
+                raise ValueError(
+                    "operation_identity_conflict: operation reused with different arguments"
+                )
+            if str(existing["state"]) == "prepared":
+                self._conn.execute(
+                    "UPDATE actions SET lease_generation = ?, attempt_id = ?, call_id = ?, "
+                    "owner_session_id = ? "
+                    "WHERE action_id = ? AND state = 'prepared'",
+                    (
+                        lease_generation,
+                        attempt_id,
+                        call_id,
+                        owner_session_id,
+                        str(existing["action_id"]),
+                    ),
+                )
             return PreparedAction(existing["action_id"], existing["idempotency_key"])
 
     @staticmethod
@@ -225,12 +249,24 @@ class ActionJournal:
             now = time.time()
             dispatched_at = now if state == "dispatched" else None
             finished_at = now if state in {"succeeded", "failed", "cancelled", "timed_out", "unknown"} else None
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """UPDATE actions SET state = ?, dispatched_at = COALESCE(dispatched_at, ?),
                 finished_at = COALESCE(?, finished_at), error_code = ?, error_summary = ?
-                WHERE action_id = ?""",
-                (state, dispatched_at, finished_at, error_code, (error_summary or "")[:1000], action_id),
+                WHERE action_id = ? AND state = ?""",
+                (
+                    state,
+                    dispatched_at,
+                    finished_at,
+                    error_code,
+                    (error_summary or "")[:1000],
+                    action_id,
+                    current,
+                ),
             )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"concurrent_action_transition: {action_id} changed from {current}"
+                )
             self._transition_row(action_id, current, state, "coordinator", reason)
             if evidence is not None:
                 payload = self._canonical(evidence)
@@ -240,14 +276,30 @@ class ActionJournal:
                      hashlib.sha256(payload.encode()).hexdigest(), now),
                 )
 
-    def claim_dispatch(self, action_id: str, *, reason: str = "") -> bool:
+    def claim_dispatch(
+        self,
+        action_id: str,
+        *,
+        reason: str = "",
+        lease_generation: int | None = None,
+        attempt_id: str | None = None,
+        owner_session_id: str | None = None,
+    ) -> bool:
         """原子抢占 prepared 动作的实际执行权。"""
         with self._lock, self._conn:
             now = time.time()
             cursor = self._conn.execute(
                 "UPDATE actions SET state = 'dispatched', dispatched_at = ? "
-                "WHERE action_id = ? AND state = 'prepared'",
-                (now, action_id),
+                "WHERE action_id = ? AND state = 'prepared' "
+                "AND lease_generation IS ? AND attempt_id IS ? "
+                "AND owner_session_id IS ?",
+                (
+                    now,
+                    action_id,
+                    lease_generation,
+                    attempt_id,
+                    owner_session_id,
+                ),
             )
             if cursor.rowcount != 1:
                 return False
@@ -367,43 +419,90 @@ class ActionJournal:
                 "SELECT * FROM actions WHERE state = 'unknown' ORDER BY prepared_at"
             ).fetchall()]
 
-    def recover_stale_dispatched(
+    def recover_abandoned_dispatched(
         self,
         *,
-        stale_after_seconds: float | None = None,
-        now: float | None = None,
+        is_abandoned: Callable[[dict[str, Any]], bool],
     ) -> int:
-        """Fence dispatches whose process may have died before recording an outcome."""
-        stale_after = (
-            self.DEFAULT_DISPATCH_STALE_SECONDS
-            if stale_after_seconds is None
-            else max(0.0, float(stale_after_seconds))
-        )
-        cutoff = (time.time() if now is None else float(now)) - stale_after
-        with self._lock, self._conn:
+        """Move only dispatches whose execution owner is confirmed abandoned."""
+        with self._lock:
             rows = self._conn.execute(
-                "SELECT action_id FROM actions WHERE state = 'dispatched' "
-                "AND dispatched_at IS NOT NULL AND dispatched_at <= ?",
-                (cutoff,),
+                "SELECT * FROM actions WHERE state = 'dispatched' "
+                "ORDER BY dispatched_at",
             ).fetchall()
-            for row in rows:
-                action_id = str(row["action_id"])
+        abandoned_ids = [
+            str(row["action_id"])
+            for row in rows
+            if is_abandoned(dict(row))
+        ]
+        with self._lock, self._conn:
+            recovered = 0
+            for action_id in abandoned_ids:
                 cursor = self._conn.execute(
                     "UPDATE actions SET state = 'unknown', finished_at = ?, "
-                    "error_code = 'stale_dispatch', "
-                    "error_summary = 'Process ended before dispatch outcome was recorded' "
+                    "error_code = 'abandoned_dispatch', "
+                    "error_summary = 'Execution owner was confirmed inactive before outcome' "
                     "WHERE action_id = ? AND state = 'dispatched'",
                     (time.time(), action_id),
                 )
                 if cursor.rowcount == 1:
+                    recovered += 1
                     self._transition_row(
                         action_id,
                         "dispatched",
                         "unknown",
                         "recovery",
-                        "stale_dispatch_recovered",
+                        "abandoned_dispatch_confirmed",
                     )
-            return len(rows)
+            return recovered
+
+    def record_outcome(
+        self,
+        action_id: str,
+        state: Literal["succeeded", "failed", "cancelled", "timed_out", "unknown"],
+        *,
+        reason: str = "",
+        error_code: str | None = None,
+        error_summary: str | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a direct outcome, reconciling a concurrently recovered action."""
+        for _attempt in range(3):
+            record = self.get(action_id)
+            if record is None:
+                raise KeyError(action_id)
+            current = str(record["state"])
+            target = "reconciling" if current == "unknown" and state != "unknown" else state
+            try:
+                self.transition(
+                    action_id,
+                    target,
+                    reason=(
+                        "late_dispatch_outcome_received"
+                        if target == "reconciling"
+                        else reason
+                    ),
+                    error_code=error_code if target == state else None,
+                    error_summary=error_summary if target == state else None,
+                    evidence=evidence if target == state else None,
+                )
+            except (RuntimeError, ValueError) as exc:
+                latest = self.get(action_id)
+                if (
+                    latest is None
+                    or str(latest["state"]) == current
+                    or (
+                        "concurrent_action_transition" not in str(exc)
+                        and "Illegal action transition" not in str(exc)
+                    )
+                ):
+                    raise
+                continue
+            if target == state:
+                return
+        raise RuntimeError(
+            f"concurrent_action_transition: could not record outcome for {action_id}"
+        )
 
     def begin_reconcile(self, action_id: str, *, reason: str) -> None:
         self.transition(action_id, "reconciling", reason=reason)

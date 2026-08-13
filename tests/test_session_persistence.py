@@ -84,6 +84,30 @@ class _SessionDB:
             )
             self.revisions[session_id] = self.revisions.get(session_id, 0) + 1
 
+    def replace_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        *,
+        expected_revision: int,
+        expected_transcript_hash: str,
+    ) -> None:
+        assert expected_revision == self.revisions.get(session_id, 0)
+        assert expected_transcript_hash == SessionDB.transcript_hash(
+            self.get_messages_as_conversation(session_id)
+        )
+        self.messages = [
+            message for message in self.messages if message["session_id"] != session_id
+        ]
+        self.sequences[session_id] = 0
+        self.append_messages_batch(
+            session_id,
+            messages,
+            allocate_sequences=True,
+        )
+        if not messages:
+            self.revisions[session_id] = expected_revision + 1
+
     def get_messages_as_conversation(self, session_id: str) -> list[dict]:
         return [
             {
@@ -400,7 +424,7 @@ def test_agent_persists_compressed_continuation_history() -> None:
     persistence = type(
         "Persistence",
         (),
-        {"persist": lambda self, messages: calls.append(messages)},
+        {"replace_transcript": lambda self, messages: calls.append(messages)},
     )()
     agent = AIAgent.__new__(AIAgent)
     agent._session_persistence = persistence
@@ -409,3 +433,33 @@ def test_agent_persists_compressed_continuation_history() -> None:
     agent.persist_compressed_session_history(history)
 
     assert calls == [history]
+
+
+def test_compressed_history_replaces_existing_sqlite_transcript(tmp_path) -> None:
+    session_db = SessionDB(tmp_path / "sessions.db")
+    session_db.create_session("session-1", source="cli")
+    persistence, _ = _persistence(tmp_path, session_db=session_db)
+    persistence.persist(
+        [
+            {"role": "user", "content": "A"},
+            {"role": "assistant", "content": "B"},
+            {"role": "user", "content": "C"},
+        ]
+    )
+    compressed = [
+        {"role": "assistant", "content": "summary"},
+        {"role": "user", "content": "C"},
+    ]
+
+    persistence.replace_transcript(compressed)
+
+    restored = session_db.get_messages_as_conversation("session-1")
+    assert [
+        {"role": message["role"], "content": message["content"]}
+        for message in restored
+    ] == compressed
+    saved = json.loads(persistence.session_log_file.read_text(encoding="utf-8"))
+    assert [
+        {"role": message["role"], "content": message["content"]}
+        for message in saved["messages"]
+    ] == compressed

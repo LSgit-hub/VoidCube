@@ -1293,6 +1293,110 @@ class SessionDB:
 
         return self._execute_write(_do)
 
+    def replace_messages(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+        *,
+        expected_revision: int,
+        expected_transcript_hash: str,
+    ) -> List[int]:
+        """Atomically replace a transcript after an explicit history rewrite."""
+        replacement = [dict(message) for message in messages]
+
+        def _do(conn):
+            session = conn.execute(
+                "SELECT transcript_revision, transcript_hash FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                raise KeyError(f"Unknown session: {session_id}")
+            current_revision = int(session["transcript_revision"] or 0)
+            current_hash = str(session["transcript_hash"] or "")
+            if not current_hash:
+                current_hash = self._transcript_hash_from_connection(conn, session_id)
+            if current_revision != int(expected_revision):
+                raise SessionSequenceConflictError(
+                    f"stale transcript revision for {session_id}: "
+                    f"expected {expected_revision}, current {current_revision}"
+                )
+            if current_hash != str(expected_transcript_hash):
+                raise SessionSequenceConflictError(
+                    f"transcript replacement base mismatch for {session_id}"
+                )
+
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            row_ids: List[int] = []
+            tool_call_count = 0
+            for sequence_no, message in enumerate(replacement, 1):
+                message["sequence_no"] = sequence_no
+                message["message_id"] = self.stable_message_id(
+                    session_id,
+                    sequence_no,
+                    message,
+                )
+                tool_calls = message.get("tool_calls")
+                if tool_calls is not None:
+                    tool_call_count += len(tool_calls) if isinstance(tool_calls, list) else 1
+                tool_calls_json = (
+                    json.dumps(tool_calls, ensure_ascii=False)
+                    if tool_calls is not None
+                    else None
+                )
+                reasoning_details = message.get("reasoning_details")
+                reasoning_details_json = (
+                    json.dumps(reasoning_details, ensure_ascii=False)
+                    if reasoning_details is not None
+                    else None
+                )
+                action_refs = message.get("action_refs")
+                action_refs_json = (
+                    json.dumps(action_refs, ensure_ascii=False)
+                    if action_refs is not None
+                    else None
+                )
+                cursor = conn.execute(
+                    """INSERT INTO messages (
+                       message_id, session_id, sequence_no, role, content,
+                       tool_call_id, tool_calls, tool_name, timestamp, token_count,
+                       finish_reason, reasoning, reasoning_details, action_refs
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        message["message_id"],
+                        session_id,
+                        sequence_no,
+                        str(message.get("role") or "unknown"),
+                        message.get("content"),
+                        message.get("tool_call_id"),
+                        tool_calls_json,
+                        message.get("tool_name"),
+                        float(message.get("timestamp") or time.time()),
+                        message.get("token_count"),
+                        message.get("finish_reason"),
+                        message.get("reasoning"),
+                        reasoning_details_json,
+                        action_refs_json,
+                    ),
+                )
+                row_ids.append(int(cursor.lastrowid))
+
+            conn.execute(
+                "UPDATE sessions SET message_count = ?, tool_call_count = ?, "
+                "flush_sequence = ?, transcript_revision = ?, transcript_hash = ? "
+                "WHERE id = ?",
+                (
+                    len(replacement),
+                    tool_call_count,
+                    len(replacement),
+                    current_revision + 1,
+                    self.transcript_hash(replacement),
+                    session_id,
+                ),
+            )
+            return row_ids
+
+        return self._execute_write(_do)
+
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Load all messages for a session, ordered by timestamp."""
         with self._lock:

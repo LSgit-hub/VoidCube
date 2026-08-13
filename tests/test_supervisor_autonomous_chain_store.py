@@ -7,6 +7,7 @@ import json
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 import pytest
 
@@ -100,6 +101,42 @@ def _drive_history_service(supervisor: Supervisor):
 
 def _cognitive_history_service(supervisor: Supervisor):
     return supervisor._endogenous_cognitive_history_summary_service
+
+
+def test_supervisor_execution_lease_validation_route_is_authoritative(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._autonomous_chain_store.create_task(title="lease route")
+    supervisor._autonomous_chain_store.update_status(
+        task.task_id,
+        status="approved",
+        reason="ready",
+    )
+    claimed = supervisor._autonomous_chain_store.claim_execution(
+        task.task_id,
+        owner_session_id="owner-session",
+    )
+    lease = claimed.execution_lease
+    client = TestClient(supervisor.app)
+    payload = {
+        "generation": lease.generation,
+        "attempt_id": str(lease.attempt_id),
+        "owner_session_id": "owner-session",
+    }
+
+    valid = client.post(
+        f"/autonomous-chain/tasks/{task.task_id}/lease/validate",
+        json=payload,
+    )
+    stale = client.post(
+        f"/autonomous-chain/tasks/{task.task_id}/lease/validate",
+        json={**payload, "owner_session_id": "old-owner"},
+    )
+
+    assert valid.status_code == 200
+    assert valid.json()["valid"] is True
+    assert valid.json()["task"]["task_id"] == task.task_id
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_execution_lease"
 
 
 def _auditable_body_task_fields(seed: str = "1") -> dict:

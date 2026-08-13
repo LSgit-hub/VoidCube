@@ -24,9 +24,19 @@ class ToolExecutionResult:
     state: ExecutionState = ExecutionState.UNKNOWN
 
 
-_FAILED_RESULT_STATES = frozenset(
-    {"blocked", "cancelled", "error", "failed", "failure", "timed_out", "timeout"}
-)
+_RESULT_STATE_ALIASES = {
+    "cancelled": ExecutionState.CANCELLED,
+    "canceled": ExecutionState.CANCELLED,
+    "timed_out": ExecutionState.TIMED_OUT,
+    "timeout": ExecutionState.TIMED_OUT,
+    "unknown": ExecutionState.UNKNOWN,
+    "failed": ExecutionState.FAILED,
+    "failure": ExecutionState.FAILED,
+    "error": ExecutionState.FAILED,
+    "blocked": ExecutionState.FAILED,
+    "succeeded": ExecutionState.SUCCEEDED,
+    "success": ExecutionState.SUCCEEDED,
+}
 
 
 def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
@@ -41,6 +51,14 @@ def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
     except (TypeError, ValueError, json.JSONDecodeError):
         payload = None
     if isinstance(payload, dict):
+        status = str(payload.get("status") or payload.get("state") or "").strip().lower()
+        explicit_state = _RESULT_STATE_ALIASES.get(status)
+        if explicit_state in {
+            ExecutionState.CANCELLED,
+            ExecutionState.TIMED_OUT,
+            ExecutionState.UNKNOWN,
+        }:
+            return explicit_state, ""
         exit_code = payload.get("exit_code")
         if exit_code is not None:
             try:
@@ -48,8 +66,11 @@ def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
                     return ExecutionState.FAILED, f" [exit {exit_code}]"
             except (TypeError, ValueError):
                 return ExecutionState.FAILED, " [error]"
-        status = str(payload.get("status") or payload.get("state") or "").strip().lower()
-        if payload.get("success") is False or bool(payload.get("error")) or status in _FAILED_RESULT_STATES:
+        if (
+            payload.get("success") is False
+            or bool(payload.get("error"))
+            or explicit_state is ExecutionState.FAILED
+        ):
             return ExecutionState.FAILED, " [error]"
         return ExecutionState.SUCCEEDED, ""
     if text.lstrip().lower().startswith("error"):

@@ -118,3 +118,53 @@ def test_cli_creates_and_reuses_narrow_autonomous_owner(monkeypatch) -> None:
     assert isinstance(owner, AutonomousExecutionHost)
     assert owner.session_id != cli.session_id
     assert cli._ensure_autonomous_execution_host() is owner
+
+
+def test_cli_autonomous_owner_agent_receives_live_lease_fencing(monkeypatch) -> None:
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.model = "model"
+    cli.max_turns = 8
+    cli.enabled_toolsets = ["web"]
+    cli.system_prompt = None
+    cli.prefill_messages = []
+    cli.reasoning_config = None
+    cli.service_tier = None
+    cli._providers_only = None
+    cli._providers_ignore = None
+    cli._providers_order = None
+    cli._provider_sort = None
+    cli._provider_require_params = False
+    cli._provider_data_collection = None
+    cli._fallback_model = None
+    cli.checkpoints_enabled = False
+    cli.checkpoint_max_snapshots = 0
+    cli._quiet_autonomous_cprint = lambda *_args, **_kwargs: None
+    owner = _host()
+    owner._current_autonomous_task = {"task_id": "task-1"}
+    captured = {}
+
+    class _Agent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self._print_fn = None
+
+    monkeypatch.setattr("VoidCube_cli.app._get_AIAgent", lambda: _Agent)
+    monkeypatch.setattr("VoidCube_cli.app._is_gateway_running", lambda: False)
+
+    initialized = cli._initialize_autonomous_turn_agent(
+        owner,
+        {
+            "runtime": {
+                "api_key": "key",
+                "base_url": "https://example.test/v1",
+                "provider": "provider",
+            },
+            "model": "model",
+            "signature": "route-1",
+        },
+        ["web"],
+    )
+
+    assert initialized is True
+    assert captured["autonomous_task_provider"]() == {"task_id": "task-1"}
+    assert callable(captured["validate_execution_lease"])

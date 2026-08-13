@@ -247,6 +247,51 @@ def test_delegate_task_rejects_missing_declared_worktree(tmp_path):
     assert "worktree_path does not exist" in result["error"]
 
 
+def test_child_agent_inherits_parent_execution_lease_fencing(monkeypatch) -> None:
+    captured = {}
+
+    class _Child:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(run_agent, "AIAgent", _Child)
+    monkeypatch.setattr(delegate_tool, "_load_config", lambda: {})
+    parent = SimpleNamespace(
+        enabled_toolsets=[],
+        model="model",
+        provider="provider",
+        base_url="https://example.test/v1",
+        api_key="key",
+        acp_args=[],
+        reasoning_config=None,
+        prefill_messages=None,
+        platform="cli",
+        _session_db=None,
+        session_id="owner-session",
+        providers_allowed=None,
+        providers_ignored=None,
+        providers_order=None,
+        provider_sort=None,
+        tool_event_sink=None,
+        _delegate_spinner=None,
+        autonomous_task_provider=lambda: {"task_id": "autonomous-task"},
+        validate_execution_lease=lambda **_kwargs: None,
+    )
+
+    delegate_tool._build_child_agent(
+        task_index=0,
+        goal="inspect",
+        context=None,
+        toolsets=None,
+        max_iterations=3,
+        model=None,
+        parent_agent=parent,
+    )
+
+    assert captured["autonomous_task_provider"] is parent.autonomous_task_provider
+    assert captured["validate_execution_lease"] is parent.validate_execution_lease
+
+
 @pytest.mark.unit
 def test_child_event_sink_batches_started_tools_for_parent() -> None:
     parent_events = []

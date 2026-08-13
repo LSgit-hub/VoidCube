@@ -552,6 +552,35 @@ def handle_function_call(
                         lease.get("owner_session_id") or session_id or ""
                     ),
                 )
+                current_task_id = str(
+                    autonomous_task.get("task_id") or task_id or ""
+                )
+
+                def _lease_is_abandoned(action: dict[str, Any]) -> bool:
+                    if str(action.get("task_id") or "") != current_task_id:
+                        return False
+                    if not all(
+                        (
+                            action.get("lease_generation") is not None,
+                            action.get("attempt_id"),
+                            action.get("owner_session_id"),
+                        )
+                    ):
+                        return False
+                    try:
+                        lease_validator(
+                            task_id=current_task_id,
+                            generation=int(action["lease_generation"]),
+                            attempt_id=str(action["attempt_id"]),
+                            owner_session_id=str(action["owner_session_id"]),
+                        )
+                    except Exception as exc:
+                        return getattr(exc, "code", None) == "stale_execution_lease"
+                    return False
+
+                journal.recover_abandoned_dispatched(
+                    is_abandoned=_lease_is_abandoned
+                )
             if lease and str(lease.get("state") or "") != "active":
                 raise ValueError("stale_execution_lease: side effect dispatch rejected")
             prepared_action = journal.prepare(
@@ -565,10 +594,20 @@ def handle_function_call(
                 attempt_id=str(lease.get("attempt_id") or "") or None,
                 call_id=tool_call_id,
                 operation_id=str(function_args.get("operation_id") or "") or None,
+                owner_session_id=(
+                    str(lease.get("owner_session_id") or session_id or "") or None
+                ),
             )
             if not journal.claim_dispatch(
                 prepared_action.action_id,
                 reason="tool_dispatch_started",
+                lease_generation=(
+                    int(lease.get("generation") or 0) if lease else None
+                ),
+                attempt_id=str(lease.get("attempt_id") or "") or None,
+                owner_session_id=(
+                    str(lease.get("owner_session_id") or session_id or "") or None
+                ),
             ):
                 record = journal.get(prepared_action.action_id) or {}
                 return json.dumps(
@@ -604,15 +643,25 @@ def handle_function_call(
 
         if prepared_action is not None and journal is not None:
             result_state, _ = classify_tool_result(result)
-            is_error = result_state is ExecutionState.FAILED
-            journal.transition(
+            action_state = {
+                ExecutionState.SUCCEEDED: "succeeded",
+                ExecutionState.FAILED: "failed",
+                ExecutionState.CANCELLED: "cancelled",
+                ExecutionState.TIMED_OUT: "timed_out",
+                ExecutionState.UNKNOWN: "unknown",
+            }[result_state]
+            is_error = result_state is not ExecutionState.SUCCEEDED
+            journal.record_outcome(
                 prepared_action.action_id,
-                "failed" if is_error else "succeeded",
+                action_state,
                 reason="tool_dispatch_finished",
-                error_code="tool_error" if is_error else None,
+                error_code=(
+                    f"tool_{result_state.value}" if is_error else None
+                ),
                 error_summary=str(result)[:1000] if is_error else None,
                 evidence={
                     "result_hash": hashlib.sha256(str(result).encode()).hexdigest(),
+                    "state": result_state.value,
                 },
             )
 

@@ -466,6 +466,16 @@ def _build_child_agent(
         provider_sort=getattr(parent_agent, 'provider_sort', None) if parent_agent else None,
         tool_event_sink=child_event_sink,
         iteration_budget=None,  # fresh budget per subagent
+        autonomous_task_provider=(
+            getattr(parent_agent, "autonomous_task_provider", None)
+            if parent_agent
+            else None
+        ),
+        validate_execution_lease=(
+            getattr(parent_agent, "validate_execution_lease", None)
+            if parent_agent
+            else None
+        ),
     )
     child._print_fn = getattr(parent_agent, '_print_fn', None)
     if worktree_path:

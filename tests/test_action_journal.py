@@ -90,7 +90,115 @@ def test_new_protocol_call_id_reuses_stable_task_operation(tmp_path):
     assert journal.get(first.action_id)["operation_id"]
 
 
-def test_startup_recovery_moves_stale_dispatched_to_unknown(tmp_path):
+def test_same_operation_reuses_action_across_attempt_and_generation(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    first = journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=1,
+        attempt_id="attempt-1",
+        operation_id="logical-operation-1",
+    )
+    replay = journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=2,
+        attempt_id="attempt-2",
+        operation_id="logical-operation-1",
+    )
+
+    assert replay == first
+    record = journal.get(first.action_id)
+    assert record["lease_generation"] == 2
+    assert record["attempt_id"] == "attempt-2"
+
+
+def test_old_attempt_cannot_dispatch_prepared_action_after_lease_takeover(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    action = journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=1,
+        attempt_id="attempt-1",
+        owner_session_id="owner-1",
+        operation_id="logical-operation-1",
+    )
+    journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=2,
+        attempt_id="attempt-2",
+        owner_session_id="owner-2",
+        operation_id="logical-operation-1",
+    )
+
+    assert not journal.claim_dispatch(
+        action.action_id,
+        lease_generation=1,
+        attempt_id="attempt-1",
+        owner_session_id="owner-1",
+    )
+    assert journal.claim_dispatch(
+        action.action_id,
+        lease_generation=2,
+        attempt_id="attempt-2",
+        owner_session_id="owner-2",
+    )
+
+
+def test_same_implicit_task_operation_reuses_action_across_attempts(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    first = journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=1,
+        attempt_id="attempt-1",
+        call_id="call-1",
+    )
+    replay = journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "stable"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        lease_generation=2,
+        attempt_id="attempt-2",
+        call_id="call-2",
+    )
+
+    assert replay == first
+
+
+def test_operation_id_cannot_be_reused_with_different_arguments(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    journal.prepare(
+        tool_name="create_resource",
+        arguments={"resource": "first"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+        operation_id="logical-operation-1",
+    )
+
+    with pytest.raises(ValueError, match="operation_identity_conflict"):
+        journal.prepare(
+            tool_name="create_resource",
+            arguments={"resource": "second"},
+            effect="non_idempotent_write",
+            task_id="task-1",
+            operation_id="logical-operation-1",
+        )
+
+
+def test_journal_open_does_not_recover_long_running_dispatch_by_elapsed_time(tmp_path):
     path = tmp_path / "actions.db"
     journal = ActionJournal(path)
     action = journal.prepare(
@@ -100,11 +208,64 @@ def test_startup_recovery_moves_stale_dispatched_to_unknown(tmp_path):
         task_id="task-1",
     )
     assert journal.claim_dispatch(action.action_id)
+    journal._conn.execute(
+        "UPDATE actions SET dispatched_at = ? WHERE action_id = ?",
+        (time.time() - 3600, action.action_id),
+    )
+    journal._conn.commit()
 
-    recovered = journal.recover_stale_dispatched(stale_after_seconds=0, now=time.time() + 1)
+    reopened = ActionJournal(path)
+
+    assert reopened.get(action.action_id)["state"] == "dispatched"
+
+
+def test_recovery_requires_owner_or_lease_abandonment_confirmation(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    active = journal.prepare(
+        tool_name="terminal",
+        arguments={"command": "long-active"},
+        effect="non_idempotent_write",
+        task_id="active",
+    )
+    abandoned = journal.prepare(
+        tool_name="terminal",
+        arguments={"command": "abandoned"},
+        effect="non_idempotent_write",
+        task_id="abandoned",
+    )
+    assert journal.claim_dispatch(active.action_id)
+    assert journal.claim_dispatch(abandoned.action_id)
+
+    recovered = journal.recover_abandoned_dispatched(
+        is_abandoned=lambda action: action["task_id"] == "abandoned"
+    )
 
     assert recovered == 1
-    assert journal.get(action.action_id)["state"] == "unknown"
+    assert journal.get(active.action_id)["state"] == "dispatched"
+    assert journal.get(abandoned.action_id)["state"] == "unknown"
+
+
+def test_late_outcome_reconciles_action_recovered_as_unknown(tmp_path):
+    journal = ActionJournal(tmp_path / "actions.db")
+    action = journal.prepare(
+        tool_name="terminal",
+        arguments={"command": "long-running"},
+        effect="non_idempotent_write",
+        task_id="task-1",
+    )
+    assert journal.claim_dispatch(action.action_id)
+    assert journal.recover_abandoned_dispatched(
+        is_abandoned=lambda _record: True
+    ) == 1
+
+    journal.record_outcome(
+        action.action_id,
+        "succeeded",
+        reason="late result",
+        evidence={"result_hash": "hash"},
+    )
+
+    assert journal.get(action.action_id)["state"] == "succeeded"
 
 
 def test_claim_dispatch_is_single_winner(tmp_path):
@@ -219,6 +380,45 @@ def test_dynamic_memory_write_uses_journal_and_stable_operation(monkeypatch, tmp
     assert action.state == "succeeded"
 
 
+@pytest.mark.parametrize(
+    ("result", "expected_state"),
+    [
+        ('{"status": "cancelled"}', "cancelled"),
+        ('{"status": "timed_out"}', "timed_out"),
+        ('{"status": "unknown"}', "unknown"),
+    ],
+)
+def test_structured_terminal_state_is_preserved_in_journal(
+    monkeypatch,
+    tmp_path,
+    result,
+    expected_state,
+):
+    journal = ActionJournal(tmp_path / "actions.db")
+    registry.register(
+        name="structured_state_test",
+        handler=lambda args: result,
+        effect="non_idempotent_write",
+    )
+    monkeypatch.setattr("agent.action_journal.get_action_journal", lambda: journal)
+    try:
+        assert handle_function_call(
+            "structured_state_test",
+            {"resource": expected_state},
+            task_id=f"task-{expected_state}",
+            tool_call_id=f"call-{expected_state}",
+        ) == result
+    finally:
+        registry.unregister("structured_state_test")
+
+    action = journal.find_by_call_id(
+        f"call-{expected_state}",
+        task_id=f"task-{expected_state}",
+    )
+    assert action is not None
+    assert action.state == expected_state
+
+
 def test_unclassified_tool_defaults_to_non_idempotent_write():
     local = ToolRegistry()
     local.register(name="unknown", handler=lambda: "ok")
@@ -254,6 +454,75 @@ def test_inactive_execution_lease_blocks_dispatch(monkeypatch):
 
     assert invoked == []
     assert "stale_execution_lease" in result["error"]
+
+
+def test_stale_prior_dispatch_is_recovered_via_trusted_lease_validator(
+    monkeypatch,
+    tmp_path,
+):
+    from systems.supervisor.autonomous_chain_store import StaleExecutionLeaseError
+
+    journal = ActionJournal(tmp_path / "actions.db")
+    stale = journal.prepare(
+        tool_name="lease_recovery_test",
+        arguments={"resource": "old"},
+        effect="non_idempotent_write",
+        task_id="task-lease",
+        lease_generation=1,
+        attempt_id="old-attempt",
+        owner_session_id="old-owner",
+        operation_id="old-operation",
+    )
+    assert journal.claim_dispatch(
+        stale.action_id,
+        lease_generation=1,
+        attempt_id="old-attempt",
+        owner_session_id="old-owner",
+    )
+    invoked = []
+    registry.register(
+        name="lease_recovery_test",
+        handler=lambda args: invoked.append(args) or '{"success": true}',
+        effect="non_idempotent_write",
+    )
+    monkeypatch.setattr("agent.action_journal.get_action_journal", lambda: journal)
+
+    def validate(**lease):
+        if lease["generation"] == 1:
+            raise StaleExecutionLeaseError("stale_execution_lease: old owner")
+
+    try:
+        result = handle_function_call(
+            "lease_recovery_test",
+            {"resource": "new", "operation_id": "new-operation"},
+            task_id="task-lease",
+            session_id="new-owner",
+            tool_call_id="new-call",
+            main_runtime={
+                "autonomous_task": {
+                    "task_id": "task-lease",
+                    "execution_lease": {
+                        "generation": 2,
+                        "attempt_id": "new-attempt",
+                        "owner_session_id": "new-owner",
+                        "state": "active",
+                    },
+                },
+                "execution_lease": {
+                    "generation": 2,
+                    "attempt_id": "new-attempt",
+                    "owner_session_id": "new-owner",
+                    "state": "active",
+                },
+                "validate_execution_lease": validate,
+            },
+        )
+    finally:
+        registry.unregister("lease_recovery_test")
+
+    assert json.loads(result)["success"] is True
+    assert invoked
+    assert journal.get(stale.action_id)["state"] == "unknown"
 
 
 def test_action_ref_uses_task_scoped_call_id_and_projects_filtered_evidence(tmp_path):

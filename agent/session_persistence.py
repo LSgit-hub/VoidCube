@@ -96,6 +96,43 @@ class SessionPersistence:
         if self.flush_to_db(messages, conversation_history):
             self.refresh_json_mirror()
 
+    @staticmethod
+    def _messages_for_storage(messages: Sequence[Message]) -> list[Message]:
+        persisted_messages = []
+        for message in messages:
+            role = message.get("role", "unknown")
+            tool_calls = None
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                tool_calls = [
+                    {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    }
+                    for tool_call in message.tool_calls
+                ]
+            elif isinstance(message.get("tool_calls"), list):
+                tool_calls = message["tool_calls"]
+            persisted_messages.append(
+                {
+                    "role": role,
+                    "content": message.get("content"),
+                    "tool_name": message.get("tool_name"),
+                    "tool_calls": tool_calls,
+                    "tool_call_id": message.get("tool_call_id"),
+                    "action_refs": message.get("action_refs"),
+                    "finish_reason": message.get("finish_reason"),
+                    "reasoning": (
+                        message.get("reasoning") if role == "assistant" else None
+                    ),
+                    "reasoning_details": (
+                        message.get("reasoning_details")
+                        if role == "assistant"
+                        else None
+                    ),
+                }
+            )
+        return persisted_messages
+
     def flush_to_db(
         self,
         messages: list[Message],
@@ -114,38 +151,7 @@ class SessionPersistence:
             for attempt in range(3):
                 snapshot = self.session_db.get_transcript_snapshot(self._session_id())
                 flush_from = snapshot["flush_sequence"]
-                persisted_messages = []
-                for message in messages:
-                    role = message.get("role", "unknown")
-                    tool_calls = None
-                    if hasattr(message, "tool_calls") and message.tool_calls:
-                        tool_calls = [
-                            {
-                                "name": tool_call.function.name,
-                                "arguments": tool_call.function.arguments,
-                            }
-                            for tool_call in message.tool_calls
-                        ]
-                    elif isinstance(message.get("tool_calls"), list):
-                        tool_calls = message["tool_calls"]
-                    persisted_message = {
-                        "role": role,
-                        "content": message.get("content"),
-                        "tool_name": message.get("tool_name"),
-                        "tool_calls": tool_calls,
-                        "tool_call_id": message.get("tool_call_id"),
-                        "action_refs": message.get("action_refs"),
-                        "finish_reason": message.get("finish_reason"),
-                        "reasoning": (
-                            message.get("reasoning") if role == "assistant" else None
-                        ),
-                        "reasoning_details": (
-                            message.get("reasoning_details")
-                            if role == "assistant"
-                            else None
-                        ),
-                    }
-                    persisted_messages.append(persisted_message)
+                persisted_messages = self._messages_for_storage(messages)
                 local_prefix_hash = SessionDB.transcript_hash(
                     persisted_messages[:flush_from]
                 )
@@ -172,6 +178,26 @@ class SessionPersistence:
         except Exception as exc:
             logger.warning("Session DB batch append failed: %s", exc)
             return False
+
+    def replace_transcript(self, messages: list[Message]) -> None:
+        """Commit an explicit compression/history rewrite as one SQLite fact."""
+        if not self.enabled or not self.session_db:
+            return
+        self.session_db.ensure_session(
+            self._session_id(),
+            source=self._platform() or "cli",
+            model=self._model(),
+        )
+        snapshot = self.session_db.get_transcript_snapshot(self._session_id())
+        persisted_messages = self._messages_for_storage(messages)
+        self.session_db.replace_messages(
+            self._session_id(),
+            persisted_messages,
+            expected_revision=snapshot["transcript_revision"],
+            expected_transcript_hash=snapshot["transcript_hash"],
+        )
+        self.messages = messages
+        self.refresh_json_mirror()
 
     def refresh_json_mirror(self) -> None:
         """Refresh the compatibility JSON mirror from committed SQLite rows."""

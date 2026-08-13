@@ -195,6 +195,8 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
         def __init__(self, **kwargs):
             self.base_url = kwargs["base_url"]
             self.enabled_toolsets = kwargs["enabled_toolsets"]
+            self.autonomous_task_provider = kwargs["autonomous_task_provider"]
+            self.validate_execution_lease = kwargs["validate_execution_lease"]
             self._print_fn = None
 
     monkeypatch.setattr("cli._get_AIAgent", lambda: _FakeAgent)
@@ -212,6 +214,8 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     assert ok is True
     assert cli.agent.base_url == "https://runtime-base.example/v1"
     assert cli.agent.enabled_toolsets == ["learn"]
+    assert cli.agent.autonomous_task_provider() is None
+    assert callable(cli.agent.validate_execution_lease)
 
 
 def test_main_cli_does_not_mount_autonomous_execution_panel_in_default_tui_widgets():
@@ -798,7 +802,10 @@ def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_write
     _autonomous_runtime(cli).poll_workflow()
 
     complete_request = next(
-        item for item in requests if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
+        item
+        for item in requests
+        if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
+        and item["data"]["decision"] == "completed"
     )
     assert complete_request["data"]["decision"] == "completed"
     assert complete_request["data"]["execution_lease"]["generation"] == 4

@@ -18,6 +18,7 @@ from systems.supervisor.autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_TASK_CLEAR_ROUTE,
     AUTONOMOUS_CHAIN_TASK_REVIEW_ROUTE,
     autonomous_chain_task_decision_route,
+    autonomous_chain_task_lease_validation_route,
     autonomous_chain_task_route,
 )
 from systems.supervisor.config_models import (
@@ -270,6 +271,11 @@ class Supervisor(
         self.app.add_api_route(
             autonomous_chain_task_decision_route("{task_id}"),
             self.decide_autonomous_chain_task,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            autonomous_chain_task_lease_validation_route("{task_id}"),
+            self.validate_autonomous_chain_execution_lease,
             methods=["POST"],
         )
         self.app.add_api_route("/health/check", self.run_health_checks, methods=["POST"])
@@ -840,6 +846,28 @@ class Supervisor(
         parsed = BodyImprovementReport(**report)
         result = await self._body_improvement_review_service.review(parsed)
         return {"status": "reviewed", **result}
+
+    async def validate_autonomous_chain_execution_lease(
+        self,
+        task_id: str,
+        request: dict,
+    ) -> Dict[str, Any]:
+        try:
+            task = self._autonomous_chain_store.validate_execution_lease(
+                task_id,
+                generation=int(request.get("generation") or 0),
+                attempt_id=str(request.get("attempt_id") or ""),
+                owner_session_id=str(request.get("owner_session_id") or ""),
+            )
+        except (KeyError, TypeError, ValueError, StaleExecutionLeaseError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "stale_execution_lease", "message": str(exc)},
+            ) from exc
+        return {
+            "valid": True,
+            "task": self._autonomous_chain_planning_service.serialize_task(task),
+        }
 
     async def rollback_body_improvement(
         self,

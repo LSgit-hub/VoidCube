@@ -223,6 +223,23 @@ def test_structured_failure_payloads_share_one_failed_outcome(content):
     assert outcome.failed is True
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ('{"status": "cancelled"}', ExecutionState.CANCELLED),
+        ('{"status": "timed_out"}', ExecutionState.TIMED_OUT),
+        ('{"status": "unknown"}', ExecutionState.UNKNOWN),
+    ],
+)
+def test_structured_terminal_payload_preserves_non_failure_state(content, expected):
+    coordinator = _coordinator(invoke=lambda _call: content)
+    call = coordinator.prepare([_tool_call("call-state", "tool", {})])
+
+    outcome = coordinator.execute(call, parallel=False)[0]
+
+    assert outcome.state is expected
+
+
 def test_sequential_delay_runs_only_between_started_calls():
     sleeps: list[float] = []
     coordinator = _coordinator(

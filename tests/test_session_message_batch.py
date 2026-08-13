@@ -164,6 +164,81 @@ def test_stale_expected_cursor_is_rejected_without_dropping_message(tmp_path):
     assert [row["content"] for row in db.get_messages("session")] == ["committed"]
 
 
+def test_replace_messages_atomically_rewrites_transcript_and_metadata(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    db.append_message("session", "user", "A")
+    db.append_message("session", "assistant", "B")
+    db.append_message("session", "user", "C")
+    snapshot = db.get_transcript_snapshot("session")
+    replacement = [
+        {"role": "assistant", "content": "summary"},
+        {"role": "user", "content": "C"},
+    ]
+
+    db.replace_messages(
+        "session",
+        replacement,
+        expected_revision=snapshot["transcript_revision"],
+        expected_transcript_hash=snapshot["transcript_hash"],
+    )
+
+    assert [row["content"] for row in db.get_messages("session")] == [
+        "summary",
+        "C",
+    ]
+    session = db.get_session("session")
+    assert session["message_count"] == 2
+    assert session["flush_sequence"] == 2
+    assert session["transcript_revision"] == snapshot["transcript_revision"] + 1
+    assert session["transcript_hash"] == SessionDB.transcript_hash(replacement)
+
+
+def test_replace_messages_rolls_back_delete_when_replacement_insert_fails(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    db.append_message("session", "user", "original")
+    snapshot = db.get_transcript_snapshot("session")
+    db._conn.execute(
+        """CREATE TRIGGER fail_replacement BEFORE INSERT ON messages
+        WHEN new.content = 'explode' BEGIN
+            SELECT RAISE(ABORT, 'replacement failure');
+        END"""
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="replacement failure"):
+        db.replace_messages(
+            "session",
+            [{"role": "assistant", "content": "explode"}],
+            expected_revision=snapshot["transcript_revision"],
+            expected_transcript_hash=snapshot["transcript_hash"],
+        )
+
+    assert [row["content"] for row in db.get_messages("session")] == ["original"]
+    assert db.get_transcript_snapshot("session") == snapshot
+
+
+def test_replace_messages_rejects_stale_snapshot_without_overwrite(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    db.append_message("session", "user", "original")
+    stale = db.get_transcript_snapshot("session")
+    db.append_message("session", "assistant", "concurrent")
+
+    with pytest.raises(SessionSequenceConflictError, match="stale transcript revision"):
+        db.replace_messages(
+            "session",
+            [{"role": "assistant", "content": "summary"}],
+            expected_revision=stale["transcript_revision"],
+            expected_transcript_hash=stale["transcript_hash"],
+        )
+
+    assert [row["content"] for row in db.get_messages("session")] == [
+        "original",
+        "concurrent",
+    ]
+
+
 def test_action_refs_migrate_and_round_trip_in_authoritative_session_store(tmp_path):
     path = tmp_path / "v8.db"
     db = SessionDB(path)

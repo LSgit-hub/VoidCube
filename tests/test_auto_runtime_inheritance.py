@@ -46,6 +46,32 @@ def test_handle_function_call_forwards_main_runtime_to_registry(monkeypatch):
     assert captured["kwargs"]["main_runtime"] == runtime
 
 
+def test_agent_main_runtime_includes_current_autonomous_execution_lease():
+    from run_agent import AIAgent
+
+    agent = AIAgent.__new__(AIAgent)
+    agent.model = "model"
+    agent.provider = "provider"
+    agent.base_url = "https://example.test/v1"
+    agent.api_key = "key"
+    task = {
+        "task_id": "task-1",
+        "execution_lease": {
+            "generation": 3,
+            "attempt_id": "attempt-3",
+            "owner_session_id": "owner",
+            "state": "active",
+        },
+    }
+    agent.autonomous_task_provider = lambda: task
+    agent.validate_execution_lease = lambda **_kwargs: None
+
+    runtime = agent._current_main_runtime()
+
+    assert runtime["autonomous_task"] is task
+    assert runtime["execution_lease"] == task["execution_lease"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_web_extract_uses_main_runtime_for_auxiliary_resolution(monkeypatch):

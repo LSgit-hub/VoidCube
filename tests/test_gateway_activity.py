@@ -1706,6 +1706,80 @@ def _register_supervisor(gateway, address="http://127.0.0.1:6002"):
     )
 
 
+@pytest.mark.parametrize(
+    ("upstream_status", "upstream_payload", "expected_status", "expected_payload"),
+    [
+        (200, {"valid": True, "task": {"task_id": "lease-1"}}, 200, {"valid": True}),
+        (
+            409,
+            {"detail": {"code": "stale_execution_lease", "message": "old owner"}},
+            409,
+            {"code": "stale_execution_lease", "message": "old owner"},
+        ),
+    ],
+)
+def test_gateway_forwards_execution_lease_validation_result(
+    monkeypatch,
+    upstream_status,
+    upstream_payload,
+    expected_status,
+    expected_payload,
+):
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    forwarded = {}
+
+    class _FakeResponse:
+        status = upstream_status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return upstream_payload
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            forwarded.update(url=url, json=json, timeout=timeout)
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.gateway.internal_gateway.aiohttp.ClientSession",
+        _FakeSession,
+    )
+    response = TestClient(gateway.app).post(
+        "/v1/tasks/lease-1/lease/validate",
+        json={"generation": 3, "attempt_id": "attempt-3", "owner_session_id": "owner"},
+    )
+
+    assert response.status_code == expected_status
+    payload = response.json()
+    actual = payload if expected_status == 200 else payload["detail"]
+    assert all(actual[key] == value for key, value in expected_payload.items())
+    assert forwarded["url"].endswith(
+        "/autonomous-chain/tasks/lease-1/lease/validate"
+    )
+    assert forwarded["json"]["attempt_id"] == "attempt-3"
+
+
+def test_gateway_lease_validation_fails_closed_without_supervisor():
+    response = TestClient(InternalGateway(GatewayConfig()).app).post(
+        "/v1/tasks/lease-1/lease/validate",
+        json={"generation": 1, "attempt_id": "attempt", "owner_session_id": "owner"},
+    )
+
+    assert response.status_code == 503
+
+
 def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     # P0-2 成果回流: a completed autonomous task carrying final_response + session_id
     # must trigger a Tier1 turn write so the agent's finding leaves the CLI.

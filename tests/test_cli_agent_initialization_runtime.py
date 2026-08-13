@@ -6,6 +6,8 @@ from VoidCube_cli.cli_agent_initialization_runtime import (
 
 def test_agent_initialization_runtime_forwards_runtime_and_host_ports():
     captured = {}
+    task_provider = lambda: {"task_id": "task-1"}
+    lease_validator = lambda **_kwargs: None
 
     def factory(**kwargs):
         captured.update(kwargs)
@@ -51,6 +53,8 @@ def test_agent_initialization_runtime_forwards_runtime_and_host_ports():
             tool_event_sink="events",
             stream_delta_callback="stream",
             tool_gen_callback="tool-gen",
+            autonomous_task_provider=task_provider,
+            validate_execution_lease=lease_validator,
         )
     ).create()
 
@@ -61,3 +65,5 @@ def test_agent_initialization_runtime_forwards_runtime_and_host_ports():
     assert captured["request_overrides"] == {"temperature": 0}
     assert captured["session_id"] == "session"
     assert captured["tool_gen_callback"] == "tool-gen"
+    assert captured["autonomous_task_provider"] is task_provider
+    assert captured["validate_execution_lease"] is lease_validator
