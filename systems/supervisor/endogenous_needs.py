@@ -369,6 +369,11 @@ def detect_needs(
                         for item in list(task.get("evidence_refs") or [])
                         if str(item).strip()
                     ],
+                    *[
+                        f"foundation_trigger={str(item)}"
+                        for item in list(task.get("trigger_reasons") or [])
+                        if str(item).strip()
+                    ],
                 ],
             )
         )

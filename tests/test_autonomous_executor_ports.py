@@ -78,6 +78,13 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
         "constraints": {
             "worktree_path": "F:/body/slot-B/worktree",
             "target_slot_id": "slot-B",
+            "experiment_result_id": "experiment-result-" + "1" * 64,
+            "evaluated_baseline_commit": "b" * 40,
+            "evaluated_candidate_commit": "a" * 40,
+            "must_not_create_new_commit": True,
+            "must_match_evaluated_commit": True,
+            "requires_governor_review": True,
+            "requires_user_consent": True,
         },
     }
     pending_input = Queue()
@@ -116,7 +123,7 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
         "prepare",
         "autonomous-session-1",
         "F:/body/slot-B/worktree",
-        "baseline-head",
+        "b" * 40,
     )
     assert calls[1] == "enqueue"
     assert "/workspace" in pending_input.get_nowait()
@@ -125,7 +132,16 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
 def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
     task = {
         "execution_kind": "body_improvement",
-        "constraints": {"worktree_path": "F:/body/slot-B/worktree"},
+        "constraints": {
+            "worktree_path": "F:/body/slot-B/worktree",
+            "experiment_result_id": "experiment-result-" + "1" * 64,
+            "evaluated_baseline_commit": "b" * 40,
+            "evaluated_candidate_commit": "a" * 40,
+            "must_not_create_new_commit": True,
+            "must_match_evaluated_commit": True,
+            "requires_governor_review": True,
+            "requires_user_consent": True,
+        },
     }
     state = {"run_id": ""}
     released = []

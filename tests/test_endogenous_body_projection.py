@@ -13,6 +13,23 @@ def _policy(**overrides):
     return policy
 
 
+def _authorization():
+    return {
+        "schema_version": 1,
+        "authorized": True,
+        "reason": "promote_result_verified",
+        "experiment_result_id": "experiment-result-" + "1" * 64,
+        "experiment_spec_id": "experiment-spec-" + "2" * 64,
+        "evaluated_baseline_commit": "b" * 40,
+        "evaluated_candidate_commit": "a" * 40,
+        "baseline_snapshot_id": "self-cognition-" + "3" * 64,
+        "candidate_snapshot_id": "self-cognition-" + "4" * 64,
+        "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
+        "scoring_policy_id": "scoring-policy-" + "6" * 64,
+        "knowledge_ids": ["knowledge-" + "7" * 64],
+    }
+
+
 def test_body_improvement_projection_preserves_eligibility_rejection():
     result = build_body_improvement_projection(
         drive_context={"policy": {}, "completed_learning_tasks": []},
@@ -39,6 +56,11 @@ def test_body_improvement_projection_composes_learning_mapping():
                 }
             ],
             "api_b_judgement_tasks": [],
+            "evolution_foundation": {
+                "evaluation": {
+                    "body_improvement_authorization": _authorization(),
+                }
+            },
         },
         shell_slot_meta={"slot_id": "slot-B", "worktree_path": "F:/tmp/slot-B/worktree"},
     )
@@ -47,3 +69,27 @@ def test_body_improvement_projection_composes_learning_mapping():
     assert result["mapping_key"]
     assert result["target_paths"] == ["agent/stream_handler.py"]
     assert result["learning_refs"][0]["mem_id"] == "learn-stream"
+    assert result["evaluation_authorization"]["authorized"] is True
+
+
+def test_body_improvement_projection_rejects_missing_evaluation_authorization():
+    result = build_body_improvement_projection(
+        drive_context={
+            "policy": _policy(),
+            "completed_learning_tasks": [
+                {
+                    "task_id": "learn-stream",
+                    "title": "Stream display finding",
+                    "conclusion": "Improve agent/stream_handler.py after validation.",
+                    "completed_at": "2026-07-30T00:00:00+00:00",
+                    "quality_score": 1.0,
+                }
+            ],
+            "api_b_judgement_tasks": [],
+            "evolution_foundation": {},
+        },
+        shell_slot_meta={"slot_id": "slot-B", "worktree_path": "F:/tmp/slot-B/worktree"},
+    )
+
+    assert result["available"] is False
+    assert result["reason"] == "evaluation_authorization_unavailable"

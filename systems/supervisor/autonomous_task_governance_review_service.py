@@ -172,7 +172,12 @@ class AutonomousTaskGovernanceReviewService:
                     "constraints": {
                         "execution_policy": constraints.get("execution_policy"),
                         "target_slot": constraints.get("target_slot"),
-                        "must_commit": constraints.get("must_commit"),
+                        "must_not_create_new_commit": constraints.get(
+                            "must_not_create_new_commit"
+                        ),
+                        "must_match_evaluated_commit": constraints.get(
+                            "must_match_evaluated_commit"
+                        ),
                     },
                     "decision_history_count": len(task.decision_history or []),
                 }

@@ -45,6 +45,7 @@ def test_deliberation_projects_foundation_tasks_as_shadow_only_intents():
                         "rationale": "snapshot missing",
                         "execution_allowed": False,
                         "evidence_refs": ["self_cognition:no_snapshot"],
+                        "trigger_reasons": ["self_cognition_unavailable"],
                     },
                     {
                         "task_kind": "fill_research_knowledge",
@@ -86,6 +87,9 @@ def test_deliberation_projects_foundation_tasks_as_shadow_only_intents():
         for signal in report.signals
         if signal.signal_type == "foundation_shadow_task_signal"
     ]
+    shadow_signals_by_kind = {
+        signal.payload["task_kind"]: signal for signal in shadow_signals
+    }
 
     assert shadow_needs == {
         "complete_self_cognition",
@@ -96,3 +100,6 @@ def test_deliberation_projects_foundation_tasks_as_shadow_only_intents():
     assert all(intent.candidate_kind is None for intent in shadow_intents)
     assert len(shadow_signals) == 3
     assert all(signal.payload["execution_allowed"] is False for signal in shadow_signals)
+    assert shadow_signals_by_kind["fill_self_cognition"].payload["trigger_reasons"] == [
+        "self_cognition_unavailable"
+    ]

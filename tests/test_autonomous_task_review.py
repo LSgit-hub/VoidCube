@@ -21,6 +21,57 @@ def _drive_input(*, eligible: bool) -> dict:
     }
 
 
+def _authorization() -> dict:
+    return {
+        "schema_version": 1,
+        "authorized": True,
+        "reason": "promote_result_verified",
+        "experiment_result_id": "experiment-result-" + "1" * 64,
+        "experiment_spec_id": "experiment-spec-" + "2" * 64,
+        "evaluated_baseline_commit": "b" * 40,
+        "evaluated_candidate_commit": "a" * 40,
+        "baseline_snapshot_id": "self-cognition-" + "3" * 64,
+        "candidate_snapshot_id": "self-cognition-" + "4" * 64,
+        "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
+        "scoring_policy_id": "scoring-policy-" + "6" * 64,
+        "knowledge_ids": ["knowledge-" + "7" * 64],
+    }
+
+
+def _authorized_body_task(**kwargs) -> AutonomousChainTask:
+    authorization = _authorization()
+    fields = {
+        key: authorization[key]
+        for key in (
+            "experiment_result_id",
+            "experiment_spec_id",
+            "evaluated_baseline_commit",
+            "evaluated_candidate_commit",
+            "baseline_snapshot_id",
+            "candidate_snapshot_id",
+            "benchmark_pack_id",
+            "scoring_policy_id",
+            "knowledge_ids",
+        )
+    }
+    evidence = {"learning_quality_score": 88.0, **fields}
+    evidence.update(kwargs.pop("evidence", {}))
+    constraints = {
+        **fields,
+        "must_match_evaluated_commit": True,
+        "requires_governor_review": True,
+        "requires_user_consent": True,
+    }
+    constraints.update(kwargs.pop("constraints", {}))
+    return _task(
+        task_family="body_upgrade",
+        execution_kind="body_improvement",
+        evidence=evidence,
+        constraints=constraints,
+        **kwargs,
+    )
+
+
 def test_decision_normalization_is_owned_by_the_pure_policy() -> None:
     assert normalize_autonomous_chain_decision("approve") == "approved"
     assert normalize_autonomous_chain_decision("complete") == "completed"
@@ -115,10 +166,7 @@ def test_body_improvement_fallback_reads_completed_learning_history() -> None:
             "completed_at": "2026-08-03T00:00:00+00:00",
         },
     )
-    body = _task(
-        task_family="body_upgrade",
-        execution_kind="body_improvement",
-    )
+    body = _authorized_body_task()
 
     status, _ = build_autonomous_chain_auto_decision(
         task=body,
@@ -129,6 +177,29 @@ def test_body_improvement_fallback_reads_completed_learning_history() -> None:
         learning_history=[completed_learning],
         now=datetime(2026, 8, 3, tzinfo=timezone.utc),
         body_improvement_min_quality=60.0,
+        evaluation_authorization=_authorization(),
     )
 
     assert status == "approved"
+
+
+def test_body_improvement_rejects_forged_evaluation_binding() -> None:
+    policy = TaskProfilePolicy()
+    body = _authorized_body_task(
+        evidence={"experiment_result_id": "experiment-result-" + "9" * 64}
+    )
+
+    status, reason = build_autonomous_chain_auto_decision(
+        task=body,
+        drive_input=_drive_input(eligible=True),
+        autonomous_chain_gate_active=False,
+        task_profile_policy=policy,
+        active_tasks=[body],
+        learning_history=[],
+        now=datetime(2026, 8, 3, tzinfo=timezone.utc),
+        body_improvement_min_quality=60.0,
+        evaluation_authorization=_authorization(),
+    )
+
+    assert status == "cancelled"
+    assert "evaluation_authorization_binding_mismatch" in reason

@@ -437,6 +437,15 @@ def test_wheel_contract_tracks_evolution_foundation_packages():
 
 
 @pytest.mark.unit
+def test_wheel_contract_excludes_retired_self_learning_conclusion_package():
+    expected = expected_wheel_files(ROOT)
+    retired_package = "systems/self_" + "learning/"
+
+    assert not (ROOT / retired_package).exists()
+    assert not any(path.startswith(retired_package) for path in expected)
+
+
+@pytest.mark.unit
 def test_wheel_contract_tracks_mem_identity_resources():
     expected = expected_wheel_files(ROOT)
 

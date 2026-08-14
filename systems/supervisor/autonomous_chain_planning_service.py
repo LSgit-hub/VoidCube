@@ -7,7 +7,6 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import HTTPException
 
-from systems.self_learning.models import SupervisorConclusionSubmission
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainStore,
     AutonomousChainTask,
@@ -366,87 +365,5 @@ class AutonomousChainPlanningService:
             "tasks": [self.serialize_task(task) for task in created],
             "count": len(created),
         }
-
-    async def submit_self_learning_conclusion(
-        self,
-        request: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        try:
-            submission = SupervisorConclusionSubmission.model_validate(request or {})
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        created: list[Dict[str, Any]] = []
-        for proposal in submission.proposals:
-            proposal_metadata = {
-                **submission.metadata,
-                **proposal.metadata,
-            }
-            if proposal.governance_task_type is not None:
-                proposal_metadata["governance_task_type"] = proposal.governance_task_type
-            if proposal.task_family is not None:
-                proposal_metadata["task_family"] = proposal.task_family
-            if proposal.execution_kind is not None:
-                proposal_metadata["execution_kind"] = proposal.execution_kind
-            proposal_payload = {
-                "task_type": proposal.task_type,
-                "source": proposal.source,
-                "governance_task_type": proposal.governance_task_type,
-                "task_family": proposal.task_family,
-                "execution_kind": proposal.execution_kind,
-                "metadata": proposal_metadata,
-            }
-            task = self._task_state.create_task(
-                title=proposal.title,
-                summary=proposal.summary,
-                trace_id=str(
-                    submission.metadata.get("trace_id")
-                    or submission.conclusion_id
-                    or uuid.uuid4()
-                ),
-                task_type=self._task_profile_policy.request_type(
-                    proposal_payload,
-                    metadata=proposal_metadata,
-                ),
-                source=proposal.source,
-                priority=proposal.priority,
-                metadata=proposal_metadata,
-                evidence={
-                    **submission.evidence,
-                    **proposal.evidence,
-                },
-                constraints=dict(proposal.constraints),
-            )
-            created.append(self.serialize_task(task))
-
-        if created:
-            self._record_activity(
-                "self_learning_submitted",
-                scene="drive",
-                summary=f"自主学习结论已提交 {len(created)} 个 API-B 判断在途提案。",
-                metadata={
-                    "count": len(created),
-                    "conclusion_id": submission.conclusion_id,
-                    "task_ids": [task.get("task_id") for task in created],
-                },
-            )
-            await self._touch_activity(
-                "self_learning",
-                metadata={
-                    "action": "self_learning_submission",
-                    "count": len(created),
-                    "conclusion_id": submission.conclusion_id,
-                },
-            )
-
-        return {
-            "status": "accepted",
-            "source": submission.source,
-            "conclusion_id": submission.conclusion_id,
-            "topic_id": submission.topic_id,
-            "count": len(created),
-            "tasks": created,
-        }
-
 
 __all__ = ["AutonomousChainPlanningService"]

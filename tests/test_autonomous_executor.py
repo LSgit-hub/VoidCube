@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from VoidCube_cli.autonomous_executor import (
     AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX,
     AUTONOMOUS_LEARNING_TASK_PREFIX,
@@ -66,8 +68,15 @@ def test_body_improvement_prompt_captures_body_context():
             "target_slot_id": "slot-B",
             "target_paths": ["agent/memory_manager.py"],
             "editable_dirs": ["agent/", "tools/"],
-            "forbidden_patterns": ["systems/**"],
-            "max_files_changed": 3,
+        "forbidden_patterns": ["systems/**"],
+        "max_files_changed": 3,
+        "experiment_result_id": "experiment-result-" + "1" * 64,
+        "evaluated_baseline_commit": "b" * 40,
+        "evaluated_candidate_commit": "a" * 40,
+        "must_not_create_new_commit": True,
+        "must_match_evaluated_commit": True,
+        "requires_governor_review": True,
+        "requires_user_consent": True,
         },
         "evidence": {
             "learning_refs": [
@@ -91,7 +100,20 @@ def test_body_improvement_prompt_captures_body_context():
     assert "Editable dirs: agent/, tools/" in prompt
     assert "Approved target paths: agent/memory_manager.py" in prompt
     assert "learning-memory-1: Verified memory display finding" in prompt
-    assert "Keep the change within the approved target paths" in prompt
-    assert task["_baseline_head"] == "head-for-F:/worktree/slot-B"
+    assert "Do not edit files or create a new commit" in prompt
+    assert "Required candidate HEAD: " + "a" * 40 in prompt
+    assert task["_baseline_head"] == "b" * 40
+    assert task["_expected_candidate_head"] == "a" * 40
+    assert task["_initial_head"] == "head-for-F:/worktree/slot-B"
     assert task["_improvement_worktree"] == "F:/worktree/slot-B"
     assert task["_improvement_slot_id"] == "slot-B"
+
+
+def test_body_improvement_prompt_rejects_missing_evaluation_authorization():
+    task = {
+        "title": "Unsafe body task",
+        "constraints": {"worktree_path": "F:/worktree/slot-B"},
+    }
+
+    with pytest.raises(ValueError, match="immutable evaluation authorization"):
+        build_autonomous_task_prompt(task, "body_improvement")

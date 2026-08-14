@@ -95,4 +95,5 @@ def test_body_factory_projects_mapping_evidence_and_constraints():
         "agent/context_engine.py"
     ]
     assert candidate.constraints == body_improvement_constraints(projection)
-    assert candidate.constraints["must_commit"] is True
+    assert candidate.constraints["must_not_create_new_commit"] is True
+    assert candidate.constraints["must_match_evaluated_commit"] is True

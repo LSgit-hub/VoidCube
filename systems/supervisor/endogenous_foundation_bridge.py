@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -9,10 +10,38 @@ from typing import Any, Callable
 from systems.evolution_evaluation import JsonEvaluationRepository
 from systems.research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
 from systems.self_cognition import JsonSelfCognitionRepository
+from systems.supervisor.evolution_evaluation_governance import (
+    EvolutionEvaluationGovernanceVerifier,
+)
 
 
 FOUNDATION_PROJECTION_SCHEMA_VERSION = 1
 FOUNDATION_SHADOW_MODE = "shadow_read_only"
+FOUNDATION_SHADOW_POLICY_VERSION = "foundation-shadow-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationShadowPolicy:
+    """Versioned thresholds used only to classify shadow debt."""
+
+    policy_version: str = FOUNDATION_SHADOW_POLICY_VERSION
+    min_knowledge_quality_score: float = 0.5
+    retry_evaluation_verdicts: tuple[str, ...] = ("observe", "reject")
+
+    def __post_init__(self) -> None:
+        if not self.policy_version.strip():
+            raise ValueError("policy_version must not be empty")
+        if not 0.0 <= self.min_knowledge_quality_score <= 1.0:
+            raise ValueError("min_knowledge_quality_score must be between 0 and 1")
+        if not self.retry_evaluation_verdicts:
+            raise ValueError("retry_evaluation_verdicts must not be empty")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "policy_version": self.policy_version,
+            "min_knowledge_quality_score": self.min_knowledge_quality_score,
+            "retry_evaluation_verdicts": list(self.retry_evaluation_verdicts),
+        }
 
 
 class EndogenousFoundationReadOnlyProjection:
@@ -25,14 +54,27 @@ class EndogenousFoundationReadOnlyProjection:
         knowledge_repository: Any,
         evaluation_repository: Any,
         now: Callable[[], datetime] | None = None,
+        shadow_policy: FoundationShadowPolicy | None = None,
     ) -> None:
         self._self_cognition_repository = self_cognition_repository
         self._knowledge_repository = knowledge_repository
         self._evaluation_repository = evaluation_repository
+        self._evaluation_governance = EvolutionEvaluationGovernanceVerifier(
+            evaluation_repository=evaluation_repository,
+            knowledge_repository=knowledge_repository,
+            self_cognition_repository=self_cognition_repository,
+        )
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._shadow_policy = shadow_policy or FoundationShadowPolicy()
 
     @classmethod
-    def from_root(cls, root: str | Path, *, now: Callable[[], datetime] | None = None) -> "EndogenousFoundationReadOnlyProjection":
+    def from_root(
+        cls,
+        root: str | Path,
+        *,
+        now: Callable[[], datetime] | None = None,
+        shadow_policy: FoundationShadowPolicy | None = None,
+    ) -> "EndogenousFoundationReadOnlyProjection":
         foundation_root = Path(root).resolve()
         return cls(
             self_cognition_repository=JsonSelfCognitionRepository(
@@ -45,6 +87,7 @@ class EndogenousFoundationReadOnlyProjection:
                 foundation_root / "evaluation"
             ),
             now=now,
+            shadow_policy=shadow_policy,
         )
 
     def load(self) -> dict[str, Any]:
@@ -66,8 +109,12 @@ class EndogenousFoundationReadOnlyProjection:
             "research_knowledge": knowledge,
             "evaluation": evaluation,
             "known_gaps": errors,
+            "shadow_policy": self._shadow_policy.as_dict(),
         }
         projection["shadow_tasks"] = self._shadow_tasks(projection)
+        projection["shadow_calibration"] = self._shadow_calibration(
+            projection["shadow_tasks"]
+        )
         return projection
 
     def _load_self_cognition(self) -> tuple[dict[str, Any], str | None]:
@@ -145,6 +192,7 @@ class EndogenousFoundationReadOnlyProjection:
 
     def _load_evaluation(self) -> tuple[dict[str, Any], str | None]:
         try:
+            authorization = self._evaluation_governance.latest_authorization()
             result_ids = self._evaluation_repository.list_ids("experiment_results")
             result_records = [
                 self._evaluation_repository.get_experiment_result(record_id)
@@ -158,8 +206,12 @@ class EndogenousFoundationReadOnlyProjection:
                     "result_count": 0,
                     "experiment_spec_count": len(spec_ids),
                     "experiment_result_id": None,
+                    "body_improvement_authorization": authorization,
                 }, "evaluation:no_experiment_result"
             latest = max(result_records, key=lambda record: record.completed_at)
+            latest_spec = self._evaluation_repository.get_experiment_spec(
+                latest.experiment_spec_id
+            )
             failed_gates = [
                 gate.gate
                 for gate in latest.hard_gate_results
@@ -170,12 +222,32 @@ class EndogenousFoundationReadOnlyProjection:
                 "result_count": len(result_records),
                 "experiment_spec_count": len(spec_ids),
                 "experiment_result_id": latest.experiment_result_id,
+                "experiment_spec_id": latest.experiment_spec_id,
                 "completed_at": latest.completed_at.isoformat(),
                 "verdict": latest.verdict,
                 "confidence": latest.confidence,
                 "failed_hard_gates": failed_gates,
                 "regression_count": len(latest.regressions),
                 "content_hash": latest.content_hash,
+                "candidate_commit": (
+                    latest_spec.candidate_commit if latest_spec is not None else None
+                ),
+                "baseline_snapshot_id": (
+                    latest_spec.baseline_snapshot_id if latest_spec is not None else None
+                ),
+                "candidate_snapshot_id": (
+                    latest_spec.candidate_snapshot_id if latest_spec is not None else None
+                ),
+                "benchmark_pack_id": (
+                    latest_spec.benchmark_pack_id if latest_spec is not None else None
+                ),
+                "scoring_policy_id": (
+                    latest_spec.scoring_policy_id if latest_spec is not None else None
+                ),
+                "knowledge_ids": (
+                    list(latest_spec.knowledge_ids) if latest_spec is not None else []
+                ),
+                "body_improvement_authorization": authorization,
             }, None
         except Exception as exc:
             return {
@@ -183,37 +255,75 @@ class EndogenousFoundationReadOnlyProjection:
                 "result_count": 0,
                 "experiment_spec_count": 0,
                 "experiment_result_id": None,
+                "body_improvement_authorization": {
+                    "schema_version": 1,
+                    "authorized": False,
+                    "reason": "evaluation_projection_read_error",
+                    "error_type": type(exc).__name__,
+                },
             }, f"evaluation:read_error:{type(exc).__name__}"
 
-    @staticmethod
-    def _shadow_tasks(projection: dict[str, Any]) -> list[dict[str, Any]]:
+    def _shadow_tasks(self, projection: dict[str, Any]) -> list[dict[str, Any]]:
         tasks: list[dict[str, Any]] = []
         cognition = dict(projection["self_cognition"])
         knowledge = dict(projection["research_knowledge"])
         evaluation = dict(projection["evaluation"])
         if cognition.get("status") != "available":
+            cognition_reason = {
+                "unavailable": "self_cognition_unavailable",
+                "degraded": "self_cognition_degraded",
+                "error": "self_cognition_read_error",
+            }.get(str(cognition.get("status")), "self_cognition_unavailable")
             tasks.append(
                 _shadow_task(
                     task_kind="fill_self_cognition",
                     title="补充代码自我认知快照",
                     rationale="当前没有完整可用的代码自我认知事实，先补齐只读快照。",
                     evidence_refs=[str(cognition.get("snapshot_id") or "self_cognition")],
+                    trigger_reasons=[cognition_reason],
                 )
             )
-        if knowledge.get("status") != "available" or float(knowledge.get("quality_score") or 0.0) < 0.5:
+        knowledge_reasons: list[str] = []
+        knowledge_status = str(knowledge.get("status") or "unavailable")
+        if knowledge_status != "available":
+            knowledge_reasons.append(
+                {
+                    "unavailable": "knowledge_missing",
+                    "stale": "knowledge_stale",
+                    "error": "knowledge_read_error",
+                }.get(knowledge_status, "knowledge_missing")
+            )
+        quality_score = knowledge.get("quality_score")
+        if quality_score is not None and float(quality_score) < self._shadow_policy.min_knowledge_quality_score:
+            knowledge_reasons.append("knowledge_low_quality")
+        if knowledge_reasons:
             tasks.append(
                 _shadow_task(
                     task_kind="fill_research_knowledge",
                     title="补充外部知识 artifact",
                     rationale="当前外部知识缺失、过期或质量不足，建议先完成离线知识归一化。",
                     evidence_refs=[str(knowledge.get("knowledge_id") or "research_knowledge")],
+                    trigger_reasons=knowledge_reasons,
                 )
             )
+        evaluation_reasons: list[str] = []
+        evaluation_status = str(evaluation.get("status") or "unavailable")
+        if evaluation_status != "available":
+            evaluation_reasons.append(
+                {
+                    "unavailable": "evaluation_missing",
+                    "error": "evaluation_read_error",
+                }.get(evaluation_status, "evaluation_missing")
+            )
+        verdict = str(evaluation.get("verdict") or "")
+        if verdict in self._shadow_policy.retry_evaluation_verdicts:
+            evaluation_reasons.append(f"evaluation_verdict_{verdict}")
+        if int(evaluation.get("experiment_spec_count") or 0) > int(
+            evaluation.get("result_count") or 0
+        ):
+            evaluation_reasons.append("evaluation_pending_specs")
         if (
-            evaluation.get("status") != "available"
-            or evaluation.get("verdict") in {"reject", "observe"}
-            or int(evaluation.get("experiment_spec_count") or 0)
-            > int(evaluation.get("result_count") or 0)
+            evaluation_reasons
         ):
             tasks.append(
                 _shadow_task(
@@ -223,9 +333,32 @@ class EndogenousFoundationReadOnlyProjection:
                     evidence_refs=[
                         str(evaluation.get("experiment_result_id") or "evaluation")
                     ],
+                    trigger_reasons=evaluation_reasons,
                 )
             )
         return tasks
+
+    def _shadow_calibration(self, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+        task_kind_counts = {
+            task_kind: sum(1 for task in tasks if task.get("task_kind") == task_kind)
+            for task_kind in (
+                "fill_self_cognition",
+                "fill_research_knowledge",
+                "run_evolution_evaluation",
+            )
+        }
+        trigger_reason_counts: dict[str, int] = {}
+        for task in tasks:
+            for reason in list(task.get("trigger_reasons") or []):
+                trigger_reason_counts[str(reason)] = trigger_reason_counts.get(str(reason), 0) + 1
+        return {
+            "policy_version": self._shadow_policy.policy_version,
+            "status": "clear" if not tasks else "debt_observed",
+            "shadow_task_count": len(tasks),
+            "task_kind_counts": task_kind_counts,
+            "trigger_reason_counts": dict(sorted(trigger_reason_counts.items())),
+            "execution_allowed": False,
+        }
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -240,6 +373,7 @@ def _shadow_task(
     title: str,
     rationale: str,
     evidence_refs: list[str],
+    trigger_reasons: list[str],
 ) -> dict[str, Any]:
     return {
         "stable_key": f"evolution_foundation:{task_kind}",
@@ -249,11 +383,14 @@ def _shadow_task(
         "status": "shadow",
         "execution_allowed": False,
         "evidence_refs": sorted(set(evidence_refs)),
+        "trigger_reasons": sorted(set(trigger_reasons)),
     }
 
 
 __all__ = [
     "FOUNDATION_PROJECTION_SCHEMA_VERSION",
     "FOUNDATION_SHADOW_MODE",
+    "FOUNDATION_SHADOW_POLICY_VERSION",
     "EndogenousFoundationReadOnlyProjection",
+    "FoundationShadowPolicy",
 ]

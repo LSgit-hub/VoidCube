@@ -27,10 +27,29 @@ def build_body_improvement_projection(
     )
     if not eligibility.get("available"):
         return eligibility
-    return build_body_structure_mapping(
+    mapping = build_body_structure_mapping(
         completed_learning_tasks=list(eligibility["completed_learning_tasks"]),
         shell_slot_id=str(eligibility["shell_slot_id"]),
         shell_worktree=str(eligibility["shell_worktree"]),
         policy=policy,
         learning_quality_score=float(eligibility["learning_quality_score"]),
     )
+    if not mapping.get("available"):
+        return mapping
+
+    foundation = dict(drive_context.get("evolution_foundation") or {})
+    evaluation = dict(foundation.get("evaluation") or {})
+    authorization = dict(
+        evaluation.get("body_improvement_authorization") or {}
+    )
+    if not authorization.get("authorized"):
+        return {
+            "available": False,
+            "reason": "evaluation_authorization_unavailable",
+            "evaluation_authorization": authorization,
+        }
+
+    result_id = str(authorization.get("experiment_result_id") or "").strip()
+    mapping["mapping_key"] = f"{mapping['mapping_key']}:{result_id[-16:]}"
+    mapping["evaluation_authorization"] = authorization
+    return mapping

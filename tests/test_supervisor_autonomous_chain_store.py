@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import json
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -93,6 +94,41 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
         return_value={}
     )
     return supervisor
+
+
+def _body_evaluation_authorization() -> dict:
+    return {
+        "schema_version": 1,
+        "authorized": True,
+        "reason": "promote_result_verified",
+        "experiment_result_id": "experiment-result-" + "1" * 64,
+        "experiment_spec_id": "experiment-spec-" + "2" * 64,
+        "evaluated_baseline_commit": "b" * 40,
+        "evaluated_candidate_commit": "a" * 40,
+        "baseline_snapshot_id": "self-cognition-" + "3" * 64,
+        "candidate_snapshot_id": "self-cognition-" + "4" * 64,
+        "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
+        "scoring_policy_id": "scoring-policy-" + "6" * 64,
+        "knowledge_ids": ["knowledge-" + "7" * 64],
+    }
+
+
+def _body_evaluation_fields() -> dict:
+    authorization = _body_evaluation_authorization()
+    return {
+        key: authorization[key]
+        for key in (
+            "experiment_result_id",
+            "experiment_spec_id",
+            "evaluated_baseline_commit",
+            "evaluated_candidate_commit",
+            "baseline_snapshot_id",
+            "candidate_snapshot_id",
+            "benchmark_pack_id",
+            "scoring_policy_id",
+            "knowledge_ids",
+        )
+    }
 
 
 def _drive_history_service(supervisor: Supervisor):
@@ -16903,12 +16939,23 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 @pytest.mark.unit
 async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    authorization = _body_evaluation_authorization()
+    fields = _body_evaluation_fields()
+    supervisor._evolution_evaluation_governance_verifier = Mock(
+        verify=Mock(return_value=authorization)
+    )
     planned = await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
-            "evidence": {"learning_quality_score": 88.0},
+            "evidence": {"learning_quality_score": 88.0, **fields},
+            "constraints": {
+                **fields,
+                "must_match_evaluated_commit": True,
+                "requires_governor_review": True,
+                "requires_user_consent": True,
+            },
             "metadata": {
                 "task_family": "body_upgrade",
                 "execution_kind": "body_improvement",
@@ -16945,6 +16992,9 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
     assert task["status"] == "approved"
     assert task["execution_kind"] == "body_improvement"
     assert task["execution_request"] is None
+    supervisor._evolution_evaluation_governance_verifier.verify.assert_called_once_with(
+        authorization["experiment_result_id"]
+    )
 
 
 @pytest.mark.asyncio

@@ -157,6 +157,7 @@ def build_body_improvement_candidate(
     target_paths = list(body_projection.get("target_paths") or [])
     domains = list(body_projection.get("structure_domains") or [])
     learning_quality = float(body_projection.get("learning_quality_score") or 0.0)
+    authorization = dict(body_projection.get("evaluation_authorization") or {})
     return build_scored_candidate(
         stable_key=(
             "creativity:body_improvement:"
@@ -164,9 +165,9 @@ def build_body_improvement_candidate(
         ),
         title="定向改进替身：" + (domains[0] if domains else target_paths[0]),
         summary=(
-            "依据已完成学习结论，定向检查并改进 shell 替身中的 "
-            f"{', '.join(target_paths)}。只允许修改映射出的安全节点，"
-            "提交 Git 变更后由 Supervisor 独立复核。"
+            "接管已经通过 BenchmarkPack 评测的 shell 候选提交，"
+            f"复核其对 {', '.join(target_paths)} 的改动。实际提交必须与"
+            "不可变 ExperimentResult 完全一致，再由 Supervisor 独立复核。"
         ),
         priority="high" if learning_quality >= 80.0 else "normal",
         governance_task_type="self_evolution",
@@ -195,6 +196,10 @@ def build_body_improvement_candidate(
                 for ref in list(body_projection.get("learning_refs") or [])
             ],
             "learning_quality_score": learning_quality,
+            "experiment_result_id": authorization.get("experiment_result_id"),
+            "evaluated_candidate_commit": authorization.get(
+                "evaluated_candidate_commit"
+            ),
             "drive_judgement": dict(drive_judgement),
         },
         evidence={
@@ -207,14 +212,16 @@ def build_body_improvement_candidate(
                 "domains": domains,
                 "target_paths": target_paths,
             },
+            **evaluation_authorization_fields(authorization),
         },
         constraints=body_improvement_constraints(body_projection),
     )
 
 
 def body_improvement_constraints(projection: Dict[str, Any]) -> Dict[str, Any]:
+    authorization = dict(projection.get("evaluation_authorization") or {})
     return {
-        "execution_policy": "improve_shell_body",
+        "execution_policy": "adopt_evaluated_shell_commit",
         "target_slot": "shell",
         "target_slot_id": projection["target_slot_id"],
         "worktree_path": projection["worktree_path"],
@@ -222,7 +229,31 @@ def body_improvement_constraints(projection: Dict[str, Any]) -> Dict[str, Any]:
         "editable_dirs": list(projection.get("editable_dirs") or []),
         "forbidden_patterns": list(projection.get("forbidden_patterns") or []),
         "max_files_changed": int(projection.get("max_files_changed") or 5),
-        "must_commit": True,
+        "must_not_create_new_commit": True,
+        "must_match_evaluated_commit": True,
+        "requires_governor_review": True,
+        "requires_user_consent": True,
         "evolution_boundary_check": True,
         "structure_mapping_source": projection.get("mapping_source"),
+        **evaluation_authorization_fields(authorization),
+    }
+
+
+def evaluation_authorization_fields(
+    authorization: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "experiment_result_id": authorization.get("experiment_result_id"),
+        "experiment_spec_id": authorization.get("experiment_spec_id"),
+        "evaluated_baseline_commit": authorization.get(
+            "evaluated_baseline_commit"
+        ),
+        "evaluated_candidate_commit": authorization.get(
+            "evaluated_candidate_commit"
+        ),
+        "baseline_snapshot_id": authorization.get("baseline_snapshot_id"),
+        "candidate_snapshot_id": authorization.get("candidate_snapshot_id"),
+        "benchmark_pack_id": authorization.get("benchmark_pack_id"),
+        "scoring_policy_id": authorization.get("scoring_policy_id"),
+        "knowledge_ids": list(authorization.get("knowledge_ids") or []),
     }

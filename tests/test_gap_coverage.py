@@ -1251,6 +1251,24 @@ class TestEndogenousDriveErrorBridge:
                 }
             ],
             "api_b_judgement_tasks": [],
+            "evolution_foundation": {
+                "evaluation": {
+                    "body_improvement_authorization": {
+                        "schema_version": 1,
+                        "authorized": True,
+                        "reason": "promote_result_verified",
+                        "experiment_result_id": "experiment-result-" + "1" * 64,
+                        "experiment_spec_id": "experiment-spec-" + "2" * 64,
+                        "evaluated_baseline_commit": "b" * 40,
+                        "evaluated_candidate_commit": "a" * 40,
+                        "baseline_snapshot_id": "self-cognition-" + "3" * 64,
+                        "candidate_snapshot_id": "self-cognition-" + "4" * 64,
+                        "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
+                        "scoring_policy_id": "scoring-policy-" + "6" * 64,
+                        "knowledge_ids": ["knowledge-" + "7" * 64],
+                    }
+                }
+            },
             "endogenous_drive_policy": {
                 "body_improvement_min_quality": 60.0,
                 "body_improvement_cooldown_hours": 24,
@@ -1383,40 +1401,4 @@ class TestEndogenousDriveErrorBridge:
         assert candidate.evidence["structure_mapping"]["source"] == (
             "learning_evidence_structure_projection_v1"
         )
-
-
-# ── T-09: Self-learning conclusion compatibility layer ─────────────
-
-class TestSelfLearningConclusionStoreLifecycle:
-    """Verify the learning conclusion store compatibility layer (T-09)."""
-
-    @pytest.mark.xfail(reason="LearningSession Pydantic validation — pre-existing schema issue")
-    def test_create_topic_and_build_submission(self, tmp_path):
-        from systems.self_learning.conclusion_store import SelfLearningConclusionStore
-
-        svc = SelfLearningConclusionStore(storage_root=str(tmp_path))
-        topic = svc.create_topic(title="测试主题", reason="验证生命周期")
-        assert topic.topic_id
-        assert topic.title == "测试主题"
-
-        session = svc.plan_session(topic=topic, trigger="test")
-        assert session.session_id
-
-        experiment = svc.record_experiment(
-            topic=topic, session=session,
-            hypothesis="X causes Y", method="Test X",
-            observations=["obs1"], outcome="confirmed",
-        )
-        assert experiment.experiment_id
-        assert experiment.outcome == "confirmed"
-
-        conclusion = svc.submit_conclusion(
-            topic=topic, session=session,
-            experiments=[experiment], comparisons=["baseline"],
-            summary="学习已完成收束", verified=True,
-        )
-        assert conclusion.conclusion_id
-
-        submission = svc.build_supervisor_submission(conclusion)
-        assert submission.conclusion_id == conclusion.conclusion_id
 

@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from systems.supervisor.evolution_evaluation_governance import (
+    validate_body_improvement_authorization_binding,
+)
+
 
 logger = logging.getLogger("supervisor")
 
@@ -25,11 +29,13 @@ class BodyImprovementReviewService:
         task_store: Any,
         task_profile_policy: Any,
         execution_facade_provider: Callable[[], Any],
+        evaluation_governance_verifier: Any,
     ) -> None:
         self._body_registry = body_registry
         self._autonomous_chain_store = task_store
         self._task_profile_policy = task_profile_policy
         self._execution_facade_provider = execution_facade_provider
+        self._evaluation_governance_verifier = evaluation_governance_verifier
 
 
     def _calc_file_repeat_penalty(self, slot_id: str, changed_files: list[str]) -> float:
@@ -422,6 +428,26 @@ class BodyImprovementReviewService:
                 "score_delta": 0,
                 "reject_reason": commit_inspection.get("reject_reason")
                 or "commit_inspection_failed",
+            }
+
+        experiment_result_id = str(
+            governed_evidence.get("experiment_result_id") or ""
+        ).strip()
+        evaluation_authorization = self._evaluation_governance_verifier.verify(
+            experiment_result_id
+        )
+        authorization_binding = validate_body_improvement_authorization_binding(
+            evidence=governed_evidence,
+            constraints=governed_constraints,
+            authorization=evaluation_authorization,
+            actual_commit=commit_hash,
+            actual_baseline_commit=str(baseline_commit),
+        )
+        if not authorization_binding.get("valid"):
+            return {
+                "score_delta": 0,
+                "reject_reason": authorization_binding.get("reason")
+                or "evaluation_authorization_invalid",
             }
 
         from systems.evolution_boundary import (

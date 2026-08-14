@@ -29,6 +29,9 @@ from systems.governor import GovernorDecisionEngine
 from systems.governance_runtime_migration import consolidate_governance_event_logs
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.evolution_evaluation_governance import (
+    EvolutionEvaluationGovernanceVerifier,
+)
 from systems.supervisor.endogenous_governance_event_consumer import (
     EndogenousGovernanceEventConsumer,
 )
@@ -323,10 +326,27 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         touch_activity=supervisor._touch_gateway_activity,
     )
 
+    foundation_root = Path(
+        getattr(supervisor, "_runtime_root", None)
+        or supervisor.config.soul_store_path
+    ) / "evolution-foundation"
+    supervisor._evolution_evaluation_governance_verifier = (
+        EvolutionEvaluationGovernanceVerifier.from_root(foundation_root)
+    )
+
     def autonomous_task_auto_decision(
         task: Any,
         drive_input: dict[str, Any],
     ) -> tuple[str, str]:
+        if supervisor._task_profile_policy.execution_kind(task) == "body_improvement":
+            result_id = str(
+                dict(task.evidence or {}).get("experiment_result_id") or ""
+            ).strip()
+            evaluation_authorization = (
+                supervisor._evolution_evaluation_governance_verifier.verify(result_id)
+            )
+        else:
+            evaluation_authorization = {}
         return build_autonomous_chain_auto_decision(
             task=task,
             drive_input=drive_input,
@@ -351,6 +371,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
                 )
                 or 60.0
             ),
+            evaluation_authorization=evaluation_authorization,
         )
 
     supervisor._autonomous_task_governance_review_service = (
@@ -542,6 +563,9 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         task_store=supervisor._autonomous_chain_store,
         task_profile_policy=supervisor._task_profile_policy,
         execution_facade_provider=lambda: supervisor._execution_facade,
+        evaluation_governance_verifier=(
+            supervisor._evolution_evaluation_governance_verifier
+        ),
     )
     supervisor._autonomous_chain_execution_handoff_service = (
         AutonomousChainExecutionHandoffService(

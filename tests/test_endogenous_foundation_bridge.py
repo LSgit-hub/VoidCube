@@ -33,6 +33,7 @@ from systems.self_cognition import (
 )
 from systems.supervisor.endogenous_foundation_bridge import (
     EndogenousFoundationReadOnlyProjection,
+    FoundationShadowPolicy,
 )
 
 
@@ -56,7 +57,14 @@ def _snapshot() -> SelfCognitionSnapshot:
     )
 
 
-def _artifact() -> KnowledgeArtifact:
+def _artifact(
+    *,
+    quality_score: float = 0.9,
+    ingested_at: datetime | None = None,
+    valid_until: datetime | None = None,
+) -> KnowledgeArtifact:
+    ingested_at = ingested_at or NOW - timedelta(hours=1)
+    valid_until = valid_until or NOW + timedelta(days=30)
     return KnowledgeArtifact.create(
         topic="retrieval",
         artifact_version="1",
@@ -77,11 +85,11 @@ def _artifact() -> KnowledgeArtifact:
                 prompt_injection_reviewed=True,
             ),
         ),
-        valid_until=NOW + timedelta(days=30),
+        valid_until=valid_until,
         confidence=0.9,
-        quality_score=0.9,
+        quality_score=quality_score,
         raw_research_task_id="task-1",
-        ingested_at=NOW - timedelta(hours=1),
+        ingested_at=ingested_at,
     )
 
 
@@ -137,6 +145,23 @@ def test_missing_foundation_records_produce_three_shadow_tasks_without_writes(tm
         "run_evolution_evaluation",
     }
     assert all(task["execution_allowed"] is False for task in facts["shadow_tasks"])
+    assert facts["shadow_calibration"] == {
+        "policy_version": "foundation-shadow-v1",
+        "status": "debt_observed",
+        "shadow_task_count": 3,
+        "task_kind_counts": {
+            "fill_self_cognition": 1,
+            "fill_research_knowledge": 1,
+            "run_evolution_evaluation": 1,
+        },
+        "trigger_reason_counts": {
+            "evaluation_missing": 1,
+            "knowledge_missing": 1,
+            "self_cognition_unavailable": 1,
+        },
+        "execution_allowed": False,
+    }
+    assert all(task["trigger_reasons"] for task in facts["shadow_tasks"])
     assert not root.exists()
 
 
@@ -160,6 +185,18 @@ def test_available_foundation_records_are_projected_without_shadow_debt(tmp_path
     assert facts["research_knowledge"]["status"] == "available"
     assert facts["evaluation"]["verdict"] == "promote"
     assert facts["shadow_tasks"] == []
+    assert facts["shadow_calibration"] == {
+        "policy_version": "foundation-shadow-v1",
+        "status": "clear",
+        "shadow_task_count": 0,
+        "task_kind_counts": {
+            "fill_self_cognition": 0,
+            "fill_research_knowledge": 0,
+            "run_evolution_evaluation": 0,
+        },
+        "trigger_reason_counts": {},
+        "execution_allowed": False,
+    }
     assert json.loads((root / "self-cognition" / "index.json").read_text(encoding="utf-8"))
 
 
@@ -175,3 +212,79 @@ def test_stale_or_corrupt_records_are_reported_and_never_written(tmp_path: Path)
     assert any(item.startswith("research_knowledge:read_error:") for item in facts["known_gaps"])
     assert facts["shadow_tasks"]
     assert (knowledge_root / "index.json").read_text(encoding="utf-8") == "{bad json"
+
+
+def test_stale_knowledge_and_pending_evaluation_expose_distinct_shadow_reasons(tmp_path: Path):
+    root = tmp_path / "evolution-foundation"
+    self_repo = JsonSelfCognitionRepository(root / "self-cognition")
+    knowledge_repo = JsonKnowledgeRepository(root / "knowledge")
+    evaluation_repo = JsonEvaluationRepository(root / "evaluation")
+    self_repo.put(_snapshot())
+    knowledge_repo.put(
+        _artifact(
+            ingested_at=NOW - timedelta(days=2),
+            valid_until=NOW - timedelta(hours=1),
+        )
+    )
+    pack, policy, spec, result = _evaluation_records()
+    evaluation_repo.put_benchmark_pack(pack)
+    evaluation_repo.put_scoring_policy(policy)
+    evaluation_repo.put_experiment_spec(spec)
+    evaluation_repo.put_experiment_result(result)
+    pending_spec = ExperimentSpec.create(
+        baseline_snapshot_id=spec.baseline_snapshot_id,
+        candidate_commit="candidate-2",
+        candidate_snapshot_id="self-cognition-" + "e" * 64,
+        hypothesis="candidate improves another path",
+        target_metrics=spec.target_metrics,
+        benchmark_pack_id=pack.benchmark_pack_id,
+        scoring_policy_id=policy.scoring_policy_id,
+        created_at=NOW,
+    )
+    evaluation_repo.put_experiment_spec(pending_spec)
+
+    facts = EndogenousFoundationReadOnlyProjection.from_root(root, now=lambda: NOW).load()
+
+    assert facts["research_knowledge"]["status"] == "stale"
+    assert facts["evaluation"]["status"] == "available"
+    tasks = {task["task_kind"]: task for task in facts["shadow_tasks"]}
+    assert tasks["fill_research_knowledge"]["trigger_reasons"] == ["knowledge_stale"]
+    assert tasks["run_evolution_evaluation"]["trigger_reasons"] == [
+        "evaluation_pending_specs"
+    ]
+    assert facts["shadow_calibration"]["trigger_reason_counts"] == {
+        "evaluation_pending_specs": 1,
+        "knowledge_stale": 1,
+    }
+
+
+@pytest.mark.parametrize("quality_score, expected_reasons", [(0.5, []), (0.49, ["knowledge_low_quality"])])
+def test_knowledge_quality_threshold_is_explicit_and_calibratable(
+    tmp_path: Path,
+    quality_score: float,
+    expected_reasons: list[str],
+):
+    root = tmp_path / "evolution-foundation"
+    knowledge_repo = JsonKnowledgeRepository(root / "knowledge")
+    knowledge_repo.put(_artifact(quality_score=quality_score))
+    policy = FoundationShadowPolicy(
+        policy_version="foundation-shadow-test-v2",
+        min_knowledge_quality_score=0.5,
+    )
+
+    facts = EndogenousFoundationReadOnlyProjection.from_root(
+        root,
+        now=lambda: NOW,
+        shadow_policy=policy,
+    ).load()
+
+    knowledge_tasks = [
+        task
+        for task in facts["shadow_tasks"]
+        if task["task_kind"] == "fill_research_knowledge"
+    ]
+    assert [task["trigger_reasons"] for task in knowledge_tasks] == (
+        [expected_reasons] if expected_reasons else []
+    )
+    assert facts["shadow_policy"]["policy_version"] == "foundation-shadow-test-v2"
+    assert facts["shadow_calibration"]["policy_version"] == "foundation-shadow-test-v2"

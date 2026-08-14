@@ -12,6 +12,9 @@ from typing import Any, Dict, Iterable, Optional
 
 from systems.supervisor.autonomous_chain_store import AutonomousChainTask
 from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from systems.supervisor.evolution_evaluation_governance import (
+    validate_body_improvement_authorization_binding,
+)
 
 
 _ACTIVE_SELF_LEARNING_STATUSES = frozenset({"planned", "approved", "running"})
@@ -167,6 +170,7 @@ def build_autonomous_chain_auto_decision(
     learning_history: Optional[Iterable[AutonomousChainTask]],
     now: datetime,
     body_improvement_min_quality: float,
+    evaluation_authorization: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, str]:
     drive_input = dict(drive_input or {})
     task_type = task_profile_policy.governance_type(task)
@@ -203,9 +207,20 @@ def build_autonomous_chain_auto_decision(
                         f"current score {learning_quality_score:.2f} is below required {min_quality:.2f}."
                     ),
                 )
+            authorization_binding = validate_body_improvement_authorization_binding(
+                evidence=dict(task.evidence or {}),
+                constraints=dict(task.constraints or {}),
+                authorization=dict(evaluation_authorization or {}),
+            )
+            if not authorization_binding.get("valid"):
+                return (
+                    "cancelled",
+                    "Body-improvement task cancelled because its immutable evaluation authorization is invalid: "
+                    + str(authorization_binding.get("reason") or "unknown"),
+                )
             return (
                 "approved",
-                "Agent-pull body-improvement task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
+                "Agent-pull body-improvement task transferred by API-B for API-A execution after authoritative ExperimentResult verification. The executed commit must remain identical to the evaluated candidate commit.",
             )
         return (
             "approved",

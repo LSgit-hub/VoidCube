@@ -61,10 +61,6 @@ from systems.supervisor.ui_state_projection import (
     project_supervisor_scene,
     project_ui_metrics,
 )
-from systems.self_learning import LearningRecommendation
-from systems.self_learning.conclusion_store import SelfLearningConclusionStore
-
-
 UI_HTML = load_supervisor_ui_html()
 
 
@@ -1146,6 +1142,8 @@ def test_supervisor_routes_no_longer_publish_deprecated_execution_surface(tmp_pa
     assert "/autonomous-chain/tasks/{task_id}/decision" in route_paths
     assert "/autonomous-chain/tasks/review" in route_paths
     assert "/autonomous-chain/tasks/clear" in route_paths
+    retired_learning_submission = "/self-" + "learning/conclusions/submit"
+    assert retired_learning_submission not in route_paths
     assert "/self-evolution/autonomous-cycle" not in route_paths
     assert "/self-evolution/tasks" not in route_paths
     assert "/self-evolution/tasks/{task_id}" not in route_paths
@@ -4360,70 +4358,6 @@ async def test_supervisor_internal_body_upgrade_pipeline_does_not_route_through_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_accepts_self_learning_conclusion_submission_into_backlog(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._autonomous_chain_planning_service._touch_activity = (
-        supervisor._touch_gateway_activity
-    )
-    learning = SelfLearningConclusionStore(tmp_path / "self-learning")
-
-    topic = learning.create_topic(
-        title="网关活动支撑的活动护栏",
-        reason="需要一个由学习证据支撑的正式自主链路提案。",
-        tags=["gateway", "idle"],
-    )
-    session = learning.plan_session(topic=topic, planned_minutes=20, trigger="idle")
-    experiment = learning.record_experiment(
-        topic=topic,
-        session=session,
-        hypothesis="网关活动事实应参与空闲判断门控。",
-        method="对比只看时钟的判断与网关活动标记。",
-        observations=["网关标记更贴近真实的用户打断模式。"],
-        outcome="passed",
-        compared_against=["clock-only"],
-    )
-    conclusion = learning.submit_conclusion(
-        topic=topic,
-        session=session,
-        experiments=[experiment],
-        comparisons=["gateway-facts > clock-only"],
-        summary="把基于网关的空闲判断提升为 API-B 判断在途任务。",
-        verified=True,
-        recommendations=[
-            LearningRecommendation(
-                recommendation_type="propose_evolution_task",
-                title="采用基于网关的空闲判断",
-                summary="创建 API-B 判断在途任务，而不是直接改动运行时。",
-                evidence={"priority_reason": "reduces false activity-guard approvals"},
-            )
-        ],
-    )
-
-    submission = learning.build_supervisor_payload(conclusion)
-    assert "task_type" not in submission["proposals"][0]
-    result = await supervisor._autonomous_chain_planning_service.submit_self_learning_conclusion(submission)
-
-    assert result["status"] == "accepted"
-    assert result["count"] == 1
-    assert result["tasks"][0]["title"] == "采用基于网关的空闲判断"
-    assert result["tasks"][0]["task_type"] == "self_evolution"
-    assert result["tasks"][0]["governance_task_type"] == "self_evolution"
-    assert result["tasks"][0]["task_family"] == "general_self_evolution"
-    assert result["tasks"][0]["execution_kind"] == "general_self_evolution"
-    assert result["tasks"][0]["metadata"]["conclusion_id"] == conclusion.conclusion_id
-    supervisor._touch_gateway_activity.assert_awaited_once_with(  # type: ignore[attr-defined]
-        "self_learning",
-        metadata={
-            "action": "self_learning_submission",
-            "count": 1,
-            "conclusion_id": conclusion.conclusion_id,
-        },
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
 async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._autonomous_task_review_service._touch_activity = (  # type: ignore[method-assign]
@@ -4537,33 +4471,25 @@ async def test_governor_approved_verified_conclusion_creates_consent_candidate(
         "aiohttp",
         SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
     )
-    submission = {
-        "source": "self_learning",
-        "conclusion_id": "conclusion-verified",
-        "topic_id": "topic-verified",
-        "title": "已验证的伴侣解释策略",
-        "summary": "日常陪伴应解释已经通过治理的变更。",
-        "verified": True,
-        "proposals": [
-            {
-                "title": "采用已验证的解释策略",
-                "summary": "仅在治理批准后解释变更。",
-                "source": "self_learning",
+    submitted = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "采用已验证的解释策略",
+            "summary": "仅在治理批准后解释变更。",
+            "trace_id": "conclusion-verified",
+            "source": "self_learning",
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "metadata": {
+                "conclusion_id": "conclusion-verified",
+                "verified": True,
                 "governance_task_type": "self_learning",
                 "task_family": "self_learning",
-                "metadata": {
-                    "conclusion_id": "conclusion-verified",
-                    "verified": True,
-                    "governance_task_type": "self_learning",
-                    "task_family": "self_learning",
-                },
-                "evidence": {
-                    "summary": "日常陪伴应解释已经通过治理的变更。"
-                },
-            }
-        ],
-    }
-    submitted = await supervisor._autonomous_chain_planning_service.submit_self_learning_conclusion(submission)
+            },
+            "evidence": {
+                "summary": "日常陪伴应解释已经通过治理的变更。"
+            },
+        }
+    )
     task_id = submitted["tasks"][0]["task_id"]
 
     decided = await supervisor.decide_autonomous_chain_task(

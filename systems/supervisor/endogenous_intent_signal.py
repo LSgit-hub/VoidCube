@@ -325,6 +325,7 @@ def emit_drive_signal_projections(
                     "status": "shadow",
                     "execution_allowed": False,
                     "evidence_refs": list(task.get("evidence_refs") or []),
+                    "trigger_reasons": list(task.get("trigger_reasons") or []),
                 },
             }
         )

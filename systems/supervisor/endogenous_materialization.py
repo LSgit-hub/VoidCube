@@ -726,6 +726,7 @@ def _build_lm_evidence(
 
 
 def _body_metadata(projection: Dict[str, Any]) -> Dict[str, Any]:
+    authorization = dict(projection.get("evaluation_authorization") or {})
     return {
         "improvement_direction_source": projection.get("mapping_source"),
         "target_paths": list(projection.get("target_paths") or []),
@@ -734,10 +735,15 @@ def _body_metadata(projection: Dict[str, Any]) -> Dict[str, Any]:
             ref.get("mem_id") for ref in list(projection.get("learning_refs") or [])
         ],
         "learning_quality_score": projection.get("learning_quality_score"),
+        "experiment_result_id": authorization.get("experiment_result_id"),
+        "evaluated_candidate_commit": authorization.get(
+            "evaluated_candidate_commit"
+        ),
     }
 
 
 def _body_evidence(projection: Dict[str, Any]) -> Dict[str, Any]:
+    authorization = dict(projection.get("evaluation_authorization") or {})
     return {
         "learning_quality_score": projection.get("learning_quality_score"),
         "learning_refs": list(projection.get("learning_refs") or []),
@@ -746,4 +752,17 @@ def _body_evidence(projection: Dict[str, Any]) -> Dict[str, Any]:
             "domains": list(projection.get("structure_domains") or []),
             "target_paths": list(projection.get("target_paths") or []),
         },
+        "experiment_result_id": authorization.get("experiment_result_id"),
+        "experiment_spec_id": authorization.get("experiment_spec_id"),
+        "evaluated_baseline_commit": authorization.get(
+            "evaluated_baseline_commit"
+        ),
+        "evaluated_candidate_commit": authorization.get(
+            "evaluated_candidate_commit"
+        ),
+        "baseline_snapshot_id": authorization.get("baseline_snapshot_id"),
+        "candidate_snapshot_id": authorization.get("candidate_snapshot_id"),
+        "benchmark_pack_id": authorization.get("benchmark_pack_id"),
+        "scoring_policy_id": authorization.get("scoring_policy_id"),
+        "knowledge_ids": list(authorization.get("knowledge_ids") or []),
     }

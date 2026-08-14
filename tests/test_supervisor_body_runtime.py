@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -14,6 +15,20 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.governor import GovernorRequest
+from systems.evolution_evaluation import (
+    BenchmarkCase,
+    BenchmarkPack,
+    ExperimentResult,
+    ExperimentSpec,
+    HardGateResult,
+    MetricDelta,
+    MetricTarget,
+    MetricValue,
+    ScoringDimension,
+    ScoringPolicy,
+)
+from systems.research_knowledge import KnowledgeArtifact, KnowledgeClaim, KnowledgeSource
+from systems.self_cognition import SelfCognitionSnapshot
 from systems.supervisor.supervisor import (
     AgentInstance,
     Supervisor,
@@ -77,6 +92,21 @@ def _create_running_body_improvement_task(
     target_paths: list[str],
     learning_refs: list[dict] | None = None,
 ):
+    authorization = _seed_body_evaluation_authorization(supervisor)
+    authorization_fields = {
+        key: authorization[key]
+        for key in (
+            "experiment_result_id",
+            "experiment_spec_id",
+            "evaluated_baseline_commit",
+            "evaluated_candidate_commit",
+            "baseline_snapshot_id",
+            "candidate_snapshot_id",
+            "benchmark_pack_id",
+            "scoring_policy_id",
+            "knowledge_ids",
+        )
+    }
     slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
     task = supervisor._autonomous_chain_store.create_task(
         title="Governed body improvement",
@@ -90,6 +120,7 @@ def _create_running_body_improvement_task(
         },
         evidence={
             "learning_quality_score": 90.0,
+            **authorization_fields,
             "learning_refs": learning_refs
             or [
                 {
@@ -104,6 +135,10 @@ def _create_running_body_improvement_task(
             "worktree_path": slot_meta.worktree_path,
             "target_paths": target_paths,
             "max_files_changed": 5,
+            "must_match_evaluated_commit": True,
+            "requires_governor_review": True,
+            "requires_user_consent": True,
+            **authorization_fields,
         },
     )
     supervisor._autonomous_chain_store.update_status(
@@ -118,6 +153,94 @@ def _create_running_body_improvement_task(
         actor="cli_agent",
         reason="claimed by API-A",
     )
+
+
+def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
+    now = datetime(2026, 8, 14, 6, 0, tzinfo=timezone.utc)
+    baseline = SelfCognitionSnapshot.create(
+        body_id="body-baseline",
+        git_commit="b" * 40,
+        config_digest="1" * 64,
+        collector_version="collector-1",
+        collected_at=now,
+    )
+    candidate = SelfCognitionSnapshot.create(
+        body_id="body-candidate",
+        git_commit="a" * 40,
+        config_digest="2" * 64,
+        collector_version="collector-1",
+        collected_at=now,
+    )
+    knowledge = KnowledgeArtifact.create(
+        topic="stream handling",
+        artifact_version="1",
+        claims=(
+            KnowledgeClaim(
+                claim_id="claim-1",
+                statement="The candidate improves stream handling.",
+                confidence=0.9,
+                applicable_modules=("agent",),
+            ),
+        ),
+        sources=(
+            KnowledgeSource(
+                source_id="source-1",
+                url="https://example.test/research",
+                source_type="paper",
+                retrieved_at=now,
+                source_content_hash="3" * 64,
+                prompt_injection_reviewed=True,
+            ),
+        ),
+        confidence=0.9,
+        quality_score=0.9,
+        raw_research_task_id="research-1",
+        ingested_at=now,
+    )
+    pack = BenchmarkPack.create(
+        name="body-core",
+        pack_version="1",
+        cases=(BenchmarkCase(case_id="case-1", runner="core", input_ref="input"),),
+        created_at=now,
+    )
+    policy = ScoringPolicy.create(
+        policy_version="1",
+        dimensions=(ScoringDimension(name="correctness", weight=1.0),),
+        required_hard_gates=("tests",),
+        promote_threshold=0.8,
+        observe_threshold=0.5,
+        created_at=now,
+    )
+    spec = ExperimentSpec.create(
+        baseline_snapshot_id=baseline.snapshot_id,
+        candidate_commit="a" * 40,
+        candidate_snapshot_id=candidate.snapshot_id,
+        hypothesis="Candidate improves correctness.",
+        knowledge_ids=(knowledge.knowledge_id,),
+        target_metrics=(MetricTarget(metric="correctness", objective="increase"),),
+        benchmark_pack_id=pack.benchmark_pack_id,
+        scoring_policy_id=policy.scoring_policy_id,
+        created_at=now,
+    )
+    result = ExperimentResult.create(
+        experiment_spec_id=spec.experiment_spec_id,
+        baseline_metrics=(MetricValue(metric="correctness", value=0.8, unit="ratio"),),
+        candidate_metrics=(MetricValue(metric="correctness", value=0.9, unit="ratio"),),
+        metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
+        confidence=0.9,
+        hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+        verdict="promote",
+        completed_at=now,
+    )
+    verifier = supervisor._evolution_evaluation_governance_verifier
+    verifier.self_cognition_repository.put(baseline)
+    verifier.self_cognition_repository.put(candidate)
+    verifier.knowledge_repository.put(knowledge)
+    verifier.evaluation_repository.put_benchmark_pack(pack)
+    verifier.evaluation_repository.put_scoring_policy(policy)
+    verifier.evaluation_repository.put_experiment_spec(spec)
+    verifier.evaluation_repository.put_experiment_result(result)
+    return verifier.verify(result.experiment_result_id)
 
 
 def _body_improvement_execution_context(task) -> dict:
@@ -534,6 +657,84 @@ async def test_body_improvement_report_rejects_untrusted_file_scope(
     slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
     assert slot_meta.improvement_count == 0
     assert slot_meta.health_history == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_report_rejects_commit_not_named_by_experiment_result(
+    tmp_path,
+):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    governed_task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=["agent/stream_handler.py"],
+    )
+    supervisor._body_improvement_review_service._inspect_body_improvement_commit = Mock(
+        return_value={
+            "ok": True,
+            "changed_files": ["agent/stream_handler.py"],
+            "diff_text": "verified diff",
+        }
+    )
+
+    result = await supervisor.receive_improvement_report(
+        {
+            **_body_improvement_execution_context(governed_task),
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "c" * 40,
+            "diff_summary": "Different unevaluated commit",
+            "changed_files": ["agent/stream_handler.py"],
+            "improvement_description": "Must be rejected before Governor review.",
+        }
+    )
+
+    assert result["score_delta"] == 0
+    assert result["reject_reason"] == "evaluated_candidate_commit_mismatch"
+    assert supervisor._body_registry.load_slot_meta("slot-B").health_history == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_report_reloads_and_rejects_corrupted_result(tmp_path):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    governed_task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=["agent/stream_handler.py"],
+    )
+    result_id = str(governed_task.evidence["experiment_result_id"])
+    result_path = (
+        supervisor._evolution_evaluation_governance_verifier.evaluation_repository.experiment_results_root
+        / f"{result_id}.json"
+    )
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["confidence"] = 0.1
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    supervisor._body_improvement_review_service._inspect_body_improvement_commit = Mock(
+        return_value={
+            "ok": True,
+            "changed_files": ["agent/stream_handler.py"],
+            "diff_text": "verified diff",
+        }
+    )
+
+    result = await supervisor.receive_improvement_report(
+        {
+            **_body_improvement_execution_context(governed_task),
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "a" * 40,
+            "diff_summary": "Corrupted authorization",
+            "changed_files": ["agent/stream_handler.py"],
+            "improvement_description": "Must be rejected before Governor review.",
+        }
+    )
+
+    assert result["score_delta"] == 0
+    assert result["reject_reason"] == "experiment_result_unreadable"
+    assert supervisor._body_registry.load_slot_meta("slot-B").health_history == []
 
 
 @pytest.mark.asyncio

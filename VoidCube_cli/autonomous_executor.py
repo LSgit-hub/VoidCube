@@ -97,7 +97,30 @@ def build_autonomous_task_prompt(
             or constraints.get("target_worktree")
             or ""
         ).strip()
-        task["_baseline_head"] = git_head_commit(worktree_path) if git_head_commit else ""
+        evaluated_baseline_commit = str(
+            constraints.get("evaluated_baseline_commit") or ""
+        ).strip().lower()
+        evaluated_candidate_commit = str(
+            constraints.get("evaluated_candidate_commit") or ""
+        ).strip().lower()
+        experiment_result_id = str(
+            constraints.get("experiment_result_id") or ""
+        ).strip()
+        if not (
+            constraints.get("must_not_create_new_commit") is True
+            and constraints.get("must_match_evaluated_commit") is True
+            and constraints.get("requires_governor_review") is True
+            and constraints.get("requires_user_consent") is True
+            and evaluated_baseline_commit
+            and evaluated_candidate_commit
+            and experiment_result_id
+        ):
+            raise ValueError(
+                "body improvement task is missing immutable evaluation authorization"
+            )
+        task["_baseline_head"] = evaluated_baseline_commit
+        task["_expected_candidate_head"] = evaluated_candidate_commit
+        task["_initial_head"] = git_head_commit(worktree_path) if git_head_commit else ""
         task["_improvement_worktree"] = worktree_path
         task["_improvement_slot_id"] = str(
             constraints.get("target_slot_id")
@@ -117,7 +140,9 @@ def build_autonomous_task_prompt(
         prompt_parts = [f"{AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX} {title}"]
         if summary:
             prompt_parts.append(summary)
-        prompt_parts.append("Edit the shell body code directly and implement the approved improvement.")
+        prompt_parts.append(
+            "Adopt and inspect the already evaluated candidate commit. Do not edit files or create a new commit."
+        )
         if worktree_path:
             prompt_parts.append("Worktree path inside the sandbox: /workspace")
         if editable_dirs:
@@ -131,6 +156,9 @@ def build_autonomous_task_prompt(
             prompt_parts.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
         if max_files:
             prompt_parts.append(f"Max files changed: {max_files}")
+        prompt_parts.append(f"ExperimentResult: {experiment_result_id}")
+        prompt_parts.append(f"Evaluated baseline commit: {evaluated_baseline_commit}")
+        prompt_parts.append(f"Required candidate HEAD: {evaluated_candidate_commit}")
         if learning_refs:
             prompt_parts.append(
                 "Learning evidence: "
@@ -140,11 +168,13 @@ def build_autonomous_task_prompt(
                 )
             )
         prompt_parts.append(
-            "Keep the change within the approved target paths; if the evidence does not support "
-            "a concrete change there, report that no safe improvement is available."
+            "Check out the required candidate HEAD, keep the worktree clean, and verify that its existing "
+            "diff stays within the approved target paths. If the commit is unavailable or does not match "
+            "the authorization, stop and report the mismatch."
         )
-        prompt_parts.append("Commit the shell worktree changes before reporting completion.")
-        prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
+        prompt_parts.append(
+            "Produce a concise verification summary with the concrete files changed and reasoning."
+        )
         return "\n\n".join(prompt_parts)
 
     constraints = dict(task.get("constraints") or {})
@@ -864,6 +894,17 @@ class AutonomousExecutorRuntime:
                 f"任务 {task_id[:8]} 未检测到替身提交，跳过改进报告",
                 tone="warn",
                 stage="improvement_report_skipped",
+            )
+            return False
+        expected_candidate_head = str(
+            task.get("_expected_candidate_head") or ""
+        ).strip().lower()
+        actual_candidate_head = str(diff.get("commit_hash") or "").strip().lower()
+        if not expected_candidate_head or actual_candidate_head != expected_candidate_head:
+            self.ports.append_execution_event(
+                f"任务 {task_id[:8]} 当前 HEAD 与评测候选提交不一致，拒绝提交报告",
+                tone="error",
+                stage="improvement_report_commit_mismatch",
             )
             return False
         learning_refs = []

@@ -195,6 +195,7 @@ def build_drive_context(
             api_a_running_count += 1
     return {
         "policy": policy,
+        "evolution_foundation": dict(drive_input.get("evolution_foundation") or {}),
         "drive_history": {
             "judgements": [dict(item) for item in list(drive_history.get("judgements") or []) if isinstance(item, dict)],
             "outcomes": [dict(item) for item in list(drive_history.get("outcomes") or []) if isinstance(item, dict)],

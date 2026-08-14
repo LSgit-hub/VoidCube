@@ -262,11 +262,6 @@ class Supervisor(
             self.recover_autonomous_chain_from_mem,
             methods=["POST"],
         )
-        self.app.add_api_route(
-            "/self-learning/conclusions/submit",
-            self._autonomous_chain_planning_service.submit_self_learning_conclusion,
-            methods=["POST"],
-        )
         self.app.add_api_route(autonomous_chain_task_route("{task_id}"), self.get_autonomous_chain_task, methods=["GET"])
         self.app.add_api_route(
             autonomous_chain_task_decision_route("{task_id}"),
