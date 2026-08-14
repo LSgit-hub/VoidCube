@@ -2,11 +2,40 @@ from __future__ import annotations
 
 from queue import Queue
 import json
+from pathlib import Path
 
 from VoidCube_cli.autonomous_executor import (
     AutonomousExecutorPorts,
     AutonomousExecutorRuntime,
 )
+from systems.evolution_evaluation import (
+    ExecutionEnvironmentManifest,
+    capture_host_environment_manifest,
+)
+
+
+_HOST_ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head="b" * 40,
+)
+_BODY_ENVIRONMENT_PAYLOAD = _HOST_ENVIRONMENT.content_payload()
+_BODY_ENVIRONMENT_PAYLOAD.update(
+    backend="podman",
+    validation_scope="container",
+    execution_os="Linux 6.8",
+    architecture="x86_64",
+    execution_workspace_path="/workspace",
+    path_mappings=(
+        {
+            "host_path": _HOST_ENVIRONMENT.host_workspace_path,
+            "execution_path": "/workspace",
+        },
+    ),
+    validated_platforms=("linux",),
+)
+_BODY_ENVIRONMENT = ExecutionEnvironmentManifest.create(
+    **_BODY_ENVIRONMENT_PAYLOAD
+).model_dump(mode="json")
 
 
 def test_executor_runtime_uses_explicit_state_ports_without_host_object():
@@ -85,6 +114,9 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
             "must_match_evaluated_commit": True,
             "requires_governor_review": True,
             "requires_user_consent": True,
+            "execution_environment_id": "execution-environment-" + "e" * 64,
+            "validation_scope": "host",
+            "validated_platforms": ["windows"],
         },
     }
     pending_input = Queue()
@@ -107,9 +139,10 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
             agent_running=lambda: False,
             autonomous_gate_active=lambda: True,
             append_execution_event=lambda *_args, **_kwargs: None,
-            prepare_body_worktree=lambda task_id, path, head: calls.append(
-                ("prepare", task_id, path, head)
-            ),
+            prepare_body_worktree=lambda task_id, path, head: (
+                calls.append(("prepare", task_id, path, head)),
+                _BODY_ENVIRONMENT,
+            )[1],
             release_task_environment=lambda _task_id: None,
         ),
         push_cli_agent_scene=lambda *args, **kwargs: None,
@@ -126,7 +159,10 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
         "b" * 40,
     )
     assert calls[1] == "enqueue"
-    assert "/workspace" in pending_input.get_nowait()
+    prompt = pending_input.get_nowait()
+    assert "/workspace" in prompt
+    assert "do not claim that Windows-host tests passed" in prompt
+    assert task["_execution_environment"]["validation_scope"] == "container"
 
 
 def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
@@ -141,6 +177,9 @@ def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
             "must_match_evaluated_commit": True,
             "requires_governor_review": True,
             "requires_user_consent": True,
+            "execution_environment_id": "execution-environment-" + "e" * 64,
+            "validation_scope": "host",
+            "validated_platforms": ["windows"],
         },
     }
     state = {"run_id": ""}
@@ -162,7 +201,7 @@ def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
             agent_running=lambda: False,
             autonomous_gate_active=lambda: True,
             append_execution_event=lambda *_args, **_kwargs: None,
-            prepare_body_worktree=lambda _task_id, _path, _head: None,
+            prepare_body_worktree=lambda _task_id, _path, _head: _BODY_ENVIRONMENT,
             release_task_environment=released.append,
         ),
         push_cli_agent_scene=lambda *args, **kwargs: None,

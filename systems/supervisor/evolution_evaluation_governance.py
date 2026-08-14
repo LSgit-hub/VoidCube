@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from systems.evolution_evaluation import JsonEvaluationRepository
+from systems.evolution_evaluation import (
+    EXECUTION_ENVIRONMENT_GATE,
+    JsonEvaluationRepository,
+)
 from systems.research_knowledge import JsonKnowledgeRepository
 from systems.self_cognition import JsonSelfCognitionRepository
 
@@ -180,6 +183,38 @@ class EvolutionEvaluationGovernanceVerifier:
                 failed_hard_gates=failed_required_gates,
             )
 
+        environment_gate = next(
+            (
+                gate
+                for gate in result.hard_gate_results
+                if gate.gate == EXECUTION_ENVIRONMENT_GATE
+            ),
+            None,
+        )
+        if environment_gate is None or not environment_gate.passed:
+            return _rejection(
+                "execution_environment_gate_failed",
+                experiment_result_id=result_id,
+            )
+        environment = result.execution_environment
+        missing_platforms = sorted(
+            set(policy.required_validation_platforms)
+            - set(environment.validated_platforms)
+        )
+        if missing_platforms:
+            return _rejection(
+                "required_validation_platforms_missing",
+                experiment_result_id=result_id,
+                missing_validation_platforms=missing_platforms,
+                execution_environment_id=environment.execution_environment_id,
+            )
+        if str(environment.repository_head).strip().lower() != candidate_commit:
+            return _rejection(
+                "execution_environment_commit_mismatch",
+                experiment_result_id=result_id,
+                execution_environment_id=environment.execution_environment_id,
+            )
+
         baseline_snapshot = self._read_reference(
             self.self_cognition_repository.get,
             spec.baseline_snapshot_id,
@@ -245,6 +280,9 @@ class EvolutionEvaluationGovernanceVerifier:
             "completed_at": result.completed_at.isoformat(),
             "confidence": float(result.confidence),
             "verdict": str(result.verdict),
+            "execution_environment_id": environment.execution_environment_id,
+            "validation_scope": environment.validation_scope,
+            "validated_platforms": list(environment.validated_platforms),
         }
 
     @staticmethod
@@ -302,6 +340,7 @@ def validate_body_improvement_authorization_binding(
         "candidate_snapshot_id",
         "benchmark_pack_id",
         "scoring_policy_id",
+        "execution_environment_id",
     )
     for field in fields:
         expected = str(authorization.get(field) or "").strip().lower()
@@ -319,6 +358,22 @@ def validate_body_improvement_authorization_binding(
         return {"valid": False, "reason": "evaluation_knowledge_binding_mismatch"}
     if tuple(str(item) for item in constraints.get("knowledge_ids") or []) != expected_knowledge:
         return {"valid": False, "reason": "evaluation_knowledge_binding_mismatch"}
+
+    expected_scope = str(authorization.get("validation_scope") or "").strip()
+    expected_platforms = tuple(
+        str(item) for item in authorization.get("validated_platforms") or []
+    )
+    for source in (evidence, constraints):
+        if str(source.get("validation_scope") or "").strip() != expected_scope:
+            return {
+                "valid": False,
+                "reason": "evaluation_environment_binding_mismatch",
+            }
+        if tuple(str(item) for item in source.get("validated_platforms") or []) != expected_platforms:
+            return {
+                "valid": False,
+                "reason": "evaluation_environment_binding_mismatch",
+            }
 
     evaluated_commit = str(authorization["evaluated_candidate_commit"]).lower()
     if actual_commit is not None and str(actual_commit).strip().lower() != evaluated_commit:

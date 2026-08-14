@@ -973,6 +973,14 @@ class AIAgent:
         self.session_start = session_start
         self.reset_session_state()
         self._session_persistence.session_start = session_start
+        if hasattr(self, "context_compressor") and self.context_compressor:
+            self.context_compressor.on_session_start(
+                session_id,
+                VoidCube_home=str(get_VoidCube_home()),
+                platform=self.platform or "cli",
+                model=self.model,
+                context_length=getattr(self.context_compressor, "context_length", 0),
+            )
 
         from tools.todo_tool import TodoStore
 

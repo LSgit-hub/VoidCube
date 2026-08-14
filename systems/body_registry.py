@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
+
 from VoidCube_core.utils import atomic_json_write
 
 BodyState = Literal["shell", "candidate", "probe", "awaiting_user_consent", "active", "retired"]
@@ -137,6 +139,7 @@ class BodyImprovementReport(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
     learning_refs: list[dict] = Field(default_factory=list)
     improvement_description: str
+    execution_environment: ExecutionEnvironmentManifest
     executed_at: str = ""
 
 

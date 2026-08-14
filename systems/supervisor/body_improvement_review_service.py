@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict
 from systems.supervisor.evolution_evaluation_governance import (
     validate_body_improvement_authorization_binding,
 )
+from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
 
 
 logger = logging.getLogger("supervisor")
@@ -355,6 +356,21 @@ class BodyImprovementReviewService:
 
         if not changed_files or not baseline_commit or not commit_hash:
             return {"score_delta": 0, "reject_reason": "empty_improvement"}
+
+        try:
+            execution_environment = ExecutionEnvironmentManifest.model_validate(
+                report_dict.get("execution_environment")
+            )
+        except Exception:
+            return {
+                "score_delta": 0,
+                "reject_reason": "execution_environment_manifest_invalid",
+            }
+        if execution_environment.validation_scope != "container":
+            return {
+                "score_delta": 0,
+                "reject_reason": "body_task_container_environment_required",
+            }
 
         task_id = str(report_dict.get("task_id") or "").strip()
         governed_task = self._autonomous_chain_store.get_task(task_id)

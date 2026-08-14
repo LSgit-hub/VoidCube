@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.governor import GovernorRequest
 from systems.evolution_evaluation import (
+    EXECUTION_ENVIRONMENT_GATE,
     BenchmarkCase,
     BenchmarkPack,
     ExperimentResult,
@@ -26,6 +27,8 @@ from systems.evolution_evaluation import (
     MetricValue,
     ScoringDimension,
     ScoringPolicy,
+    ExecutionEnvironmentManifest,
+    capture_host_environment_manifest,
 )
 from systems.research_knowledge import KnowledgeArtifact, KnowledgeClaim, KnowledgeSource
 from systems.self_cognition import SelfCognitionSnapshot
@@ -35,6 +38,31 @@ from systems.supervisor.supervisor import (
     SupervisorConfig,
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
+)
+
+
+_HOST_ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head="a" * 40,
+)
+_BODY_ENVIRONMENT_PAYLOAD = _HOST_ENVIRONMENT.content_payload()
+_BODY_ENVIRONMENT_PAYLOAD.update(
+    backend="podman",
+    validation_scope="container",
+    execution_os="Linux 6.8",
+    architecture="x86_64",
+    execution_workspace_path="/workspace",
+    path_mappings=(
+        {
+            "host_path": _HOST_ENVIRONMENT.host_workspace_path,
+            "execution_path": "/workspace",
+        },
+    ),
+    repository_head="b" * 40,
+    validated_platforms=("linux",),
+)
+_BODY_ENVIRONMENT = ExecutionEnvironmentManifest.create(
+    **_BODY_ENVIRONMENT_PAYLOAD
 )
 
 
@@ -105,6 +133,9 @@ def _create_running_body_improvement_task(
             "benchmark_pack_id",
             "scoring_policy_id",
             "knowledge_ids",
+            "execution_environment_id",
+            "validation_scope",
+            "validated_platforms",
         )
     }
     slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
@@ -207,6 +238,7 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
+        required_validation_platforms=("windows",),
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=now,
@@ -228,7 +260,15 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
         candidate_metrics=(MetricValue(metric="correctness", value=0.9, unit="ratio"),),
         metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
         confidence=0.9,
-        hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+        hard_gate_results=(
+            HardGateResult(gate="tests", passed=True),
+            HardGateResult(
+                gate=EXECUTION_ENVIRONMENT_GATE,
+                passed=True,
+                evidence_refs=(_HOST_ENVIRONMENT.execution_environment_id,),
+            ),
+        ),
+        execution_environment=_HOST_ENVIRONMENT,
         verdict="promote",
         completed_at=now,
     )
@@ -247,6 +287,7 @@ def _body_improvement_execution_context(task) -> dict:
     return {
         "session_id": task.execution_lease.owner_session_id,
         "execution_lease": task.execution_lease.model_dump(mode="json"),
+        "execution_environment": _BODY_ENVIRONMENT.model_dump(mode="json"),
     }
 
 

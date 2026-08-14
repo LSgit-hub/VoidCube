@@ -77,6 +77,9 @@ def test_body_improvement_prompt_captures_body_context():
         "must_match_evaluated_commit": True,
         "requires_governor_review": True,
         "requires_user_consent": True,
+        "execution_environment_id": "execution-environment-" + "e" * 64,
+        "validation_scope": "host",
+        "validated_platforms": ["windows"],
         },
         "evidence": {
             "learning_refs": [

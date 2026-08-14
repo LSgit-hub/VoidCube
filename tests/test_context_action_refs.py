@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent.context_compressor import ContextCompressor
 
 
@@ -81,16 +83,40 @@ def test_pruning_large_tool_output_keeps_action_ref_and_readable_pointer():
     assert "act-pruned state=succeeded" in pruned[2]["content"]
 
 
-def test_summary_failure_retains_action_refs_in_compacted_message(monkeypatch):
+def test_summary_failure_recovers_from_durable_structured_checkpoint(
+    monkeypatch,
+    tmp_path,
+):
     compressor = _compressor()
+    compressor.on_session_start("session-fallback", VoidCube_home=str(tmp_path))
     monkeypatch.setattr(compressor, "_generate_summary", lambda *_args, **_kwargs: None)
 
     compressed = compressor.compress(_messages(_ref("act-fallback")), current_tokens=9000)
 
     refs = _all_refs(compressed)
     assert [item["action_id"] for item in refs] == ["act-fallback"]
-    summary = next(message["content"] for message in compressed if "Summary generation was unavailable" in message["content"])
+    summary = next(
+        message["content"]
+        for message in compressed
+        if "Structured Recovery Checkpoint" in message["content"]
+    )
     assert "act-fallback state=succeeded" in summary
+    assert "intermediate" in summary
+
+    checkpoint_files = list(
+        (tmp_path / "runtime" / "context-checkpoints").glob("*.json")
+    )
+    assert len(checkpoint_files) == 1
+    payload = json.loads(checkpoint_files[0].read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["checkpoint_id"].startswith("context-checkpoint-")
+    assert payload["session_id"] == "session-fallback"
+    assert payload["action_refs"][0]["action_id"] == "act-fallback"
+    assert any(turn.get("content") == "intermediate" for turn in payload["turns"])
+
+    restored = _compressor()
+    restored.on_session_start("session-fallback", VoidCube_home=str(tmp_path))
+    assert restored._last_checkpoint["checkpoint_id"] == payload["checkpoint_id"]
 
 
 def test_repeated_compression_deduplicates_and_preserves_action_refs(monkeypatch):

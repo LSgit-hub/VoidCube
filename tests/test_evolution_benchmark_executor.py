@@ -9,6 +9,7 @@ import pytest
 
 from systems.evolution_evaluation import (
     BENCHMARK_CONSISTENCY_GATE,
+    EXECUTION_ENVIRONMENT_GATE,
     BenchmarkCase,
     BenchmarkCaseFailed,
     BenchmarkCaseResult,
@@ -17,6 +18,7 @@ from systems.evolution_evaluation import (
     BenchmarkPack,
     BenchmarkPackExecutor,
     ExperimentSpec,
+    ExecutionEnvironmentManifest,
     HardGateResult,
     JsonEvaluationRepository,
     MetricValue,
@@ -24,6 +26,7 @@ from systems.evolution_evaluation import (
     ScoringDimension,
     ScoringPolicy,
     AllowedRegression,
+    capture_host_environment_manifest,
 )
 
 
@@ -32,6 +35,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 NOW = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
 BASELINE_SNAPSHOT = "self-cognition-" + "a" * 64
 CANDIDATE_SNAPSHOT = "self-cognition-" + "b" * 64
+ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head="c" * 40,
+)
 
 
 def _contracts(
@@ -53,6 +60,7 @@ def _contracts(
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
+        required_validation_platforms=("windows",),
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=NOW,
@@ -82,6 +90,7 @@ def _runner(request):
     value = 0.8 if request.subject == "baseline" else 0.9
     return BenchmarkCaseResult(
         case_id=request.case.case_id,
+        execution_environment=ENVIRONMENT,
         metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
         hard_gate_results=(
             HardGateResult(
@@ -123,8 +132,69 @@ def test_executor_runs_same_pack_for_both_subjects_and_promotes():
     assert {gate.gate for gate in result.hard_gate_results} == {
         "tests",
         BENCHMARK_CONSISTENCY_GATE,
+        EXECUTION_ENVIRONMENT_GATE,
     }
     assert all(gate.passed for gate in result.hard_gate_results)
+
+
+def test_platform_coverage_is_a_hard_gate():
+    pack, policy, spec = _contracts()
+    payload = ENVIRONMENT.content_payload()
+    payload.update(
+        backend="podman",
+        validation_scope="container",
+        execution_os="Linux 6.8",
+        architecture="x86_64",
+        execution_workspace_path="/workspace",
+        path_mappings=(
+            {
+                "host_path": ENVIRONMENT.host_workspace_path,
+                "execution_path": "/workspace",
+            },
+        ),
+        validated_platforms=("linux",),
+    )
+    linux_environment = ExecutionEnvironmentManifest.create(**payload)
+
+    def linux_runner(request):
+        result = _runner(request)
+        return result.model_copy(update={"execution_environment": linux_environment})
+
+    result = BenchmarkPackExecutor({"quality": linux_runner}).execute(
+        benchmark_pack=pack,
+        experiment_spec=spec,
+        scoring_policy=policy,
+        completed_at=NOW,
+    )
+
+    environment_gate = next(
+        gate
+        for gate in result.hard_gate_results
+        if gate.gate == EXECUTION_ENVIRONMENT_GATE
+    )
+    assert environment_gate.passed is False
+    assert "missing-platform:windows" in environment_gate.evidence_refs
+    assert result.verdict == "reject"
+
+
+def test_baseline_candidate_environment_drift_aborts_evaluation():
+    pack, policy, spec = _contracts()
+    payload = ENVIRONMENT.content_payload()
+    payload["backend"] = "different-host"
+    drifted = ExecutionEnvironmentManifest.create(**payload)
+
+    def drifting_environment_runner(request):
+        result = _runner(request)
+        environment = ENVIRONMENT if request.subject == "baseline" else drifted
+        return result.model_copy(update={"execution_environment": environment})
+
+    with pytest.raises(BenchmarkCaseFailed, match="identical execution environment"):
+        BenchmarkPackExecutor({"quality": drifting_environment_runner}).execute(
+            benchmark_pack=pack,
+            experiment_spec=spec,
+            scoring_policy=policy,
+            completed_at=NOW,
+        )
 
 
 def test_missing_required_gate_rejects_without_fabricating_success():
@@ -134,6 +204,7 @@ def test_missing_required_gate_rejects_without_fabricating_success():
         value = 0.8 if request.subject == "baseline" else 0.9
         return BenchmarkCaseResult(
             case_id=request.case.case_id,
+            execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
         )
 
@@ -157,6 +228,7 @@ def test_disallowed_regression_is_recorded_and_rejected():
         value = 0.9 if request.subject == "baseline" else 0.8
         return BenchmarkCaseResult(
             case_id=request.case.case_id,
+            execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
         )
@@ -185,6 +257,7 @@ def test_allowed_regression_can_observe_when_score_is_partial():
         value = 0.9 if request.subject == "baseline" else 0.8
         return BenchmarkCaseResult(
             case_id=request.case.case_id,
+            execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
         )
@@ -238,6 +311,7 @@ def test_metric_shape_drift_and_missing_runner_are_rejected():
             metrics.append(MetricValue(metric="latency", value=1.0, unit="ms"))
         return BenchmarkCaseResult(
             case_id=request.case.case_id,
+            execution_environment=ENVIRONMENT,
             metrics=tuple(metrics),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
         )

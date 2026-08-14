@@ -12,11 +12,96 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 SCHEMA_VERSION = 1
+SCORING_POLICY_SCHEMA_VERSION = 2
+EXPERIMENT_RESULT_SCHEMA_VERSION = 2
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_GIT_COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 
 
 class _FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+
+
+class RuntimeToolIdentity(_FrozenModel):
+    scope: Literal["host", "execution"]
+    name: Literal["git", "python", "pytest", "node", "npm"]
+    available: bool
+    executable: str = ""
+    version: str = ""
+
+    @model_validator(mode="after")
+    def _validate_availability(self) -> Self:
+        if self.available and (not self.executable or not self.version):
+            raise ValueError("available runtime tools require executable and version")
+        if not self.available and (self.executable or self.version):
+            raise ValueError("unavailable runtime tools cannot declare executable or version")
+        return self
+
+
+class WorkspacePathMapping(_FrozenModel):
+    host_path: str = Field(min_length=1)
+    execution_path: str = Field(min_length=1)
+
+
+class _ExecutionEnvironmentManifestContent(_FrozenModel):
+    schema_version: Literal[1] = SCHEMA_VERSION
+    backend: str = Field(min_length=1)
+    validation_scope: Literal["host", "container", "remote"]
+    host_os: str = Field(min_length=1)
+    execution_os: str = Field(min_length=1)
+    architecture: str = Field(min_length=1)
+    host_workspace_path: str = Field(min_length=1)
+    execution_workspace_path: str = Field(min_length=1)
+    path_mappings: tuple[WorkspacePathMapping, ...] = Field(min_length=1)
+    tools: tuple[RuntimeToolIdentity, ...] = Field(min_length=1)
+    repository_head: str = Field(pattern=_GIT_COMMIT_PATTERN)
+    dependency_fingerprint: str = Field(pattern=_SHA256_PATTERN)
+    validated_platforms: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_environment(self) -> Self:
+        tool_keys = ((item.scope, item.name) for item in self.tools)
+        _require_unique("runtime tool", (f"{scope}:{name}" for scope, name in tool_keys))
+        _require_unique("validated platform", self.validated_platforms)
+        execution_platform = _platform_key(self.execution_os)
+        if self.validated_platforms != (execution_platform,):
+            raise ValueError(
+                "validated_platforms must match the execution operating system"
+            )
+        if not any(
+            item.host_path == self.host_workspace_path
+            and item.execution_path == self.execution_workspace_path
+            for item in self.path_mappings
+        ):
+            raise ValueError("workspace paths require an explicit host-to-execution mapping")
+        return self
+
+
+class ExecutionEnvironmentManifest(_ExecutionEnvironmentManifestContent):
+    execution_environment_id: str = Field(min_length=1)
+    content_hash: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        return _create_content_addressed(
+            cls=cls,
+            content_cls=_ExecutionEnvironmentManifestContent,
+            id_field="execution_environment_id",
+            id_prefix="execution-environment-",
+            values=values,
+        )
+
+    def content_payload(self) -> dict[str, object]:
+        return _content_payload(
+            self,
+            _ExecutionEnvironmentManifestContent,
+            "execution_environment_id",
+        )
+
+    @model_validator(mode="after")
+    def _validate_content_address(self) -> Self:
+        _validate_address(self, "execution_environment_id", "execution-environment-")
+        return self
 
 
 class BenchmarkCase(_FrozenModel):
@@ -74,10 +159,11 @@ class ScoringDimension(_FrozenModel):
 
 
 class _ScoringPolicyContent(_FrozenModel):
-    schema_version: Literal[1] = SCHEMA_VERSION
+    schema_version: Literal[2] = SCORING_POLICY_SCHEMA_VERSION
     policy_version: str = Field(min_length=1)
     dimensions: tuple[ScoringDimension, ...] = Field(min_length=1)
     required_hard_gates: tuple[str, ...] = Field(min_length=1)
+    required_validation_platforms: tuple[str, ...] = Field(min_length=1)
     promote_threshold: float = Field(ge=0.0, le=1.0)
     observe_threshold: float = Field(ge=0.0, le=1.0)
     created_at: datetime
@@ -91,6 +177,12 @@ class _ScoringPolicyContent(_FrozenModel):
     def _validate_policy(self) -> Self:
         _require_unique("dimension", (item.name for item in self.dimensions))
         _require_unique("hard gate", self.required_hard_gates)
+        _require_unique("validation platform", self.required_validation_platforms)
+        if any(
+            platform_name != _platform_key(platform_name)
+            for platform_name in self.required_validation_platforms
+        ):
+            raise ValueError("required validation platforms must use canonical names")
         if abs(sum(item.weight for item in self.dimensions) - 1.0) > 1e-9:
             raise ValueError("scoring dimension weights must sum to 1.0")
         if self.observe_threshold > self.promote_threshold:
@@ -213,7 +305,7 @@ class HardGateResult(_FrozenModel):
 
 
 class _ExperimentResultContent(_FrozenModel):
-    schema_version: Literal[1] = SCHEMA_VERSION
+    schema_version: Literal[2] = EXPERIMENT_RESULT_SCHEMA_VERSION
     experiment_spec_id: str = Field(pattern=r"^experiment-spec-[0-9a-f]{64}$")
     baseline_metrics: tuple[MetricValue, ...] = Field(min_length=1)
     candidate_metrics: tuple[MetricValue, ...] = Field(min_length=1)
@@ -221,6 +313,7 @@ class _ExperimentResultContent(_FrozenModel):
     regressions: tuple[Regression, ...] = ()
     confidence: float = Field(ge=0.0, le=1.0)
     hard_gate_results: tuple[HardGateResult, ...] = Field(min_length=1)
+    execution_environment: ExecutionEnvironmentManifest
     verdict: str = Field(pattern=r"^(promote|observe|reject)$")
     completed_at: datetime
 
@@ -338,3 +431,14 @@ def _require_unique(label: str, values: object) -> None:
     items = [str(item) for item in values]
     if len(items) != len(set(items)):
         raise ValueError(f"{label} values must be unique")
+
+
+def _platform_key(value: str) -> str:
+    normalized = str(value or "unknown").strip().lower()
+    if normalized.startswith("win"):
+        return "windows"
+    if normalized.startswith("linux"):
+        return "linux"
+    if normalized.startswith(("darwin", "macos", "mac ")):
+        return "macos"
+    return normalized.split(maxsplit=1)[0] or "unknown"

@@ -109,6 +109,9 @@ def _body_evaluation_authorization() -> dict:
         "candidate_snapshot_id": "self-cognition-" + "4" * 64,
         "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
         "scoring_policy_id": "scoring-policy-" + "6" * 64,
+        "execution_environment_id": "execution-environment-" + "8" * 64,
+        "validation_scope": "host",
+        "validated_platforms": ["windows"],
         "knowledge_ids": ["knowledge-" + "7" * 64],
     }
 
@@ -126,6 +129,9 @@ def _body_evaluation_fields() -> dict:
             "candidate_snapshot_id",
             "benchmark_pack_id",
             "scoring_policy_id",
+            "execution_environment_id",
+            "validation_scope",
+            "validated_platforms",
             "knowledge_ids",
         )
     }

@@ -610,12 +610,54 @@ def _git_path(worktree: Path, argument: str) -> Path:
     return path.resolve()
 
 
+_ENVIRONMENT_PROBE_MARKER = "__VOIDCUBE_EXECUTION_ENVIRONMENT__"
+
+
+def _parse_sandbox_environment_probe(
+    output: str,
+    *,
+    expected_head: str,
+) -> Dict[str, Any]:
+    lines = str(output or "").splitlines()
+    try:
+        marker_index = lines.index(_ENVIRONMENT_PROBE_MARKER)
+    except ValueError as exc:
+        raise RuntimeError("sandbox probe did not return environment metadata") from exc
+    if marker_index < 3:
+        raise RuntimeError("sandbox probe did not return workspace and Git identity")
+    if (
+        lines[0].strip() != "/workspace"
+        or lines[1].strip() != "/workspace"
+        or lines[2].strip() != expected_head
+    ):
+        raise RuntimeError("sandbox workspace or Git HEAD does not match the task")
+
+    values: Dict[str, str] = {}
+    tools: Dict[str, Dict[str, str]] = {}
+    for line in lines[marker_index + 1 :]:
+        parts = line.split("\t", 2)
+        if len(parts) == 2:
+            values[parts[0]] = parts[1].strip()
+        elif len(parts) == 3 and parts[0].startswith("tool."):
+            tools[parts[0][5:]] = {
+                "executable": parts[1].strip(),
+                "version": parts[2].strip(),
+            }
+    return {
+        "os_name": values.get("os_name") or "unknown",
+        "os_release": values.get("os_release") or "unknown",
+        "architecture": values.get("architecture") or "unknown",
+        "repository_head": lines[2].strip(),
+        "tools": tools,
+    }
+
+
 def prepare_task_git_worktree(
     task_id: str,
     worktree_path: str,
     *,
     expected_head: str,
-) -> None:
+) -> Dict[str, Any]:
     """Bind and verify an isolated linked worktree for one sandbox task.
 
     Linked worktrees on Windows contain host-only paths in their ``.git`` file.
@@ -694,29 +736,69 @@ def prepare_task_git_worktree(
     )
 
     try:
-        probe = json.loads(
+        probe_command = "\n".join(
+            (
+                "pwd",
+                "git rev-parse --show-toplevel",
+                "git rev-parse HEAD",
+                "printf '__VOIDCUBE_EXECUTION_ENVIRONMENT__\\n'",
+                "printf 'os_name\\t%s\\n' \"$(uname -s 2>/dev/null || printf unknown)\"",
+                "printf 'os_release\\t%s\\n' \"$(uname -r 2>/dev/null || printf unknown)\"",
+                "printf 'architecture\\t%s\\n' \"$(uname -m 2>/dev/null || printf unknown)\"",
+                "for tool in git python pytest node npm; do",
+                "  executable=\"$(command -v \"$tool\" 2>/dev/null || true)\"",
+                "  version=\"\"",
+                "  if [ \"$tool\" = python ] && [ -z \"$executable\" ]; then",
+                "    executable=\"$(command -v python3 2>/dev/null || true)\"",
+                "  fi",
+                "  if [ \"$tool\" = pytest ] && [ -z \"$executable\" ]; then",
+                "    python_executable=\"$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)\"",
+                "    if [ -n \"$python_executable\" ]; then",
+                "      pytest_version=\"$(\"$python_executable\" -m pytest --version 2>/dev/null | head -n 1)\"",
+                "      if [ -n \"$pytest_version\" ]; then",
+                "        executable=\"$python_executable -m pytest\"",
+                "        version=\"$pytest_version\"",
+                "      fi",
+                "    fi",
+                "  fi",
+                "  if [ -n \"$executable\" ]; then",
+                "    version=\"${version:-$(\"$executable\" --version 2>&1 | head -n 1)}\"",
+                "    printf 'tool.%s\\t%s\\t%s\\n' \"$tool\" \"$executable\" \"$version\"",
+                "  fi",
+                "done",
+                "git status --short",
+            )
+        )
+        probe_result = json.loads(
             terminal_tool(
-                "pwd && git rev-parse --show-toplevel && git rev-parse HEAD && git status --short",
+                probe_command,
                 task_id=normalized_task_id,
                 timeout=30,
             )
         )
-        output_lines = str(probe.get("output") or "").splitlines()
-        probe_ok = (
-            probe.get("exit_code") == 0
-            and len(output_lines) >= 3
-            and output_lines[0].strip() == "/workspace"
-            and output_lines[1].strip() == "/workspace"
-            and output_lines[2].strip() == expected_head
-        )
-        if not probe_ok:
+        if probe_result.get("exit_code") != 0:
             raise RuntimeError(
                 str(
-                    probe.get("error")
-                    or probe.get("output")
+                    probe_result.get("error")
+                    or probe_result.get("output")
                     or "invalid Git probe output"
                 )[:500]
             )
+        environment_probe = _parse_sandbox_environment_probe(
+            str(probe_result.get("output") or ""),
+            expected_head=expected_head,
+        )
+        from systems.evolution_evaluation.environment import (
+            build_container_environment_manifest,
+        )
+
+        manifest = build_container_environment_manifest(
+            worktree,
+            backend=backend,
+            execution_workspace_path="/workspace",
+            probe=environment_probe,
+        )
+        return manifest.model_dump(mode="json")
     except Exception as exc:
         cleanup_vm(normalized_task_id)
         clear_task_env_overrides(normalized_task_id)

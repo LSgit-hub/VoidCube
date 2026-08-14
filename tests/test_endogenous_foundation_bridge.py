@@ -17,6 +17,7 @@ from systems.evolution_evaluation import (
     MetricValue,
     ScoringDimension,
     ScoringPolicy,
+    capture_host_environment_manifest,
 )
 from systems.research_knowledge import (
     JsonKnowledgeRepository,
@@ -40,6 +41,10 @@ from systems.supervisor.endogenous_foundation_bridge import (
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 NOW = datetime(2026, 8, 14, 14, 0, tzinfo=timezone.utc)
+ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head="c" * 40,
+)
 
 
 def _snapshot() -> SelfCognitionSnapshot:
@@ -104,6 +109,7 @@ def _evaluation_records():
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
+        required_validation_platforms=("windows",),
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=NOW,
@@ -125,6 +131,7 @@ def _evaluation_records():
         metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
         confidence=1.0,
         hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+        execution_environment=ENVIRONMENT,
         verdict="promote",
         completed_at=NOW,
     )

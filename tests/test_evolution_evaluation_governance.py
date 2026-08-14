@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from systems.evolution_evaluation import (
+    EXECUTION_ENVIRONMENT_GATE,
     BenchmarkCase,
     BenchmarkPack,
     ExperimentResult,
@@ -18,6 +19,7 @@ from systems.evolution_evaluation import (
     MetricValue,
     ScoringDimension,
     ScoringPolicy,
+    capture_host_environment_manifest,
 )
 from systems.research_knowledge import (
     JsonKnowledgeRepository,
@@ -35,6 +37,10 @@ from systems.supervisor.evolution_evaluation_governance import (
 NOW = datetime(2026, 8, 14, 6, 0, tzinfo=timezone.utc)
 BASELINE_COMMIT = "b" * 40
 CANDIDATE_COMMIT = "a" * 40
+ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head=CANDIDATE_COMMIT,
+)
 
 
 def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: str = "tests"):
@@ -88,6 +94,7 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
+        required_validation_platforms=("windows",),
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=NOW,
@@ -109,7 +116,15 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
         candidate_metrics=(MetricValue(metric="correctness", value=0.9, unit="ratio"),),
         metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
         confidence=0.9,
-        hard_gate_results=(HardGateResult(gate=gate, passed=True),),
+        hard_gate_results=(
+            HardGateResult(gate=gate, passed=True),
+            HardGateResult(
+                gate=EXECUTION_ENVIRONMENT_GATE,
+                passed=True,
+                evidence_refs=(ENVIRONMENT.execution_environment_id,),
+            ),
+        ),
+        execution_environment=ENVIRONMENT,
         verdict=verdict,
         completed_at=completed_at,
     )
@@ -251,6 +266,9 @@ def test_binding_rejects_actual_commit_mismatch(tmp_path: Path):
             "candidate_snapshot_id",
             "benchmark_pack_id",
             "scoring_policy_id",
+            "execution_environment_id",
+            "validation_scope",
+            "validated_platforms",
             "knowledge_ids",
         )
     }

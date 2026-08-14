@@ -106,14 +106,23 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
         "terminal_tool",
         lambda *_args, **_kwargs: json.dumps(
             {
-                "output": f"/workspace\n/workspace\n{head}\n",
+                "output": (
+                    f"/workspace\n/workspace\n{head}\n"
+                    "__VOIDCUBE_EXECUTION_ENVIRONMENT__\n"
+                    "os_name\tLinux\n"
+                    "os_release\t6.8.0\n"
+                    "architecture\tx86_64\n"
+                    "tool.git\t/usr/bin/git\tgit version 2.45.0\n"
+                    "tool.python\t/usr/bin/python\tPython 3.12.0\n"
+                    "tool.pytest\t/usr/bin/pytest\tpytest 8.3.0\n"
+                ),
                 "exit_code": 0,
                 "error": None,
             }
         ),
     )
 
-    terminal_tool_module.prepare_task_git_worktree(
+    manifest = terminal_tool_module.prepare_task_git_worktree(
         "autonomous-session",
         str(worktree),
         expected_head=head,
@@ -134,6 +143,10 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
         "/voidcube-git/common/worktrees/"
     )
     assert overrides["docker_env"]["EXISTING"] == "1"
+    assert manifest["validation_scope"] == "container"
+    assert manifest["validated_platforms"] == ["linux"]
+    assert manifest["repository_head"] == head
+    assert manifest["execution_workspace_path"] == "/workspace"
 
 
 @pytest.mark.unit

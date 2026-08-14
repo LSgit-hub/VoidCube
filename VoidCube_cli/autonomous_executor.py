@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from VoidCube_cli.ops.executor import default_gateway_url
+from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
 
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"
@@ -31,7 +32,7 @@ class AutonomousExecutorPorts:
     agent_running: Callable[[], bool]
     autonomous_gate_active: Callable[[], bool]
     append_execution_event: Callable[..., None]
-    prepare_body_worktree: Callable[[str, str, str], None]
+    prepare_body_worktree: Callable[[str, str, str], Dict[str, Any]]
     release_task_environment: Callable[[str], None]
 
 
@@ -106,6 +107,14 @@ def build_autonomous_task_prompt(
         experiment_result_id = str(
             constraints.get("experiment_result_id") or ""
         ).strip()
+        evaluated_environment_id = str(
+            constraints.get("execution_environment_id") or ""
+        ).strip()
+        evaluated_platforms = tuple(
+            str(item).strip()
+            for item in constraints.get("validated_platforms") or []
+            if str(item).strip()
+        )
         if not (
             constraints.get("must_not_create_new_commit") is True
             and constraints.get("must_match_evaluated_commit") is True
@@ -114,6 +123,8 @@ def build_autonomous_task_prompt(
             and evaluated_baseline_commit
             and evaluated_candidate_commit
             and experiment_result_id
+            and evaluated_environment_id
+            and evaluated_platforms
         ):
             raise ValueError(
                 "body improvement task is missing immutable evaluation authorization"
@@ -157,6 +168,10 @@ def build_autonomous_task_prompt(
         if max_files:
             prompt_parts.append(f"Max files changed: {max_files}")
         prompt_parts.append(f"ExperimentResult: {experiment_result_id}")
+        prompt_parts.append(
+            f"Evaluated environment: {evaluated_environment_id} "
+            f"(platforms: {', '.join(evaluated_platforms)})"
+        )
         prompt_parts.append(f"Evaluated baseline commit: {evaluated_baseline_commit}")
         prompt_parts.append(f"Required candidate HEAD: {evaluated_candidate_commit}")
         if learning_refs:
@@ -317,10 +332,36 @@ class AutonomousExecutorRuntime:
                 git_head_commit=self._git_head_commit,
             )
             if execution_kind == "body_improvement":
-                self.ports.prepare_body_worktree(
+                raw_manifest = self.ports.prepare_body_worktree(
                     self.ports.get_session_id(),
                     str(task.get("_improvement_worktree") or ""),
                     str(task.get("_baseline_head") or ""),
+                )
+                manifest = ExecutionEnvironmentManifest.model_validate(raw_manifest)
+                if manifest.validation_scope != "container":
+                    raise ValueError(
+                        "autonomous body worktree must be bound to a container manifest"
+                    )
+                task["_execution_environment"] = manifest.model_dump(mode="json")
+                execution_tools = ", ".join(
+                    (
+                        f"{tool.name}={tool.executable} ({tool.version})"
+                        if tool.available
+                        else f"{tool.name}=unavailable"
+                    )
+                    for tool in manifest.tools
+                    if tool.scope == "execution"
+                )
+                prompt += (
+                    "\n\nExecution environment: "
+                    f"{manifest.execution_environment_id} "
+                    f"({manifest.execution_os}, scope={manifest.validation_scope}). "
+                    "Paths under the mounted repository must use /workspace. "
+                    f"Sandbox toolchain: {execution_tools}. "
+                    "Use these sandbox executables and report a missing dependency as "
+                    "blocked rather than substituting a host path. "
+                    "This manifest proves only the container environment; do not claim "
+                    "that Windows-host tests passed unless separate Windows evidence exists."
                 )
             run_id = bind_autonomous_execution_start(task, prompt)
             self.ports.set_current_task_run_id(run_id)
@@ -341,6 +382,7 @@ class AutonomousExecutorRuntime:
                 "_autonomous_task_run_id",
                 "_autonomous_execution_start_text",
                 "_autonomous_execution_started",
+                "_execution_environment",
             ):
                 task.pop(key, None)
             self.ports.set_current_task_run_id("")
@@ -723,6 +765,9 @@ class AutonomousExecutorRuntime:
                         "error": str(turn_result.get("error", "") or "")[:200],
                         "tools_used": list(turn_result.get("tools_used") or []),
                         "source_urls": list(turn_result.get("source_urls") or [])[:20],
+                        "execution_environment": dict(
+                            current.get("_execution_environment") or {}
+                        ),
                     },
                     timeout=15,
                     gateway_base=gateway_base,
@@ -922,6 +967,9 @@ class AutonomousExecutorRuntime:
             "improvement_description": improvement_description,
             "session_id": str(self.ports.get_session_id() or ""),
             "execution_lease": dict(task.get("execution_lease") or {}),
+            "execution_environment": dict(
+                task.get("_execution_environment") or {}
+            ),
         }
         try:
             request = urllib.request.Request(

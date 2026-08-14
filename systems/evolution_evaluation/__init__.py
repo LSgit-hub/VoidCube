@@ -3,6 +3,7 @@
 from systems.evolution_evaluation.executor import (
     BENCHMARK_CONSISTENCY_GATE,
     DEFAULT_BENCHMARK_EXECUTOR_VERSION,
+    EXECUTION_ENVIRONMENT_GATE,
     BenchmarkCaseFailed,
     BenchmarkCaseResult,
     BenchmarkCaseTimedOut,
@@ -16,6 +17,7 @@ from systems.evolution_evaluation.models import (
     AllowedRegression,
     BenchmarkCase,
     BenchmarkPack,
+    ExecutionEnvironmentManifest,
     ExperimentResult,
     ExperimentSpec,
     HardGateResult,
@@ -23,8 +25,16 @@ from systems.evolution_evaluation.models import (
     MetricTarget,
     MetricValue,
     Regression,
+    RuntimeToolIdentity,
     ScoringDimension,
     ScoringPolicy,
+    WorkspacePathMapping,
+)
+from systems.evolution_evaluation.environment import (
+    build_container_environment_manifest,
+    capture_host_environment_manifest,
+    capture_host_runtime_tools,
+    dependency_fingerprint,
 )
 from systems.evolution_evaluation.repository import (
     EvaluationImmutableConflict,
@@ -47,9 +57,11 @@ __all__ = [
     "BenchmarkRunner",
     "BenchmarkRunRequest",
     "DEFAULT_BENCHMARK_EXECUTOR_VERSION",
+    "EXECUTION_ENVIRONMENT_GATE",
     "EvaluationImmutableConflict",
     "EvaluationRecordCorrupted",
     "EvaluationRepository",
+    "ExecutionEnvironmentManifest",
     "ExperimentResult",
     "ExperimentSpec",
     "HardGateResult",
@@ -58,6 +70,12 @@ __all__ = [
     "MetricTarget",
     "MetricValue",
     "Regression",
+    "RuntimeToolIdentity",
     "ScoringDimension",
     "ScoringPolicy",
+    "WorkspacePathMapping",
+    "build_container_environment_manifest",
+    "capture_host_environment_manifest",
+    "capture_host_runtime_tools",
+    "dependency_fingerprint",
 ]

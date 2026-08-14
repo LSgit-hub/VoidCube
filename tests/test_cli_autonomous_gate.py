@@ -35,6 +35,34 @@ from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 from VoidCube_cli.command_execution import initialize_command_execution
 from VoidCube_cli.tui_layout import build_tui_layout_children
 from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
+from systems.evolution_evaluation import (
+    ExecutionEnvironmentManifest,
+    capture_host_environment_manifest,
+)
+
+
+def _test_container_environment() -> dict:
+    host = capture_host_environment_manifest(
+        Path(__file__).parents[1],
+        repository_head="b" * 40,
+    )
+    payload = host.content_payload()
+    payload.update(
+        backend="podman",
+        validation_scope="container",
+        execution_os="Linux 6.8",
+        architecture="x86_64",
+        execution_workspace_path="/workspace",
+        path_mappings=(
+            {
+                "host_path": host.host_workspace_path,
+                "execution_path": "/workspace",
+            },
+        ),
+        repository_head="b" * 40,
+        validated_platforms=("linux",),
+    )
+    return ExecutionEnvironmentManifest.create(**payload).model_dump(mode="json")
 
 
 class _FakeUrlopenResponse:
@@ -486,9 +514,10 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
     monkeypatch.setattr(
         autonomous_runtime_host_module,
         "prepare_task_git_worktree",
-        lambda task_id, path, *, expected_head: prepared_worktrees.append(
-            (task_id, path, expected_head)
-        ),
+        lambda task_id, path, *, expected_head: (
+            prepared_worktrees.append((task_id, path, expected_head)),
+            _test_container_environment(),
+        )[1],
     )
 
     def fake_urlopen(request, timeout=0):
@@ -514,6 +543,9 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
                             "must_match_evaluated_commit": True,
                             "requires_governor_review": True,
                             "requires_user_consent": True,
+                            "execution_environment_id": "execution-environment-" + "8" * 64,
+                            "validation_scope": "host",
+                            "validated_platforms": ["windows"],
                         },
                         "execution_lease": {
                             "generation": 1,
@@ -549,6 +581,9 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
                                 "must_match_evaluated_commit": True,
                                 "requires_governor_review": True,
                                 "requires_user_consent": True,
+                                "execution_environment_id": "execution-environment-" + "8" * 64,
+                                "validation_scope": "host",
+                                "validated_platforms": ["windows"],
                             },
                         }
                     ]

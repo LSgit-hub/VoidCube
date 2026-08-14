@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
@@ -37,6 +38,27 @@ _RESULT_STATE_ALIASES = {
     "succeeded": ExecutionState.SUCCEEDED,
     "success": ExecutionState.SUCCEEDED,
 }
+
+_TEXT_FAILURE_PATTERNS = (
+    re.compile(r"^\s*(?:error|failed|failure|fatal)\b", re.IGNORECASE),
+    re.compile(
+        r"^\s*(?:command\s+)?(?:exit|exited)\s+with\s+"
+        r"(?:non[- ]zero\s+)?(?:code|status)\s*[1-9]\d*\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:timed?\s*out|timeout)\s+"
+        r"(?:while|waiting|connecting|loading|reading|writing)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:permission denied|access denied)\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:command\s+)?not found\b", re.IGNORECASE),
+    re.compile(
+        r"^\s*(?:unable|could not|cannot|can't)\s+to\s+"
+        r"(?:connect|reach|access|open)\b",
+        re.IGNORECASE,
+    ),
+)
 
 
 def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
@@ -73,7 +95,7 @@ def classify_tool_result(content: Any) -> tuple[ExecutionState, str]:
         ):
             return ExecutionState.FAILED, " [error]"
         return ExecutionState.SUCCEEDED, ""
-    if text.lstrip().lower().startswith("error"):
+    if any(pattern.search(text) for pattern in _TEXT_FAILURE_PATTERNS):
         return ExecutionState.FAILED, " [error]"
     return ExecutionState.SUCCEEDED, ""
 

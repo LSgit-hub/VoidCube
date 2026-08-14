@@ -22,6 +22,7 @@ from systems.evolution_evaluation import (
     MetricValue,
     ScoringDimension,
     ScoringPolicy,
+    capture_host_environment_manifest,
 )
 from systems.research_knowledge import (
     JsonKnowledgeRepository,
@@ -39,6 +40,10 @@ from systems.self_cognition import (
 
 
 NOW = datetime(2026, 8, 14, 4, 0, tzinfo=timezone.utc)
+ENVIRONMENT = capture_host_environment_manifest(
+    Path(__file__).parents[1],
+    repository_head="c" * 40,
+)
 
 
 def _snapshot() -> SelfCognitionSnapshot:
@@ -100,6 +105,7 @@ def _evaluation_records() -> tuple[BenchmarkPack, ScoringPolicy, ExperimentSpec,
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
+        required_validation_platforms=("windows",),
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=NOW,
@@ -123,6 +129,7 @@ def _evaluation_records() -> tuple[BenchmarkPack, ScoringPolicy, ExperimentSpec,
         metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
         confidence=0.9,
         hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+        execution_environment=ENVIRONMENT,
         verdict="promote",
         completed_at=NOW,
     )
@@ -212,6 +219,7 @@ def test_evaluation_hard_gates_and_policy_weights_are_invariant():
             policy_version="bad",
             dimensions=(ScoringDimension(name="correctness", weight=0.9),),
             required_hard_gates=("tests",),
+            required_validation_platforms=("windows",),
             promote_threshold=0.8,
             observe_threshold=0.5,
             created_at=NOW,
@@ -226,6 +234,7 @@ def test_evaluation_hard_gates_and_policy_weights_are_invariant():
             metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
             confidence=0.9,
             hard_gate_results=(HardGateResult(gate="tests", passed=False),),
+            execution_environment=ENVIRONMENT,
             verdict="promote",
             completed_at=NOW,
         )

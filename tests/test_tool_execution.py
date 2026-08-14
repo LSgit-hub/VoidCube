@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.tool_execution import ToolExecutionCoordinator, ToolExecutionResult
+from agent.tool_execution import (
+    ToolExecutionCoordinator,
+    ToolExecutionResult,
+    classify_tool_result,
+)
 from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_app.contracts.execution import ExecutionState
 from run_agent import AIAgent
@@ -238,6 +242,39 @@ def test_structured_terminal_payload_preserves_non_failure_state(content, expect
     outcome = coordinator.execute(call, parallel=False)[0]
 
     assert outcome.state is expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "failed: permission denied",
+        "command exited with code 1",
+        "timeout while waiting",
+        "unable to connect to service",
+        "not found",
+    ],
+)
+def test_plain_text_failure_diagnostics_are_not_reported_as_success(content):
+    state, suffix = classify_tool_result(content)
+
+    assert state is ExecutionState.FAILED
+    assert suffix == " [error]"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "No errors found in the report",
+        "The command completed successfully",
+        "The requested item was not found in the documentation index",
+        "Waiting completed after 1 second",
+    ],
+)
+def test_plain_text_non_failure_diagnostics_remain_successful(content):
+    state, suffix = classify_tool_result(content)
+
+    assert state is ExecutionState.SUCCEEDED
+    assert suffix == ""
 
 
 def test_sequential_delay_runs_only_between_started_calls():

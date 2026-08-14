@@ -62,7 +62,12 @@ def is_destructive_command(cmd: str) -> bool:
 
 
 def _extract_parallel_scope_path(tool_name: str, function_args: dict) -> Path | None:
-    """Return the normalized file target for path-scoped tools."""
+    """Return the real file entity targeted by a path-scoped tool.
+
+    Resolving existing and non-existing paths alike catches aliases through
+    symlinked parents. A resolution failure is intentionally treated as an
+    unknown scope so callers fall back to sequential execution.
+    """
     if tool_name not in PATH_SCOPED_TOOLS:
         return None
 
@@ -71,10 +76,12 @@ def _extract_parallel_scope_path(tool_name: str, function_args: dict) -> Path | 
         return None
 
     expanded = Path(raw_path).expanduser()
-    if expanded.is_absolute():
-        return Path(os.path.abspath(str(expanded)))
-
-    return Path(os.path.abspath(str(Path.cwd() / expanded)))
+    candidate = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    try:
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        logger.debug("Could not resolve parallel tool scope %s: %s", raw_path, exc)
+        return None
 
 
 def paths_overlap(left: Path, right: Path) -> bool:

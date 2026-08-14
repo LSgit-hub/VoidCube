@@ -17,10 +17,15 @@ Improvements over v2:
   - Richer tool call/result detail in summarizer input
 """
 
+import hashlib
+import json
 import logging
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.context_engine import ContextEngine
@@ -70,6 +75,35 @@ class CompressionAttempt:
     @property
     def exhausted(self) -> bool:
         return self.number > self.maximum
+
+
+@dataclass(frozen=True, slots=True)
+class CompressionCheckpoint:
+    """Durable evidence retained before lossy context compaction."""
+
+    checkpoint_id: str
+    session_id: str
+    created_at: float
+    source_message_count: int
+    compress_start: int
+    compress_end: int
+    previous_summary: str | None
+    turns: tuple[dict[str, Any], ...]
+    action_refs: tuple[dict[str, Any], ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "checkpoint_id": self.checkpoint_id,
+            "session_id": self.session_id,
+            "created_at": self.created_at,
+            "source_message_count": self.source_message_count,
+            "compress_start": self.compress_start,
+            "compress_end": self.compress_end,
+            "previous_summary": self.previous_summary,
+            "turns": list(self.turns),
+            "action_refs": list(self.action_refs),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +373,23 @@ class ContextCompressor(ContextEngine):
         self._context_probed = False
         self._context_probe_persistable = False
         self._previous_summary = None
+        self._last_checkpoint = None
+
+    def on_session_start(self, session_id: str, **kwargs: Any) -> None:
+        """Bind durable compression checkpoints to the active session."""
+        self._checkpoint_session_id = str(session_id or "").strip()
+        home = str(kwargs.get("VoidCube_home") or "").strip()
+        if not home or not self._checkpoint_session_id:
+            self._checkpoint_path = None
+            self._last_checkpoint = None
+            return
+        checkpoint_key = hashlib.sha256(
+            self._checkpoint_session_id.encode("utf-8")
+        ).hexdigest()[:24]
+        self._checkpoint_path = (
+            Path(home) / "runtime" / "context-checkpoints" / f"{checkpoint_key}.json"
+        )
+        self._last_checkpoint = self._load_checkpoint()
 
     def update_model(
         self,
@@ -422,6 +473,9 @@ class ContextCompressor(ContextEngine):
         # Stores the previous compaction summary for iterative updates
         self._previous_summary: Optional[str] = None
         self._summary_failure_cooldown_until: float = 0.0
+        self._checkpoint_session_id = ""
+        self._checkpoint_path: Path | None = None
+        self._last_checkpoint: dict[str, Any] | None = None
 
     def update_from_response(self, usage: Dict[str, Any]):
         """Update tracked token usage from API response."""
@@ -432,6 +486,151 @@ class ContextCompressor(ContextEngine):
         """Check if context exceeds the compression threshold."""
         tokens = prompt_tokens if prompt_tokens is not None else self.last_prompt_tokens
         return tokens >= self.threshold_tokens
+
+    def _build_checkpoint(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        turns: List[Dict[str, Any]],
+        action_refs: list[dict[str, Any]],
+        compress_start: int,
+        compress_end: int,
+    ) -> CompressionCheckpoint:
+        checkpoint_turns: list[dict[str, Any]] = []
+        for message in turns:
+            try:
+                row = json.loads(json.dumps(dict(message), default=str))
+            except (TypeError, ValueError):
+                row = {
+                    "role": str(message.get("role") or "unknown"),
+                    "content": str(message.get("content") or ""),
+                }
+            content = str(row.get("content") or "")
+            if len(content) > self._CONTENT_MAX:
+                row["content"] = (
+                    content[: self._CONTENT_HEAD]
+                    + "\n...[truncated in checkpoint]...\n"
+                    + content[-self._CONTENT_TAIL :]
+                )
+            checkpoint_turns.append(row)
+        identity_payload = {
+            "session_id": self._checkpoint_session_id,
+            "source_message_count": len(messages),
+            "compress_start": compress_start,
+            "compress_end": compress_end,
+            "previous_summary": self._previous_summary,
+            "turns": checkpoint_turns,
+            "action_refs": action_refs,
+        }
+        checkpoint_id = "context-checkpoint-" + hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        return CompressionCheckpoint(
+            checkpoint_id=checkpoint_id,
+            session_id=self._checkpoint_session_id,
+            created_at=time.time(),
+            source_message_count=len(messages),
+            compress_start=compress_start,
+            compress_end=compress_end,
+            previous_summary=self._previous_summary,
+            turns=tuple(checkpoint_turns),
+            action_refs=tuple(action_refs),
+        )
+
+    def _persist_checkpoint(self, checkpoint: CompressionCheckpoint) -> None:
+        payload = checkpoint.as_dict()
+        self._last_checkpoint = payload
+        if self._checkpoint_path is None:
+            return
+        self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            dir=self._checkpoint_path.parent,
+            prefix=f".{self._checkpoint_path.stem}.",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, self._checkpoint_path)
+        except Exception:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+            raise
+
+    def _load_checkpoint(self) -> dict[str, Any] | None:
+        if self._checkpoint_path is None or not self._checkpoint_path.is_file():
+            return None
+        try:
+            payload = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Compression checkpoint could not be loaded: %s", exc)
+            return None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != 1
+            or not isinstance(payload.get("turns"), list)
+            or not str(payload.get("checkpoint_id") or "").startswith(
+                "context-checkpoint-"
+            )
+        ):
+            logger.warning("Compression checkpoint has an invalid contract")
+            return None
+        return payload
+
+    def _checkpoint_fallback_summary(self) -> str:
+        checkpoint = dict(self._last_checkpoint or {})
+        turns = [
+            dict(item)
+            for item in list(checkpoint.get("turns") or [])
+            if isinstance(item, dict)
+        ]
+        selected_turns = turns
+        if len(turns) > 24:
+            selected_turns = [*turns[:12], *turns[-12:]]
+        lines = [
+            SUMMARY_PREFIX,
+            "## Structured Recovery Checkpoint",
+            f"Checkpoint: {checkpoint.get('checkpoint_id') or 'in-memory'}",
+            (
+                f"Full checkpoint: {self._checkpoint_path}"
+                if self._checkpoint_path is not None
+                else "Full checkpoint: in-memory only"
+            ),
+            "The summarizer was unavailable. Recover intent and evidence from the "
+            "structured checkpoint projection below.",
+        ]
+        previous_summary = str(checkpoint.get("previous_summary") or "").strip()
+        if previous_summary:
+            lines.extend(["## Previous Summary", previous_summary[:4000]])
+        lines.append("## Retained Turn Projection")
+        for index, turn in enumerate(selected_turns, 1):
+            content = str(turn.get("content") or "").strip()
+            if len(content) > 1200:
+                content = content[:900] + " ... " + content[-250:]
+            role = str(turn.get("role") or "unknown").upper()
+            lines.append(f"{index}. [{role}] {content or '[no text content]'}")
+            tool_calls = list(turn.get("tool_calls") or [])
+            if tool_calls:
+                lines.append(
+                    "   tool_calls="
+                    + json.dumps(tool_calls, ensure_ascii=False, default=str)[:1200]
+                )
+        if len(turns) > len(selected_turns):
+            lines.append(
+                f"{len(turns) - len(selected_turns)} additional turns remain in the "
+                "full checkpoint."
+            )
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Tool output pruning (cheap pre-pass, no LLM call)
@@ -1005,6 +1204,17 @@ The user has requested that this compaction PRIORITISE preserving all informatio
 
         turns_to_summarize = messages[compress_start:compress_end]
         action_refs = self._collect_action_refs(turns_to_summarize)
+        checkpoint = self._build_checkpoint(
+            messages=messages,
+            turns=turns_to_summarize,
+            action_refs=action_refs,
+            compress_start=compress_start,
+            compress_end=compress_end,
+        )
+        try:
+            self._persist_checkpoint(checkpoint)
+        except Exception as exc:
+            logger.warning("Compression checkpoint persistence failed: %s", exc)
 
         if not self.quiet_mode:
             logger.info(
@@ -1042,19 +1252,14 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 )
             compressed.append(msg)
 
-        # If LLM summary failed, insert a static fallback so the model
-        # knows context was lost rather than silently dropping everything.
+        # If LLM summary failed, recover a bounded projection from the durable
+        # pre-compression checkpoint instead of replacing history with a marker.
         if not summary:
             if not self.quiet_mode:
-                logger.warning("Summary generation failed — inserting static fallback context marker")
-            n_dropped = compress_end - compress_start
-            summary = (
-                f"{SUMMARY_PREFIX}\n"
-                f"Summary generation was unavailable. {n_dropped} conversation turns were "
-                f"removed to free context space but could not be summarized. The removed "
-                f"turns contained earlier work in this session. Continue based on the "
-                f"recent messages below and the current state of any files or resources."
-            )
+                logger.warning(
+                    "Summary generation failed — recovering structured checkpoint"
+                )
+            summary = self._checkpoint_fallback_summary()
         summary += self._format_action_refs(action_refs)
 
         _merge_summary_into_tail = False

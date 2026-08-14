@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from systems.evolution_evaluation.models import (
     BenchmarkCase,
     BenchmarkPack,
+    ExecutionEnvironmentManifest,
     ExperimentResult,
     ExperimentSpec,
     HardGateResult,
@@ -25,6 +26,7 @@ from systems.evolution_evaluation.repository import EvaluationRepository
 
 DEFAULT_BENCHMARK_EXECUTOR_VERSION = "benchmark-executor/1"
 BENCHMARK_CONSISTENCY_GATE = "benchmark_pack_consistency"
+EXECUTION_ENVIRONMENT_GATE = "execution_environment_coverage"
 
 
 class BenchmarkExecutionError(RuntimeError):
@@ -59,6 +61,7 @@ class BenchmarkRunRequest(_FrozenModel):
 class BenchmarkCaseResult(_FrozenModel):
     case_id: str = Field(min_length=1)
     metrics: tuple[MetricValue, ...] = Field(min_length=1)
+    execution_environment: ExecutionEnvironmentManifest
     hard_gate_results: tuple[HardGateResult, ...] = ()
     evidence_refs: tuple[str, ...] = ()
 
@@ -129,6 +132,9 @@ class BenchmarkPackExecutor:
             benchmark_pack=benchmark_pack,
         )
         self._validate_result_shapes(baseline_results, candidate_results)
+        execution_environment = self._resolve_execution_environment(
+            (*baseline_results, *candidate_results)
+        )
 
         baseline_metrics = self._aggregate_metrics(baseline_results)
         candidate_metrics = self._aggregate_metrics(candidate_results)
@@ -146,6 +152,29 @@ class BenchmarkPackExecutor:
             benchmark_pack=benchmark_pack,
             scoring_policy=scoring_policy,
             results=(*baseline_results, *candidate_results),
+        )
+        covered_platforms = set(execution_environment.validated_platforms)
+        required_platforms = set(scoring_policy.required_validation_platforms)
+        missing_platforms = sorted(required_platforms - covered_platforms)
+        hard_gates = tuple(
+            sorted(
+                (
+                    *hard_gates,
+                    HardGateResult(
+                        gate=EXECUTION_ENVIRONMENT_GATE,
+                        passed=not missing_platforms,
+                        evidence_refs=(
+                            execution_environment.execution_environment_id,
+                            f"scope:{execution_environment.validation_scope}",
+                            *(
+                                f"missing-platform:{item}"
+                                for item in missing_platforms
+                            ),
+                        ),
+                    ),
+                ),
+                key=lambda gate: gate.gate,
+            )
         )
         regressions, has_disallowed_regression = self._regressions(
             experiment_spec=experiment_spec,
@@ -178,6 +207,7 @@ class BenchmarkPackExecutor:
             regressions=regressions,
             confidence=confidence,
             hard_gate_results=hard_gates,
+            execution_environment=execution_environment,
             verdict=verdict,
             completed_at=completed,
         )
@@ -335,6 +365,21 @@ class BenchmarkPackExecutor:
             elif baseline_shape != expected_metrics:
                 raise BenchmarkCaseFailed("benchmark cases returned inconsistent metric shapes")
 
+    @staticmethod
+    def _resolve_execution_environment(
+        results: tuple[BenchmarkCaseResult, ...],
+    ) -> ExecutionEnvironmentManifest:
+        manifests = {
+            result.execution_environment.execution_environment_id:
+            result.execution_environment
+            for result in results
+        }
+        if len(manifests) != 1:
+            raise BenchmarkCaseFailed(
+                "baseline and candidate must run in one identical execution environment"
+            )
+        return next(iter(manifests.values()))
+
     def _aggregate_metrics(
         self,
         results: tuple[BenchmarkCaseResult, ...],
@@ -371,6 +416,7 @@ class BenchmarkPackExecutor:
             for gate_name in gates
         } | set(scoring_policy.required_hard_gates)
         gate_names.discard(BENCHMARK_CONSISTENCY_GATE)
+        gate_names.discard(EXECUTION_ENVIRONMENT_GATE)
         aggregated: list[HardGateResult] = []
         for gate_name in sorted(gate_names):
             gate_results = [gates.get(gate_name) for gates in by_result]
@@ -497,6 +543,7 @@ def _as_aware(value: datetime, field_name: str) -> datetime:
 
 __all__ = [
     "BENCHMARK_CONSISTENCY_GATE",
+    "EXECUTION_ENVIRONMENT_GATE",
     "DEFAULT_BENCHMARK_EXECUTOR_VERSION",
     "BenchmarkCaseFailed",
     "BenchmarkCaseResult",

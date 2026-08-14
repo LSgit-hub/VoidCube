@@ -255,5 +255,10 @@ def evaluation_authorization_fields(
         "candidate_snapshot_id": authorization.get("candidate_snapshot_id"),
         "benchmark_pack_id": authorization.get("benchmark_pack_id"),
         "scoring_policy_id": authorization.get("scoring_policy_id"),
+        "execution_environment_id": authorization.get("execution_environment_id"),
+        "validation_scope": authorization.get("validation_scope"),
+        "validated_platforms": list(
+            authorization.get("validated_platforms") or []
+        ),
         "knowledge_ids": list(authorization.get("knowledge_ids") or []),
     }
