@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from systems.evolution_evaluation import (
+    ExecutionEnvironmentIdentity,
     ExecutionEnvironmentManifest,
+    SubjectCheckoutEvidence,
     build_container_environment_manifest,
     capture_host_environment_manifest,
     dependency_fingerprint,
@@ -112,3 +115,30 @@ def test_manifest_cannot_claim_a_platform_different_from_execution_os():
 
     with pytest.raises(ValidationError, match="execution operating system"):
         ExecutionEnvironmentManifest.create(**payload)
+
+
+def test_identity_excludes_subject_head_and_checkout_evidence_is_addressed():
+    root = Path(__file__).parents[1]
+    baseline = capture_host_environment_manifest(root, repository_head="a" * 40)
+    candidate = capture_host_environment_manifest(root, repository_head="b" * 40)
+
+    baseline_identity = baseline.identity()
+    candidate_identity = candidate.identity()
+
+    assert isinstance(baseline_identity, ExecutionEnvironmentIdentity)
+    assert (
+        baseline_identity.execution_environment_identity_id
+        == candidate_identity.execution_environment_identity_id
+    )
+    assert baseline_identity.content_hash == candidate_identity.content_hash
+
+    evidence = SubjectCheckoutEvidence.create(
+        subject="candidate",
+        commit="b" * 40,
+        worktree_path=str(root),
+        execution_environment_identity_id=(
+            candidate_identity.execution_environment_identity_id
+        ),
+        checked_out_at=datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    assert evidence.subject_checkout_evidence_id.startswith("subject-checkout-")

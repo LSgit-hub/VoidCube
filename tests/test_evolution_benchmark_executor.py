@@ -197,6 +197,38 @@ def test_baseline_candidate_environment_drift_aborts_evaluation():
         )
 
 
+def test_baseline_and_candidate_heads_can_differ_with_one_environment_identity():
+    pack, policy, spec = _contracts()
+    candidate_payload = ENVIRONMENT.content_payload()
+    candidate_payload["repository_head"] = "d" * 40
+    candidate_environment = ExecutionEnvironmentManifest.create(**candidate_payload)
+
+    def checkout_runner(request):
+        result = _runner(request)
+        environment = ENVIRONMENT if request.subject == "baseline" else candidate_environment
+        return result.model_copy(update={"execution_environment": environment})
+
+    result = BenchmarkPackExecutor({"quality": checkout_runner}).execute(
+        benchmark_pack=pack,
+        experiment_spec=spec,
+        scoring_policy=policy,
+        completed_at=NOW,
+    )
+
+    assert result.execution_environment_identity is not None
+    assert {item.subject for item in result.subject_checkouts} == {"baseline", "candidate"}
+    assert {
+        item.commit
+        for item in result.subject_checkouts
+        if item.subject == "baseline"
+    } == {"c" * 40}
+    assert {
+        item.commit
+        for item in result.subject_checkouts
+        if item.subject == "candidate"
+    } == {"d" * 40}
+
+
 def test_missing_required_gate_rejects_without_fabricating_success():
     pack, policy, spec = _contracts()
 

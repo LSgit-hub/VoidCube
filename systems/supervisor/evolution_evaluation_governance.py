@@ -208,7 +208,29 @@ class EvolutionEvaluationGovernanceVerifier:
                 missing_validation_platforms=missing_platforms,
                 execution_environment_id=environment.execution_environment_id,
             )
-        if str(environment.repository_head).strip().lower() != candidate_commit:
+        candidate_checkout = next(
+            (
+                checkout
+                for checkout in result.subject_checkouts
+                if checkout.subject == "candidate"
+            ),
+            None,
+        )
+        evaluated_candidate_head = (
+            candidate_checkout.commit.strip().lower()
+            if candidate_checkout is not None
+            else str(environment.repository_head).strip().lower()
+        )
+        if (
+            result.execution_environment_identity is not None
+            and candidate_checkout is None
+        ):
+            return _rejection(
+                "candidate_checkout_evidence_missing",
+                experiment_result_id=result_id,
+                execution_environment_id=environment.execution_environment_id,
+            )
+        if evaluated_candidate_head != candidate_commit:
             return _rejection(
                 "execution_environment_commit_mismatch",
                 experiment_result_id=result_id,

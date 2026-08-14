@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from systems.evolution_evaluation.models import (
     BenchmarkCase,
     BenchmarkPack,
+    ExecutionEnvironmentIdentity,
     ExecutionEnvironmentManifest,
     ExperimentResult,
     ExperimentSpec,
@@ -20,6 +21,7 @@ from systems.evolution_evaluation.models import (
     MetricValue,
     Regression,
     ScoringPolicy,
+    SubjectCheckoutEvidence,
 )
 from systems.evolution_evaluation.repository import EvaluationRepository
 
@@ -64,6 +66,7 @@ class BenchmarkCaseResult(_FrozenModel):
     execution_environment: ExecutionEnvironmentManifest
     hard_gate_results: tuple[HardGateResult, ...] = ()
     evidence_refs: tuple[str, ...] = ()
+    subject_checkout: SubjectCheckoutEvidence | None = None
 
     @model_validator(mode="after")
     def _validate_unique_results(self) -> Self:
@@ -132,9 +135,21 @@ class BenchmarkPackExecutor:
             benchmark_pack=benchmark_pack,
         )
         self._validate_result_shapes(baseline_results, candidate_results)
-        execution_environment = self._resolve_execution_environment(
-            (*baseline_results, *candidate_results)
+        execution_environment, environment_identity, subject_checkouts = (
+            self._resolve_execution_environment(
+                baseline_results=baseline_results,
+                candidate_results=candidate_results,
+            )
         )
+        expected_identity_id = experiment_spec.execution_environment_identity_id
+        if (
+            expected_identity_id is not None
+            and expected_identity_id
+            != environment_identity.execution_environment_identity_id
+        ):
+            raise BenchmarkConfigurationError(
+                "benchmark results do not match the experiment environment identity"
+            )
 
         baseline_metrics = self._aggregate_metrics(baseline_results)
         candidate_metrics = self._aggregate_metrics(candidate_results)
@@ -210,6 +225,8 @@ class BenchmarkPackExecutor:
             execution_environment=execution_environment,
             verdict=verdict,
             completed_at=completed,
+            execution_environment_identity=environment_identity,
+            subject_checkouts=subject_checkouts,
         )
 
     def execute_and_store(
@@ -367,18 +384,83 @@ class BenchmarkPackExecutor:
 
     @staticmethod
     def _resolve_execution_environment(
-        results: tuple[BenchmarkCaseResult, ...],
-    ) -> ExecutionEnvironmentManifest:
-        manifests = {
-            result.execution_environment.execution_environment_id:
-            result.execution_environment
-            for result in results
-        }
-        if len(manifests) != 1:
+        *,
+        baseline_results: tuple[BenchmarkCaseResult, ...],
+        candidate_results: tuple[BenchmarkCaseResult, ...],
+    ) -> tuple[
+        ExecutionEnvironmentManifest,
+        ExecutionEnvironmentIdentity,
+        tuple[SubjectCheckoutEvidence, ...],
+    ]:
+        grouped = (
+            ("baseline", baseline_results),
+            ("candidate", candidate_results),
+        )
+        identities: dict[str, ExecutionEnvironmentIdentity] = {}
+        manifests_by_subject: dict[str, list[ExecutionEnvironmentManifest]] = {}
+        explicit_checkouts: dict[str, SubjectCheckoutEvidence] = {}
+        for subject, results in grouped:
+            if not results:
+                raise BenchmarkCaseFailed(f"benchmark returned no {subject} results")
+            manifests_by_subject[subject] = []
+            for result in results:
+                manifest = result.execution_environment
+                identity = manifest.identity()
+                identities[identity.execution_environment_identity_id] = identity
+                manifests_by_subject[subject].append(manifest)
+                checkout = result.subject_checkout
+                if checkout is not None:
+                    if checkout.subject != subject:
+                        raise BenchmarkCaseFailed(
+                            f"subject checkout mismatch: expected {subject}, got {checkout.subject}"
+                        )
+                    if (
+                        checkout.execution_environment_identity_id
+                        != identity.execution_environment_identity_id
+                    ):
+                        raise BenchmarkCaseFailed(
+                            "subject checkout references a different environment identity"
+                        )
+                    prior = explicit_checkouts.get(subject)
+                    if prior is not None and prior != checkout:
+                        raise BenchmarkCaseFailed(
+                            f"{subject} results returned inconsistent checkout evidence"
+                        )
+                    explicit_checkouts[subject] = checkout
+        if len(identities) != 1:
             raise BenchmarkCaseFailed(
                 "baseline and candidate must run in one identical execution environment"
             )
-        return next(iter(manifests.values()))
+        identity = next(iter(identities.values()))
+        subject_checkouts: list[SubjectCheckoutEvidence] = []
+        for subject, manifests in manifests_by_subject.items():
+            heads = {manifest.repository_head.lower() for manifest in manifests}
+            if len(heads) != 1:
+                raise BenchmarkCaseFailed(
+                    f"{subject} results returned inconsistent checkout HEADs"
+                )
+            checkout = explicit_checkouts.get(subject)
+            if checkout is None:
+                checkout = SubjectCheckoutEvidence.create(
+                    subject=subject,
+                    commit=next(iter(heads)),
+                    worktree_path=manifests[0].execution_workspace_path,
+                    execution_environment_identity_id=(
+                        identity.execution_environment_identity_id
+                    ),
+                    checked_out_at=datetime.now(timezone.utc),
+                )
+            elif checkout.commit.lower() != next(iter(heads)):
+                raise BenchmarkCaseFailed(
+                    f"{subject} checkout evidence does not match manifest HEAD"
+                )
+            subject_checkouts.append(checkout)
+        # Keep the candidate manifest as the legacy report projection. Its HEAD
+        # remains available to older consumers while identity/checkouts are primary.
+        representative = candidate_results[0].execution_environment
+        return representative, identity, tuple(
+            sorted(subject_checkouts, key=lambda item: item.subject)
+        )
 
     def _aggregate_metrics(
         self,

@@ -17,6 +17,7 @@ from systems.evolution_evaluation.models import (
     AllowedRegression,
     BenchmarkCase,
     BenchmarkPack,
+    ExecutionEnvironmentIdentity,
     ExecutionEnvironmentManifest,
     ExperimentResult,
     ExperimentSpec,
@@ -28,6 +29,7 @@ from systems.evolution_evaluation.models import (
     RuntimeToolIdentity,
     ScoringDimension,
     ScoringPolicy,
+    SubjectCheckoutEvidence,
     WorkspacePathMapping,
 )
 from systems.evolution_evaluation.environment import (
@@ -61,6 +63,7 @@ __all__ = [
     "EvaluationImmutableConflict",
     "EvaluationRecordCorrupted",
     "EvaluationRepository",
+    "ExecutionEnvironmentIdentity",
     "ExecutionEnvironmentManifest",
     "ExperimentResult",
     "ExperimentSpec",
@@ -73,6 +76,7 @@ __all__ = [
     "RuntimeToolIdentity",
     "ScoringDimension",
     "ScoringPolicy",
+    "SubjectCheckoutEvidence",
     "WorkspacePathMapping",
     "build_container_environment_manifest",
     "capture_host_environment_manifest",
