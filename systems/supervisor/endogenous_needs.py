@@ -87,6 +87,7 @@ def detect_needs(
     autonomous_improvement_plan: Dict[str, Any],
     governance_review_need_type: str = REVIEW_API_B_JUDGEMENT_NEED,
     historical_observation_carryover_released: bool = False,
+    foundation_projection: Dict[str, Any] | None = None,
 ) -> List[DriveNeed]:
     needs: List[DriveNeed] = []
     truthfulness_review_active = (
@@ -325,6 +326,49 @@ def detect_needs(
                     f"pending_review_count={perception.pending_review_count}",
                     f"repeated_drive_pressure={reflection.repeated_drive_pressure:.2f}",
                     f"governance_hygiene_bias={adaptive_policy.governance_hygiene_bias:.2f}",
+                ],
+            )
+        )
+    foundation_task_needs = {
+        "fill_self_cognition": (
+            "complete_self_cognition",
+            "当前代码自我认知事实缺失或不完整，应先补齐只读快照。",
+        ),
+        "fill_research_knowledge": (
+            "complete_research_knowledge",
+            "当前外部知识事实缺失、过期或质量不足，应先补齐离线知识 artifact。",
+        ),
+        "run_evolution_evaluation": (
+            "run_evolution_evaluation",
+            "当前对比实验事实缺失或未形成稳定结论，应先补充影子评测证据。",
+        ),
+    }
+    for task in list(dict(foundation_projection or {}).get("shadow_tasks") or []):
+        if not isinstance(task, dict) or task.get("execution_allowed") is not False:
+            continue
+        task_kind = str(task.get("task_kind") or "").strip()
+        need_definition = foundation_task_needs.get(task_kind)
+        if need_definition is None:
+            continue
+        need_type, default_rationale = need_definition
+        # Foundation suggestions remain shadow observations and cannot outrank
+        # an existing operational need in the endogenous drive.
+        priority = min(0.45, clamp01(task.get("priority") or 0.28))
+        needs.append(
+            DriveNeed(
+                need_type=need_type,
+                severity=priority,
+                urgency=priority,
+                confidence=0.9,
+                rationale=str(task.get("rationale") or default_rationale),
+                source_evidence=[
+                    "foundation_mode=shadow_read_only",
+                    f"foundation_task={task_kind}",
+                    *[
+                        str(item)
+                        for item in list(task.get("evidence_refs") or [])
+                        if str(item).strip()
+                    ],
                 ],
             )
         )

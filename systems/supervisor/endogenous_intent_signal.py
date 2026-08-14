@@ -110,6 +110,30 @@ def synthesize_intent_projections(
                 ),
                 output_channel="drive_signal",
             )
+        elif need.need_type == "complete_self_cognition":
+            row.update(
+                intent_type="complete_self_cognition",
+                target_horizon="near_term",
+                output_channel="shadow_task",
+                candidate_family=None,
+                candidate_kind=None,
+            )
+        elif need.need_type == "complete_research_knowledge":
+            row.update(
+                intent_type="complete_research_knowledge",
+                target_horizon="near_term",
+                output_channel="shadow_task",
+                candidate_family=None,
+                candidate_kind=None,
+            )
+        elif need.need_type == "run_evolution_evaluation":
+            row.update(
+                intent_type="run_evolution_evaluation",
+                target_horizon="near_term",
+                output_channel="shadow_task",
+                candidate_family=None,
+                candidate_kind=None,
+            )
         else:
             continue
         intents.append(row)
@@ -125,6 +149,7 @@ def emit_drive_signal_projections(
     adaptive_policy: Any,
     needs: List[Any],
     intents: List[Any],
+    foundation_projection: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     """Project supervisory signals from explicit current-round inputs."""
     signals: List[Dict[str, Any]] = []
@@ -279,6 +304,27 @@ def emit_drive_signal_projections(
                     "correction_signals": perception.correction_signals,
                     "learning_quality": round(perception.learning_quality, 4),
                     "system_posture": perception.system_posture,
+                },
+            }
+        )
+
+    for task in list(dict(foundation_projection or {}).get("shadow_tasks") or []):
+        if not isinstance(task, dict) or task.get("execution_allowed") is not False:
+            continue
+        signals.append(
+            {
+                "signal_type": "foundation_shadow_task_signal",
+                "priority": _clamp01(task.get("priority") or 0.55),
+                "message": f"影子建议：{task.get('title') or '补充进化基础设施事实'}。",
+                "rationale": str(task.get("rationale") or ""),
+                "source_needs": [str(task.get("task_kind") or "foundation")],
+                "related_intent": str(task.get("task_kind") or "") or None,
+                "payload": {
+                    "task_kind": str(task.get("task_kind") or ""),
+                    "stable_key": str(task.get("stable_key") or ""),
+                    "status": "shadow",
+                    "execution_allowed": False,
+                    "evidence_refs": list(task.get("evidence_refs") or []),
                 },
             }
         )

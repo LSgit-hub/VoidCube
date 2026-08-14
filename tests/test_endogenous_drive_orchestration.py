@@ -139,6 +139,15 @@ async def test_drive_orchestration_owner_runs_explicit_callback_pipeline():
             "signal_type": "drive_posture_signal"
         },
         core_values=["truthfulness"],
+        load_evolution_foundation=lambda: {
+            "mode": "shadow_read_only",
+            "shadow_tasks": [
+                {
+                    "task_kind": "fill_self_cognition",
+                    "execution_allowed": False,
+                }
+            ],
+        },
     )
 
     result = await evaluate_endogenous_drive(
@@ -151,6 +160,7 @@ async def test_drive_orchestration_owner_runs_explicit_callback_pipeline():
     assert result["count"] == 1
     assert result["core_values"] == ["truthfulness"]
     assert result["cognition_state"] == {"status": "evaluated", "candidate_count": 1}
+    assert result["drive_input"]["evolution_foundation"]["mode"] == "shadow_read_only"
     assert result["governance_event_stream"]["events"] == [
         {"event_type": "review"}
     ]

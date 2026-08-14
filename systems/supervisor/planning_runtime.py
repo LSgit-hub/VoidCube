@@ -5,6 +5,7 @@ import logging
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -40,6 +41,9 @@ from systems.supervisor.endogenous_proposal_cognition import (
 from systems.supervisor.endogenous_drive_orchestration import (
     EndogenousDriveEvaluationContext,
     evaluate_endogenous_drive as run_endogenous_drive_evaluation,
+)
+from systems.supervisor.endogenous_foundation_bridge import (
+    EndogenousFoundationReadOnlyProjection,
 )
 from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
@@ -120,6 +124,12 @@ class PlanningRuntimeMixin:
             runtime_config=getattr(self.config, "service_runtime", None),
             state_loader=getattr(engine, "get_latest_lm_task_generation_state", None),
         )
+
+    def _load_evolution_foundation_projection(self) -> Dict[str, Any]:
+        runtime_root = getattr(self, "_runtime_root", None) or self.config.soul_store_path
+        return EndogenousFoundationReadOnlyProjection.from_root(
+            Path(runtime_root) / "evolution-foundation"
+        ).load()
     @staticmethod
     def _clamp_endogenous_ratio(value: Any) -> float:
         try:
@@ -1445,6 +1455,7 @@ class PlanningRuntimeMixin:
             build_response_fields=self._build_drive_input_response_fields,
             drive_posture_from_deliberation=self._drive_posture_signal_from_deliberation,
             core_values=CORE_VALUES,
+            load_evolution_foundation=self._load_evolution_foundation_projection,
         )
         return await run_endogenous_drive_evaluation(
             request=request,

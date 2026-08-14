@@ -47,6 +47,7 @@ class EndogenousDriveEvaluationContext:
     build_response_fields: Callable[..., Dict[str, JsonDict]]
     drive_posture_from_deliberation: Callable[[JsonDict], JsonDict]
     core_values: Any
+    load_evolution_foundation: Callable[[], JsonDict] | None = None
 
 
 def build_endogenous_drive_policy(runtime_config: Any) -> JsonDict:
@@ -138,6 +139,12 @@ async def evaluate_endogenous_drive(
     record_activity = bool(request.get("record_activity", True))
     persist_evaluation = bool(request.get("persist_evaluation", True))
     drive_input = await context.resolve_drive_input_request(request)
+    evolution_foundation = (
+        dict(context.load_evolution_foundation() or {})
+        if context.load_evolution_foundation is not None
+        else {}
+    )
+    drive_input["evolution_foundation"] = evolution_foundation
     persisted_self_regulation = dict(context.load_self_regulation() or {})
     api_b_judgement_tasks = context.api_b_judgement_task_summaries(24)
     api_a_execution_lane_tasks = context.api_a_execution_lane_task_summaries(24)

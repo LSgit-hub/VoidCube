@@ -433,6 +433,8 @@ def test_wheel_contract_tracks_evolution_foundation_packages():
         "systems/evolution_evaluation/repository.py",
     } <= expected
 
+    assert "systems/supervisor/endogenous_foundation_bridge.py" in expected
+
 
 @pytest.mark.unit
 def test_wheel_contract_tracks_mem_identity_resources():

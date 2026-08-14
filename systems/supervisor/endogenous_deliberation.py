@@ -138,6 +138,7 @@ def build_deliberation_report(
                 False,
             )
         ),
+        foundation_projection=dict(drive_input.get("evolution_foundation") or {}),
     )
     intents = [
         DriveIntent(**projection)
@@ -157,6 +158,7 @@ def build_deliberation_report(
             adaptive_policy=adaptive_policy,
             needs=needs,
             intents=intents,
+            foundation_projection=dict(drive_input.get("evolution_foundation") or {}),
         )
     ]
     return DriveDeliberationReport(
