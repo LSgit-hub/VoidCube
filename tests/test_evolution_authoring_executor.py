@@ -204,6 +204,29 @@ async def test_authoring_executor_creates_tested_candidate_ref_and_cleans_worktr
 
 
 @pytest.mark.asyncio
+async def test_authoring_executor_rejects_duplicate_candidate_task(tmp_path: Path):
+    repository, baseline = _repository(tmp_path)
+    harness = _Harness()
+
+    class Agent:
+        def author(self, context):
+            assert harness.worktree is not None
+            (harness.worktree / "agent/demo.py").write_text(
+                "VALUE = 'candidate'\n", encoding="utf-8"
+            )
+            return {"completed": True, "summary": "created candidate"}
+
+    executor = _executor(repository, tmp_path, harness)
+    first = await executor.execute(_spec("candidate-duplicate", baseline), agent=Agent())
+    second = await executor.execute(_spec("candidate-duplicate", baseline), agent=Agent())
+
+    assert first.status == "candidate_created"
+    assert second.status == "blocked"
+    assert second.error_code == "candidate_ref_exists"
+    assert harness.released == ["candidate-duplicate"]
+
+
+@pytest.mark.asyncio
 async def test_authoring_executor_rejects_changes_outside_allowed_boundary(
     tmp_path: Path,
 ):
