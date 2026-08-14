@@ -424,3 +424,43 @@ async def test_autonomous_cycle_service_skips_overlapping_drive_cycle():
         "tasks": [],
     }
     assert completed["status"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_autonomous_cycle_schedules_candidate_after_drive_without_waiting_for_work():
+    calls = []
+
+    async def schedule_candidate_generation(**request):
+        calls.append(request)
+        return {"status": "started", "request_id": "candidate-request"}
+
+    service = AutonomousCycleService(
+        runtime_config=SimpleNamespace(
+            endogenous_drive_enabled=False,
+            endogenous_drive_interval=900,
+            autonomous_chain_review_interval=300,
+        ),
+        evaluate_drive=lambda request: asyncio.sleep(0, result={"candidates": []}),
+        drive_input_fields_from_evaluation=lambda evaluation: {},
+        load_drive_history=lambda: {},
+        load_governance_events=lambda: {},
+        load_cognition_state=lambda: {},
+        persist_evaluation=lambda **kwargs: {},
+        restore_evaluation_snapshots=lambda **kwargs: None,
+        lm_generation_application_state=lambda: SimpleNamespace(reasoning_state={}),
+        plan_autonomous_chain_task=lambda request: asyncio.sleep(0, result={"tasks": []}),
+        record_ui_activity=lambda *args, **kwargs: None,
+        touch_gateway_activity=lambda *args, **kwargs: asyncio.sleep(0),
+        run_review_cycle=lambda request: asyncio.sleep(0, result={}),
+        update_drive_schedule=lambda last_at, next_at: None,
+        update_review_schedule=lambda last_at, next_at: None,
+        schedule_candidate_generation=schedule_candidate_generation,
+    )
+
+    result = await service.run_drive_cycle()
+
+    assert calls == [{"mode": "automatic"}]
+    assert result["candidate_generation"] == {
+        "status": "started",
+        "request_id": "candidate-request",
+    }

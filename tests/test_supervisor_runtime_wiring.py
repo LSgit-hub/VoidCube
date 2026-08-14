@@ -1193,6 +1193,9 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/runtime/traces/{trace_id}" in route_paths
     assert "/runtime/observation-input" in route_paths
     assert "/runtime/drive-input/evaluate" in route_paths
+    assert "/runtime/evolution-candidate-generation" in route_paths
+    assert "/runtime/evolution-candidate-generation/requests" in route_paths
+    assert "/runtime/evolution-candidate-generation/trigger" in route_paths
     assert "/runtime/activity-guards/evaluate" not in route_paths
     assert "/runtime/idle-window/evaluate" not in route_paths
 
@@ -1620,6 +1623,12 @@ async def test_supervisor_runtime_observation_input_projects_soft_signal_snapsho
 
     result = await supervisor.get_runtime_observation_input()
 
+    supervisor.evaluate_drive_input.assert_awaited_once_with(  # type: ignore[union-attr]
+        {
+            "autonomous_chain_gate_active": False,
+            "perception_scope": "full",
+        }
+    )
     assert result["status"] == "ok"
     assert result["gateway_address"] == supervisor.config.execution.gateway_address
     observation_input = result["observation_input"]

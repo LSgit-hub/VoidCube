@@ -1256,7 +1256,12 @@ class PlanningRuntimeMixin:
         }
 
     async def get_runtime_observation_input(self):
-        payload = await self.evaluate_drive_input({})
+        payload = await self.evaluate_drive_input(
+            {
+                "autonomous_chain_gate_active": False,
+                "perception_scope": "full",
+            }
+        )
         observation_input = project_runtime_observation_input(
             payload,
             snapshot_source="live",
@@ -1270,9 +1275,11 @@ class PlanningRuntimeMixin:
     async def evaluate_drive_input(self, request: dict | None = None):
         request = dict(request or {})
         runtime = getattr(self, "_service_runtime", None)
-        gate_active = bool(
-            request.get("autonomous_chain_gate_active")
-            or getattr(runtime, "autonomous_chain_gate_active", False)
+        requested_gate_state = request.get("autonomous_chain_gate_active")
+        gate_active = (
+            bool(getattr(runtime, "autonomous_chain_gate_active", False))
+            if requested_gate_state is None
+            else bool(requested_gate_state)
         )
         perception_scope = "autonomous_only" if gate_active else (
             str(request.get("perception_scope") or "").strip().lower() or "full"

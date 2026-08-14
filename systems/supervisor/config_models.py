@@ -289,6 +289,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     evolution_capability_policy_profile: Literal[
         "development", "ci", "production"
     ] = "development"
+    evolution_candidate_generation_enabled: bool = False
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
@@ -348,4 +349,3 @@ class SupervisorConfig(BaseModel):
     soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
     scheduled_task_store_path: Optional[str] = None
-

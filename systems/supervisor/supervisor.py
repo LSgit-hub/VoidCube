@@ -4,12 +4,13 @@ import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from systems.body_registry import BodyImprovementReport
+from systems.evolution_candidate_generation import EvolutionCandidateGenerationRequest
 from systems.supervisor.autonomous_chain_store import StaleExecutionLeaseError
 from systems.governor import GovernorRequest
 from systems.supervisor.autonomous_chain_contract import (
@@ -85,6 +86,11 @@ class CompanionMessageRequest(BaseModel):
 
 class CompanionWorkerTestRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000)
+
+
+class EvolutionCandidateGenerationTriggerRequest(BaseModel):
+    mode: Literal["manual", "shadow"] = "shadow"
+    request_id: Optional[str] = None
 
 
 class VoiceToggleRequest(BaseModel):
@@ -239,6 +245,21 @@ class Supervisor(
         self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/cognition", self.get_endogenous_cognition_state, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/state", self.get_endogenous_governance_state, methods=["GET"])
+        self.app.add_api_route(
+            "/runtime/evolution-candidate-generation",
+            self.get_evolution_candidate_generation_status,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            "/runtime/evolution-candidate-generation/requests",
+            self.register_evolution_candidate_generation_request,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/runtime/evolution-candidate-generation/trigger",
+            self.trigger_evolution_candidate_generation,
+            methods=["POST"],
+        )
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
         self.app.add_api_route("/ready", self.readiness_check, methods=["GET"])
         self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.list_autonomous_chain_tasks, methods=["GET"])
@@ -800,6 +821,24 @@ class Supervisor(
 
     async def get_body_registry(self) -> Dict[str, Any]:
         return self._execution_facade.get_body_registry()
+
+    async def get_evolution_candidate_generation_status(self) -> Dict[str, Any]:
+        return self._evolution_candidate_generation_scheduler.status()
+
+    async def register_evolution_candidate_generation_request(
+        self,
+        request: EvolutionCandidateGenerationRequest,
+    ) -> Dict[str, Any]:
+        return self._evolution_candidate_generation_scheduler.register(request)
+
+    async def trigger_evolution_candidate_generation(
+        self,
+        request: EvolutionCandidateGenerationTriggerRequest,
+    ) -> Dict[str, Any]:
+        return await self._evolution_candidate_generation_scheduler.trigger(
+            mode=request.mode,
+            request_id=request.request_id,
+        )
 
     async def list_body_slots(self) -> Dict[str, Any]:
         slots = self._execution_facade.list_body_slots()["slots"]

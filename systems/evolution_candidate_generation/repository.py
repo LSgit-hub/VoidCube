@@ -61,6 +61,8 @@ class EvolutionCandidateGenerationRepository(Protocol):
         self, request_id: str
     ) -> EvolutionCandidateGenerationState | None: ...
 
+    def list_request_ids(self) -> tuple[str, ...]: ...
+
     def recover_evaluation(
         self,
         request_id: str,

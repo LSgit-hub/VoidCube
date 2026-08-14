@@ -8,6 +8,9 @@ from typing import Any
 import aiohttp
 
 from systems.evolution_evaluation import EnvironmentCapabilityPolicy
+from systems.evolution_candidate_generation import (
+    JsonEvolutionCandidateGenerationRepository,
+)
 from VoidCube_core.runtime_paths import (
     get_legacy_project_runtime_layout,
     get_runtime_layout,
@@ -32,6 +35,13 @@ from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,
+)
+from systems.supervisor.evolution_candidate_generation_scheduler import (
+    EvolutionCandidateGenerationScheduler,
+    TERMINAL_BODY_TASK_STATUSES,
+)
+from systems.supervisor.evolution_candidate_generation_service import (
+    EvolutionCandidateGenerationService,
 )
 from systems.supervisor.endogenous_governance_event_consumer import (
     EndogenousGovernanceEventConsumer,
@@ -342,6 +352,51 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         )
     )
 
+    candidate_repository = JsonEvolutionCandidateGenerationRepository(
+        foundation_root / "candidate-generation"
+    )
+    candidate_service: EvolutionCandidateGenerationService | None = None
+
+    async def execute_candidate_generation(
+        request_id: str,
+        *,
+        lease_owner: str,
+    ) -> Any:
+        nonlocal candidate_service
+        if candidate_service is None:
+            candidate_service = EvolutionCandidateGenerationService.from_root(
+                supervisor.config.execution.git_repo_path,
+                foundation_root,
+                capability_policy_profile=(
+                    supervisor.config.service_runtime.evolution_capability_policy_profile
+                ),
+            )
+        return await candidate_service.execute(
+            request_id,
+            lease_owner=lease_owner,
+        )
+
+    def has_active_body_task() -> bool:
+        return any(
+            supervisor._task_profile_policy.execution_kind(task)
+            == "body_improvement"
+            and str(task.status or "").strip().lower()
+            not in TERMINAL_BODY_TASK_STATUSES
+            for task in supervisor._autonomous_chain_store.list_chain_projection_tasks()
+        )
+
+    supervisor._evolution_candidate_generation_scheduler = (
+        EvolutionCandidateGenerationScheduler(
+            repository=candidate_repository,
+            execute=execute_candidate_generation,
+            automatic_enabled=lambda: bool(
+                supervisor.config.service_runtime.evolution_candidate_generation_enabled
+            ),
+            load_runtime_observation=supervisor.get_runtime_observation_input,
+            has_active_body_task=has_active_body_task,
+        )
+    )
+
     def autonomous_task_auto_decision(
         task: Any,
         drive_input: dict[str, Any],
@@ -451,6 +506,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         run_review_cycle=supervisor._autonomous_task_review_cycle_service.run,
         update_drive_schedule=update_drive_schedule,
         update_review_schedule=update_review_schedule,
+        schedule_candidate_generation=(
+            supervisor._evolution_candidate_generation_scheduler.trigger
+        ),
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)

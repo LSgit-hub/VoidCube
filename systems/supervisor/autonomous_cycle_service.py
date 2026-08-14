@@ -42,6 +42,7 @@ class AutonomousCycleService:
         run_review_cycle: RunAsync,
         update_drive_schedule: UpdateSchedule,
         update_review_schedule: UpdateSchedule,
+        schedule_candidate_generation: RunAsync | None = None,
         now: Optional[Now] = None,
     ) -> None:
         self._runtime_config = runtime_config
@@ -59,6 +60,7 @@ class AutonomousCycleService:
         self._run_review_cycle = run_review_cycle
         self._update_drive_schedule = update_drive_schedule
         self._update_review_schedule = update_review_schedule
+        self._schedule_candidate_generation = schedule_candidate_generation
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._drive_lock = asyncio.Lock()
 
@@ -75,7 +77,21 @@ class AutonomousCycleService:
             }
 
         async with self._drive_lock:
-            return await self._run_drive_cycle_locked()
+            result = await self._run_drive_cycle_locked()
+
+        if self._schedule_candidate_generation is not None:
+            try:
+                candidate_result = await self._schedule_candidate_generation(
+                    mode="automatic"
+                )
+            except Exception as exc:
+                candidate_result = {
+                    "status": "error",
+                    "error_code": type(exc).__name__,
+                }
+            result = dict(result)
+            result["candidate_generation"] = candidate_result
+        return result
 
     async def _run_drive_cycle_locked(self) -> JsonDict:
         context = EndogenousDriveCycleContext(
@@ -113,6 +129,10 @@ class AutonomousCycleService:
                     if isinstance(task, dict)
                 ],
             }
+            if isinstance(drive_result.get("candidate_generation"), dict):
+                phases["candidate_generation"] = dict(
+                    drive_result["candidate_generation"]
+                )
             now = self._now()
             self._update_drive_schedule(
                 now,

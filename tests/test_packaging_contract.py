@@ -444,6 +444,7 @@ def test_wheel_contract_tracks_evolution_foundation_packages():
     assert "systems/supervisor/endogenous_foundation_bridge.py" in expected
     assert "systems/supervisor/evolution_candidate_evaluation_service.py" in expected
     assert "systems/supervisor/evolution_candidate_generation_service.py" in expected
+    assert "systems/supervisor/evolution_candidate_generation_scheduler.py" in expected
 
 
 @pytest.mark.unit

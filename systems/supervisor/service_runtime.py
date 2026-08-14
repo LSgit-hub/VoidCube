@@ -1603,6 +1603,14 @@ class ServiceRuntimeMixin:
         self._endogenous_drive_task = None
         self._service_runtime.next_drive_at = None
 
+        candidate_scheduler = getattr(
+            self,
+            "_evolution_candidate_generation_scheduler",
+            None,
+        )
+        if candidate_scheduler is not None:
+            await candidate_scheduler.cancel_active()
+
         for task in self._autonomous_chain_store.list_api_a_running_tasks():
             self._autonomous_task_state.update_status(
                 task.task_id,

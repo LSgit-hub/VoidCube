@@ -243,6 +243,15 @@ def load_config_from_env() -> SystemConfig:
             str(capability_policy_profile).strip().lower()
         )
     )
+    config.supervisor.service_runtime.evolution_candidate_generation_enabled = (
+        os.getenv(
+            "SUPERVISOR_EVOLUTION_CANDIDATE_GENERATION_ENABLED",
+            str(
+                config.supervisor.service_runtime.evolution_candidate_generation_enabled
+            ),
+        ).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     config.supervisor.service_runtime.endogenous_drive_enabled = (
         os.getenv(
             "SUPERVISOR_ENDOGENOUS_DRIVE_ENABLED",

@@ -59,6 +59,20 @@ def test_supervisor_lm_task_generation_is_enabled_by_default():
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is True
 
 
+def test_supervisor_candidate_generation_is_disabled_by_default():
+    config = _build_service_config("supervisor", 6123, system_config=SystemConfig())
+
+    assert config.service_runtime.evolution_candidate_generation_enabled is False
+
+
+def test_supervisor_candidate_generation_honors_environment_override(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_EVOLUTION_CANDIDATE_GENERATION_ENABLED", "1")
+
+    config = load_config_from_env().supervisor.service_runtime
+
+    assert config.evolution_candidate_generation_enabled is True
+
+
 def test_supervisor_capability_policy_profile_honors_environment_override(monkeypatch):
     monkeypatch.setenv("SUPERVISOR_EVOLUTION_CAPABILITY_POLICY_PROFILE", "PRODUCTION")
 
