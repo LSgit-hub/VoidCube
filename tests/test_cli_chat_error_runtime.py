@@ -1,7 +1,18 @@
+import pytest
+
 from VoidCube_cli.cli_chat_error_runtime import (
     CliChatErrorPorts,
     CliChatErrorRuntime,
 )
+from VoidCube_cli.i18n import get_i18n, set_locale, t
+
+
+@pytest.fixture(autouse=True)
+def _english_locale():
+    previous_locale = get_i18n().get_current_locale()
+    set_locale("en_US")
+    yield
+    set_locale(previous_locale)
 
 
 def _runtime(events, **overrides):
@@ -12,6 +23,7 @@ def _runtime(events, **overrides):
         "current_autonomous_task": lambda: None,
         "set_last_agent_turn_result": lambda result: events.append(("result", result)),
         "should_emit": lambda: True,
+        "translate": t,
         "emit": lambda text: events.append(("emit", text)),
     }
     values.update(overrides)
@@ -48,3 +60,16 @@ def test_chat_error_runtime_does_not_emit_when_host_suppresses_scrollback():
 
     assert events and events[0][0] == "result"
     assert not any(event[0] == "emit" for event in events)
+
+
+def test_chat_error_runtime_uses_selected_chinese_locale():
+    set_locale("zh_CN")
+    events = []
+
+    result = _runtime(
+        events,
+        autonomous_timeout_reported=True,
+    ).handle(RuntimeError("transport"))
+
+    assert result["error"] == "自主任务运行超过 30 分钟，已超时。"
+    assert events[1] == ("emit", "错误：transport")

@@ -252,6 +252,25 @@
       "invalid_command": "Invalid command: {command}",
       "missing_argument": "Missing argument: {arg}"
     },
+    "chat_error": {
+      "error": "Error: {error}",
+      "autonomous_timeout": "Autonomous task timed out after 30 minutes."
+    },
+    "tui_dynamic": {
+      "voice_recording": "recording... Ctrl+B to stop",
+      "voice_processing": "transcribing...",
+      "sudo_input": "enter password (input hidden), Enter to skip",
+      "secret_input": "enter secret (input hidden), Enter to skip",
+      "clarify_freetext_placeholder": "type your answer here and press Enter",
+      "command_processing": "processing command...",
+      "agent_running": "agent running... use /cancel to cancel this turn",
+      "voice_mode": "type a message, or press Ctrl+B to record",
+      "sudo_hidden_hint": "  password hidden · Enter to skip",
+      "secret_hidden_hint": "  secret hidden · Enter to skip",
+      "selection_hint": "  ↑/↓ select, Enter to confirm",
+      "clarify_freetext_hint": "  type your answer and press Enter",
+      "command_running_hint": "  {frame} command running · input temporarily unavailable"
+    },
     "prompts": {
       "select_session": "Select session",
       "search_sessions": "Search sessions...",

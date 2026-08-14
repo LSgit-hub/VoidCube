@@ -379,6 +379,25 @@
       "invalid_command": "无效命令: {command}",
       "missing_argument": "缺少参数: {arg}"
     },
+    "chat_error": {
+      "error": "错误：{error}",
+      "autonomous_timeout": "自主任务运行超过 30 分钟，已超时。"
+    },
+    "tui_dynamic": {
+      "voice_recording": "录音中……按 Ctrl+B 停止",
+      "voice_processing": "转写中……",
+      "sudo_input": "请输入密码（隐藏输入），按 Enter 跳过",
+      "secret_input": "请输入密钥（隐藏输入），按 Enter 跳过",
+      "clarify_freetext_placeholder": "请在此输入答案并按 Enter 提交",
+      "command_processing": "正在处理命令……",
+      "agent_running": "智能体运行中……使用 /cancel 取消本轮",
+      "voice_mode": "输入文字，或按 Ctrl+B 录音",
+      "sudo_hidden_hint": "  密码已隐藏 · 按 Enter 跳过",
+      "secret_hidden_hint": "  密钥已隐藏 · 按 Enter 跳过",
+      "selection_hint": "  ↑/↓ 选择，Enter 确认",
+      "clarify_freetext_hint": "  输入答案并按 Enter 提交",
+      "command_running_hint": "  {frame} 命令执行中 · 暂时无法输入"
+    },
     "prompts": {
       "select_session": "选择会话",
       "search_sessions": "搜索会话...",

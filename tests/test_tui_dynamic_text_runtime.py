@@ -1,7 +1,18 @@
+import pytest
+
+from VoidCube_cli.i18n import get_i18n, set_locale, t
 from VoidCube_cli.tui_dynamic_text_runtime import (
     TuiDynamicTextPorts,
     TuiDynamicTextRuntime,
 )
+
+
+@pytest.fixture(autouse=True)
+def _english_locale():
+    previous_locale = get_i18n().get_current_locale()
+    set_locale("en_US")
+    yield
+    set_locale(previous_locale)
 
 
 def _runtime(state):
@@ -28,6 +39,7 @@ def _runtime(state):
             secret_deadline=lambda: 100.0,
             approval_deadline=lambda: 100.0,
             clarify_deadline=lambda: state["clarify_deadline"],
+            translate=t,
         )
     )
 
@@ -85,3 +97,32 @@ def test_clarify_freetext_and_idle_spacer_are_projected():
     state.update(clarify=False, clarify_freetext=False)
     assert runtime.hint_fragments() == []
     assert runtime.hint_height() == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (_state(voice_processing=True), "transcribing..."),
+        (_state(sudo=True), "enter password (input hidden), Enter to skip"),
+        (_state(secret=True), "enter secret (input hidden), Enter to skip"),
+        (_state(command=True), "· processing command..."),
+        (_state(agent=True), "agent running... use /cancel to cancel this turn"),
+        (_state(voice_mode=True), "type a message, or press Ctrl+B to record"),
+    ],
+)
+def test_placeholder_uses_explicit_english_locale(state, expected):
+    assert _runtime(state).placeholder() == expected
+
+
+def test_dynamic_text_uses_selected_chinese_locale():
+    set_locale("zh_CN")
+    state = _state(voice_recording=True)
+    runtime = _runtime(state)
+
+    assert runtime.placeholder() == "录音中……按 Ctrl+B 停止"
+
+    state.update(voice_recording=False, approval=True)
+    assert runtime.hint_fragments()[0] == (
+        "class:hint",
+        "  ↑/↓ 选择，Enter 确认",
+    )

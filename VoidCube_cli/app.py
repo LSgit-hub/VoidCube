@@ -4126,6 +4126,7 @@ class VoidcubeCLI:
                         autonomous_runtime.set_last_agent_turn_result
                     ),
                     should_emit=should_emit,
+                    translate=t,
                     emit=print,
                 )
             ).handle(error)
@@ -4480,6 +4481,7 @@ class VoidcubeCLI:
                 secret_deadline=lambda: self._secret_deadline,
                 approval_deadline=lambda: self._approval_deadline,
                 clarify_deadline=lambda: self._clarify_deadline,
+                translate=t,
             )
         )
 

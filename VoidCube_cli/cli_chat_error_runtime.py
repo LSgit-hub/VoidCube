@@ -17,6 +17,7 @@ class CliChatErrorPorts:
     current_autonomous_task: Callable[[], Any]
     set_last_agent_turn_result: Callable[[Mapping[str, Any]], None]
     should_emit: Callable[[], bool]
+    translate: Callable[..., str]
     emit: Callable[[str], None]
 
 
@@ -39,7 +40,9 @@ class CliChatErrorRuntime:
             error_result.update(
                 {
                     "interrupted": True,
-                    "error": "自主任务运行超过 30 分钟，已超时。",
+                    "error": ports.translate(
+                        "chat_error.autonomous_timeout",
+                    ),
                 }
             )
         if (
@@ -51,5 +54,10 @@ class CliChatErrorRuntime:
         elif ports.current_autonomous_task() is None:
             ports.set_last_agent_turn_result(error_result)
         if ports.should_emit():
-            ports.emit(f"错误：{error}")
+            ports.emit(
+                ports.translate(
+                    "chat_error.error",
+                    error=str(error),
+                )
+            )
         return error_result
