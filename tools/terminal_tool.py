@@ -713,6 +713,36 @@ def prepare_task_git_worktree(
         raise ValueError("Autonomous worktree HEAD does not match the captured baseline")
 
     container_git_dir = f"/voidcube-git/common/{git_dir_relative}"
+    task_environment = {
+        **dict(config.get("docker_env") or {}),
+        "GIT_DIR": container_git_dir,
+        "GIT_WORK_TREE": "/workspace",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": "/workspace",
+    }
+    from tools.task_execution import (
+        TaskExecutionContract,
+        clear_task_execution_state,
+        configure_task_execution,
+    )
+
+    clear_task_execution_state(normalized_task_id)
+    configure_task_execution(
+        TaskExecutionContract(
+            task_id=normalized_task_id,
+            backend=backend,
+            validation_scope="container",
+            host_workspace_path=str(worktree),
+            execution_workspace_path="/workspace",
+            allowed_execution_paths=("/workspace",),
+            allowed_environment_variables=tuple(sorted(task_environment)),
+            command_timeout_seconds=max(30, int(config.get("timeout") or 120)),
+            max_output_chars=50_000,
+            required_tools=("git",),
+            required_platforms=("linux",),
+        )
+    )
     register_task_env_overrides(
         normalized_task_id,
         {
@@ -723,14 +753,7 @@ def prepare_task_git_worktree(
                 *configured_volumes,
                 f"{common_dir}:/voidcube-git/common",
             ],
-            "docker_env": {
-                **dict(config.get("docker_env") or {}),
-                "GIT_DIR": container_git_dir,
-                "GIT_WORK_TREE": "/workspace",
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "safe.directory",
-                "GIT_CONFIG_VALUE_0": "/workspace",
-            },
+            "docker_env": task_environment,
             "fallback_to_local": False,
         },
     )
@@ -798,10 +821,21 @@ def prepare_task_git_worktree(
             execution_workspace_path="/workspace",
             probe=environment_probe,
         )
+        from tools.task_execution import validate_task_environment_manifest
+
+        validate_task_environment_manifest(normalized_task_id, manifest)
         return manifest.model_dump(mode="json")
     except Exception as exc:
         cleanup_vm(normalized_task_id)
         clear_task_env_overrides(normalized_task_id)
+        from tools.task_execution import TaskExecutionBlocked, block_task_execution
+
+        if not isinstance(exc, TaskExecutionBlocked):
+            block_task_execution(
+                normalized_task_id,
+                code="worktree_environment_preparation_failed",
+                reason=f"{type(exc).__name__}: {exc}",
+            )
         raise RuntimeError(f"Autonomous worktree sandbox probe failed: {exc}") from exc
 
 
@@ -812,6 +846,9 @@ def release_task_environment(task_id: str) -> None:
         return
     cleanup_vm(normalized_task_id)
     clear_task_env_overrides(normalized_task_id)
+    from tools.task_execution import release_task_execution
+
+    release_task_execution(normalized_task_id)
 
 
 # Configuration from environment variables
@@ -1650,6 +1687,36 @@ def terminal_tool(
         host_cwd = overrides.get("host_cwd", config.get("host_cwd"))
         default_timeout = config["timeout"]
         effective_timeout = timeout or default_timeout
+        configured_fallback = overrides.get(
+            "fallback_to_local", config.get("fallback_to_local", True)
+        )
+        from tools.task_execution import (
+            TaskExecutionBlocked,
+            begin_task_execution,
+            block_task_execution,
+            ensure_task_execution_request,
+            get_task_execution_contract,
+            mark_task_execution_ready,
+        )
+
+        configured_contract = get_task_execution_contract(effective_task_id)
+        requested_fallback = (
+            False if configured_contract is not None else bool(configured_fallback)
+        )
+        try:
+            execution_contract = ensure_task_execution_request(
+                effective_task_id,
+                requested_backend=requested_env_type,
+                workdir=workdir or cwd,
+                timeout_seconds=effective_timeout,
+                environment_variables=tuple(
+                    sorted(dict(overrides.get("docker_env") or {}))
+                ),
+                fallback_to_local=requested_fallback,
+            )
+        except TaskExecutionBlocked as exc:
+            return json.dumps(exc.as_payload(), ensure_ascii=False)
+        fallback_to_local = requested_fallback
 
         # Reject foreground commands where the model explicitly requests
         # a timeout above FOREGROUND_MAX_TIMEOUT — nudge it toward background.
@@ -1664,6 +1731,11 @@ def terminal_tool(
 
         # Start cleanup thread
         _start_cleanup_thread()
+
+        try:
+            begin_task_execution(effective_task_id)
+        except TaskExecutionBlocked as exc:
+            return json.dumps(exc.as_payload(), ensure_ascii=False)
 
         # Get or create environment.
         # Use a per-task creation lock so concurrent tool calls for the same
@@ -1750,17 +1822,42 @@ def terminal_tool(
                             local_config=local_config,
                             task_id=effective_task_id,
                             host_cwd=host_cwd,
-                            fallback_to_local=overrides.get(
-                                "fallback_to_local", config.get("fallback_to_local", True)
-                            ),
+                            fallback_to_local=fallback_to_local,
                         )
                     except ImportError as e:
+                        if execution_contract is not None:
+                            block_task_execution(
+                                effective_task_id,
+                                code="environment_start_failed",
+                                reason=f"{type(e).__name__}: {e}",
+                            )
                         return json.dumps({
                             "output": "",
                             "exit_code": -1,
                             "error": f"Terminal tool disabled: environment creation failed ({e})",
-                            "status": "disabled"
+                            "status": "blocked" if execution_contract is not None else "disabled",
+                            **(
+                                {"block_code": "environment_start_failed"}
+                                if execution_contract is not None
+                                else {}
+                            ),
                         }, ensure_ascii=False)
+                    except Exception as e:
+                        if execution_contract is None:
+                            raise
+                        block_task_execution(
+                            effective_task_id,
+                            code="environment_start_failed",
+                            reason=f"{type(e).__name__}: {e}",
+                        )
+                        return json.dumps(
+                            TaskExecutionBlocked(
+                                effective_task_id,
+                                "environment_start_failed",
+                                f"{type(e).__name__}: {e}",
+                            ).as_payload(),
+                            ensure_ascii=False,
+                        )
 
                     with _env_lock:
                         _active_environments[effective_task_id] = new_env
@@ -1769,6 +1866,14 @@ def terminal_tool(
                     active_env_type = getattr(env, "_voidcube_active_backend", requested_env_type)
                     backend_warning = getattr(env, "_voidcube_backend_warning", None)
                     logger.info("%s environment ready for task %s", active_env_type, effective_task_id[:8])
+
+        try:
+            mark_task_execution_ready(
+                effective_task_id,
+                active_backend=active_env_type,
+            )
+        except TaskExecutionBlocked as exc:
+            return json.dumps(exc.as_payload(), ensure_ascii=False)
 
         # Validate workdir against shell injection
         if workdir:
@@ -1889,7 +1994,11 @@ def terminal_tool(
             output = _handle_sudo_failure(output, active_env_type)
             
             # Truncate output if too long, keeping both head and tail
-            MAX_OUTPUT_CHARS = 50000
+            MAX_OUTPUT_CHARS = (
+                execution_contract.max_output_chars
+                if execution_contract is not None
+                else 50000
+            )
             if len(output) > MAX_OUTPUT_CHARS:
                 head_chars = int(MAX_OUTPUT_CHARS * 0.4)  # 40% head (error messages often appear early)
                 tail_chars = MAX_OUTPUT_CHARS - head_chars  # 60% tail (most recent/relevant output)

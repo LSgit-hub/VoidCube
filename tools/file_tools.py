@@ -15,6 +15,7 @@ from tools.path_security import (
 )
 from agent.redact import redact_sensitive_text
 from tools.path_runtime import RuntimePath, resolve_runtime_path
+from tools.task_execution import TaskExecutionBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +93,18 @@ def _get_backend_warning(file_ops: ShellFileOperations) -> str | None:
     return getattr(getattr(file_ops, "env", None), "_voidcube_backend_warning", None)
 
 
-def _resolve_tool_path(path: str, file_ops: ShellFileOperations) -> RuntimePath:
+def _resolve_tool_path(
+    path: str,
+    file_ops: ShellFileOperations,
+    *,
+    task_id: str,
+) -> RuntimePath:
     """Resolve a user-supplied path against the active file backend."""
-    return resolve_runtime_path(path, getattr(file_ops, "env", None))
+    runtime_path = resolve_runtime_path(path, getattr(file_ops, "env", None))
+    from tools.task_execution import ensure_task_execution_path
+
+    ensure_task_execution_path(task_id, runtime_path.backend_path)
+    return runtime_path
 
 
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
@@ -114,6 +124,22 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
         _creation_locks_lock,
     )
     import time
+    from tools.task_execution import (
+        begin_task_execution,
+        block_task_execution,
+        ensure_task_execution_request,
+        get_task_execution_contract,
+        get_task_execution_state,
+        mark_task_execution_ready,
+    )
+
+    scope_state = get_task_execution_state(task_id)
+    if scope_state is not None and scope_state.status == "blocked":
+        raise TaskExecutionBlocked(
+            task_id,
+            scope_state.block_code or "execution_scope_blocked",
+            scope_state.block_reason or "task execution scope is blocked",
+        )
 
     # Fast path: check cache -- but also verify the underlying environment
     # is still alive (it may have been killed by the cleanup thread).
@@ -151,6 +177,15 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             config = _get_env_config()
             env_type = config["env_type"]
             overrides = _task_env_overrides.get(task_id, {})
+            configured_fallback = overrides.get(
+                "fallback_to_local", config.get("fallback_to_local", True)
+            )
+            configured_contract = get_task_execution_contract(task_id)
+            requested_fallback = (
+                False
+                if configured_contract is not None
+                else bool(configured_fallback)
+            )
 
             if env_type == "docker":
                 image = overrides.get("docker_image") or config["docker_image"]
@@ -167,6 +202,20 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
 
             cwd = overrides.get("cwd") or config["cwd"]
             host_cwd = overrides.get("host_cwd", config.get("host_cwd"))
+            try:
+                execution_contract = ensure_task_execution_request(
+                    task_id,
+                    requested_backend=env_type,
+                    workdir=cwd,
+                    timeout_seconds=config["timeout"],
+                    environment_variables=tuple(
+                        sorted(dict(overrides.get("docker_env") or {}))
+                    ),
+                    fallback_to_local=requested_fallback,
+                )
+                begin_task_execution(task_id)
+            except TaskExecutionBlocked:
+                raise
             logger.info("Creating new %s environment for task %s...", env_type, task_id[:8])
 
             container_config = None
@@ -207,20 +256,36 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                     "persistent": config.get("local_persistent", False),
                 }
 
-            terminal_env = _create_environment(
-                env_type=env_type,
-                image=image,
-                cwd=cwd,
-                timeout=config["timeout"],
-                ssh_config=ssh_config,
-                container_config=container_config,
-                local_config=local_config,
-                task_id=task_id,
-                host_cwd=host_cwd,
-                fallback_to_local=overrides.get(
-                    "fallback_to_local", config.get("fallback_to_local", True)
-                ),
-            )
+            try:
+                terminal_env = _create_environment(
+                    env_type=env_type,
+                    image=image,
+                    cwd=cwd,
+                    timeout=config["timeout"],
+                    ssh_config=ssh_config,
+                    container_config=container_config,
+                    local_config=local_config,
+                    task_id=task_id,
+                    host_cwd=host_cwd,
+                    fallback_to_local=(
+                        False
+                        if execution_contract is not None
+                        else requested_fallback
+                    ),
+                )
+            except Exception as exc:
+                if execution_contract is not None:
+                    block_task_execution(
+                        task_id,
+                        code="environment_start_failed",
+                        reason=f"{type(exc).__name__}: {exc}",
+                    )
+                    raise TaskExecutionBlocked(
+                        task_id,
+                        "environment_start_failed",
+                        f"{type(exc).__name__}: {exc}",
+                    ) from exc
+                raise
 
             with _env_lock:
                 _active_environments[task_id] = terminal_env
@@ -228,6 +293,13 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
 
             _start_cleanup_thread()
             logger.info("%s environment ready for task %s", env_type, task_id[:8])
+
+    active_backend = getattr(
+        terminal_env,
+        "_voidcube_active_backend",
+        getattr(terminal_env, "_voidcube_requested_backend", "local"),
+    )
+    mark_task_execution_ready(task_id, active_backend=active_backend)
 
     # Build file_ops from the (guaranteed live) environment and cache it
     file_ops = ShellFileOperations(terminal_env)
@@ -260,7 +332,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
             })
 
         file_ops = _get_file_ops(task_id)
-        runtime_path = _resolve_tool_path(path, file_ops)
+        runtime_path = _resolve_tool_path(path, file_ops, task_id=task_id)
         if runtime_path.backend_path != path and is_blocked_device(runtime_path.backend_path):
             return json.dumps({
                 "error": (
@@ -425,6 +497,8 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
             )
 
         return json.dumps(result_dict, ensure_ascii=False)
+    except TaskExecutionBlocked as e:
+        return json.dumps(e.as_payload(), ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))
 
@@ -553,12 +627,14 @@ def _check_file_staleness(filepath: str, task_id: str, file_ops: ShellFileOperat
 
 def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
     """Write content to a file."""
-    file_ops = _get_file_ops(task_id)
-    runtime_path = _resolve_tool_path(path, file_ops)
-    sensitive_err = validate_file_write_path(runtime_path.host_path or runtime_path.backend_path)
-    if sensitive_err:
-        return tool_error(sensitive_err)
     try:
+        file_ops = _get_file_ops(task_id)
+        runtime_path = _resolve_tool_path(path, file_ops, task_id=task_id)
+        sensitive_err = validate_file_write_path(
+            runtime_path.host_path or runtime_path.backend_path
+        )
+        if sensitive_err:
+            return tool_error(sensitive_err)
         stale_warning = _check_file_staleness(path, task_id, file_ops=file_ops)
         result = file_ops.write_file(runtime_path.backend_path, content)
         result_dict = result.to_dict()
@@ -569,6 +645,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
         # task don't trigger false staleness warnings.
         _update_read_timestamp(path, task_id, file_ops=file_ops)
         return json.dumps(result_dict, ensure_ascii=False)
+    except TaskExecutionBlocked as e:
+        return json.dumps(e.as_payload(), ensure_ascii=False)
     except Exception as e:
         if _is_expected_write_exception(e):
             logger.debug("write_file expected denial: %s: %s", type(e).__name__, e)
@@ -581,25 +659,31 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                new_string: str = None, replace_all: bool = False, patch: str = None,
                task_id: str = "default") -> str:
     """Patch a file using replace mode or V4A patch format."""
-    file_ops = _get_file_ops(task_id)
-    # Check sensitive paths for both replace (explicit path) and V4A patch (extract paths)
-    _paths_to_check = []
-    if path:
-        _paths_to_check.append(path)
-    if mode == "patch" and patch:
-        import re as _re
-        for _m in _re.finditer(r'^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$', patch, _re.MULTILINE):
-            _paths_to_check.append(_m.group(1).strip())
-    resolved_paths = {
-        _p: _resolve_tool_path(_p, file_ops)
-        for _p in _paths_to_check
-    }
-    for _p in _paths_to_check:
-        resolved = resolved_paths[_p]
-        sensitive_err = validate_file_write_path(resolved.host_path or resolved.backend_path)
-        if sensitive_err:
-            return tool_error(sensitive_err)
     try:
+        file_ops = _get_file_ops(task_id)
+        # Check sensitive paths for both replace (explicit path) and V4A patch (extract paths)
+        _paths_to_check = []
+        if path:
+            _paths_to_check.append(path)
+        if mode == "patch" and patch:
+            import re as _re
+            for _m in _re.finditer(
+                r'^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$',
+                patch,
+                _re.MULTILINE,
+            ):
+                _paths_to_check.append(_m.group(1).strip())
+        resolved_paths = {
+            _p: _resolve_tool_path(_p, file_ops, task_id=task_id)
+            for _p in _paths_to_check
+        }
+        for _p in _paths_to_check:
+            resolved = resolved_paths[_p]
+            sensitive_err = validate_file_write_path(
+                resolved.host_path or resolved.backend_path
+            )
+            if sensitive_err:
+                return tool_error(sensitive_err)
         # Check staleness for all files this patch will touch.
         stale_warnings = []
         for _p in _paths_to_check:
@@ -635,6 +719,8 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
         if result_dict.get("error") and "Could not find" in str(result_dict["error"]):
             result_json += "\n\n[Hint: old_string not found. Use read_file to verify the current content, or search_files to locate the text.]"
         return result_json
+    except TaskExecutionBlocked as e:
+        return json.dumps(e.as_payload(), ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))
 
@@ -646,7 +732,7 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
     """Search for content or files."""
     try:
         file_ops = _get_file_ops(task_id)
-        runtime_path = _resolve_tool_path(path, file_ops)
+        runtime_path = _resolve_tool_path(path, file_ops, task_id=task_id)
         # Track searches to detect *consecutive* repeated search loops.
         # Include pagination args so users can page through truncated
         # results without tripping the repeated-search guard.
@@ -705,6 +791,8 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
             next_offset = offset + limit
             result_json += f"\n\n[Hint: Results truncated. Use offset={next_offset} to see more, or narrow with a more specific pattern or file_glob.]"
         return result_json
+    except TaskExecutionBlocked as e:
+        return json.dumps(e.as_payload(), ensure_ascii=False)
     except Exception as e:
         return tool_error(str(e))
 
