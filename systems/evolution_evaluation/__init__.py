@@ -68,6 +68,14 @@ from systems.evolution_evaluation.benchmark_packs import (
     create_native_first_scoring_policy,
     native_first_benchmark_evaluators,
 )
+from systems.evolution_evaluation.capability_policy import (
+    CAPABILITY_POLICY_VERSION,
+    CapabilityPolicyEvaluation,
+    CapabilityPolicyProfile,
+    CapabilityPolicyViolation,
+    EnvironmentCapabilityPolicy,
+    resolve_environment_capability_policy,
+)
 
 __all__ = [
     "AllowedRegression",
@@ -86,11 +94,16 @@ __all__ = [
     "BenchmarkPackExecutor",
     "BenchmarkRunner",
     "BenchmarkRunRequest",
+    "CAPABILITY_POLICY_VERSION",
+    "CapabilityPolicyEvaluation",
+    "CapabilityPolicyProfile",
+    "CapabilityPolicyViolation",
     "DEFAULT_BENCHMARK_EXECUTOR_VERSION",
     "EXECUTION_ENVIRONMENT_GATE",
     "EvaluationImmutableConflict",
     "EvaluationRecordCorrupted",
     "EvaluationRepository",
+    "EnvironmentCapabilityPolicy",
     "ExecutionEnvironmentIdentity",
     "ExecutionEnvironmentManifest",
     "ExperimentResult",
@@ -124,4 +137,5 @@ __all__ = [
     "build_native_first_platform_runners",
     "dependency_fingerprint",
     "native_first_benchmark_evaluators",
+    "resolve_environment_capability_policy",
 ]

@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from systems.evolution_authoring import JsonEvolutionAuthoringRepository
 from systems.evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
+    EnvironmentCapabilityPolicy,
     JsonEvaluationRepository,
     benchmark_case_supports_platform,
+    resolve_environment_capability_policy,
     select_benchmark_platforms,
 )
 from systems.research_knowledge import JsonKnowledgeRepository
 from systems.self_cognition import JsonSelfCognitionRepository
 
 
-EVALUATION_GOVERNANCE_SCHEMA_VERSION = 1
+EVALUATION_GOVERNANCE_SCHEMA_VERSION = 2
 _FULL_GIT_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
@@ -30,9 +32,18 @@ class EvolutionEvaluationGovernanceVerifier:
     knowledge_repository: Any
     self_cognition_repository: Any
     authoring_repository: Any
+    capability_policy: EnvironmentCapabilityPolicy = field(
+        default_factory=lambda: EnvironmentCapabilityPolicy.for_profile("development")
+    )
 
     @classmethod
-    def from_root(cls, root: str | Path) -> "EvolutionEvaluationGovernanceVerifier":
+    def from_root(
+        cls,
+        root: str | Path,
+        *,
+        capability_policy: EnvironmentCapabilityPolicy | None = None,
+        capability_policy_profile: str | None = None,
+    ) -> "EvolutionEvaluationGovernanceVerifier":
         foundation_root = Path(root).resolve()
         return cls(
             evaluation_repository=JsonEvaluationRepository(
@@ -46,6 +57,10 @@ class EvolutionEvaluationGovernanceVerifier:
             ),
             authoring_repository=JsonEvolutionAuthoringRepository(
                 foundation_root / "authoring"
+            ),
+            capability_policy=resolve_environment_capability_policy(
+                policy=capability_policy,
+                profile=capability_policy_profile,
             ),
         )
 
@@ -548,15 +563,6 @@ class EvolutionEvaluationGovernanceVerifier:
         disk_quota_statuses = sorted(
             {item.container_disk_quota_status for item in authoring.command_evidence}
         )
-        capability_warnings = [
-            f"security_scanner_{status}"
-            for status in scanner_statuses
-            if status != "available"
-        ] + [
-            f"container_disk_quota_{status}"
-            for status in disk_quota_statuses
-            if status not in {"enforced", "not_applicable"}
-        ]
         validation_scanner_statuses = sorted(
             {
                 command.security_scanner_status
@@ -571,15 +577,41 @@ class EvolutionEvaluationGovernanceVerifier:
                 for command in item.commands
             }
         )
-        validation_capability_warnings = [
-            f"security_scanner_{status}"
-            for status in validation_scanner_statuses
-            if status != "available"
-        ] + [
-            f"container_disk_quota_{status}"
-            for status in validation_disk_quota_statuses
-            if status not in {"enforced", "not_applicable"}
-        ]
+        authoring_capability = self.capability_policy.evaluate(
+            phase="authoring",
+            security_scanner_statuses=scanner_statuses,
+            container_disk_quota_statuses=disk_quota_statuses,
+        )
+        validation_capability = self.capability_policy.evaluate(
+            phase="validation",
+            security_scanner_statuses=validation_scanner_statuses,
+            container_disk_quota_statuses=validation_disk_quota_statuses,
+        )
+        capability_violations = tuple(
+            (*authoring_capability.violations, *validation_capability.violations)
+        )
+        capability_policy_fields = {
+            "capability_policy_id": self.capability_policy.capability_policy_id,
+            "capability_policy_version": self.capability_policy.policy_version,
+            "capability_policy_profile": self.capability_policy.profile,
+            "authoring_security_scanner_statuses": scanner_statuses,
+            "authoring_container_disk_quota_statuses": disk_quota_statuses,
+            "environment_capability_warnings": list(authoring_capability.warnings),
+            "validation_security_scanner_statuses": validation_scanner_statuses,
+            "validation_container_disk_quota_statuses": validation_disk_quota_statuses,
+            "validation_environment_capability_warnings": list(
+                validation_capability.warnings
+            ),
+            "environment_capability_policy_violations": [
+                item.model_dump(mode="json") for item in capability_violations
+            ],
+        }
+        if capability_violations:
+            return _rejection(
+                "environment_capability_policy_failed",
+                experiment_result_id=result_id,
+                **capability_policy_fields,
+            )
         return {
             "schema_version": EVALUATION_GOVERNANCE_SCHEMA_VERSION,
             "authorized": True,
@@ -594,12 +626,7 @@ class EvolutionEvaluationGovernanceVerifier:
             "authoring_environment_manifest_id": authoring.environment_manifest_id,
             "authoring_environment_identity_id": authoring.environment_identity_id,
             "authoring_dependency_fingerprint": authoring.environment_dependency_fingerprint,
-            "authoring_security_scanner_statuses": scanner_statuses,
-            "authoring_container_disk_quota_statuses": disk_quota_statuses,
-            "environment_capability_warnings": capability_warnings,
-            "validation_security_scanner_statuses": validation_scanner_statuses,
-            "validation_container_disk_quota_statuses": validation_disk_quota_statuses,
-            "validation_environment_capability_warnings": validation_capability_warnings,
+            **capability_policy_fields,
             "platform_selection_id": selection.selection_id,
             "selected_validation_platforms": list(selection.required_platforms),
             "platform_selection_reason_codes": list(selection.reason_codes),
@@ -681,6 +708,9 @@ def validate_body_improvement_authorization_binding(
         "authoring_environment_identity_id",
         "authoring_dependency_fingerprint",
         "platform_selection_id",
+        "capability_policy_id",
+        "capability_policy_version",
+        "capability_policy_profile",
     )
     for field in fields:
         expected = str(authorization.get(field) or "").strip().lower()
@@ -741,6 +771,32 @@ def validate_body_improvement_authorization_binding(
                 "valid": False,
                 "reason": "evaluation_authorization_binding_mismatch",
                 "field": "validation_environment_capability_warnings",
+            }
+
+    expected_violations = tuple(
+        (
+            str(item.get("phase") or ""),
+            str(item.get("capability") or ""),
+            str(item.get("status") or ""),
+            str(item.get("reason_code") or ""),
+        )
+        for item in authorization.get("environment_capability_policy_violations") or []
+    )
+    for source in (evidence, constraints):
+        source_violations = tuple(
+            (
+                str(item.get("phase") or ""),
+                str(item.get("capability") or ""),
+                str(item.get("status") or ""),
+                str(item.get("reason_code") or ""),
+            )
+            for item in source.get("environment_capability_policy_violations") or []
+        )
+        if source_violations != expected_violations:
+            return {
+                "valid": False,
+                "reason": "evaluation_authorization_binding_mismatch",
+                "field": "environment_capability_policy_violations",
             }
 
     expected_knowledge = tuple(str(item) for item in authorization.get("knowledge_ids") or [])

@@ -7,6 +7,7 @@ from typing import Any
 
 import aiohttp
 
+from systems.evolution_evaluation import EnvironmentCapabilityPolicy
 from VoidCube_core.runtime_paths import (
     get_legacy_project_runtime_layout,
     get_runtime_layout,
@@ -330,8 +331,15 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         getattr(supervisor, "_runtime_root", None)
         or supervisor.config.soul_store_path
     ) / "evolution-foundation"
+    evolution_capability_policy = EnvironmentCapabilityPolicy.for_profile(
+        supervisor.config.service_runtime.evolution_capability_policy_profile
+    )
+    supervisor._evolution_capability_policy = evolution_capability_policy
     supervisor._evolution_evaluation_governance_verifier = (
-        EvolutionEvaluationGovernanceVerifier.from_root(foundation_root)
+        EvolutionEvaluationGovernanceVerifier.from_root(
+            foundation_root,
+            capability_policy=evolution_capability_policy,
+        )
     )
 
     def autonomous_task_auto_decision(

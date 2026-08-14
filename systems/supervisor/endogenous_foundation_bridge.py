@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from systems.evolution_authoring import JsonEvolutionAuthoringRepository
-from systems.evolution_evaluation import JsonEvaluationRepository
+from systems.evolution_evaluation import (
+    EnvironmentCapabilityPolicy,
+    JsonEvaluationRepository,
+    resolve_environment_capability_policy,
+)
 from systems.research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
 from systems.self_cognition import JsonSelfCognitionRepository
 from systems.supervisor.evolution_evaluation_governance import (
@@ -57,6 +61,7 @@ class EndogenousFoundationReadOnlyProjection:
         authoring_repository: Any,
         now: Callable[[], datetime] | None = None,
         shadow_policy: FoundationShadowPolicy | None = None,
+        capability_policy: EnvironmentCapabilityPolicy | None = None,
     ) -> None:
         self._self_cognition_repository = self_cognition_repository
         self._knowledge_repository = knowledge_repository
@@ -66,6 +71,10 @@ class EndogenousFoundationReadOnlyProjection:
             knowledge_repository=knowledge_repository,
             self_cognition_repository=self_cognition_repository,
             authoring_repository=authoring_repository,
+            capability_policy=(
+                capability_policy
+                or EnvironmentCapabilityPolicy.for_profile("development")
+            ),
         )
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._shadow_policy = shadow_policy or FoundationShadowPolicy()
@@ -77,6 +86,8 @@ class EndogenousFoundationReadOnlyProjection:
         *,
         now: Callable[[], datetime] | None = None,
         shadow_policy: FoundationShadowPolicy | None = None,
+        capability_policy: EnvironmentCapabilityPolicy | None = None,
+        capability_policy_profile: str | None = None,
     ) -> "EndogenousFoundationReadOnlyProjection":
         foundation_root = Path(root).resolve()
         return cls(
@@ -94,6 +105,10 @@ class EndogenousFoundationReadOnlyProjection:
             ),
             now=now,
             shadow_policy=shadow_policy,
+            capability_policy=resolve_environment_capability_policy(
+                policy=capability_policy,
+                profile=capability_policy_profile,
+            ),
         )
 
     def load(self) -> dict[str, Any]:

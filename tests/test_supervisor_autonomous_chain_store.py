@@ -98,7 +98,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
 
 def _body_evaluation_authorization() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "authorized": True,
         "reason": "promote_result_verified",
         "experiment_result_id": "experiment-result-" + "1" * 64,
@@ -133,6 +133,10 @@ def _body_evaluation_authorization() -> dict:
         "validation_security_scanner_statuses": ["available"],
         "validation_container_disk_quota_statuses": ["not_applicable"],
         "validation_environment_capability_warnings": [],
+        "capability_policy_id": "environment-capability-policy-" + "e" * 64,
+        "capability_policy_version": "environment-capability-policy-v1",
+        "capability_policy_profile": "development",
+        "environment_capability_policy_violations": [],
         "platform_selection_id": "benchmark-platform-selection-" + "d" * 64,
         "selected_validation_platforms": ["windows"],
         "platform_selection_reason_codes": ["project_default_windows"],
@@ -170,6 +174,10 @@ def _body_evaluation_fields() -> dict:
             "validation_security_scanner_statuses",
             "validation_container_disk_quota_statuses",
             "validation_environment_capability_warnings",
+            "capability_policy_id",
+            "capability_policy_version",
+            "capability_policy_profile",
+            "environment_capability_policy_violations",
             "platform_selection_id",
             "selected_validation_platforms",
             "platform_selection_reason_codes",

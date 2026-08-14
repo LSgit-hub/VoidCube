@@ -5,6 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from systems.config import SystemConfig, load_config_from_env
 
@@ -56,6 +57,21 @@ def test_supervisor_lm_task_generation_is_enabled_by_default():
     config = _build_service_config("supervisor", 6123, system_config=SystemConfig())
 
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is True
+
+
+def test_supervisor_capability_policy_profile_honors_environment_override(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_EVOLUTION_CAPABILITY_POLICY_PROFILE", "PRODUCTION")
+
+    profile = load_config_from_env().supervisor.service_runtime.evolution_capability_policy_profile
+
+    assert profile == "production"
+
+
+def test_supervisor_rejects_unknown_capability_policy_profile(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_EVOLUTION_CAPABILITY_POLICY_PROFILE", "staging")
+
+    with pytest.raises(ValidationError, match="development|ci|production"):
+        load_config_from_env()
 
 
 def test_supervisor_reminder_policy_loads_from_canonical_config_before_env_overrides(

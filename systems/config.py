@@ -1,11 +1,16 @@
 import os
 import json
-from typing import Optional
+from typing import Literal, Optional
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from systems.memory.config import MemoryServiceConfig
 from systems.supervisor.config_models import SupervisorConfig
+
+
+_EVOLUTION_CAPABILITY_POLICY_PROFILE = TypeAdapter(
+    Literal["development", "ci", "production"]
+)
 
 
 def _parse_string_list_env(raw: str) -> list[str]:
@@ -227,6 +232,15 @@ def load_config_from_env() -> SystemConfig:
         os.getenv(
             "SUPERVISOR_AUTONOMOUS_CHAIN_REVIEW_INTERVAL",
             config.supervisor.service_runtime.autonomous_chain_review_interval,
+        )
+    )
+    capability_policy_profile = os.getenv(
+        "SUPERVISOR_EVOLUTION_CAPABILITY_POLICY_PROFILE",
+        config.supervisor.service_runtime.evolution_capability_policy_profile,
+    )
+    config.supervisor.service_runtime.evolution_capability_policy_profile = (
+        _EVOLUTION_CAPABILITY_POLICY_PROFILE.validate_python(
+            str(capability_policy_profile).strip().lower()
         )
     )
     config.supervisor.service_runtime.endogenous_drive_enabled = (

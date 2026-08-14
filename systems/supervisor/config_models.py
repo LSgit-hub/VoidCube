@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 from VoidCube_core.runtime_paths import get_runtime_layout
@@ -286,6 +286,9 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     governor_llm_advisory_enabled: bool = True
     autonomous_chain_review_interval: int = 300
     autonomous_chain_handoff_limit_per_cycle: int = 1
+    evolution_capability_policy_profile: Literal[
+        "development", "ci", "production"
+    ] = "development"
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
@@ -345,5 +348,4 @@ class SupervisorConfig(BaseModel):
     soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
     scheduled_task_store_path: Optional[str] = None
-
 

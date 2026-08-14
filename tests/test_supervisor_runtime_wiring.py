@@ -345,6 +345,20 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     return supervisor
 
 
+@pytest.mark.unit
+def test_supervisor_runtime_uses_configured_evolution_capability_policy(tmp_path):
+    config = _make_supervisor_config(tmp_path)
+    config.service_runtime.evolution_capability_policy_profile = "production"
+
+    supervisor = Supervisor(config)
+
+    assert supervisor._evolution_capability_policy.profile == "production"
+    assert (
+        supervisor._evolution_evaluation_governance_verifier.capability_policy
+        == supervisor._evolution_capability_policy
+    )
+
+
 def _make_probe_ready_supervisor(tmp_path: Path) -> Supervisor:
     (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
     (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")

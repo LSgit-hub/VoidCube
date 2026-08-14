@@ -19,6 +19,7 @@ from systems.evolution_evaluation import (
     BenchmarkPack,
     BenchmarkPackExecutor,
     BenchmarkPlatformSelection,
+    EnvironmentCapabilityPolicy,
     EvaluationRepository,
     ExperimentResult,
     ExperimentSpec,
@@ -26,6 +27,7 @@ from systems.evolution_evaluation import (
     MetricTarget,
     ScoringPolicy,
     select_benchmark_platforms,
+    resolve_environment_capability_policy,
 )
 from systems.research_knowledge import JsonKnowledgeRepository
 from systems.self_cognition import (
@@ -102,6 +104,8 @@ class EvolutionCandidateEvaluationService:
         *,
         benchmark_executor: BenchmarkPackExecutor | None = None,
         benchmark_executor_factory: BenchmarkExecutorFactory | None = None,
+        capability_policy: EnvironmentCapabilityPolicy | None = None,
+        capability_policy_profile: str | None = None,
     ) -> "EvolutionCandidateEvaluationService":
         root = Path(foundation_root).expanduser().resolve()
         authoring_repository = JsonEvolutionAuthoringRepository(root / "authoring")
@@ -113,6 +117,10 @@ class EvolutionCandidateEvaluationService:
             knowledge_repository=knowledge_repository,
             self_cognition_repository=self_cognition_repository,
             authoring_repository=authoring_repository,
+            capability_policy=resolve_environment_capability_policy(
+                policy=capability_policy,
+                profile=capability_policy_profile,
+            ),
         )
         return cls(
             repository,

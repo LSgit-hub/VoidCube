@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 import aiohttp
 
+from systems.evolution_evaluation import EnvironmentCapabilityPolicy
 from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
 from systems.supervisor.endogenous_proposal_port import (
     LmGenerationApplicationState,
@@ -127,8 +128,12 @@ class PlanningRuntimeMixin:
 
     def _load_evolution_foundation_projection(self) -> Dict[str, Any]:
         runtime_root = getattr(self, "_runtime_root", None) or self.config.soul_store_path
+        capability_policy = EnvironmentCapabilityPolicy.for_profile(
+            self.config.service_runtime.evolution_capability_policy_profile
+        )
         return EndogenousFoundationReadOnlyProjection.from_root(
-            Path(runtime_root) / "evolution-foundation"
+            Path(runtime_root) / "evolution-foundation",
+            capability_policy=capability_policy,
         ).load()
     @staticmethod
     def _clamp_endogenous_ratio(value: Any) -> float:

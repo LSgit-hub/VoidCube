@@ -281,6 +281,16 @@ def evaluation_authorization_fields(
         "validation_environment_capability_warnings": list(
             authorization.get("validation_environment_capability_warnings") or []
         ),
+        "capability_policy_id": authorization.get("capability_policy_id"),
+        "capability_policy_version": authorization.get(
+            "capability_policy_version"
+        ),
+        "capability_policy_profile": authorization.get(
+            "capability_policy_profile"
+        ),
+        "environment_capability_policy_violations": list(
+            authorization.get("environment_capability_policy_violations") or []
+        ),
         "platform_selection_id": authorization.get("platform_selection_id"),
         "selected_validation_platforms": list(
             authorization.get("selected_validation_platforms") or []

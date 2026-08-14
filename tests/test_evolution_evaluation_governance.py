@@ -66,6 +66,10 @@ def _records(
     completed_at: datetime = NOW,
     gate: str = "tests",
     changed_files: tuple[str, ...] = ("agent/demo.py",),
+    authoring_scanner_status: str = "available",
+    authoring_disk_quota_status: str = "unsupported",
+    validation_scanner_status: str = "available",
+    validation_disk_quota_status: str = "not_applicable",
 ):
     baseline = SelfCognitionSnapshot.create(
         body_id="body-baseline",
@@ -139,8 +143,8 @@ def _records(
                 command="pytest tests/test_demo.py",
                 exit_code=0,
                 output="1 passed",
-                security_scanner_status="available",
-                container_disk_quota_status="unsupported",
+                security_scanner_status=authoring_scanner_status,
+                container_disk_quota_status=authoring_disk_quota_status,
             ),
         ),
         agent_summary="Improved correctness",
@@ -213,8 +217,8 @@ def _records(
                         command="pytest tests/test_demo.py",
                         exit_code=0,
                         output_summary="1 passed",
-                        security_scanner_status="available",
-                        container_disk_quota_status="not_applicable",
+                        security_scanner_status=validation_scanner_status,
+                        container_disk_quota_status=validation_disk_quota_status,
                     ),
                 ),
                 execution_environment_id=(
@@ -235,8 +239,8 @@ def _records(
                         command="pytest tests/test_demo.py",
                         exit_code=0,
                         output_summary="1 passed",
-                        security_scanner_status="available",
-                        container_disk_quota_status="not_applicable",
+                        security_scanner_status=validation_scanner_status,
+                        container_disk_quota_status=validation_disk_quota_status,
                     ),
                 ),
                 execution_environment_id=ENVIRONMENT.execution_environment_id,
@@ -672,6 +676,10 @@ def test_binding_rejects_actual_commit_mismatch(tmp_path: Path):
             "validation_security_scanner_statuses",
             "validation_container_disk_quota_statuses",
             "validation_environment_capability_warnings",
+            "capability_policy_id",
+            "capability_policy_version",
+            "capability_policy_profile",
+            "environment_capability_policy_violations",
             "platform_selection_id",
             "selected_validation_platforms",
             "validation_scope",
@@ -730,6 +738,10 @@ def test_binding_rejects_environment_matrix_id_tampering(tmp_path: Path):
             "validation_security_scanner_statuses",
             "validation_container_disk_quota_statuses",
             "validation_environment_capability_warnings",
+            "capability_policy_id",
+            "capability_policy_version",
+            "capability_policy_profile",
+            "environment_capability_policy_violations",
             "platform_selection_id",
             "selected_validation_platforms",
             "validation_scope",
@@ -754,4 +766,134 @@ def test_binding_rejects_environment_matrix_id_tampering(tmp_path: Path):
         "valid": False,
         "reason": "evaluation_authorization_binding_mismatch",
         "field": "execution_environment_ids",
+    }
+
+
+def test_development_authorizes_non_ideal_capabilities_with_warnings(tmp_path: Path):
+    result = _seed(
+        tmp_path,
+        authoring_scanner_status="unavailable",
+        validation_scanner_status="error",
+        validation_disk_quota_status="unsupported",
+    )[-1]
+
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(
+        tmp_path,
+        capability_policy_profile="development",
+    ).verify(result.experiment_result_id)
+
+    assert authorization["authorized"] is True
+    assert authorization["capability_policy_profile"] == "development"
+    assert authorization["environment_capability_policy_violations"] == []
+    assert authorization["environment_capability_warnings"] == [
+        "security_scanner_unavailable",
+        "container_disk_quota_unsupported",
+    ]
+    assert authorization["validation_environment_capability_warnings"] == [
+        "security_scanner_error",
+        "container_disk_quota_unsupported",
+    ]
+
+
+def test_ci_rejects_authoring_scanner_violation_with_phase_details(tmp_path: Path):
+    result = _seed(tmp_path, authoring_scanner_status="timeout")[-1]
+
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(
+        tmp_path,
+        capability_policy_profile="ci",
+    ).verify(result.experiment_result_id)
+
+    assert authorization["authorized"] is False
+    assert authorization["reason"] == "environment_capability_policy_failed"
+    assert authorization["capability_policy_profile"] == "ci"
+    assert authorization["environment_capability_policy_violations"] == [
+        {
+            "phase": "authoring",
+            "capability": "security_scanner",
+            "status": "timeout",
+            "reason_code": "security_scanner_status_not_allowed",
+        }
+    ]
+
+
+def test_ci_rejects_validation_scanner_but_allows_unsupported_quota(tmp_path: Path):
+    rejected = _seed(tmp_path, validation_scanner_status="disabled")[-1]
+    verifier = EvolutionEvaluationGovernanceVerifier.from_root(
+        tmp_path,
+        capability_policy_profile="ci",
+    )
+
+    rejection = verifier.verify(rejected.experiment_result_id)
+
+    assert rejection["environment_capability_policy_violations"][0]["phase"] == (
+        "validation"
+    )
+    allowed_root = tmp_path / "allowed"
+    allowed = _seed(allowed_root, validation_disk_quota_status="unsupported")[-1]
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(
+        allowed_root,
+        capability_policy_profile="ci",
+    ).verify(allowed.experiment_result_id)
+    assert authorization["authorized"] is True
+    assert authorization["validation_environment_capability_warnings"] == [
+        "container_disk_quota_unsupported"
+    ]
+
+
+def test_production_rejects_unsupported_quota_but_allows_not_applicable(tmp_path: Path):
+    rejected = _seed(tmp_path)[-1]
+    verifier = EvolutionEvaluationGovernanceVerifier.from_root(
+        tmp_path,
+        capability_policy_profile="production",
+    )
+
+    rejection = verifier.verify(rejected.experiment_result_id)
+
+    assert rejection["reason"] == "environment_capability_policy_failed"
+    assert rejection["environment_capability_policy_violations"][0] == {
+        "phase": "authoring",
+        "capability": "container_disk_quota",
+        "status": "unsupported",
+        "reason_code": "container_disk_quota_status_not_allowed",
+    }
+
+    allowed_root = tmp_path / "windows"
+    allowed = _seed(
+        allowed_root,
+        authoring_disk_quota_status="not_applicable",
+    )[-1]
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(
+        allowed_root,
+        capability_policy_profile="production",
+    ).verify(allowed.experiment_result_id)
+    assert authorization["authorized"] is True
+
+
+def test_binding_rejects_capability_policy_id_tampering(tmp_path: Path):
+    result = _seed(tmp_path)[-1]
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(tmp_path).verify(
+        result.experiment_result_id
+    )
+    fields = {
+        key: value
+        for key, value in authorization.items()
+        if key not in {"authorized", "reason", "schema_version"}
+    }
+    evidence = {**fields, "capability_policy_id": "forged"}
+
+    binding = validate_body_improvement_authorization_binding(
+        evidence=evidence,
+        constraints={
+            **fields,
+            "must_match_evaluated_commit": True,
+            "requires_governor_review": True,
+            "requires_user_consent": True,
+        },
+        authorization=authorization,
+    )
+
+    assert binding == {
+        "valid": False,
+        "reason": "evaluation_authorization_binding_mismatch",
+        "field": "capability_policy_id",
     }
