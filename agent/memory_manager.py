@@ -17,7 +17,7 @@ Usage in run_agent.py:
     context = self._memory_manager.prefetch_all(user_message)
 
     # Post-turn
-    self._memory_manager.sync_all(user_msg, assistant_response)
+    self._memory_manager.sync_turn(user_msg, assistant_response)
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from agent.effect_outcomes import EffectOutcome, failed_effect, require_effect_outcome
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
@@ -160,16 +161,42 @@ class MemoryManager:
 
     # -- Sync ----------------------------------------------------------------
 
-    def sync_all(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Sync a completed turn to all providers."""
-        for provider in self._providers:
-            try:
-                provider.sync_turn(user_content, assistant_content, session_id=session_id)
-            except Exception as e:
-                logger.warning(
-                    "Memory provider '%s' sync_turn failed: %s",
-                    provider.name, e,
-                )
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+    ) -> EffectOutcome:
+        """Queue one completed turn with the canonical provider."""
+        if not self._providers:
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "no_provider"},
+            )
+
+        provider = self._providers[0]
+        try:
+            outcome = require_effect_outcome(
+                provider.sync_turn(
+                    user_content,
+                    assistant_content,
+                    session_id=session_id,
+                ),
+                effect=f"memory provider '{provider.name}' sync_turn",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Memory provider '%s' sync_turn failed: %s",
+                provider.name,
+                exc,
+            )
+            outcome = failed_effect(exc)
+        return EffectOutcome(
+            status=outcome.status,
+            error=outcome.error,
+            details={"provider": provider.name, **dict(outcome.details)},
+        )
 
     # -- Tools ---------------------------------------------------------------
 

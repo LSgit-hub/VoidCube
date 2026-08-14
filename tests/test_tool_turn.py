@@ -6,6 +6,7 @@ import pytest
 
 from agent.conversation_turn import ConversationTurnState
 from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
+from agent.effect_outcomes import EffectOutcome
 from agent.tool_turn import (
     ContextPressureTracker,
     execute_successful_tool_turn,
@@ -44,11 +45,19 @@ def _owner(events, *, tool_name="terminal", compress=False):
         events.append("compress")
         return messages[-2:], "compressed-policy"
 
+    def persist(_messages, _history):
+        events.append("persist")
+        return EffectOutcome(status="succeeded")
+
+    def cleanup(_task_id):
+        events.append("cleanup")
+        return EffectOutcome(status="succeeded")
+
     turn_runtime = ConversationTurnRuntime(
         ConversationTurnPorts(
-            persist_session=lambda _messages, _history: events.append("persist"),
+            persist_session=persist,
             save_session_log=lambda _messages: events.append("save"),
-            cleanup_task_resources=lambda _task_id: events.append("cleanup"),
+            cleanup_task_resources=cleanup,
             clear_interrupt=lambda: events.append("clear_interrupt"),
             emit_status=lambda message: events.append(("status", message)),
             emit_verbose=lambda message, force: events.append(

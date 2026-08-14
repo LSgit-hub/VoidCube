@@ -29,6 +29,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
+from agent.effect_outcomes import EffectOutcome
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,8 +96,15 @@ class MemoryProvider(ABC):
         """
         return ""
 
-    def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Persist a completed turn to the backend.
+    @abstractmethod
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+    ) -> EffectOutcome:
+        """Queue a completed turn and report whether durable handoff succeeded.
 
         Called after each turn. Should be non-blocking — queue for
         background processing if the backend has latency.

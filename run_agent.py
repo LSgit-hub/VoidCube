@@ -88,6 +88,7 @@ def get_active_env(task_id: str):
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import build_memory_context_block
+from agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
 from agent.retry_utils import (
     RetryKind,
     RetryRecoveryKind,
@@ -1322,7 +1323,7 @@ class AIAgent:
         """Return True when the base URL targets OpenRouter."""
         return "openrouter" in self._base_url_lower
 
-    def _cleanup_task_resources(self, task_id: str) -> None:
+    def _cleanup_task_resources(self, task_id: str) -> EffectOutcome:
         """Clean up VM and browser resources for a given task.
 
         Skips ``cleanup_vm`` when the active terminal environment is marked
@@ -1333,10 +1334,15 @@ class AIAgent:
         torn down per-turn as before to prevent resource leakage (the original
         intent of this hook for the Morph backend, see commit fbd3a2fd).
         """
+        terminal_outcome = EffectOutcome(status="succeeded")
         try:
             from tools.terminal_tool import cleanup_vm, is_persistent_env
 
             if is_persistent_env(task_id):
+                terminal_outcome = EffectOutcome(
+                    status="skipped",
+                    details={"reason": "persistent_environment"},
+                )
                 if self.verbose_logging:
                     logging.debug(
                         f"Skipping per-turn cleanup_vm for persistent env {task_id}; "
@@ -1344,15 +1350,25 @@ class AIAgent:
                     )
             else:
                 cleanup_vm(task_id)
-        except Exception as e:
-            if self.verbose_logging:
-                logging.warning(f"Failed to cleanup VM for task {task_id}: {e}")
+        except Exception as exc:
+            logging.warning("Failed to cleanup VM for task %s: %s", task_id, exc)
+            terminal_outcome = failed_effect(exc)
+
+        browser_outcome = EffectOutcome(status="succeeded")
         try:
             from tools.browser_tool import cleanup_browser
             cleanup_browser(task_id)
-        except Exception as e:
-            if self.verbose_logging:
-                logging.warning(f"Failed to cleanup browser for task {task_id}: {e}")
+        except Exception as exc:
+            logging.warning("Failed to cleanup browser for task %s: %s", task_id, exc)
+            browser_outcome = failed_effect(exc)
+
+        return EffectOutcome(
+            status=finalization_status(terminal_outcome, browser_outcome),
+            details={
+                "terminal": terminal_outcome.as_dict(),
+                "browser": browser_outcome.as_dict(),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Background skill review
@@ -5198,7 +5214,7 @@ class AIAgent:
                 iterations_since_skill=lambda: self._iters_since_skill,
                 clear_skill_nudge=lambda: setattr(self, "_iters_since_skill", 0),
                 sync_memory=(
-                    lambda user_message, response, session_id: self._memory_manager.sync_all(
+                    lambda user_message, response, session_id: self._memory_manager.sync_turn(
                         user_message,
                         response,
                         session_id=session_id,

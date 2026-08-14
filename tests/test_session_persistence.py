@@ -171,7 +171,7 @@ def test_persist_restores_user_text_and_flushes_only_new_messages(tmp_path):
     )
     messages = [{"role": "user", "content": "temporary API text"}]
 
-    persistence.persist(messages)
+    first_outcome = persistence.persist(messages)
     messages.append(
         {
             "role": "assistant",
@@ -180,7 +180,7 @@ def test_persist_restores_user_text_and_flushes_only_new_messages(tmp_path):
             "reasoning_details": [{"type": "summary", "text": "checked"}],
         }
     )
-    persistence.persist(messages)
+    second_outcome = persistence.persist(messages)
 
     assert messages[0]["content"] == "original user text"
     assert [message["role"] for message in session_db.messages] == [
@@ -192,6 +192,8 @@ def test_persist_restores_user_text_and_flushes_only_new_messages(tmp_path):
     assert saved["message_count"] == 2
     assert saved["messages"][0] == messages[0]
     assert saved["messages"][1] == {**messages[1], "content": "answer"}
+    assert first_outcome.status == "succeeded"
+    assert second_outcome.status == "succeeded"
 
 
 def test_sqlite_flush_sequence_prevents_duplicate_db_writes(tmp_path):
@@ -231,7 +233,8 @@ def test_divergent_local_prefix_is_rejected_without_mixing_transcripts(tmp_path)
         ]
     )
 
-    assert result is False
+    assert result.status == "failed"
+    assert "diverges" in (result.error or "")
     assert [
         message["content"]
         for message in session_db.get_messages_as_conversation("session-1")
@@ -272,14 +275,17 @@ def test_json_mirror_failure_does_not_rollback_sqlite_batch(tmp_path, monkeypatc
     persistence, _ = _persistence(tmp_path, session_db=session_db)
     monkeypatch.setattr(
         persistence,
-        "save_log",
+        "_write_log",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
 
-    persistence.persist([{"role": "user", "content": "committed"}])
+    outcome = persistence.persist([{"role": "user", "content": "committed"}])
 
     assert [message["content"] for message in session_db.messages] == ["committed"]
     assert session_db.sequences["session-1"] == 1
+    assert outcome.status == "degraded"
+    assert outcome.details["database"]["status"] == "succeeded"
+    assert outcome.details["json_mirror"]["status"] == "failed"
 
 
 def test_new_session_flush_sequence_starts_from_first_message(tmp_path):
@@ -353,13 +359,15 @@ def test_disabled_persistence_does_not_write_or_mutate_messages(tmp_path):
     )
     messages = [{"role": "user", "content": "api-only"}]
 
-    persistence.persist(messages)
+    outcome = persistence.persist(messages)
     persistence.save_log(messages)
-    persistence.flush_to_db(messages)
+    flush_outcome = persistence.flush_to_db(messages)
 
     assert messages[0]["content"] == "api-only"
     assert persistence.messages == []
     assert not persistence.session_log_file.exists()
+    assert outcome.status == "skipped"
+    assert flush_outcome.status == "skipped"
 
 
 def test_clean_session_content_normalizes_think_block_spacing():

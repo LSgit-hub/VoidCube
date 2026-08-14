@@ -5,22 +5,37 @@ from types import SimpleNamespace
 import pytest
 
 from agent.conversation_turn import ConversationTurnState
+from agent.effect_outcomes import EffectOutcome
 from agent.turn_finalization import (
     TurnFinalizationPorts,
     derive_turn_diagnostics,
     finalize_conversation_turn,
     last_assistant_reasoning,
 )
+from run_agent import AIAgent
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 
 def _owner(events):
+    def sync_memory(user, response, session_id=""):
+        events.append(("memory_sync", user, response, session_id))
+        return EffectOutcome(
+            status="queued",
+            details={"write_id": "write-1", "durable_outbox": True},
+        )
+
+    def persist(messages, history):
+        events.append(("persist", messages, history))
+        return EffectOutcome(status="succeeded")
+
+    def cleanup(task_id):
+        events.append(("cleanup", task_id))
+        return EffectOutcome(status="succeeded")
+
     memory = SimpleNamespace(
-        sync_all=lambda user, response, session_id="": events.append(
-            ("memory_sync", user, response, session_id)
-        ),
+        sync_turn=sync_memory,
     )
     owner = SimpleNamespace(
         max_iterations=5,
@@ -44,9 +59,7 @@ def _owner(events):
         session_cost_status="estimated",
         session_cost_source="pricing",
         _session_persistence=SimpleNamespace(
-            persist=lambda messages, history: events.append(
-                ("persist", messages, history)
-            )
+            persist=persist,
         ),
         _response_was_previewed=True,
         _interrupt_message=None,
@@ -54,9 +67,7 @@ def _owner(events):
         _skill_nudge_interval=2,
         _iters_since_skill=2,
         _memory_manager=memory,
-        _cleanup_task_resources=lambda task_id: events.append(
-            ("cleanup", task_id)
-        ),
+        _cleanup_task_resources=cleanup,
         clear_interrupt=lambda: events.append(("clear_interrupt",)),
         _spawn_background_review=lambda **kwargs: events.append(
             ("background", kwargs)
@@ -101,7 +112,7 @@ def _ports(owner):
         skill_nudge_interval=owner._skill_nudge_interval,
         iterations_since_skill=lambda: owner._iters_since_skill,
         clear_skill_nudge=lambda: setattr(owner, "_iters_since_skill", 0),
-        sync_memory=lambda user, response, session_id: owner._memory_manager.sync_all(
+        sync_memory=lambda user, response, session_id: owner._memory_manager.sync_turn(
             user,
             response,
             session_id=session_id,
@@ -201,6 +212,9 @@ def test_finalizer_runs_one_ordered_success_sequence():
     assert owner._response_was_previewed is False
     assert owner._stream_callback is None
     assert owner._iters_since_skill == 0
+    assert result["finalization"]["status"] == "succeeded"
+    assert result["finalization"]["persistence"]["status"] == "succeeded"
+    assert result["finalization"]["memory_sync"]["status"] == "queued"
 
 
 def test_interrupted_finalization_skips_success_side_effects():
@@ -231,3 +245,127 @@ def test_interrupted_finalization_skips_success_side_effects():
     assert [event[1] for event in events if event[0] == "hook"] == [
         "on_session_end"
     ]
+    assert result["finalization"]["memory_sync"] == {
+        "status": "skipped",
+        "details": {"reason": "not_applicable"},
+    }
+
+
+def test_finalizer_reports_cleanup_failure_without_losing_persistence_or_result():
+    events = []
+    owner = _owner(events)
+
+    def fail_cleanup(_task_id):
+        events.append(("cleanup_failed",))
+        raise OSError("browser busy")
+
+    owner._cleanup_task_resources = fail_cleanup
+    state = ConversationTurnState(
+        api_call_count=1,
+        final_response="answer",
+        exit_reason="text_response",
+    )
+
+    result = finalize_conversation_turn(
+        _ports(owner),
+        state=state,
+        messages=[{"role": "assistant", "content": "answer"}],
+        conversation_history=None,
+        task_id="task-1",
+        original_user_message="question",
+        invoke_hook=lambda *_args, **_kwargs: None,
+    )
+
+    assert result["completed"] is True
+    assert any(event[0] == "persist" for event in events)
+    assert any(event[0] == "clear_interrupt" for event in events)
+    assert result["finalization"]["status"] == "degraded"
+    assert result["finalization"]["cleanup"]["task_resources"]["status"] == "failed"
+
+
+def test_finalizer_reports_persistence_failure_without_reclassifying_completed_turn():
+    events = []
+    owner = _owner(events)
+
+    def fail_persistence(messages, history):
+        events.append(("persist", messages, history))
+        return EffectOutcome(status="failed", error="database unavailable")
+
+    owner._session_persistence.persist = fail_persistence
+    state = ConversationTurnState(
+        api_call_count=1,
+        final_response="answer",
+        exit_reason="text_response",
+    )
+
+    result = finalize_conversation_turn(
+        _ports(owner),
+        state=state,
+        messages=[{"role": "assistant", "content": "answer"}],
+        conversation_history=None,
+        task_id="task-1",
+        original_user_message="question",
+        invoke_hook=lambda *_args, **_kwargs: None,
+    )
+
+    assert result["completed"] is True
+    assert result["finalization"]["status"] == "degraded"
+    assert result["finalization"]["persistence"] == {
+        "status": "failed",
+        "error": "database unavailable",
+    }
+    assert result["finalization"]["memory_sync"]["status"] == "queued"
+
+
+def test_finalizer_reports_memory_enqueue_failure_without_reclassifying_completed_turn():
+    events = []
+    owner = _owner(events)
+    owner._memory_manager.sync_turn = lambda *_args, **_kwargs: EffectOutcome(
+        status="failed",
+        error="outbox unavailable",
+    )
+    state = ConversationTurnState(
+        api_call_count=1,
+        final_response="answer",
+        exit_reason="text_response",
+    )
+
+    result = finalize_conversation_turn(
+        _ports(owner),
+        state=state,
+        messages=[{"role": "assistant", "content": "answer"}],
+        conversation_history=None,
+        task_id="task-1",
+        original_user_message="question",
+        invoke_hook=lambda *_args, **_kwargs: None,
+    )
+
+    assert result["completed"] is True
+    assert result["finalization"]["status"] == "degraded"
+    assert result["finalization"]["memory_sync"] == {
+        "status": "failed",
+        "error": "outbox unavailable",
+    }
+
+
+def test_agent_resource_cleanup_reports_individual_backend_failure(monkeypatch):
+    agent = AIAgent.__new__(AIAgent)
+    agent.verbose_logging = False
+    browser_calls = []
+
+    monkeypatch.setattr("tools.terminal_tool.is_persistent_env", lambda _task_id: False)
+    monkeypatch.setattr(
+        "tools.terminal_tool.cleanup_vm",
+        lambda _task_id: (_ for _ in ()).throw(OSError("terminal busy")),
+    )
+    monkeypatch.setattr(
+        "tools.browser_tool.cleanup_browser",
+        lambda task_id: browser_calls.append(task_id),
+    )
+
+    outcome = agent._cleanup_task_resources("task-1")
+
+    assert browser_calls == ["task-1"]
+    assert outcome.status == "degraded"
+    assert outcome.details["terminal"]["status"] == "failed"
+    assert outcome.details["browser"]["status"] == "succeeded"

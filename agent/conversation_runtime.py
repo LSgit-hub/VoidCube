@@ -6,6 +6,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from agent.effect_outcomes import (
+    EffectOutcome,
+    failed_effect,
+    finalization_status,
+    require_effect_outcome,
+)
 
 Message = dict[str, Any]
 _MISSING = object()
@@ -16,10 +22,10 @@ class ConversationTurnPorts:
     """External effects used while one conversation turn is running."""
 
     persist_session: Callable[
-        [list[Message], Sequence[Mapping[str, Any]] | None], None
+        [list[Message], Sequence[Mapping[str, Any]] | None], EffectOutcome
     ]
     save_session_log: Callable[[list[Message]], None]
-    cleanup_task_resources: Callable[[str], None]
+    cleanup_task_resources: Callable[[str], EffectOutcome]
     clear_interrupt: Callable[[], None]
     emit_status: Callable[[str], None]
     emit_verbose: Callable[[str, bool], None]
@@ -35,8 +41,8 @@ class ConversationTurnRuntime:
         self,
         messages: list[Message],
         conversation_history: Sequence[Mapping[str, Any]] | None = None,
-    ) -> None:
-        self._ports.persist_session(messages, conversation_history)
+    ) -> EffectOutcome:
+        return self._ports.persist_session(messages, conversation_history)
 
     def save_progress(self, messages: list[Message]) -> None:
         self._ports.save_session_log(messages)
@@ -63,17 +69,85 @@ class ConversationTurnRuntime:
         clear_interrupt: bool = False,
     ) -> dict[str, Any]:
         """Apply ordered terminal effects and build one stable result mapping."""
+        cleanup_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_requested"},
+        )
         if cleanup_task_id is not None:
-            self._ports.cleanup_task_resources(cleanup_task_id)
+            try:
+                cleanup_outcome = require_effect_outcome(
+                    self._ports.cleanup_task_resources(cleanup_task_id),
+                    effect="cleanup_task_resources",
+                )
+            except Exception as exc:
+                cleanup_outcome = failed_effect(exc)
+
+        persistence_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_requested"},
+        )
         if persist:
-            self.persist(messages, conversation_history)
+            try:
+                persistence_outcome = require_effect_outcome(
+                    self.persist(messages, conversation_history),
+                    effect="persist_session",
+                )
+            except Exception as exc:
+                persistence_outcome = failed_effect(exc)
+
+        interrupt_cleanup_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_requested"},
+        )
         if clear_interrupt:
-            self._ports.clear_interrupt()
+            try:
+                self._ports.clear_interrupt()
+                interrupt_cleanup_outcome = EffectOutcome(status="succeeded")
+            except Exception as exc:
+                interrupt_cleanup_outcome = failed_effect(exc)
+
+        preview_cleanup_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_available_in_early_exit"},
+        )
+        stream_cleanup_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_available_in_early_exit"},
+        )
+        memory_outcome = EffectOutcome(
+            status="skipped",
+            details={"reason": "not_applicable"},
+        )
+        cleanup_status = finalization_status(
+            cleanup_outcome,
+            preview_cleanup_outcome,
+            interrupt_cleanup_outcome,
+            stream_cleanup_outcome,
+        )
 
         result: dict[str, Any] = {
             "messages": messages,
             "completed": False,
             "api_calls": api_call_count,
+            "finalization": {
+                "status": finalization_status(
+                    cleanup_outcome,
+                    persistence_outcome,
+                    preview_cleanup_outcome,
+                    interrupt_cleanup_outcome,
+                    stream_cleanup_outcome,
+                    memory_outcome,
+                ),
+                "cleanup": {
+                    "status": cleanup_status,
+                    "task_resources": cleanup_outcome.as_dict(),
+                    "response_preview": preview_cleanup_outcome.as_dict(),
+                    "interrupt": interrupt_cleanup_outcome.as_dict(),
+                    "stream_callback": stream_cleanup_outcome.as_dict(),
+                },
+                "persistence": persistence_outcome.as_dict(),
+                "memory_sync": memory_outcome.as_dict(),
+            },
         }
         if final_response is not _MISSING:
             result["final_response"] = final_response

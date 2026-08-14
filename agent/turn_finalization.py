@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.conversation_turn import ConversationTurnState
+from agent.effect_outcomes import (
+    EffectOutcome,
+    failed_effect,
+    finalization_status,
+    require_effect_outcome,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -17,9 +23,9 @@ logger = logging.getLogger(__name__)
 class TurnFinalizationPorts:
     """Explicit inputs and side-effect ports for one completed turn."""
 
-    cleanup_task_resources: Callable[[str], None]
+    cleanup_task_resources: Callable[[str], EffectOutcome]
     persist_session: Callable[
-        [list[dict[str, Any]], Sequence[Mapping[str, Any]] | None], None
+        [list[dict[str, Any]], Sequence[Mapping[str, Any]] | None], EffectOutcome
     ]
     model: str
     provider: str
@@ -39,7 +45,7 @@ class TurnFinalizationPorts:
     skill_nudge_interval: int
     iterations_since_skill: Callable[[], int]
     clear_skill_nudge: Callable[[], None]
-    sync_memory: Callable[[Any, str, str], None] | None
+    sync_memory: Callable[[Any, str, str], EffectOutcome] | None
     spawn_background_review: Callable[..., None]
 
 
@@ -163,8 +169,23 @@ def finalize_conversation_turn(
     hook = invoke_hook or _default_hook_invoker
     completed = state.completed()
 
-    ports.cleanup_task_resources(task_id)
-    ports.persist_session(messages, conversation_history)
+    try:
+        cleanup_outcome = require_effect_outcome(
+            ports.cleanup_task_resources(task_id),
+            effect="cleanup_task_resources",
+        )
+    except Exception as exc:
+        logger.warning("Task resource cleanup failed: %s", exc)
+        cleanup_outcome = failed_effect(exc)
+
+    try:
+        persistence_outcome = require_effect_outcome(
+            ports.persist_session(messages, conversation_history),
+            effect="persist_session",
+        )
+    except Exception as exc:
+        logger.warning("Session persistence failed during finalization: %s", exc)
+        persistence_outcome = failed_effect(exc)
 
     budget = ports.iteration_budget
     diagnostics = derive_turn_diagnostics(
@@ -221,15 +242,34 @@ def finalize_conversation_turn(
         "cost_status": usage.get("cost_status", "unknown"),
         "cost_source": usage.get("cost_source", "none"),
     }
-    ports.clear_response_preview()
+    try:
+        ports.clear_response_preview()
+        preview_cleanup_outcome = EffectOutcome(status="succeeded")
+    except Exception as exc:
+        logger.warning("Response preview cleanup failed: %s", exc)
+        preview_cleanup_outcome = failed_effect(exc)
     interrupt_message = ports.interrupt_message()
     if state.interrupted and interrupt_message:
         result["interrupt_message"] = interrupt_message
 
-    ports.clear_interrupt()
-    ports.clear_stream_callback()
+    try:
+        ports.clear_interrupt()
+        interrupt_cleanup_outcome = EffectOutcome(status="succeeded")
+    except Exception as exc:
+        logger.warning("Interrupt cleanup failed: %s", exc)
+        interrupt_cleanup_outcome = failed_effect(exc)
+    try:
+        ports.clear_stream_callback()
+        stream_cleanup_outcome = EffectOutcome(status="succeeded")
+    except Exception as exc:
+        logger.warning("Stream callback cleanup failed: %s", exc)
+        stream_cleanup_outcome = failed_effect(exc)
 
     review_skills = False
+    memory_outcome = EffectOutcome(
+        status="skipped",
+        details={"reason": "not_applicable"},
+    )
     if (
         ports.skill_nudge_interval > 0
         and ports.iterations_since_skill() >= ports.skill_nudge_interval
@@ -245,13 +285,17 @@ def finalize_conversation_turn(
         and original_user_message
     ):
         try:
-            ports.sync_memory(
-                original_user_message,
-                state.final_response,
-                ports.session_id or "",
+            memory_outcome = require_effect_outcome(
+                ports.sync_memory(
+                    original_user_message,
+                    state.final_response,
+                    ports.session_id or "",
+                ),
+                effect="sync_memory",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Memory sync enqueue failed: %s", exc)
+            memory_outcome = failed_effect(exc)
 
     if (
         state.final_response
@@ -276,5 +320,31 @@ def finalize_conversation_turn(
         )
     except Exception as exc:
         logger.warning("on_session_end hook failed: %s", exc)
+
+    cleanup_status = finalization_status(
+        cleanup_outcome,
+        preview_cleanup_outcome,
+        interrupt_cleanup_outcome,
+        stream_cleanup_outcome,
+    )
+    result["finalization"] = {
+        "status": finalization_status(
+            cleanup_outcome,
+            persistence_outcome,
+            preview_cleanup_outcome,
+            interrupt_cleanup_outcome,
+            stream_cleanup_outcome,
+            memory_outcome,
+        ),
+        "cleanup": {
+            "status": cleanup_status,
+            "task_resources": cleanup_outcome.as_dict(),
+            "response_preview": preview_cleanup_outcome.as_dict(),
+            "interrupt": interrupt_cleanup_outcome.as_dict(),
+            "stream_callback": stream_cleanup_outcome.as_dict(),
+        },
+        "persistence": persistence_outcome.as_dict(),
+        "memory_sync": memory_outcome.as_dict(),
+    }
 
     return result

@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from agent.effect_outcomes import EffectOutcome, failed_effect
 from agent.memory_provider import MemoryProvider
 from agent.redact import redact_sensitive_text
 from plugins.memory.mem.outbox import MemoryWriteOutbox
@@ -415,31 +416,56 @@ class MemMemoryProvider(MemoryProvider):
         assistant_content: str,
         *,
         session_id: str = "",
-    ) -> None:
-        if not self._initialized or not self._auto_sync:
-            return
+    ) -> EffectOutcome:
+        if not self._initialized:
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "not_initialized"},
+            )
+        if not self._auto_sync:
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "auto_sync_disabled"},
+            )
         resolved_session_id = str(session_id or self._session_id).strip()
         if not resolved_session_id:
-            return
+            return EffectOutcome(
+                status="failed",
+                error="Memory sync requires a session ID",
+            )
         write_id = str(uuid.uuid4())
         if self._outbox is None:
             logger.warning("Memory outbox is unavailable; completed turn was not queued")
-            return
-        user_text = str(user_content or "")
-        assistant_text = str(assistant_content or "")
-        if self._redact_before_store:
-            user_text = redact_sensitive_text(user_text)
-            assistant_text = redact_sensitive_text(assistant_text)
-        self._outbox.enqueue(
-            {
-                "session_id": resolved_session_id,
-                "user_content": user_text,
-                "assistant_content": assistant_text,
-                "write_id": write_id,
-                **self._scope_payload(),
-            }
-        )
+            return EffectOutcome(
+                status="failed",
+                error="Memory outbox is unavailable",
+            )
+        try:
+            user_text = str(user_content or "")
+            assistant_text = str(assistant_content or "")
+            if self._redact_before_store:
+                user_text = redact_sensitive_text(user_text)
+                assistant_text = redact_sensitive_text(assistant_text)
+            self._outbox.enqueue(
+                {
+                    "session_id": resolved_session_id,
+                    "user_content": user_text,
+                    "assistant_content": assistant_text,
+                    "write_id": write_id,
+                    **self._scope_payload(),
+                }
+            )
+        except Exception as exc:
+            logger.warning("Memory outbox enqueue failed: %s", exc)
+            return failed_effect(exc)
         self._sync_wake.set()
+        return EffectOutcome(
+            status="queued",
+            details={
+                "write_id": write_id,
+                "durable_outbox": True,
+            },
+        )
 
     def shutdown(self) -> None:
         if not self._initialized:

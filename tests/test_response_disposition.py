@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
+from agent.effect_outcomes import EffectOutcome
 from agent.response_disposition import (
     ResponseLoopControl,
     TextResponseAction,
@@ -151,17 +152,21 @@ def _action_owner(events, *, fallback=False):
             ],
         }
 
+    def persist(messages, history):
+        events.append(("persist", messages, history))
+        return EffectOutcome(status="succeeded")
+
+    def cleanup(task_id):
+        events.append(("cleanup", task_id))
+        return EffectOutcome(status="succeeded")
+
     turn_runtime = ConversationTurnRuntime(
         ConversationTurnPorts(
-            persist_session=lambda messages, history: events.append(
-                ("persist", messages, history)
-            ),
+            persist_session=persist,
             save_session_log=lambda messages: events.append(
                 ("save_log", messages)
             ),
-            cleanup_task_resources=lambda task_id: events.append(
-                ("cleanup", task_id)
-            ),
+            cleanup_task_resources=cleanup,
             clear_interrupt=lambda: events.append(("clear_interrupt",)),
             emit_status=lambda message: events.append(("status", message)),
             emit_verbose=lambda message, force: events.append(

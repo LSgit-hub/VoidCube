@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from agent.effect_outcomes import EffectOutcome, failed_effect
 from VoidCube_core.state import SessionDB, SessionSequenceConflictError
 from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
 
@@ -86,15 +87,51 @@ class SessionPersistence:
         self,
         messages: list[Message],
         conversation_history: Sequence[Message] | None = None,
-    ) -> None:
+    ) -> EffectOutcome:
         """Persist the current transcript to JSON and SQLite."""
         if not self.enabled:
-            return
-        override_index, override = self._user_message_override()
-        apply_user_message_override(messages, override_index, override)
-        self.messages = messages
-        if self.flush_to_db(messages, conversation_history):
-            self.refresh_json_mirror()
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "disabled"},
+            )
+        try:
+            override_index, override = self._user_message_override()
+            apply_user_message_override(messages, override_index, override)
+            self.messages = messages
+        except Exception as exc:
+            return EffectOutcome(
+                status="failed",
+                error=f"{type(exc).__name__}: {exc}",
+                details={"stage": "prepare"},
+            )
+
+        database_outcome = self.flush_to_db(messages, conversation_history)
+        if database_outcome.status != "succeeded":
+            return EffectOutcome(
+                status="failed",
+                error=database_outcome.error or "Session database flush failed",
+                details={
+                    "database": database_outcome.as_dict(),
+                    "json_mirror": {
+                        "status": "skipped",
+                        "details": {"reason": "database_not_committed"},
+                    },
+                },
+            )
+
+        mirror_outcome = self.refresh_json_mirror()
+        return EffectOutcome(
+            status=(
+                "succeeded"
+                if mirror_outcome.status == "succeeded"
+                else "degraded"
+            ),
+            error=mirror_outcome.error,
+            details={
+                "database": database_outcome.as_dict(),
+                "json_mirror": mirror_outcome.as_dict(),
+            },
+        )
 
     @staticmethod
     def _messages_for_storage(messages: Sequence[Message]) -> list[Message]:
@@ -137,10 +174,18 @@ class SessionPersistence:
         self,
         messages: list[Message],
         conversation_history: Sequence[Message] | None = None,
-    ) -> bool:
+    ) -> EffectOutcome:
         """Append messages not yet written to the SQLite session store."""
-        if not self.enabled or not self.session_db:
-            return False
+        if not self.enabled:
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "disabled"},
+            )
+        if not self.session_db:
+            return EffectOutcome(
+                status="failed",
+                error="Session database is unavailable",
+            )
         try:
             self.session_db.ensure_session(
                 self._session_id(),
@@ -170,14 +215,17 @@ class SessionPersistence:
                         expected_prefix_hash=local_prefix_hash,
                         allocate_sequences=True,
                     )
-                    return True
+                    return EffectOutcome(status="succeeded")
                 except SessionSequenceConflictError:
                     if attempt == 2:
                         raise
-            return False
+            return EffectOutcome(
+                status="failed",
+                error="Session database conflict retries were exhausted",
+            )
         except Exception as exc:
             logger.warning("Session DB batch append failed: %s", exc)
-            return False
+            return failed_effect(exc)
 
     def replace_transcript(self, messages: list[Message]) -> None:
         """Commit an explicit compression/history rewrite as one SQLite fact."""
@@ -199,10 +247,13 @@ class SessionPersistence:
         self.messages = messages
         self.refresh_json_mirror()
 
-    def refresh_json_mirror(self) -> None:
+    def refresh_json_mirror(self) -> EffectOutcome:
         """Refresh the compatibility JSON mirror from committed SQLite rows."""
         if not self.enabled or not self.session_db:
-            return
+            return EffectOutcome(
+                status="skipped",
+                details={"reason": "disabled_or_database_unavailable"},
+            )
         try:
             with interprocess_file_lock(self.session_log_lock_file):
                 while True:
@@ -211,7 +262,7 @@ class SessionPersistence:
                     )
                     existing_revision = self._existing_mirror_revision()
                     if existing_revision > snapshot["transcript_revision"]:
-                        return
+                        return EffectOutcome(status="succeeded")
                     self._write_log(
                         snapshot["messages"],
                         allow_truncate=True,
@@ -219,14 +270,15 @@ class SessionPersistence:
                     )
                     current = self.session_db.get_session(self._session_id())
                     if current is None:
-                        return
+                        return EffectOutcome(status="succeeded")
                     if int(current["transcript_revision"] or 0) == snapshot[
                         "transcript_revision"
                     ]:
-                        return
+                        return EffectOutcome(status="succeeded")
         except Exception as exc:
             if self.verbose_logging:
                 logger.warning("Failed to refresh session JSON mirror: %s", exc)
+            return failed_effect(exc)
 
     def save_log(
         self,

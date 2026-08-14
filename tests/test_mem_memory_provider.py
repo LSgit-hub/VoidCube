@@ -437,7 +437,7 @@ def test_mem_provider_redacts_before_durable_outbox(monkeypatch, tmp_path):
         lambda value: value.replace("secret-value", "<redacted>"),
     )
 
-    provider.sync_turn("api_key=secret-value", "stored secret-value")
+    outcome = provider.sync_turn("api_key=secret-value", "stored secret-value")
     pending = provider._outbox.next_due()
 
     assert pending is not None
@@ -445,6 +445,45 @@ def test_mem_provider_redacts_before_durable_outbox(monkeypatch, tmp_path):
     assert pending["assistant_content"] == "stored <redacted>"
     assert pending["owner_id"] == "local-user"
     assert pending["workspace_id"] == "default"
+    assert outcome.status == "queued"
+    assert outcome.details["write_id"] == pending["write_id"]
+    assert outcome.details["durable_outbox"] is True
+
+
+@pytest.mark.unit
+def test_mem_provider_reports_when_completed_turn_cannot_be_queued(tmp_path):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._auto_sync = True
+    provider._session_id = "session-1"
+
+    missing_outbox = provider.sync_turn("question", "answer")
+    assert missing_outbox.status == "failed"
+    assert missing_outbox.error == "Memory outbox is unavailable"
+
+    class _FailingOutbox:
+        def enqueue(self, _payload):
+            raise OSError("disk full")
+
+    provider._outbox = _FailingOutbox()
+    enqueue_failure = provider.sync_turn("question", "answer")
+    assert enqueue_failure.status == "failed"
+    assert "disk full" in (enqueue_failure.error or "")
+
+
+@pytest.mark.unit
+def test_mem_provider_reports_intentional_sync_skip_reasons():
+    provider = MemMemoryProvider()
+
+    not_initialized = provider.sync_turn("question", "answer")
+    assert not_initialized.status == "skipped"
+    assert not_initialized.details["reason"] == "not_initialized"
+
+    provider._initialized = True
+    provider._auto_sync = False
+    disabled = provider.sync_turn("question", "answer")
+    assert disabled.status == "skipped"
+    assert disabled.details["reason"] == "auto_sync_disabled"
 
 
 @pytest.mark.unit
@@ -466,3 +505,36 @@ def test_memory_outbox_survives_reopen_until_delivery(tmp_path):
 
     reopened.mark_delivered("write-1")
     assert MemoryWriteOutbox(path).pending_count() == 0
+
+
+@pytest.mark.unit
+def test_memory_outbox_failure_is_retained_until_exponential_retry_is_due(
+    monkeypatch,
+    tmp_path,
+):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        "plugins.memory.mem.outbox.time.time",
+        lambda: clock["now"],
+    )
+    outbox = MemoryWriteOutbox(tmp_path / "outbox.sqlite3")
+    outbox.enqueue(
+        {
+            "write_id": "write-1",
+            "session_id": "session-1",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    outbox.mark_failed("write-1", attempts=1, error="service unavailable")
+
+    assert outbox.pending_count() == 1
+    assert outbox.next_due() is None
+
+    clock["now"] += 2.0
+    retry = outbox.next_due()
+
+    assert retry is not None
+    assert retry["write_id"] == "write-1"
+    assert retry["_outbox_attempts"] == 1

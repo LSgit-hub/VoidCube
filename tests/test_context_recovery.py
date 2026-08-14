@@ -14,6 +14,7 @@ from agent.context_compressor import (
     next_compression_attempt,
 )
 from agent.conversation_runtime import ConversationTurnPorts, ConversationTurnRuntime
+from agent.effect_outcomes import EffectOutcome
 from run_agent import AIAgent
 
 
@@ -205,13 +206,18 @@ def test_agent_compression_recovery_returns_named_result():
 
 def test_turn_runtime_context_recovery_failure_persists_once_and_is_partial():
     persisted = []
+
+    def persist(messages, history):
+        persisted.append((messages, history))
+        return EffectOutcome(status="succeeded")
+
     runtime = ConversationTurnRuntime(
         ConversationTurnPorts(
-            persist_session=lambda messages, history: persisted.append(
-                (messages, history)
-            ),
+            persist_session=persist,
             save_session_log=lambda _messages: None,
-            cleanup_task_resources=lambda _task_id: None,
+            cleanup_task_resources=lambda _task_id: EffectOutcome(
+                status="succeeded"
+            ),
             clear_interrupt=lambda: None,
             emit_status=lambda _message: None,
             emit_verbose=lambda _message, _force: None,
@@ -232,6 +238,33 @@ def test_turn_runtime_context_recovery_failure_persists_once_and_is_partial():
         "messages": messages,
         "completed": False,
         "api_calls": 4,
+        "finalization": {
+            "status": "succeeded",
+            "cleanup": {
+                "status": "succeeded",
+                "task_resources": {
+                    "status": "skipped",
+                    "details": {"reason": "not_requested"},
+                },
+                "response_preview": {
+                    "status": "skipped",
+                    "details": {"reason": "not_available_in_early_exit"},
+                },
+                "interrupt": {
+                    "status": "skipped",
+                    "details": {"reason": "not_requested"},
+                },
+                "stream_callback": {
+                    "status": "skipped",
+                    "details": {"reason": "not_available_in_early_exit"},
+                },
+            },
+            "persistence": {"status": "succeeded"},
+            "memory_sync": {
+                "status": "skipped",
+                "details": {"reason": "not_applicable"},
+            },
+        },
         "error": "cannot compress",
         "partial": True,
     }
