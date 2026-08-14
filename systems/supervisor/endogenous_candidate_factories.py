@@ -272,6 +272,15 @@ def evaluation_authorization_fields(
         "environment_capability_warnings": list(
             authorization.get("environment_capability_warnings") or []
         ),
+        "validation_security_scanner_statuses": list(
+            authorization.get("validation_security_scanner_statuses") or []
+        ),
+        "validation_container_disk_quota_statuses": list(
+            authorization.get("validation_container_disk_quota_statuses") or []
+        ),
+        "validation_environment_capability_warnings": list(
+            authorization.get("validation_environment_capability_warnings") or []
+        ),
         "platform_selection_id": authorization.get("platform_selection_id"),
         "selected_validation_platforms": list(
             authorization.get("selected_validation_platforms") or []
@@ -284,6 +293,12 @@ def evaluation_authorization_fields(
         "benchmark_pack_id": authorization.get("benchmark_pack_id"),
         "scoring_policy_id": authorization.get("scoring_policy_id"),
         "execution_environment_id": authorization.get("execution_environment_id"),
+        "execution_environment_ids": list(
+            authorization.get("execution_environment_ids") or []
+        ),
+        "execution_environment_identity_ids": list(
+            authorization.get("execution_environment_identity_ids") or []
+        ),
         "validation_scope": authorization.get("validation_scope"),
         "validated_platforms": list(
             authorization.get("validated_platforms") or []

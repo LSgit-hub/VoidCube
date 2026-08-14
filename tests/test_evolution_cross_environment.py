@@ -14,6 +14,7 @@ from systems.evolution_authoring import (
 )
 from systems.evolution_evaluation import (
     BenchmarkCase,
+    BenchmarkCaseEvaluation,
     BenchmarkCaseResult,
     BenchmarkCommandEvidence,
     BenchmarkPack,
@@ -21,6 +22,7 @@ from systems.evolution_evaluation import (
     HardGateResult,
     MetricTarget,
     MetricValue,
+    NativeFirstBenchmarkExecutorFactory,
     ScoringDimension,
     ScoringPolicy,
     SubjectCheckoutEvidence,
@@ -29,7 +31,7 @@ from systems.self_cognition import SelfCognitionSnapshot
 from systems.supervisor.evolution_candidate_evaluation_service import (
     EvolutionCandidateEvaluationService,
 )
-from tools.podman_sandbox import DEFAULT_IMAGE, image_exists
+from tools.file_tools import write_file_tool
 from tools.terminal_tool import terminal_tool
 from tools.windows_host_executor import WindowsHostExecutor
 
@@ -54,7 +56,7 @@ def _git(*args: str, cwd: Path, check: bool = True) -> str:
     return result.stdout.strip() or result.stderr.strip()
 
 
-def _repository(root: Path) -> tuple[Path, str]:
+def _repository(root: Path, *, include_containerfile: bool = False) -> tuple[Path, str]:
     repository = root / "repo"
     repository.mkdir()
     _git("init", "--initial-branch", "master", cwd=repository)
@@ -62,7 +64,14 @@ def _repository(root: Path) -> tuple[Path, str]:
     _git("config", "user.email", "stage-5g@example.invalid", cwd=repository)
     (repository / "agent").mkdir()
     (repository / "agent/demo.py").write_text("VALUE = 1\n", encoding="utf-8")
-    _git("add", "agent/demo.py", cwd=repository)
+    if include_containerfile:
+        environment_dir = repository / "tools" / "environments"
+        environment_dir.mkdir(parents=True)
+        (environment_dir / "stage5i_marker.py").write_text(
+            "VALIDATION_MODE = 'baseline'\n",
+            encoding="utf-8",
+        )
+    _git("add", ".", cwd=repository)
     _git("commit", "-m", "baseline", cwd=repository)
     return repository, _git("rev-parse", "HEAD", cwd=repository)
 
@@ -78,38 +87,27 @@ def _snapshot(commit: str, body_id: str, now: datetime) -> SelfCognitionSnapshot
 
 
 @pytest.mark.asyncio
-async def test_real_podman_authoring_to_windows_governed_evaluation(
+async def test_real_windows_authoring_to_windows_governed_evaluation(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     if platform.system().lower() != "windows":
         pytest.skip("the real cross-environment handoff requires a Windows host")
     if not PROJECT_PYTHON.is_file():
         pytest.skip("project virtualenv is unavailable")
-    if not image_exists(DEFAULT_IMAGE):
-        pytest.skip(f"Podman image is unavailable: {DEFAULT_IMAGE}")
-
-    monkeypatch.setenv("TERMINAL_ENV", "podman")
-    monkeypatch.setenv("TERMINAL_PODMAN_IMAGE", DEFAULT_IMAGE)
-    monkeypatch.setenv("TERMINAL_FALLBACK_TO_LOCAL", "false")
-    monkeypatch.setenv("TERMINAL_TIMEOUT", "120")
-
     repository, baseline = _repository(tmp_path)
     manifest_from_authoring = []
 
     class Agent:
         def author(self, context):
             manifest_from_authoring.append(context.environment_manifest)
-            payload = json.loads(
-                terminal_tool(
-                    "printf 'VALUE = 2\\n' > /workspace/agent/demo.py",
-                    task_id=context.task_id,
-                    timeout=60,
-                )
+            result = write_file_tool(
+                "agent/demo.py",
+                "VALUE = 2\n",
+                task_id=context.task_id,
             )
             return {
-                "completed": payload.get("exit_code") == 0,
-                "summary": "Podman authoring command completed",
+                "completed": not result.startswith("Error"),
+                "summary": result,
             }
 
     spec = EvolutionAuthoringSpec(
@@ -121,7 +119,7 @@ async def test_real_podman_authoring_to_windows_governed_evaluation(
         forbidden_patterns=("**/credential*",),
         max_files_changed=1,
         test_commands=(
-            "python -c \"source=open('/workspace/agent/demo.py').read(); compile(source, 'agent/demo.py', 'exec')\"",
+            "python -c \"compile(open('agent/demo.py').read(), 'agent/demo.py', 'exec')\"",
         ),
         command_timeout_seconds=120,
         commit_message="Create stage 5G candidate",
@@ -129,6 +127,7 @@ async def test_real_podman_authoring_to_windows_governed_evaluation(
     authoring = await EvolutionAuthoringExecutor(
         repository,
         worktree_root=tmp_path / "authoring-worktrees",
+        python_executable=PROJECT_PYTHON,
     ).execute(spec, agent=Agent())
 
     assert authoring.status == "candidate_created", (
@@ -138,11 +137,11 @@ async def test_real_podman_authoring_to_windows_governed_evaluation(
     )
     assert len(manifest_from_authoring) == 1
     authoring_manifest = manifest_from_authoring[0]
-    assert authoring_manifest.backend == "podman"
-    assert authoring_manifest.validation_scope == "container"
-    assert authoring_manifest.validated_platforms == ("linux",)
-    assert authoring_manifest.image_reference == DEFAULT_IMAGE
-    assert authoring_manifest.image_digest
+    assert authoring_manifest.backend == "local"
+    assert authoring_manifest.validation_scope == "host"
+    assert authoring_manifest.validated_platforms == ("windows",)
+    assert authoring_manifest.image_reference is None
+    assert authoring_manifest.image_digest is None
 
     evaluation_worktree = tmp_path / "evaluation-worktree"
     _git("worktree", "add", "--detach", str(evaluation_worktree), baseline, cwd=repository)
@@ -195,6 +194,8 @@ async def test_real_podman_authoring_to_windows_governed_evaluation(
                     exit_code=command_result.exit_code,
                     output_summary=command_result.output.strip() or "completed",
                     timed_out=command_result.timed_out,
+                    security_scanner_status="disabled",
+                    container_disk_quota_status="not_applicable",
                 ),
             ),
             subject_checkout=checkout,
@@ -255,19 +256,143 @@ async def test_real_podman_authoring_to_windows_governed_evaluation(
         == outcome.governance_authorization["authoring_environment_identity_id"]
     )
     assert authoring.environment_identity_id != evidence[0].execution_environment_identity_id
-    print(
-        "5G_REAL_EVIDENCE "
-        + json.dumps(
-            {
-                "authoring_environment_manifest_id": authoring.environment_manifest_id,
-                "authoring_environment_identity_id": authoring.environment_identity_id,
-                "authoring_image_digest": authoring_manifest.image_digest,
-                "evaluation_environment_ids": sorted(
-                    {item.execution_environment_id for item in evidence}
-                ),
-                "evaluation_environment_identity_id": evidence[0].execution_environment_identity_id,
-                "experiment_result_id": outcome.experiment_result.experiment_result_id,
-            },
-            sort_keys=True,
-        )
+
+
+@pytest.mark.asyncio
+async def test_real_native_authoring_dispatches_linux_and_windows_runner_matrix(
+    tmp_path: Path,
+):
+    if platform.system().lower() != "windows":
+        pytest.skip("the native-first runner matrix requires a Windows host")
+    if not PROJECT_PYTHON.is_file():
+        pytest.skip("project virtualenv is unavailable")
+    repository, baseline = _repository(tmp_path, include_containerfile=True)
+
+    class Agent:
+        def author(self, context):
+            result = write_file_tool(
+                "tools/environments/stage5i_marker.py",
+                "VALIDATION_MODE = 'native-first'\n",
+                task_id=context.task_id,
+            )
+            return {"completed": not result.startswith("Error"), "summary": result}
+
+    authoring_spec = EvolutionAuthoringSpec(
+        task_id="stage-5i-real-matrix",
+        objective="Verify native authoring and the selected runner matrix",
+        improvement_hypothesis="The container metadata is valid on both project platforms",
+        baseline_commit=baseline,
+        allowed_paths=("tools/environments/stage5i_marker.py",),
+        forbidden_patterns=("**/credential*",),
+        max_files_changed=1,
+        test_commands=(
+            "python -c \"from pathlib import Path; assert 'native-first' in Path('tools/environments/stage5i_marker.py').read_text()\"",
+        ),
+        command_timeout_seconds=120,
+        commit_message="Create stage 5I runner matrix candidate",
     )
+    authoring = await EvolutionAuthoringExecutor(
+        repository,
+        worktree_root=tmp_path / "authoring-worktrees",
+        python_executable=PROJECT_PYTHON,
+    ).execute(authoring_spec, agent=Agent())
+    assert authoring.status == "candidate_created", (
+        f"{authoring.status}: {authoring.error_code} {authoring.error_reason}"
+    )
+
+    def evaluator(request, task_id, _environment):
+        command = (
+            "python -c \"from pathlib import Path; "
+            "assert 'VALIDATION_MODE' in Path('tools/environments/stage5i_marker.py').read_text()\""
+        )
+        payload = json.loads(
+            terminal_tool(command, task_id=task_id, timeout=request.timeout_seconds)
+        )
+        return BenchmarkCaseEvaluation(
+            case_id=request.case.case_id,
+            metrics=(
+                MetricValue(
+                    metric="correctness",
+                    value=0.8 if request.subject == "baseline" else 0.95,
+                    unit="ratio",
+                ),
+            ),
+            hard_gate_results=(
+                HardGateResult(
+                    gate="tests",
+                    passed=payload["exit_code"] == 0 and not payload.get("timed_out"),
+                ),
+            ),
+            command_evidence=(
+                BenchmarkCommandEvidence(
+                    command=command,
+                    exit_code=int(payload["exit_code"]),
+                    output_summary=str(payload.get("output") or "completed").strip(),
+                    timed_out=bool(payload.get("timed_out")),
+                    security_scanner_status=payload.get("security_scanner_status"),
+                    container_disk_quota_status=payload.get(
+                        "container_disk_quota_status"
+                    ),
+                ),
+            ),
+        )
+
+    now = datetime.now(timezone.utc)
+    pack = BenchmarkPack.create(
+        name="stage-5i-real-matrix",
+        pack_version="1",
+        cases=(
+            BenchmarkCase(
+                case_id="containerfile",
+                runner="containerfile",
+                input_ref="tools/environments/stage5i_marker.py",
+            ),
+        ),
+        created_at=now,
+    )
+    policy = ScoringPolicy.create(
+        policy_version="stage-5i-real-matrix",
+        dimensions=(ScoringDimension(name="correctness", weight=1.0),),
+        required_hard_gates=("tests",),
+        required_validation_platforms=("linux", "windows"),
+        promote_threshold=0.8,
+        observe_threshold=0.5,
+        created_at=now,
+    )
+    executor_factory = NativeFirstBenchmarkExecutorFactory(
+        repository,
+        worktree_root=tmp_path / "validation-worktrees",
+        evaluators={"containerfile": evaluator},
+        python_executable=PROJECT_PYTHON,
+        case_timeout_seconds=120,
+    )
+    service = EvolutionCandidateEvaluationService.from_root(
+        repository,
+        tmp_path / "foundation",
+        benchmark_executor_factory=executor_factory,
+    )
+    outcome = service.evaluate(
+        authoring_result=authoring,
+        baseline_snapshot=_snapshot(baseline, "baseline", now),
+        candidate_snapshot=_snapshot(str(authoring.candidate_commit), "candidate", now),
+        benchmark_pack=pack,
+        scoring_policy=policy,
+        target_metrics=(MetricTarget(metric="correctness", objective="increase"),),
+        hypothesis="The container metadata remains valid on Linux and Windows",
+        created_at=now,
+        completed_at=now,
+    )
+
+    result = outcome.experiment_result
+    authorization = outcome.governance_authorization
+    assert result.verdict == "promote"
+    assert result.execution_environments is not None
+    assert result.execution_environment_identities is not None
+    assert len(result.execution_environments) == 4
+    assert len(result.execution_environment_identities) == 2
+    assert authorization["authorized"] is True
+    assert authorization["selected_validation_platforms"] == ["linux", "windows"]
+    assert len(authorization["execution_environment_ids"]) == 4
+    assert len(authorization["execution_environment_identity_ids"]) == 2
+    assert not (tmp_path / "validation-worktrees" / "linux").exists()
+    assert not (tmp_path / "validation-worktrees" / "windows").exists()

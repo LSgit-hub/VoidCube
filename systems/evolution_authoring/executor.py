@@ -58,6 +58,7 @@ class EvolutionAuthoringExecutor:
         prepare_environment: PrepareEnvironment | None = None,
         release_environment: ReleaseEnvironment | None = None,
         terminal_runner: TerminalRunner | None = None,
+        python_executable: str | Path | None = None,
     ) -> None:
         self.repository = Path(repository).expanduser().resolve()
         if not (self.repository / ".git").exists():
@@ -83,9 +84,31 @@ class EvolutionAuthoringExecutor:
             raise ValueError(
                 "authoring worktree root must be outside the primary repository"
             )
-        self._prepare_environment = prepare_environment or _prepare_environment
+        self.python_executable = Path(
+            python_executable
+            or self.repository / ".venv" / "Scripts" / "python.exe"
+        ).expanduser().resolve()
+        self._prepare_environment = prepare_environment or self._prepare_native_environment
         self._release_environment = release_environment or _release_environment
         self._terminal_runner = terminal_runner or _terminal_runner
+
+    def _prepare_native_environment(
+        self,
+        task_id: str,
+        worktree: str,
+        **kwargs: object,
+    ) -> Mapping[str, object]:
+        from tools.terminal_tool import prepare_task_native_git_worktree
+
+        return prepare_task_native_git_worktree(
+            task_id,
+            worktree,
+            expected_head=str(kwargs.get("expected_head") or ""),
+            command_timeout_seconds=int(
+                kwargs.get("command_timeout_seconds") or 120
+            ),
+            python_executable=str(self.python_executable),
+        )
 
     async def execute(
         self,
@@ -674,14 +697,6 @@ def _git_output_bytes(repository: Path, args: tuple[str, ...]) -> bytes:
             + result.stderr.decode("utf-8", errors="replace")[:1000]
         )
     return result.stdout
-
-
-def _prepare_environment(
-    task_id: str, worktree: str, **kwargs: object
-) -> Mapping[str, object]:
-    from tools.terminal_tool import prepare_task_git_worktree
-
-    return prepare_task_git_worktree(task_id, worktree, **kwargs)
 
 
 def _release_environment(task_id: str) -> None:

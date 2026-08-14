@@ -13,6 +13,7 @@ from systems.evolution_authoring import (
 )
 from systems.evolution_evaluation import (
     BenchmarkCase,
+    BenchmarkCaseFailed,
     BenchmarkCaseResult,
     BenchmarkCommandEvidence,
     BenchmarkPack,
@@ -197,6 +198,8 @@ def _executor(
                     command="pytest tests/test_demo.py -q",
                     exit_code=0,
                     output_summary="1 passed",
+                    security_scanner_status="available",
+                    container_disk_quota_status="not_applicable",
                 ),
             ),
             evidence_refs=(f"log:{request.subject}:{request.case.case_id}",),
@@ -298,6 +301,38 @@ def test_handoff_persists_replayable_evidence_and_exposes_existing_authorization
     assert constraints["authoring_result_id"] == authoring.authoring_result_id
 
 
+def test_selection_aware_executor_factory_receives_exact_candidate_matrix(
+    tmp_path: Path,
+):
+    repository, baseline, candidate, candidate_ref = _repository(tmp_path)
+    baseline_environment = _environment(repository, baseline)
+    candidate_environment = _environment(repository, candidate)
+    calls = []
+
+    def executor_factory(*, selection, baseline_commit, candidate_commit):
+        calls.append((selection, baseline_commit, candidate_commit))
+        return _executor(baseline_environment, candidate_environment)
+
+    service = EvolutionCandidateEvaluationService.from_root(
+        repository,
+        tmp_path / "foundation",
+        benchmark_executor_factory=executor_factory,
+    )
+    authoring = _authoring(
+        baseline,
+        candidate,
+        candidate_ref,
+        candidate_environment,
+    )
+
+    outcome = _evaluate(service, authoring, baseline, candidate)
+
+    assert outcome.governance_authorization["authorized"] is True
+    assert len(calls) == 1
+    assert calls[0][0].required_platforms == ("windows",)
+    assert calls[0][1:] == (baseline, candidate)
+
+
 def test_linux_evaluation_cannot_cross_windows_platform_gate(tmp_path: Path):
     repository, baseline, candidate, candidate_ref = _repository(tmp_path)
     service, _baseline_environment, candidate_environment = _service(
@@ -309,13 +344,11 @@ def test_linux_evaluation_cannot_cross_windows_platform_gate(tmp_path: Path):
     )
     authoring = _authoring(baseline, candidate, candidate_ref, candidate_environment)
 
-    outcome = _evaluate(service, authoring, baseline, candidate)
-
-    assert outcome.experiment_result.verdict == "reject"
-    assert outcome.governance_authorization["authorized"] is False
-    assert (
-        outcome.governance_authorization["reason"] == "experiment_verdict_not_promote"
-    )
+    with pytest.raises(
+        BenchmarkCaseFailed,
+        match="runner returned evidence for a different platform",
+    ):
+        _evaluate(service, authoring, baseline, candidate)
 
 
 def test_handoff_rejects_candidate_ref_mismatch_before_persistence(tmp_path: Path):

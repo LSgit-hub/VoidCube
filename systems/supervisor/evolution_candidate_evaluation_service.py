@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from systems.evolution_authoring import (
     EvolutionAuthoringRepository,
@@ -18,6 +18,7 @@ from systems.evolution_evaluation import (
     AllowedRegression,
     BenchmarkPack,
     BenchmarkPackExecutor,
+    BenchmarkPlatformSelection,
     EvaluationRepository,
     ExperimentResult,
     ExperimentSpec,
@@ -51,6 +52,16 @@ class EvolutionCandidateEvaluationOutcome:
     governance_authorization: dict[str, Any]
 
 
+class BenchmarkExecutorFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        selection: BenchmarkPlatformSelection,
+        baseline_commit: str,
+        candidate_commit: str,
+    ) -> BenchmarkPackExecutor: ...
+
+
 class EvolutionCandidateEvaluationService:
     """Validate candidate provenance, execute BenchmarkPack, and request governance."""
 
@@ -62,7 +73,8 @@ class EvolutionCandidateEvaluationService:
         self_cognition_repository: SelfCognitionRepository,
         knowledge_repository: Any,
         evaluation_repository: EvaluationRepository,
-        benchmark_executor: BenchmarkPackExecutor,
+        benchmark_executor: BenchmarkPackExecutor | None,
+        benchmark_executor_factory: BenchmarkExecutorFactory | None = None,
         governance_verifier: EvolutionEvaluationGovernanceVerifier,
     ) -> None:
         self.repository = Path(repository).expanduser().resolve()
@@ -74,7 +86,12 @@ class EvolutionCandidateEvaluationService:
         self.self_cognition_repository = self_cognition_repository
         self.knowledge_repository = knowledge_repository
         self.evaluation_repository = evaluation_repository
+        if (benchmark_executor is None) == (benchmark_executor_factory is None):
+            raise ValueError(
+                "provide exactly one benchmark executor or benchmark executor factory"
+            )
         self.benchmark_executor = benchmark_executor
+        self.benchmark_executor_factory = benchmark_executor_factory
         self.governance_verifier = governance_verifier
 
     @classmethod
@@ -83,7 +100,8 @@ class EvolutionCandidateEvaluationService:
         repository: str | Path,
         foundation_root: str | Path,
         *,
-        benchmark_executor: BenchmarkPackExecutor,
+        benchmark_executor: BenchmarkPackExecutor | None = None,
+        benchmark_executor_factory: BenchmarkExecutorFactory | None = None,
     ) -> "EvolutionCandidateEvaluationService":
         root = Path(foundation_root).expanduser().resolve()
         authoring_repository = JsonEvolutionAuthoringRepository(root / "authoring")
@@ -103,6 +121,7 @@ class EvolutionCandidateEvaluationService:
             knowledge_repository=knowledge_repository,
             evaluation_repository=evaluation_repository,
             benchmark_executor=benchmark_executor,
+            benchmark_executor_factory=benchmark_executor_factory,
             governance_verifier=governance_verifier,
         )
 
@@ -153,6 +172,16 @@ class EvolutionCandidateEvaluationService:
                 "scoring policy does not cover selected validation platforms: "
                 + ", ".join(missing_platforms),
             )
+        unexpected_platforms = sorted(
+            set(policy.required_validation_platforms)
+            - set(selection.required_platforms)
+        )
+        if unexpected_platforms:
+            raise EvolutionCandidateEvaluationBlocked(
+                "validation_platform_not_selected",
+                "scoring policy includes platforms not selected for this candidate: "
+                + ", ".join(unexpected_platforms),
+            )
         spec = ExperimentSpec.create(
             authoring_result_id=authoring.authoring_result_id,
             platform_selection=selection,
@@ -174,7 +203,16 @@ class EvolutionCandidateEvaluationService:
         self.evaluation_repository.put_benchmark_pack(pack)
         self.evaluation_repository.put_scoring_policy(policy)
         self.evaluation_repository.put_experiment_spec(spec)
-        result = self.benchmark_executor.execute_from_repository(
+        benchmark_executor = self.benchmark_executor
+        if benchmark_executor is None:
+            if self.benchmark_executor_factory is None:
+                raise RuntimeError("benchmark executor factory is unavailable")
+            benchmark_executor = self.benchmark_executor_factory(
+                selection=selection,
+                baseline_commit=authoring.baseline_commit,
+                candidate_commit=str(authoring.candidate_commit),
+            )
+        result = benchmark_executor.execute_from_repository(
             self.evaluation_repository,
             experiment_spec_id=spec.experiment_spec_id,
             completed_at=completed_at,
@@ -326,6 +364,7 @@ class EvolutionCandidateEvaluationService:
 
 
 __all__ = [
+    "BenchmarkExecutorFactory",
     "EvolutionCandidateEvaluationBlocked",
     "EvolutionCandidateEvaluationOutcome",
     "EvolutionCandidateEvaluationService",

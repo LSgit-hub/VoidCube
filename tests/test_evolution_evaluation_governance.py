@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from systems.evolution_evaluation import (
     ScoringDimension,
     ScoringPolicy,
     SubjectCheckoutEvidence,
+    build_container_environment_manifest,
     capture_host_environment_manifest,
     select_benchmark_platforms,
 )
@@ -58,7 +60,13 @@ BASELINE_ENVIRONMENT = ENVIRONMENT.__class__.create(
 )
 
 
-def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: str = "tests"):
+def _records(
+    *,
+    verdict: str = "promote",
+    completed_at: datetime = NOW,
+    gate: str = "tests",
+    changed_files: tuple[str, ...] = ("agent/demo.py",),
+):
     baseline = SelfCognitionSnapshot.create(
         body_id="body-baseline",
         git_commit=BASELINE_COMMIT,
@@ -120,7 +128,7 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
         baseline_commit=BASELINE_COMMIT,
         candidate_commit=CANDIDATE_COMMIT,
         candidate_ref="refs/voidcube/candidates/governance-test",
-        changed_files=("agent/demo.py",),
+        changed_files=changed_files,
         environment_manifest_id=ENVIRONMENT.execution_environment_id,
         environment_identity_id=(
             ENVIRONMENT.identity().execution_environment_identity_id
@@ -193,6 +201,8 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
         verdict=verdict,
         completed_at=completed_at,
         execution_environment_identity=environment_identity,
+        execution_environments=(BASELINE_ENVIRONMENT, ENVIRONMENT),
+        execution_environment_identities=(environment_identity,),
         subject_checkouts=(baseline_checkout, candidate_checkout),
         benchmark_case_evidence=(
             BenchmarkCaseExecutionEvidence(
@@ -203,6 +213,8 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
                         command="pytest tests/test_demo.py",
                         exit_code=0,
                         output_summary="1 passed",
+                        security_scanner_status="available",
+                        container_disk_quota_status="not_applicable",
                     ),
                 ),
                 execution_environment_id=(
@@ -223,6 +235,8 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
                         command="pytest tests/test_demo.py",
                         exit_code=0,
                         output_summary="1 passed",
+                        security_scanner_status="available",
+                        container_disk_quota_status="not_applicable",
                     ),
                 ),
                 execution_environment_id=ENVIRONMENT.execution_environment_id,
@@ -240,6 +254,11 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
 
 def _seed(root: Path, *, omit: str | None = None, **record_options):
     records = _records(**record_options)
+    _store_records(root, records, omit=omit)
+    return records
+
+
+def _store_records(root: Path, records: tuple, *, omit: str | None = None) -> None:
     baseline, candidate, knowledge, pack, policy, authoring, spec, result = records
     cognition_repo = JsonSelfCognitionRepository(root / "self-cognition")
     knowledge_repo = JsonKnowledgeRepository(root / "knowledge")
@@ -260,7 +279,139 @@ def _seed(root: Path, *, omit: str | None = None, **record_options):
     if omit != "experiment_spec":
         evaluation_repo.put_experiment_spec(spec)
     evaluation_repo.put_experiment_result(result)
-    return records
+
+
+def _dual_platform_records():
+    baseline, candidate, knowledge, pack, _policy, authoring, old_spec, _result = (
+        _records(changed_files=("pyproject.toml",))
+    )
+    policy = ScoringPolicy.create(
+        policy_version="dual-platform",
+        dimensions=(ScoringDimension(name="correctness", weight=1.0),),
+        required_hard_gates=("tests",),
+        required_validation_platforms=("linux", "windows"),
+        promote_threshold=0.8,
+        observe_threshold=0.5,
+        created_at=NOW,
+    )
+    spec = ExperimentSpec.create(
+        authoring_result_id=authoring.authoring_result_id,
+        platform_selection=old_spec.platform_selection,
+        baseline_snapshot_id=baseline.snapshot_id,
+        candidate_commit=CANDIDATE_COMMIT,
+        candidate_snapshot_id=candidate.snapshot_id,
+        hypothesis=old_spec.hypothesis,
+        knowledge_ids=old_spec.knowledge_ids,
+        target_metrics=old_spec.target_metrics,
+        benchmark_pack_id=pack.benchmark_pack_id,
+        scoring_policy_id=policy.scoring_policy_id,
+        created_at=NOW,
+    )
+    linux_candidate = build_container_environment_manifest(
+        Path(__file__).parents[1],
+        backend="podman",
+        execution_workspace_path="/workspace",
+        probe={
+            "os_name": "Linux",
+            "os_release": "test",
+            "architecture": "x86_64",
+            "repository_head": CANDIDATE_COMMIT,
+            "image_reference": "localhost/voidcube-test:1",
+            "image_digest": "sha256:" + "4" * 64,
+            "tools": {},
+        },
+    )
+    linux_baseline = linux_candidate.__class__.create(
+        **{
+            **linux_candidate.content_payload(),
+            "repository_head": BASELINE_COMMIT,
+        }
+    )
+    environments = (
+        linux_baseline,
+        linux_candidate,
+        BASELINE_ENVIRONMENT,
+        ENVIRONMENT,
+    )
+    identities = (linux_candidate.identity(), ENVIRONMENT.identity())
+    checkouts = tuple(
+        SubjectCheckoutEvidence.create(
+            subject=subject,
+            commit=BASELINE_COMMIT if subject == "baseline" else CANDIDATE_COMMIT,
+            worktree_path=environment.execution_workspace_path,
+            execution_environment_identity_id=(
+                environment.identity().execution_environment_identity_id
+            ),
+            checked_out_at=NOW,
+        )
+        for environment in (linux_candidate, ENVIRONMENT)
+        for subject in ("baseline", "candidate")
+    )
+    checkout_by_key = {
+        (item.subject, item.execution_environment_identity_id): item
+        for item in checkouts
+    }
+    case_evidence = tuple(
+        BenchmarkCaseExecutionEvidence(
+            subject=subject,
+            case_id="case-1",
+            commands=(
+                BenchmarkCommandEvidence(
+                    command=f"{platform} tests",
+                    exit_code=0,
+                    output_summary="1 passed",
+                    security_scanner_status="available",
+                    container_disk_quota_status=(
+                        "unsupported" if platform == "linux" else "not_applicable"
+                    ),
+                ),
+            ),
+            execution_environment_id=environment.execution_environment_id,
+            execution_environment_identity_id=(
+                environment.identity().execution_environment_identity_id
+            ),
+            subject_checkout_evidence_id=checkout_by_key[
+                (
+                    subject,
+                    environment.identity().execution_environment_identity_id,
+                )
+            ].subject_checkout_evidence_id,
+        )
+        for platform, baseline_environment, candidate_environment in (
+            ("linux", linux_baseline, linux_candidate),
+            ("windows", BASELINE_ENVIRONMENT, ENVIRONMENT),
+        )
+        for subject, environment in (
+            ("baseline", baseline_environment),
+            ("candidate", candidate_environment),
+        )
+    )
+    result = ExperimentResult.create(
+        experiment_spec_id=spec.experiment_spec_id,
+        baseline_metrics=(MetricValue(metric="correctness", value=0.8, unit="ratio"),),
+        candidate_metrics=(MetricValue(metric="correctness", value=0.9, unit="ratio"),),
+        metric_deltas=(MetricDelta(metric="correctness", delta=0.1),),
+        confidence=1.0,
+        hard_gate_results=(
+            HardGateResult(gate="tests", passed=True),
+            HardGateResult(
+                gate=EXECUTION_ENVIRONMENT_GATE,
+                passed=True,
+                evidence_refs=tuple(
+                    item.execution_environment_id for item in environments
+                ),
+            ),
+        ),
+        execution_environment=ENVIRONMENT,
+        verdict="promote",
+        completed_at=NOW,
+        execution_environment_identity=ENVIRONMENT.identity(),
+        execution_environments=environments,
+        execution_environment_identities=identities,
+        subject_checkouts=checkouts,
+        benchmark_case_evidence=case_evidence,
+    )
+    return baseline, candidate, knowledge, pack, policy, authoring, spec, result
 
 
 def test_promote_result_with_complete_references_authorizes_exact_commit(tmp_path: Path):
@@ -275,6 +426,76 @@ def test_promote_result_with_complete_references_authorizes_exact_commit(tmp_pat
     assert authorization["evaluated_candidate_commit"] == CANDIDATE_COMMIT
     assert authorization["evaluated_baseline_commit"] == BASELINE_COMMIT
     assert authorization["experiment_spec_id"] == records[-2].experiment_spec_id
+
+
+def test_complete_dual_platform_matrix_authorizes_all_environment_ids(tmp_path: Path):
+    records = _dual_platform_records()
+    _store_records(tmp_path, records)
+
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(tmp_path).verify(
+        records[-1].experiment_result_id
+    )
+
+    assert authorization["authorized"] is True
+    assert len(authorization["execution_environment_ids"]) == 4
+    assert len(authorization["execution_environment_identity_ids"]) == 2
+
+
+def test_missing_one_platform_case_evidence_is_not_authorized(tmp_path: Path):
+    records = _dual_platform_records()
+    result = records[-1]
+    payload = result.content_payload()
+    payload["benchmark_case_evidence"] = payload["benchmark_case_evidence"][:-1]
+    modified = ExperimentResult.create(**payload)
+    modified_records = (*records[:-1], modified)
+    _store_records(tmp_path, modified_records)
+
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(tmp_path).verify(
+        modified.experiment_result_id
+    )
+
+    assert authorization["authorized"] is False
+    assert authorization["reason"] == "benchmark_case_evidence_incomplete"
+
+
+def test_legacy_result_without_environment_matrix_is_readable_but_not_promotable(
+    tmp_path: Path,
+):
+    records = _records()
+    payload = records[-1].content_payload()
+    payload.pop("execution_environments", None)
+    payload.pop("execution_environment_identities", None)
+    for evidence in payload["benchmark_case_evidence"]:
+        for command in evidence["commands"]:
+            command.pop("security_scanner_status", None)
+            command.pop("container_disk_quota_status", None)
+    digest = hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    legacy_result = ExperimentResult.model_validate(
+        {
+            **payload,
+            "experiment_result_id": f"experiment-result-{digest}",
+            "content_hash": digest,
+        }
+    )
+    _store_records(tmp_path, (*records[:-1], legacy_result))
+
+    restored = JsonEvaluationRepository(tmp_path / "evaluation").get_experiment_result(
+        legacy_result.experiment_result_id
+    )
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(tmp_path).verify(
+        legacy_result.experiment_result_id
+    )
+
+    assert restored is not None
+    assert authorization["authorized"] is False
+    assert authorization["reason"] == "execution_environment_matrix_missing"
 
 
 @pytest.mark.parametrize(
@@ -440,12 +661,17 @@ def test_binding_rejects_actual_commit_mismatch(tmp_path: Path):
             "benchmark_pack_id",
             "scoring_policy_id",
             "execution_environment_id",
+            "execution_environment_ids",
+            "execution_environment_identity_ids",
             "authoring_environment_manifest_id",
             "authoring_environment_identity_id",
             "authoring_dependency_fingerprint",
             "authoring_security_scanner_statuses",
             "authoring_container_disk_quota_statuses",
             "environment_capability_warnings",
+            "validation_security_scanner_statuses",
+            "validation_container_disk_quota_statuses",
+            "validation_environment_capability_warnings",
             "platform_selection_id",
             "selected_validation_platforms",
             "validation_scope",
@@ -470,4 +696,62 @@ def test_binding_rejects_actual_commit_mismatch(tmp_path: Path):
     assert binding == {
         "valid": False,
         "reason": "evaluated_candidate_commit_mismatch",
+    }
+
+
+def test_binding_rejects_environment_matrix_id_tampering(tmp_path: Path):
+    records = _seed(tmp_path)
+    authorization = EvolutionEvaluationGovernanceVerifier.from_root(tmp_path).verify(
+        records[-1].experiment_result_id
+    )
+    fields = {
+        key: authorization[key]
+        for key in (
+            "experiment_result_id",
+            "experiment_spec_id",
+            "authoring_result_id",
+            "evaluated_baseline_commit",
+            "evaluated_candidate_commit",
+            "candidate_ref",
+            "changed_files",
+            "baseline_snapshot_id",
+            "candidate_snapshot_id",
+            "benchmark_pack_id",
+            "scoring_policy_id",
+            "execution_environment_id",
+            "execution_environment_ids",
+            "execution_environment_identity_ids",
+            "authoring_environment_manifest_id",
+            "authoring_environment_identity_id",
+            "authoring_dependency_fingerprint",
+            "authoring_security_scanner_statuses",
+            "authoring_container_disk_quota_statuses",
+            "environment_capability_warnings",
+            "validation_security_scanner_statuses",
+            "validation_container_disk_quota_statuses",
+            "validation_environment_capability_warnings",
+            "platform_selection_id",
+            "selected_validation_platforms",
+            "validation_scope",
+            "validated_platforms",
+            "knowledge_ids",
+        )
+    }
+    evidence = {**fields, "execution_environment_ids": ["forged"]}
+
+    binding = validate_body_improvement_authorization_binding(
+        evidence=evidence,
+        constraints={
+            **fields,
+            "must_match_evaluated_commit": True,
+            "requires_governor_review": True,
+            "requires_user_consent": True,
+        },
+        authorization=authorization,
+    )
+
+    assert binding == {
+        "valid": False,
+        "reason": "evaluation_authorization_binding_mismatch",
+        "field": "execution_environment_ids",
     }

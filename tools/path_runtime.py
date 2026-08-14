@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -35,6 +36,9 @@ def _normalize_windows_host_path(path: str) -> str:
         return path.replace("\\", "/")
     if path.startswith("/mnt/"):
         return wsl_path_to_windows(path).replace("\\", "/")
+    if path == "/tmp" or path.startswith("/tmp/"):
+        suffix = path.removeprefix("/tmp").lstrip("/")
+        return str(Path(tempfile.gettempdir(), suffix)).replace("\\", "/")
     converted = _git_bash_path_to_windows(path)
     if converted != path:
         return converted
@@ -58,6 +62,11 @@ def _normalize_host_path(path: str) -> str:
     if is_wsl():
         return _normalize_wsl_host_path(path)
     return path.replace("\\", "/")
+
+
+def normalize_host_path(path: str) -> str:
+    """Normalize WSL/Git Bash paths into the current host path syntax."""
+    return _normalize_host_path(str(path or ""))
 
 
 def _looks_like_absolute_host_path(path: str) -> bool:

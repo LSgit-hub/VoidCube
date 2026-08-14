@@ -510,6 +510,7 @@ class LocalEnvironment(BaseEnvironment):
 
         proc = subprocess.Popen(
             args,
+            cwd=self.cwd,
             text=True,
             env=run_env,
             encoding="utf-8",
@@ -578,6 +579,7 @@ class LocalEnvironment(BaseEnvironment):
 
     def _update_cwd(self, result: dict):
         """Read CWD from temp file (local-only, no round-trip needed)."""
+        previous_cwd = self.cwd
         try:
             with open(self._cwd_file, 'r') as f:
                 cwd_path = f.read().strip()
@@ -588,6 +590,10 @@ class LocalEnvironment(BaseEnvironment):
 
         # Still strip the marker from output so it's not visible
         self._extract_cwd_from_output(result)
+        from tools.path_runtime import normalize_host_path
+
+        normalized_cwd = normalize_host_path(self.cwd)
+        self.cwd = normalized_cwd if os.path.isdir(normalized_cwd) else previous_cwd
 
     def cleanup(self):
         """Stop the persistent shell and clean up temp files."""

@@ -187,7 +187,6 @@ def test_file_and_terminal_tools_share_one_task_environment(monkeypatch, tmp_pat
     def local_config():
         return {
             **_podman_config(),
-            "env_type": "local",
             "cwd": str(tmp_path),
             "host_cwd": str(tmp_path),
             "fallback_to_local": False,
@@ -214,6 +213,16 @@ def test_file_and_terminal_tools_share_one_task_environment(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(terminal_tool_module, "_start_cleanup_thread", lambda: None)
     monkeypatch.setattr(terminal_tool_module, "_create_environment_once", create_once)
+    monkeypatch.setitem(
+        terminal_tool_module._task_env_overrides,
+        task_id,
+        {
+            "env_type": "local",
+            "cwd": str(tmp_path),
+            "host_cwd": str(tmp_path),
+            "fallback_to_local": False,
+        },
+    )
 
     try:
         file_ops = file_tools_module._get_file_ops(task_id)
@@ -224,6 +233,7 @@ def test_file_and_terminal_tools_share_one_task_environment(monkeypatch, tmp_pat
     assert payload["output"] == "ok"
     assert file_ops.env is environment
     assert created == [environment]
+    assert getattr(environment, "_voidcube_requested_backend") == "local"
     state = get_task_execution_state(task_id)
     assert state is not None and state.status == "ready"
 

@@ -11,6 +11,7 @@ from systems.evolution_authoring import JsonEvolutionAuthoringRepository
 from systems.evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
     JsonEvaluationRepository,
+    select_benchmark_platforms,
 )
 from systems.research_knowledge import JsonKnowledgeRepository
 from systems.self_cognition import JsonSelfCognitionRepository
@@ -238,6 +239,17 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
                 platform_selection_id=selection.selection_id,
             )
+        expected_selection = select_benchmark_platforms(
+            authoring.changed_files,
+            str(authoring.environment_dependency_fingerprint),
+            created_at=selection.created_at,
+        )
+        if selection != expected_selection:
+            return _rejection(
+                "platform_selection_not_deterministic",
+                experiment_result_id=result_id,
+                platform_selection_id=selection.selection_id,
+            )
         missing_selection_platforms = sorted(
             set(selection.required_platforms)
             - set(policy.required_validation_platforms)
@@ -249,6 +261,17 @@ class EvolutionEvaluationGovernanceVerifier:
                 platform_selection_id=selection.selection_id,
                 missing_validation_platforms=missing_selection_platforms,
             )
+        unexpected_policy_platforms = sorted(
+            set(policy.required_validation_platforms)
+            - set(selection.required_platforms)
+        )
+        if unexpected_policy_platforms:
+            return _rejection(
+                "validation_platform_not_selected",
+                experiment_result_id=result_id,
+                platform_selection_id=selection.selection_id,
+                unexpected_validation_platforms=unexpected_policy_platforms,
+            )
 
         case_evidence = result.benchmark_case_evidence
         if not case_evidence:
@@ -256,15 +279,59 @@ class EvolutionEvaluationGovernanceVerifier:
                 "benchmark_command_evidence_missing",
                 experiment_result_id=result_id,
             )
+        if (
+            result.execution_environments is None
+            or result.execution_environment_identities is None
+        ):
+            return _rejection(
+                "execution_environment_matrix_missing",
+                experiment_result_id=result_id,
+            )
+        environments = tuple(result.execution_environments)
+        identities = tuple(result.execution_environment_identities)
+        environment_by_id = {
+            item.execution_environment_id: item for item in environments
+        }
+        identity_ids = {
+            item.execution_environment_identity_id for item in identities
+        }
+        evidence_platforms: dict[str, str] = {
+            item.execution_environment_id: item.validated_platforms[0]
+            for item in environments
+        }
         expected_cases = {
-            (subject, case.case_id)
+            (platform, subject, case.case_id)
+            for platform in policy.required_validation_platforms
             for subject in ("baseline", "candidate")
             for case in benchmark.cases
         }
-        actual_cases = {(item.subject, item.case_id) for item in case_evidence}
+        try:
+            actual_cases = {
+                (
+                    evidence_platforms[item.execution_environment_id],
+                    item.subject,
+                    item.case_id,
+                )
+                for item in case_evidence
+            }
+        except KeyError:
+            return _rejection(
+                "benchmark_environment_evidence_unknown",
+                experiment_result_id=result_id,
+            )
         if actual_cases != expected_cases:
             return _rejection(
                 "benchmark_case_evidence_incomplete",
+                experiment_result_id=result_id,
+            )
+        if any(
+            command.security_scanner_status is None
+            or command.container_disk_quota_status is None
+            for item in case_evidence
+            for command in item.commands
+        ):
+            return _rejection(
+                "benchmark_environment_capability_evidence_missing",
                 experiment_result_id=result_id,
             )
         failed_commands = [
@@ -312,12 +379,44 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
             )
         environment = result.execution_environment
+        if {item.execution_environment_id for item in case_evidence} != set(
+            environment_by_id
+        ):
+            return _rejection(
+                "benchmark_environment_matrix_mismatch",
+                experiment_result_id=result_id,
+            )
+        checkout_by_id = {
+            item.subject_checkout_evidence_id: item
+            for item in result.subject_checkouts
+        }
+        for item in case_evidence:
+            manifest = environment_by_id[item.execution_environment_id]
+            checkout = checkout_by_id.get(item.subject_checkout_evidence_id)
+            if (
+                checkout is None
+                or checkout.subject != item.subject
+                or checkout.execution_environment_identity_id
+                != item.execution_environment_identity_id
+                or manifest.identity().execution_environment_identity_id
+                != item.execution_environment_identity_id
+                or manifest.repository_head.lower() != checkout.commit.lower()
+            ):
+                return _rejection(
+                    "benchmark_environment_checkout_mismatch",
+                    experiment_result_id=result_id,
+                )
         candidate_environment_ids = {
             item.execution_environment_id
             for item in case_evidence
             if item.subject == "candidate"
         }
-        if candidate_environment_ids != {environment.execution_environment_id}:
+        candidate_matrix_ids = {
+            item.execution_environment_id
+            for item in environments
+            if item.repository_head.lower() == candidate_commit
+        }
+        if candidate_environment_ids != candidate_matrix_ids:
             return _rejection(
                 "candidate_environment_evidence_mismatch",
                 experiment_result_id=result_id,
@@ -325,7 +424,11 @@ class EvolutionEvaluationGovernanceVerifier:
             )
         missing_platforms = sorted(
             set(policy.required_validation_platforms)
-            - set(environment.validated_platforms)
+            - {
+                platform
+                for item in environments
+                for platform in item.validated_platforms
+            }
         )
         if missing_platforms:
             return _rejection(
@@ -334,29 +437,28 @@ class EvolutionEvaluationGovernanceVerifier:
                 missing_validation_platforms=missing_platforms,
                 execution_environment_id=environment.execution_environment_id,
             )
-        candidate_checkout = next(
-            (
-                checkout
-                for checkout in result.subject_checkouts
-                if checkout.subject == "candidate"
-            ),
-            None,
-        )
-        evaluated_candidate_head = (
-            candidate_checkout.commit.strip().lower()
-            if candidate_checkout is not None
-            else str(environment.repository_head).strip().lower()
+        candidate_checkouts = tuple(
+            checkout
+            for checkout in result.subject_checkouts
+            if checkout.subject == "candidate"
         )
         if (
-            result.execution_environment_identity is not None
-            and candidate_checkout is None
+            len(candidate_checkouts) != len(identity_ids)
+            or {
+                checkout.execution_environment_identity_id
+                for checkout in candidate_checkouts
+            }
+            != identity_ids
         ):
             return _rejection(
                 "candidate_checkout_evidence_missing",
                 experiment_result_id=result_id,
                 execution_environment_id=environment.execution_environment_id,
             )
-        if evaluated_candidate_head != candidate_commit:
+        if any(
+            checkout.commit.strip().lower() != candidate_commit
+            for checkout in candidate_checkouts
+        ):
             return _rejection(
                 "execution_environment_commit_mismatch",
                 experiment_result_id=result_id,
@@ -400,15 +502,23 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
                 authoring_result_id=authoring_result_id,
             )
-        baseline_checkout = next(
-            (
-                checkout
-                for checkout in result.subject_checkouts
-                if checkout.subject == "baseline"
-            ),
-            None,
+        baseline_checkouts = tuple(
+            checkout
+            for checkout in result.subject_checkouts
+            if checkout.subject == "baseline"
         )
-        if baseline_checkout is None or baseline_checkout.commit.lower() != baseline_commit:
+        if (
+            len(baseline_checkouts) != len(identity_ids)
+            or {
+                checkout.execution_environment_identity_id
+                for checkout in baseline_checkouts
+            }
+            != identity_ids
+            or any(
+                checkout.commit.lower() != baseline_commit
+                for checkout in baseline_checkouts
+            )
+        ):
             return _rejection(
                 "baseline_checkout_commit_mismatch",
                 experiment_result_id=result_id,
@@ -445,6 +555,29 @@ class EvolutionEvaluationGovernanceVerifier:
             for status in disk_quota_statuses
             if status not in {"enforced", "not_applicable"}
         ]
+        validation_scanner_statuses = sorted(
+            {
+                command.security_scanner_status
+                for item in case_evidence
+                for command in item.commands
+            }
+        )
+        validation_disk_quota_statuses = sorted(
+            {
+                command.container_disk_quota_status
+                for item in case_evidence
+                for command in item.commands
+            }
+        )
+        validation_capability_warnings = [
+            f"security_scanner_{status}"
+            for status in validation_scanner_statuses
+            if status != "available"
+        ] + [
+            f"container_disk_quota_{status}"
+            for status in validation_disk_quota_statuses
+            if status not in {"enforced", "not_applicable"}
+        ]
         return {
             "schema_version": EVALUATION_GOVERNANCE_SCHEMA_VERSION,
             "authorized": True,
@@ -462,6 +595,9 @@ class EvolutionEvaluationGovernanceVerifier:
             "authoring_security_scanner_statuses": scanner_statuses,
             "authoring_container_disk_quota_statuses": disk_quota_statuses,
             "environment_capability_warnings": capability_warnings,
+            "validation_security_scanner_statuses": validation_scanner_statuses,
+            "validation_container_disk_quota_statuses": validation_disk_quota_statuses,
+            "validation_environment_capability_warnings": validation_capability_warnings,
             "platform_selection_id": selection.selection_id,
             "selected_validation_platforms": list(selection.required_platforms),
             "platform_selection_reason_codes": list(selection.reason_codes),
@@ -475,6 +611,8 @@ class EvolutionEvaluationGovernanceVerifier:
             "confidence": float(result.confidence),
             "verdict": str(result.verdict),
             "execution_environment_id": environment.execution_environment_id,
+            "execution_environment_ids": sorted(environment_by_id),
+            "execution_environment_identity_ids": sorted(identity_ids),
             "validation_scope": environment.validation_scope,
             "validated_platforms": list(environment.validated_platforms),
         }
@@ -556,6 +694,10 @@ def validate_body_improvement_authorization_binding(
     for field in (
         "authoring_security_scanner_statuses",
         "authoring_container_disk_quota_statuses",
+        "execution_environment_ids",
+        "execution_environment_identity_ids",
+        "validation_security_scanner_statuses",
+        "validation_container_disk_quota_statuses",
     ):
         expected = tuple(str(item) for item in authorization.get(field) or [])
         if not expected:
@@ -582,6 +724,21 @@ def validate_body_improvement_authorization_binding(
                 "valid": False,
                 "reason": "evaluation_authorization_binding_mismatch",
                 "field": "environment_capability_warnings",
+            }
+    expected_validation_warnings = tuple(
+        str(item)
+        for item in authorization.get("validation_environment_capability_warnings")
+        or []
+    )
+    for source in (evidence, constraints):
+        if tuple(
+            str(item)
+            for item in source.get("validation_environment_capability_warnings") or []
+        ) != expected_validation_warnings:
+            return {
+                "valid": False,
+                "reason": "evaluation_authorization_binding_mismatch",
+                "field": "validation_environment_capability_warnings",
             }
 
     expected_knowledge = tuple(str(item) for item in authorization.get("knowledge_ids") or [])

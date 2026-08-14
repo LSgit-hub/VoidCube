@@ -247,6 +247,19 @@ class BenchmarkCommandEvidence(_FrozenModel):
     exit_code: int
     output_summary: str = Field(min_length=1, max_length=50_000)
     timed_out: bool = False
+    security_scanner_status: Literal[
+        "available",
+        "disabled",
+        "unavailable",
+        "timeout",
+        "error",
+    ] | None = None
+    container_disk_quota_status: Literal[
+        "enforced",
+        "unsupported",
+        "not_requested",
+        "not_applicable",
+    ] | None = None
 
 
 class BenchmarkCaseExecutionEvidence(_FrozenModel):
@@ -492,6 +505,10 @@ class _ExperimentResultContent(_FrozenModel):
     verdict: str = Field(pattern=r"^(promote|observe|reject)$")
     completed_at: datetime
     execution_environment_identity: ExecutionEnvironmentIdentity | None = None
+    execution_environments: tuple[ExecutionEnvironmentManifest, ...] | None = None
+    execution_environment_identities: tuple[
+        ExecutionEnvironmentIdentity, ...
+    ] | None = None
     subject_checkouts: tuple[SubjectCheckoutEvidence, ...] = ()
     benchmark_case_evidence: tuple[BenchmarkCaseExecutionEvidence, ...] | None = None
 
@@ -528,6 +545,16 @@ class _ExperimentResultContent(_FrozenModel):
             raise ValueError(
                 "subject checkout evidence requires an execution environment identity"
             )
+        if (
+            self.execution_environment_identity is None
+            and self.execution_environments is None
+            and self.execution_environment_identities is None
+        ):
+            if self.benchmark_case_evidence is not None:
+                raise ValueError(
+                    "benchmark case evidence requires an execution environment identity"
+                )
+            return self
         if self.execution_environment_identity is not None:
             if (
                 self.execution_environment.identity().execution_environment_identity_id
@@ -536,12 +563,52 @@ class _ExperimentResultContent(_FrozenModel):
                 raise ValueError(
                     "execution environment identity does not match the manifest"
                 )
-            _require_unique("subject checkout", (item.subject for item in self.subject_checkouts))
+        if (self.execution_environments is None) != (
+            self.execution_environment_identities is None
+        ):
+            raise ValueError(
+                "execution environment matrix requires manifests and identities"
+            )
+        has_environment_matrix = self.execution_environments is not None
+        environments = self.execution_environments or (self.execution_environment,)
+        identities = self.execution_environment_identities or (
+            (self.execution_environment_identity,)
+            if self.execution_environment_identity is not None
+            else ()
+        )
+        if not environments or not identities:
+            raise ValueError("execution environment evidence must not be empty")
+        _require_unique(
+            "execution environment",
+            (item.execution_environment_id for item in environments),
+        )
+        _require_unique(
+            "execution environment identity",
+            (item.execution_environment_identity_id for item in identities),
+        )
+        identity_ids = {
+            item.execution_environment_identity_id for item in identities
+        }
+        if any(
+            item.identity().execution_environment_identity_id not in identity_ids
+            for item in environments
+        ):
+            raise ValueError(
+                "execution environment matrix contains an unbound manifest"
+            )
+        _require_unique(
+            "subject checkout",
+            (
+                f"{item.subject}:{item.execution_environment_identity_id}"
+                for item in self.subject_checkouts
+            ),
+        )
         if self.benchmark_case_evidence is not None:
             _require_unique(
                 "benchmark case evidence",
                 (
-                    f"{item.subject}:{item.case_id}"
+                    f"{item.subject}:{item.case_id}:"
+                    f"{item.execution_environment_identity_id}"
                     for item in self.benchmark_case_evidence
                 ),
             )
@@ -549,22 +616,40 @@ class _ExperimentResultContent(_FrozenModel):
                 raise ValueError(
                     "benchmark case evidence requires an execution environment identity"
                 )
-            checkouts = {item.subject: item for item in self.subject_checkouts}
-            if set(checkouts) != {"baseline", "candidate"}:
+            checkouts = {
+                (item.subject, item.execution_environment_identity_id): item
+                for item in self.subject_checkouts
+            }
+            expected_checkouts = {
+                (subject, identity_id)
+                for subject in ("baseline", "candidate")
+                for identity_id in identity_ids
+            }
+            if set(checkouts) != expected_checkouts:
                 raise ValueError(
-                    "benchmark case evidence requires baseline and candidate checkouts"
+                    "benchmark case evidence requires every platform checkout"
                 )
-            identity_id = (
-                self.execution_environment_identity.execution_environment_identity_id
-            )
+            environment_ids = {
+                item.execution_environment_id for item in environments
+            }
             for evidence in self.benchmark_case_evidence:
-                if evidence.execution_environment_identity_id != identity_id:
+                if evidence.execution_environment_identity_id not in identity_ids:
                     raise ValueError(
                         "benchmark case evidence references a different environment identity"
                     )
                 if (
+                    has_environment_matrix
+                    and evidence.execution_environment_id not in environment_ids
+                ):
+                    raise ValueError(
+                        "benchmark case evidence references an unknown environment"
+                    )
+                checkout = checkouts[
+                    (evidence.subject, evidence.execution_environment_identity_id)
+                ]
+                if (
                     evidence.subject_checkout_evidence_id
-                    != checkouts[evidence.subject].subject_checkout_evidence_id
+                    != checkout.subject_checkout_evidence_id
                 ):
                     raise ValueError(
                         "benchmark case evidence references a different subject checkout"
@@ -591,12 +676,34 @@ class ExperimentResult(_ExperimentResultContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        _validate_address_with_legacy_optional_fields(
-            self,
-            "experiment_result_id",
-            "experiment-result-",
-            ("benchmark_case_evidence",),
+        optional_fields = (
+            "benchmark_case_evidence",
+            "execution_environments",
+            "execution_environment_identities",
         )
+        try:
+            _validate_address_with_legacy_optional_fields(
+                self,
+                "experiment_result_id",
+                "experiment-result-",
+                optional_fields,
+            )
+        except ValueError:
+            payload = self.content_payload()
+            for field in optional_fields:
+                if payload.get(field) is None:
+                    payload.pop(field, None)
+            for evidence in payload.get("benchmark_case_evidence") or []:
+                for command in evidence.get("commands") or []:
+                    if command.get("security_scanner_status") is None:
+                        command.pop("security_scanner_status", None)
+                    if command.get("container_disk_quota_status") is None:
+                        command.pop("container_disk_quota_status", None)
+            expected_hash = _content_hash(payload)
+            if self.content_hash != expected_hash:
+                raise ValueError("content_hash does not match record content")
+            if self.experiment_result_id != f"experiment-result-{expected_hash}":
+                raise ValueError("experiment_result_id does not match content_hash")
         return self
 
 

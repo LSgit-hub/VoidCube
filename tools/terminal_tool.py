@@ -556,6 +556,7 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
     per-task sandbox settings (e.g., a custom Dockerfile for the Modal image).
 
     Supported override keys:
+        - env_type: str -- Backend selected for this task only
         - modal_image: str -- Path to Dockerfile or Docker Hub image name
         - docker_image: str -- Docker image name
         - cwd: str -- Working directory inside the sandbox
@@ -563,6 +564,7 @@ def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
         - docker_volumes: list[str] -- Per-task container volume mounts
         - docker_env: dict[str, str] -- Per-task container environment variables
         - fallback_to_local: bool -- Whether sandbox startup may use the host
+        - local_env: dict[str, str] -- Environment injected into a local backend
 
     Args:
         task_id: The rollout's unique task identifier
@@ -679,8 +681,9 @@ def prepare_task_git_worktree(
     *,
     expected_head: str,
     command_timeout_seconds: int | None = None,
+    backend: str | None = None,
 ) -> Dict[str, Any]:
-    """Bind and verify an isolated linked worktree for one sandbox task.
+    """Bind and verify an isolated linked worktree for container validation.
 
     Linked worktrees on Windows contain host-only paths in their ``.git`` file.
     The sandbox therefore receives the common Git directory separately and uses
@@ -688,37 +691,37 @@ def prepare_task_git_worktree(
     """
     normalized_task_id = str(task_id or "").strip()
     if not normalized_task_id:
-        raise ValueError("Autonomous worktree binding requires a task id")
+        raise ValueError("Container validation worktree binding requires a task id")
     cleanup_vm(normalized_task_id)
     clear_task_env_overrides(normalized_task_id)
     worktree = Path(str(worktree_path or "").strip()).expanduser().resolve()
     if not worktree.is_dir():
-        raise ValueError(f"Autonomous worktree does not exist: {worktree}")
+        raise ValueError(f"Container validation worktree does not exist: {worktree}")
     if not (worktree / ".git").is_file():
-        raise ValueError("Autonomous body tasks require an isolated linked Git worktree")
+        raise ValueError("Container validation requires an isolated linked Git worktree")
 
     config = _get_env_config()
-    backend = str(config.get("env_type") or "").strip().lower()
-    if backend not in {"docker", "podman"}:
+    selected_backend = str(backend or config.get("env_type") or "").strip().lower()
+    if selected_backend not in {"docker", "podman"}:
         raise ValueError(
-            "Autonomous body tasks require a Docker or Podman sandbox backend"
+            "Container validation requires a Docker or Podman backend"
         )
 
     configured_volumes = list(config.get("docker_volumes") or [])
     if any(_volume_target(volume) == "/workspace" for volume in configured_volumes):
         raise ValueError(
-            "Autonomous worktree binding conflicts with a configured /workspace volume"
+            "Container validation conflicts with a configured /workspace volume"
         )
     if any(_is_host_bind_volume(volume) for volume in configured_volumes):
         raise ValueError(
-            "Autonomous worktree binding permits named container volumes only; "
+            "Container validation permits named container volumes only; "
             "host bind mounts outside the worktree are forbidden"
         )
 
     top_level = _git_path(worktree, "--show-toplevel")
     if os.path.normcase(str(top_level)) != os.path.normcase(str(worktree)):
         raise ValueError(
-            f"Autonomous worktree root mismatch: expected {worktree}, got {top_level}"
+            f"Container validation worktree root mismatch: expected {worktree}, got {top_level}"
         )
     git_dir = _git_path(worktree, "--absolute-git-dir")
     common_dir = _git_path(worktree, "--git-common-dir")
@@ -727,7 +730,7 @@ def prepare_task_git_worktree(
     except ValueError as exc:
         raise ValueError("Linked worktree Git metadata is outside its common directory") from exc
     if not git_dir_relative or git_dir_relative == ".":
-        raise ValueError("Autonomous body tasks cannot edit the primary Git worktree")
+        raise ValueError("Container validation cannot use the primary Git worktree")
 
     head_result = subprocess.run(
         ["git", "-C", str(worktree), "rev-parse", "HEAD"],
@@ -737,7 +740,7 @@ def prepare_task_git_worktree(
     )
     host_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
     if not expected_head or host_head != expected_head:
-        raise ValueError("Autonomous worktree HEAD does not match the captured baseline")
+        raise ValueError("Container validation HEAD does not match the requested commit")
 
     container_git_dir = f"/voidcube-git/common/{git_dir_relative}"
     task_environment = {
@@ -758,7 +761,7 @@ def prepare_task_git_worktree(
     configure_task_execution(
         TaskExecutionContract(
             task_id=normalized_task_id,
-            backend=backend,
+            backend=selected_backend,
             validation_scope="container",
             host_workspace_path=str(worktree),
             execution_workspace_path="/workspace",
@@ -776,6 +779,7 @@ def prepare_task_git_worktree(
     register_task_env_overrides(
         normalized_task_id,
         {
+            "env_type": selected_backend,
             "cwd": "/workspace",
             "host_cwd": str(worktree),
             "docker_mount_cwd_to_workspace": True,
@@ -789,7 +793,7 @@ def prepare_task_git_worktree(
             "container_persistent": False,
             **(
                 {"podman_image": _autonomous_podman_image()}
-                if backend == "podman"
+                if selected_backend == "podman"
                 else {}
             ),
         },
@@ -850,7 +854,7 @@ def prepare_task_git_worktree(
             str(probe_result.get("output") or ""),
             expected_head=expected_head,
         )
-        if backend == "podman" and not environment_probe.get("image_digest"):
+        if selected_backend == "podman" and not environment_probe.get("image_digest"):
             raise RuntimeError("Podman probe did not return the immutable image digest")
         from systems.evolution_evaluation.environment import (
             build_container_environment_manifest,
@@ -858,7 +862,7 @@ def prepare_task_git_worktree(
 
         manifest = build_container_environment_manifest(
             worktree,
-            backend=backend,
+            backend=selected_backend,
             execution_workspace_path="/workspace",
             probe=environment_probe,
         )
@@ -877,7 +881,152 @@ def prepare_task_git_worktree(
                 code="worktree_environment_preparation_failed",
                 reason=f"{type(exc).__name__}: {exc}",
             )
-        raise RuntimeError(f"Autonomous worktree sandbox probe failed: {exc}") from exc
+        raise RuntimeError(f"Container validation probe failed: {exc}") from exc
+
+
+def prepare_task_native_git_worktree(
+    task_id: str,
+    worktree_path: str,
+    *,
+    expected_head: str,
+    command_timeout_seconds: int | None = None,
+    python_executable: str | None = None,
+) -> Dict[str, Any]:
+    """Bind one linked worktree to the Windows host execution backend."""
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ValueError("Native authoring worktree binding requires a task id")
+    if platform.system().lower() != "windows":
+        from tools.task_execution import TaskExecutionBlocked
+
+        raise TaskExecutionBlocked(
+            normalized_task_id,
+            "windows_host_required",
+            "Native authoring for this project requires a Windows host",
+        )
+    cleanup_vm(normalized_task_id)
+    clear_task_env_overrides(normalized_task_id)
+    worktree = Path(str(worktree_path or "").strip()).expanduser().resolve()
+    if not worktree.is_dir() or not (worktree / ".git").is_file():
+        raise ValueError(
+            "Native authoring requires an isolated linked Git worktree"
+        )
+    top_level = _git_path(worktree, "--show-toplevel")
+    if os.path.normcase(str(top_level)) != os.path.normcase(str(worktree)):
+        raise ValueError(
+            f"Native authoring worktree root mismatch: expected {worktree}, got {top_level}"
+        )
+    git_dir = _git_path(worktree, "--absolute-git-dir")
+    common_dir = _git_path(worktree, "--git-common-dir")
+    if git_dir == common_dir:
+        raise ValueError("Native authoring cannot edit the primary Git worktree")
+    head_result = subprocess.run(
+        ("git", "-C", str(worktree), "rev-parse", "HEAD"),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    host_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    if not expected_head or host_head != expected_head:
+        raise ValueError("Native authoring HEAD does not match the requested commit")
+
+    project_python = Path(
+        python_executable
+        or common_dir.parent / ".venv" / "Scripts" / "python.exe"
+    ).expanduser().resolve()
+    if not project_python.is_file():
+        from tools.task_execution import TaskExecutionBlocked
+
+        raise TaskExecutionBlocked(
+            normalized_task_id,
+            "project_venv_missing",
+            f"project virtualenv Python is unavailable: {project_python}",
+        )
+    timeout_seconds = max(30, int(command_timeout_seconds or 120))
+    local_environment = {
+        "VIRTUAL_ENV": str(project_python.parent.parent),
+        "PATH": str(project_python.parent) + os.pathsep + os.environ.get("PATH", ""),
+    }
+    from tools.task_execution import (
+        TaskExecutionContract,
+        clear_task_execution_state,
+        configure_task_execution,
+    )
+
+    clear_task_execution_state(normalized_task_id)
+    configure_task_execution(
+        TaskExecutionContract(
+            task_id=normalized_task_id,
+            backend="local",
+            validation_scope="host",
+            host_workspace_path=str(worktree),
+            execution_workspace_path=str(worktree),
+            allowed_execution_paths=(str(worktree),),
+            allowed_environment_variables=tuple(sorted(local_environment)),
+            command_timeout_seconds=timeout_seconds,
+            max_output_chars=50_000,
+            required_tools=("git", "python", "pytest"),
+            required_platforms=("windows",),
+        )
+    )
+    register_task_env_overrides(
+        normalized_task_id,
+        {
+            "env_type": "local",
+            "cwd": str(worktree),
+            "host_cwd": str(worktree),
+            "fallback_to_local": False,
+            "local_persistent": False,
+            "local_env": local_environment,
+        },
+    )
+    try:
+        probe = json.loads(
+            terminal_tool(
+                "git rev-parse --show-toplevel && git rev-parse HEAD && git status --short",
+                task_id=normalized_task_id,
+                timeout=min(timeout_seconds, 30),
+            )
+        )
+        if probe.get("exit_code") != 0:
+            raise RuntimeError(
+                str(probe.get("error") or probe.get("output") or "host probe failed")[
+                    :500
+                ]
+            )
+        lines = str(probe.get("output") or "").splitlines()
+        probed_root = str(lines[0]).strip() if lines else ""
+        probed_head = str(lines[1]).strip() if len(lines) > 1 else ""
+        from tools.path_runtime import normalize_host_path
+
+        normalized_probed_root = os.path.normcase(
+            os.path.abspath(os.path.expanduser(normalize_host_path(probed_root)))
+        )
+        if (
+            len(lines) < 2
+            or normalized_probed_root != os.path.normcase(str(worktree))
+            or probed_head != expected_head
+        ):
+            raise RuntimeError(
+                "native workspace or Git HEAD does not match the task: "
+                f"root={probed_root!r}, head={probed_head!r}"
+            )
+        from systems.evolution_evaluation.environment import (
+            capture_host_environment_manifest,
+        )
+        from tools.task_execution import validate_task_environment_manifest
+
+        manifest = capture_host_environment_manifest(
+            worktree,
+            repository_head=expected_head,
+            python_executable=project_python,
+        )
+        validate_task_environment_manifest(normalized_task_id, manifest)
+        return manifest.model_dump(mode="json")
+    except Exception:
+        cleanup_vm(normalized_task_id)
+        clear_task_env_overrides(normalized_task_id)
+        raise
 
 
 def release_task_environment(task_id: str) -> None:
@@ -1145,6 +1294,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
             cwd=cwd,
             timeout=timeout,
             persistent=bool((local_config or {}).get("persistent", False)),
+            env=dict((local_config or {}).get("env") or {}),
         )
     
     elif env_type == "docker":
@@ -1684,7 +1834,11 @@ def terminal_tool(
 
         # Get configuration
         config = _get_env_config()
-        requested_env_type = config["env_type"]
+        effective_task_id = task_id or "default"
+        overrides = _task_env_overrides.get(effective_task_id, {})
+        requested_env_type = str(
+            overrides.get("env_type") or config["env_type"]
+        ).strip().lower()
         active_env_type = requested_env_type
         backend_warning = None
 
@@ -1713,11 +1867,8 @@ def terminal_tool(
                 approval_note = f"Command required approval ({desc}) and was approved by the user."
 
         # Use task_id for environment isolation
-        effective_task_id = task_id or "default"
-
-        # Check per-task overrides (set by environments like TerminalBench2Env)
-        # before falling back to global env var config
-        overrides = _task_env_overrides.get(effective_task_id, {})
+        # Per-task overrides are infrastructure-owned and take precedence over
+        # the user's default terminal backend for governed task scopes.
         
         # Select image based on env type, with per-task override support
         if requested_env_type == "docker":
@@ -1878,7 +2029,11 @@ def terminal_tool(
                         local_config = None
                         if requested_env_type == "local":
                             local_config = {
-                                "persistent": config.get("local_persistent", False),
+                                "persistent": overrides.get(
+                                    "local_persistent",
+                                    config.get("local_persistent", False),
+                                ),
+                                "env": dict(overrides.get("local_env") or {}),
                             }
 
                         new_env = _create_environment(
@@ -2070,8 +2225,19 @@ def terminal_tool(
                     if retry_count < max_retries:
                         retry_count += 1
                         wait_time = 2 ** retry_count
-                        logger.warning("Execution error, retrying in %ds (attempt %d/%d) - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
-                                       wait_time, retry_count, max_retries, _safe_command_preview(command), type(e).__name__, e, effective_task_id, active_env_type)
+                        logger.warning(
+                            "Execution error, retrying in %ds (attempt %d/%d) - "
+                            "Command: %s - Error: %s: %s - Task: %s, Backend: %s, Cwd: %s",
+                            wait_time,
+                            retry_count,
+                            max_retries,
+                            _safe_command_preview(command),
+                            type(e).__name__,
+                            e,
+                            effective_task_id,
+                            active_env_type,
+                            getattr(env, "cwd", None),
+                        )
                         time.sleep(wait_time)
                         continue
 

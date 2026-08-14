@@ -113,6 +113,13 @@ def _body_evaluation_authorization() -> dict:
         "benchmark_pack_id": "benchmark-pack-" + "5" * 64,
         "scoring_policy_id": "scoring-policy-" + "6" * 64,
         "execution_environment_id": "execution-environment-" + "8" * 64,
+        "execution_environment_ids": [
+            "execution-environment-" + "8" * 64,
+            "execution-environment-" + "9" * 64,
+        ],
+        "execution_environment_identity_ids": [
+            "execution-environment-identity-" + "8" * 64,
+        ],
         "authoring_environment_manifest_id": "execution-environment-" + "a" * 64,
         "authoring_environment_identity_id": (
             "execution-environment-identity-" + "b" * 64
@@ -123,6 +130,9 @@ def _body_evaluation_authorization() -> dict:
         "environment_capability_warnings": [
             "container_disk_quota_unsupported"
         ],
+        "validation_security_scanner_statuses": ["available"],
+        "validation_container_disk_quota_statuses": ["not_applicable"],
+        "validation_environment_capability_warnings": [],
         "platform_selection_id": "benchmark-platform-selection-" + "d" * 64,
         "selected_validation_platforms": ["windows"],
         "platform_selection_reason_codes": ["project_default_windows"],
@@ -149,12 +159,17 @@ def _body_evaluation_fields() -> dict:
             "benchmark_pack_id",
             "scoring_policy_id",
             "execution_environment_id",
+            "execution_environment_ids",
+            "execution_environment_identity_ids",
             "authoring_environment_manifest_id",
             "authoring_environment_identity_id",
             "authoring_dependency_fingerprint",
             "authoring_security_scanner_statuses",
             "authoring_container_disk_quota_statuses",
             "environment_capability_warnings",
+            "validation_security_scanner_statuses",
+            "validation_container_disk_quota_statuses",
+            "validation_environment_capability_warnings",
             "platform_selection_id",
             "selected_validation_platforms",
             "platform_selection_reason_codes",

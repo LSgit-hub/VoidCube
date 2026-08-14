@@ -28,6 +28,7 @@ from systems.evolution_evaluation import (
     ScoringPolicy,
     AllowedRegression,
     capture_host_environment_manifest,
+    select_benchmark_platforms,
 )
 
 
@@ -47,6 +48,7 @@ def _contracts(
     objective: str = "increase",
     target_value: float | None = 0.85,
     allowed_regressions: tuple[AllowedRegression, ...] = (),
+    required_platforms: tuple[str, ...] = ("windows",),
 ):
     pack = BenchmarkPack.create(
         name="quality",
@@ -61,7 +63,7 @@ def _contracts(
         policy_version="1",
         dimensions=(ScoringDimension(name="correctness", weight=1.0),),
         required_hard_gates=("tests",),
-        required_validation_platforms=("windows",),
+        required_validation_platforms=required_platforms,
         promote_threshold=0.8,
         observe_threshold=0.5,
         created_at=NOW,
@@ -159,7 +161,7 @@ def test_executor_runs_same_pack_for_both_subjects_and_promotes():
     assert all(item.commands[0].exit_code == 0 for item in result.benchmark_case_evidence)
 
 
-def test_platform_coverage_is_a_hard_gate():
+def test_runner_cannot_return_evidence_for_another_platform():
     pack, policy, spec = _contracts()
     payload = ENVIRONMENT.content_payload()
     payload.update(
@@ -182,21 +184,13 @@ def test_platform_coverage_is_a_hard_gate():
         result = _runner(request)
         return result.model_copy(update={"execution_environment": linux_environment})
 
-    result = BenchmarkPackExecutor({"quality": linux_runner}).execute(
-        benchmark_pack=pack,
-        experiment_spec=spec,
-        scoring_policy=policy,
-        completed_at=NOW,
-    )
-
-    environment_gate = next(
-        gate
-        for gate in result.hard_gate_results
-        if gate.gate == EXECUTION_ENVIRONMENT_GATE
-    )
-    assert environment_gate.passed is False
-    assert "missing-platform:windows" in environment_gate.evidence_refs
-    assert result.verdict == "reject"
+    with pytest.raises(BenchmarkCaseFailed, match="different platform"):
+        BenchmarkPackExecutor({"quality": linux_runner}).execute(
+            benchmark_pack=pack,
+            experiment_spec=spec,
+            scoring_policy=policy,
+            completed_at=NOW,
+        )
 
 
 def test_baseline_candidate_environment_drift_aborts_evaluation():
@@ -210,8 +204,94 @@ def test_baseline_candidate_environment_drift_aborts_evaluation():
         environment = ENVIRONMENT if request.subject == "baseline" else drifted
         return result.model_copy(update={"execution_environment": environment})
 
-    with pytest.raises(BenchmarkCaseFailed, match="identical execution environment"):
+    with pytest.raises(BenchmarkCaseFailed, match="one windows environment"):
         BenchmarkPackExecutor({"quality": drifting_environment_runner}).execute(
+            benchmark_pack=pack,
+            experiment_spec=spec,
+            scoring_policy=policy,
+            completed_at=NOW,
+        )
+
+
+def test_executor_runs_and_aggregates_a_dual_platform_matrix():
+    pack, policy, spec = _contracts(required_platforms=("linux", "windows"))
+    spec_payload = spec.content_payload()
+    spec_payload["platform_selection"] = select_benchmark_platforms(
+        ("pyproject.toml",),
+        "f" * 64,
+        created_at=NOW,
+    )
+    spec = ExperimentSpec.create(**spec_payload)
+
+    def environment(platform_name: str, head: str) -> ExecutionEnvironmentManifest:
+        payload = ENVIRONMENT.content_payload()
+        payload["repository_head"] = head
+        if platform_name == "linux":
+            payload.update(
+                backend="podman",
+                validation_scope="container",
+                execution_os="Linux 6.8",
+                architecture="x86_64",
+                execution_workspace_path="/workspace",
+                path_mappings=(
+                    {
+                        "host_path": ENVIRONMENT.host_workspace_path,
+                        "execution_path": "/workspace",
+                    },
+                ),
+                validated_platforms=("linux",),
+            )
+        return ExecutionEnvironmentManifest.create(**payload)
+
+    def matrix_runner(request):
+        base = _runner(request)
+        head = "c" * 40 if request.subject == "baseline" else "d" * 40
+        return base.model_copy(
+            update={
+                "execution_environment": environment(
+                    request.validation_platform, head
+                )
+            }
+        )
+
+    executor = BenchmarkPackExecutor(
+        {},
+        platform_runners={
+            "linux": {"quality": matrix_runner},
+            "windows": {"quality": matrix_runner},
+        },
+    )
+    result = executor.execute(
+        benchmark_pack=pack,
+        experiment_spec=spec,
+        scoring_policy=policy,
+        completed_at=NOW,
+    )
+
+    assert result.verdict == "promote"
+    assert result.execution_environments is not None
+    assert len(result.execution_environments) == 4
+    assert result.execution_environment_identities is not None
+    assert len(result.execution_environment_identities) == 2
+    assert len(result.subject_checkouts) == 4
+    assert result.benchmark_case_evidence is not None
+    assert len(result.benchmark_case_evidence) == 8
+    assert {
+        platform
+        for environment_item in result.execution_environments
+        for platform in environment_item.validated_platforms
+    } == {"linux", "windows"}
+    assert result.confidence == 1.0
+
+
+def test_dual_platform_matrix_requires_every_selected_runner():
+    pack, policy, spec = _contracts(required_platforms=("linux", "windows"))
+
+    with pytest.raises(BenchmarkConfigurationError, match="linux:quality"):
+        BenchmarkPackExecutor(
+            {},
+            platform_runners={"windows": {"quality": _runner}},
+        ).execute(
             benchmark_pack=pack,
             experiment_spec=spec,
             scoring_policy=policy,

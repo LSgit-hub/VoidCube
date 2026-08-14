@@ -175,8 +175,10 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             from tools.terminal_tool import _task_env_overrides
 
             config = _get_env_config()
-            env_type = config["env_type"]
             overrides = _task_env_overrides.get(task_id, {})
+            env_type = str(
+                overrides.get("env_type") or config["env_type"]
+            ).strip().lower()
             configured_fallback = overrides.get(
                 "fallback_to_local", config.get("fallback_to_local", True)
             )
@@ -259,7 +261,10 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
             local_config = None
             if env_type == "local":
                 local_config = {
-                    "persistent": config.get("local_persistent", False),
+                    "persistent": overrides.get(
+                        "local_persistent", config.get("local_persistent", False)
+                    ),
+                    "env": dict(overrides.get("local_env") or {}),
                 }
 
             try:

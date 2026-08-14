@@ -46,6 +46,13 @@ from systems.evolution_evaluation.repository import (
     EvaluationRepository,
     JsonEvaluationRepository,
 )
+from systems.evolution_evaluation.runners import (
+    BenchmarkCaseEvaluation,
+    GitWorktreeValidationRunner,
+    NativeFirstBenchmarkExecutorFactory,
+    ValidationCaseEvaluator,
+    build_native_first_platform_runners,
+)
 from systems.evolution_evaluation.selection import (
     BenchmarkPlatformSelection,
     select_benchmark_platforms,
@@ -56,6 +63,7 @@ __all__ = [
     "BENCHMARK_CONSISTENCY_GATE",
     "BenchmarkCase",
     "BenchmarkCaseExecutionEvidence",
+    "BenchmarkCaseEvaluation",
     "BenchmarkCaseFailed",
     "BenchmarkCaseResult",
     "BenchmarkCaseTimedOut",
@@ -77,10 +85,12 @@ __all__ = [
     "ExperimentResult",
     "ExperimentSpec",
     "HardGateResult",
+    "GitWorktreeValidationRunner",
     "JsonEvaluationRepository",
     "MetricDelta",
     "MetricTarget",
     "MetricValue",
+    "NativeFirstBenchmarkExecutorFactory",
     "Regression",
     "RuntimeToolIdentity",
     "ScoringDimension",
@@ -88,8 +98,10 @@ __all__ = [
     "select_benchmark_platforms",
     "SubjectCheckoutEvidence",
     "WorkspacePathMapping",
+    "ValidationCaseEvaluator",
     "build_container_environment_manifest",
     "capture_host_environment_manifest",
     "capture_host_runtime_tools",
+    "build_native_first_platform_runners",
     "dependency_fingerprint",
 ]

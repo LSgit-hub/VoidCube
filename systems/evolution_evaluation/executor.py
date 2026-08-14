@@ -60,6 +60,7 @@ class BenchmarkRunRequest(_FrozenModel):
     benchmark_pack_id: str = Field(pattern=r"^benchmark-pack-[0-9a-f]{64}$")
     case: BenchmarkCase
     timeout_seconds: float = Field(gt=0.0)
+    validation_platform: str = Field(min_length=1)
 
 
 class BenchmarkCaseResult(_FrozenModel):
@@ -70,6 +71,7 @@ class BenchmarkCaseResult(_FrozenModel):
     command_evidence: tuple[BenchmarkCommandEvidence, ...] = Field(min_length=1)
     evidence_refs: tuple[str, ...] = ()
     subject_checkout: SubjectCheckoutEvidence | None = None
+    validation_platform: str | None = None
 
     @model_validator(mode="after")
     def _validate_unique_results(self) -> Self:
@@ -96,6 +98,7 @@ class BenchmarkPackExecutor:
         self,
         runners: Mapping[str, BenchmarkRunner],
         *,
+        platform_runners: Mapping[str, Mapping[str, BenchmarkRunner]] | None = None,
         case_timeout_seconds: float = 30.0,
         executor_version: str = DEFAULT_BENCHMARK_EXECUTOR_VERSION,
     ) -> None:
@@ -109,6 +112,18 @@ class BenchmarkPackExecutor:
             raise ValueError("runner names must not be empty")
         if any(not callable(runner) for runner in self.runners.values()):
             raise ValueError("benchmark runners must be callable")
+        self.platform_runners = {
+            str(platform).strip().lower(): {
+                str(name).strip(): runner for name, runner in platform_map.items()
+            }
+            for platform, platform_map in dict(platform_runners or {}).items()
+        }
+        if any(
+            not platform
+            or any(not name or not callable(runner) for name, runner in runners.items())
+            for platform, runners in self.platform_runners.items()
+        ):
+            raise ValueError("platform runner names and callables must be valid")
         self.case_timeout_seconds = float(case_timeout_seconds)
         self.executor_version = version
 
@@ -125,20 +140,29 @@ class BenchmarkPackExecutor:
             experiment_spec=experiment_spec,
             scoring_policy=scoring_policy,
         )
+        validation_platforms = tuple(scoring_policy.required_validation_platforms)
         baseline_results = self._execute_subject(
             subject="baseline",
             snapshot_id=experiment_spec.baseline_snapshot_id,
             candidate_commit=None,
             benchmark_pack=benchmark_pack,
+            validation_platforms=validation_platforms,
         )
         candidate_results = self._execute_subject(
             subject="candidate",
             snapshot_id=experiment_spec.candidate_snapshot_id,
             candidate_commit=experiment_spec.candidate_commit,
             benchmark_pack=benchmark_pack,
+            validation_platforms=validation_platforms,
         )
         self._validate_result_shapes(baseline_results, candidate_results)
-        execution_environment, environment_identity, subject_checkouts = (
+        (
+            execution_environment,
+            environment_identity,
+            execution_environments,
+            environment_identities,
+            subject_checkouts,
+        ) = (
             self._resolve_execution_environment(
                 baseline_results=baseline_results,
                 candidate_results=candidate_results,
@@ -147,13 +171,12 @@ class BenchmarkPackExecutor:
         benchmark_case_evidence = self._build_case_evidence(
             baseline_results=baseline_results,
             candidate_results=candidate_results,
-            environment_identity=environment_identity,
             subject_checkouts=subject_checkouts,
         )
         expected_identity_id = experiment_spec.execution_environment_identity_id
-        if (
-            expected_identity_id is not None
-            and expected_identity_id
+        if expected_identity_id is not None and (
+            len(environment_identities) != 1
+            or expected_identity_id
             != environment_identity.execution_environment_identity_id
         ):
             raise BenchmarkConfigurationError(
@@ -177,7 +200,11 @@ class BenchmarkPackExecutor:
             scoring_policy=scoring_policy,
             results=(*baseline_results, *candidate_results),
         )
-        covered_platforms = set(execution_environment.validated_platforms)
+        covered_platforms = {
+            platform
+            for environment in execution_environments
+            for platform in environment.validated_platforms
+        }
         required_platforms = set(scoring_policy.required_validation_platforms)
         missing_platforms = sorted(required_platforms - covered_platforms)
         hard_gates = tuple(
@@ -188,8 +215,10 @@ class BenchmarkPackExecutor:
                         gate=EXECUTION_ENVIRONMENT_GATE,
                         passed=not missing_platforms,
                         evidence_refs=(
-                            execution_environment.execution_environment_id,
-                            f"scope:{execution_environment.validation_scope}",
+                            *(
+                                environment.execution_environment_id
+                                for environment in execution_environments
+                            ),
                             *(
                                 f"missing-platform:{item}"
                                 for item in missing_platforms
@@ -222,7 +251,9 @@ class BenchmarkPackExecutor:
 
         completed = _as_aware(completed_at or datetime.now(timezone.utc), "completed_at")
         completed_pairs = min(len(baseline_results), len(candidate_results))
-        confidence = completed_pairs / len(benchmark_pack.cases)
+        confidence = completed_pairs / (
+            len(benchmark_pack.cases) * len(validation_platforms)
+        )
         return ExperimentResult.create(
             experiment_spec_id=experiment_spec.experiment_spec_id,
             baseline_metrics=baseline_metrics,
@@ -235,6 +266,8 @@ class BenchmarkPackExecutor:
             verdict=verdict,
             completed_at=completed,
             execution_environment_identity=environment_identity,
+            execution_environments=execution_environments,
+            execution_environment_identities=environment_identities,
             subject_checkouts=subject_checkouts,
             benchmark_case_evidence=benchmark_case_evidence,
         )
@@ -308,9 +341,22 @@ class BenchmarkPackExecutor:
                 "scoring dimensions require matching target metrics: "
                 + ", ".join(sorted(missing_dimensions))
             )
-        missing_runners = sorted(
-            {case.runner for case in benchmark_pack.cases if case.runner not in self.runners}
-        )
+        platforms = tuple(scoring_policy.required_validation_platforms)
+        if len(platforms) == 1 and not self.platform_runners:
+            missing_runners = sorted(
+                {
+                    case.runner
+                    for case in benchmark_pack.cases
+                    if case.runner not in self.runners
+                }
+            )
+        else:
+            missing_runners = sorted(
+                f"{platform}:{case.runner}"
+                for platform in platforms
+                for case in benchmark_pack.cases
+                if case.runner not in self.platform_runners.get(platform, {})
+            )
         if missing_runners:
             raise BenchmarkConfigurationError(
                 "benchmark runners are not registered: " + ", ".join(missing_runners)
@@ -323,18 +369,27 @@ class BenchmarkPackExecutor:
         snapshot_id: str,
         candidate_commit: str | None,
         benchmark_pack: BenchmarkPack,
+        validation_platforms: tuple[str, ...],
     ) -> tuple[BenchmarkCaseResult, ...]:
         results: list[BenchmarkCaseResult] = []
-        for case in benchmark_pack.cases:
-            request = BenchmarkRunRequest(
-                subject=subject,
-                subject_snapshot_id=snapshot_id,
-                candidate_commit=candidate_commit,
-                benchmark_pack_id=benchmark_pack.benchmark_pack_id,
-                case=case,
-                timeout_seconds=self.case_timeout_seconds,
-            )
-            results.append(self._run_case(self.runners[case.runner], request))
+        for platform in validation_platforms:
+            platform_map = self.platform_runners.get(platform)
+            for case in benchmark_pack.cases:
+                request = BenchmarkRunRequest(
+                    subject=subject,
+                    subject_snapshot_id=snapshot_id,
+                    candidate_commit=candidate_commit,
+                    benchmark_pack_id=benchmark_pack.benchmark_pack_id,
+                    case=case,
+                    timeout_seconds=self.case_timeout_seconds,
+                    validation_platform=platform,
+                )
+                runner = (
+                    platform_map[case.runner]
+                    if platform_map is not None
+                    else self.runners[case.runner]
+                )
+                results.append(self._run_case(runner, request))
         return tuple(results)
 
     def _run_case(
@@ -372,7 +427,16 @@ class BenchmarkPackExecutor:
             raise BenchmarkCaseFailed(
                 f"benchmark case_id mismatch: expected {request.case.case_id}, got {result.case_id}"
             )
-        return result
+        if result.execution_environment.validated_platforms != (
+            request.validation_platform,
+        ):
+            raise BenchmarkCaseFailed(
+                "benchmark runner returned evidence for a different platform: "
+                f"expected {request.validation_platform}"
+            )
+        return result.model_copy(
+            update={"validation_platform": request.validation_platform}
+        )
 
     def _validate_result_shapes(
         self,
@@ -400,24 +464,40 @@ class BenchmarkPackExecutor:
     ) -> tuple[
         ExecutionEnvironmentManifest,
         ExecutionEnvironmentIdentity,
+        tuple[ExecutionEnvironmentManifest, ...],
+        tuple[ExecutionEnvironmentIdentity, ...],
         tuple[SubjectCheckoutEvidence, ...],
     ]:
         grouped = (
             ("baseline", baseline_results),
             ("candidate", candidate_results),
         )
-        identities: dict[str, ExecutionEnvironmentIdentity] = {}
-        manifests_by_subject: dict[str, list[ExecutionEnvironmentManifest]] = {}
-        explicit_checkouts: dict[str, SubjectCheckoutEvidence] = {}
+        identities_by_platform: dict[str, ExecutionEnvironmentIdentity] = {}
+        manifests_by_subject_platform: dict[
+            tuple[str, str], list[ExecutionEnvironmentManifest]
+        ] = {}
+        all_manifests: dict[str, ExecutionEnvironmentManifest] = {}
+        explicit_checkouts: dict[tuple[str, str], SubjectCheckoutEvidence] = {}
         for subject, results in grouped:
             if not results:
                 raise BenchmarkCaseFailed(f"benchmark returned no {subject} results")
-            manifests_by_subject[subject] = []
             for result in results:
                 manifest = result.execution_environment
                 identity = manifest.identity()
-                identities[identity.execution_environment_identity_id] = identity
-                manifests_by_subject[subject].append(manifest)
+                platform = str(result.validation_platform or "").strip().lower()
+                if not platform or manifest.validated_platforms != (platform,):
+                    raise BenchmarkCaseFailed(
+                        "benchmark result is missing its selected platform binding"
+                    )
+                prior_identity = identities_by_platform.get(platform)
+                if prior_identity is not None and prior_identity != identity:
+                    raise BenchmarkCaseFailed(
+                        f"baseline and candidate must use one {platform} environment"
+                    )
+                identities_by_platform[platform] = identity
+                all_manifests[manifest.execution_environment_id] = manifest
+                key = (subject, platform)
+                manifests_by_subject_platform.setdefault(key, []).append(manifest)
                 checkout = result.subject_checkout
                 if checkout is not None:
                     if checkout.subject != subject:
@@ -431,45 +511,85 @@ class BenchmarkPackExecutor:
                         raise BenchmarkCaseFailed(
                             "subject checkout references a different environment identity"
                         )
-                    prior = explicit_checkouts.get(subject)
+                    prior = explicit_checkouts.get(key)
                     if prior is not None and prior != checkout:
                         raise BenchmarkCaseFailed(
-                            f"{subject} results returned inconsistent checkout evidence"
+                            f"{subject}:{platform} returned inconsistent checkout evidence"
                         )
-                    explicit_checkouts[subject] = checkout
-        if len(identities) != 1:
+                    explicit_checkouts[key] = checkout
+        platforms = tuple(sorted(identities_by_platform))
+        if not platforms:
             raise BenchmarkCaseFailed(
-                "baseline and candidate must run in one identical execution environment"
+                "benchmark returned no execution environment identities"
             )
-        identity = next(iter(identities.values()))
         subject_checkouts: list[SubjectCheckoutEvidence] = []
-        for subject, manifests in manifests_by_subject.items():
-            heads = {manifest.repository_head.lower() for manifest in manifests}
-            if len(heads) != 1:
-                raise BenchmarkCaseFailed(
-                    f"{subject} results returned inconsistent checkout HEADs"
-                )
-            checkout = explicit_checkouts.get(subject)
-            if checkout is None:
-                checkout = SubjectCheckoutEvidence.create(
-                    subject=subject,
-                    commit=next(iter(heads)),
-                    worktree_path=manifests[0].execution_workspace_path,
-                    execution_environment_identity_id=(
-                        identity.execution_environment_identity_id
+        for platform in platforms:
+            identity = identities_by_platform[platform]
+            for subject in ("baseline", "candidate"):
+                key = (subject, platform)
+                manifests = manifests_by_subject_platform.get(key, [])
+                if not manifests:
+                    raise BenchmarkCaseFailed(
+                        f"benchmark returned no {subject}:{platform} results"
+                    )
+                heads = {manifest.repository_head.lower() for manifest in manifests}
+                if len(heads) != 1:
+                    raise BenchmarkCaseFailed(
+                        f"{subject}:{platform} returned inconsistent checkout HEADs"
+                    )
+                checkout = explicit_checkouts.get(key)
+                if checkout is None:
+                    checkout = SubjectCheckoutEvidence.create(
+                        subject=subject,
+                        commit=next(iter(heads)),
+                        worktree_path=manifests[0].execution_workspace_path,
+                        execution_environment_identity_id=(
+                            identity.execution_environment_identity_id
+                        ),
+                        checked_out_at=datetime.now(timezone.utc),
+                    )
+                elif checkout.commit.lower() != next(iter(heads)):
+                    raise BenchmarkCaseFailed(
+                        f"{subject}:{platform} checkout does not match manifest HEAD"
+                    )
+                subject_checkouts.append(checkout)
+        representative_result = next(
+            (
+                result
+                for result in candidate_results
+                if result.validation_platform == "windows"
+            ),
+            candidate_results[0],
+        )
+        representative = representative_result.execution_environment
+        representative_identity = representative.identity()
+        environments = tuple(
+            sorted(
+                all_manifests.values(),
+                key=lambda item: (
+                    item.validated_platforms[0],
+                    item.repository_head,
+                    item.execution_environment_id,
+                ),
+            )
+        )
+        identities = tuple(
+            identities_by_platform[platform] for platform in platforms
+        )
+        return (
+            representative,
+            representative_identity,
+            environments,
+            identities,
+            tuple(
+                sorted(
+                    subject_checkouts,
+                    key=lambda item: (
+                        item.execution_environment_identity_id,
+                        item.subject,
                     ),
-                    checked_out_at=datetime.now(timezone.utc),
                 )
-            elif checkout.commit.lower() != next(iter(heads)):
-                raise BenchmarkCaseFailed(
-                    f"{subject} checkout evidence does not match manifest HEAD"
-                )
-            subject_checkouts.append(checkout)
-        # Keep the candidate manifest as the legacy report projection. Its HEAD
-        # remains available to older consumers while identity/checkouts are primary.
-        representative = candidate_results[0].execution_environment
-        return representative, identity, tuple(
-            sorted(subject_checkouts, key=lambda item: item.subject)
+            ),
         )
 
     def _aggregate_metrics(
@@ -496,17 +616,22 @@ class BenchmarkPackExecutor:
         *,
         baseline_results: tuple[BenchmarkCaseResult, ...],
         candidate_results: tuple[BenchmarkCaseResult, ...],
-        environment_identity: ExecutionEnvironmentIdentity,
         subject_checkouts: tuple[SubjectCheckoutEvidence, ...],
     ) -> tuple[BenchmarkCaseExecutionEvidence, ...]:
-        checkouts = {item.subject: item for item in subject_checkouts}
+        checkouts = {
+            (item.subject, item.execution_environment_identity_id): item
+            for item in subject_checkouts
+        }
         evidence: list[BenchmarkCaseExecutionEvidence] = []
         for subject, results in (
             ("baseline", baseline_results),
             ("candidate", candidate_results),
         ):
-            checkout = checkouts[subject]
             for result in results:
+                identity_id = (
+                    result.execution_environment.identity().execution_environment_identity_id
+                )
+                checkout = checkouts[(subject, identity_id)]
                 evidence.append(
                     BenchmarkCaseExecutionEvidence(
                         subject=subject,
@@ -516,7 +641,7 @@ class BenchmarkPackExecutor:
                             result.execution_environment.execution_environment_id
                         ),
                         execution_environment_identity_id=(
-                            environment_identity.execution_environment_identity_id
+                            identity_id
                         ),
                         subject_checkout_evidence_id=(
                             checkout.subject_checkout_evidence_id
