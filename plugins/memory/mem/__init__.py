@@ -57,6 +57,7 @@ class MemMemoryProvider(MemoryProvider):
         self._auto_sync = True
         self._prefetch_limit = 5
         self._prefetch_max_context_chars = 3500
+        self._outbox_max_attempts = 12
         self._owner_id = DEFAULT_OWNER_ID
         self._workspace_id = DEFAULT_WORKSPACE_ID
         self._redact_before_store = True
@@ -108,6 +109,9 @@ class MemMemoryProvider(MemoryProvider):
                 int(provider_config.get("prefetch_max_context_chars", 3500)),
             ),
         )
+        self._outbox_max_attempts = max(
+            1, int(provider_config.get("outbox_max_attempts", 12))
+        )
         scope = MemoryScope.create(
             kwargs.get("user_id") or provider_config.get("owner_id"),
             kwargs.get("agent_workspace") or provider_config.get("workspace_id"),
@@ -119,7 +123,8 @@ class MemMemoryProvider(MemoryProvider):
         )
         home = Path(str(kwargs.get("VoidCube_home") or "."))
         self._outbox = MemoryWriteOutbox(
-            home / "runtime" / "memory" / "write-outbox.sqlite3"
+            home / "runtime" / "memory" / "write-outbox.sqlite3",
+            max_attempts=self._outbox_max_attempts,
         )
         self._initialized = True
         if self._auto_sync:
@@ -476,6 +481,19 @@ class MemMemoryProvider(MemoryProvider):
             self._sync_wake.set()
             self._sync_thread.join(timeout=max(2.0, self._request_timeout_seconds * 3))
             self._sync_thread = None
+
+    def outbox_status(self) -> dict[str, Any]:
+        """Return durable write backlog and retry state for local monitoring."""
+        if self._outbox is None:
+            return {
+                "pending_count": 0,
+                "dead_letter_count": 0,
+                "oldest_pending_at": None,
+                "last_success_at": None,
+                "last_error": None,
+                "max_attempts": self._outbox_max_attempts,
+            }
+        return self._outbox.health_snapshot()
 
     def _background_sync(self) -> None:
         while not self._sync_stop.is_set():

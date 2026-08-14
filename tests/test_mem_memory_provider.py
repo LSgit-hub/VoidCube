@@ -538,3 +538,33 @@ def test_memory_outbox_failure_is_retained_until_exponential_retry_is_due(
     assert retry is not None
     assert retry["write_id"] == "write-1"
     assert retry["_outbox_attempts"] == 1
+
+
+@pytest.mark.unit
+def test_memory_outbox_dead_letters_permanent_failures_and_reports_health(
+    monkeypatch, tmp_path
+):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        "plugins.memory.mem.outbox.time.time",
+        lambda: clock["now"],
+    )
+    outbox = MemoryWriteOutbox(tmp_path / "outbox.sqlite3", max_attempts=2)
+    outbox.enqueue(
+        {
+            "write_id": "write-dead",
+            "session_id": "session-1",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+    outbox.mark_failed("write-dead", attempts=1, error="schema rejected")
+    outbox.mark_failed("write-dead", attempts=2, error="schema rejected")
+
+    assert outbox.next_due() is None
+    health = outbox.health_snapshot()
+    assert health["pending_count"] == 0
+    assert health["dead_letter_count"] == 1
+    assert health["last_success_at"] is None
+    assert outbox.requeue_dead_letter("write-dead") is True
+    assert outbox.next_due()["write_id"] == "write-dead"

@@ -179,6 +179,12 @@ class SemanticMemoryIndex:
             "last_error": self._last_error,
         }
 
+    def pending_count(self) -> int:
+        """Return the number of active records not indexed for this model."""
+        if not self.enabled:
+            return 0
+        return len(self._pending_records(1_000_000))
+
     def index_pending(self, limit: int | None = None) -> int:
         with self._index_lock:
             return self._index_pending_locked(limit)

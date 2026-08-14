@@ -439,6 +439,7 @@ def recall_memories(
                 workspace_id=workspace_id,
                 source_domains=source_domains,
                 existing_ids=existing_ids,
+                semantic_matches=semantic_matches,
             )
         )
 
@@ -892,6 +893,8 @@ def _tier2_candidates(
                 "identity_layer": row[16],
                 "evidence_refs": _json_list(row[17]),
                 "memory_domain": row[18],
+                "raw_score": round(score, 6),
+                "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -1025,6 +1028,8 @@ def _profile_candidates(
                 "evidence_refs": _json_list(row[10]),
                 "source_turns": _json_list(row[11]),
                 "memory_domain": row[12],
+                "raw_score": round(score, 6),
+                "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -1141,6 +1146,8 @@ def _archive_candidates(
                 "source_turns": [row[0]],
                 "evidence_refs": [*_json_list(row[6]), *_json_list(row[7])],
                 "memory_domain": row[8],
+                "raw_score": round(score, 6),
+                "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -1165,6 +1172,7 @@ def _graph_candidates(
     workspace_id: str,
     source_domains: Sequence[str],
     existing_ids: set[str],
+    semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
     """Entity-graph expansion: surface memories connected to query entities.
 
@@ -1215,6 +1223,13 @@ def _graph_candidates(
         memory_id = str(row[0])
         if memory_id in existing_ids:
             continue
+        topics = _json_list(row[8])
+        entities = _json_list(row[9])
+        searchable_text = " ".join(
+            [str(row[2] or ""), str(row[3] or ""), *topics]
+        )
+        lexical, matched = _lexical_score(plan, searchable_text)
+        semantic = float(semantic_matches.get(("compressed", memory_id), 0.0))
         proximity = float(expanded.get(memory_id, 0.0))
         dynamic_weight = _dynamic_weight(
             float(row[15] or 0.0),
@@ -1225,10 +1240,15 @@ def _graph_candidates(
         )
         importance = float(row[6] or 0.0)
         recency = _recency_score(row[5], now)
-        score = (
-            0.55 * proximity
-            + 0.25 * dynamic_weight
-            + 0.20 * importance
+        query_relevance = max(lexical, semantic)
+        # Graph expansion is an exploration signal.  It may surface a memory
+        # with no direct lexical hit, but it must not outrank a task-relevant
+        # result solely because the connected memory is popular or important.
+        raw_score = (
+            0.55 * query_relevance
+            + 0.25 * proximity
+            + 0.10 * dynamic_weight
+            + 0.05 * importance
             + 0.05 * recency
         )
         results.append(
@@ -1240,16 +1260,20 @@ def _graph_candidates(
                 "summary": row[3],
                 "timespan_start": row[4],
                 "timespan_end": row[5],
-                "topics": _json_list(row[8]),
-                "entities": _json_list(row[9]),
+                "topics": topics,
+                "entities": entities,
                 "source_turns": _json_list(row[10]),
                 "identity_layer": row[16],
                 "evidence_refs": _json_list(row[17]),
                 "memory_domain": row[18],
-                "score": round(min(score, 1.0), 6),
-                "matched_terms": list(query_entities),
+                "raw_score": round(raw_score, 6),
+                "normalized_score": round(min(raw_score, 1.0), 6),
+                "score": round(min(raw_score, 1.0), 6),
+                "matched_terms": [*query_entities, *matched],
                 "signals": {
                     "graph_proximity": round(proximity, 6),
+                    "lexical": round(lexical, 6),
+                    "semantic": round(semantic, 6),
                     "dynamic_weight": round(dynamic_weight, 6),
                     "importance": round(importance, 6),
                     "recency": round(recency, 6),
@@ -1378,6 +1402,8 @@ def _tier1_candidates(
                 "session_id": row[1],
                 "source_turns": [row[0]],
                 "memory_domain": row[7],
+                "raw_score": round(score, 6),
+                "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -1596,7 +1622,7 @@ def _deduplicate_and_rank(
     ranked = sorted(
         candidates,
         key=lambda item: (
-            float(item.get("score") or 0.0),
+            float(item.get("raw_score", item.get("score")) or 0.0),
             _structural_rank(item),
             str(item.get("timespan_start") or item.get("timestamp") or ""),
         ),
@@ -1772,10 +1798,15 @@ def _apply_feedback_scores(
         feedback = counts.get(str(item.get("id") or ""), {})
         delta = sum(verdict_weights.get(verdict, 0.0) * count for verdict, count in feedback.items())
         delta = max(-0.65, min(0.20, delta))
+        adjusted_raw_score = float(
+            item.get("raw_score", item.get("score") or 0.0)
+        ) + delta
         item["score"] = round(
-            max(0.0, min(1.0, float(item.get("score") or 0.0) + delta)),
+            max(0.0, min(1.0, adjusted_raw_score)),
             6,
         )
+        item["raw_score"] = round(adjusted_raw_score, 6)
+        item["normalized_score"] = item["score"]
         signals = dict(item.get("signals") or {})
         signals["feedback_delta"] = round(delta, 6)
         signals["feedback_counts"] = feedback

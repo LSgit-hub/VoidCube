@@ -313,12 +313,21 @@ async def test_recall_mixes_recent_tier1_and_durable_tier2(tmp_path):
     assert "Relevant recalled memory:" in result["context"]
     assert "id=event-migration" in result["context"]
     assert "score=" in result["context"]
+    assert all(
+        {"raw_score", "normalized_score", "score"} <= set(item)
+        for item in result["results"]
+    )
     assert result["trace_id"]
     health = await service.health_check()
     assert health["recall"]["requests"] == 1
     assert health["recall"]["hits"] == 1
     assert health["recall"]["last_result_count"] == 2
     assert health["recall"]["last_latency_ms"] >= 0
+    assert health["service_reachable"] is True
+    assert health["database"]["readable"] is True
+    assert health["database"]["integrity"] == "ok"
+    assert health["database"]["counts"]["turns"] >= 2
+    assert "pending_count" in health["semantic_index"]
 
 
 @pytest.mark.asyncio

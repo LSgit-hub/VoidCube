@@ -249,6 +249,43 @@ async def test_graph_recall_surfaces_neighbor_memory_beyond_lexical_match(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_graph_expansion_cannot_outrank_direct_task_relevance(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_compressed(
+        service,
+        memory_id="diagnostic-direct",
+        title="数据库故障诊断",
+        summary="数据库迁移失败的根因是校验顺序错误。",
+        timestamp=now,
+        topics=["数据库", "诊断"],
+        entities=["数据库", "星子"],
+    )
+    _insert_compressed(
+        service,
+        memory_id="identity-neighbor",
+        title="身份锚点",
+        summary="持续身份与信任关系的背景说明。",
+        timestamp=now,
+        topics=["身份"],
+        entities=["数据库", "信任"],
+    )
+    _rebuild_graph(service)
+
+    result = await service.recall(
+        RecallRequest(query="数据库迁移故障诊断", limit=2)
+    )
+
+    assert result["results"][0]["id"] == "diagnostic-direct"
+    graph_items = [
+        item for item in result["results"] if item.get("id") == "identity-neighbor"
+    ]
+    assert graph_items
+    assert graph_items[0]["signals"]["lexical"] < result["results"][0]["signals"]["lexical"]
+    assert graph_items[0]["score"] < result["results"][0]["score"]
+
+
+@pytest.mark.asyncio
 async def test_graph_introspection_routes_and_scope(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)

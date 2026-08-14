@@ -1731,11 +1731,21 @@ class MemoryApplicationService:
         return result
 
     async def health_check(self):
+        database = await asyncio.to_thread(self._database_health_snapshot)
+        semantic = await asyncio.to_thread(self._semantic_health_snapshot)
+        maintenance = {
+            "last_effective_activity_at": self._last_effective_activity_at,
+            "last_rule_runs": dict(self._last_rule_run),
+            "last_tier2_bridge_result": self._last_tier2_bridge_result,
+        }
+        service_healthy = bool(self._gateway_registration_healthy)
+        database_healthy = database["readable"] and database["integrity"] == "ok"
         return {
             "status": (
-                "healthy" if self._gateway_registration_healthy else "degraded"
+                "healthy" if service_healthy and database_healthy else "degraded"
             ),
             "service": "memory-service",
+            "service_reachable": True,
             "gateway_registration": {
                 "healthy": self._gateway_registration_healthy,
                 "service_id": self._gateway_service_id,
@@ -1756,7 +1766,60 @@ class MemoryApplicationService:
                 "last_trace_id": self._last_recall_trace_id,
                 "last_status": self._last_recall_status,
             },
+            "database": database,
+            "semantic_index": semantic,
+            "maintenance": maintenance,
         }
+
+    def _database_health_snapshot(self) -> dict[str, Any]:
+        counts: dict[str, int] = {}
+        readable = False
+        integrity = "unavailable"
+        try:
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                readable = True
+                integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
+                integrity = str(integrity_row[0] if integrity_row else "missing")
+                for table in (
+                    "sessions",
+                    "turns",
+                    "turns_archive",
+                    "compressed_memories",
+                    "profile_memories",
+                ):
+                    counts[table] = int(
+                        conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    )
+            finally:
+                conn.close()
+        except Exception as exc:
+            return {
+                "readable": False,
+                "integrity": "error",
+                "path": str(self._db_path),
+                "counts": counts,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return {
+            "readable": readable,
+            "integrity": integrity,
+            "path": str(self._db_path),
+            "counts": counts,
+            "error": None,
+        }
+
+    def _semantic_health_snapshot(self) -> dict[str, Any]:
+        try:
+            status = self._semantic_index.status()
+            status["pending_count"] = self._semantic_index.pending_count()
+            return status
+        except Exception as exc:
+            return {
+                "enabled": False,
+                "pending_count": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     async def get_mem_usage(self) -> Dict[str, Any]:
         """Return cumulative LLM token usage for the memory model.
