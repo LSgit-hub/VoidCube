@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import platform
 import shutil
@@ -60,18 +59,17 @@ def dependency_fingerprint(workspace: str | Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def capture_host_runtime_tools(workspace: str | Path) -> tuple[RuntimeToolIdentity, ...]:
+def capture_host_runtime_tools(
+    workspace: str | Path,
+    *,
+    python_executable: str | Path | None = None,
+) -> tuple[RuntimeToolIdentity, ...]:
     root = Path(workspace).resolve()
+    python_path = Path(python_executable or sys.executable).resolve()
     identities = [
         _host_command_identity("git", ("git", "--version"), cwd=root),
-        RuntimeToolIdentity(
-            scope="host",
-            name="python",
-            available=True,
-            executable=str(Path(sys.executable).resolve()),
-            version=platform.python_version(),
-        ),
-        _host_pytest_identity(),
+        _host_python_identity(python_path, cwd=root),
+        _host_pytest_identity(python_path, cwd=root),
         _host_command_identity("node", ("node", "--version"), cwd=root),
         _host_command_identity("npm", ("npm", "--version"), cwd=root),
     ]
@@ -82,6 +80,7 @@ def capture_host_environment_manifest(
     workspace: str | Path,
     *,
     repository_head: str | None = None,
+    python_executable: str | Path | None = None,
 ) -> ExecutionEnvironmentManifest:
     root = Path(workspace).resolve()
     head = str(repository_head or _git_head(root)).strip()
@@ -97,7 +96,7 @@ def capture_host_environment_manifest(
         path_mappings=(
             WorkspacePathMapping(host_path=str(root), execution_path=str(root)),
         ),
-        tools=capture_host_runtime_tools(root),
+        tools=capture_host_runtime_tools(root, python_executable=python_executable),
         repository_head=head,
         dependency_fingerprint=dependency_fingerprint(root),
         validated_platforms=(_platform_key(system),),
@@ -176,18 +175,54 @@ def _host_command_identity(
     )
 
 
-def _host_pytest_identity() -> RuntimeToolIdentity:
-    try:
-        version = importlib.metadata.version("pytest")
-    except importlib.metadata.PackageNotFoundError:
+def _host_python_identity(python_executable: Path, *, cwd: Path) -> RuntimeToolIdentity:
+    version = _command_version((str(python_executable), "--version"), cwd=cwd)
+    if not version:
+        return RuntimeToolIdentity(scope="host", name="python", available=False)
+    return RuntimeToolIdentity(
+        scope="host",
+        name="python",
+        available=True,
+        executable=str(python_executable),
+        version=version,
+    )
+
+
+def _host_pytest_identity(
+    python_executable: Path,
+    *,
+    cwd: Path,
+) -> RuntimeToolIdentity:
+    version = _command_version(
+        (str(python_executable), "-m", "pytest", "--version"),
+        cwd=cwd,
+    )
+    if not version:
         return RuntimeToolIdentity(scope="host", name="pytest", available=False)
     return RuntimeToolIdentity(
         scope="host",
         name="pytest",
         available=True,
-        executable=f"{Path(sys.executable).resolve()} -m pytest",
+        executable=f"{python_executable} -m pytest",
         version=version,
     )
+
+
+def _command_version(command: tuple[str, ...], *, cwd: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = (result.stdout or result.stderr).strip().splitlines()
+    if result.returncode != 0 or not lines:
+        return None
+    return lines[0][:300]
 
 
 def _execution_tool_identity(name: str, value: object) -> RuntimeToolIdentity:
