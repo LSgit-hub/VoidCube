@@ -15,9 +15,15 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.governor import GovernorRequest
+from systems.evolution_authoring import (
+    AuthoringCommandEvidence,
+    EvolutionAuthoringResult,
+)
 from systems.evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
     BenchmarkCase,
+    BenchmarkCaseExecutionEvidence,
+    BenchmarkCommandEvidence,
     BenchmarkPack,
     ExperimentResult,
     ExperimentSpec,
@@ -27,6 +33,7 @@ from systems.evolution_evaluation import (
     MetricValue,
     ScoringDimension,
     ScoringPolicy,
+    SubjectCheckoutEvidence,
     ExecutionEnvironmentManifest,
     capture_host_environment_manifest,
 )
@@ -120,20 +127,28 @@ def _create_running_body_improvement_task(
     target_paths: list[str],
     learning_refs: list[dict] | None = None,
 ):
-    authorization = _seed_body_evaluation_authorization(supervisor)
+    authorization = _seed_body_evaluation_authorization(
+        supervisor,
+        changed_files=tuple(target_paths),
+    )
     authorization_fields = {
         key: authorization[key]
         for key in (
             "experiment_result_id",
             "experiment_spec_id",
+            "authoring_result_id",
             "evaluated_baseline_commit",
             "evaluated_candidate_commit",
+            "candidate_ref",
+            "changed_files",
             "baseline_snapshot_id",
             "candidate_snapshot_id",
             "benchmark_pack_id",
             "scoring_policy_id",
             "knowledge_ids",
             "execution_environment_id",
+            "authoring_environment_manifest_id",
+            "authoring_environment_identity_id",
             "validation_scope",
             "validated_platforms",
         )
@@ -186,7 +201,11 @@ def _create_running_body_improvement_task(
     )
 
 
-def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
+def _seed_body_evaluation_authorization(
+    supervisor: Supervisor,
+    *,
+    changed_files: tuple[str, ...] = ("agent/stream_handler.py",),
+) -> dict:
     now = datetime(2026, 8, 14, 6, 0, tzinfo=timezone.utc)
     baseline = SelfCognitionSnapshot.create(
         body_id="body-baseline",
@@ -243,7 +262,30 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
         observe_threshold=0.5,
         created_at=now,
     )
+    authoring = EvolutionAuthoringResult.create(
+        task_id="body-runtime-test",
+        status="candidate_created",
+        baseline_commit="b" * 40,
+        candidate_commit="a" * 40,
+        candidate_ref="refs/voidcube/candidates/body-runtime-test",
+        changed_files=changed_files,
+        environment_manifest_id=_HOST_ENVIRONMENT.execution_environment_id,
+        environment_identity_id=(
+            _HOST_ENVIRONMENT.identity().execution_environment_identity_id
+        ),
+        command_evidence=(
+            AuthoringCommandEvidence(
+                command="pytest tests/test_stream_handler.py",
+                exit_code=0,
+                output="1 passed",
+            ),
+        ),
+        agent_summary="Improved stream handling",
+        started_at=now,
+        finished_at=now,
+    )
     spec = ExperimentSpec.create(
+        authoring_result_id=authoring.authoring_result_id,
         baseline_snapshot_id=baseline.snapshot_id,
         candidate_commit="a" * 40,
         candidate_snapshot_id=candidate.snapshot_id,
@@ -253,6 +295,31 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
         benchmark_pack_id=pack.benchmark_pack_id,
         scoring_policy_id=policy.scoring_policy_id,
         created_at=now,
+    )
+    environment_identity = _HOST_ENVIRONMENT.identity()
+    baseline_environment = ExecutionEnvironmentManifest.create(
+        **{
+            **_HOST_ENVIRONMENT.content_payload(),
+            "repository_head": "b" * 40,
+        }
+    )
+    baseline_checkout = SubjectCheckoutEvidence.create(
+        subject="baseline",
+        commit="b" * 40,
+        worktree_path=_HOST_ENVIRONMENT.execution_workspace_path,
+        execution_environment_identity_id=(
+            environment_identity.execution_environment_identity_id
+        ),
+        checked_out_at=now,
+    )
+    candidate_checkout = SubjectCheckoutEvidence.create(
+        subject="candidate",
+        commit="a" * 40,
+        worktree_path=_HOST_ENVIRONMENT.execution_workspace_path,
+        execution_environment_identity_id=(
+            environment_identity.execution_environment_identity_id
+        ),
+        checked_out_at=now,
     )
     result = ExperimentResult.create(
         experiment_spec_id=spec.experiment_spec_id,
@@ -271,6 +338,46 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
         execution_environment=_HOST_ENVIRONMENT,
         verdict="promote",
         completed_at=now,
+        execution_environment_identity=environment_identity,
+        subject_checkouts=(baseline_checkout, candidate_checkout),
+        benchmark_case_evidence=(
+            BenchmarkCaseExecutionEvidence(
+                subject="baseline",
+                case_id="case-1",
+                commands=(
+                    BenchmarkCommandEvidence(
+                        command="pytest tests/test_stream_handler.py",
+                        exit_code=0,
+                        output_summary="1 passed",
+                    ),
+                ),
+                execution_environment_id=baseline_environment.execution_environment_id,
+                execution_environment_identity_id=(
+                    environment_identity.execution_environment_identity_id
+                ),
+                subject_checkout_evidence_id=(
+                    baseline_checkout.subject_checkout_evidence_id
+                ),
+            ),
+            BenchmarkCaseExecutionEvidence(
+                subject="candidate",
+                case_id="case-1",
+                commands=(
+                    BenchmarkCommandEvidence(
+                        command="pytest tests/test_stream_handler.py",
+                        exit_code=0,
+                        output_summary="1 passed",
+                    ),
+                ),
+                execution_environment_id=_HOST_ENVIRONMENT.execution_environment_id,
+                execution_environment_identity_id=(
+                    environment_identity.execution_environment_identity_id
+                ),
+                subject_checkout_evidence_id=(
+                    candidate_checkout.subject_checkout_evidence_id
+                ),
+            ),
+        ),
     )
     verifier = supervisor._evolution_evaluation_governance_verifier
     verifier.self_cognition_repository.put(baseline)
@@ -278,6 +385,7 @@ def _seed_body_evaluation_authorization(supervisor: Supervisor) -> dict:
     verifier.knowledge_repository.put(knowledge)
     verifier.evaluation_repository.put_benchmark_pack(pack)
     verifier.evaluation_repository.put_scoring_policy(policy)
+    verifier.authoring_repository.put(authoring)
     verifier.evaluation_repository.put_experiment_spec(spec)
     verifier.evaluation_repository.put_experiment_result(result)
     return verifier.verify(result.experiment_result_id)

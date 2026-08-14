@@ -14,6 +14,7 @@ from systems.evolution_evaluation import (
     BenchmarkCaseFailed,
     BenchmarkCaseResult,
     BenchmarkCaseTimedOut,
+    BenchmarkCommandEvidence,
     BenchmarkConfigurationError,
     BenchmarkPack,
     BenchmarkPackExecutor,
@@ -99,7 +100,16 @@ def _runner(request):
                 evidence_refs=(f"{request.subject}:{request.case.case_id}",),
             ),
         ),
+        command_evidence=(_command_evidence(request),),
         evidence_refs=(f"evidence:{request.subject}:{request.case.case_id}",),
+    )
+
+
+def _command_evidence(request):
+    return BenchmarkCommandEvidence(
+        command=f"pytest {request.case.input_ref}",
+        exit_code=0,
+        output_summary=f"{request.subject}:{request.case.case_id}:passed",
     )
 
 
@@ -135,6 +145,18 @@ def test_executor_runs_same_pack_for_both_subjects_and_promotes():
         EXECUTION_ENVIRONMENT_GATE,
     }
     assert all(gate.passed for gate in result.hard_gate_results)
+    assert result.benchmark_case_evidence is not None
+    assert len(result.benchmark_case_evidence) == 4
+    assert {
+        (item.subject, item.case_id)
+        for item in result.benchmark_case_evidence
+    } == {
+        ("baseline", "case-1"),
+        ("baseline", "case-2"),
+        ("candidate", "case-1"),
+        ("candidate", "case-2"),
+    }
+    assert all(item.commands[0].exit_code == 0 for item in result.benchmark_case_evidence)
 
 
 def test_platform_coverage_is_a_hard_gate():
@@ -238,6 +260,7 @@ def test_missing_required_gate_rejects_without_fabricating_success():
             case_id=request.case.case_id,
             execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
+            command_evidence=(_command_evidence(request),),
         )
 
     result = BenchmarkPackExecutor({"quality": no_gate_runner}).execute(
@@ -263,6 +286,7 @@ def test_disallowed_regression_is_recorded_and_rejected():
             execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+            command_evidence=(_command_evidence(request),),
         )
 
     result = BenchmarkPackExecutor({"quality": regressing_runner}).execute(
@@ -292,6 +316,7 @@ def test_allowed_regression_can_observe_when_score_is_partial():
             execution_environment=ENVIRONMENT,
             metrics=(MetricValue(metric="correctness", value=value, unit="ratio"),),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+            command_evidence=(_command_evidence(request),),
         )
 
     result = BenchmarkPackExecutor({"quality": slightly_regressing_runner}).execute(
@@ -346,6 +371,7 @@ def test_metric_shape_drift_and_missing_runner_are_rejected():
             execution_environment=ENVIRONMENT,
             metrics=tuple(metrics),
             hard_gate_results=(HardGateResult(gate="tests", passed=True),),
+            command_evidence=(_command_evidence(request),),
         )
 
     with pytest.raises(BenchmarkCaseFailed, match="metric shape"):

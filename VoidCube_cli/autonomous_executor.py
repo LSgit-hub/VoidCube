@@ -107,6 +107,21 @@ def build_autonomous_task_prompt(
         experiment_result_id = str(
             constraints.get("experiment_result_id") or ""
         ).strip()
+        authoring_result_id = str(
+            constraints.get("authoring_result_id") or ""
+        ).strip()
+        candidate_ref = str(constraints.get("candidate_ref") or "").strip()
+        authorized_changed_files = tuple(
+            str(item).strip()
+            for item in constraints.get("changed_files") or []
+            if str(item).strip()
+        )
+        authoring_environment_manifest_id = str(
+            constraints.get("authoring_environment_manifest_id") or ""
+        ).strip()
+        authoring_environment_identity_id = str(
+            constraints.get("authoring_environment_identity_id") or ""
+        ).strip()
         evaluated_environment_id = str(
             constraints.get("execution_environment_id") or ""
         ).strip()
@@ -123,6 +138,11 @@ def build_autonomous_task_prompt(
             and evaluated_baseline_commit
             and evaluated_candidate_commit
             and experiment_result_id
+            and authoring_result_id
+            and candidate_ref
+            and authorized_changed_files
+            and authoring_environment_manifest_id
+            and authoring_environment_identity_id
             and evaluated_environment_id
             and evaluated_platforms
         ):
@@ -168,6 +188,11 @@ def build_autonomous_task_prompt(
         if max_files:
             prompt_parts.append(f"Max files changed: {max_files}")
         prompt_parts.append(f"ExperimentResult: {experiment_result_id}")
+        prompt_parts.append(f"AuthoringResult: {authoring_result_id}")
+        prompt_parts.append(f"Candidate ref: {candidate_ref}")
+        prompt_parts.append(
+            "Authoring changed files: " + ", ".join(authorized_changed_files)
+        )
         prompt_parts.append(
             f"Evaluated environment: {evaluated_environment_id} "
             f"(platforms: {', '.join(evaluated_platforms)})"

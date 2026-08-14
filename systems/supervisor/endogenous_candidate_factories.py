@@ -245,11 +245,20 @@ def evaluation_authorization_fields(
     return {
         "experiment_result_id": authorization.get("experiment_result_id"),
         "experiment_spec_id": authorization.get("experiment_spec_id"),
+        "authoring_result_id": authorization.get("authoring_result_id"),
         "evaluated_baseline_commit": authorization.get(
             "evaluated_baseline_commit"
         ),
         "evaluated_candidate_commit": authorization.get(
             "evaluated_candidate_commit"
+        ),
+        "candidate_ref": authorization.get("candidate_ref"),
+        "changed_files": list(authorization.get("changed_files") or []),
+        "authoring_environment_manifest_id": authorization.get(
+            "authoring_environment_manifest_id"
+        ),
+        "authoring_environment_identity_id": authorization.get(
+            "authoring_environment_identity_id"
         ),
         "baseline_snapshot_id": authorization.get("baseline_snapshot_id"),
         "candidate_snapshot_id": authorization.get("candidate_snapshot_id"),

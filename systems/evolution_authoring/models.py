@@ -160,6 +160,8 @@ class _EvolutionAuthoringResultContent(_FrozenModel):
             raise ValueError(
                 "successful authoring requires candidate and environment evidence"
             )
+        if success and self.candidate_ref != f"refs/voidcube/candidates/{self.task_id}":
+            raise ValueError("successful authoring requires the canonical candidate ref")
         if not success and (self.candidate_commit or self.candidate_ref):
             raise ValueError("failed authoring cannot publish a candidate")
         if success and (self.error_code or self.error_reason):

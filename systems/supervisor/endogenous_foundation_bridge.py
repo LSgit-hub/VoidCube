@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from systems.evolution_authoring import JsonEvolutionAuthoringRepository
 from systems.evolution_evaluation import JsonEvaluationRepository
 from systems.research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
 from systems.self_cognition import JsonSelfCognitionRepository
@@ -53,6 +54,7 @@ class EndogenousFoundationReadOnlyProjection:
         self_cognition_repository: Any,
         knowledge_repository: Any,
         evaluation_repository: Any,
+        authoring_repository: Any,
         now: Callable[[], datetime] | None = None,
         shadow_policy: FoundationShadowPolicy | None = None,
     ) -> None:
@@ -63,6 +65,7 @@ class EndogenousFoundationReadOnlyProjection:
             evaluation_repository=evaluation_repository,
             knowledge_repository=knowledge_repository,
             self_cognition_repository=self_cognition_repository,
+            authoring_repository=authoring_repository,
         )
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._shadow_policy = shadow_policy or FoundationShadowPolicy()
@@ -85,6 +88,9 @@ class EndogenousFoundationReadOnlyProjection:
             ),
             evaluation_repository=JsonEvaluationRepository(
                 foundation_root / "evaluation"
+            ),
+            authoring_repository=JsonEvolutionAuthoringRepository(
+                foundation_root / "authoring"
             ),
             now=now,
             shadow_policy=shadow_policy,

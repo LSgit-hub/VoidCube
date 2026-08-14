@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from systems.evolution_evaluation.models import (
     BenchmarkCase,
+    BenchmarkCaseExecutionEvidence,
+    BenchmarkCommandEvidence,
     BenchmarkPack,
     ExecutionEnvironmentIdentity,
     ExecutionEnvironmentManifest,
@@ -65,6 +67,7 @@ class BenchmarkCaseResult(_FrozenModel):
     metrics: tuple[MetricValue, ...] = Field(min_length=1)
     execution_environment: ExecutionEnvironmentManifest
     hard_gate_results: tuple[HardGateResult, ...] = ()
+    command_evidence: tuple[BenchmarkCommandEvidence, ...] = Field(min_length=1)
     evidence_refs: tuple[str, ...] = ()
     subject_checkout: SubjectCheckoutEvidence | None = None
 
@@ -140,6 +143,12 @@ class BenchmarkPackExecutor:
                 baseline_results=baseline_results,
                 candidate_results=candidate_results,
             )
+        )
+        benchmark_case_evidence = self._build_case_evidence(
+            baseline_results=baseline_results,
+            candidate_results=candidate_results,
+            environment_identity=environment_identity,
+            subject_checkouts=subject_checkouts,
         )
         expected_identity_id = experiment_spec.execution_environment_identity_id
         if (
@@ -227,6 +236,7 @@ class BenchmarkPackExecutor:
             completed_at=completed,
             execution_environment_identity=environment_identity,
             subject_checkouts=subject_checkouts,
+            benchmark_case_evidence=benchmark_case_evidence,
         )
 
     def execute_and_store(
@@ -480,6 +490,41 @@ class BenchmarkPackExecutor:
             )
             for name in sorted(totals)
         )
+
+    @staticmethod
+    def _build_case_evidence(
+        *,
+        baseline_results: tuple[BenchmarkCaseResult, ...],
+        candidate_results: tuple[BenchmarkCaseResult, ...],
+        environment_identity: ExecutionEnvironmentIdentity,
+        subject_checkouts: tuple[SubjectCheckoutEvidence, ...],
+    ) -> tuple[BenchmarkCaseExecutionEvidence, ...]:
+        checkouts = {item.subject: item for item in subject_checkouts}
+        evidence: list[BenchmarkCaseExecutionEvidence] = []
+        for subject, results in (
+            ("baseline", baseline_results),
+            ("candidate", candidate_results),
+        ):
+            checkout = checkouts[subject]
+            for result in results:
+                evidence.append(
+                    BenchmarkCaseExecutionEvidence(
+                        subject=subject,
+                        case_id=result.case_id,
+                        commands=result.command_evidence,
+                        execution_environment_id=(
+                            result.execution_environment.execution_environment_id
+                        ),
+                        execution_environment_identity_id=(
+                            environment_identity.execution_environment_identity_id
+                        ),
+                        subject_checkout_evidence_id=(
+                            checkout.subject_checkout_evidence_id
+                        ),
+                        evidence_refs=result.evidence_refs,
+                    )
+                )
+        return tuple(evidence)
 
     def _aggregate_hard_gates(
         self,

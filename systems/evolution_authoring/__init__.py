@@ -12,6 +12,13 @@ from systems.evolution_authoring.executor import (
     AuthoringAgent,
     EvolutionAuthoringExecutor,
 )
+from systems.evolution_authoring.repository import (
+    EvolutionAuthoringImmutableConflict,
+    EvolutionAuthoringRecordCorrupted,
+    EvolutionAuthoringRepository,
+    EvolutionAuthoringRepositoryError,
+    JsonEvolutionAuthoringRepository,
+)
 
 __all__ = [
     "AuthoringAgentReport",
@@ -19,7 +26,12 @@ __all__ = [
     "AuthoringCommandEvidence",
     "EvolutionAuthoringContext",
     "EvolutionAuthoringExecutor",
+    "EvolutionAuthoringImmutableConflict",
+    "EvolutionAuthoringRecordCorrupted",
+    "EvolutionAuthoringRepository",
+    "EvolutionAuthoringRepositoryError",
     "EvolutionAuthoringResult",
     "EvolutionAuthoringSpec",
+    "JsonEvolutionAuthoringRepository",
     "candidate_ref_for_task",
 ]

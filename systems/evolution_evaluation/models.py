@@ -240,6 +240,29 @@ class SubjectCheckoutEvidence(_SubjectCheckoutEvidenceContent):
         return self
 
 
+class BenchmarkCommandEvidence(_FrozenModel):
+    command: str = Field(min_length=1)
+    exit_code: int
+    output_summary: str = Field(min_length=1, max_length=50_000)
+    timed_out: bool = False
+
+
+class BenchmarkCaseExecutionEvidence(_FrozenModel):
+    subject: Literal["baseline", "candidate"]
+    case_id: str = Field(min_length=1)
+    commands: tuple[BenchmarkCommandEvidence, ...] = Field(min_length=1)
+    execution_environment_id: str = Field(
+        pattern=r"^execution-environment-[0-9a-f]{64}$"
+    )
+    execution_environment_identity_id: str = Field(
+        pattern=r"^execution-environment-identity-[0-9a-f]{64}$"
+    )
+    subject_checkout_evidence_id: str = Field(
+        pattern=r"^subject-checkout-[0-9a-f]{64}$"
+    )
+    evidence_refs: tuple[str, ...] = ()
+
+
 class BenchmarkCase(_FrozenModel):
     case_id: str = Field(min_length=1)
     runner: str = Field(min_length=1)
@@ -362,6 +385,10 @@ class AllowedRegression(_FrozenModel):
 
 class _ExperimentSpecContent(_FrozenModel):
     schema_version: Literal[1] = SCHEMA_VERSION
+    authoring_result_id: str | None = Field(
+        default=None,
+        pattern=r"^evolution-authoring-result-[0-9a-f]{64}$",
+    )
     baseline_snapshot_id: str = Field(pattern=r"^self-cognition-[0-9a-f]{64}$")
     candidate_commit: str = Field(min_length=1)
     candidate_snapshot_id: str = Field(pattern=r"^self-cognition-[0-9a-f]{64}$")
@@ -417,7 +444,12 @@ class ExperimentSpec(_ExperimentSpecContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        _validate_address(self, "experiment_spec_id", "experiment-spec-")
+        _validate_address_with_legacy_optional_fields(
+            self,
+            "experiment_spec_id",
+            "experiment-spec-",
+            ("authoring_result_id",),
+        )
         return self
 
 
@@ -458,6 +490,7 @@ class _ExperimentResultContent(_FrozenModel):
     completed_at: datetime
     execution_environment_identity: ExecutionEnvironmentIdentity | None = None
     subject_checkouts: tuple[SubjectCheckoutEvidence, ...] = ()
+    benchmark_case_evidence: tuple[BenchmarkCaseExecutionEvidence, ...] | None = None
 
     @field_validator("completed_at")
     @classmethod
@@ -501,6 +534,38 @@ class _ExperimentResultContent(_FrozenModel):
                     "execution environment identity does not match the manifest"
                 )
             _require_unique("subject checkout", (item.subject for item in self.subject_checkouts))
+        if self.benchmark_case_evidence is not None:
+            _require_unique(
+                "benchmark case evidence",
+                (
+                    f"{item.subject}:{item.case_id}"
+                    for item in self.benchmark_case_evidence
+                ),
+            )
+            if self.execution_environment_identity is None:
+                raise ValueError(
+                    "benchmark case evidence requires an execution environment identity"
+                )
+            checkouts = {item.subject: item for item in self.subject_checkouts}
+            if set(checkouts) != {"baseline", "candidate"}:
+                raise ValueError(
+                    "benchmark case evidence requires baseline and candidate checkouts"
+                )
+            identity_id = (
+                self.execution_environment_identity.execution_environment_identity_id
+            )
+            for evidence in self.benchmark_case_evidence:
+                if evidence.execution_environment_identity_id != identity_id:
+                    raise ValueError(
+                        "benchmark case evidence references a different environment identity"
+                    )
+                if (
+                    evidence.subject_checkout_evidence_id
+                    != checkouts[evidence.subject].subject_checkout_evidence_id
+                ):
+                    raise ValueError(
+                        "benchmark case evidence references a different subject checkout"
+                    )
         return self
 
 
@@ -523,7 +588,12 @@ class ExperimentResult(_ExperimentResultContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        _validate_address(self, "experiment_result_id", "experiment-result-")
+        _validate_address_with_legacy_optional_fields(
+            self,
+            "experiment_result_id",
+            "experiment-result-",
+            ("benchmark_case_evidence",),
+        )
         return self
 
 

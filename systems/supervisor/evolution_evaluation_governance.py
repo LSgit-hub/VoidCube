@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from systems.evolution_authoring import JsonEvolutionAuthoringRepository
 from systems.evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
     JsonEvaluationRepository,
@@ -26,6 +27,7 @@ class EvolutionEvaluationGovernanceVerifier:
     evaluation_repository: Any
     knowledge_repository: Any
     self_cognition_repository: Any
+    authoring_repository: Any
 
     @classmethod
     def from_root(cls, root: str | Path) -> "EvolutionEvaluationGovernanceVerifier":
@@ -39,6 +41,9 @@ class EvolutionEvaluationGovernanceVerifier:
             ),
             self_cognition_repository=JsonSelfCognitionRepository(
                 foundation_root / "self-cognition"
+            ),
+            authoring_repository=JsonEvolutionAuthoringRepository(
+                foundation_root / "authoring"
             ),
         )
 
@@ -147,6 +152,33 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
                 experiment_spec_id=spec.experiment_spec_id,
             )
+        authoring_result_id = str(spec.authoring_result_id or "").strip()
+        if not authoring_result_id:
+            return _rejection(
+                "authoring_result_missing",
+                experiment_result_id=result_id,
+                experiment_spec_id=spec.experiment_spec_id,
+            )
+        authoring = self._read_reference(
+            self.authoring_repository.get,
+            authoring_result_id,
+            "authoring_result",
+            result_id,
+        )
+        if isinstance(authoring, dict):
+            return authoring
+        if authoring.status != "candidate_created":
+            return _rejection(
+                "authoring_result_not_successful",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
+        if str(authoring.candidate_commit).lower() != candidate_commit:
+            return _rejection(
+                "authoring_candidate_commit_mismatch",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
 
         benchmark = self._read_reference(
             self.evaluation_repository.get_benchmark_pack,
@@ -164,6 +196,36 @@ class EvolutionEvaluationGovernanceVerifier:
         )
         if isinstance(policy, dict):
             return policy
+
+        case_evidence = result.benchmark_case_evidence
+        if not case_evidence:
+            return _rejection(
+                "benchmark_command_evidence_missing",
+                experiment_result_id=result_id,
+            )
+        expected_cases = {
+            (subject, case.case_id)
+            for subject in ("baseline", "candidate")
+            for case in benchmark.cases
+        }
+        actual_cases = {(item.subject, item.case_id) for item in case_evidence}
+        if actual_cases != expected_cases:
+            return _rejection(
+                "benchmark_case_evidence_incomplete",
+                experiment_result_id=result_id,
+            )
+        failed_commands = [
+            f"{item.subject}:{item.case_id}:{command.command}"
+            for item in case_evidence
+            for command in item.commands
+            if command.exit_code != 0 or command.timed_out
+        ]
+        if failed_commands:
+            return _rejection(
+                "benchmark_command_failed",
+                experiment_result_id=result_id,
+                failed_commands=failed_commands,
+            )
 
         gate_results = {gate.gate: bool(gate.passed) for gate in result.hard_gate_results}
         missing_gates = sorted(set(policy.required_hard_gates) - set(gate_results))
@@ -197,6 +259,17 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
             )
         environment = result.execution_environment
+        candidate_environment_ids = {
+            item.execution_environment_id
+            for item in case_evidence
+            if item.subject == "candidate"
+        }
+        if candidate_environment_ids != {environment.execution_environment_id}:
+            return _rejection(
+                "candidate_environment_evidence_mismatch",
+                experiment_result_id=result_id,
+                execution_environment_id=environment.execution_environment_id,
+            )
         missing_platforms = sorted(
             set(policy.required_validation_platforms)
             - set(environment.validated_platforms)
@@ -268,6 +341,25 @@ class EvolutionEvaluationGovernanceVerifier:
                 evaluated_candidate_commit=candidate_commit,
                 candidate_snapshot_commit=snapshot_candidate_commit,
             )
+        if baseline_commit != str(authoring.baseline_commit).lower():
+            return _rejection(
+                "authoring_baseline_commit_mismatch",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
+        baseline_checkout = next(
+            (
+                checkout
+                for checkout in result.subject_checkouts
+                if checkout.subject == "baseline"
+            ),
+            None,
+        )
+        if baseline_checkout is None or baseline_checkout.commit.lower() != baseline_commit:
+            return _rejection(
+                "baseline_checkout_commit_mismatch",
+                experiment_result_id=result_id,
+            )
         if baseline_commit == candidate_commit:
             return _rejection(
                 "evaluated_candidate_matches_baseline",
@@ -291,8 +383,13 @@ class EvolutionEvaluationGovernanceVerifier:
             "reason": "promote_result_verified",
             "experiment_result_id": result_id,
             "experiment_spec_id": spec.experiment_spec_id,
+            "authoring_result_id": authoring_result_id,
             "evaluated_baseline_commit": baseline_commit,
             "evaluated_candidate_commit": candidate_commit,
+            "candidate_ref": authoring.candidate_ref,
+            "changed_files": list(authoring.changed_files),
+            "authoring_environment_manifest_id": authoring.environment_manifest_id,
+            "authoring_environment_identity_id": authoring.environment_identity_id,
             "baseline_snapshot_id": spec.baseline_snapshot_id,
             "candidate_snapshot_id": spec.candidate_snapshot_id,
             "benchmark_pack_id": benchmark.benchmark_pack_id,
@@ -356,13 +453,17 @@ def validate_body_improvement_authorization_binding(
     fields = (
         "experiment_result_id",
         "experiment_spec_id",
+        "authoring_result_id",
         "evaluated_baseline_commit",
         "evaluated_candidate_commit",
+        "candidate_ref",
         "baseline_snapshot_id",
         "candidate_snapshot_id",
         "benchmark_pack_id",
         "scoring_policy_id",
         "execution_environment_id",
+        "authoring_environment_manifest_id",
+        "authoring_environment_identity_id",
     )
     for field in fields:
         expected = str(authorization.get(field) or "").strip().lower()
@@ -380,6 +481,20 @@ def validate_body_improvement_authorization_binding(
         return {"valid": False, "reason": "evaluation_knowledge_binding_mismatch"}
     if tuple(str(item) for item in constraints.get("knowledge_ids") or []) != expected_knowledge:
         return {"valid": False, "reason": "evaluation_knowledge_binding_mismatch"}
+
+    expected_changed_files = tuple(
+        str(item) for item in authorization.get("changed_files") or []
+    )
+    if tuple(str(item) for item in evidence.get("changed_files") or []) != expected_changed_files:
+        return {
+            "valid": False,
+            "reason": "evaluation_changed_files_binding_mismatch",
+        }
+    if tuple(str(item) for item in constraints.get("changed_files") or []) != expected_changed_files:
+        return {
+            "valid": False,
+            "reason": "evaluation_changed_files_binding_mismatch",
+        }
 
     expected_scope = str(authorization.get("validation_scope") or "").strip()
     expected_platforms = tuple(

@@ -483,7 +483,6 @@ class BodyImprovementReviewService:
                 "reject_reason": "changed_files_mismatch",
                 "actual_changed_files": actual_changed_files,
             }
-
         approved_target_paths = {
             normalize_repo_path(str(path))
             for path in list(governed_constraints.get("target_paths") or [])
@@ -518,6 +517,18 @@ class BodyImprovementReviewService:
                 "score_delta": 0,
                 "reject_reason": "evolution_boundary_violation",
                 "evolution_boundary": boundary.model_dump(),
+            }
+        evaluated_changed_files = [
+            normalized
+            for path in list(evaluation_authorization.get("changed_files") or [])
+            if (normalized := normalize_repo_path(str(path)))
+        ]
+        if set(actual_changed_files) != set(evaluated_changed_files):
+            return {
+                "score_delta": 0,
+                "reject_reason": "evaluated_changed_files_mismatch",
+                "evaluated_changed_files": evaluated_changed_files,
+                "actual_changed_files": actual_changed_files,
             }
         boundary_score = boundary.score
 
