@@ -5069,6 +5069,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
     assert result["cognitive_self_regulation"]["dynamic_observation_bias_boost"] == 0.0
     assert result["cognitive_self_regulation"]["dynamic_candidate_throttle_boost"] == 0.0
     assert result["cognitive_self_regulation"]["dynamic_learning_expansion_suppression"] == 0.0
+    assert result["cognitive_self_regulation"]["historical_observation_carryover_released"] is True
     assert result["self_regulation"]["dynamic_observation_bias_boost"] > 0.0
     assert result["self_regulation"]["dynamic_truthfulness_bias_boost"] > 0.0
     assert (

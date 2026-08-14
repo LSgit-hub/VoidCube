@@ -30,6 +30,9 @@ from systems.supervisor.endogenous_materialization import (
     resolve_candidate_eligibility_plan,
 )
 from systems.supervisor.endogenous_needs import detect_needs
+from systems.supervisor.endogenous_policy import (
+    HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+)
 from systems.supervisor.endogenous_reflection import build_reflection_projection
 
 
@@ -129,6 +132,12 @@ def build_deliberation_report(
         self_learning_plan=self_learning_plan,
         autonomous_improvement_plan=autonomous_improvement_plan,
         governance_review_need_type=_REVIEW_API_B_JUDGEMENT_NEED,
+        historical_observation_carryover_released=bool(
+            drive_context["policy"].get(
+                HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+                False,
+            )
+        ),
     )
     intents = [
         DriveIntent(**projection)

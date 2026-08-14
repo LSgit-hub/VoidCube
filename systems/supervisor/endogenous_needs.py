@@ -86,6 +86,7 @@ def detect_needs(
     self_learning_plan: Dict[str, Any],
     autonomous_improvement_plan: Dict[str, Any],
     governance_review_need_type: str = REVIEW_API_B_JUDGEMENT_NEED,
+    historical_observation_carryover_released: bool = False,
 ) -> List[DriveNeed]:
     needs: List[DriveNeed] = []
     truthfulness_review_active = (
@@ -181,6 +182,9 @@ def detect_needs(
         )
     if self_learning_plan.get("eligible_for_planning"):
         learning_constraint_penalty = 0.0
+        learning_recovery_bonus = (
+            0.03 if historical_observation_carryover_released else 0.0
+        )
         if reflection.dominant_constraint == "historical_underdelivery":
             learning_constraint_penalty += 0.14
         if adaptive_policy.preferred_focus == "observation":
@@ -202,6 +206,7 @@ def detect_needs(
                     - 0.02
                     + reflection.autonomy_readiness * 0.16
                     + adaptive_policy.learning_expansion_bias * 0.2
+                    + learning_recovery_bonus
                     - reflection.api_b_judgement_blockage_pressure * 0.12
                     - learning_constraint_penalty
                 ),
@@ -209,6 +214,7 @@ def detect_needs(
                     world_model.learning_momentum
                     + reflection.recent_learning_quality * 0.15
                     + adaptive_policy.learning_expansion_bias * 0.1
+                    + learning_recovery_bonus
                     - reflection.api_b_judgement_blockage_pressure * 0.08
                     - adaptive_policy.candidate_throttle * 0.12
                     - learning_constraint_penalty * 0.72
@@ -217,6 +223,7 @@ def detect_needs(
                     world_model.self_confidence * 0.52
                     + reflection.autonomy_readiness * 0.22
                     + adaptive_policy.learning_expansion_bias * 0.26
+                    + learning_recovery_bonus * 0.67
                     - learning_constraint_penalty * 0.46
                 ),
                 rationale=(
@@ -232,6 +239,7 @@ def detect_needs(
                     f"learning_expansion_bias={adaptive_policy.learning_expansion_bias:.2f}",
                     f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
                     f"learning_constraint_penalty={learning_constraint_penalty:.2f}",
+                    f"historical_observation_carryover_released={historical_observation_carryover_released}",
                     f"api_a_handoff_count={perception.api_a_handoff_count}",
                     f"api_a_running_count={perception.api_a_running_count}",
                 ],
@@ -339,6 +347,8 @@ def detect_needs(
         if adaptive_policy.preferred_focus == "observation":
             observation_constraint_bonus += 0.06
         observation_release_penalty = 0.0
+        if historical_observation_carryover_released:
+            observation_release_penalty += 0.04
         if (
             memory_backlog_recovery_window
             and adaptive_policy.memory_continuity_bias

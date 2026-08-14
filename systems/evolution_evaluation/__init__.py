@@ -1,0 +1,63 @@
+"""Immutable evolution evaluation records and their repository boundary."""
+
+from systems.evolution_evaluation.executor import (
+    BENCHMARK_CONSISTENCY_GATE,
+    DEFAULT_BENCHMARK_EXECUTOR_VERSION,
+    BenchmarkCaseFailed,
+    BenchmarkCaseResult,
+    BenchmarkCaseTimedOut,
+    BenchmarkConfigurationError,
+    BenchmarkExecutionError,
+    BenchmarkPackExecutor,
+    BenchmarkRunner,
+    BenchmarkRunRequest,
+)
+from systems.evolution_evaluation.models import (
+    AllowedRegression,
+    BenchmarkCase,
+    BenchmarkPack,
+    ExperimentResult,
+    ExperimentSpec,
+    HardGateResult,
+    MetricDelta,
+    MetricTarget,
+    MetricValue,
+    Regression,
+    ScoringDimension,
+    ScoringPolicy,
+)
+from systems.evolution_evaluation.repository import (
+    EvaluationImmutableConflict,
+    EvaluationRecordCorrupted,
+    EvaluationRepository,
+    JsonEvaluationRepository,
+)
+
+__all__ = [
+    "AllowedRegression",
+    "BENCHMARK_CONSISTENCY_GATE",
+    "BenchmarkCase",
+    "BenchmarkCaseFailed",
+    "BenchmarkCaseResult",
+    "BenchmarkCaseTimedOut",
+    "BenchmarkConfigurationError",
+    "BenchmarkExecutionError",
+    "BenchmarkPack",
+    "BenchmarkPackExecutor",
+    "BenchmarkRunner",
+    "BenchmarkRunRequest",
+    "DEFAULT_BENCHMARK_EXECUTOR_VERSION",
+    "EvaluationImmutableConflict",
+    "EvaluationRecordCorrupted",
+    "EvaluationRepository",
+    "ExperimentResult",
+    "ExperimentSpec",
+    "HardGateResult",
+    "JsonEvaluationRepository",
+    "MetricDelta",
+    "MetricTarget",
+    "MetricValue",
+    "Regression",
+    "ScoringDimension",
+    "ScoringPolicy",
+]

@@ -416,6 +416,25 @@ def test_wheel_contract_tracks_shared_application_package():
 
 
 @pytest.mark.unit
+def test_wheel_contract_tracks_evolution_foundation_packages():
+    expected = expected_wheel_files(ROOT)
+
+    assert {
+        "systems/self_cognition/__init__.py",
+        "systems/self_cognition/models.py",
+        "systems/self_cognition/repository.py",
+        "systems/research_knowledge/__init__.py",
+        "systems/research_knowledge/models.py",
+        "systems/research_knowledge/normalizer.py",
+        "systems/research_knowledge/repository.py",
+        "systems/evolution_evaluation/__init__.py",
+        "systems/evolution_evaluation/executor.py",
+        "systems/evolution_evaluation/models.py",
+        "systems/evolution_evaluation/repository.py",
+    } <= expected
+
+
+@pytest.mark.unit
 def test_wheel_contract_tracks_mem_identity_resources():
     expected = expected_wheel_files(ROOT)
 

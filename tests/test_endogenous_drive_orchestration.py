@@ -9,6 +9,9 @@ from systems.supervisor.endogenous_drive_orchestration import (
     build_endogenous_drive_policy,
     evaluate_endogenous_drive,
 )
+from systems.supervisor.endogenous_policy import (
+    HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+)
 from systems.supervisor.autonomous_cycle_service import AutonomousCycleService
 from systems.supervisor.endogenous_drive_cycle import (
     EndogenousDriveCycleContext,
@@ -158,6 +161,83 @@ async def test_drive_orchestration_owner_runs_explicit_callback_pipeline():
         "activity",
     ]
     assert candidate_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_drive_orchestration_rebuilds_after_historical_observation_carryover_release():
+    deliberation_policies = []
+
+    class Deliberation:
+        def to_dict(self):
+            return {"perception": {}, "reflection": {}}
+
+    def build_deliberation_report(**kwargs):
+        policy = dict(kwargs["drive_input"]["endogenous_drive_policy"])
+        deliberation_policies.append(policy)
+        return Deliberation()
+
+    context = EndogenousDriveEvaluationContext(
+        runtime_config=SimpleNamespace(
+            endogenous_drive_enabled=True,
+            endogenous_drive_max_candidates=1,
+        ),
+        resolve_drive_input_request=lambda request: asyncio.sleep(
+            0,
+            result={
+                "activity": {},
+                "task_family_decisions": {},
+                "governance_task_type_decisions": {},
+            },
+        ),
+        load_self_regulation=lambda: {},
+        load_drive_history=lambda: {},
+        normalize_strategy_memory=lambda value: {},
+        api_b_judgement_task_summaries=lambda limit: [],
+        api_a_execution_lane_task_summaries=lambda limit: [],
+        build_deliberation_report=build_deliberation_report,
+        generate_candidates=lambda **kwargs: [],
+        existing_drive_keys=lambda: set(),
+        schedule_candidate_items=lambda candidates: [],
+        lm_generation_application_state=lambda: SimpleNamespace(
+            reasoning_state={},
+            candidate_repass_proposals=None,
+        ),
+        derive_cognitive_self_regulation=lambda **kwargs: {
+            "dynamic_candidate_throttle_boost": 0.0,
+            "dynamic_observation_bias_boost": 0.0,
+            "dynamic_truthfulness_bias_boost": 0.0,
+            "dynamic_learning_expansion_suppression": 0.0,
+        },
+        release_cleared_observation_carryover=lambda **kwargs: {
+            **kwargs["cognitive_self_regulation"],
+            HISTORICAL_OBSERVATION_CARRYOVER_RELEASED: True,
+            "last_reason": "cleared_historical_window_releases_composite_observation_carryover",
+        },
+        governance_channels_from_deliberation=lambda deliberation: {},
+        persist_evaluation=lambda **kwargs: pytest.fail(
+            "non-persistent evaluation must not write state"
+        ),
+        load_governance_events=lambda: {},
+        build_cognition_state=lambda **kwargs: {},
+        record_ui_activity=lambda *args, **kwargs: None,
+        build_response_fields=lambda **kwargs: {
+            "drive_input": kwargs["drive_input"]
+        },
+        drive_posture_from_deliberation=lambda deliberation: {},
+        core_values=[],
+    )
+
+    result = await evaluate_endogenous_drive(
+        request={"record_activity": False, "persist_evaluation": False},
+        context=context,
+    )
+
+    assert len(deliberation_policies) == 2
+    assert HISTORICAL_OBSERVATION_CARRYOVER_RELEASED not in deliberation_policies[0]
+    assert deliberation_policies[1][HISTORICAL_OBSERVATION_CARRYOVER_RELEASED] is True
+    assert result["drive_input"]["endogenous_drive_policy"][
+        HISTORICAL_OBSERVATION_CARRYOVER_RELEASED
+    ] is True
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,9 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
+from systems.supervisor.endogenous_policy import (
+    HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+)
 from systems.supervisor.endogenous_state_projection import (
     project_drive_history,
     project_governance_event_stream,
@@ -187,6 +190,16 @@ async def evaluate_endogenous_drive(
         lm_reasoning_state=lm_reasoning_state,
         drive_history=drive_input["drive_history"],
     )
+    observation_carryover_released = bool(
+        cognitive_self_regulation.get(
+            HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+            False,
+        )
+    )
+    if observation_carryover_released:
+        drive_input["endogenous_drive_policy"][
+            HISTORICAL_OBSERVATION_CARRYOVER_RELEASED
+        ] = True
     combined_self_regulation = _merge_self_regulation(
         self_regulation,
         cognitive_self_regulation,
@@ -201,7 +214,10 @@ async def evaluate_endogenous_drive(
         "dynamic_truthfulness_bias_boost",
         "dynamic_learning_expansion_suppression",
     )
-    if any(float(cognitive_self_regulation.get(key) or 0.0) > 0.0 for key in boost_keys):
+    if observation_carryover_released or any(
+        float(cognitive_self_regulation.get(key) or 0.0) > 0.0
+        for key in boost_keys
+    ):
         deliberation = context.build_deliberation_report(drive_input=drive_input)
         deliberation_dict = deliberation.to_dict()
         candidates = await asyncio.to_thread(

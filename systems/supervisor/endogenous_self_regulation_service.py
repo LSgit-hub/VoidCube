@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+from systems.supervisor.endogenous_policy import (
+    HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
+    TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
+)
 
 
 class EndogenousSelfRegulationService:
@@ -363,6 +366,7 @@ class EndogenousSelfRegulationService:
         adjusted["dynamic_observation_bias_boost"] = 0.0
         adjusted["dynamic_candidate_throttle_boost"] = 0.0
         adjusted["dynamic_learning_expansion_suppression"] = 0.0
+        adjusted[HISTORICAL_OBSERVATION_CARRYOVER_RELEASED] = True
         reason = str(adjusted.get("last_reason") or "").strip()
         release_reason = "cleared_historical_window_releases_composite_observation_carryover"
         adjusted["last_reason"] = (

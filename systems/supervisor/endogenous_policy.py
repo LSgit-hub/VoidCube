@@ -6,6 +6,9 @@ from typing import Protocol
 
 
 TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
+HISTORICAL_OBSERVATION_CARRYOVER_RELEASED = (
+    "historical_observation_carryover_released"
+)
 
 
 class PerceptionPolicySignals(Protocol):
