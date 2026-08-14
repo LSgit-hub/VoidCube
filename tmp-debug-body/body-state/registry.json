@@ -1,0 +1,19 @@
+{
+  "slot_ids": [
+    "slot-A",
+    "slot-B"
+  ],
+  "active_slot": "slot-A",
+  "shell_slot": "slot-B",
+  "retired_slot": null,
+  "current_generation": 0,
+  "watch_window": {
+    "status": "inactive",
+    "slot_id": null,
+    "started_at": null,
+    "expires_at": null,
+    "stable_window_days": 3,
+    "stable_health_checks": 3
+  },
+  "last_switch_result": null
+}

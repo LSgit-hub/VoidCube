@@ -16326,6 +16326,13 @@ async def test_completed_learning_structure_mapping_reaches_planned_body_task(tm
                 }
             ],
             "api_b_judgement_tasks": [],
+            "evolution_foundation": {
+                "evaluation": {
+                    "body_improvement_authorization": (
+                        _body_evaluation_authorization()
+                    )
+                }
+            },
             "endogenous_drive_policy": {
                 "body_improvement_min_quality": 60.0,
                 "body_improvement_cooldown_hours": 12,
@@ -16345,6 +16352,13 @@ async def test_completed_learning_structure_mapping_reaches_planned_body_task(tm
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
+    supervisor._load_evolution_foundation_projection = (  # type: ignore[method-assign]
+        lambda: {
+            "evaluation": {
+                "body_improvement_authorization": _body_evaluation_authorization()
+            }
+        }
+    )
 
     result = await supervisor._autonomous_cycle_service.run_drive_cycle()
     body_task = next(
@@ -17143,6 +17157,11 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 @pytest.mark.unit
 async def test_batch_review_releases_body_improvement_after_one_self_learning_prereq_deferral(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    authorization = _body_evaluation_authorization()
+    fields = _body_evaluation_fields()
+    supervisor._evolution_evaluation_governance_verifier = Mock(
+        verify=Mock(return_value=authorization)
+    )
     await supervisor._autonomous_chain_planning_service.plan(
         {
             "title": "Understand current shell body baseline",
@@ -17155,7 +17174,13 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
-            "evidence": {"learning_quality_score": 88.0},
+            "evidence": {"learning_quality_score": 88.0, **fields},
+            "constraints": {
+                **fields,
+                "must_match_evaluated_commit": True,
+                "requires_governor_review": True,
+                "requires_user_consent": True,
+            },
             "metadata": {
                 "task_family": "body_upgrade",
                 "execution_kind": "body_improvement",

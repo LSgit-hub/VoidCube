@@ -194,11 +194,16 @@ class EndogenousFoundationReadOnlyProjection:
         try:
             authorization = self._evaluation_governance.latest_authorization()
             result_ids = self._evaluation_repository.list_ids("experiment_results")
-            result_records = [
-                self._evaluation_repository.get_experiment_result(record_id)
-                for record_id in result_ids
-            ]
-            result_records = [record for record in result_records if record is not None]
+            result_records = []
+            read_errors: list[str] = []
+            for record_id in result_ids:
+                try:
+                    record = self._evaluation_repository.get_experiment_result(record_id)
+                except Exception as exc:
+                    read_errors.append(f"{record_id}:{type(exc).__name__}")
+                    continue
+                if record is not None:
+                    result_records.append(record)
             spec_ids = self._evaluation_repository.list_ids("experiment_specs")
             if not result_records:
                 return {
@@ -207,7 +212,11 @@ class EndogenousFoundationReadOnlyProjection:
                     "experiment_spec_count": len(spec_ids),
                     "experiment_result_id": None,
                     "body_improvement_authorization": authorization,
-                }, "evaluation:no_experiment_result"
+                }, (
+                    f"evaluation:no_experiment_result:{','.join(read_errors)}"
+                    if read_errors
+                    else "evaluation:no_experiment_result"
+                )
             latest = max(result_records, key=lambda record: record.completed_at)
             latest_spec = self._evaluation_repository.get_experiment_spec(
                 latest.experiment_spec_id
@@ -248,7 +257,12 @@ class EndogenousFoundationReadOnlyProjection:
                     list(latest_spec.knowledge_ids) if latest_spec is not None else []
                 ),
                 "body_improvement_authorization": authorization,
-            }, None
+                "corrupted_result_records": read_errors,
+            }, (
+                f"evaluation:partial_read_error:{','.join(read_errors)}"
+                if read_errors
+                else None
+            )
         except Exception as exc:
             return {
                 "status": "error",

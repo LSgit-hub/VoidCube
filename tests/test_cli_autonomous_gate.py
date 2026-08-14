@@ -507,6 +507,13 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
                             "editable_dirs": ["agent/", "tools/"],
                             "forbidden_patterns": ["systems/**"],
                             "max_files_changed": 3,
+                            "experiment_result_id": "experiment-result-" + "1" * 64,
+                            "evaluated_baseline_commit": "b" * 40,
+                            "evaluated_candidate_commit": "a" * 40,
+                            "must_not_create_new_commit": True,
+                            "must_match_evaluated_commit": True,
+                            "requires_governor_review": True,
+                            "requires_user_consent": True,
                         },
                         "execution_lease": {
                             "generation": 1,
@@ -535,6 +542,13 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
                                 "editable_dirs": ["agent/", "tools/"],
                                 "forbidden_patterns": ["systems/**"],
                                 "max_files_changed": 3,
+                                "experiment_result_id": "experiment-result-" + "1" * 64,
+                                "evaluated_baseline_commit": "b" * 40,
+                                "evaluated_candidate_commit": "a" * 40,
+                                "must_not_create_new_commit": True,
+                                "must_match_evaluated_commit": True,
+                                "requires_governor_review": True,
+                                "requires_user_consent": True,
                             },
                         }
                     ]
@@ -554,7 +568,7 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
     assert prompts
     assert prompts[0].startswith("[Autonomous Body Improvement Task]")
     assert prepared_worktrees == [
-        (cli.session_id, "F:/tmp/worktree", ""),
+        (cli.session_id, "F:/tmp/worktree", "b" * 40),
     ]
 
 
@@ -2040,6 +2054,7 @@ def test_body_improvement_report_includes_verified_baseline_contract(monkeypatch
     task = {
         "_improvement_worktree": "F:/body/slot-B",
         "_baseline_head": "b" * 40,
+        "_expected_candidate_head": "a" * 40,
         "_improvement_slot_id": "slot-B",
         "evidence": {
             "learning_refs": [
@@ -2065,6 +2080,40 @@ def test_body_improvement_report_includes_verified_baseline_contract(monkeypatch
     assert captured["payload"]["commit_hash"] == "a" * 40
     assert captured["payload"]["changed_files"] == ["agent/stream_handler.py"]
     assert captured["payload"]["learning_refs"][0]["mem_id"] == "learning-1"
+
+
+def test_body_improvement_report_rejects_unevaluated_local_head(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-body-report-mismatch"
+    cli._autonomous_execution_events = []
+    runtime = _autonomous_runtime(cli)
+    runtime._git_improvement_diff = lambda worktree, baseline: {
+        "commit_hash": "c" * 40,
+        "changed_files": ["agent/stream_handler.py"],
+        "diff_summary": "agent/stream_handler.py | 2 +-",
+    }
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("mismatched report must not be submitted"),
+    )
+    task = {
+        "_improvement_worktree": "F:/body/slot-B",
+        "_baseline_head": "b" * 40,
+        "_expected_candidate_head": "a" * 40,
+        "_improvement_slot_id": "slot-B",
+    }
+
+    submitted = runtime.submit_body_improvement_report(
+        task,
+        "body-report-mismatch",
+        "http://127.0.0.1:6000",
+        improvement_description="Unevaluated local head",
+    )
+
+    assert submitted is False
+    assert cli._autonomous_execution_events[-1]["stage"] == (
+        "improvement_report_commit_mismatch"
+    )
 
 
 def test_body_improvement_completion_posts_after_successful_report(monkeypatch):

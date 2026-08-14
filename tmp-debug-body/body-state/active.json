@@ -1,0 +1,15 @@
+{
+  "slot_id": "slot-A",
+  "body_state": "active",
+  "worktree_path": "F:\\My_code\\VScode_py\\VoidCube\\tmp-debug-body\\body-state\\slots\\slot-A\\worktree",
+  "runtime_path": "F:\\My_code\\VScode_py\\VoidCube\\tmp-debug-body\\body-state\\slots\\slot-A\\runtime",
+  "logs_path": "F:\\My_code\\VScode_py\\VoidCube\\tmp-debug-body\\body-state\\slots\\slot-A\\logs",
+  "body_version": "bootstrap",
+  "generation": 0,
+  "materialized_from": "F:\\My_code\\VScode_py\\VoidCube\\tmp-debug-body",
+  "active_ref": "body/slot-A",
+  "active_commit": "b47507f1f025b8b5bee86e65b074f822d80cae81",
+  "candidate_branch": "master",
+  "candidate_commit": "b47507f1f025b8b5bee86e65b074f822d80cae81",
+  "updated_at": "2026-08-14T06:54:53.468268"
+}
