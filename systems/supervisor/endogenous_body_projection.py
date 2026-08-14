@@ -19,7 +19,9 @@ def build_body_improvement_projection(
     shell_slot_id = str(shell_slot_meta.get("slot_id") or "").strip()
     shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
     eligibility = resolve_body_improvement_eligibility(
-        completed_learning_tasks=list(drive_context.get("completed_learning_tasks") or []),
+        completed_learning_tasks=list(
+            drive_context.get("completed_learning_tasks") or []
+        ),
         shell_slot_id=shell_slot_id,
         shell_worktree=shell_worktree,
         policy=policy,
@@ -39,17 +41,18 @@ def build_body_improvement_projection(
 
     foundation = dict(drive_context.get("evolution_foundation") or {})
     evaluation = dict(foundation.get("evaluation") or {})
-    authorization = dict(
-        evaluation.get("body_improvement_authorization") or {}
-    )
+    authorization = dict(evaluation.get("body_improvement_authorization") or {})
     if not authorization.get("authorized"):
         return {
+            **mapping,
             "available": False,
             "reason": "evaluation_authorization_unavailable",
+            "candidate_generation_ready": True,
             "evaluation_authorization": authorization,
         }
 
     result_id = str(authorization.get("experiment_result_id") or "").strip()
     mapping["mapping_key"] = f"{mapping['mapping_key']}:{result_id[-16:]}"
+    mapping["candidate_generation_ready"] = False
     mapping["evaluation_authorization"] = authorization
     return mapping

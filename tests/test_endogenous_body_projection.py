@@ -62,7 +62,10 @@ def test_body_improvement_projection_composes_learning_mapping():
                 }
             },
         },
-        shell_slot_meta={"slot_id": "slot-B", "worktree_path": "F:/tmp/slot-B/worktree"},
+        shell_slot_meta={
+            "slot_id": "slot-B",
+            "worktree_path": "F:/tmp/slot-B/worktree",
+        },
     )
 
     assert result["available"] is True
@@ -88,8 +91,18 @@ def test_body_improvement_projection_rejects_missing_evaluation_authorization():
             "api_b_judgement_tasks": [],
             "evolution_foundation": {},
         },
-        shell_slot_meta={"slot_id": "slot-B", "worktree_path": "F:/tmp/slot-B/worktree"},
+        shell_slot_meta={
+            "slot_id": "slot-B",
+            "worktree_path": "F:/tmp/slot-B/worktree",
+        },
     )
 
     assert result["available"] is False
     assert result["reason"] == "evaluation_authorization_unavailable"
+    assert result["candidate_generation_ready"] is True
+    assert result["mapping_source"] == "learning_evidence_structure_projection_v1"
+    assert result["target_paths"] == ["agent/stream_handler.py"]
+    assert result["learning_refs"][0]["mem_id"] == "learn-stream"
+    assert result["evidence_summary"] == [
+        "Improve agent/stream_handler.py after validation."
+    ]
