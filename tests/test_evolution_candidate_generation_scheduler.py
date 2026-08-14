@@ -64,6 +64,7 @@ def _scheduler(
     enabled=False,
     observation=None,
     active_body=False,
+    clock=None,
 ):
     async def load_observation():
         value = observation if observation is not None else _quiet_observation()
@@ -75,7 +76,7 @@ def _scheduler(
         automatic_enabled=lambda: enabled,
         load_runtime_observation=load_observation,
         has_active_body_task=lambda: active_body,
-        clock=lambda: NOW,
+        clock=clock or (lambda: NOW),
         lease_owner="test-scheduler",
     )
 
@@ -264,3 +265,100 @@ async def test_runtime_observation_failure_is_fail_closed_and_sanitized(tmp_path
     assert result["reason"] == "runtime_observation_unavailable"
     assert result["error_code"] == "RuntimeError"
     assert "sensitive" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_restarted_scheduler_respects_lease_then_retries_after_expiry(tmp_path):
+    repository = JsonEvolutionCandidateGenerationRepository(tmp_path / "cycles")
+    request = _request()
+    repository.register(request, requested_at=NOW)
+    first = repository.claim_authoring(
+        request.request_id,
+        lease_owner="stopped-supervisor",
+        claimed_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    clock = [NOW]
+
+    async def execute(request_id, *, lease_owner):
+        state = repository.claim_authoring(
+            request_id,
+            lease_owner=lease_owner,
+            claimed_at=clock[0],
+            lease_expires_at=clock[0] + timedelta(minutes=30),
+        )
+        return SimpleNamespace(state=state)
+
+    before_expiry = _scheduler(
+        repository,
+        execute,
+        clock=lambda: clock[0],
+    )
+
+    blocked = await before_expiry.trigger(mode="shadow")
+
+    assert blocked["reason"] == "active_candidate_cycle"
+    assert repository.get_current_state(request.request_id) == first
+
+    clock[0] = NOW + timedelta(minutes=5)
+    restarted = _scheduler(
+        repository,
+        execute,
+        clock=lambda: clock[0],
+    )
+    started = await restarted.trigger(mode="manual")
+    await restarted._background_task
+    retried = repository.get_current_state(request.request_id)
+
+    assert started["status"] == "started"
+    assert retried.status == "authoring"
+    assert retried.attempt_number == first.attempt_number + 1
+    assert retried.attempt_id != first.attempt_id
+
+
+@pytest.mark.asyncio
+async def test_same_candidate_becomes_retryable_only_after_cooldown(tmp_path):
+    repository = JsonEvolutionCandidateGenerationRepository(tmp_path / "cycles")
+    request = _request()
+    repository.register(request, requested_at=NOW)
+    claimed = repository.claim_authoring(
+        request.request_id,
+        lease_owner="failed-worker",
+        claimed_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    repository.mark_failure(
+        request.request_id,
+        attempt_id=claimed.attempt_id,
+        status="blocked",
+        error_code="environment_unavailable",
+        error_reason="The required environment is unavailable.",
+        completed_at=NOW,
+        cooldown_until=NOW + timedelta(hours=1),
+    )
+    clock = [NOW]
+
+    async def execute(request_id, *, lease_owner):
+        state = repository.claim_authoring(
+            request_id,
+            lease_owner=lease_owner,
+            claimed_at=clock[0],
+            lease_expires_at=clock[0] + timedelta(minutes=30),
+        )
+        return SimpleNamespace(state=state)
+
+    scheduler = _scheduler(
+        repository,
+        execute,
+        clock=lambda: clock[0],
+    )
+
+    cooling = await scheduler.trigger(mode="shadow")
+    clock[0] = NOW + timedelta(hours=1)
+    started = await scheduler.trigger(mode="manual")
+    await scheduler._background_task
+    retried = repository.get_current_state(request.request_id)
+
+    assert cooling["reason"] == "candidate_cooldown"
+    assert started["status"] == "started"
+    assert retried.attempt_number == claimed.attempt_number + 1

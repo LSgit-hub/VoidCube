@@ -250,6 +250,8 @@ class EvolutionCandidateGenerationScheduler:
                 "result_state": state.status,
                 "attempt_id": state.attempt_id,
                 "authoring_task_id": state.authoring_task_id,
+                "authoring_result_id": state.authoring_result_id,
+                "experiment_result_id": state.experiment_result_id,
                 "error_code": state.error_code,
             }
         except asyncio.CancelledError:
@@ -350,6 +352,7 @@ class EvolutionCandidateGenerationScheduler:
             "attempt_number": state.attempt_number,
             "attempt_id": state.attempt_id,
             "authoring_task_id": state.authoring_task_id,
+            "authoring_result_id": state.authoring_result_id,
             "experiment_result_id": state.experiment_result_id,
             "lease_expires_at": (
                 state.lease_expires_at.isoformat() if state.lease_expires_at else None
