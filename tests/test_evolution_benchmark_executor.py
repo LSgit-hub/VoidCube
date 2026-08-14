@@ -284,6 +284,122 @@ def test_executor_runs_and_aggregates_a_dual_platform_matrix():
     assert result.confidence == 1.0
 
 
+def test_executor_dispatches_platform_tagged_cases_only_to_matching_runners():
+    _, policy, spec = _contracts(required_platforms=("linux", "windows"))
+    pack = BenchmarkPack.create(
+        name="platform-sensitive",
+        pack_version="1",
+        cases=(
+            BenchmarkCase(
+                case_id="portable",
+                runner="portable",
+                input_ref="portable",
+            ),
+            BenchmarkCase(
+                case_id="windows-lock",
+                runner="windows-lock",
+                input_ref="windows-lock",
+                tags=("platform:windows",),
+            ),
+        ),
+        created_at=NOW,
+    )
+    spec_payload = spec.content_payload()
+    spec_payload["benchmark_pack_id"] = pack.benchmark_pack_id
+    spec_payload["platform_selection"] = select_benchmark_platforms(
+        ("pyproject.toml",),
+        "f" * 64,
+        created_at=NOW,
+    )
+    spec = ExperimentSpec.create(**spec_payload)
+    calls: list[tuple[str, str, str]] = []
+
+    def platform_runner(request):
+        calls.append(
+            (request.validation_platform, request.subject, request.case.case_id)
+        )
+        result = _runner(request)
+        payload = result.execution_environment.content_payload()
+        payload["repository_head"] = (
+            "c" * 40 if request.subject == "baseline" else "d" * 40
+        )
+        if request.validation_platform == "linux":
+            payload.update(
+                backend="podman",
+                validation_scope="container",
+                execution_os="Linux 6.8",
+                execution_workspace_path="/workspace",
+                path_mappings=(
+                    {
+                        "host_path": ENVIRONMENT.host_workspace_path,
+                        "execution_path": "/workspace",
+                    },
+                ),
+                validated_platforms=("linux",),
+            )
+        return result.model_copy(
+            update={"execution_environment": ExecutionEnvironmentManifest.create(**payload)}
+        )
+
+    result = BenchmarkPackExecutor(
+        {},
+        platform_runners={
+            "linux": {"portable": platform_runner},
+            "windows": {
+                "portable": platform_runner,
+                "windows-lock": platform_runner,
+            },
+        },
+    ).execute(
+        benchmark_pack=pack,
+        experiment_spec=spec,
+        scoring_policy=policy,
+        completed_at=NOW,
+    )
+
+    assert calls == [
+        ("linux", "baseline", "portable"),
+        ("windows", "baseline", "portable"),
+        ("windows", "baseline", "windows-lock"),
+        ("linux", "candidate", "portable"),
+        ("windows", "candidate", "portable"),
+        ("windows", "candidate", "windows-lock"),
+    ]
+    assert result.confidence == 1.0
+    assert len(result.benchmark_case_evidence or ()) == 6
+
+
+def test_executor_rejects_selected_platform_without_an_applicable_case():
+    _, policy, spec = _contracts(required_platforms=("linux", "windows"))
+    pack = BenchmarkPack.create(
+        name="windows-only",
+        pack_version="1",
+        cases=(
+            BenchmarkCase(
+                case_id="windows-lock",
+                runner="windows-lock",
+                input_ref="windows-lock",
+                tags=("platform:windows",),
+            ),
+        ),
+        created_at=NOW,
+    )
+    spec_payload = spec.content_payload()
+    spec_payload["benchmark_pack_id"] = pack.benchmark_pack_id
+    spec = ExperimentSpec.create(**spec_payload)
+
+    with pytest.raises(BenchmarkConfigurationError, match="no cases.*linux"):
+        BenchmarkPackExecutor(
+            {},
+            platform_runners={"windows": {"windows-lock": _runner}},
+        ).execute(
+            benchmark_pack=pack,
+            experiment_spec=spec,
+            scoring_policy=policy,
+            completed_at=NOW,
+        )
+
+
 def test_dual_platform_matrix_requires_every_selected_runner():
     pack, policy, spec = _contracts(required_platforms=("linux", "windows"))
 

@@ -24,6 +24,7 @@ from systems.evolution_evaluation.models import (
     Regression,
     ScoringPolicy,
     SubjectCheckoutEvidence,
+    benchmark_case_supports_platform,
 )
 from systems.evolution_evaluation.repository import EvaluationRepository
 
@@ -251,9 +252,13 @@ class BenchmarkPackExecutor:
 
         completed = _as_aware(completed_at or datetime.now(timezone.utc), "completed_at")
         completed_pairs = min(len(baseline_results), len(candidate_results))
-        confidence = completed_pairs / (
-            len(benchmark_pack.cases) * len(validation_platforms)
+        expected_pairs = sum(
+            1
+            for platform in validation_platforms
+            for case in benchmark_pack.cases
+            if benchmark_case_supports_platform(case, platform)
         )
+        confidence = completed_pairs / expected_pairs
         return ExperimentResult.create(
             experiment_spec_id=experiment_spec.experiment_spec_id,
             baseline_metrics=baseline_metrics,
@@ -342,11 +347,27 @@ class BenchmarkPackExecutor:
                 + ", ".join(sorted(missing_dimensions))
             )
         platforms = tuple(scoring_policy.required_validation_platforms)
+        cases_by_platform = {
+            platform: tuple(
+                case
+                for case in benchmark_pack.cases
+                if benchmark_case_supports_platform(case, platform)
+            )
+            for platform in platforms
+        }
+        empty_platforms = sorted(
+            platform for platform, cases in cases_by_platform.items() if not cases
+        )
+        if empty_platforms:
+            raise BenchmarkConfigurationError(
+                "benchmark pack has no cases for selected platforms: "
+                + ", ".join(empty_platforms)
+            )
         if len(platforms) == 1 and not self.platform_runners:
             missing_runners = sorted(
                 {
                     case.runner
-                    for case in benchmark_pack.cases
+                    for case in cases_by_platform[platforms[0]]
                     if case.runner not in self.runners
                 }
             )
@@ -354,7 +375,7 @@ class BenchmarkPackExecutor:
             missing_runners = sorted(
                 f"{platform}:{case.runner}"
                 for platform in platforms
-                for case in benchmark_pack.cases
+                for case in cases_by_platform[platform]
                 if case.runner not in self.platform_runners.get(platform, {})
             )
         if missing_runners:
@@ -375,6 +396,8 @@ class BenchmarkPackExecutor:
         for platform in validation_platforms:
             platform_map = self.platform_runners.get(platform)
             for case in benchmark_pack.cases:
+                if not benchmark_case_supports_platform(case, platform):
+                    continue
                 request = BenchmarkRunRequest(
                     subject=subject,
                     subject_snapshot_id=snapshot_id,
@@ -512,11 +535,14 @@ class BenchmarkPackExecutor:
                             "subject checkout references a different environment identity"
                         )
                     prior = explicit_checkouts.get(key)
-                    if prior is not None and prior != checkout:
+                    if prior is not None and _checkout_binding(prior) != _checkout_binding(
+                        checkout
+                    ):
                         raise BenchmarkCaseFailed(
                             f"{subject}:{platform} returned inconsistent checkout evidence"
                         )
-                    explicit_checkouts[key] = checkout
+                    if prior is None or checkout.checked_out_at < prior.checked_out_at:
+                        explicit_checkouts[key] = checkout
         platforms = tuple(sorted(identities_by_platform))
         if not platforms:
             raise BenchmarkCaseFailed(
@@ -791,6 +817,15 @@ def _as_aware(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise BenchmarkConfigurationError(f"{field_name} must include a timezone")
     return value
+
+
+def _checkout_binding(checkout: SubjectCheckoutEvidence) -> tuple[str, str, str, str]:
+    return (
+        checkout.subject,
+        checkout.commit.lower(),
+        checkout.worktree_path,
+        checkout.execution_environment_identity_id,
+    )
 
 
 __all__ = [

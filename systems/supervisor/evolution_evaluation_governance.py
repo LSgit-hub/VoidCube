@@ -11,6 +11,7 @@ from systems.evolution_authoring import JsonEvolutionAuthoringRepository
 from systems.evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
     JsonEvaluationRepository,
+    benchmark_case_supports_platform,
     select_benchmark_platforms,
 )
 from systems.research_knowledge import JsonKnowledgeRepository
@@ -304,6 +305,7 @@ class EvolutionEvaluationGovernanceVerifier:
             for platform in policy.required_validation_platforms
             for subject in ("baseline", "candidate")
             for case in benchmark.cases
+            if benchmark_case_supports_platform(case, platform)
         }
         try:
             actual_cases = {

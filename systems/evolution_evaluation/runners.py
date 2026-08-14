@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import threading
@@ -68,6 +69,7 @@ class GitWorktreeValidationRunner:
         candidate_commit: str,
         evaluator: ValidationCaseEvaluator,
         python_executable: str | Path | None = None,
+        workspace_dependencies: Mapping[str, str | Path] | None = None,
         prepare_environment: PrepareValidationEnvironment | None = None,
         release_environment: ReleaseValidationEnvironment | None = None,
     ) -> None:
@@ -94,6 +96,17 @@ class GitWorktreeValidationRunner:
             if python_executable is not None
             else None
         )
+        self.workspace_dependencies = {
+            _relative_workspace_path(relative_path): Path(source).expanduser().resolve()
+            for relative_path, source in dict(workspace_dependencies or {}).items()
+        }
+        for source in self.workspace_dependencies.values():
+            try:
+                source.relative_to(self.repository)
+            except ValueError as exc:
+                raise ValueError(
+                    "validation workspace dependencies must belong to the repository"
+                ) from exc
         self._prepare_environment = (
             prepare_environment or self._prepare_platform_environment
         )
@@ -136,6 +149,8 @@ class GitWorktreeValidationRunner:
         try:
             self._create_worktree(commit)
             worktree_created = True
+            if self.platform == "windows":
+                self._link_workspace_dependencies()
             environment_preparation_started = True
             raw_manifest = self._prepare_environment(
                 task_id,
@@ -249,6 +264,43 @@ class GitWorktreeValidationRunner:
                 or "failed to create validation worktree"
             )
 
+    def _link_workspace_dependencies(self) -> None:
+        for relative_path, source in self.workspace_dependencies.items():
+            if not source.is_dir():
+                raise BenchmarkCaseFailed(
+                    f"validation workspace dependency is unavailable: {source}"
+                )
+            destination = self.worktree_path.joinpath(*relative_path.split("/"))
+            if destination.exists() or destination.is_symlink():
+                raise BenchmarkCaseFailed(
+                    f"validation workspace dependency destination exists: {relative_path}"
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                result = subprocess.run(
+                    (
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(destination),
+                        str(source),
+                    ),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    raise BenchmarkCaseFailed(
+                        (result.stderr or result.stdout).strip()[:1000]
+                        or f"failed to link workspace dependency: {relative_path}"
+                    )
+            else:
+                destination.symlink_to(source, target_is_directory=True)
+
     def _cleanup(
         self,
         task_id: str,
@@ -263,6 +315,10 @@ class GitWorktreeValidationRunner:
             except BaseException as exc:
                 errors.append(exc)
         if worktree_created:
+            try:
+                self._remove_workspace_dependency_links()
+            except BaseException as exc:
+                errors.append(exc)
             try:
                 result = subprocess.run(
                     (
@@ -296,6 +352,16 @@ class GitWorktreeValidationRunner:
                 )
         return errors[0] if errors else None
 
+    def _remove_workspace_dependency_links(self) -> None:
+        for relative_path in reversed(tuple(self.workspace_dependencies)):
+            destination = self.worktree_path.joinpath(*relative_path.split("/"))
+            if not destination.exists() and not destination.is_symlink():
+                continue
+            if destination.is_symlink():
+                destination.unlink()
+            else:
+                os.rmdir(destination)
+
 
 class NativeFirstBenchmarkExecutorFactory:
     """Create a one-experiment executor from its deterministic platform selection."""
@@ -307,6 +373,7 @@ class NativeFirstBenchmarkExecutorFactory:
         worktree_root: str | Path,
         evaluators: Mapping[str, ValidationCaseEvaluator],
         python_executable: str | Path | None = None,
+        workspace_dependencies: Mapping[str, str | Path] | None = None,
         prepare_environments: Mapping[str, PrepareValidationEnvironment] | None = None,
         release_environment: ReleaseValidationEnvironment | None = None,
         case_timeout_seconds: float = 30.0,
@@ -315,6 +382,7 @@ class NativeFirstBenchmarkExecutorFactory:
         self.worktree_root = Path(worktree_root).expanduser().resolve()
         self.evaluators = dict(evaluators)
         self.python_executable = python_executable
+        self.workspace_dependencies = dict(workspace_dependencies or {})
         self.prepare_environments = dict(prepare_environments or {})
         self.release_environment = release_environment
         self.case_timeout_seconds = float(case_timeout_seconds)
@@ -334,6 +402,7 @@ class NativeFirstBenchmarkExecutorFactory:
             required_platforms=selection.required_platforms,
             evaluators=self.evaluators,
             python_executable=self.python_executable,
+            workspace_dependencies=self.workspace_dependencies,
             prepare_environments=self.prepare_environments,
             release_environment=self.release_environment,
         )
@@ -353,6 +422,7 @@ def build_native_first_platform_runners(
     required_platforms: Iterable[str],
     evaluators: Mapping[str, ValidationCaseEvaluator],
     python_executable: str | Path | None = None,
+    workspace_dependencies: Mapping[str, str | Path] | None = None,
     prepare_environments: Mapping[str, PrepareValidationEnvironment] | None = None,
     release_environment: ReleaseValidationEnvironment | None = None,
 ) -> dict[str, dict[str, BenchmarkRunner]]:
@@ -375,6 +445,7 @@ def build_native_first_platform_runners(
                 candidate_commit=candidate_commit,
                 evaluator=evaluator,
                 python_executable=python_executable,
+                workspace_dependencies=workspace_dependencies,
                 prepare_environment=prepare_by_platform.get(platform),
                 release_environment=release_environment,
             )
@@ -382,6 +453,16 @@ def build_native_first_platform_runners(
         }
         for platform in platforms
     }
+
+
+def _relative_workspace_path(value: str) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").strip("/")
+    parts = tuple(part for part in normalized.split("/") if part)
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("workspace dependency paths must be repository-relative")
+    if parts[0].lower() == ".git" or ":" in parts[0]:
+        raise ValueError("workspace dependency paths cannot target Git metadata")
+    return "/".join(parts)
 
 
 def _full_commit(value: str, field: str) -> str:

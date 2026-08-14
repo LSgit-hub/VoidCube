@@ -33,6 +33,8 @@ from systems.evolution_evaluation.models import (
     ScoringPolicy,
     SubjectCheckoutEvidence,
     WorkspacePathMapping,
+    benchmark_case_platforms,
+    benchmark_case_supports_platform,
 )
 from systems.evolution_evaluation.environment import (
     build_container_environment_manifest,
@@ -56,6 +58,15 @@ from systems.evolution_evaluation.runners import (
 from systems.evolution_evaluation.selection import (
     BenchmarkPlatformSelection,
     select_benchmark_platforms,
+)
+from systems.evolution_evaluation.benchmark_packs import (
+    NATIVE_COMPATIBILITY_GATE,
+    NATIVE_COMPATIBILITY_METRIC,
+    NATIVE_FIRST_PACK_VERSION,
+    create_native_first_benchmark_pack,
+    create_native_first_executor_factory,
+    create_native_first_scoring_policy,
+    native_first_benchmark_evaluators,
 )
 
 __all__ = [
@@ -90,6 +101,9 @@ __all__ = [
     "MetricDelta",
     "MetricTarget",
     "MetricValue",
+    "NATIVE_COMPATIBILITY_GATE",
+    "NATIVE_COMPATIBILITY_METRIC",
+    "NATIVE_FIRST_PACK_VERSION",
     "NativeFirstBenchmarkExecutorFactory",
     "Regression",
     "RuntimeToolIdentity",
@@ -100,8 +114,14 @@ __all__ = [
     "WorkspacePathMapping",
     "ValidationCaseEvaluator",
     "build_container_environment_manifest",
+    "benchmark_case_platforms",
+    "benchmark_case_supports_platform",
     "capture_host_environment_manifest",
     "capture_host_runtime_tools",
+    "create_native_first_benchmark_pack",
+    "create_native_first_executor_factory",
+    "create_native_first_scoring_policy",
     "build_native_first_platform_runners",
     "dependency_fingerprint",
+    "native_first_benchmark_evaluators",
 ]

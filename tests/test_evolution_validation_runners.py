@@ -218,3 +218,22 @@ def test_cleanup_failure_rejects_otherwise_successful_case(tmp_path: Path):
         runner(_request(subject="baseline", candidate=candidate, platform="windows"))
 
     assert not (tmp_path / "validation" / "windows").exists()
+
+
+def test_workspace_dependency_cannot_escape_repository(tmp_path: Path):
+    repository, baseline, candidate = _repository(tmp_path)
+    outside = tmp_path / "outside-dependency"
+    outside.mkdir()
+
+    with pytest.raises(ValueError, match="must belong to the repository"):
+        build_native_first_platform_runners(
+            repository,
+            worktree_root=tmp_path / "validation",
+            baseline_commit=baseline,
+            candidate_commit=candidate,
+            required_platforms=("windows",),
+            evaluators={"quality": _evaluation},
+            workspace_dependencies={"vendor/dependency": outside},
+            prepare_environments={"windows": _preparer("windows", [])},
+            release_environment=lambda _task_id: None,
+        )

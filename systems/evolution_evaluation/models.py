@@ -21,6 +21,8 @@ SUBJECT_CHECKOUT_EVIDENCE_SCHEMA_VERSION = 1
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 _IMAGE_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
+BENCHMARK_PLATFORM_TAG_PREFIX = "platform:"
+BENCHMARK_PLATFORMS = frozenset({"linux", "windows"})
 
 
 class _FrozenModel(BaseModel):
@@ -284,6 +286,30 @@ class BenchmarkCase(_FrozenModel):
     input_ref: str = Field(min_length=1)
     expected_ref: str | None = None
     tags: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_tags(self) -> Self:
+        _require_unique("benchmark case tag", self.tags)
+        platforms = benchmark_case_platforms(self)
+        _require_unique("benchmark case platform", platforms)
+        if any(platform not in BENCHMARK_PLATFORMS for platform in platforms):
+            raise ValueError("benchmark case platform tags must name linux or windows")
+        return self
+
+
+def benchmark_case_platforms(case: BenchmarkCase) -> tuple[str, ...]:
+    """Return explicit case platforms; an empty tuple means every selected platform."""
+
+    return tuple(
+        tag[len(BENCHMARK_PLATFORM_TAG_PREFIX) :].strip().lower()
+        for tag in case.tags
+        if tag.lower().startswith(BENCHMARK_PLATFORM_TAG_PREFIX)
+    )
+
+
+def benchmark_case_supports_platform(case: BenchmarkCase, platform: str) -> bool:
+    platforms = benchmark_case_platforms(case)
+    return not platforms or str(platform).strip().lower() in platforms
 
 
 class _BenchmarkPackContent(_FrozenModel):
