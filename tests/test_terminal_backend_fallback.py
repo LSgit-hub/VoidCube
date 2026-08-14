@@ -112,9 +112,13 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
                     "os_name\tLinux\n"
                     "os_release\t6.8.0\n"
                     "architecture\tx86_64\n"
+                    "image_reference\tlocalhost/test-sandbox:latest\n"
+                    "image_digest\tsha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"
                     "tool.git\t/usr/bin/git\tgit version 2.45.0\n"
                     "tool.python\t/usr/bin/python\tPython 3.12.0\n"
                     "tool.pytest\t/usr/bin/pytest\tpytest 8.3.0\n"
+                    "tool.node\t/usr/bin/node\tv22.22.0\n"
+                    "tool.npm\t/usr/bin/npm\t10.9.4\n"
                 ),
                 "exit_code": 0,
                 "error": None,
@@ -133,6 +137,9 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
     assert overrides["host_cwd"] == str(worktree.resolve())
     assert overrides["cwd"] == "/workspace"
     assert overrides["fallback_to_local"] is False
+    assert overrides["docker_mount_host_integrations"] is False
+    assert overrides["container_persistent"] is False
+    assert overrides["podman_image"] == "localhost/voidcube-project-podman:py314-v1"
     assert "cache-volume:/cache" in overrides["docker_volumes"]
     assert any(
         volume.endswith(":/voidcube-git/common")
@@ -173,6 +180,32 @@ def test_prepare_task_git_worktree_rejects_primary_worktree(monkeypatch, tmp_pat
             "autonomous-session",
             str(repo),
             expected_head=head,
+        )
+
+
+@pytest.mark.unit
+def test_prepare_task_git_worktree_rejects_host_bind_volume(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "candidate"
+    repo.mkdir()
+    _git("init", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "VoidCube Test", cwd=repo)
+    (repo / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    _git("add", "tracked.txt", cwd=repo)
+    _git("commit", "-m", "baseline", cwd=repo)
+    _git("worktree", "add", "--detach", str(worktree), cwd=repo)
+    head = _git("rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    monkeypatch.setattr(terminal_tool_module, "cleanup_vm", lambda task_id: None)
+    monkeypatch.setattr(
+        terminal_tool_module,
+        "_get_env_config",
+        lambda: {"env_type": "podman", "docker_volumes": [r"C:\outside:/cache"]},
+    )
+
+    with pytest.raises(ValueError, match="host bind mounts"):
+        terminal_tool_module.prepare_task_git_worktree(
+            "autonomous-session-bind", str(worktree), expected_head=head
         )
 
 

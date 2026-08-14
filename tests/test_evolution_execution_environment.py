@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -67,6 +69,8 @@ def test_container_manifest_keeps_host_and_execution_identities_distinct(tmp_pat
             "os_name": "Linux",
             "os_release": "6.8.0",
             "architecture": "x86_64",
+            "image_reference": "localhost/voidcube-project-podman:py314-v1",
+            "image_digest": "sha256:" + "e" * 64,
             "repository_head": "b" * 40,
             "tools": {
                 "git": {
@@ -84,6 +88,8 @@ def test_container_manifest_keeps_host_and_execution_identities_distinct(tmp_pat
     assert manifest.validation_scope == "container"
     assert manifest.validated_platforms == ("linux",)
     assert manifest.execution_workspace_path == "/workspace"
+    assert manifest.image_reference.endswith("py314-v1")
+    assert manifest.image_digest == "sha256:" + "e" * 64
     assert {tool.scope for tool in manifest.tools} == {"host", "execution"}
     sandbox_pytest = next(
         tool
@@ -103,6 +109,30 @@ def test_manifest_content_address_rejects_tampering():
 
     with pytest.raises(ValidationError, match="content_hash"):
         ExecutionEnvironmentManifest.model_validate(payload)
+
+
+def test_manifest_reads_legacy_hash_without_image_fields():
+    manifest = capture_host_environment_manifest(
+        Path(__file__).parents[1], repository_head="e" * 40
+    )
+    payload = manifest.content_payload()
+    payload.pop("image_reference")
+    payload.pop("image_digest")
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    restored = ExecutionEnvironmentManifest.model_validate(
+        {
+            **payload,
+            "execution_environment_id": f"execution-environment-{content_hash}",
+            "content_hash": content_hash,
+        }
+    )
+
+    assert restored.image_reference is None
+    assert restored.image_digest is None
 
 
 def test_manifest_cannot_claim_a_platform_different_from_execution_os():

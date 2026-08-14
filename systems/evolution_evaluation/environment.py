@@ -141,7 +141,14 @@ def build_container_environment_manifest(
         repository_head=repository_head,
         dependency_fingerprint=dependency_fingerprint(root),
         validated_platforms=(_platform_key(execution_system),),
+        image_reference=_optional_probe_string(probe, "image_reference"),
+        image_digest=_optional_probe_string(probe, "image_digest"),
     )
+
+
+def _optional_probe_string(probe: Mapping[str, object], key: str) -> str | None:
+    value = str(probe.get(key) or "").strip()
+    return value or None
 
 
 def _host_command_identity(

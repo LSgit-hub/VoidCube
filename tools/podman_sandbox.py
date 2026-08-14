@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 from importlib.resources import as_file, files
+from pathlib import Path
 import shutil
 import subprocess
 from typing import Sequence
 
 
-DEFAULT_IMAGE = "localhost/voidcube-podman-local:latest"
+DEFAULT_IMAGE = "localhost/voidcube-project-podman:py314-v1"
 CONTAINERFILE_RESOURCE = "containerfiles/podman-agent.Containerfile"
 
 
@@ -31,9 +32,17 @@ def image_exists(image: str = DEFAULT_IMAGE, *, executable: str | None = None) -
     return result.returncode == 0
 
 
-def build_image(image: str = DEFAULT_IMAGE, *, executable: str | None = None) -> None:
+def build_image(
+    image: str = DEFAULT_IMAGE,
+    *,
+    executable: str | None = None,
+    context: str | Path | None = None,
+) -> None:
     podman = executable or find_podman()
     resource = files("tools").joinpath(CONTAINERFILE_RESOURCE)
+    build_context = Path(context or Path.cwd()).expanduser().resolve()
+    if not (build_context / "pyproject.toml").is_file():
+        raise ValueError(f"Podman project build context must contain pyproject.toml: {build_context}")
     with as_file(resource) as containerfile:
         subprocess.run(
             [
@@ -43,7 +52,7 @@ def build_image(image: str = DEFAULT_IMAGE, *, executable: str | None = None) ->
                 image,
                 "--file",
                 str(containerfile),
-                str(containerfile.parent),
+                str(build_context),
             ],
             check=True,
         )

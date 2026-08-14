@@ -18,6 +18,7 @@ EXECUTION_ENVIRONMENT_IDENTITY_SCHEMA_VERSION = 1
 SUBJECT_CHECKOUT_EVIDENCE_SCHEMA_VERSION = 1
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+_IMAGE_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
 
 
 class _FrozenModel(BaseModel):
@@ -59,6 +60,8 @@ class _ExecutionEnvironmentManifestContent(_FrozenModel):
     repository_head: str = Field(pattern=_GIT_COMMIT_PATTERN)
     dependency_fingerprint: str = Field(pattern=_SHA256_PATTERN)
     validated_platforms: tuple[str, ...] = Field(min_length=1)
+    image_reference: str | None = None
+    image_digest: str | None = Field(default=None, pattern=_IMAGE_DIGEST_PATTERN)
 
     @model_validator(mode="after")
     def _validate_environment(self) -> Self:
@@ -76,6 +79,8 @@ class _ExecutionEnvironmentManifestContent(_FrozenModel):
             for item in self.path_mappings
         ):
             raise ValueError("workspace paths require an explicit host-to-execution mapping")
+        if self.image_digest and not self.image_reference:
+            raise ValueError("image digest requires an image reference")
         return self
 
 
@@ -102,7 +107,12 @@ class ExecutionEnvironmentManifest(_ExecutionEnvironmentManifestContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        _validate_address(self, "execution_environment_id", "execution-environment-")
+        _validate_address_with_legacy_optional_fields(
+            self,
+            "execution_environment_id",
+            "execution-environment-",
+            ("image_reference", "image_digest"),
+        )
         return self
 
     def identity(self) -> ExecutionEnvironmentIdentity:
@@ -123,6 +133,8 @@ class _ExecutionEnvironmentIdentityContent(_FrozenModel):
     tools: tuple[RuntimeToolIdentity, ...] = Field(min_length=1)
     dependency_fingerprint: str = Field(pattern=_SHA256_PATTERN)
     validated_platforms: tuple[str, ...] = Field(min_length=1)
+    image_reference: str | None = None
+    image_digest: str | None = Field(default=None, pattern=_IMAGE_DIGEST_PATTERN)
 
     @model_validator(mode="after")
     def _validate_identity(self) -> Self:
@@ -140,6 +152,8 @@ class _ExecutionEnvironmentIdentityContent(_FrozenModel):
             for item in self.path_mappings
         ):
             raise ValueError("workspace paths require an explicit host-to-execution mapping")
+        if self.image_digest and not self.image_reference:
+            raise ValueError("image digest requires an image reference")
         return self
 
 
@@ -174,10 +188,11 @@ class ExecutionEnvironmentIdentity(_ExecutionEnvironmentIdentityContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        _validate_address(
+        _validate_address_with_legacy_optional_fields(
             self,
             "execution_environment_identity_id",
             "execution-environment-identity-",
+            ("image_reference", "image_digest"),
         )
         return self
 
@@ -544,6 +559,29 @@ def _content_payload(
 
 def _validate_address(model: BaseModel, id_field: str, id_prefix: str) -> None:
     payload = model.content_payload()  # type: ignore[attr-defined]
+    expected_hash = _content_hash(payload)
+    if model.content_hash != expected_hash:  # type: ignore[attr-defined]
+        raise ValueError("content_hash does not match record content")
+    if getattr(model, id_field) != f"{id_prefix}{expected_hash}":
+        raise ValueError(f"{id_field} does not match content_hash")
+
+
+def _validate_address_with_legacy_optional_fields(
+    model: BaseModel,
+    id_field: str,
+    id_prefix: str,
+    optional_fields: tuple[str, ...],
+) -> None:
+    try:
+        _validate_address(model, id_field, id_prefix)
+        return
+    except ValueError:
+        if any(getattr(model, field) is not None for field in optional_fields):
+            raise
+
+    payload = model.content_payload()  # type: ignore[attr-defined]
+    for field in optional_fields:
+        payload.pop(field, None)
     expected_hash = _content_hash(payload)
     if model.content_hash != expected_hash:  # type: ignore[attr-defined]
         raise ValueError("content_hash does not match record content")

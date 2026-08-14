@@ -1,0 +1,11 @@
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+desktop/node_modules
+desktop/out
+desktop/release
+desktop/test-results
+build
+dist
+.test-tmp

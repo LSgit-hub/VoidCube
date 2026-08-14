@@ -135,6 +135,37 @@ def find_podman() -> Optional[str]:
     return find_container_executable("podman")
 
 
+def inspect_image_digest(image: str, *, runtime: str = "podman") -> str:
+    """Return the immutable sha256 digest for a locally available image.
+
+    A tag alone is not sufficient evidence for an evolution task because it
+    can be retagged between baseline and candidate runs.
+    """
+    normalized_image = str(image or "").strip()
+    if not normalized_image:
+        raise RuntimeError("container image reference is required")
+    executable = find_container_executable(runtime) or runtime
+    result = subprocess.run(
+        [executable, "image", "inspect", "--format", "{{.Id}}", normalized_image],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{runtime} image is unavailable: {normalized_image}: "
+            f"{(result.stderr or result.stdout).strip()[:300]}"
+        )
+    value = (result.stdout or "").strip()
+    digest = value.rsplit("@", 1)[-1] if "@" in value else value
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        digest = f"sha256:{digest}"
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise RuntimeError(f"{runtime} image has no immutable digest: {normalized_image}")
+    return digest
+
+
 # Security flags applied to every container.
 # The container itself is the security boundary (isolated from host).
 # We drop all capabilities then add back the minimum needed:
@@ -156,6 +187,36 @@ _SECURITY_ARGS = [
 
 
 _storage_opt_ok: dict[str, Optional[bool]] = {}  # cached result across runtimes
+
+
+def _append_host_integration_mounts(volume_args: list[str], runtime_label: str) -> None:
+    """Append the optional read-only credential, skill, and cache mounts."""
+    try:
+        from tools.credential_files import (
+            get_cache_directory_mounts,
+            get_credential_file_mounts,
+            get_skills_directory_mount,
+        )
+
+        groups = (
+            (get_credential_file_mounts(), "credential"),
+            (get_skills_directory_mount(), "skills dir"),
+            (get_cache_directory_mounts(), "cache dir"),
+        )
+        for entries, label in groups:
+            for entry in entries:
+                volume_args.extend(
+                    ["-v", f"{entry['host_path']}:{entry['container_path']}:ro"]
+                )
+                logger.info(
+                    "%s: mounting %s %s -> %s",
+                    runtime_label,
+                    label,
+                    entry["host_path"],
+                    entry["container_path"],
+                )
+    except Exception as exc:
+        logger.debug("%s: could not load host integration mounts: %s", runtime_label, exc)
 
 
 def _ensure_container_runtime_available(runtime: str = "docker") -> None:
@@ -260,6 +321,7 @@ class DockerEnvironment(BaseEnvironment):
         network: bool = True,
         host_cwd: str = None,
         auto_mount_cwd: bool = False,
+        mount_host_integrations: bool = True,
         runtime: str = "docker",
     ):
         if cwd == "~":
@@ -280,6 +342,11 @@ class DockerEnvironment(BaseEnvironment):
 
         # Fail fast if the container runtime is not available.
         _ensure_container_runtime_available(self._container_runtime)
+        self._image_reference = str(image).strip()
+        self._image_digest = inspect_image_digest(
+            self._image_reference,
+            runtime=self._container_runtime,
+        )
 
         # Build resource limit args
         resource_args = []
@@ -373,64 +440,21 @@ class DockerEnvironment(BaseEnvironment):
         self._voidcube_workspace_host_path = host_cwd_abs if bind_host_cwd else self._workspace_dir
         self._voidcube_home_host_path = self._home_dir
 
-        # Mount credential files (OAuth tokens, etc.) declared by skills.
-        # Read-only so the container can authenticate but not modify host creds.
-        try:
-            from tools.credential_files import (
-                get_credential_file_mounts,
-                get_skills_directory_mount,
-                get_cache_directory_mounts,
-            )
-
-            for mount_entry in get_credential_file_mounts():
-                volume_args.extend([
-                    "-v",
-                    f"{mount_entry['host_path']}:{mount_entry['container_path']}:ro",
-                ])
-                logger.info(
-                    "%s: mounting credential %s -> %s",
-                    self._runtime_label,
-                    mount_entry["host_path"],
-                    mount_entry["container_path"],
-                )
-
-            # Mount skill directories (local + external) so skill
-            # scripts/templates are available inside the container.
-            for skills_mount in get_skills_directory_mount():
-                volume_args.extend([
-                    "-v",
-                    f"{skills_mount['host_path']}:{skills_mount['container_path']}:ro",
-                ])
-                logger.info(
-                    "%s: mounting skills dir %s -> %s",
-                    self._runtime_label,
-                    skills_mount["host_path"],
-                    skills_mount["container_path"],
-                )
-
-            # Mount host-side cache directories (documents, images, audio,
-            # screenshots) so the agent can access uploaded files and other
-            # cached media from inside the container.  Read-only — the
-            # container reads these but the host gateway manages writes.
-            for cache_mount in get_cache_directory_mounts():
-                volume_args.extend([
-                    "-v",
-                    f"{cache_mount['host_path']}:{cache_mount['container_path']}:ro",
-                ])
-                logger.info(
-                    "%s: mounting cache dir %s -> %s",
-                    self._runtime_label,
-                    cache_mount["host_path"],
-                    cache_mount["container_path"],
-                )
-        except Exception as e:
-            logger.debug("%s: could not load credential file mounts: %s", self._runtime_label, e)
+        if mount_host_integrations:
+            _append_host_integration_mounts(volume_args, self._runtime_label)
+        else:
+            logger.info("%s: host integration mounts disabled for task", self._runtime_label)
 
         # Explicit environment variables (docker_env config) — set at container
         # creation so they're available to all processes (including entrypoint).
         env_args = []
-        for key in sorted(self._env):
-            env_args.extend(["-e", f"{key}={self._env[key]}"])
+        runtime_env = {
+            **self._env,
+            "VOIDCUBE_IMAGE_REFERENCE": self._image_reference,
+            "VOIDCUBE_IMAGE_DIGEST": self._image_digest,
+        }
+        for key in sorted(runtime_env):
+            env_args.extend(["-e", f"{key}={runtime_env[key]}"])
 
         logger.info("%s volume_args: %s", self._runtime_label, volume_args)
         all_run_args = list(_SECURITY_ARGS) + writable_args + resource_args + volume_args + env_args

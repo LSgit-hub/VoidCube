@@ -413,7 +413,7 @@ DEFAULT_CONFIG = {
         # are passed through automatically; this list is for non-skill use cases.
         "env_passthrough": [],
         "docker_image": "nikolaik/python-nodejs:python3.14-nodejs20",
-        "podman_image": "localhost/voidcube-podman-local:latest",
+        "podman_image": "localhost/voidcube-project-podman:py314-v1",
         "docker_forward_env": [],
         # Explicit environment variables to set inside Docker containers.
         # Unlike docker_forward_env (which reads values from the host process),

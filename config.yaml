@@ -89,7 +89,7 @@ terminal:
   timeout: 180
   env_passthrough: []
   docker_image: nikolaik/python-nodejs:python3.14-nodejs20
-  podman_image: localhost/voidcube-podman-local:latest
+  podman_image: localhost/voidcube-project-podman:py314-v1
   docker_forward_env: []
   docker_env: {}
   singularity_image: docker://nikolaik/python-nodejs:python3.14-nodejs20

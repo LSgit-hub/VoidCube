@@ -592,6 +592,19 @@ def _volume_target(volume: object) -> str:
     return parts[-1]
 
 
+def _is_host_bind_volume(volume: object) -> bool:
+    """Identify host-path bind mounts that would escape a task worktree."""
+    value = str(volume or "").strip()
+    if ":" not in value:
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", value):
+        return True
+    source = value.split(":", 1)[0].strip()
+    if not source or source.startswith((".", "~", "/")):
+        return True
+    return os.path.exists(source)
+
+
 def _git_path(worktree: Path, argument: str) -> Path:
     result = subprocess.run(
         ["git", "-C", str(worktree), "rev-parse", argument],
@@ -611,6 +624,12 @@ def _git_path(worktree: Path, argument: str) -> Path:
 
 
 _ENVIRONMENT_PROBE_MARKER = "__VOIDCUBE_EXECUTION_ENVIRONMENT__"
+
+
+def _autonomous_podman_image() -> str:
+    from tools.podman_sandbox import DEFAULT_IMAGE
+
+    return DEFAULT_IMAGE
 
 
 def _parse_sandbox_environment_probe(
@@ -647,6 +666,8 @@ def _parse_sandbox_environment_probe(
         "os_name": values.get("os_name") or "unknown",
         "os_release": values.get("os_release") or "unknown",
         "architecture": values.get("architecture") or "unknown",
+        "image_reference": values.get("image_reference") or None,
+        "image_digest": values.get("image_digest") or None,
         "repository_head": lines[2].strip(),
         "tools": tools,
     }
@@ -686,6 +707,11 @@ def prepare_task_git_worktree(
     if any(_volume_target(volume) == "/workspace" for volume in configured_volumes):
         raise ValueError(
             "Autonomous worktree binding conflicts with a configured /workspace volume"
+        )
+    if any(_is_host_bind_volume(volume) for volume in configured_volumes):
+        raise ValueError(
+            "Autonomous worktree binding permits named container volumes only; "
+            "host bind mounts outside the worktree are forbidden"
         )
 
     top_level = _git_path(worktree, "--show-toplevel")
@@ -739,7 +765,7 @@ def prepare_task_git_worktree(
             allowed_environment_variables=tuple(sorted(task_environment)),
             command_timeout_seconds=max(30, int(config.get("timeout") or 120)),
             max_output_chars=50_000,
-            required_tools=("git",),
+            required_tools=("git", "python", "pytest", "node", "npm"),
             required_platforms=("linux",),
         )
     )
@@ -755,6 +781,13 @@ def prepare_task_git_worktree(
             ],
             "docker_env": task_environment,
             "fallback_to_local": False,
+            "docker_mount_host_integrations": False,
+            "container_persistent": False,
+            **(
+                {"podman_image": _autonomous_podman_image()}
+                if backend == "podman"
+                else {}
+            ),
         },
     )
 
@@ -768,6 +801,8 @@ def prepare_task_git_worktree(
                 "printf 'os_name\\t%s\\n' \"$(uname -s 2>/dev/null || printf unknown)\"",
                 "printf 'os_release\\t%s\\n' \"$(uname -r 2>/dev/null || printf unknown)\"",
                 "printf 'architecture\\t%s\\n' \"$(uname -m 2>/dev/null || printf unknown)\"",
+                "printf 'image_reference\\t%s\\n' \"${VOIDCUBE_IMAGE_REFERENCE:-}\"",
+                "printf 'image_digest\\t%s\\n' \"${VOIDCUBE_IMAGE_DIGEST:-}\"",
                 "for tool in git python pytest node npm; do",
                 "  executable=\"$(command -v \"$tool\" 2>/dev/null || true)\"",
                 "  version=\"\"",
@@ -811,6 +846,8 @@ def prepare_task_git_worktree(
             str(probe_result.get("output") or ""),
             expected_head=expected_head,
         )
+        if backend == "podman" and not environment_probe.get("image_digest"):
+            raise RuntimeError("Podman probe did not return the immutable image digest")
         from systems.evolution_evaluation.environment import (
             build_container_environment_manifest,
         )
@@ -968,7 +1005,7 @@ def _get_env_config() -> Dict[str, Any]:
             setting(
                 "TERMINAL_PODMAN_IMAGE",
                 "podman_image",
-                "localhost/voidcube-podman-local:latest",
+                "localhost/voidcube-project-podman:py314-v1",
             )
         ),
         "docker_forward_env": structured_setting(
@@ -1095,6 +1132,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     volumes = cc.get("docker_volumes", [])
     docker_forward_env = cc.get("docker_forward_env", [])
     docker_env = cc.get("docker_env", {})
+    mount_host_integrations = cc.get("docker_mount_host_integrations", True)
 
     if env_type == "local":
         from tools.environments.local import LocalEnvironment
@@ -1117,6 +1155,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
             auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
             forward_env=docker_forward_env,
             env=docker_env,
+            mount_host_integrations=mount_host_integrations,
             network=network,
         )
 
@@ -1132,6 +1171,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
             auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
             forward_env=docker_forward_env,
             env=docker_env,
+            mount_host_integrations=mount_host_integrations,
             network=network,
         )
     
@@ -1789,7 +1829,10 @@ def terminal_tool(
                                 "container_cpu": config.get("container_cpu", 1),
                                 "container_memory": config.get("container_memory", 5120),
                                 "container_disk": config.get("container_disk", 51200),
-                                "container_persistent": config.get("container_persistent", True),
+                                "container_persistent": overrides.get(
+                                    "container_persistent",
+                                    config.get("container_persistent", True),
+                                ),
                                 "modal_mode": config.get("modal_mode", "auto"),
                                 "docker_volumes": overrides.get(
                                     "docker_volumes", config.get("docker_volumes", [])
@@ -1803,6 +1846,9 @@ def terminal_tool(
                                 ),
                                 "docker_env": overrides.get(
                                     "docker_env", config.get("docker_env", {})
+                                ),
+                                "docker_mount_host_integrations": overrides.get(
+                                    "docker_mount_host_integrations", True
                                 ),
                             }
 

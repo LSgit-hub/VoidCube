@@ -534,7 +534,7 @@ def _diagnose_podman(cfg: dict) -> AgentCheck:
     image = str(
         os.getenv("TERMINAL_PODMAN_IMAGE")
         or configured.get("podman_image")
-        or "localhost/voidcube-podman-local:latest"
+        or "localhost/voidcube-project-podman:py314-v1"
     ).strip()
     requested = requested_backend == "podman"
     required = requested and not fallback_to_local
