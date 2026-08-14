@@ -614,7 +614,12 @@ def check_command_security(command: str) -> dict:
     cfg = _load_security_config()
 
     if not cfg["tirith_enabled"]:
-        return {"action": "allow", "findings": [], "summary": ""}
+        return {
+            "action": "allow",
+            "findings": [],
+            "summary": "",
+            "scanner_status": "disabled",
+        }
 
     tirith_path = _resolve_tirith_path(cfg["tirith_path"])
     timeout = cfg["tirith_timeout"]
@@ -632,13 +637,33 @@ def check_command_security(command: str) -> dict:
         # Covers FileNotFoundError, PermissionError, exec format error
         logger.warning("tirith spawn failed: %s", exc)
         if fail_open:
-            return {"action": "allow", "findings": [], "summary": f"tirith unavailable: {exc}"}
-        return {"action": "block", "findings": [], "summary": f"tirith spawn failed (fail-closed): {exc}"}
+            return {
+                "action": "allow",
+                "findings": [],
+                "summary": f"tirith unavailable: {exc}",
+                "scanner_status": "unavailable",
+            }
+        return {
+            "action": "block",
+            "findings": [],
+            "summary": f"tirith spawn failed (fail-closed): {exc}",
+            "scanner_status": "unavailable",
+        }
     except subprocess.TimeoutExpired:
         logger.warning("tirith timed out after %ds", timeout)
         if fail_open:
-            return {"action": "allow", "findings": [], "summary": f"tirith timed out ({timeout}s)"}
-        return {"action": "block", "findings": [], "summary": "tirith timed out (fail-closed)"}
+            return {
+                "action": "allow",
+                "findings": [],
+                "summary": f"tirith timed out ({timeout}s)",
+                "scanner_status": "timeout",
+            }
+        return {
+            "action": "block",
+            "findings": [],
+            "summary": "tirith timed out (fail-closed)",
+            "scanner_status": "timeout",
+        }
 
     # Map exit code to action
     exit_code = result.returncode
@@ -652,8 +677,18 @@ def check_command_security(command: str) -> dict:
         # Unknown exit code — respect fail_open
         logger.warning("tirith returned unexpected exit code %d", exit_code)
         if fail_open:
-            return {"action": "allow", "findings": [], "summary": f"tirith exit code {exit_code} (fail-open)"}
-        return {"action": "block", "findings": [], "summary": f"tirith exit code {exit_code} (fail-closed)"}
+            return {
+                "action": "allow",
+                "findings": [],
+                "summary": f"tirith exit code {exit_code} (fail-open)",
+                "scanner_status": "error",
+            }
+        return {
+            "action": "block",
+            "findings": [],
+            "summary": f"tirith exit code {exit_code} (fail-closed)",
+            "scanner_status": "error",
+        }
 
     # Parse JSON for enrichment (never overrides the exit code verdict)
     findings = []
@@ -671,4 +706,9 @@ def check_command_security(command: str) -> dict:
         elif action == "warn":
             summary = "security warning detected (details unavailable)"
 
-    return {"action": action, "findings": findings, "summary": summary}
+    return {
+        "action": action,
+        "findings": findings,
+        "summary": summary,
+        "scanner_status": "available",
+    }

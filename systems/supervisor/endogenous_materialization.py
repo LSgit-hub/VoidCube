@@ -769,6 +769,25 @@ def _body_evidence(projection: Dict[str, Any]) -> Dict[str, Any]:
         "authoring_environment_identity_id": authorization.get(
             "authoring_environment_identity_id"
         ),
+        "authoring_dependency_fingerprint": authorization.get(
+            "authoring_dependency_fingerprint"
+        ),
+        "authoring_security_scanner_statuses": list(
+            authorization.get("authoring_security_scanner_statuses") or []
+        ),
+        "authoring_container_disk_quota_statuses": list(
+            authorization.get("authoring_container_disk_quota_statuses") or []
+        ),
+        "environment_capability_warnings": list(
+            authorization.get("environment_capability_warnings") or []
+        ),
+        "platform_selection_id": authorization.get("platform_selection_id"),
+        "selected_validation_platforms": list(
+            authorization.get("selected_validation_platforms") or []
+        ),
+        "platform_selection_reason_codes": list(
+            authorization.get("platform_selection_reason_codes") or []
+        ),
         "baseline_snapshot_id": authorization.get("baseline_snapshot_id"),
         "candidate_snapshot_id": authorization.get("candidate_snapshot_id"),
         "benchmark_pack_id": authorization.get("benchmark_pack_id"),

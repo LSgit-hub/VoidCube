@@ -1654,6 +1654,9 @@ def terminal_tool(
 
         tirith_result = _check_tirith_security(command)
         tirith_action = tirith_result["action"]
+        security_scanner_status = str(
+            tirith_result.get("scanner_status") or "error"
+        )
         tirith_summary = tirith_result.get("summary") or ""
         tirith_findings = tirith_result.get("findings") or []
         if tirith_action == "block":
@@ -1663,6 +1666,7 @@ def terminal_tool(
                 "error": tirith_summary or "Command blocked by Tirith security scan",
                 "status": "blocked",
                 "security_scanner": "tirith",
+                "security_scanner_status": security_scanner_status,
                 "security_findings": tirith_findings,
             }, ensure_ascii=False)
         tirith_warning = None
@@ -1675,6 +1679,7 @@ def terminal_tool(
                 "error": f"Invalid Tirith security verdict: {tirith_action!r}",
                 "status": "error",
                 "security_scanner": "tirith",
+                "security_scanner_status": security_scanner_status,
             }, ensure_ascii=False)
 
         # Get configuration
@@ -1701,6 +1706,7 @@ def terminal_tool(
                     "error": decision_reason or fallback_msg,
                     "status": "blocked",
                     "approval_status": approval["approval_status"],
+                    "security_scanner_status": security_scanner_status,
                 }, ensure_ascii=False)
             if approval["approval_required"]:
                 desc = approval.get("reason") or "flagged as dangerous"
@@ -1759,7 +1765,13 @@ def terminal_tool(
                 fallback_to_local=requested_fallback,
             )
         except TaskExecutionBlocked as exc:
-            return json.dumps(exc.as_payload(), ensure_ascii=False)
+            return json.dumps(
+                {
+                    **exc.as_payload(),
+                    "security_scanner_status": security_scanner_status,
+                },
+                ensure_ascii=False,
+            )
         fallback_to_local = requested_fallback
 
         # Reject foreground commands where the model explicitly requests
@@ -1771,6 +1783,7 @@ def terminal_tool(
                     f"{FOREGROUND_MAX_TIMEOUT}s. Use background=true with "
                     f"notify_on_complete=true for long-running commands."
                 ),
+                "security_scanner_status": security_scanner_status,
             }, ensure_ascii=False)
 
         # Start cleanup thread
@@ -1779,7 +1792,13 @@ def terminal_tool(
         try:
             begin_task_execution(effective_task_id)
         except TaskExecutionBlocked as exc:
-            return json.dumps(exc.as_payload(), ensure_ascii=False)
+            return json.dumps(
+                {
+                    **exc.as_payload(),
+                    "security_scanner_status": security_scanner_status,
+                },
+                ensure_ascii=False,
+            )
 
         # Get or create environment.
         # Use a per-task creation lock so concurrent tool calls for the same
@@ -1891,6 +1910,7 @@ def terminal_tool(
                                 if execution_contract is not None
                                 else {}
                             ),
+                            "security_scanner_status": security_scanner_status,
                         }, ensure_ascii=False)
                     except Exception as e:
                         if execution_contract is None:
@@ -1901,11 +1921,14 @@ def terminal_tool(
                             reason=f"{type(e).__name__}: {e}",
                         )
                         return json.dumps(
-                            TaskExecutionBlocked(
-                                effective_task_id,
-                                "environment_start_failed",
-                                f"{type(e).__name__}: {e}",
-                            ).as_payload(),
+                            {
+                                **TaskExecutionBlocked(
+                                    effective_task_id,
+                                    "environment_start_failed",
+                                    f"{type(e).__name__}: {e}",
+                                ).as_payload(),
+                                "security_scanner_status": security_scanner_status,
+                            },
                             ensure_ascii=False,
                         )
 
@@ -1923,7 +1946,16 @@ def terminal_tool(
                 active_backend=active_env_type,
             )
         except TaskExecutionBlocked as exc:
-            return json.dumps(exc.as_payload(), ensure_ascii=False)
+            return json.dumps(
+                {
+                    **exc.as_payload(),
+                    "security_scanner_status": security_scanner_status,
+                    "container_disk_quota_status": getattr(
+                        env, "_voidcube_disk_quota_status", "not_applicable"
+                    ),
+                },
+                ensure_ascii=False,
+            )
 
         # Validate workdir against shell injection
         if workdir:
@@ -1935,7 +1967,11 @@ def terminal_tool(
                     "output": "",
                     "exit_code": -1,
                     "error": workdir_error,
-                    "status": "blocked"
+                    "status": "blocked",
+                    "security_scanner_status": security_scanner_status,
+                    "container_disk_quota_status": getattr(
+                        env, "_voidcube_disk_quota_status", "not_applicable"
+                    ),
                 }, ensure_ascii=False)
 
         if background:
@@ -1971,6 +2007,10 @@ def terminal_tool(
                     "pid": proc_session.pid,
                     "exit_code": 0,
                     "error": None,
+                    "security_scanner_status": security_scanner_status,
+                    "container_disk_quota_status": getattr(
+                        env, "_voidcube_disk_quota_status", "not_applicable"
+                    ),
                 }
                 if approval_note:
                     result_data["approval"] = approval_note
@@ -1993,7 +2033,11 @@ def terminal_tool(
                 return json.dumps({
                     "output": "",
                     "exit_code": -1,
-                    "error": f"Failed to start background process: {str(e)}"
+                    "error": f"Failed to start background process: {str(e)}",
+                    "security_scanner_status": security_scanner_status,
+                    "container_disk_quota_status": getattr(
+                        env, "_voidcube_disk_quota_status", "not_applicable"
+                    ),
                 }, ensure_ascii=False)
         else:
             # Run foreground command with retry logic
@@ -2013,7 +2057,13 @@ def terminal_tool(
                         return json.dumps({
                             "output": "",
                             "exit_code": 124,
-                            "error": f"Command timed out after {effective_timeout} seconds"
+                            "error": f"Command timed out after {effective_timeout} seconds",
+                            "security_scanner_status": security_scanner_status,
+                            "container_disk_quota_status": getattr(
+                                env,
+                                "_voidcube_disk_quota_status",
+                                "not_applicable",
+                            ),
                         }, ensure_ascii=False)
                     
                     # Retry on transient errors
@@ -2030,7 +2080,13 @@ def terminal_tool(
                     return json.dumps({
                         "output": "",
                         "exit_code": -1,
-                        "error": f"Command execution failed: {type(e).__name__}: {str(e)}"
+                        "error": f"Command execution failed: {type(e).__name__}: {str(e)}",
+                        "security_scanner_status": security_scanner_status,
+                        "container_disk_quota_status": getattr(
+                            env,
+                            "_voidcube_disk_quota_status",
+                            "not_applicable",
+                        ),
                     }, ensure_ascii=False)
                 
                 # Got a result
@@ -2076,6 +2132,10 @@ def terminal_tool(
                 "output": output,
                 "exit_code": returncode,
                 "error": None,
+                "security_scanner_status": security_scanner_status,
+                "container_disk_quota_status": getattr(
+                    env, "_voidcube_disk_quota_status", "not_applicable"
+                ),
             }
             if approval_note:
                 result_dict["approval"] = approval_note

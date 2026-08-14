@@ -122,6 +122,9 @@ def test_body_task_prepares_worktree_before_prompt_is_enqueued():
             "authoring_environment_identity_id": (
                 "execution-environment-identity-" + "d" * 64
             ),
+            "authoring_dependency_fingerprint": "f" * 64,
+            "platform_selection_id": "benchmark-platform-selection-" + "7" * 64,
+            "selected_validation_platforms": ["windows"],
             "validation_scope": "host",
             "validated_platforms": ["windows"],
         },
@@ -192,6 +195,9 @@ def test_body_task_releases_environment_and_can_retry_when_enqueue_fails():
             "authoring_environment_identity_id": (
                 "execution-environment-identity-" + "d" * 64
             ),
+            "authoring_dependency_fingerprint": "f" * 64,
+            "platform_selection_id": "benchmark-platform-selection-" + "7" * 64,
+            "selected_validation_platforms": ["windows"],
             "validation_scope": "host",
             "validated_platforms": ["windows"],
         },

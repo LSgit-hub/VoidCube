@@ -42,6 +42,7 @@ def test_tirith_block_prevents_backend_initialization(monkeypatch, background, f
         "_check_tirith_security",
         lambda command: {
             "action": "block",
+            "scanner_status": "available",
             "summary": "pipe-to-interpreter detected",
             "findings": [{"rule": "pipe-shell"}],
         },
@@ -59,6 +60,7 @@ def test_tirith_block_prevents_backend_initialization(monkeypatch, background, f
     assert touched == []
     assert payload["status"] == "blocked"
     assert payload["security_scanner"] == "tirith"
+    assert payload["security_scanner_status"] == "available"
     assert payload["security_findings"] == [{"rule": "pipe-shell"}]
 
 
@@ -76,6 +78,7 @@ def test_tirith_allow_and_warn_execute_foreground(
     executed = []
     env = SimpleNamespace(
         cwd=".",
+        _voidcube_disk_quota_status="unsupported",
         execute=lambda command, **kwargs: (
             executed.append((command, kwargs))
             or {"output": "ok", "returncode": 0}
@@ -88,6 +91,7 @@ def test_tirith_allow_and_warn_execute_foreground(
         "_check_tirith_security",
         lambda command: {
             "action": action,
+            "scanner_status": "available",
             "summary": "suspicious URL" if action == "warn" else "",
             "findings": [{"rule": "homograph"}] if action == "warn" else [],
         },
@@ -105,6 +109,8 @@ def test_tirith_allow_and_warn_execute_foreground(
 
     assert executed == [("fetch example", {"timeout": 30})]
     assert payload["output"] == "ok"
+    assert payload["security_scanner_status"] == "available"
+    assert payload["container_disk_quota_status"] == "unsupported"
     if expected_warning is None:
         assert "security_warning" not in payload
     else:
@@ -132,6 +138,7 @@ def test_unknown_tirith_action_does_not_reach_backend(monkeypatch):
     assert touched == []
     assert payload["status"] == "error"
     assert payload["security_scanner"] == "tirith"
+    assert payload["security_scanner_status"] == "error"
 
 
 @pytest.mark.unit
@@ -176,3 +183,4 @@ def test_tirith_operational_failure_respects_config(
     result = tirith_security_module.check_command_security("fetch example")
 
     assert result["action"] == expected_action
+    assert result["scanner_status"] in {"unavailable", "timeout"}

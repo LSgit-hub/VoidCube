@@ -46,6 +46,10 @@ from systems.evolution_evaluation.repository import (
     EvaluationRepository,
     JsonEvaluationRepository,
 )
+from systems.evolution_evaluation.selection import (
+    BenchmarkPlatformSelection,
+    select_benchmark_platforms,
+)
 
 __all__ = [
     "AllowedRegression",
@@ -59,6 +63,7 @@ __all__ = [
     "BenchmarkConfigurationError",
     "BenchmarkExecutionError",
     "BenchmarkPack",
+    "BenchmarkPlatformSelection",
     "BenchmarkPackExecutor",
     "BenchmarkRunner",
     "BenchmarkRunRequest",
@@ -80,6 +85,7 @@ __all__ = [
     "RuntimeToolIdentity",
     "ScoringDimension",
     "ScoringPolicy",
+    "select_benchmark_platforms",
     "SubjectCheckoutEvidence",
     "WorkspacePathMapping",
     "build_container_environment_manifest",

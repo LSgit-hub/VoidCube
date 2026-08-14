@@ -117,6 +117,15 @@ def _body_evaluation_authorization() -> dict:
         "authoring_environment_identity_id": (
             "execution-environment-identity-" + "b" * 64
         ),
+        "authoring_dependency_fingerprint": "c" * 64,
+        "authoring_security_scanner_statuses": ["available"],
+        "authoring_container_disk_quota_statuses": ["unsupported"],
+        "environment_capability_warnings": [
+            "container_disk_quota_unsupported"
+        ],
+        "platform_selection_id": "benchmark-platform-selection-" + "d" * 64,
+        "selected_validation_platforms": ["windows"],
+        "platform_selection_reason_codes": ["project_default_windows"],
         "validation_scope": "host",
         "validated_platforms": ["windows"],
         "knowledge_ids": ["knowledge-" + "7" * 64],
@@ -142,6 +151,13 @@ def _body_evaluation_fields() -> dict:
             "execution_environment_id",
             "authoring_environment_manifest_id",
             "authoring_environment_identity_id",
+            "authoring_dependency_fingerprint",
+            "authoring_security_scanner_statuses",
+            "authoring_container_disk_quota_statuses",
+            "environment_capability_warnings",
+            "platform_selection_id",
+            "selected_validation_platforms",
+            "platform_selection_reason_codes",
             "validation_scope",
             "validated_platforms",
             "knowledge_ids",

@@ -28,6 +28,7 @@ from systems.evolution_evaluation import (
     ScoringPolicy,
     SubjectCheckoutEvidence,
     capture_host_environment_manifest,
+    select_benchmark_platforms,
 )
 from systems.research_knowledge import (
     JsonKnowledgeRepository,
@@ -124,11 +125,14 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
         environment_identity_id=(
             ENVIRONMENT.identity().execution_environment_identity_id
         ),
+        environment_dependency_fingerprint=ENVIRONMENT.dependency_fingerprint,
         command_evidence=(
             AuthoringCommandEvidence(
                 command="pytest tests/test_demo.py",
                 exit_code=0,
                 output="1 passed",
+                security_scanner_status="available",
+                container_disk_quota_status="unsupported",
             ),
         ),
         agent_summary="Improved correctness",
@@ -137,6 +141,11 @@ def _records(*, verdict: str = "promote", completed_at: datetime = NOW, gate: st
     )
     spec = ExperimentSpec.create(
         authoring_result_id=authoring.authoring_result_id,
+        platform_selection=select_benchmark_platforms(
+            authoring.changed_files,
+            str(authoring.environment_dependency_fingerprint),
+            created_at=NOW,
+        ),
         baseline_snapshot_id=baseline.snapshot_id,
         candidate_commit=CANDIDATE_COMMIT,
         candidate_snapshot_id=candidate.snapshot_id,
@@ -433,6 +442,12 @@ def test_binding_rejects_actual_commit_mismatch(tmp_path: Path):
             "execution_environment_id",
             "authoring_environment_manifest_id",
             "authoring_environment_identity_id",
+            "authoring_dependency_fingerprint",
+            "authoring_security_scanner_statuses",
+            "authoring_container_disk_quota_statuses",
+            "environment_capability_warnings",
+            "platform_selection_id",
+            "selected_validation_platforms",
             "validation_scope",
             "validated_platforms",
             "knowledge_ids",

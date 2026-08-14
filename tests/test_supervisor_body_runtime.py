@@ -36,6 +36,7 @@ from systems.evolution_evaluation import (
     SubjectCheckoutEvidence,
     ExecutionEnvironmentManifest,
     capture_host_environment_manifest,
+    select_benchmark_platforms,
 )
 from systems.research_knowledge import KnowledgeArtifact, KnowledgeClaim, KnowledgeSource
 from systems.self_cognition import SelfCognitionSnapshot
@@ -149,6 +150,13 @@ def _create_running_body_improvement_task(
             "execution_environment_id",
             "authoring_environment_manifest_id",
             "authoring_environment_identity_id",
+            "authoring_dependency_fingerprint",
+            "authoring_security_scanner_statuses",
+            "authoring_container_disk_quota_statuses",
+            "environment_capability_warnings",
+            "platform_selection_id",
+            "selected_validation_platforms",
+            "platform_selection_reason_codes",
             "validation_scope",
             "validated_platforms",
         )
@@ -273,11 +281,14 @@ def _seed_body_evaluation_authorization(
         environment_identity_id=(
             _HOST_ENVIRONMENT.identity().execution_environment_identity_id
         ),
+        environment_dependency_fingerprint=_HOST_ENVIRONMENT.dependency_fingerprint,
         command_evidence=(
             AuthoringCommandEvidence(
                 command="pytest tests/test_stream_handler.py",
                 exit_code=0,
                 output="1 passed",
+                security_scanner_status="available",
+                container_disk_quota_status="not_applicable",
             ),
         ),
         agent_summary="Improved stream handling",
@@ -286,6 +297,11 @@ def _seed_body_evaluation_authorization(
     )
     spec = ExperimentSpec.create(
         authoring_result_id=authoring.authoring_result_id,
+        platform_selection=select_benchmark_platforms(
+            authoring.changed_files,
+            str(authoring.environment_dependency_fingerprint),
+            created_at=now,
+        ),
         baseline_snapshot_id=baseline.snapshot_id,
         candidate_commit="a" * 40,
         candidate_snapshot_id=candidate.snapshot_id,

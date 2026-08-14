@@ -108,6 +108,19 @@ class AuthoringCommandEvidence(_FrozenModel):
     exit_code: int
     output: str = ""
     timed_out: bool = False
+    security_scanner_status: Literal[
+        "available",
+        "disabled",
+        "unavailable",
+        "timeout",
+        "error",
+    ] | None = None
+    container_disk_quota_status: Literal[
+        "enforced",
+        "unsupported",
+        "not_requested",
+        "not_applicable",
+    ] | None = None
 
 
 AuthoringStatus = Literal[
@@ -131,6 +144,10 @@ class _EvolutionAuthoringResultContent(_FrozenModel):
     changed_files: tuple[str, ...] = ()
     environment_manifest_id: str | None = None
     environment_identity_id: str | None = None
+    environment_dependency_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     command_evidence: tuple[AuthoringCommandEvidence, ...] = ()
     agent_summary: str = ""
     error_code: str | None = None
@@ -195,7 +212,20 @@ class EvolutionAuthoringResult(_EvolutionAuthoringResultContent):
 
     @model_validator(mode="after")
     def _validate_content_address(self) -> Self:
-        digest = _content_hash(self.content_payload())
+        payload = self.content_payload()
+        digest = _content_hash(payload)
+        if digest != self.content_hash:
+            legacy_payload = dict(payload)
+            if self.environment_dependency_fingerprint is None:
+                legacy_payload.pop("environment_dependency_fingerprint", None)
+            for command in legacy_payload.get("command_evidence", []):
+                if not isinstance(command, dict):
+                    continue
+                if command.get("security_scanner_status") is None:
+                    command.pop("security_scanner_status", None)
+                if command.get("container_disk_quota_status") is None:
+                    command.pop("container_disk_quota_status", None)
+            digest = _content_hash(legacy_payload)
         if self.content_hash != digest:
             raise ValueError("content_hash does not match authoring result")
         if self.authoring_result_id != f"evolution-authoring-result-{digest}":

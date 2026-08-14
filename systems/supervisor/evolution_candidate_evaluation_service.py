@@ -24,6 +24,7 @@ from systems.evolution_evaluation import (
     JsonEvaluationRepository,
     MetricTarget,
     ScoringPolicy,
+    select_benchmark_platforms,
 )
 from systems.research_knowledge import JsonKnowledgeRepository
 from systems.self_cognition import (
@@ -137,8 +138,24 @@ class EvolutionCandidateEvaluationService:
         self._validate_git_candidate(authoring)
         self._validate_knowledge(knowledge_ids)
         timestamp = created_at or datetime.now(timezone.utc)
+        selection = select_benchmark_platforms(
+            authoring.changed_files,
+            str(authoring.environment_dependency_fingerprint),
+            created_at=timestamp,
+        )
+        missing_platforms = sorted(
+            set(selection.required_platforms)
+            - set(policy.required_validation_platforms)
+        )
+        if missing_platforms:
+            raise EvolutionCandidateEvaluationBlocked(
+                "platform_selection_not_covered",
+                "scoring policy does not cover selected validation platforms: "
+                + ", ".join(missing_platforms),
+            )
         spec = ExperimentSpec.create(
             authoring_result_id=authoring.authoring_result_id,
+            platform_selection=selection,
             baseline_snapshot_id=baseline.snapshot_id,
             candidate_commit=str(authoring.candidate_commit),
             candidate_snapshot_id=candidate.snapshot_id,
@@ -187,6 +204,25 @@ class EvolutionCandidateEvaluationService:
             raise EvolutionCandidateEvaluationBlocked(
                 "candidate_provenance_missing",
                 "successful authoring result is missing candidate commit or ref",
+            )
+        if not result.environment_dependency_fingerprint:
+            raise EvolutionCandidateEvaluationBlocked(
+                "authoring_dependency_fingerprint_missing",
+                "successful authoring result is missing its dependency fingerprint",
+            )
+        if not result.command_evidence:
+            raise EvolutionCandidateEvaluationBlocked(
+                "authoring_command_evidence_missing",
+                "successful authoring result is missing command evidence",
+            )
+        if any(
+            evidence.security_scanner_status is None
+            or evidence.container_disk_quota_status is None
+            for evidence in result.command_evidence
+        ):
+            raise EvolutionCandidateEvaluationBlocked(
+                "authoring_environment_capability_evidence_missing",
+                "authoring command evidence is missing scanner or disk quota status",
             )
 
     @staticmethod

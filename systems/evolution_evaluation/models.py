@@ -10,6 +10,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from systems.evolution_evaluation.selection import BenchmarkPlatformSelection
+
 
 SCHEMA_VERSION = 1
 SCORING_POLICY_SCHEMA_VERSION = 2
@@ -389,6 +391,7 @@ class _ExperimentSpecContent(_FrozenModel):
         default=None,
         pattern=r"^evolution-authoring-result-[0-9a-f]{64}$",
     )
+    platform_selection: BenchmarkPlatformSelection | None = None
     baseline_snapshot_id: str = Field(pattern=r"^self-cognition-[0-9a-f]{64}$")
     candidate_commit: str = Field(min_length=1)
     candidate_snapshot_id: str = Field(pattern=r"^self-cognition-[0-9a-f]{64}$")
@@ -448,7 +451,7 @@ class ExperimentSpec(_ExperimentSpecContent):
             self,
             "experiment_spec_id",
             "experiment-spec-",
-            ("authoring_result_id",),
+            ("authoring_result_id", "platform_selection"),
         )
         return self
 
@@ -646,11 +649,14 @@ def _validate_address_with_legacy_optional_fields(
         _validate_address(model, id_field, id_prefix)
         return
     except ValueError:
-        if any(getattr(model, field) is not None for field in optional_fields):
+        removable_fields = tuple(
+            field for field in optional_fields if getattr(model, field) is None
+        )
+        if not removable_fields:
             raise
 
     payload = model.content_payload()  # type: ignore[attr-defined]
-    for field in optional_fields:
+    for field in removable_fields:
         payload.pop(field, None)
     expected_hash = _content_hash(payload)
     if model.content_hash != expected_hash:  # type: ignore[attr-defined]

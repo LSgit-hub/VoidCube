@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 from pathlib import Path
 
@@ -131,6 +133,8 @@ class _Harness:
             "output": (result.stdout or result.stderr).strip(),
             "exit_code": result.returncode,
             "status": "ok" if result.returncode == 0 else "error",
+            "security_scanner_status": "available",
+            "container_disk_quota_status": "unsupported",
         }
 
 
@@ -190,7 +194,14 @@ async def test_authoring_executor_creates_tested_candidate_ref_and_cleans_worktr
     assert result.changed_files == ("agent/demo.py",)
     assert result.environment_manifest_id
     assert result.environment_identity_id
+    assert result.environment_dependency_fingerprint == "d" * 64
     assert len(result.command_evidence) == 3
+    assert {
+        item.security_scanner_status for item in result.command_evidence
+    } == {"available"}
+    assert {
+        item.container_disk_quota_status for item in result.command_evidence
+    } == {"unsupported"}
     assert (
         _git("show", f"{result.candidate_ref}:agent/demo.py", cwd=repository).stdout
         == "VALUE = 'candidate'\n"
@@ -417,3 +428,47 @@ async def test_authoring_result_rejects_tampered_content_address(tmp_path: Path)
 
     with pytest.raises(ValidationError, match="content_hash does not match"):
         type(result).model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_authoring_result_reads_legacy_evidence_without_new_capabilities(
+    tmp_path: Path,
+):
+    repository, baseline = _repository(tmp_path)
+    harness = _Harness()
+
+    class Agent:
+        def author(self, context):
+            assert harness.worktree is not None
+            (harness.worktree / "agent/demo.py").write_text(
+                "VALUE = 'candidate'\n", encoding="utf-8"
+            )
+            return {"completed": True, "summary": "updated value"}
+
+    result = await _executor(repository, tmp_path, harness).execute(
+        _spec("candidate-legacy-address", baseline), agent=Agent()
+    )
+    legacy_payload = result.content_payload()
+    legacy_payload.pop("environment_dependency_fingerprint")
+    for command in legacy_payload["command_evidence"]:
+        command.pop("security_scanner_status")
+        command.pop("container_disk_quota_status")
+    canonical = json.dumps(
+        legacy_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    loaded = type(result).model_validate(
+        {
+            **legacy_payload,
+            "authoring_result_id": f"evolution-authoring-result-{digest}",
+            "content_hash": digest,
+        }
+    )
+
+    assert loaded.environment_dependency_fingerprint is None
+    assert loaded.command_evidence[0].security_scanner_status is None
+    assert loaded.command_evidence[0].container_disk_quota_status is None

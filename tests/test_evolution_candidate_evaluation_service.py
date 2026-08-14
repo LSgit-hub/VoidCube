@@ -55,21 +55,25 @@ def _git(*args: str, cwd: Path) -> str:
     return result.stdout.strip()
 
 
-def _repository(tmp_path: Path) -> tuple[Path, str, str, str]:
+def _repository(
+    tmp_path: Path,
+    relative_path: str = "agent/demo.py",
+) -> tuple[Path, str, str, str]:
     repository = tmp_path / "repo"
     repository.mkdir()
     _git("init", cwd=repository)
     _git("config", "user.name", "VoidCube Test", cwd=repository)
     _git("config", "user.email", "test@example.com", cwd=repository)
-    (repository / "agent").mkdir()
-    (repository / "agent/demo.py").write_text("VALUE = 1\n", encoding="utf-8")
-    _git("add", "agent/demo.py", cwd=repository)
+    target = repository / relative_path
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    _git("add", relative_path, cwd=repository)
     _git("commit", "-m", "baseline", cwd=repository)
     baseline = _git("rev-parse", "HEAD", cwd=repository)
     branch = _git("branch", "--show-current", cwd=repository)
     _git("switch", "--detach", baseline, cwd=repository)
-    (repository / "agent/demo.py").write_text("VALUE = 2\n", encoding="utf-8")
-    _git("add", "agent/demo.py", cwd=repository)
+    target.write_text("VALUE = 2\n", encoding="utf-8")
+    _git("add", relative_path, cwd=repository)
     _git("commit", "-m", "candidate", cwd=repository)
     candidate = _git("rev-parse", "HEAD", cwd=repository)
     candidate_ref = "refs/voidcube/candidates/stage-5f-test"
@@ -97,11 +101,14 @@ def _authoring(
         environment_identity_id=(
             candidate_environment.identity().execution_environment_identity_id
         ),
+        environment_dependency_fingerprint=candidate_environment.dependency_fingerprint,
         command_evidence=(
             AuthoringCommandEvidence(
                 command="python -m py_compile agent/demo.py",
                 exit_code=0,
                 output="no output",
+                security_scanner_status="available",
+                container_disk_quota_status="unsupported",
             ),
         ),
         agent_summary="Changed the demo value",
@@ -346,6 +353,22 @@ def test_handoff_rejects_changed_file_evidence_mismatch(tmp_path: Path):
     assert captured.value.code == "candidate_changed_files_mismatch"
 
 
+def test_handoff_rejects_authoring_without_capability_evidence(tmp_path: Path):
+    repository, baseline, candidate, candidate_ref = _repository(tmp_path)
+    service, _baseline_environment, candidate_environment = _service(
+        repository, tmp_path / "foundation", baseline, candidate
+    )
+    authoring = _authoring(baseline, candidate, candidate_ref, candidate_environment)
+    payload = authoring.content_payload()
+    payload["command_evidence"][0]["security_scanner_status"] = None
+    incomplete = EvolutionAuthoringResult.create(**payload)
+
+    with pytest.raises(EvolutionCandidateEvaluationBlocked) as captured:
+        _evaluate(service, incomplete, baseline, candidate)
+
+    assert captured.value.code == "authoring_environment_capability_evidence_missing"
+
+
 def test_governance_rejects_tampered_persisted_authoring_result(tmp_path: Path):
     repository, baseline, candidate, candidate_ref = _repository(tmp_path)
     foundation_root = tmp_path / "foundation"
@@ -370,3 +393,28 @@ def test_governance_rejects_tampered_persisted_authoring_result(tmp_path: Path):
 
     assert authorization["authorized"] is False
     assert authorization["reason"] == "authoring_result_unreadable"
+
+
+def test_handoff_blocks_when_policy_does_not_cover_selected_platforms(tmp_path: Path):
+    changed_file = "tools/podman_probe.py"
+    repository, baseline, candidate, candidate_ref = _repository(
+        tmp_path,
+        relative_path=changed_file,
+    )
+    foundation_root = tmp_path / "foundation"
+    service, _baseline_environment, candidate_environment = _service(
+        repository, foundation_root, baseline, candidate
+    )
+    authoring = _authoring(
+        baseline,
+        candidate,
+        candidate_ref,
+        candidate_environment,
+        changed_files=(changed_file,),
+    )
+
+    with pytest.raises(EvolutionCandidateEvaluationBlocked) as captured:
+        _evaluate(service, authoring, baseline, candidate)
+
+    assert captured.value.code == "platform_selection_not_covered"
+    assert service.evaluation_repository.list_ids("experiment_specs") == ()

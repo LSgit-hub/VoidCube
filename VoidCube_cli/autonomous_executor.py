@@ -122,6 +122,17 @@ def build_autonomous_task_prompt(
         authoring_environment_identity_id = str(
             constraints.get("authoring_environment_identity_id") or ""
         ).strip()
+        authoring_dependency_fingerprint = str(
+            constraints.get("authoring_dependency_fingerprint") or ""
+        ).strip()
+        platform_selection_id = str(
+            constraints.get("platform_selection_id") or ""
+        ).strip()
+        selected_validation_platforms = tuple(
+            str(item).strip()
+            for item in constraints.get("selected_validation_platforms") or []
+            if str(item).strip()
+        )
         evaluated_environment_id = str(
             constraints.get("execution_environment_id") or ""
         ).strip()
@@ -143,6 +154,9 @@ def build_autonomous_task_prompt(
             and authorized_changed_files
             and authoring_environment_manifest_id
             and authoring_environment_identity_id
+            and authoring_dependency_fingerprint
+            and platform_selection_id
+            and selected_validation_platforms
             and evaluated_environment_id
             and evaluated_platforms
         ):
@@ -192,6 +206,11 @@ def build_autonomous_task_prompt(
         prompt_parts.append(f"Candidate ref: {candidate_ref}")
         prompt_parts.append(
             "Authoring changed files: " + ", ".join(authorized_changed_files)
+        )
+        prompt_parts.append(
+            "Selected validation platforms: "
+            + ", ".join(selected_validation_platforms)
+            + f" ({platform_selection_id})"
         )
         prompt_parts.append(
             f"Evaluated environment: {evaluated_environment_id} "

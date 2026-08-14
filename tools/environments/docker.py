@@ -350,6 +350,7 @@ class DockerEnvironment(BaseEnvironment):
 
         # Build resource limit args
         resource_args = []
+        self._voidcube_disk_quota_status = "not_requested"
         if cpu > 0:
             resource_args.extend(["--cpus", str(cpu)])
         if memory > 0:
@@ -357,7 +358,9 @@ class DockerEnvironment(BaseEnvironment):
         if disk > 0 and sys.platform != "darwin":
             if self._storage_opt_supported():
                 resource_args.extend(["--storage-opt", f"size={disk}m"])
+                self._voidcube_disk_quota_status = "enforced"
             else:
+                self._voidcube_disk_quota_status = "unsupported"
                 logger.warning(
                     "%s could not apply the requested per-container disk limit (%sm). "
                     "This is not a low-disk-space warning: the current storage driver/filesystem "
@@ -366,6 +369,8 @@ class DockerEnvironment(BaseEnvironment):
                     "overlay2 on XFS with pquota."
                     % (self._runtime_label, disk)
                 )
+        elif disk > 0:
+            self._voidcube_disk_quota_status = "unsupported"
         if not network:
             resource_args.append("--network=none")
 

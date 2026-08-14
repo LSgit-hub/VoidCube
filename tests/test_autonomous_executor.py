@@ -85,6 +85,9 @@ def test_body_improvement_prompt_captures_body_context():
         "authoring_environment_identity_id": (
             "execution-environment-identity-" + "d" * 64
         ),
+        "authoring_dependency_fingerprint": "f" * 64,
+        "platform_selection_id": "benchmark-platform-selection-" + "7" * 64,
+        "selected_validation_platforms": ["windows"],
         "validation_scope": "host",
         "validated_platforms": ["windows"],
         },
@@ -112,6 +115,7 @@ def test_body_improvement_prompt_captures_body_context():
     assert "learning-memory-1: Verified memory display finding" in prompt
     assert "Do not edit files or create a new commit" in prompt
     assert "Required candidate HEAD: " + "a" * 40 in prompt
+    assert "Selected validation platforms: windows" in prompt
     assert task["_baseline_head"] == "b" * 40
     assert task["_expected_candidate_head"] == "a" * 40
     assert task["_initial_head"] == "head-for-F:/worktree/slot-B"

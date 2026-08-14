@@ -179,6 +179,28 @@ class EvolutionEvaluationGovernanceVerifier:
                 experiment_result_id=result_id,
                 authoring_result_id=authoring_result_id,
             )
+        if not authoring.environment_dependency_fingerprint:
+            return _rejection(
+                "authoring_dependency_fingerprint_missing",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
+        if not authoring.command_evidence:
+            return _rejection(
+                "authoring_command_evidence_missing",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
+        if any(
+            evidence.security_scanner_status is None
+            or evidence.container_disk_quota_status is None
+            for evidence in authoring.command_evidence
+        ):
+            return _rejection(
+                "authoring_environment_capability_evidence_missing",
+                experiment_result_id=result_id,
+                authoring_result_id=authoring_result_id,
+            )
 
         benchmark = self._read_reference(
             self.evaluation_repository.get_benchmark_pack,
@@ -196,6 +218,37 @@ class EvolutionEvaluationGovernanceVerifier:
         )
         if isinstance(policy, dict):
             return policy
+
+        selection = spec.platform_selection
+        if selection is None:
+            return _rejection(
+                "platform_selection_missing",
+                experiment_result_id=result_id,
+                experiment_spec_id=spec.experiment_spec_id,
+            )
+        if tuple(selection.changed_files) != tuple(authoring.changed_files):
+            return _rejection(
+                "platform_selection_changed_files_mismatch",
+                experiment_result_id=result_id,
+                platform_selection_id=selection.selection_id,
+            )
+        if selection.dependency_fingerprint != authoring.environment_dependency_fingerprint:
+            return _rejection(
+                "platform_selection_dependency_mismatch",
+                experiment_result_id=result_id,
+                platform_selection_id=selection.selection_id,
+            )
+        missing_selection_platforms = sorted(
+            set(selection.required_platforms)
+            - set(policy.required_validation_platforms)
+        )
+        if missing_selection_platforms:
+            return _rejection(
+                "platform_selection_not_covered",
+                experiment_result_id=result_id,
+                platform_selection_id=selection.selection_id,
+                missing_validation_platforms=missing_selection_platforms,
+            )
 
         case_evidence = result.benchmark_case_evidence
         if not case_evidence:
@@ -377,6 +430,21 @@ class EvolutionEvaluationGovernanceVerifier:
                 knowledge["knowledge_id"] = knowledge_id
                 return knowledge
 
+        scanner_statuses = sorted(
+            {item.security_scanner_status for item in authoring.command_evidence}
+        )
+        disk_quota_statuses = sorted(
+            {item.container_disk_quota_status for item in authoring.command_evidence}
+        )
+        capability_warnings = [
+            f"security_scanner_{status}"
+            for status in scanner_statuses
+            if status != "available"
+        ] + [
+            f"container_disk_quota_{status}"
+            for status in disk_quota_statuses
+            if status not in {"enforced", "not_applicable"}
+        ]
         return {
             "schema_version": EVALUATION_GOVERNANCE_SCHEMA_VERSION,
             "authorized": True,
@@ -390,6 +458,13 @@ class EvolutionEvaluationGovernanceVerifier:
             "changed_files": list(authoring.changed_files),
             "authoring_environment_manifest_id": authoring.environment_manifest_id,
             "authoring_environment_identity_id": authoring.environment_identity_id,
+            "authoring_dependency_fingerprint": authoring.environment_dependency_fingerprint,
+            "authoring_security_scanner_statuses": scanner_statuses,
+            "authoring_container_disk_quota_statuses": disk_quota_statuses,
+            "environment_capability_warnings": capability_warnings,
+            "platform_selection_id": selection.selection_id,
+            "selected_validation_platforms": list(selection.required_platforms),
+            "platform_selection_reason_codes": list(selection.reason_codes),
             "baseline_snapshot_id": spec.baseline_snapshot_id,
             "candidate_snapshot_id": spec.candidate_snapshot_id,
             "benchmark_pack_id": benchmark.benchmark_pack_id,
@@ -464,6 +539,8 @@ def validate_body_improvement_authorization_binding(
         "execution_environment_id",
         "authoring_environment_manifest_id",
         "authoring_environment_identity_id",
+        "authoring_dependency_fingerprint",
+        "platform_selection_id",
     )
     for field in fields:
         expected = str(authorization.get(field) or "").strip().lower()
@@ -474,6 +551,37 @@ def validate_body_improvement_authorization_binding(
                 "valid": False,
                 "reason": "evaluation_authorization_binding_mismatch",
                 "field": field,
+            }
+
+    for field in (
+        "authoring_security_scanner_statuses",
+        "authoring_container_disk_quota_statuses",
+    ):
+        expected = tuple(str(item) for item in authorization.get(field) or [])
+        if not expected:
+            return {
+                "valid": False,
+                "reason": "evaluation_authorization_binding_mismatch",
+                "field": field,
+            }
+        for source in (evidence, constraints):
+            if tuple(str(item) for item in source.get(field) or []) != expected:
+                return {
+                    "valid": False,
+                    "reason": "evaluation_authorization_binding_mismatch",
+                    "field": field,
+                }
+    expected_warnings = tuple(
+        str(item) for item in authorization.get("environment_capability_warnings") or []
+    )
+    for source in (evidence, constraints):
+        if tuple(
+            str(item) for item in source.get("environment_capability_warnings") or []
+        ) != expected_warnings:
+            return {
+                "valid": False,
+                "reason": "evaluation_authorization_binding_mismatch",
+                "field": "environment_capability_warnings",
             }
 
     expected_knowledge = tuple(str(item) for item in authorization.get("knowledge_ids") or [])
@@ -495,6 +603,18 @@ def validate_body_improvement_authorization_binding(
             "valid": False,
             "reason": "evaluation_changed_files_binding_mismatch",
         }
+
+    expected_selected_platforms = tuple(
+        str(item) for item in authorization.get("selected_validation_platforms") or []
+    )
+    for source in (evidence, constraints):
+        if tuple(
+            str(item) for item in source.get("selected_validation_platforms") or []
+        ) != expected_selected_platforms:
+            return {
+                "valid": False,
+                "reason": "evaluation_platform_selection_binding_mismatch",
+            }
 
     expected_scope = str(authorization.get("validation_scope") or "").strip()
     expected_platforms = tuple(

@@ -342,6 +342,7 @@ class EvolutionAuthoringExecutor:
                 changed_files=changed_files,
                 environment_manifest_id=environment.execution_environment_id,
                 environment_identity_id=identity.execution_environment_identity_id,
+                environment_dependency_fingerprint=environment.dependency_fingerprint,
                 command_evidence=tuple(command_evidence),
                 agent_summary=agent_summary,
                 started_at=started_at,
@@ -438,6 +439,10 @@ class EvolutionAuthoringExecutor:
                     :50_000
                 ],
                 timed_out=exit_code == 124 or status == "timeout",
+                security_scanner_status=payload.get("security_scanner_status"),
+                container_disk_quota_status=payload.get(
+                    "container_disk_quota_status"
+                ),
             ),
             status,
         )
@@ -489,6 +494,9 @@ class EvolutionAuthoringExecutor:
                 environment.identity().execution_environment_identity_id
                 if environment
                 else None
+            ),
+            environment_dependency_fingerprint=(
+                environment.dependency_fingerprint if environment else None
             ),
             command_evidence=command_evidence,
             agent_summary=agent_summary,
