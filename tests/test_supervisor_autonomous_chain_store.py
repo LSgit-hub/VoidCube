@@ -6809,6 +6809,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
         "external_research",
     ]
     assert set(lm_candidates[0]["metadata"]["reference_alignment"]["missing_agenda_nodes"]) == {
+        "expand_learning_frontier",
         "focus:learning_expansion",
         "missing_agenda_node",
     }
@@ -6835,6 +6836,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     assert lm_candidates[0]["constraints"]["lm_posture_alignment"]
     assert lm_candidates[0]["constraints"]["lm_priority_basis"]
     assert set(lm_candidates[0]["constraints"]["reference_alignment"]["missing_agenda_nodes"]) == {
+        "expand_learning_frontier",
         "focus:learning_expansion",
         "missing_agenda_node",
     }
