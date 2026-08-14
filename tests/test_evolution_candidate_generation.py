@@ -195,6 +195,59 @@ def test_evaluation_lease_recovers_without_reauthoring_candidate(tmp_path):
     assert recovered.lease_owner == "worker-2"
 
 
+def test_expired_authoring_with_persisted_result_recovers_into_evaluation(tmp_path):
+    repository = JsonEvolutionCandidateGenerationRepository(tmp_path / "cycles")
+    request = _request()
+    repository.register(request, requested_at=NOW)
+    authoring = repository.claim_authoring(
+        request.request_id,
+        lease_owner="worker-1",
+        claimed_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    assert authoring is not None and authoring.attempt_id is not None
+
+    recovered = repository.recover_evaluation(
+        request.request_id,
+        attempt_id=authoring.attempt_id,
+        authoring_result_id="evolution-authoring-result-" + "c" * 64,
+        lease_owner="worker-2",
+        resumed_at=NOW + timedelta(minutes=5),
+        lease_expires_at=NOW + timedelta(minutes=10),
+    )
+
+    assert recovered.status == "evaluating"
+    assert recovered.attempt_id == authoring.attempt_id
+    assert recovered.authoring_task_id == authoring.authoring_task_id
+    assert recovered.lease_owner == "worker-2"
+
+
+def test_active_authoring_lease_cannot_be_taken_over_with_persisted_result(tmp_path):
+    repository = JsonEvolutionCandidateGenerationRepository(tmp_path / "cycles")
+    request = _request()
+    repository.register(request, requested_at=NOW)
+    authoring = repository.claim_authoring(
+        request.request_id,
+        lease_owner="worker-1",
+        claimed_at=NOW,
+        lease_expires_at=NOW + timedelta(minutes=5),
+    )
+    assert authoring is not None and authoring.attempt_id is not None
+
+    with pytest.raises(
+        EvolutionCandidateGenerationTransitionRejected,
+        match="has not expired",
+    ):
+        repository.recover_evaluation(
+            request.request_id,
+            attempt_id=authoring.attempt_id,
+            authoring_result_id="evolution-authoring-result-" + "c" * 64,
+            lease_owner="worker-2",
+            resumed_at=NOW + timedelta(minutes=4),
+            lease_expires_at=NOW + timedelta(minutes=9),
+        )
+
+
 def test_active_owner_can_renew_lease_without_changing_attempt(tmp_path):
     repository = JsonEvolutionCandidateGenerationRepository(tmp_path / "cycles")
     request = _request()

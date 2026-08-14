@@ -432,13 +432,18 @@ def test_wheel_contract_tracks_evolution_foundation_packages():
         "systems/evolution_evaluation/models.py",
         "systems/evolution_evaluation/repository.py",
         "systems/evolution_authoring/__init__.py",
+        "systems/evolution_authoring/agent_adapter.py",
         "systems/evolution_authoring/executor.py",
         "systems/evolution_authoring/models.py",
         "systems/evolution_authoring/repository.py",
+        "systems/evolution_candidate_generation/__init__.py",
+        "systems/evolution_candidate_generation/models.py",
+        "systems/evolution_candidate_generation/repository.py",
     } <= expected
 
     assert "systems/supervisor/endogenous_foundation_bridge.py" in expected
     assert "systems/supervisor/evolution_candidate_evaluation_service.py" in expected
+    assert "systems/supervisor/evolution_candidate_generation_service.py" in expected
 
 
 @pytest.mark.unit

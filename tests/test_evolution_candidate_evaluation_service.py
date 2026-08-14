@@ -301,6 +301,27 @@ def test_handoff_persists_replayable_evidence_and_exposes_existing_authorization
     assert constraints["authoring_result_id"] == authoring.authoring_result_id
 
 
+def test_resume_replays_persisted_result_without_running_benchmark_again(tmp_path: Path):
+    repository, baseline, candidate, candidate_ref = _repository(tmp_path)
+    foundation_root = tmp_path / "foundation"
+    service, _baseline_environment, candidate_environment = _service(
+        repository, foundation_root, baseline, candidate
+    )
+    authoring = _authoring(baseline, candidate, candidate_ref, candidate_environment)
+    original = _evaluate(service, authoring, baseline, candidate)
+
+    class FailingExecutor:
+        def execute_from_repository(self, *_args, **_kwargs):
+            pytest.fail("persisted experiment result must be replayed")
+
+    service.benchmark_executor = FailingExecutor()
+    resumed = service.resume(original.experiment_spec.experiment_spec_id)
+
+    assert resumed.experiment_spec == original.experiment_spec
+    assert resumed.experiment_result == original.experiment_result
+    assert resumed.governance_authorization == original.governance_authorization
+
+
 def test_selection_aware_executor_factory_receives_exact_candidate_matrix(
     tmp_path: Path,
 ):

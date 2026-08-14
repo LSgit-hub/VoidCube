@@ -61,6 +61,17 @@ class EvolutionCandidateGenerationRepository(Protocol):
         self, request_id: str
     ) -> EvolutionCandidateGenerationState | None: ...
 
+    def recover_evaluation(
+        self,
+        request_id: str,
+        *,
+        attempt_id: str,
+        authoring_result_id: str,
+        lease_owner: str,
+        resumed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> EvolutionCandidateGenerationState: ...
+
 
 class JsonEvolutionCandidateGenerationRepository:
     """Store immutable requests and append-only state snapshots with a current index."""
@@ -232,6 +243,41 @@ class JsonEvolutionCandidateGenerationRepository:
                 authoring_result_id=authoring_result_id,
                 lease_expires_at=lease_expires_at,
                 updated_at=started_at,
+            )
+
+    def recover_evaluation(
+        self,
+        request_id: str,
+        *,
+        attempt_id: str,
+        authoring_result_id: str,
+        lease_owner: str,
+        resumed_at: datetime,
+        lease_expires_at: datetime,
+    ) -> EvolutionCandidateGenerationState:
+        """Resume an expired authoring attempt whose immutable result was persisted."""
+
+        if not lease_owner.strip():
+            raise ValueError("lease_owner must not be empty")
+        if lease_expires_at <= resumed_at:
+            raise ValueError("lease_expires_at must follow resumed_at")
+        with interprocess_file_lock(self.lock_path):
+            current = self._require_attempt_unlocked(
+                request_id,
+                attempt_id=attempt_id,
+                expected_status="authoring",
+            )
+            if current.lease_expires_at is None or current.lease_expires_at > resumed_at:
+                raise EvolutionCandidateGenerationTransitionRejected(
+                    "authoring lease has not expired"
+                )
+            return self._transition_unlocked(
+                current,
+                status="evaluating",
+                authoring_result_id=authoring_result_id,
+                lease_owner=lease_owner,
+                lease_expires_at=lease_expires_at,
+                updated_at=resumed_at,
             )
 
     def claim_evaluation(

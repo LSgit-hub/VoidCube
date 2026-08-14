@@ -226,6 +226,109 @@ class EvolutionCandidateEvaluationService:
             completed_at=completed_at,
         )
         authorization = self.governance_verifier.verify(result.experiment_result_id)
+        return self._build_outcome(
+            spec=spec,
+            result=result,
+            authorization=authorization,
+        )
+
+    def resume(
+        self,
+        experiment_spec_id: str,
+        *,
+        completed_at: datetime | None = None,
+    ) -> EvolutionCandidateEvaluationOutcome:
+        """Resume an immutable experiment spec or replay its persisted result."""
+
+        spec = self.evaluation_repository.get_experiment_spec(experiment_spec_id)
+        if spec is None:
+            raise EvolutionCandidateEvaluationBlocked(
+                "experiment_spec_missing",
+                f"experiment spec not found: {experiment_spec_id}",
+            )
+        if not spec.authoring_result_id:
+            raise EvolutionCandidateEvaluationBlocked(
+                "authoring_provenance_missing",
+                "experiment spec is not bound to an authoring result",
+            )
+        authoring = self.authoring_repository.get(spec.authoring_result_id)
+        if authoring is None:
+            raise EvolutionCandidateEvaluationBlocked(
+                "authoring_result_missing",
+                f"authoring result not found: {spec.authoring_result_id}",
+            )
+        baseline = self.self_cognition_repository.get(spec.baseline_snapshot_id)
+        candidate = self.self_cognition_repository.get(spec.candidate_snapshot_id)
+        pack = self.evaluation_repository.get_benchmark_pack(spec.benchmark_pack_id)
+        policy = self.evaluation_repository.get_scoring_policy(spec.scoring_policy_id)
+        if baseline is None or candidate is None or pack is None or policy is None:
+            raise EvolutionCandidateEvaluationBlocked(
+                "experiment_dependency_missing",
+                "persisted experiment dependencies are incomplete",
+            )
+        self._validate_authoring_result(authoring)
+        self._validate_snapshots(authoring, baseline, candidate)
+        self._validate_git_candidate(authoring)
+        self._validate_knowledge(spec.knowledge_ids)
+        if spec.candidate_commit.lower() != str(authoring.candidate_commit).lower():
+            raise EvolutionCandidateEvaluationBlocked(
+                "experiment_candidate_commit_mismatch",
+                "experiment spec references a different candidate commit",
+            )
+        selection = spec.platform_selection
+        if selection is None or tuple(policy.required_validation_platforms) != tuple(
+            selection.required_platforms
+        ):
+            raise EvolutionCandidateEvaluationBlocked(
+                "experiment_platform_binding_missing",
+                "experiment spec and scoring policy platform bindings do not match",
+            )
+
+        existing = self._find_experiment_result(spec.experiment_spec_id)
+        if existing is None:
+            executor = self.benchmark_executor
+            if executor is None:
+                if self.benchmark_executor_factory is None:
+                    raise RuntimeError("benchmark executor factory is unavailable")
+                executor = self.benchmark_executor_factory(
+                    selection=selection,
+                    baseline_commit=authoring.baseline_commit,
+                    candidate_commit=str(authoring.candidate_commit),
+                )
+            existing = executor.execute_from_repository(
+                self.evaluation_repository,
+                experiment_spec_id=spec.experiment_spec_id,
+                completed_at=completed_at,
+            )
+        authorization = self.governance_verifier.verify(
+            existing.experiment_result_id
+        )
+        return self._build_outcome(
+            spec=spec,
+            result=existing,
+            authorization=authorization,
+        )
+
+    def _find_experiment_result(self, experiment_spec_id: str) -> ExperimentResult | None:
+        matches = []
+        for result_id in self.evaluation_repository.list_ids("experiment_results"):
+            result = self.evaluation_repository.get_experiment_result(result_id)
+            if result is not None and result.experiment_spec_id == experiment_spec_id:
+                matches.append(result)
+        if len(matches) > 1:
+            raise EvolutionCandidateEvaluationBlocked(
+                "experiment_result_ambiguous",
+                "multiple experiment results reference the same immutable spec",
+            )
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _build_outcome(
+        *,
+        spec: ExperimentSpec,
+        result: ExperimentResult,
+        authorization: dict[str, Any],
+    ) -> EvolutionCandidateEvaluationOutcome:
         if result.verdict == "promote" and not authorization.get("authorized"):
             raise EvolutionCandidateEvaluationBlocked(
                 "promote_result_not_authorized",
