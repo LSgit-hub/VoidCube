@@ -1335,26 +1335,38 @@ class AIAgent:
         """Clean up VM and browser resources for a given task.
 
         Skips ``cleanup_vm`` when the active terminal environment is marked
-        persistent so that long-lived sandboxes and local shell sessions survive
-        between turns. The idle reaper in
+        persistent or its strict task contract assigns lifecycle ownership to
+        an executor. Persistent environments survive between turns and the idle reaper in
         ``terminal_tool._cleanup_inactive_envs`` still tears them down once
-        ``terminal.lifetime_seconds`` is exceeded. Non-persistent backends are
-        torn down per-turn as before to prevent resource leakage (the original
-        intent of this hook for the Morph backend, see commit fbd3a2fd).
+        ``terminal.lifetime_seconds`` is exceeded. Executor-owned environments
+        are released by their outer application service after post-Agent tests
+        and evidence capture. Other non-persistent backends are torn down at turn end.
         """
         terminal_outcome = EffectOutcome(status="succeeded")
         try:
             from tools.terminal_tool import cleanup_vm, is_persistent_env
+            from tools.task_execution import get_task_execution_contract
 
-            if is_persistent_env(task_id):
+            contract = get_task_execution_contract(task_id)
+            executor_owned = bool(
+                contract is not None and contract.lifecycle_owner == "executor"
+            )
+            if is_persistent_env(task_id) or executor_owned:
                 terminal_outcome = EffectOutcome(
                     status="skipped",
-                    details={"reason": "persistent_environment"},
+                    details={
+                        "reason": (
+                            "executor_owned_environment"
+                            if executor_owned
+                            else "persistent_environment"
+                        )
+                    },
                 )
                 if self.verbose_logging:
                     logging.debug(
-                        f"Skipping per-turn cleanup_vm for persistent env {task_id}; "
-                        f"idle reaper will handle it."
+                        "Skipping per-turn cleanup_vm for %s environment %s",
+                        "executor-owned" if executor_owned else "persistent",
+                        task_id,
                     )
             else:
                 cleanup_vm(task_id)

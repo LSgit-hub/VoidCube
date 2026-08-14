@@ -59,6 +59,7 @@ class TaskExecutionContract(_FrozenModel):
     fallback_to_local: Literal[False] = False
     required_tools: tuple[RuntimeToolName, ...] = ()
     required_platforms: tuple[str, ...] = ()
+    lifecycle_owner: Literal["conversation", "executor"] = "conversation"
 
     @model_validator(mode="after")
     def _validate_contract(self) -> Self:

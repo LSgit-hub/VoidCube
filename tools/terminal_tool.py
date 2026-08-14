@@ -774,6 +774,7 @@ def prepare_task_git_worktree(
             max_output_chars=50_000,
             required_tools=("git", "python", "pytest", "node", "npm"),
             required_platforms=("linux",),
+            lifecycle_owner="executor",
         )
     )
     register_task_env_overrides(
@@ -967,6 +968,7 @@ def prepare_task_native_git_worktree(
             max_output_chars=50_000,
             required_tools=("git", "python", "pytest"),
             required_platforms=("windows",),
+            lifecycle_owner="executor",
         )
     )
     register_task_env_overrides(

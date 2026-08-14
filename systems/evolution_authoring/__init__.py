@@ -1,5 +1,11 @@
 """Governed candidate authoring for autonomous evolution."""
 
+from systems.evolution_authoring.agent_adapter import (
+    AUTHORING_TOOL_NAMES,
+    AUTHORING_TOOLSETS,
+    AIAgentAuthoringAdapter,
+)
+
 from systems.evolution_authoring.models import (
     AuthoringAgentReport,
     AuthoringCommandEvidence,
@@ -21,6 +27,9 @@ from systems.evolution_authoring.repository import (
 )
 
 __all__ = [
+    "AUTHORING_TOOL_NAMES",
+    "AUTHORING_TOOLSETS",
+    "AIAgentAuthoringAdapter",
     "AuthoringAgentReport",
     "AuthoringAgent",
     "AuthoringCommandEvidence",

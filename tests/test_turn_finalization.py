@@ -369,3 +369,34 @@ def test_agent_resource_cleanup_reports_individual_backend_failure(monkeypatch):
     assert outcome.status == "degraded"
     assert outcome.details["terminal"]["status"] == "failed"
     assert outcome.details["browser"]["status"] == "succeeded"
+
+
+def test_agent_resource_cleanup_preserves_executor_owned_task_scope(monkeypatch):
+    agent = AIAgent.__new__(AIAgent)
+    agent.verbose_logging = False
+    terminal_calls = []
+    browser_calls = []
+
+    monkeypatch.setattr("tools.terminal_tool.is_persistent_env", lambda _task_id: False)
+    monkeypatch.setattr(
+        "tools.terminal_tool.cleanup_vm",
+        lambda task_id: terminal_calls.append(task_id),
+    )
+    monkeypatch.setattr(
+        "tools.task_execution.get_task_execution_contract",
+        lambda _task_id: SimpleNamespace(lifecycle_owner="executor"),
+    )
+    monkeypatch.setattr(
+        "tools.browser_tool.cleanup_browser",
+        lambda task_id: browser_calls.append(task_id),
+    )
+
+    outcome = agent._cleanup_task_resources("candidate-task")
+
+    assert terminal_calls == []
+    assert browser_calls == ["candidate-task"]
+    assert outcome.status == "succeeded"
+    assert outcome.details["terminal"] == {
+        "status": "skipped",
+        "details": {"reason": "executor_owned_environment"},
+    }
