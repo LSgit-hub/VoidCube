@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import tools.terminal_tool as terminal_tool_module
+from tools.task_execution import get_task_execution_state
 
 
 def _git(*args, cwd=None):
@@ -130,6 +131,7 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
         "autonomous-session",
         str(worktree),
         expected_head=head,
+        command_timeout_seconds=777,
     )
 
     overrides = captured["overrides"]
@@ -154,6 +156,9 @@ def test_prepare_task_git_worktree_binds_linked_worktree_and_git_metadata(
     assert manifest["validated_platforms"] == ["linux"]
     assert manifest["repository_head"] == head
     assert manifest["execution_workspace_path"] == "/workspace"
+    state = get_task_execution_state("autonomous-session")
+    assert state is not None
+    assert state.contract.command_timeout_seconds == 777
 
 
 @pytest.mark.unit

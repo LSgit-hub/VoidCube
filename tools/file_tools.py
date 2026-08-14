@@ -224,7 +224,10 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                     "container_cpu": config.get("container_cpu", 1),
                     "container_memory": config.get("container_memory", 5120),
                     "container_disk": config.get("container_disk", 51200),
-                    "container_persistent": config.get("container_persistent", True),
+                    "container_persistent": overrides.get(
+                        "container_persistent",
+                        config.get("container_persistent", True),
+                    ),
                     "docker_volumes": overrides.get(
                         "docker_volumes", config.get("docker_volumes", [])
                     ),
@@ -237,6 +240,9 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                     ),
                     "docker_env": overrides.get(
                         "docker_env", config.get("docker_env", {})
+                    ),
+                    "docker_mount_host_integrations": overrides.get(
+                        "docker_mount_host_integrations", True
                     ),
                 }
 

@@ -431,6 +431,9 @@ def test_wheel_contract_tracks_evolution_foundation_packages():
         "systems/evolution_evaluation/executor.py",
         "systems/evolution_evaluation/models.py",
         "systems/evolution_evaluation/repository.py",
+        "systems/evolution_authoring/__init__.py",
+        "systems/evolution_authoring/executor.py",
+        "systems/evolution_authoring/models.py",
     } <= expected
 
     assert "systems/supervisor/endogenous_foundation_bridge.py" in expected

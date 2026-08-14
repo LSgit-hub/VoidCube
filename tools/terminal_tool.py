@@ -678,6 +678,7 @@ def prepare_task_git_worktree(
     worktree_path: str,
     *,
     expected_head: str,
+    command_timeout_seconds: int | None = None,
 ) -> Dict[str, Any]:
     """Bind and verify an isolated linked worktree for one sandbox task.
 
@@ -763,7 +764,10 @@ def prepare_task_git_worktree(
             execution_workspace_path="/workspace",
             allowed_execution_paths=("/workspace",),
             allowed_environment_variables=tuple(sorted(task_environment)),
-            command_timeout_seconds=max(30, int(config.get("timeout") or 120)),
+            command_timeout_seconds=max(
+                30,
+                int(command_timeout_seconds or config.get("timeout") or 120),
+            ),
             max_output_chars=50_000,
             required_tools=("git", "python", "pytest", "node", "npm"),
             required_platforms=("linux",),

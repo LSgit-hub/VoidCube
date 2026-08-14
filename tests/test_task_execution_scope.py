@@ -228,6 +228,60 @@ def test_file_and_terminal_tools_share_one_task_environment(monkeypatch, tmp_pat
     assert state is not None and state.status == "ready"
 
 
+def test_file_tool_rebuild_preserves_strict_container_isolation(monkeypatch, tmp_path):
+    task_id = "strict-file-rebuild-task"
+    configure_task_execution(
+        _container_contract(
+            task_id,
+            host_workspace_path=str(tmp_path),
+            allowed_environment_variables=("GIT_WORK_TREE",),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class FakeEnvironment:
+        cwd = "/workspace"
+        env = {}
+        _voidcube_active_backend = "podman"
+
+        def execute(self, _command, **_kwargs):
+            return {"output": "ok\n", "returncode": 0}
+
+        def cleanup(self):
+            return None
+
+    def create_environment(**kwargs):
+        captured.update(kwargs)
+        return FakeEnvironment()
+
+    monkeypatch.setattr(terminal_tool_module, "_get_env_config", _podman_config)
+    monkeypatch.setattr(terminal_tool_module, "_create_environment", create_environment)
+    monkeypatch.setattr(terminal_tool_module, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setitem(
+        terminal_tool_module._task_env_overrides,
+        task_id,
+        {
+            "cwd": "/workspace",
+            "host_cwd": str(tmp_path),
+            "docker_env": {"GIT_WORK_TREE": "/workspace"},
+            "fallback_to_local": False,
+            "container_persistent": False,
+            "docker_mount_host_integrations": False,
+        },
+    )
+
+    try:
+        file_tools_module._get_file_ops(task_id)
+    finally:
+        terminal_tool_module.cleanup_vm(task_id)
+
+    container_config = captured["container_config"]
+    assert isinstance(container_config, dict)
+    assert container_config["container_persistent"] is False
+    assert container_config["docker_mount_host_integrations"] is False
+    assert captured["fallback_to_local"] is False
+
+
 def _podman_config() -> dict[str, object]:
     return {
         "env_type": "podman",
