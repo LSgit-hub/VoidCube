@@ -3,8 +3,8 @@ name: voidcube-ci
 displayName: VoidCube CI
 stages:
   - stage:
-    name: test
-    displayName: Python 3.14 full test gate
+    name: quality
+    displayName: Python 3.14 static and Mem test gate
     steps:
       - step: build@python
         name: full_test_gate
@@ -16,7 +16,8 @@ stages:
           - python3 -m ruff check .
           - python3 -m ruff check . --select F821
           - python3 -m pip_audit --vulnerability-service osv --progress-spinner off
-          - python3 scripts/run_ci_tests.py -- tests Mem/tests -q --cov --cov-report=term --cov-report=xml:coverage.xml
+          - python3 -m compileall -q agent systems tools VoidCube_core VoidCube_app VoidCube_cli Mem
+          - python3 -m pytest Mem/tests -q --cov=Mem --cov-report=term
 triggers:
   push:
     branches:

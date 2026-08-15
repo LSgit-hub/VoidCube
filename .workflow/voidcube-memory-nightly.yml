@@ -4,7 +4,7 @@ displayName: VoidCube memory nightly soak
 stages:
   - stage:
     name: memory_nightly_soak
-    displayName: Memory outbox 180 second soak
+    displayName: Memory outbox 180 second smoke
     steps:
       - step: build@python
         name: memory_outbox_soak
@@ -14,7 +14,6 @@ stages:
           - python3 -m pip install --upgrade pip
           - python3 -m pip install -e ".[all,dev]"
           - python3 scripts/smoke_memory_outbox.py --mode soak --duration-seconds 180
-          - python3 -m pytest tests/test_memory_outbox_operational.py tests/test_memory_health_signals.py -q
 triggers:
   schedule:
     - cron: '0 18 * * *'

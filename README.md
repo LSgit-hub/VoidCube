@@ -31,8 +31,8 @@ VoidCube/
 ├─ systems/voice/         录音、声纹、STT/TTS 和可中断会话
 ├─ systems/execution/     Execution Facade、Adapter 与身体执行
 ├─ Mem/src/memai/         MemAI 领域包
-├─ tests/                 主仓测试
-└─ docs/                  架构与开发文档
+├─ tests/                 本地测试（不随远程仓库分发）
+└─ docs/                  本地架构与开发文档（不随远程仓库分发）
 ```
 
 ## 安装与验证
@@ -44,6 +44,8 @@ python -m pip install -e ".[all,dev]"
 python -m pytest -q
 python -m pytest Mem/tests -q
 ```
+
+根目录 `tests/` 仅保留在开发机用于本地验证，已加入 `.gitignore`，不会提交到远程仓库；`Mem/tests/` 仍是远程保留的记忆领域测试。
 
 ## 桌面端
 
@@ -65,7 +67,7 @@ npm run dev
 python -m pytest tests/test_integration_policy.py tests/test_packaging_contract.py -q
 ```
 
-完整架构和当前实现差距见 [docs/项目架构与逻辑架构.md](docs/项目架构与逻辑架构.md)。
+完整架构和当前实现差距见开发机本地 `docs/` 目录；该目录与 `tests/` 一样不随远程仓库分发。
 
 ## License
 
