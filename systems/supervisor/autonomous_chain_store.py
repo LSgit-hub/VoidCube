@@ -804,6 +804,14 @@ class AutonomousChainStore:
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
                     continue
+                persisted_lease = task.execution_lease
+                if (
+                    task.status == status
+                    and persisted_lease.generation == int(generation)
+                    and bool(str(attempt_id or "").strip())
+                    and persisted_lease.attempt_id == str(attempt_id).strip()
+                ):
+                    return task
                 lease = self._require_lease(
                     task, generation=generation, attempt_id=attempt_id
                 )

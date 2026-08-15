@@ -2023,7 +2023,22 @@ class InternalGateway:
                 status_code=400,
                 detail="Agent pull 链路项裁决需要提供 session_id 或 context.session_id。",
             )
-        if session_id not in self._agent_session_cache:
+        session = self._agent_session_cache.get(session_id)
+        if session is not None:
+            return session_id
+
+        task_lease = dict(task.get("execution_lease") or {})
+        request_lease = dict(data.get("execution_lease") or {})
+        lease_recovers_session = (
+            str(task_lease.get("owner_session_id") or "").strip() == session_id
+            and bool(str(task_lease.get("generation") or "").strip())
+            and str(task_lease.get("generation") or "").strip()
+            == str(request_lease.get("generation") or "").strip()
+            and bool(str(task_lease.get("attempt_id") or "").strip())
+            and str(task_lease.get("attempt_id") or "").strip()
+            == str(request_lease.get("attempt_id") or "").strip()
+        )
+        if not lease_recovers_session:
             raise HTTPException(
                 status_code=409,
                 detail=f"无法识别该链路写回对应的 CLI 会话: {session_id}",
@@ -2175,9 +2190,16 @@ class InternalGateway:
                     context.setdefault("session_id", session_id)
                     payload["context"] = context
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status != 200:
-                        raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
+                    if resp.status != 200:
+                        detail = (
+                            result.get("detail", result)
+                            if isinstance(result, dict)
+                            else result
+                        )
+                        raise HTTPException(status_code=resp.status, detail=detail)
+                if session_id in self._agent_session_cache:
+                    self._agent_session_cache[session_id]["last_used_at"] = datetime.now()
             self._touch_activity(
                 "agent_work",
                 source_service="gateway",

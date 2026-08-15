@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
@@ -316,6 +317,7 @@ class AutonomousExecutorRuntime:
 
     _LEASE_RENEW_INTERVAL_SECONDS = 60.0
     _LEASE_SECONDS = 300.0
+    _WRITEBACK_RETRY_INTERVAL_SECONDS = 15.0
 
     def __init__(
         self,
@@ -331,7 +333,35 @@ class AutonomousExecutorRuntime:
         self._git_head_commit = git_head_commit
         self._git_improvement_diff = git_improvement_diff
         self._cprint = cprint
-        self._last_lease_renewal_at = 0.0
+        self._last_lease_renewal_attempt_at = 0.0
+        self._last_writeback_attempt_at = 0.0
+        self._last_writeback_task_id = ""
+
+    @staticmethod
+    def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+        try:
+            payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return str(exc)
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    @staticmethod
+    def _is_stale_execution_conflict(
+        exc: urllib.error.HTTPError,
+        detail: str,
+    ) -> bool:
+        return exc.code == 409 and (
+            "stale_execution_lease" in detail
+            or "Supervisor returned 409" in detail
+        )
+
+    def _writeback_retry_due(self, task_id: str, *, now: float | None = None) -> bool:
+        current_time = time.monotonic() if now is None else float(now)
+        return (
+            task_id != self._last_writeback_task_id
+            or current_time - self._last_writeback_attempt_at
+            >= self._WRITEBACK_RETRY_INTERVAL_SECONDS
+        )
 
     def find_owned_running_task(self) -> Dict[str, Any] | None:
         """Recover the running autonomous task owned by this CLI session, if any."""
@@ -446,6 +476,9 @@ class AutonomousExecutorRuntime:
         self.ports.set_current_task_started_at(0)
         self.ports.set_current_task_run_id("")
         self.ports.set_last_agent_turn_result(None)
+        self._last_lease_renewal_attempt_at = 0.0
+        self._last_writeback_attempt_at = 0.0
+        self._last_writeback_task_id = ""
 
     def current_task(self) -> Dict[str, Any] | None:
         """Expose the current task snapshot without leaking host state."""
@@ -570,6 +603,10 @@ class AutonomousExecutorRuntime:
         timeout: float = 15,
         gateway_base: str | None = None,
     ) -> bool:
+        if not self._writeback_retry_due(task_id):
+            return False
+        self._last_writeback_task_id = task_id
+        self._last_writeback_attempt_at = time.monotonic()
         gateway_base = (gateway_base or default_gateway_url()).rstrip("/")
         payload: Dict[str, Any] = {
             "decision": decision,
@@ -596,9 +633,32 @@ class AutonomousExecutorRuntime:
             )
             urllib.request.urlopen(request, timeout=timeout)
             return True
+        except urllib.error.HTTPError as exc:
+            detail = self._http_error_detail(exc)
+            if self._is_stale_execution_conflict(exc, detail):
+                self.ports.append_execution_event(
+                    f"任务 {task_id[:8]} lease 已失效，停止本地重试",
+                    tone="warn",
+                    stage="writeback_conflict",
+                )
+                self.clear_current_task_state()
+                return False
+            self.ports.append_execution_event(
+                f"任务 {task_id[:8]} 回写 {decision} 失败，稍后重试",
+                tone="error",
+                stage="writeback_failed",
+            )
+            try:
+                self._cprint(
+                    f"  ⚠️  Autonomous task writeback failed for {task_id[:8]}: "
+                    f"HTTP {exc.code} {detail[:300]}"
+                )
+            except Exception:
+                pass
+            return False
         except Exception as exc:
             self.ports.append_execution_event(
-                f"任务 {task_id[:8]} 回写 {decision} 失败，保留本地状态待重试",
+                f"任务 {task_id[:8]} 回写 {decision} 失败，稍后重试",
                 tone="error",
                 stage="writeback_failed",
             )
@@ -622,7 +682,10 @@ class AutonomousExecutorRuntime:
         if lease.get("state") != "active" or not lease.get("attempt_id"):
             return False
         current_time = time.time() if now is None else float(now)
-        if current_time - self._last_lease_renewal_at < self._LEASE_RENEW_INTERVAL_SECONDS:
+        if (
+            current_time - self._last_lease_renewal_attempt_at
+            < self._LEASE_RENEW_INTERVAL_SECONDS
+        ):
             return True
         task_id = str(current.get("task_id") or "").strip()
         if not task_id:
@@ -636,6 +699,7 @@ class AutonomousExecutorRuntime:
             "execution_lease": lease,
             "context": {"source": "cli_agent_pull", "heartbeat": True},
         }
+        self._last_lease_renewal_attempt_at = current_time
         try:
             request = urllib.request.Request(
                 f"{(gateway_base or default_gateway_url()).rstrip('/')}/v1/tasks/{task_id}/decision",
@@ -648,11 +712,33 @@ class AutonomousExecutorRuntime:
             if not isinstance(renewed, dict):
                 return False
             self.ports.set_current_task(renewed)
-            self._last_lease_renewal_at = current_time
             return True
+        except urllib.error.HTTPError as exc:
+            detail = self._http_error_detail(exc)
+            if self._is_stale_execution_conflict(exc, detail):
+                self.ports.append_execution_event(
+                    f"任务 {task_id[:8]} lease 已失效，停止本地执行",
+                    tone="warn",
+                    stage="lease_lost",
+                )
+                self.clear_current_task_state()
+                return False
+            self.ports.append_execution_event(
+                f"任务 {task_id[:8]} lease 续租失败，稍后重试",
+                tone="error",
+                stage="lease_renew_failed",
+            )
+            try:
+                self._cprint(
+                    f"  ⚠️  Autonomous task lease renewal failed for {task_id[:8]}: "
+                    f"HTTP {exc.code} {detail[:300]}"
+                )
+            except Exception:
+                pass
+            return False
         except Exception as exc:
             self.ports.append_execution_event(
-                f"任务 {task_id[:8]} lease 续租失败",
+                f"任务 {task_id[:8]} lease 续租失败，稍后重试",
                 tone="error",
                 stage="lease_renew_failed",
             )
@@ -748,8 +834,6 @@ class AutonomousExecutorRuntime:
 
         current = self.ports.get_current_task()
         if current is not None:
-            self.renew_current_task_lease_if_due(gateway_base=gateway_base)
-            current = self.ports.get_current_task() or current
             task_id = current.get("task_id", "")
             execution_kind = autonomous_task_execution_kind(current)
             task_label = autonomous_task_label(execution_kind)
@@ -763,6 +847,8 @@ class AutonomousExecutorRuntime:
                 and turn_result is not None
                 and (not expected_run_id or observed_run_id == expected_run_id)
             ):
+                if not self._writeback_retry_due(task_id):
+                    return
                 decision = "failed" if (
                     turn_result.get("failed")
                     or turn_result.get("partial")
@@ -828,6 +914,9 @@ class AutonomousExecutorRuntime:
                         agent_role="supervisor_task",
                     )
                     self.clear_current_task_state()
+                return
+            self.renew_current_task_lease_if_due(gateway_base=gateway_base)
+            if self.ports.get_current_task() is None:
                 return
             if self.report_current_task_timeout_if_needed(
                 gateway_base=gateway_base,
