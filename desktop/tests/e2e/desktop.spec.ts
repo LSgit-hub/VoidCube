@@ -28,6 +28,10 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
   delete env.ELECTRON_RUN_AS_NODE
   env.VOIDCUBE_PROJECT_ROOT = projectRoot
   env.VOIDCUBE_DESKTOP_WORKSPACE = projectRoot
+  // Keep this smoke test deterministic; it asserts the container execution
+  // context and must not inherit the developer's persisted backend choice.
+  env.TERMINAL_ENV = 'podman'
+  env.TERMINAL_FALLBACK_TO_LOCAL = 'false'
 
   const application = await electron.launch({
     executablePath: electronExecutable(),
@@ -56,6 +60,9 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await expect(window.locator('#execution-context')).toHaveAttribute('title', /Agent 目录：\/workspace/)
     await expect(window.locator('#services-state, #monitor-state, #terminal-state')).toHaveCount(0)
     await expect(window.locator('#terminal-meta')).toHaveText(/PID \d+/)
+    const terminalScrollbar = window.locator('#terminal .scrollbar.vertical')
+    await expect(terminalScrollbar).toHaveCount(1)
+    await expect(terminalScrollbar).toBeHidden()
     await expect(window.locator('#monitor-frame')).toHaveAttribute('src', /127\.0\.0\.1:6002\/ui/)
     await expect(window.locator('#monitor-overlay')).toBeHidden()
     await expect(window.frameLocator('#monitor-frame').locator('.room')).toBeVisible()

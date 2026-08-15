@@ -1984,14 +1984,20 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   position: fixed; left: 0; right: 0; bottom: 48px;
   z-index: 98;
   display: flex; align-items: flex-end; justify-content: center;
+  min-width: 0;
+  max-width: 100%;
   pointer-events: none;
   padding: 0 16px 8px;
 }
 
 /* ── 单个面板 ── */
 .dock-panel {
+  --panel-max-inline-size: 900px;
   display: none;
-  width: 100%; max-width: 900px; max-height: 420px;
+  width: min(100%, var(--panel-max-inline-size));
+  max-width: 100%; max-height: 420px;
+  min-width: 0;
+  container: dock-panel / inline-size;
   background: linear-gradient(180deg,
     rgba(20,14,10,.96) 0%,
     rgba(28,18,14,.98) 100%);
@@ -2019,6 +2025,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 /* ── 面板标题栏 ── */
 .panel-header {
   display: flex; align-items: center; justify-content: space-between;
+  min-width: 0;
+  gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid rgba(255,255,255,.06);
   flex-shrink: 0;
@@ -2028,6 +2036,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 13px; font-weight: 700;
   color: var(--text-primary);
   display: flex; align-items: center; gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   letter-spacing: .01em;
 }
 .panel-title .pt-icon {
@@ -2054,6 +2064,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 /* ── 面板内容滚动区 ── */
 .panel-body {
   flex: 1; overflow-y: auto; overflow-x: hidden;
+  min-width: 0;
+  max-width: 100%;
   padding: 12px 16px;
   display: grid; gap: 10px;
   scrollbar-width: thin;
@@ -2067,18 +2079,20 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 
 /* ── Provider 池与员工配置 ── */
 #panelSettings {
-  max-width: 1060px;
+  --panel-max-inline-size: 1060px;
   max-height: min(650px, calc(100vh - 72px));
 }
 .settings-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 8px 12px 0;
   border-bottom: 1px solid rgba(255,255,255,.06);
   background: rgba(0,0,0,.12);
 }
 .settings-tab {
-  min-width: 92px;
+  flex: 1 1 92px;
+  min-width: 0;
   min-height: 32px;
   padding: 5px 12px;
   border: 0;
@@ -2096,6 +2110,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   color: var(--mint);
 }
 .settings-view {
+  min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto;
@@ -2104,6 +2119,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .provider-pool-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
   min-height: 430px;
 }
 .provider-pool-list-pane {
@@ -2140,6 +2157,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .provider-add-button:hover { background: rgba(111,198,160,.18); }
 .provider-pool-list {
   display: grid;
+  min-width: 0;
   align-content: start;
   gap: 2px;
   padding: 6px;
@@ -2191,12 +2209,14 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 }
 .provider-list-health { color: var(--mint); }
 .provider-pool-status {
+  min-width: 0;
   min-height: 34px;
   padding: 8px 10px;
   border-top: 1px solid rgba(255,255,255,.06);
   color: var(--text-muted);
   font-size: 9px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .provider-pool-status.error { color: var(--coral); }
 .provider-catalog-meta {
@@ -2261,6 +2281,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .provider-active-field input { accent-color: var(--mint); }
 .provider-runtime-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2270,10 +2291,11 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 9px;
   line-height: 1.45;
 }
-.provider-runtime-metrics { min-width: 0; }
+.provider-runtime-metrics { min-width: 0; overflow-wrap: anywhere; }
 .provider-form-actions,
 .worker-form-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
@@ -2288,6 +2310,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   border: 0;
 }
 .provider-action {
+  max-width: 100%;
   min-height: 30px;
   padding: 5px 12px;
   border: 1px solid rgba(255,255,255,.12);
@@ -2324,6 +2347,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-role-list { display: grid; gap: 6px; }
 .worker-role-row {
   display: grid;
+  min-width: 0;
   grid-template-columns: minmax(140px, .8fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(64px, .35fr) minmax(110px, .7fr) auto;
   align-items: center;
   gap: 9px;
@@ -2332,6 +2356,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 }
 .worker-test-row {
   display: grid;
+  min-width: 0;
   grid-template-columns: minmax(120px, 1fr) minmax(240px, 2fr);
   align-items: center;
   gap: 12px;
@@ -2352,6 +2377,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 10.5px;
 }
 .worker-test-result {
+  min-width: 0;
   min-height: 0;
   max-height: 90px;
   margin: 0;
@@ -2364,6 +2390,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font: inherit;
   font-size: 9px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .worker-test-result:empty { display: none; }
@@ -2396,7 +2423,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   position: absolute;
   z-index: 8;
   right: 0;
-  width: 230px;
+  width: min(230px, calc(100cqi - 16px));
+  max-width: 100cqi;
   max-height: 210px;
   display: grid;
   gap: 3px;
@@ -2409,8 +2437,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 }
 .worker-toolset-option { display: flex; align-items: center; gap: 7px; min-height: 24px; color: var(--text-secondary); font-size: 9.5px; }
 .worker-toolset-option input { accent-color: var(--mint); }
-@media (max-width: 760px) {
-  #panelSettings { max-height: calc(100vh - 54px); }
+@container dock-panel (max-width: 760px) {
   .provider-pool-layout { grid-template-columns: 1fr; }
   .provider-pool-list-pane { max-height: 190px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); }
   .provider-form-grid { grid-template-columns: 1fr; }
@@ -2418,6 +2445,9 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   .worker-role-row { grid-template-columns: 1fr; }
   .worker-default-row { grid-template-columns: 1fr; }
   .worker-test-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  #panelSettings { max-height: calc(100vh - 54px); }
 }
 
 /* ── 游戏风格卡片(面板内用) ── */
@@ -3351,8 +3381,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   line-height: 1.5;
 }
 /* 账号中心 */
-#panelAccount { max-width: 920px; max-height: min(560px, calc(100vh - 72px)); }
+#panelAccount {
+  --panel-max-inline-size: 920px;
+  max-height: min(560px, calc(100vh - 72px));
+}
 .account-card {
+  min-width: 0;
+  max-width: 100%;
   border-radius: 10px; padding: 14px 16px;
   background: rgba(0,0,0,.22);
   border: 1px solid rgba(255,255,255,.08);
@@ -3369,9 +3404,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .account-card-meta { flex: 1; min-width: 0; }
 .account-card-title {
+  min-width: 0;
   font-size: 12px; font-weight: 700;
   color: var(--text-primary);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  overflow-wrap: anywhere;
 }
 .account-card-detail {
   font-size: 10px; color: var(--text-secondary);
@@ -3399,24 +3436,31 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .account-card-actions button:hover { background: rgba(255,255,255,.14); }
 .account-card-actions button.danger:hover { background: rgba(232,130,110,.25); color: var(--coral); }
 .account-add-bar {
-  display: flex; gap: 8px; align-items: flex-end;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 0;
   border-top: 1px solid rgba(255,255,255,.06);
 }
 .account-add-bar .provider-field { flex: 1; min-width: 0; }
+.account-add-bar > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.account-login-button { flex: 0 1 auto; }
+.account-login-note { color: var(--text-muted); font-size: 9.5px; }
 .account-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  max-width: 100%;
   align-items: end;
 }
-@media (max-width: 720px) {
+@container dock-panel (max-width: 720px) {
   .account-fields { grid-template-columns: 1fr; }
-  .account-add-bar { flex-wrap: wrap; align-items: center; }
+  .account-add-bar { align-items: center; }
 }
 /* 自主链路观测 */
 .segment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 720px) { .segment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .segment-grid { grid-template-columns: 1fr; } }
+@container dock-panel (max-width: 720px) { .segment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container dock-panel (max-width: 560px) { .segment-grid { grid-template-columns: 1fr; } }
 .segment-col {
   border-radius: 12px; padding: 12px;
   background: rgba(255,255,255,.03);
@@ -3613,7 +3657,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .dock-btn.media-dock-btn.has-media::after { opacity: 1; transform: scale(1); }
 #panelMedia {
-  width: min(1180px, calc(100vw - 32px)); max-width: 1180px;
+  --panel-max-inline-size: 1180px;
   height: min(740px, calc(100vh - 64px)); max-height: calc(100vh - 64px);
 }
 #panelMedia:fullscreen { width: 100vw; height: 100vh; max-width: none; max-height: none; border-radius: 0; }
@@ -3694,7 +3738,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .media-queue-item-meta { color: var(--text-muted); font-size: 8.5px; margin-top: 2px; }
 .media-queue-item-state { color: var(--mint); font-size: 8.5px; white-space: nowrap; }
 @media (max-width: 720px) {
-  #panelMedia { width: calc(100vw - 16px); height: calc(100vh - 54px); max-height: calc(100vh - 54px); }
+  #panelMedia { height: calc(100vh - 54px); max-height: calc(100vh - 54px); }
   .media-board { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) minmax(120px, .45fr); }
   .media-stage { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.07); padding: 10px; }
   .media-now { display: flex; flex-wrap: wrap; }
@@ -7980,8 +8024,8 @@ function renderAccountPanel(data) {
   html += '</div>';
   html += '</div>';
   html += '<div class="account-add-bar" style="border-top:none; padding-top:4px;">';
-  html += '<button id="accountDesktopLogin" class="provider-action primary" onclick="loginAccountInDesktop()" style="min-width:140px;">在桌面应用中登录</button>';
-  html += '<span style="font-size:9.5px;color:var(--text-muted);">登录状态保存在本机，并提供给本地 Agent 工具</span>';
+  html += '<button id="accountDesktopLogin" class="provider-action primary account-login-button" onclick="loginAccountInDesktop()">在桌面应用中登录</button>';
+  html += '<span class="account-login-note">登录状态保存在本机，并提供给本地 Agent 工具</span>';
   html += '</div>';
 
   els.panelAccountBody.innerHTML = html;

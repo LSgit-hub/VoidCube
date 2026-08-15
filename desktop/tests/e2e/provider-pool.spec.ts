@@ -1,23 +1,115 @@
-import { chromium, expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import {
+  installAccountsRoute,
+  launchSupervisorPage,
+  supervisorUiUrl
+} from './helpers/supervisor-page'
 
 
 test('provider pool and worker assignment panels stay usable across viewports', async () => {
-  const browser = await chromium.launch()
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
-  const pageErrors: string[] = []
-  page.on('pageerror', (error) => pageErrors.push(error.message))
-  await page.route('**/ui/media-events', (route) => route.fulfill({
-    status: 200,
-    contentType: 'text/event-stream',
-    body: ''
-  }))
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 800 })
+  await installAccountsRoute(page, {
+    accounts: [
+      {
+        id: 'test-bilibili',
+        platform: 'bilibili',
+        platform_name: 'B站',
+        label: '这是用于验证组件边界的超长账号标签不会推动相邻操作按钮离开面板',
+        cookies_count: 24,
+        status: 'active'
+      },
+      {
+        id: 'test-netease',
+        platform: 'netease_music',
+        platform_name: '网易云音乐',
+        label: '',
+        cookies_count: 19,
+        status: 'active'
+      }
+    ],
+    supported_platforms: ['bilibili', 'netease_music'],
+    accounts_revision: 0
+  })
   await page.route(/\/provider-pool(?:\?.*)?$/, async (route) => {
     const response = await route.fetch()
     const body = await response.json()
+    if (!Array.isArray(body.providers) || body.providers.length < 2) {
+      body.managed = false
+      body.active_provider = 'openrouter'
+      body.providers = [
+        {
+          key: 'backup',
+          label: '备用 Provider',
+          type: 'openai_compatible',
+          base_url: 'https://example.invalid/v1',
+          selected_model: 'cached-model',
+          concurrency_limit: 2,
+          model_catalog: { models: ['cached-model'], updated_at: '2026-08-10T01:02:03+00:00' },
+          auth_mode: 'env',
+          api_key_env: 'BACKUP_API_KEY',
+          credential_configured: true,
+          active: false,
+          references: ['员工角色 general']
+        },
+        {
+          key: 'openrouter',
+          label: 'OpenRouter',
+          type: 'openrouter',
+          base_url: 'https://openrouter.ai/api/v1',
+          selected_model: 'history-model',
+          concurrency_limit: 2,
+          model_catalog: { models: ['history-model'], updated_at: '2026-08-10T01:02:03+00:00' },
+          auth_mode: 'env',
+          api_key_env: 'OPENROUTER_API_KEY',
+          credential_configured: true,
+          active: true,
+          references: ['API-A 当前 Provider']
+        }
+      ]
+      body.provider_presets = [
+        { type: 'openai_compatible', label: 'OpenAI Compatible', base_url: '', api_key_env: '', auth_mode: 'env' },
+        { type: 'openrouter', label: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', api_key_env: 'OPENROUTER_API_KEY', auth_mode: 'env' }
+      ]
+      body.default_role = 'general'
+      body.max_concurrent = 4
+      body.roles = [
+        {
+          role: 'general', label: '通用员工', description: '综合工作', enabled: true,
+          provider: 'backup', model: 'model-a', concurrency_limit: 1,
+          toolsets: ['web'], recommended_toolsets: ['web', 'file', 'skills', 'todo']
+        },
+        {
+          role: 'research', label: '调研员工', description: '外部信息', enabled: true,
+          provider: 'openrouter', model: 'model-b', concurrency_limit: 1,
+          toolsets: ['learn'], recommended_toolsets: ['learn']
+        },
+        {
+          role: 'coding', label: '工程员工', description: '代码工作', enabled: true,
+          provider: 'backup', model: 'model-a', concurrency_limit: 1,
+          toolsets: ['file'], recommended_toolsets: ['file', 'terminal', 'code_execution', 'skills', 'todo']
+        },
+        {
+          role: 'media', label: '媒体员工', description: '媒体工作', enabled: true,
+          provider: 'openrouter', model: 'model-b', concurrency_limit: 1,
+          toolsets: ['web'], recommended_toolsets: ['media', 'web']
+        }
+      ]
+      body.toolsets = [
+        'assistant', 'browser', 'code_execution', 'file', 'learn', 'media', 'skills', 'terminal', 'todo', 'web'
+      ].map(name => ({ name }))
+    }
     if (Array.isArray(body.providers) && body.providers[0]) {
       body.providers[0].model_catalog = {
         models: ['cached-model'],
         updated_at: '2026-08-10T01:02:03+00:00'
+      }
+    }
+    if (Array.isArray(body.roles)) {
+      const limits = { general: 1, research: 1, coding: 1, media: 1 }
+      for (const role of body.roles) {
+        if (typeof role.role === 'string' && role.role in limits) {
+          role.concurrency_limit = limits[role.role as keyof typeof limits]
+        }
       }
     }
     await route.fulfill({ response, contentType: 'application/json', body: JSON.stringify(body) })
@@ -145,7 +237,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
   })
 
   try {
-    await page.goto('http://127.0.0.1:6002/ui', { waitUntil: 'domcontentloaded' })
+    await page.goto(supervisorUiUrl, { waitUntil: 'domcontentloaded' })
     await page.setViewportSize({ width: 1024, height: 768 })
     await page.locator('.dock-btn[data-panel="account"]').click({ force: true })
     await expect(page.locator('#panelAccount')).toHaveClass(/open/)
@@ -158,6 +250,25 @@ test('provider pool and worker assignment panels stay usable across viewports', 
     expect(accountPanelBox).not.toBeNull()
     expect(accountPanelBox!.x).toBeGreaterThanOrEqual(0)
     expect(accountPanelBox!.x + accountPanelBox!.width).toBeLessThanOrEqual(1024)
+    const accountOverflow = await page.locator('#panelAccount').evaluate((panel) => {
+      const panelRect = panel.getBoundingClientRect()
+      const selectors = [
+        '.panel-header',
+        '.panel-body',
+        '.account-card',
+        '.account-add-bar',
+        '.account-fields',
+        '.provider-field',
+        '.provider-action'
+      ]
+      return Array.from(panel.querySelectorAll<HTMLElement>(selectors.join(',')))
+        .filter((element) => {
+          const rect = element.getBoundingClientRect()
+          return rect.left < panelRect.left - 1 || rect.right > panelRect.right + 1
+        })
+        .map((element) => element.className || element.id || element.tagName)
+    })
+    expect(accountOverflow).toEqual([])
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({
       path: 'test-results/account-center-desktop.png',
@@ -274,6 +385,7 @@ test('provider pool and worker assignment panels stay usable across viewports', 
       fullPage: true,
       animations: 'disabled'
     })
+
     expect(pageErrors).toEqual([])
   } finally {
     await page.unrouteAll({ behavior: 'ignoreErrors' })

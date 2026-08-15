@@ -1,0 +1,33 @@
+version: '1.0'
+name: voidcube-supervisor-e2e-nightly
+displayName: VoidCube Supervisor browser E2E
+stages:
+  - stage:
+    name: supervisor_browser_e2e
+    displayName: Supervisor auto-start browser regression
+    steps:
+      - step: build@python
+        name: supervisor_browser_e2e
+        displayName: Install dependencies and run Supervisor E2E
+        pythonVersion: '3.14'
+        commands:
+          - python3 -m venv .venv
+          - .venv/bin/python -m pip install --upgrade pip
+          - .venv/bin/python -m pip install -e ".[all,dev]"
+          - node --version
+          - npm --version
+          - mkdir -p .local_state/npm-cache .local_state/playwright-browsers
+          - test -f .local_state/playwright-browsers/.voidcube-cache-ready && echo "Playwright browser cache hit" || echo "Playwright browser cache cold"
+          - cd desktop
+          - npm ci --cache ../.local_state/npm-cache
+          - npm cache verify --cache ../.local_state/npm-cache
+          - PLAYWRIGHT_BROWSERS_PATH=../.local_state/playwright-browsers npx playwright install --with-deps chromium
+          - touch ../.local_state/playwright-browsers/.voidcube-cache-ready
+          - du -sh ../.local_state/npm-cache ../.local_state/playwright-browsers
+          - PLAYWRIGHT_BROWSERS_PATH=../.local_state/playwright-browsers npx playwright test tests/e2e/dock-layout.spec.ts tests/e2e/provider-pool.spec.ts -c playwright.config.ts --workers=1
+triggers:
+  schedule:
+    - cron: '30 18 * * *'
+      branches:
+        include:
+          - master

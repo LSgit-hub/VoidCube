@@ -809,7 +809,18 @@ body.resizing * {
 
 .terminal-host .xterm-viewport {
   scrollbar-color: #384453 #0d1117;
-  scrollbar-width: thin;
+  /* Keep the terminal footer flush with the content edge. Scrolling remains
+     available through the wheel, keyboard, and xterm's programmatic API. */
+  scrollbar-width: none;
+}
+
+.terminal-host .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.terminal-host .xterm-scrollable-element > .scrollbar {
+  display: none !important;
 }
 
 .terminal-error {
