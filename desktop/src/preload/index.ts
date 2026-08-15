@@ -3,6 +3,8 @@ import type {
   MonitorProbe,
   ServiceControlResult,
   ServiceLifecycleAction,
+  TerminalBackend,
+  TerminalBackendChangeResult,
   TerminalState,
   VoidCubeDesktopApi,
   WorkspaceOpenResult
@@ -23,7 +25,9 @@ const api: VoidCubeDesktopApi = {
   services: {
     status: () => ipcRenderer.invoke('services:status') as Promise<ServiceControlResult>,
     control: (action: ServiceLifecycleAction) =>
-      ipcRenderer.invoke('services:control', action) as Promise<ServiceControlResult>
+      ipcRenderer.invoke('services:control', action) as Promise<ServiceControlResult>,
+    setBackend: (backend: TerminalBackend) =>
+      ipcRenderer.invoke('services:set-backend', backend) as Promise<TerminalBackendChangeResult>
   },
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),

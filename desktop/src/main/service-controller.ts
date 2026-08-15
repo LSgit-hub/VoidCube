@@ -5,10 +5,12 @@ import type {
   ServiceControlResult,
   ExecutionContext,
   ServiceInfo,
-  ServiceLifecycleAction
+  ServiceLifecycleAction,
+  TerminalBackend
 } from '../shared/contracts'
 
 const CONTROL_TIMEOUT_MS = 120_000
+const CONFIG_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_LENGTH = 1_000_000
 
 function isServiceInfo(value: unknown): value is ServiceInfo {
@@ -87,6 +89,53 @@ export class ServiceController {
       this.operation = undefined
     })
     return this.operation
+  }
+
+  setTerminalBackend(backend: TerminalBackend): Promise<{ ok: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      const args = [
+        ...this.runtime.pythonPrefixArgs,
+        ...this.runtime.cliArgs,
+        'config',
+        'set',
+        'terminal.backend',
+        backend
+      ]
+      const child = spawn(this.runtime.pythonCommand, args, {
+        cwd: this.runtime.workingDirectory,
+        env: {
+          ...process.env,
+          PYTHONUTF8: '1',
+          VOIDCUBE_DESKTOP: '1'
+        },
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
+      let stderr = ''
+      let settled = false
+      const finish = (result: { ok: boolean; error?: string }): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        resolve(result)
+      }
+      const timeout = setTimeout(() => {
+        child.kill()
+        finish({ ok: false, error: `配置写入超时（${CONFIG_TIMEOUT_MS / 1000} 秒）` })
+      }, CONFIG_TIMEOUT_MS)
+
+      child.stderr.setEncoding('utf8')
+      child.stderr.on('data', (data: string) => {
+        if (stderr.length < MAX_OUTPUT_LENGTH) stderr += data
+      })
+      child.on('error', (error) => finish({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+      child.on('close', (code) => finish(code === 0
+        ? { ok: true }
+        : { ok: false, error: stderr.trim() || `配置写入失败（退出码 ${code ?? 'unknown'}）` }))
+    })
   }
 
   currentWorkspacePath(): string | undefined {

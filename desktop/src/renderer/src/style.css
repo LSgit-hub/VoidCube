@@ -587,6 +587,148 @@ body.resizing * {
   color: var(--muted);
 }
 
+.execution-selector {
+  position: relative;
+}
+
+.execution-selector > summary {
+  list-style: none;
+}
+
+.execution-selector > summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-selector-button {
+  min-height: 26px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.context-selector-button:hover,
+.execution-selector[open] > summary,
+.execution-selector.busy > summary {
+  border-color: var(--line);
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.selector-chevron {
+  width: 12px !important;
+  height: 12px !important;
+  color: var(--muted) !important;
+  transition: transform 120ms ease;
+}
+
+.execution-selector[open] .selector-chevron {
+  transform: rotate(180deg);
+}
+
+.execution-popover {
+  position: absolute;
+  top: 32px;
+  left: 50%;
+  z-index: 8;
+  display: grid;
+  width: 250px;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: #171c24;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 40%);
+  transform: translateX(-50%);
+}
+
+.execution-popover button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.execution-popover button:hover:not(:disabled),
+.execution-popover button.selected {
+  border-color: var(--line);
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.execution-popover button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.execution-popover button > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--blue);
+}
+
+.execution-popover button.selected > svg:first-child {
+  color: var(--green);
+}
+
+.execution-popover button span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.execution-popover button strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-popover button small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-popover .backend-check {
+  visibility: hidden;
+  width: 14px;
+  height: 14px;
+  color: var(--green);
+}
+
+.execution-popover button.selected .backend-check {
+  visibility: visible;
+}
+
+.execution-selector-status {
+  margin: 4px 4px 1px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.execution-selector-status[data-state="error"] {
+  color: var(--coral);
+}
+
+.execution-selector-status[hidden] {
+  display: none;
+}
+
 .context-item {
   display: flex;
   align-items: center;

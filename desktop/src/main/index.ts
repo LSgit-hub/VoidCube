@@ -6,7 +6,12 @@ import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from './run
 import { ServiceController } from './service-controller'
 import { TerminalSession } from './terminal-session'
 import { loginToPlatform } from './platform-login'
-import type { MonitorProbe, ServiceLifecycleAction } from '../shared/contracts'
+import type {
+  MonitorProbe,
+  ServiceLifecycleAction,
+  TerminalBackend,
+  TerminalBackendChangeResult
+} from '../shared/contracts'
 
 let mainWindow: BrowserWindow | undefined
 let terminal: TerminalSession | undefined
@@ -181,6 +186,28 @@ function registerIpc(): void {
     }
     if (!services) throw new Error('Service control is unavailable')
     return services.control(action as ServiceLifecycleAction)
+  })
+  ipcMain.handle('services:set-backend', async (_event, backend: unknown): Promise<TerminalBackendChangeResult> => {
+    if (backend !== 'local' && backend !== 'podman') {
+      return { ok: false, backend: 'local', error: '不支持的终端后端' }
+    }
+    if (!services) return { ok: false, backend, error: '服务控制不可用' }
+
+    const configured = await services.setTerminalBackend(backend as TerminalBackend)
+    if (!configured.ok) return { ok: false, backend, error: configured.error }
+
+    const serviceResult = await services.control('restart')
+    if (!serviceResult.ok) {
+      return {
+        ok: false,
+        backend,
+        services: serviceResult,
+        error: serviceResult.error || '托管服务重启失败，配置已写入但尚未完全生效'
+      }
+    }
+
+    const terminalState = terminal?.restart()
+    return { ok: true, backend, services: serviceResult, terminal: terminalState }
   })
   ipcMain.handle('terminal:start', () => terminal?.start() ?? { phase: 'error', message: 'Terminal is unavailable' })
   ipcMain.handle('terminal:restart', () => terminal?.restart() ?? { phase: 'error', message: 'Terminal is unavailable' })

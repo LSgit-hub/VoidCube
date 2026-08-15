@@ -209,8 +209,16 @@ class SubagentDisplayManager:
     
     @print_fn.setter
     def print_fn(self, fn: Callable) -> None:
-        """Set a custom print function."""
-        self._print_fn = fn
+        """Set a custom print function; output remains serialized by self._lock."""
+        if fn is None:
+            self._print_fn = None
+            return
+
+        def _locked(*args, **kwargs) -> None:
+            with self._lock:
+                fn(*args, **kwargs)
+
+        self._print_fn = _locked
     
     def _safe_print(self, *args, **kwargs) -> None:
         """Thread-safe print with optional output lock."""
@@ -511,25 +519,28 @@ class SubagentDisplayManager:
             f"{Colors.ERROR}{_execution_state_label(state)}{Colors.RESET}"
         )
     def _print_final_summary(self, task: SubagentTask) -> None:
-        """Print final task summary."""
+        """Print final task summary (single atomic output to avoid interleaving)."""
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        
+
+        lines: list[str] = []
         if task.status == SubagentStatus.COMPLETED:
-            self.print_fn(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ 子代理已完成{Colors.RESET}")
-            self.print_fn(f"  {Colors.DIM}耗时: {task.duration_seconds:.1f}s{Colors.RESET}")
-            self.print_fn(f"  {Colors.DIM}模型调用: {task.api_calls} 次{Colors.RESET}")
-            
+            lines.append(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ 子代理已完成{Colors.RESET}")
+            lines.append(f"  {Colors.DIM}耗时: {task.duration_seconds:.1f}s{Colors.RESET}")
+            lines.append(f"  {Colors.DIM}模型调用: {task.api_calls} 次{Colors.RESET}")
+
             if task.summary:
                 # Truncate summary for display
                 summary = task.summary[:500]
                 if len(task.summary) > 500:
                     summary += "..."
-                self.print_fn(f"\n{Colors.BOLD}摘要:{Colors.RESET}")
-                self.print_fn(f"  {summary}")
+                lines.append(f"\n{Colors.BOLD}摘要:{Colors.RESET}")
+                lines.append(f"  {summary}")
         else:
-            self.print_fn(f"\n{Colors.ERROR}{Colors.BOLD}{prefix} ✗ 子代理执行失败{Colors.RESET}")
+            lines.append(f"\n{Colors.ERROR}{Colors.BOLD}{prefix} ✗ 子代理执行失败{Colors.RESET}")
             if task.error:
-                self.print_fn(f"  {Colors.ERROR}{task.error[:200]}{Colors.RESET}")
+                lines.append(f"  {Colors.ERROR}{task.error[:200]}{Colors.RESET}")
+
+        self.print_fn("\n".join(lines))
     
     def _print_interrupt(self, task: SubagentTask) -> None:
         """Print task interrupt notification."""
@@ -633,8 +644,10 @@ class SubagentDisplayManager:
             task.is_background = True
             self._background_tasks[task_id] = task
         
-        self.print_fn(f"\n{Colors.INFO}→ 已应用调试操作: {task.goal_preview}{Colors.RESET}")
-        self.print_fn(f"{Colors.DIM}  任务已转入后台运行，可使用 /tasks 查看{Colors.RESET}")
+        self.print_fn(
+            f"\n{Colors.INFO}→ 已应用调试操作: {task.goal_preview}{Colors.RESET}\n"
+            f"{Colors.DIM}  任务已转入后台运行，可使用 /tasks 查看{Colors.RESET}"
+        )
         
         return True
     

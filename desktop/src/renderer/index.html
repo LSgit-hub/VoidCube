@@ -128,11 +128,33 @@
               <strong>Agent CLI</strong>
             </div>
             <div id="execution-context" class="execution-context" aria-live="polite">
-              <div class="context-item">
-                <i data-lucide="shield-check" aria-hidden="true"></i>
-                <span>执行环境</span>
-                <strong id="execution-mode">检测中</strong>
-              </div>
+              <details id="execution-selector" class="execution-selector">
+                <summary id="execution-selector-summary" class="context-item context-selector-button" title="选择执行环境">
+                  <i data-lucide="shield-check" aria-hidden="true"></i>
+                  <span>执行环境</span>
+                  <strong id="execution-mode">检测中</strong>
+                  <i data-lucide="chevron-down" class="selector-chevron" aria-hidden="true"></i>
+                </summary>
+                <div class="execution-popover" role="menu" aria-label="执行环境选择">
+                  <button type="button" data-terminal-backend="local" role="menuitemradio" aria-checked="false">
+                    <i data-lucide="monitor" aria-hidden="true"></i>
+                    <span>
+                      <strong id="local-backend-label">Windows 本地环境</strong>
+                      <small>宿主机受限终端</small>
+                    </span>
+                    <i data-lucide="check" class="backend-check" aria-hidden="true"></i>
+                  </button>
+                  <button type="button" data-terminal-backend="podman" role="menuitemradio" aria-checked="false">
+                    <i data-lucide="box" aria-hidden="true"></i>
+                    <span>
+                      <strong>Linux Podman 沙箱</strong>
+                      <small>隔离容器终端</small>
+                    </span>
+                    <i data-lucide="check" class="backend-check" aria-hidden="true"></i>
+                  </button>
+                  <p id="execution-selector-status" class="execution-selector-status" hidden></p>
+                </div>
+              </details>
               <span class="context-divider" aria-hidden="true"></span>
               <button
                 id="open-workspace"

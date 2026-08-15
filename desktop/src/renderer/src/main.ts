@@ -1,6 +1,10 @@
 import {
+  Box,
+  Check,
+  ChevronDown,
   createIcons,
   FolderGit2,
+  Monitor,
   Minus,
   PanelTop,
   Play,
@@ -23,6 +27,7 @@ import type {
   ExecutionContext,
   ServiceInfo,
   ServiceLifecycleAction,
+  TerminalBackend,
   TerminalState
 } from '../../shared/contracts'
 
@@ -41,8 +46,15 @@ const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
 const executionContext = requiredElement<HTMLElement>('execution-context')
+const executionSelector = requiredElement<HTMLDetailsElement>('execution-selector')
+const executionSelectorSummary = requiredElement<HTMLElement>('execution-selector-summary')
 const executionMode = requiredElement<HTMLElement>('execution-mode')
 const executionWorkspace = requiredElement<HTMLElement>('execution-workspace')
+const localBackendLabel = requiredElement<HTMLElement>('local-backend-label')
+const executionSelectorStatus = requiredElement<HTMLParagraphElement>('execution-selector-status')
+const backendButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('[data-terminal-backend]')
+)
 const servicesSummary = requiredElement<HTMLElement>('services-summary')
 const servicesError = requiredElement<HTMLParagraphElement>('services-error')
 const serviceMenu = requiredElement<HTMLDetailsElement>('service-menu')
@@ -57,8 +69,12 @@ const serviceButtons = [
 
 createIcons({
   icons: {
+    Box,
+    Check,
+    ChevronDown,
     PanelTop,
     FolderGit2,
+    Monitor,
     Play,
     RefreshCw,
     RotateCcw,
@@ -129,6 +145,7 @@ let monitorProbePending = false
 const monitorHealth = new MonitorHealthGate(3)
 let servicePollTimer: number | undefined
 let serviceActionPending = false
+let backendChangePending = false
 let splitPercent = readSplitPercent()
 let layoutMode = readLayoutMode()
 let dragStartY = 0
@@ -279,6 +296,7 @@ async function verifyMonitorAvailability(): Promise<void> {
 
 function executionModeLabel(context: ExecutionContext): string {
   const backendNames: Record<string, string> = {
+    local: localEnvironmentLabel(),
     docker: 'Docker',
     podman: 'Podman',
     singularity: 'Singularity',
@@ -292,16 +310,46 @@ function executionModeLabel(context: ExecutionContext): string {
   return '系统终端'
 }
 
+function localEnvironmentLabel(): string {
+  if (api.runtime.platform === 'win32') return 'Windows 本地环境'
+  if (api.runtime.platform === 'linux') return 'Linux 本地环境'
+  return '宿主本地环境'
+}
+
+function applyBackendSelection(backend?: string): void {
+  localBackendLabel.textContent = localEnvironmentLabel()
+  executionSelector.dataset.backend = backend ?? 'pending'
+  for (const button of backendButtons) {
+    const selected = button.dataset.terminalBackend === backend
+    button.classList.toggle('selected', selected)
+    button.setAttribute('aria-checked', String(selected))
+  }
+}
+
+function setBackendSelectionBusy(busy: boolean): void {
+  backendChangePending = busy
+  executionSelector.classList.toggle('busy', busy)
+  for (const button of backendButtons) button.disabled = busy
+}
+
+function showBackendSelectionStatus(message: string, error = false): void {
+  executionSelectorStatus.hidden = !message
+  executionSelectorStatus.textContent = message
+  executionSelectorStatus.dataset.state = error ? 'error' : 'ok'
+}
+
 function applyExecutionContext(context?: ExecutionContext): void {
   if (!context) {
     executionContext.dataset.mode = 'pending'
     executionMode.textContent = '检测中'
+    applyBackendSelection()
     executionWorkspace.textContent = '等待 CLI'
     executionContext.title = ''
     return
   }
   executionContext.dataset.mode = context.mode
   executionMode.textContent = executionModeLabel(context)
+  applyBackendSelection(context.backend)
   executionWorkspace.textContent = context.branch
     ? `${context.workspaceName} · ${context.branch}`
     : context.workspaceName
@@ -312,6 +360,7 @@ function applyExecutionContext(context?: ExecutionContext): void {
     context.worktree ? 'Git 隔离：Worktree' : 'Git 隔离：主工作区',
     `回退到系统终端：${context.fallbackToLocal ? '允许' : '禁止'}`
   ].join('\n')
+  executionSelectorSummary.title = '点击切换执行环境'
 }
 
 function serviceLabel(service: ServiceInfo): string {
@@ -383,6 +432,37 @@ async function runServiceAction(action: ServiceLifecycleAction): Promise<Service
     }
     return result
   } finally {
+    setServiceBusy()
+  }
+}
+
+async function changeTerminalBackend(backend: TerminalBackend): Promise<void> {
+  if (backendChangePending || executionSelector.dataset.backend === backend) {
+    executionSelector.open = false
+    return
+  }
+
+  setBackendSelectionBusy(true)
+  setServiceBusy('restart')
+  showBackendSelectionStatus('正在切换执行环境…')
+  try {
+    const result = await api.services.setBackend(backend)
+    if (!result.ok) {
+      showBackendSelectionStatus(result.error ?? '执行环境切换失败', true)
+      return
+    }
+    if (result.services) applyServiceResult(result.services)
+    if (result.terminal) applyTerminalState(result.terminal)
+    applyBackendSelection(result.backend)
+    executionSelector.open = false
+    showBackendSelectionStatus('执行环境已切换')
+    window.setTimeout(() => {
+      if (!executionSelector.open) showBackendSelectionStatus('')
+    }, 2400)
+  } catch (error) {
+    showBackendSelectionStatus(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    setBackendSelectionBusy(false)
     setServiceBusy()
   }
 }
@@ -488,6 +568,12 @@ requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () 
 requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
 requiredElement<HTMLButtonElement>('restart-services').addEventListener('click', () => void runServiceAction('restart'))
 requiredElement<HTMLButtonElement>('stop-services').addEventListener('click', () => void runServiceAction('stop'))
+for (const button of backendButtons) {
+  button.addEventListener('click', () => {
+    const backend = button.dataset.terminalBackend
+    if (backend === 'local' || backend === 'podman') void changeTerminalBackend(backend)
+  })
+}
 requiredElement<HTMLButtonElement>('open-workspace').addEventListener('click', async () => {
   const result = await api.workspace.open()
   if (result.ok) return

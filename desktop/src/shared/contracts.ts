@@ -16,6 +16,7 @@ export interface MonitorProbe {
 export type ServiceLifecycleAction = 'start' | 'stop' | 'restart'
 export type ServiceControlAction = 'status' | ServiceLifecycleAction
 export type ServicePhase = 'healthy' | 'unhealthy' | 'stopped'
+export type TerminalBackend = 'local' | 'podman'
 
 export interface ServiceInfo {
   name: string
@@ -51,6 +52,14 @@ export interface ServiceControlResult {
   error?: string
 }
 
+export interface TerminalBackendChangeResult {
+  ok: boolean
+  backend: TerminalBackend
+  services?: ServiceControlResult
+  terminal?: TerminalState
+  error?: string
+}
+
 export interface RuntimeInfo {
   platform: NodeJS.Platform
   versions: {
@@ -81,6 +90,7 @@ export interface VoidCubeDesktopApi {
   services: {
     status: () => Promise<ServiceControlResult>
     control: (action: ServiceLifecycleAction) => Promise<ServiceControlResult>
+    setBackend: (backend: TerminalBackend) => Promise<TerminalBackendChangeResult>
   }
   window: {
     minimize: () => void
