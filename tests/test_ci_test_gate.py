@@ -79,6 +79,30 @@ def test_gitee_ci_uses_python_314_and_unified_gate():
     ]
 
 
+def test_memory_nightly_workflow_is_schedule_only_and_runs_180_second_soak():
+    workflow = yaml.safe_load(
+        (ROOT / ".workflow" / "voidcube-memory-nightly.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert workflow["version"] == "1.0"
+    assert "push" not in workflow["triggers"]
+    assert "pr" not in workflow["triggers"]
+    schedule = workflow["triggers"]["schedule"]
+    assert len(schedule) == 1
+    assert schedule[0]["cron"] == "0 18 * * *"
+    assert schedule[0]["branches"]["include"] == ["master"]
+
+    step = workflow["stages"][0]["steps"][0]
+    assert step["pythonVersion"] == "3.14"
+    assert (
+        "python3 scripts/smoke_memory_outbox.py --mode soak --duration-seconds 180"
+        in step["commands"]
+    )
+    assert "tests/test_memory_outbox_operational.py" in step["commands"][-1]
+
+
 def test_root_and_mem_packages_are_fixed_to_python_314():
     root_project = yaml.safe_load(
         (ROOT / ".workflow" / "voidcube-ci.yml").read_text(encoding="utf-8")

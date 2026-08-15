@@ -8,7 +8,10 @@ import pytest
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import DurableMemoryCreate, MemoryService, RecallRequest
 from systems.memory.database import open_memory_sqlite
-from systems.memory.ranking_policy import GRAPH_RECALL_SCORING_POLICY
+from systems.memory.ranking_policy import (
+    GRAPH_RECALL_SCORING_POLICY,
+    bounded_weighted_score,
+)
 
 
 pytestmark = [pytest.mark.unit]
@@ -262,6 +265,23 @@ def test_graph_recall_scoring_policy_is_versioned_and_normalized():
             policy.recency_weight,
         )
     ) == pytest.approx(1.0)
+
+
+def test_weighted_recall_scores_remain_bounded_without_losing_separation():
+    strongest = bounded_weighted_score(
+        (1.0, 0.50),
+        (1.0, 0.42),
+        (1.0, 0.08),
+        (1.0, 0.05),
+    )
+    weaker = bounded_weighted_score(
+        (1.0, 0.50),
+        (0.92, 0.42),
+        (1.0, 0.08),
+        (1.0, 0.05),
+    )
+
+    assert 0.0 <= weaker < strongest <= 1.0
 
 
 @pytest.mark.asyncio

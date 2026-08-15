@@ -343,6 +343,16 @@ async def evaluate_longmemeval(
             if abstention_counts
             else None
         ),
+        "abstention_false_positive_rate": (
+            round(sum(count > 0 for count in abstention_counts) / len(abstention_counts), 6)
+            if abstention_counts
+            else None
+        ),
+        "abstention_empty_rate": (
+            round(sum(count == 0 for count in abstention_counts) / len(abstention_counts), 6)
+            if abstention_counts
+            else None
+        ),
     }
     report = {
         "dataset": str(Path(dataset_path)),

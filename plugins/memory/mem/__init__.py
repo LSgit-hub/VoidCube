@@ -176,6 +176,8 @@ class MemMemoryProvider(MemoryProvider):
             "scores, matched concepts, and evidence references; use those fields "
             "when explaining why a memory was recalled. Use mem_remember for an "
             "explicit durable fact, preference, decision, or verified outcome. "
+            "When a verified conclusion replaces an earlier durable conclusion, "
+            "search for the earlier IDs and pass them as supersedes_memory_ids. "
             "Use mem_feedback for explicit relevance or correctness feedback. "
             "Use mem_forget only after the user explicitly requests permanent deletion. "
             "Treat miss, weak_match, or unavailable results as an explicit lack "
@@ -231,7 +233,9 @@ class MemMemoryProvider(MemoryProvider):
                 "description": (
                     "Persist one concise durable memory in canonical Mem. Use only "
                     "for stable preferences, explicit remember requests, decisions, "
-                    "milestones, or verified outcomes; include evidence references."
+                    "milestones, or verified outcomes; include evidence references. "
+                    "When replacing an earlier durable conclusion, provide its ID in "
+                    "supersedes_memory_ids."
                 ),
                 "parameters": {
                     "type": "object",

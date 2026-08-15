@@ -23,6 +23,7 @@ def test_mem_provider_exposes_only_canonical_service_tools():
         "mem_feedback",
         "mem_forget",
     ]
+    assert "supersedes_memory_ids" in provider.system_prompt_block()
 
 
 @pytest.mark.unit

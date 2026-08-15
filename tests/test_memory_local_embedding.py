@@ -180,9 +180,10 @@ async def test_local_semantic_recall_returns_empty_for_unrelated_query(tmp_path)
         conn.close()
 
     result = await service.recall(
-        RecallRequest(query="量子香蕉校准协议 ZXQ-917", min_score=0.5)
+        RecallRequest(query="量子香蕉校准协议 ZXQ-917")
     )
 
     assert result["results"] == []
     assert result["count"] == 0
     assert result["recall_status"] == "miss"
+    assert result["min_score"] == pytest.approx(0.5)

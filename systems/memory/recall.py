@@ -20,6 +20,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from systems.memory.lexical_index import search_memory_fts
 from systems.memory.ranking_policy import (
     GRAPH_RECALL_SCORING_POLICY,
+    bounded_weighted_score,
     compute_dynamic_weight,
 )
 from systems.memory.scope import (
@@ -68,11 +69,52 @@ _RECENT_CONVERSATION_PATTERNS = (
     "谈了什么",
     "说了什么",
     "做了什么",
+    "用户最近要做什么",
+    "我最近要做什么",
     "聊过什么",
     "讨论过什么",
     "what did we discuss",
     "what did we talk",
     "what were we discussing",
+)
+_STATE_UPDATE_MARKERS = (
+    "改用",
+    "改成",
+    "切换到",
+    "切回",
+    "换成",
+    "换用",
+    "转用",
+    "统一用",
+    "用回",
+    "changed to",
+    "moved to",
+    "switched back",
+    "switched to",
+)
+_STATE_UPDATE_QUERY_TARGETS = (
+    "方案",
+    "框架",
+    "运行时",
+    "版本",
+    "配置",
+    "平台",
+    "工具",
+    "模型",
+    "数据库",
+    "语言",
+    "服务商",
+    "provider",
+    "framework",
+    "runtime",
+    "deployment",
+    "version",
+    "configuration",
+    "platform",
+    "tool",
+    "model",
+    "database",
+    "language",
 )
 _IDENTITY_QUERY_PATTERNS = (
     "你是谁",
@@ -120,8 +162,47 @@ _CONCEPT_GROUPS = (
     ("记忆", "回忆", "历史"),
     ("保存", "记录", "记住", "沉淀"),
     ("原因", "根因", "为什么", "为何", "怎么回事"),
-    ("名字", "姓名", "称呼", "叫什么", "name", "called"),
+    (
+        "名字",
+        "姓名",
+        "称呼",
+        "叫什么",
+        "怎么称呼",
+        "叫我",
+        "name",
+        "called",
+    ),
     ("偏好", "喜欢", "首选", "prefer", "preference"),
+    ("问题", "报错", "卡住", "卡在", "阻塞", "blocker", "error"),
+)
+_PREFERENCE_QUERY_MARKERS = ("偏好", "喜欢", "首选", "prefer", "favorite")
+_PREFERENCE_EVIDENCE_MARKERS = (
+    "偏好",
+    "喜欢",
+    "首选",
+    "顺手",
+    "习惯",
+    "常用",
+    "爱用",
+    "偏爱",
+    "prefer",
+    "favorite",
+)
+_PREFERENCE_TOPIC_BRIDGES = (
+    (
+        ("语言", "代码", "编程", "language", "coding"),
+        (
+            "python",
+            "javascript",
+            "typescript",
+            "java",
+            "rust",
+            "golang",
+            "c++",
+            "c#",
+        ),
+    ),
+    (("颜色", "color"), ("红", "橙", "黄", "绿", "蓝", "紫", "黑", "白", "color")),
 )
 _LATIN_STOP_WORDS = {
     "a",
@@ -332,7 +413,7 @@ def recall_memories(
     limit: int = 5,
     candidate_limit: int = 200,
     max_context_chars: int = 3500,
-    min_score: float = 0.2,
+    min_score: float = 0.5,
     current_session_id: str | None = None,
     include_tier1: bool = True,
     include_tier2: bool = True,
@@ -840,7 +921,12 @@ def _tier2_candidates(
             [str(row[2] or ""), str(row[3] or ""), *topics, *entities]
         )
         lexical, matched = _lexical_score(plan, searchable_text)
-        semantic = float(semantic_matches.get(("compressed", str(row[0])), 0.0))
+        semantic = _semantic_candidate_score(
+            plan,
+            f"{row[2]} {row[3]} {row[8]} {row[9]}",
+            lexical,
+            float(semantic_matches.get(("compressed", str(row[0])), 0.0)),
+        )
         if (
             plan.intent != "identity"
             and lexical <= 0
@@ -848,6 +934,7 @@ def _tier2_candidates(
             and semantic < 0.35
         ):
             continue
+        query_relevance = _query_relevance_score(lexical, semantic)
         dynamic_weight = _dynamic_weight(
             float(row[15] or 0.0),
             event_kind=row[11],
@@ -862,29 +949,28 @@ def _tier2_candidates(
             else 0.0
         )
         if plan.intent == "identity":
-            score = (
-                0.69
-                + _FOUNDING_IDENTITY_PRIORITY.get(str(row[0]), 0.0)
-                + 0.15 * lexical
-                + 0.03 * dynamic_weight
-                + 0.03 * float(row[6] or 0.0)
+            score = bounded_weighted_score(
+                (1.0, 0.69),
+                (1.0, _FOUNDING_IDENTITY_PRIORITY.get(str(row[0]), 0.0)),
+                (lexical, 0.15),
+                (dynamic_weight, 0.03),
+                (float(row[6] or 0.0), 0.03),
             )
         elif semantic > 0:
-            score = (
-                0.42 * lexical
-                + 0.30 * semantic
-                + 0.12 * dynamic_weight
-                + 0.10 * float(row[6] or 0.0)
-                + (0.12 if plan.current_state_intent else 0.06) * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (query_relevance, 0.65),
+                (dynamic_weight, 0.12),
+                (float(row[6] or 0.0), 0.10),
+                (recency, 0.08 if plan.current_state_intent else 0.05),
+                (temporal_fit, 0.05),
             )
         else:
-            score = (
-                (0.58 if plan.current_state_intent else 0.62) * lexical
-                + 0.16 * dynamic_weight
-                + 0.12 * float(row[6] or 0.0)
-                + (0.16 if plan.current_state_intent else 0.08) * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (lexical, 0.58 if plan.current_state_intent else 0.62),
+                (dynamic_weight, 0.16),
+                (float(row[6] or 0.0), 0.12),
+                (recency, 0.16 if plan.current_state_intent else 0.08),
+                (temporal_fit, 0.10),
             )
         results.append(
             {
@@ -911,6 +997,7 @@ def _tier2_candidates(
                     "importance": round(float(row[6] or 0.0), 6),
                     "recency": round(recency, 6),
                     "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
                     "temporal_fit": round(temporal_fit, 6),
                 },
             }
@@ -995,9 +1082,15 @@ def _profile_candidates(
     for row in rows:
         searchable_text = " ".join(str(value or "") for value in row[2:6])
         lexical, matched = _lexical_score(plan, searchable_text)
-        semantic = float(semantic_matches.get(("profile", str(row[0])), 0.0))
+        semantic = _semantic_candidate_score(
+            plan,
+            f"{row[1]} {row[2]} {row[3]} {row[4]}",
+            lexical,
+            float(semantic_matches.get(("profile", str(row[0])), 0.0)),
+        )
         if lexical <= 0 and plan.terms and semantic < 0.35:
             continue
+        query_relevance = _query_relevance_score(lexical, semantic)
         recency = _recency_score(row[8], now, decay_days=365.0)
         temporal_fit = (
             _temporal_fit_score(row[8], row[9], plan.timespan_start, plan.timespan_end)
@@ -1005,19 +1098,18 @@ def _profile_candidates(
             else 0.0
         )
         if semantic > 0:
-            score = (
-                0.46 * lexical
-                + 0.32 * semantic
-                + 0.16 * float(row[6] or 0.0)
-                + 0.06 * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (query_relevance, 0.70),
+                (float(row[6] or 0.0), 0.15),
+                (recency, 0.10),
+                (temporal_fit, 0.05),
             )
         else:
-            score = (
-                0.70 * lexical
-                + 0.22 * float(row[6] or 0.0)
-                + 0.08 * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (lexical, 0.70),
+                (float(row[6] or 0.0), 0.22),
+                (recency, 0.08),
+                (temporal_fit, 0.10),
             )
         results.append(
             {
@@ -1045,6 +1137,7 @@ def _profile_candidates(
                     "confidence": round(float(row[6] or 0.0), 6),
                     "recency": round(recency, 6),
                     "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
                     "temporal_fit": round(temporal_fit, 6),
                 },
             }
@@ -1118,9 +1211,15 @@ def _archive_candidates(
     for row in rows:
         text = str(row[3] or row[4] or "")
         lexical, matched = _lexical_score(plan, text)
-        semantic = float(semantic_matches.get(("archive", str(row[0])), 0.0))
+        semantic = _semantic_candidate_score(
+            plan,
+            f"{row[1]} {row[2]}",
+            lexical,
+            float(semantic_matches.get(("archive", str(row[0])), 0.0)),
+        )
         if lexical <= 0 and plan.terms and semantic < 0.35:
             continue
+        query_relevance = _query_relevance_score(lexical, semantic)
         recency = _recency_score(row[5], now, decay_days=180.0)
         temporal_fit = (
             _temporal_fit_score(row[5], row[5], plan.timespan_start, plan.timespan_end)
@@ -1128,19 +1227,18 @@ def _archive_candidates(
             else 0.0
         )
         if semantic > 0:
-            score = (
-                0.48 * lexical
-                + 0.34 * semantic
-                + 0.06
-                + 0.12 * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (query_relevance, 0.70),
+                (1.0, 0.05),
+                (recency, 0.15),
+                (temporal_fit, 0.05),
             )
         else:
-            score = (
-                0.72 * lexical
-                + 0.08
-                + 0.20 * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (lexical, 0.72),
+                (1.0, 0.08),
+                (recency, 0.20),
+                (temporal_fit, 0.10),
             )
         results.append(
             {
@@ -1163,6 +1261,7 @@ def _archive_candidates(
                     "recency": round(recency, 6),
                     "archive_fallback": True,
                     "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
                     "temporal_fit": round(temporal_fit, 6),
                 },
             }
@@ -1309,6 +1408,14 @@ def _tier1_candidates(
     semantic_matches: dict[tuple[str, str], float],
     record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
+    allow_state_updates = plan.current_state_intent and any(
+        marker in plan.normalized_query for marker in _STATE_UPDATE_QUERY_TARGETS
+    )
+    state_update_targets = tuple(
+        marker
+        for marker in _STATE_UPDATE_QUERY_TARGETS
+        if marker in plan.normalized_query
+    )
     clauses = [
         "compressed_to_tier2 = 0",
         "owner_id = ?",
@@ -1326,7 +1433,7 @@ def _tier1_candidates(
         record_filter=record_filter,
     ):
         return []
-    if plan.intent != "recent_conversation":
+    if plan.intent != "recent_conversation" and not allow_state_updates:
         lexical_ids = lexical_matches.get("turn", ())
         semantic_ids = _semantic_ids(semantic_matches, "turn")
         _append_search_predicates(
@@ -1356,13 +1463,25 @@ def _tier1_candidates(
     results: list[dict[str, Any]] = []
     for row in rows:
         lexical, matched = _lexical_score(plan, f"{row[3]} {' '.join(_json_list(row[6]))}")
-        semantic = float(semantic_matches.get(("turn", str(row[0])), 0.0))
+        semantic = _semantic_candidate_score(
+            plan,
+            row[3],
+            lexical,
+            float(semantic_matches.get(("turn", str(row[0])), 0.0)),
+        )
+        state_update = (
+            _state_update_score(row[3], query_targets=state_update_targets)
+            if allow_state_updates
+            else 0.0
+        )
         if (
             lexical <= 0
             and plan.intent != "recent_conversation"
             and semantic < 0.35
+            and state_update <= 0
         ):
             continue
+        query_relevance = _query_relevance_score(lexical, semantic)
         recency = _recency_score(
             row[4],
             now,
@@ -1375,33 +1494,39 @@ def _tier1_candidates(
             else 0.0
         )
         if plan.intent == "recent_conversation":
-            score = (
-                0.68
-                + 0.20 * recency
-                + 0.07 * float(row[5] or 0.0)
-                + (0.05 if same_session else 0.0)
+            score = bounded_weighted_score(
+                (1.0, 0.68),
+                (recency, 0.20),
+                (float(row[5] or 0.0), 0.07),
+                (1.0 if same_session else 0.0, 0.05),
             )
         elif plan.immediate_recency:
-            score = (
-                0.50 * lexical
-                + 0.42 * recency
-                + 0.08 * float(row[5] or 0.0)
-                + (0.05 if same_session else 0.0)
+            score = bounded_weighted_score(
+                (lexical, 0.50),
+                (recency, 0.42),
+                (float(row[5] or 0.0), 0.08),
+                (1.0 if same_session else 0.0, 0.05),
+            )
+        elif plan.current_state_intent and state_update > 0:
+            score = bounded_weighted_score(
+                (query_relevance, 0.20),
+                (state_update, 0.38),
+                (recency, 0.32),
+                (float(row[5] or 0.0), 0.10),
             )
         elif semantic > 0:
-            score = (
-                0.50 * lexical
-                + 0.34 * semantic
-                + 0.08 * float(row[5] or 0.0)
-                + (0.18 if plan.current_state_intent else 0.08) * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (query_relevance, 0.70),
+                (float(row[5] or 0.0), 0.10),
+                (recency, 0.15 if plan.current_state_intent else 0.10),
+                (temporal_fit, 0.05),
             )
         else:
-            score = (
-                (0.60 if plan.current_state_intent else 0.76) * lexical
-                + 0.10 * float(row[5] or 0.0)
-                + (0.30 if plan.current_state_intent else 0.12) * recency
-                + 0.10 * temporal_fit
+            score = bounded_weighted_score(
+                (lexical, 0.55 if plan.current_state_intent else 0.70),
+                (float(row[5] or 0.0), 0.15),
+                (recency, 0.25 if plan.current_state_intent else 0.10),
+                (temporal_fit, 0.05),
             )
         results.append(
             {
@@ -1424,6 +1549,8 @@ def _tier1_candidates(
                     "recency": round(recency, 6),
                     "same_session": same_session,
                     "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
+                    "state_update": round(state_update, 6),
                     "temporal_fit": round(temporal_fit, 6),
                 },
             }
@@ -1494,6 +1621,17 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
         [term for term in plan.terms if term in haystack],
     )
     concept_matched = _concept_matches(plan, haystack)
+    preference_query = _is_preference_query(plan)
+    scoring_exact = (
+        [term for term in exact_matched if not _is_preference_relation_term(term)]
+        if preference_query
+        else exact_matched
+    )
+    scoring_concepts = (
+        [term for term in concept_matched if not _is_preference_relation_term(term)]
+        if preference_query
+        else concept_matched
+    )
     matched = [*_maximal_terms(exact_matched), *concept_matched]
     if plan.intent == "recent_conversation":
         return 0.25, matched
@@ -1504,10 +1642,10 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
         term for term in plan.terms if not _CJK_RUN_RE.fullmatch(term)
     ]
     non_cjk_matches = [
-        term for term in exact_matched if not _CJK_RUN_RE.fullmatch(term)
+        term for term in scoring_exact if not _CJK_RUN_RE.fullmatch(term)
     ]
-    cjk_coverage = _covered_cjk_chars(cjk_query, exact_matched)
-    concept_coverage = _concept_coverage_chars(plan, concept_matched)
+    cjk_coverage = _covered_cjk_chars(cjk_query, scoring_exact)
+    concept_coverage = _concept_coverage_chars(plan, scoring_concepts)
     non_cjk_total = sum(max(2, min(len(term), 8)) for term in non_cjk_terms)
     non_cjk_coverage = sum(
         max(2, min(len(term), 8)) for term in non_cjk_matches
@@ -1522,7 +1660,71 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
         and plan.normalized_query in haystack
     ):
         phrase_bonus = 0.35
-    return min(1.0, coverage + phrase_bonus), matched
+    preference_bonus = 0.0
+    if (
+        preference_query
+        and any(marker in haystack for marker in _PREFERENCE_EVIDENCE_MARKERS)
+        and (
+            bool(scoring_exact)
+            or bool(scoring_concepts)
+            or _preference_topic_bridge(plan, haystack)
+        )
+    ):
+        preference_bonus = 0.38
+        matched.append("preference_signal")
+    return min(1.0, coverage + phrase_bonus + preference_bonus), matched
+
+
+def _query_relevance_score(lexical: float, semantic: float) -> float:
+    """Blend discriminative term coverage with calibrated semantic support."""
+    bounded_lexical = max(0.0, min(1.0, float(lexical)))
+    bounded = max(0.0, min(1.0, float(semantic)))
+    if bounded < 0.35:
+        return bounded_lexical
+    calibrated_semantic = 0.4 + 0.6 * ((bounded - 0.35) / 0.65)
+    if bounded_lexical <= 0.0:
+        return calibrated_semantic
+    return 0.60 * bounded_lexical + 0.40 * calibrated_semantic
+
+
+def _is_preference_query(plan: RecallPlan) -> bool:
+    return any(marker in plan.normalized_query for marker in _PREFERENCE_QUERY_MARKERS)
+
+
+def _is_preference_relation_term(value: str) -> bool:
+    return any(marker in value for marker in _PREFERENCE_QUERY_MARKERS)
+
+
+def _preference_topic_bridge(plan: RecallPlan, value: object) -> bool:
+    normalized = normalize_text(value)
+    return any(
+        any(query_marker in plan.normalized_query for query_marker in query_markers)
+        and any(evidence_marker in normalized for evidence_marker in evidence_markers)
+        for query_markers, evidence_markers in _PREFERENCE_TOPIC_BRIDGES
+    )
+
+
+def _semantic_candidate_score(
+    plan: RecallPlan,
+    value: object,
+    lexical: float,
+    semantic: float,
+) -> float:
+    if _is_preference_query(plan) and lexical <= 0 and not _preference_topic_bridge(plan, value):
+        return 0.0
+    return semantic
+
+
+def _state_update_score(value: object, *, query_targets: Sequence[str] = ()) -> float:
+    normalized = normalize_text(value)
+    if not any(marker in normalized for marker in _STATE_UPDATE_MARKERS):
+        return 0.0
+    candidate_targets = {
+        marker for marker in _STATE_UPDATE_QUERY_TARGETS if marker in normalized
+    }
+    if candidate_targets and query_targets and candidate_targets.isdisjoint(query_targets):
+        return 0.0
+    return 1.0
 
 
 def _maximal_terms(terms: Sequence[str]) -> list[str]:
@@ -1808,18 +2010,28 @@ def _apply_feedback_scores(
     for source in candidates:
         item = dict(source)
         feedback = counts.get(str(item.get("id") or ""), {})
-        delta = sum(verdict_weights.get(verdict, 0.0) * count for verdict, count in feedback.items())
-        delta = max(-0.65, min(0.20, delta))
-        adjusted_raw_score = float(
-            item.get("raw_score", item.get("score") or 0.0)
-        ) + delta
-        item["score"] = round(
-            max(0.0, min(1.0, adjusted_raw_score)),
-            6,
+        delta = sum(
+            verdict_weights.get(verdict, 0.0) * count
+            for verdict, count in feedback.items()
         )
-        item["raw_score"] = round(adjusted_raw_score, 6)
+        delta = max(-0.65, min(0.20, delta))
+        base_score = max(
+            0.0,
+            min(
+                1.0,
+                float(item.get("raw_score", item.get("score") or 0.0)),
+            ),
+        )
+        adjusted_score = (
+            base_score + delta * (1.0 - base_score)
+            if delta >= 0.0
+            else base_score * (1.0 + delta)
+        )
+        item["score"] = round(adjusted_score, 6)
+        item["raw_score"] = item["score"]
         item["normalized_score"] = item["score"]
         signals = dict(item.get("signals") or {})
+        signals["pre_feedback_score"] = round(base_score, 6)
         signals["feedback_delta"] = round(delta, 6)
         signals["feedback_counts"] = feedback
         item["signals"] = signals

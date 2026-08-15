@@ -16,6 +16,20 @@ _CONTENT_IMPORTANCE_BONUS = {
 }
 
 
+def bounded_weighted_score(*signals: tuple[float, float]) -> float:
+    """Combine unit-interval signals without allowing bonus weights to saturate."""
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for value, weight in signals:
+        bounded_weight = max(0.0, float(weight))
+        bounded_value = max(0.0, min(1.0, float(value)))
+        weighted_sum += bounded_value * bounded_weight
+        total_weight += bounded_weight
+    if total_weight <= 0.0:
+        return 0.0
+    return weighted_sum / max(1.0, total_weight)
+
+
 @dataclass(frozen=True, slots=True)
 class GraphRecallScoringPolicy:
     """Versioned graph ranking policy; benchmark metrics gate changes."""
@@ -36,12 +50,12 @@ class GraphRecallScoringPolicy:
         importance: float,
         recency: float,
     ) -> float:
-        return (
-            self.query_relevance_weight * query_relevance
-            + self.proximity_weight * proximity
-            + self.dynamic_weight * dynamic_weight
-            + self.importance_weight * importance
-            + self.recency_weight * recency
+        return bounded_weighted_score(
+            (query_relevance, self.query_relevance_weight),
+            (proximity, self.proximity_weight),
+            (dynamic_weight, self.dynamic_weight),
+            (importance, self.importance_weight),
+            (recency, self.recency_weight),
         )
 
 

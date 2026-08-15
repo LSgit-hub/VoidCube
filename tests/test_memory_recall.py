@@ -23,6 +23,7 @@ from systems.memory.memory_service import (
     TurnPairCreate,
 )
 from systems.memory.recall import (
+    _query_relevance_score,
     _temporal_fit_score,
     build_recall_plan,
     normalize_text,
@@ -33,6 +34,14 @@ from systems.memory.tier1_to_tier2_bridge import (
 
 
 pytestmark = [pytest.mark.unit]
+
+
+def test_query_relevance_requires_lexical_or_strong_semantic_support():
+    weak_semantic_only = _query_relevance_score(0.0, 0.354)
+    combined_support = _query_relevance_score(1.0 / 3.0, 0.559)
+
+    assert 0.70 * weak_semantic_only + 0.20 < 0.5
+    assert 0.70 * combined_support + 0.20 >= 0.5
 
 
 def _service(tmp_path) -> MemoryService:
@@ -317,6 +326,11 @@ async def test_recall_mixes_recent_tier1_and_durable_tier2(tmp_path):
         {"raw_score", "normalized_score", "score"} <= set(item)
         for item in result["results"]
     )
+    assert all(
+        0.0 <= float(item[field]) <= 1.0
+        for item in result["results"]
+        for field in ("raw_score", "normalized_score", "score")
+    )
     assert result["trace_id"]
     health = await service.health_check()
     assert health["recall"]["requests"] == 1
@@ -375,6 +389,132 @@ async def test_recency_intent_falls_back_to_latest_tier1_turns(tmp_path):
     assert result["count"] == 1
     assert result["results"][0]["id"] == "turn-latest"
     assert result["query_plan"]["intent"] == "recent_conversation"
+
+
+@pytest.mark.asyncio
+async def test_recent_user_plan_recall_does_not_require_lexical_overlap(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(
+        service,
+        turn_id="upcoming-move",
+        session_id="plan-session",
+        text="我下周就要搬去杭州了。",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    result = await service.recall(
+        RecallRequest(query="用户最近要做什么？", include_tier2=False)
+    )
+
+    assert result["query_plan"]["intent"] == "recent_conversation"
+    assert result["results"][0]["id"] == "upcoming-move"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "text"),
+    (
+        ("用户当前遇到了什么问题？", "现在卡在一个报错上，查了一下午。"),
+        ("用户希望被怎么称呼？", "以后叫我 River 就好。"),
+    ),
+)
+async def test_concept_aliases_recall_user_state_without_exact_terms(
+    tmp_path, query, text
+):
+    service = _service(tmp_path)
+    _insert_turn(
+        service,
+        turn_id="concept-match",
+        session_id="concept-session",
+        text=text,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    result = await service.recall(RecallRequest(query=query, include_tier2=False))
+
+    assert result["results"][0]["id"] == "concept-match"
+    assert result["results"][0]["matched_terms"]
+
+
+@pytest.mark.asyncio
+async def test_current_state_recall_prioritizes_elliptical_update(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="framework-old",
+        session_id="framework-old-session",
+        text="项目框架我们用的是 Vue。",
+        timestamp=now - timedelta(days=20),
+    )
+    _insert_turn(
+        service,
+        turn_id="framework-current",
+        session_id="framework-current-session",
+        text="我们改用 React 了。",
+        timestamp=now - timedelta(days=1),
+    )
+    for index in range(25):
+        _insert_turn(
+            service,
+            turn_id=f"unrelated-chat-{index}",
+            session_id=f"unrelated-session-{index}",
+            text=f"今天完成了第 {index} 项普通会议记录。",
+            timestamp=now - timedelta(minutes=index),
+        )
+    _insert_turn(
+        service,
+        turn_id="unrelated-database-update",
+        session_id="database-session",
+        text="数据库改用 PostgreSQL 了。",
+        timestamp=now - timedelta(minutes=30),
+    )
+    _insert_turn(
+        service,
+        turn_id="unrelated-deployment-update",
+        session_id="deployment-session",
+        text="部署方案切回 Compose 了。",
+        timestamp=now - timedelta(minutes=31),
+    )
+
+    result = await service.recall(
+        RecallRequest(query="项目现在用什么框架？", include_tier2=False)
+    )
+
+    assert result["results"][0]["id"] == "framework-current"
+    assert result["results"][0]["signals"]["state_update"] == 1.0
+    assert "unrelated-database-update" not in {
+        item["id"] for item in result["results"]
+    }
+    assert "unrelated-deployment-update" not in {
+        item["id"] for item in result["results"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_current_issue_query_excludes_unrelated_elliptical_update(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="current-blocker",
+        session_id="blocker-session",
+        text="现在卡在一个报错上。",
+        timestamp=now - timedelta(hours=1),
+    )
+    _insert_turn(
+        service,
+        turn_id="unrelated-framework-update",
+        session_id="framework-session",
+        text="项目改用 React 了。",
+        timestamp=now,
+    )
+
+    result = await service.recall(
+        RecallRequest(query="用户当前遇到了什么问题？", include_tier2=False)
+    )
+
+    assert [item["id"] for item in result["results"]] == ["current-blocker"]
 
 
 @pytest.mark.asyncio
@@ -963,6 +1103,10 @@ async def test_explicit_recall_feedback_changes_future_ranking(tmp_path):
 
     assert second["results"][0]["signals"]["feedback_delta"] == -0.5
     assert second["results"][0]["score"] < first["results"][0]["score"]
+    assert all(
+        0.0 <= float(second["results"][0][field]) <= 1.0
+        for field in ("raw_score", "normalized_score", "score")
+    )
 
 
 @pytest.mark.asyncio
