@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _GATEWAY_PROBE_TIMEOUT_SECONDS = 0.25
 _GATEWAY_REACHABLE_TTL_SECONDS = 30.0
 _GATEWAY_UNREACHABLE_TTL_SECONDS = 5.0
+_DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS = 10.0
 
 
 _IDENTITY_RECALL_GUIDANCE = (
@@ -58,6 +59,10 @@ class MemMemoryProvider(MemoryProvider):
         self._prefetch_limit = 5
         self._prefetch_max_context_chars = 3500
         self._outbox_max_attempts = 12
+        self._outbox_health_report_interval_seconds = (
+            _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS
+        )
+        self._last_outbox_health_report_at = 0.0
         self._owner_id = DEFAULT_OWNER_ID
         self._workspace_id = DEFAULT_WORKSPACE_ID
         self._redact_before_store = True
@@ -110,7 +115,17 @@ class MemMemoryProvider(MemoryProvider):
             ),
         )
         self._outbox_max_attempts = max(
-            1, int(provider_config.get("outbox_max_attempts", 12))
+            1,
+            min(1000, int(provider_config.get("outbox_max_attempts", 12))),
+        )
+        self._outbox_health_report_interval_seconds = max(
+            1.0,
+            float(
+                provider_config.get(
+                    "outbox_health_report_interval_seconds",
+                    _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS,
+                )
+            ),
         )
         scope = MemoryScope.create(
             kwargs.get("user_id") or provider_config.get("owner_id"),
@@ -499,6 +514,7 @@ class MemMemoryProvider(MemoryProvider):
         while not self._sync_stop.is_set():
             item = self._outbox.next_due() if self._outbox is not None else None
             if item is None:
+                self._report_outbox_health_if_due()
                 self._sync_wake.wait(timeout=1.0)
                 self._sync_wake.clear()
                 continue
@@ -515,6 +531,31 @@ class MemMemoryProvider(MemoryProvider):
                         attempts=attempts,
                         error=f"{type(exc).__name__}: {exc}",
                     )
+            self._report_outbox_health_if_due(force=True)
+
+    def _report_outbox_health_if_due(self, *, force: bool = False) -> None:
+        if self._outbox is None or not self._session_id:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and now - self._last_outbox_health_report_at
+            < self._outbox_health_report_interval_seconds
+        ):
+            return
+        self._last_outbox_health_report_at = now
+        try:
+            self._request_json(
+                "POST",
+                "/outbox/health",
+                {
+                    "session_id": self._session_id,
+                    "outbox_id": self._outbox.outbox_id,
+                    **self._outbox.health_snapshot(),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Memory outbox health report failed: %s", exc)
 
     def _write_turn_pair(self, item: dict[str, Any]) -> None:
         self._request_json(

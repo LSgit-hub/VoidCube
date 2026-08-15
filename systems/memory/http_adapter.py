@@ -22,6 +22,8 @@ class MemoryHttpRoute:
 
 MEMORY_HTTP_ROUTES = (
     MemoryHttpRoute("/", "health_check", ("GET",)),
+    MemoryHttpRoute("/health", "health_check", ("GET",)),
+    MemoryHttpRoute("/outbox/health", "report_agent_outbox_health", ("POST",)),
     MemoryHttpRoute("/mem/usage", "get_mem_usage", ("GET",)),
     MemoryHttpRoute("/sessions", "create_session", ("POST",)),
     MemoryHttpRoute("/sessions", "list_sessions", ("GET",)),

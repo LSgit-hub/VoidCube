@@ -8,6 +8,7 @@ import pytest
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import DurableMemoryCreate, MemoryService, RecallRequest
 from systems.memory.database import open_memory_sqlite
+from systems.memory.ranking_policy import GRAPH_RECALL_SCORING_POLICY
 
 
 pytestmark = [pytest.mark.unit]
@@ -248,8 +249,23 @@ async def test_graph_recall_surfaces_neighbor_memory_beyond_lexical_match(tmp_pa
     assert max(graph_matches) <= 0.6
 
 
+def test_graph_recall_scoring_policy_is_versioned_and_normalized():
+    policy = GRAPH_RECALL_SCORING_POLICY
+
+    assert policy.version == "graph-recall-v2"
+    assert sum(
+        (
+            policy.query_relevance_weight,
+            policy.proximity_weight,
+            policy.dynamic_weight,
+            policy.importance_weight,
+            policy.recency_weight,
+        )
+    ) == pytest.approx(1.0)
+
+
 @pytest.mark.asyncio
-async def test_graph_expansion_cannot_outrank_direct_task_relevance(tmp_path):
+async def test_graph_expansion_filters_neighbors_without_direct_query_relevance(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)
     _insert_compressed(
@@ -268,7 +284,7 @@ async def test_graph_expansion_cannot_outrank_direct_task_relevance(tmp_path):
         summary="持续身份与信任关系的背景说明。",
         timestamp=now,
         topics=["身份"],
-        entities=["数据库", "信任"],
+        entities=["星子", "信任"],
     )
     _rebuild_graph(service)
 
@@ -277,12 +293,9 @@ async def test_graph_expansion_cannot_outrank_direct_task_relevance(tmp_path):
     )
 
     assert result["results"][0]["id"] == "diagnostic-direct"
-    graph_items = [
-        item for item in result["results"] if item.get("id") == "identity-neighbor"
-    ]
-    assert graph_items
-    assert graph_items[0]["signals"]["lexical"] < result["results"][0]["signals"]["lexical"]
-    assert graph_items[0]["score"] < result["results"][0]["score"]
+    assert "identity-neighbor" not in {
+        item["id"] for item in result["results"]
+    }
 
 
 @pytest.mark.asyncio

@@ -152,6 +152,16 @@ def load_config_from_env() -> SystemConfig:
         "MEMORY_RECALL_MIN_SCORE",
         "recall_min_score",
     )
+    _apply_float_override(
+        config.memory,
+        "MEMORY_RECALL_GRAPH_MIN_RELEVANCE",
+        "recall_graph_min_relevance",
+    )
+    for env_name, field_name in (
+        ("MEMORY_AGENT_OUTBOX_REPORT_STALE_SECONDS", "agent_outbox_report_stale_seconds"),
+        ("MEMORY_AGENT_OUTBOX_PENDING_STALE_SECONDS", "agent_outbox_pending_stale_seconds"),
+    ):
+        _apply_int_override(config.memory, env_name, field_name)
     
     config.supervisor.host = os.getenv("SUPERVISOR_HOST", config.supervisor.host)
     config.supervisor.port = int(os.getenv("SUPERVISOR_PORT", config.supervisor.port))

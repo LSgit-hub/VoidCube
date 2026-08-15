@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from systems.memory import tier1_to_tier2_bridge as bridge_module
 from systems.memory.database import open_memory_sqlite
 from systems.memory.memory_service import (
+    AgentOutboxHealthReport,
     MemoryService,
     MemoryServiceConfig,
     SessionCreate,
@@ -179,6 +180,68 @@ def test_memory_sqlite_connections_use_busy_timeout_and_wal(tmp_path):
 
     assert busy_timeout >= 30000
     assert str(journal_mode).lower() == "wal"
+
+
+@pytest.mark.asyncio
+async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letters(
+    tmp_path,
+):
+    service = _make_service(tmp_path)
+    service._gateway_registration_healthy = True
+
+    await service.report_agent_outbox_health(
+        AgentOutboxHealthReport(
+            session_id="agent-session",
+            outbox_id="shared-outbox",
+            pending_count=2,
+            inflight_count=1,
+            dead_letter_count=1,
+            oldest_pending_at=datetime.now(timezone.utc).isoformat(),
+            last_error="schema rejected",
+            max_attempts=12,
+        )
+    )
+    health = await service.health_check()
+
+    assert health["status"] == "degraded"
+    assert health["agent_outbox"]["pending_count"] == 2
+    assert health["agent_outbox"]["inflight_count"] == 1
+    assert health["agent_outbox"]["dead_letter_count"] == 1
+    assert health["agent_outbox"]["issues"] == ["shared-outbox:dead_letter"]
+
+
+@pytest.mark.asyncio
+async def test_memory_health_deduplicates_reports_for_the_same_outbox(tmp_path):
+    service = _make_service(tmp_path)
+    service._gateway_registration_healthy = True
+    base = {
+        "outbox_id": "shared-outbox",
+        "dead_letter_count": 0,
+        "oldest_pending_at": None,
+        "last_error": None,
+        "max_attempts": 12,
+    }
+
+    await service.report_agent_outbox_health(
+        AgentOutboxHealthReport(
+            session_id="agent-a",
+            pending_count=3,
+            **base,
+        )
+    )
+    await service.report_agent_outbox_health(
+        AgentOutboxHealthReport(
+            session_id="agent-b",
+            pending_count=0,
+            **base,
+        )
+    )
+    health = await service.health_check()
+
+    assert health["status"] == "healthy"
+    assert health["agent_outbox"]["reporter_count"] == 1
+    assert health["agent_outbox"]["pending_count"] == 0
+    assert health["agent_outbox"]["reporters"][0]["session_id"] == "agent-b"
 
 
 # ── 4-6.1: memory_active must reflect real write work, not "a rule ran" ──

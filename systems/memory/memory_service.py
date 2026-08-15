@@ -231,6 +231,21 @@ class RecallRequest(BaseModel):
     )
 
 
+class AgentOutboxHealthReport(BaseModel):
+    session_id: str = Field(min_length=1, max_length=300)
+    outbox_id: str = Field(min_length=1, max_length=128)
+    pending_count: int = Field(ge=0)
+    inflight_count: int = Field(default=0, ge=0)
+    dead_letter_count: int = Field(ge=0)
+    oldest_pending_at: Optional[str] = Field(default=None, max_length=100)
+    last_success_at: Optional[str] = Field(default=None, max_length=100)
+    last_error: Optional[str] = Field(default=None, max_length=500)
+    max_attempts: int = Field(ge=1, le=1000)
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+
+
 class IdentityRevisionProposal(BaseModel):
     target_memory_id: str
     baseline_version: str
@@ -445,6 +460,7 @@ class MemoryApplicationService:
         self._last_recall_latency_ms = 0.0
         self._last_recall_trace_id: Optional[str] = None
         self._last_recall_status: str = "idle"
+        self._agent_outbox_reports: Dict[str, Dict[str, Any]] = {}
         self._backup_manager = MemoryBackupManager(
             self._db_path,
             retention_count=self.config.backup_retention_count,
@@ -838,6 +854,7 @@ class MemoryApplicationService:
         """Expose only application handlers required by the HTTP adapter."""
         return {
             "health_check": self.health_check,
+            "report_agent_outbox_health": self.report_agent_outbox_health,
             "get_mem_usage": self.get_mem_usage,
             "create_session": self.create_session,
             "list_sessions": self.list_sessions,
@@ -1733,12 +1750,15 @@ class MemoryApplicationService:
     async def health_check(self):
         database = await asyncio.to_thread(self._database_health_snapshot)
         semantic = await asyncio.to_thread(self._semantic_health_snapshot)
+        agent_outbox = self._agent_outbox_health_snapshot()
         maintenance = {
             "last_effective_activity_at": self._last_effective_activity_at,
             "last_rule_runs": dict(self._last_rule_run),
             "last_tier2_bridge_result": self._last_tier2_bridge_result,
         }
-        service_healthy = bool(self._gateway_registration_healthy)
+        service_healthy = bool(
+            self._gateway_registration_healthy and agent_outbox["healthy"]
+        )
         database_healthy = database["readable"] and database["integrity"] == "ok"
         return {
             "status": (
@@ -1768,8 +1788,109 @@ class MemoryApplicationService:
             },
             "database": database,
             "semantic_index": semantic,
+            "agent_outbox": agent_outbox,
             "maintenance": maintenance,
         }
+
+    async def report_agent_outbox_health(
+        self,
+        report: AgentOutboxHealthReport,
+    ) -> Dict[str, Any]:
+        reported_at = datetime.now(timezone.utc).isoformat()
+        self._agent_outbox_reports[report.outbox_id] = {
+            **report.model_dump(mode="json"),
+            "reported_at": reported_at,
+        }
+        return {
+            "status": "recorded",
+            "outbox_id": report.outbox_id,
+            "reported_at": reported_at,
+        }
+
+    def _agent_outbox_health_snapshot(self) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        reports: list[Dict[str, Any]] = []
+        issues: list[str] = []
+        for stored in self._agent_outbox_reports.values():
+            report = dict(stored)
+            reported_at = self._parse_health_timestamp(report.get("reported_at"))
+            report_age = (
+                max(0.0, (now - reported_at).total_seconds())
+                if reported_at is not None
+                else float("inf")
+            )
+            report["report_age_seconds"] = round(report_age, 3)
+            report["stale"] = (
+                report_age > self.config.agent_outbox_report_stale_seconds
+            )
+            oldest_pending = self._parse_health_timestamp(
+                report.get("oldest_pending_at")
+            )
+            pending_age = (
+                max(0.0, (now - oldest_pending).total_seconds())
+                if oldest_pending is not None
+                else 0.0
+            )
+            report["oldest_pending_age_seconds"] = round(pending_age, 3)
+            outbox_id = str(report.get("outbox_id") or "unknown")
+            if int(report.get("dead_letter_count") or 0) > 0:
+                issues.append(f"{outbox_id}:dead_letter")
+            if (
+                int(report.get("pending_count") or 0) > 0
+                and pending_age > self.config.agent_outbox_pending_stale_seconds
+            ):
+                issues.append(f"{outbox_id}:stuck_pending")
+            if report["stale"] and (
+                int(report.get("pending_count") or 0) > 0
+                or int(report.get("dead_letter_count") or 0) > 0
+            ):
+                issues.append(f"{outbox_id}:stale_report")
+            reports.append(report)
+
+        reports.sort(key=lambda item: str(item.get("outbox_id") or ""))
+        active_count = sum(not bool(item["stale"]) for item in reports)
+        unique_issues = sorted(set(issues))
+        return {
+            "healthy": not unique_issues,
+            "status": (
+                "degraded"
+                if unique_issues
+                else ("healthy" if active_count else "unreported")
+            ),
+            "reporter_count": len(reports),
+            "active_reporter_count": active_count,
+            "stale_reporter_count": len(reports) - active_count,
+            "pending_count": sum(
+                int(item.get("pending_count") or 0) for item in reports
+            ),
+            "inflight_count": sum(
+                int(item.get("inflight_count") or 0) for item in reports
+            ),
+            "dead_letter_count": sum(
+                int(item.get("dead_letter_count") or 0) for item in reports
+            ),
+            "issues": unique_issues,
+            "report_stale_after_seconds": (
+                self.config.agent_outbox_report_stale_seconds
+            ),
+            "pending_stale_after_seconds": (
+                self.config.agent_outbox_pending_stale_seconds
+            ),
+            "reporters": reports,
+        }
+
+    @staticmethod
+    def _parse_health_timestamp(value: Any) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _database_health_snapshot(self) -> dict[str, Any]:
         counts: dict[str, int] = {}
@@ -2987,6 +3108,7 @@ class MemoryApplicationService:
                 source_domains=source_domains,
                 semantic_matches=semantic_matches,
                 record_filter=record_filter,
+                graph_min_relevance=self.config.recall_graph_min_relevance,
             )
         finally:
             conn.close()
@@ -3094,6 +3216,7 @@ class MemoryApplicationService:
                     workspace_id=scope.workspace_id,
                     source_domains=source_domains,
                     semantic_matches=semantic_matches,
+                    graph_min_relevance=self.config.recall_graph_min_relevance,
                 )
             finally:
                 conn.close()

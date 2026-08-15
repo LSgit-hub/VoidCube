@@ -51,6 +51,9 @@ class MemoryServiceConfig(BaseModel):
     recall_candidate_limit: int = Field(default=200, ge=10, le=2000)
     recall_max_context_chars: int = Field(default=3500, ge=256, le=20000)
     recall_min_score: float = Field(default=0.2, ge=0.0, le=1.0)
+    recall_graph_min_relevance: float = Field(default=0.15, ge=0.0, le=1.0)
+    agent_outbox_report_stale_seconds: int = Field(default=45, ge=5, le=3600)
+    agent_outbox_pending_stale_seconds: int = Field(default=300, ge=5, le=86400)
 
     @field_validator("host")
     @classmethod

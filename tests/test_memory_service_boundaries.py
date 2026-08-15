@@ -94,6 +94,8 @@ def test_http_adapter_requires_one_explicit_handler_for_every_route():
     }
     assert ("/recall", "POST") in route_contract
     assert ("/admin/backups", "POST") in route_contract
+    assert ("/outbox/health", "POST") in route_contract
+    assert ("/health", "GET") in route_contract
 
     handlers.pop("recall")
     with pytest.raises(ValueError, match="missing=.*recall"):

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,9 +14,27 @@ from typing import Any
 
 
 class MemoryWriteOutbox:
-    def __init__(self, path: str | Path, *, max_attempts: int = 12) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        max_attempts: int = 12,
+        lease_seconds: float = 30.0,
+        retry_base_seconds: float = 2.0,
+        retry_max_seconds: float = 60.0,
+    ) -> None:
         self.path = Path(path)
         self.max_attempts = max(1, int(max_attempts))
+        self.lease_seconds = max(1.0, float(lease_seconds))
+        self.retry_base_seconds = max(0.001, float(retry_base_seconds))
+        self.retry_max_seconds = max(
+            self.retry_base_seconds,
+            float(retry_max_seconds),
+        )
+        self._worker_id = str(uuid.uuid4())
+        self.outbox_id = hashlib.sha256(
+            str(self.path.resolve()).casefold().encode("utf-8")
+        ).hexdigest()[:24]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn:
             with conn:
@@ -22,7 +42,8 @@ class MemoryWriteOutbox:
                     "CREATE TABLE IF NOT EXISTS pending_writes ("
                     "write_id TEXT PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
                     "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT, created_at REAL NOT NULL, "
-                    "status TEXT NOT NULL DEFAULT 'pending', dead_letter_at REAL)"
+                    "status TEXT NOT NULL DEFAULT 'pending', dead_letter_at REAL, "
+                    "lease_owner TEXT, lease_until REAL)"
                 )
                 columns = {
                     str(row[1])
@@ -36,9 +57,17 @@ class MemoryWriteOutbox:
                     conn.execute(
                         "ALTER TABLE pending_writes ADD COLUMN dead_letter_at REAL"
                     )
+                if "lease_owner" not in columns:
+                    conn.execute(
+                        "ALTER TABLE pending_writes ADD COLUMN lease_owner TEXT"
+                    )
+                if "lease_until" not in columns:
+                    conn.execute(
+                        "ALTER TABLE pending_writes ADD COLUMN lease_until REAL"
+                    )
                 conn.execute("DROP INDEX IF EXISTS idx_pending_writes_due")
                 conn.execute(
-                    "CREATE INDEX idx_pending_writes_due "
+                    "CREATE INDEX IF NOT EXISTS idx_pending_writes_due_v2 "
                     "ON pending_writes(status, next_attempt_at, created_at)"
                 )
                 conn.execute(
@@ -59,11 +88,42 @@ class MemoryWriteOutbox:
 
     def next_due(self) -> dict[str, Any] | None:
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT write_id, payload, attempts FROM pending_writes "
-                "WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY created_at LIMIT 1",
-                (time.time(),),
+            now = time.time()
+            available = conn.execute(
+                "SELECT 1 FROM pending_writes WHERE "
+                "(status = 'pending' AND next_attempt_at <= ?) OR "
+                "(status = 'inflight' AND lease_until <= ?) LIMIT 1",
+                (now, now),
             ).fetchone()
+            if not available:
+                return None
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "UPDATE pending_writes SET status = 'pending', lease_owner = NULL, "
+                    "lease_until = NULL WHERE status = 'inflight' AND lease_until <= ?",
+                    (now,),
+                )
+                row = conn.execute(
+                    "SELECT write_id, payload, attempts FROM pending_writes "
+                    "WHERE status = 'pending' AND next_attempt_at <= ? "
+                    "ORDER BY created_at LIMIT 1",
+                    (now,),
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE pending_writes SET status = 'inflight', lease_owner = ?, "
+                        "lease_until = ? WHERE write_id = ? AND status = 'pending'",
+                        (
+                            self._worker_id,
+                            now + self.lease_seconds,
+                            str(row[0]),
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         if not row:
             return None
         payload = json.loads(row[1])
@@ -73,31 +133,48 @@ class MemoryWriteOutbox:
     def mark_delivered(self, write_id: str) -> None:
         with closing(self._connect()) as conn:
             with conn:
-                conn.execute("DELETE FROM pending_writes WHERE write_id = ?", (write_id,))
-                conn.execute(
-                    "INSERT INTO outbox_state(key, value) VALUES ('last_success_at', ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    (str(time.time()),),
+                deleted = conn.execute(
+                    "DELETE FROM pending_writes WHERE write_id = ? AND "
+                    "(status = 'pending' OR lease_owner = ?)",
+                    (write_id, self._worker_id),
                 )
+                if deleted.rowcount:
+                    conn.execute(
+                        "INSERT INTO outbox_state(key, value) VALUES ('last_success_at', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (str(time.time()),),
+                    )
 
     def mark_failed(self, write_id: str, *, attempts: int, error: str) -> None:
-        delay = min(60.0, float(2 ** min(max(attempts, 1), 6)))
+        delay = min(
+            self.retry_max_seconds,
+            self.retry_base_seconds * float(2 ** min(max(attempts - 1, 0), 6)),
+        )
         status = "dead_letter" if attempts >= self.max_attempts else "pending"
         dead_letter_at = time.time() if status == "dead_letter" else None
         with closing(self._connect()) as conn:
             with conn:
                 conn.execute(
                     "UPDATE pending_writes SET attempts = ?, next_attempt_at = ?, last_error = ?, "
-                    "status = ?, dead_letter_at = ? "
-                    "WHERE write_id = ?",
-                    (attempts, time.time() + delay, error[:500], status, dead_letter_at, write_id),
+                    "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL "
+                    "WHERE write_id = ? AND (status = 'pending' OR lease_owner = ?)",
+                    (
+                        attempts,
+                        time.time() + delay,
+                        error[:500],
+                        status,
+                        dead_letter_at,
+                        write_id,
+                        self._worker_id,
+                    ),
                 )
 
     def pending_count(self) -> int:
         with closing(self._connect()) as conn:
             return int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM pending_writes WHERE status = 'pending'"
+                    "SELECT COUNT(*) FROM pending_writes "
+                    "WHERE status IN ('pending', 'inflight')"
                 ).fetchone()[0]
             )
 
@@ -105,10 +182,14 @@ class MemoryWriteOutbox:
         with closing(self._connect()) as conn:
             pending, oldest, last_error = conn.execute(
                 "SELECT COUNT(*), MIN(created_at), "
-                "(SELECT last_error FROM pending_writes WHERE status = 'pending' "
+                "(SELECT last_error FROM pending_writes "
+                "WHERE status IN ('pending', 'inflight', 'dead_letter') "
                 "ORDER BY created_at DESC LIMIT 1) "
-                "FROM pending_writes WHERE status = 'pending'"
+                "FROM pending_writes WHERE status IN ('pending', 'inflight')"
             ).fetchone()
+            inflight = conn.execute(
+                "SELECT COUNT(*) FROM pending_writes WHERE status = 'inflight'"
+            ).fetchone()[0]
             dead_letter = conn.execute(
                 "SELECT COUNT(*) FROM pending_writes WHERE status = 'dead_letter'"
             ).fetchone()[0]
@@ -117,6 +198,7 @@ class MemoryWriteOutbox:
             ).fetchone()
         return {
             "pending_count": int(pending or 0),
+            "inflight_count": int(inflight or 0),
             "dead_letter_count": int(dead_letter or 0),
             "oldest_pending_at": (
                 datetime.fromtimestamp(float(oldest), tz=timezone.utc).isoformat()
@@ -137,7 +219,8 @@ class MemoryWriteOutbox:
             with conn:
                 cursor = conn.execute(
                     "UPDATE pending_writes SET status = 'pending', next_attempt_at = 0, "
-                    "dead_letter_at = NULL WHERE write_id = ? AND status = 'dead_letter'",
+                    "dead_letter_at = NULL, lease_owner = NULL, lease_until = NULL "
+                    "WHERE write_id = ? AND status = 'dead_letter'",
                     (write_id,),
                 )
         return cursor.rowcount > 0

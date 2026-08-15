@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 
 _CONTENT_IMPORTANCE_BONUS = {
     "decision": 0.15,
@@ -12,6 +14,38 @@ _CONTENT_IMPORTANCE_BONUS = {
     "blocker": 0.06,
     "progress": 0.04,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class GraphRecallScoringPolicy:
+    """Versioned graph ranking policy; benchmark metrics gate changes."""
+
+    version: str = "graph-recall-v2"
+    query_relevance_weight: float = 0.55
+    proximity_weight: float = 0.25
+    dynamic_weight: float = 0.10
+    importance_weight: float = 0.05
+    recency_weight: float = 0.05
+
+    def score(
+        self,
+        *,
+        query_relevance: float,
+        proximity: float,
+        dynamic_weight: float,
+        importance: float,
+        recency: float,
+    ) -> float:
+        return (
+            self.query_relevance_weight * query_relevance
+            + self.proximity_weight * proximity
+            + self.dynamic_weight * dynamic_weight
+            + self.importance_weight * importance
+            + self.recency_weight * recency
+        )
+
+
+GRAPH_RECALL_SCORING_POLICY = GraphRecallScoringPolicy()
 
 
 def compute_dynamic_weight(

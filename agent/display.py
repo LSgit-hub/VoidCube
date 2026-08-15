@@ -4,6 +4,7 @@ Pure display functions and classes with no AIAgent dependency.
 Used by AIAgent._execute_tool_calls for CLI feedback.
 """
 
+import json
 import logging
 import os
 import sys

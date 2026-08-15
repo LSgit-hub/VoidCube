@@ -508,6 +508,40 @@ def test_memory_outbox_survives_reopen_until_delivery(tmp_path):
 
 
 @pytest.mark.unit
+def test_memory_outbox_lease_prevents_duplicate_cross_process_delivery(
+    monkeypatch,
+    tmp_path,
+):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        "plugins.memory.mem.outbox.time.time",
+        lambda: clock["now"],
+    )
+    path = tmp_path / "outbox.sqlite3"
+    first = MemoryWriteOutbox(path, lease_seconds=5)
+    second = MemoryWriteOutbox(path, lease_seconds=5)
+    first.enqueue(
+        {
+            "write_id": "leased-write",
+            "session_id": "session-1",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    assert first.next_due()["write_id"] == "leased-write"
+    assert second.next_due() is None
+    assert first.health_snapshot()["inflight_count"] == 1
+
+    clock["now"] += 6.0
+    assert second.next_due()["write_id"] == "leased-write"
+    first.mark_delivered("leased-write")
+    assert second.pending_count() == 1
+    second.mark_delivered("leased-write")
+    assert second.pending_count() == 0
+
+
+@pytest.mark.unit
 def test_memory_outbox_failure_is_retained_until_exponential_retry_is_due(
     monkeypatch,
     tmp_path,
@@ -568,3 +602,35 @@ def test_memory_outbox_dead_letters_permanent_failures_and_reports_health(
     assert health["last_success_at"] is None
     assert outbox.requeue_dead_letter("write-dead") is True
     assert outbox.next_due()["write_id"] == "write-dead"
+
+
+@pytest.mark.unit
+def test_mem_provider_reports_outbox_health_through_authenticated_memory_path(
+    tmp_path,
+):
+    provider = MemMemoryProvider()
+    provider._session_id = "session-health"
+    provider._outbox = MemoryWriteOutbox(tmp_path / "outbox.sqlite3")
+    provider._outbox.enqueue(
+        {
+            "write_id": "write-health",
+            "session_id": "session-health",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+    captured = {}
+
+    def capture(method, path, payload=None):
+        captured.update({"method": method, "path": path, "payload": payload})
+        return {"status": "recorded"}
+
+    provider._request_json = capture
+
+    provider._report_outbox_health_if_due(force=True)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/outbox/health"
+    assert captured["payload"]["session_id"] == "session-health"
+    assert captured["payload"]["outbox_id"] == provider._outbox.outbox_id
+    assert captured["payload"]["pending_count"] == 1

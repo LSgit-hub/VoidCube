@@ -18,7 +18,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from systems.memory.lexical_index import search_memory_fts
-from systems.memory.ranking_policy import compute_dynamic_weight
+from systems.memory.ranking_policy import (
+    GRAPH_RECALL_SCORING_POLICY,
+    compute_dynamic_weight,
+)
 from systems.memory.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
@@ -338,6 +341,7 @@ def recall_memories(
     source_domains: Sequence[str] = ("agent_interaction",),
     semantic_matches: dict[tuple[str, str], float] | None = None,
     record_filter: Mapping[str, Sequence[str]] | None = None,
+    graph_min_relevance: float = 0.15,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a small, ranked, traceable recall set.
@@ -440,6 +444,10 @@ def recall_memories(
                 source_domains=source_domains,
                 existing_ids=existing_ids,
                 semantic_matches=semantic_matches,
+                min_query_relevance=max(
+                    0.0,
+                    min(float(graph_min_relevance), 1.0),
+                ),
             )
         )
 
@@ -1173,6 +1181,7 @@ def _graph_candidates(
     source_domains: Sequence[str],
     existing_ids: set[str],
     semantic_matches: dict[tuple[str, str], float],
+    min_query_relevance: float,
 ) -> list[dict[str, Any]]:
     """Entity-graph expansion: surface memories connected to query entities.
 
@@ -1241,15 +1250,17 @@ def _graph_candidates(
         importance = float(row[6] or 0.0)
         recency = _recency_score(row[5], now)
         query_relevance = max(lexical, semantic)
+        if query_relevance < min_query_relevance:
+            continue
         # Graph expansion is an exploration signal.  It may surface a memory
         # with no direct lexical hit, but it must not outrank a task-relevant
         # result solely because the connected memory is popular or important.
-        raw_score = (
-            0.55 * query_relevance
-            + 0.25 * proximity
-            + 0.10 * dynamic_weight
-            + 0.05 * importance
-            + 0.05 * recency
+        raw_score = GRAPH_RECALL_SCORING_POLICY.score(
+            query_relevance=query_relevance,
+            proximity=proximity,
+            dynamic_weight=dynamic_weight,
+            importance=importance,
+            recency=recency,
         )
         results.append(
             {
@@ -1274,6 +1285,7 @@ def _graph_candidates(
                     "graph_proximity": round(proximity, 6),
                     "lexical": round(lexical, 6),
                     "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
                     "dynamic_weight": round(dynamic_weight, 6),
                     "importance": round(importance, 6),
                     "recency": round(recency, 6),
