@@ -238,6 +238,7 @@ class AgentOutboxHealthReport(BaseModel):
     inflight_count: int = Field(default=0, ge=0)
     dead_letter_count: int = Field(ge=0)
     oldest_pending_at: Optional[str] = Field(default=None, max_length=100)
+    oldest_failure_at: Optional[str] = Field(default=None, max_length=100)
     last_success_at: Optional[str] = Field(default=None, max_length=100)
     last_error: Optional[str] = Field(default=None, max_length=500)
     max_attempts: int = Field(ge=1, le=1000)
@@ -1832,6 +1833,15 @@ class MemoryApplicationService:
                 else 0.0
             )
             report["oldest_pending_age_seconds"] = round(pending_age, 3)
+            oldest_failure = self._parse_health_timestamp(
+                report.get("oldest_failure_at")
+            )
+            failure_age = (
+                max(0.0, (now - oldest_failure).total_seconds())
+                if oldest_failure is not None
+                else 0.0
+            )
+            report["oldest_failure_age_seconds"] = round(failure_age, 3)
             outbox_id = str(report.get("outbox_id") or "unknown")
             if int(report.get("dead_letter_count") or 0) > 0:
                 issues.append(f"{outbox_id}:dead_letter")
@@ -1868,6 +1878,20 @@ class MemoryApplicationService:
             ),
             "dead_letter_count": sum(
                 int(item.get("dead_letter_count") or 0) for item in reports
+            ),
+            "oldest_pending_age_seconds": max(
+                (
+                    float(item.get("oldest_pending_age_seconds") or 0.0)
+                    for item in reports
+                ),
+                default=0.0,
+            ),
+            "oldest_failure_age_seconds": max(
+                (
+                    float(item.get("oldest_failure_age_seconds") or 0.0)
+                    for item in reports
+                ),
+                default=0.0,
             ),
             "issues": unique_issues,
             "report_stale_after_seconds": (

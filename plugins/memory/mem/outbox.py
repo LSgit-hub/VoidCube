@@ -13,6 +13,27 @@ from pathlib import Path
 from typing import Any
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    columns: set[str],
+    column: str,
+    definition: str,
+) -> None:
+    if column in columns:
+        return
+    try:
+        conn.execute(
+            f"ALTER TABLE pending_writes ADD COLUMN {column} {definition}"
+        )
+    except sqlite3.OperationalError:
+        refreshed = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(pending_writes)")
+        }
+        if column not in refreshed:
+            raise
+    columns.add(column)
+
+
 class MemoryWriteOutbox:
     def __init__(
         self,
@@ -43,28 +64,22 @@ class MemoryWriteOutbox:
                     "write_id TEXT PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
                     "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT, created_at REAL NOT NULL, "
                     "status TEXT NOT NULL DEFAULT 'pending', dead_letter_at REAL, "
-                    "lease_owner TEXT, lease_until REAL)"
+                    "lease_owner TEXT, lease_until REAL, first_failed_at REAL)"
                 )
                 columns = {
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(pending_writes)")
                 }
-                if "status" not in columns:
-                    conn.execute(
-                        "ALTER TABLE pending_writes ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
-                    )
-                if "dead_letter_at" not in columns:
-                    conn.execute(
-                        "ALTER TABLE pending_writes ADD COLUMN dead_letter_at REAL"
-                    )
-                if "lease_owner" not in columns:
-                    conn.execute(
-                        "ALTER TABLE pending_writes ADD COLUMN lease_owner TEXT"
-                    )
-                if "lease_until" not in columns:
-                    conn.execute(
-                        "ALTER TABLE pending_writes ADD COLUMN lease_until REAL"
-                    )
+                _ensure_column(
+                    conn,
+                    columns,
+                    "status",
+                    "TEXT NOT NULL DEFAULT 'pending'",
+                )
+                _ensure_column(conn, columns, "dead_letter_at", "REAL")
+                _ensure_column(conn, columns, "lease_owner", "TEXT")
+                _ensure_column(conn, columns, "lease_until", "REAL")
+                _ensure_column(conn, columns, "first_failed_at", "REAL")
                 conn.execute("DROP INDEX IF EXISTS idx_pending_writes_due")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_pending_writes_due_v2 "
@@ -146,24 +161,27 @@ class MemoryWriteOutbox:
                     )
 
     def mark_failed(self, write_id: str, *, attempts: int, error: str) -> None:
+        now = time.time()
         delay = min(
             self.retry_max_seconds,
             self.retry_base_seconds * float(2 ** min(max(attempts - 1, 0), 6)),
         )
         status = "dead_letter" if attempts >= self.max_attempts else "pending"
-        dead_letter_at = time.time() if status == "dead_letter" else None
+        dead_letter_at = now if status == "dead_letter" else None
         with closing(self._connect()) as conn:
             with conn:
                 conn.execute(
                     "UPDATE pending_writes SET attempts = ?, next_attempt_at = ?, last_error = ?, "
-                    "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL "
+                    "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL, "
+                    "first_failed_at = COALESCE(first_failed_at, ?) "
                     "WHERE write_id = ? AND (status = 'pending' OR lease_owner = ?)",
                     (
                         attempts,
-                        time.time() + delay,
+                        now + delay,
                         error[:500],
                         status,
                         dead_letter_at,
+                        now,
                         write_id,
                         self._worker_id,
                     ),
@@ -175,6 +193,19 @@ class MemoryWriteOutbox:
                 conn.execute(
                     "SELECT COUNT(*) FROM pending_writes "
                     "WHERE status IN ('pending', 'inflight')"
+                ).fetchone()[0]
+            )
+
+    def drainable_count(self) -> int:
+        """Return writes a bounded shutdown drain can make progress on now."""
+        now = time.time()
+        with closing(self._connect()) as conn:
+            return int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM pending_writes WHERE "
+                    "(status = 'pending' AND next_attempt_at <= ?) OR "
+                    "(status = 'inflight' AND (lease_owner = ? OR lease_until <= ?))",
+                    (now, self._worker_id, now),
                 ).fetchone()[0]
             )
 
@@ -193,6 +224,11 @@ class MemoryWriteOutbox:
             dead_letter = conn.execute(
                 "SELECT COUNT(*) FROM pending_writes WHERE status = 'dead_letter'"
             ).fetchone()[0]
+            oldest_failure = conn.execute(
+                "SELECT MIN(first_failed_at) FROM pending_writes "
+                "WHERE status IN ('pending', 'inflight', 'dead_letter') "
+                "AND first_failed_at IS NOT NULL"
+            ).fetchone()[0]
             state = conn.execute(
                 "SELECT value FROM outbox_state WHERE key = 'last_success_at'"
             ).fetchone()
@@ -203,6 +239,13 @@ class MemoryWriteOutbox:
             "oldest_pending_at": (
                 datetime.fromtimestamp(float(oldest), tz=timezone.utc).isoformat()
                 if oldest is not None
+                else None
+            ),
+            "oldest_failure_at": (
+                datetime.fromtimestamp(
+                    float(oldest_failure), tz=timezone.utc
+                ).isoformat()
+                if oldest_failure is not None
                 else None
             ),
             "last_success_at": (
@@ -218,8 +261,9 @@ class MemoryWriteOutbox:
         with closing(self._connect()) as conn:
             with conn:
                 cursor = conn.execute(
-                    "UPDATE pending_writes SET status = 'pending', next_attempt_at = 0, "
-                    "dead_letter_at = NULL, lease_owner = NULL, lease_until = NULL "
+                    "UPDATE pending_writes SET status = 'pending', attempts = 0, "
+                    "next_attempt_at = 0, last_error = NULL, dead_letter_at = NULL, "
+                    "lease_owner = NULL, lease_until = NULL, first_failed_at = NULL "
                     "WHERE write_id = ? AND status = 'dead_letter'",
                     (write_id,),
                 )

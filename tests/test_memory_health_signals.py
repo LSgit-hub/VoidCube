@@ -188,6 +188,7 @@ async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letter
 ):
     service = _make_service(tmp_path)
     service._gateway_registration_healthy = True
+    failure_started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
 
     await service.report_agent_outbox_health(
         AgentOutboxHealthReport(
@@ -197,6 +198,7 @@ async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letter
             inflight_count=1,
             dead_letter_count=1,
             oldest_pending_at=datetime.now(timezone.utc).isoformat(),
+            oldest_failure_at=failure_started_at.isoformat(),
             last_error="schema rejected",
             max_attempts=12,
         )
@@ -207,6 +209,7 @@ async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letter
     assert health["agent_outbox"]["pending_count"] == 2
     assert health["agent_outbox"]["inflight_count"] == 1
     assert health["agent_outbox"]["dead_letter_count"] == 1
+    assert health["agent_outbox"]["oldest_failure_age_seconds"] >= 29.0
     assert health["agent_outbox"]["issues"] == ["shared-outbox:dead_letter"]
 
 

@@ -28,6 +28,7 @@ _GATEWAY_PROBE_TIMEOUT_SECONDS = 0.25
 _GATEWAY_REACHABLE_TTL_SECONDS = 30.0
 _GATEWAY_UNREACHABLE_TTL_SECONDS = 5.0
 _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS = 10.0
+_DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 _IDENTITY_RECALL_GUIDANCE = (
@@ -61,6 +62,9 @@ class MemMemoryProvider(MemoryProvider):
         self._outbox_max_attempts = 12
         self._outbox_health_report_interval_seconds = (
             _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS
+        )
+        self._outbox_shutdown_drain_timeout_seconds = (
+            _DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS
         )
         self._last_outbox_health_report_at = 0.0
         self._owner_id = DEFAULT_OWNER_ID
@@ -125,6 +129,18 @@ class MemMemoryProvider(MemoryProvider):
                     "outbox_health_report_interval_seconds",
                     _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS,
                 )
+            ),
+        )
+        self._outbox_shutdown_drain_timeout_seconds = max(
+            0.0,
+            min(
+                60.0,
+                float(
+                    provider_config.get(
+                        "outbox_shutdown_drain_timeout_seconds",
+                        _DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
+                    )
+                ),
             ),
         )
         scope = MemoryScope.create(
@@ -491,19 +507,51 @@ class MemMemoryProvider(MemoryProvider):
         if not self._initialized:
             return
         self._initialized = False
-        if self._sync_thread is not None:
-            self._sync_stop.set()
-            self._sync_wake.set()
-            self._sync_thread.join(timeout=max(2.0, self._request_timeout_seconds * 3))
-            self._sync_thread = None
+        thread = self._sync_thread
+        if thread is not None:
+            deadline = (
+                time.monotonic() + self._outbox_shutdown_drain_timeout_seconds
+            )
+            try:
+                self._sync_wake.set()
+                while (
+                    thread.is_alive()
+                    and self._outbox is not None
+                    and self._outbox.drainable_count() > 0
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    thread.join(timeout=min(0.05, remaining))
+                    self._sync_wake.set()
+            except Exception as exc:
+                logger.warning("Memory outbox shutdown drain failed: %s", exc)
+            finally:
+                self._sync_stop.set()
+                self._sync_wake.set()
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                thread.join(timeout=remaining)
+            if thread.is_alive():
+                remaining_writes = (
+                    self._outbox.pending_count() if self._outbox is not None else 0
+                )
+                logger.warning(
+                    "Memory outbox shutdown drain timed out with %s durable writes remaining",
+                    remaining_writes,
+                )
+            else:
+                self._sync_thread = None
 
     def outbox_status(self) -> dict[str, Any]:
         """Return durable write backlog and retry state for local monitoring."""
         if self._outbox is None:
             return {
                 "pending_count": 0,
+                "inflight_count": 0,
                 "dead_letter_count": 0,
                 "oldest_pending_at": None,
+                "oldest_failure_at": None,
                 "last_success_at": None,
                 "last_error": None,
                 "max_attempts": self._outbox_max_attempts,

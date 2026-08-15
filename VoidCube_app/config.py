@@ -646,6 +646,7 @@ DEFAULT_CONFIG = {
             "prefetch_max_context_chars": 3500,
             "outbox_max_attempts": 12,
             "outbox_health_report_interval_seconds": 10.0,
+            "outbox_shutdown_drain_timeout_seconds": 5.0,
             # Raw conversation is redacted before entering the durable outbox.
             "redact_before_store": True,
         },

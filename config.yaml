@@ -233,6 +233,7 @@ memory:
     prefetch_max_context_chars: 3500
     outbox_max_attempts: 12
     outbox_health_report_interval_seconds: 10.0
+    outbox_shutdown_drain_timeout_seconds: 5.0
     redact_before_store: true
   semantic_recall:
     enabled: true

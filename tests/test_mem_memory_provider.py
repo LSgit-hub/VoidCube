@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -508,6 +511,39 @@ def test_memory_outbox_survives_reopen_until_delivery(tmp_path):
 
 
 @pytest.mark.unit
+def test_memory_outbox_upgrades_legacy_rows_without_losing_pending_writes(tmp_path):
+    path = tmp_path / "outbox.sqlite3"
+    payload = {
+        "write_id": "legacy-write",
+        "session_id": "legacy-session",
+        "user_content": "question",
+        "assistant_content": "answer",
+    }
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE pending_writes ("
+            "write_id TEXT PRIMARY KEY, payload TEXT NOT NULL, "
+            "attempts INTEGER NOT NULL DEFAULT 0, "
+            "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT, "
+            "created_at REAL NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO pending_writes "
+            "(write_id, payload, attempts, next_attempt_at, created_at) "
+            "VALUES (?, ?, 0, 0, ?)",
+            ("legacy-write", json.dumps(payload), time.time()),
+        )
+
+    outbox = MemoryWriteOutbox(path)
+
+    assert outbox.pending_count() == 1
+    assert outbox.next_due()["write_id"] == "legacy-write"
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(pending_writes)")}
+    assert "first_failed_at" in columns
+
+
+@pytest.mark.unit
 def test_memory_outbox_lease_prevents_duplicate_cross_process_delivery(
     monkeypatch,
     tmp_path,
@@ -599,9 +635,13 @@ def test_memory_outbox_dead_letters_permanent_failures_and_reports_health(
     health = outbox.health_snapshot()
     assert health["pending_count"] == 0
     assert health["dead_letter_count"] == 1
+    assert health["oldest_failure_at"] == "1970-01-01T00:16:40+00:00"
     assert health["last_success_at"] is None
     assert outbox.requeue_dead_letter("write-dead") is True
-    assert outbox.next_due()["write_id"] == "write-dead"
+    requeued = outbox.next_due()
+    assert requeued["write_id"] == "write-dead"
+    assert requeued["_outbox_attempts"] == 0
+    assert outbox.health_snapshot()["oldest_failure_at"] is None
 
 
 @pytest.mark.unit
@@ -634,3 +674,124 @@ def test_mem_provider_reports_outbox_health_through_authenticated_memory_path(
     assert captured["payload"]["session_id"] == "session-health"
     assert captured["payload"]["outbox_id"] == provider._outbox.outbox_id
     assert captured["payload"]["pending_count"] == 1
+
+
+@pytest.mark.unit
+def test_mem_provider_shutdown_drains_immediately_deliverable_writes(tmp_path):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._session_id = "session-shutdown"
+    provider._request_timeout_seconds = 0.1
+    provider._outbox_shutdown_drain_timeout_seconds = 1.0
+    provider._outbox = MemoryWriteOutbox(tmp_path / "outbox.sqlite3")
+    for index in range(2):
+        provider._outbox.enqueue(
+            {
+                "write_id": f"shutdown-{index}",
+                "session_id": "session-shutdown",
+                "user_content": "question",
+                "assistant_content": "answer",
+            }
+        )
+
+    delivered = []
+    provider._write_turn_pair = lambda item: delivered.append(item["write_id"])
+    provider._report_outbox_health_if_due = lambda **_kwargs: None
+    provider._sync_stop.clear()
+    provider._sync_thread = threading.Thread(target=provider._background_sync)
+    provider._sync_thread.start()
+
+    provider.shutdown()
+
+    assert sorted(delivered) == ["shutdown-0", "shutdown-1"]
+    assert provider._outbox.pending_count() == 0
+    assert provider._sync_thread is None
+
+
+@pytest.mark.unit
+def test_mem_provider_shutdown_preserves_delayed_retry_without_forcing_it(tmp_path):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._session_id = "session-shutdown-retry"
+    provider._request_timeout_seconds = 0.1
+    provider._outbox_shutdown_drain_timeout_seconds = 1.0
+    provider._outbox = MemoryWriteOutbox(
+        tmp_path / "outbox.sqlite3",
+        retry_base_seconds=60.0,
+        retry_max_seconds=60.0,
+    )
+    provider._outbox.enqueue(
+        {
+            "write_id": "shutdown-retry",
+            "session_id": "session-shutdown-retry",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+    claimed = provider._outbox.next_due()
+    provider._outbox.mark_failed(
+        "shutdown-retry",
+        attempts=1,
+        error="service unavailable",
+    )
+    assert claimed is not None
+    assert provider._outbox.drainable_count() == 0
+
+    provider._report_outbox_health_if_due = lambda **_kwargs: None
+    provider._sync_stop.clear()
+    provider._sync_thread = threading.Thread(target=provider._background_sync)
+    provider._sync_thread.start()
+    started = time.monotonic()
+
+    provider.shutdown()
+
+    assert time.monotonic() - started < 0.5
+    assert provider._outbox.pending_count() == 1
+    assert provider._outbox.next_due() is None
+
+
+@pytest.mark.unit
+def test_mem_provider_shutdown_drain_is_bounded_when_delivery_blocks(tmp_path):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._session_id = "session-shutdown-timeout"
+    provider._outbox_shutdown_drain_timeout_seconds = 0.05
+    provider._outbox = MemoryWriteOutbox(
+        tmp_path / "outbox.sqlite3",
+        lease_seconds=1.0,
+    )
+    provider._outbox.enqueue(
+        {
+            "write_id": "shutdown-timeout",
+            "session_id": "session-shutdown-timeout",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    delivery_started = threading.Event()
+    release_delivery = threading.Event()
+
+    def blocked_delivery(_item):
+        delivery_started.set()
+        release_delivery.wait(timeout=1.0)
+
+    provider._write_turn_pair = blocked_delivery
+    provider._report_outbox_health_if_due = lambda **_kwargs: None
+    provider._sync_stop.clear()
+    provider._sync_thread = threading.Thread(target=provider._background_sync)
+    provider._sync_thread.start()
+    assert delivery_started.wait(timeout=1.0)
+    worker = provider._sync_thread
+    started = time.monotonic()
+
+    provider.shutdown()
+
+    assert time.monotonic() - started < 0.5
+    assert provider._sync_thread is worker
+    assert worker.is_alive()
+
+    release_delivery.set()
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert provider._outbox.pending_count() == 0
