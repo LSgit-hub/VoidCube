@@ -116,6 +116,23 @@ _STATE_UPDATE_QUERY_TARGETS = (
     "database",
     "language",
 )
+_EVALUATION_TAG = "evaluation"
+_ARCHIVE_FALLBACK_MIN_LEXICAL = 0.45
+_ARCHIVE_FALLBACK_ACTIVE_SCORE = 0.55
+_ARCHIVE_GENERIC_QUERY_MARKERS = (
+    "用户",
+    "记忆",
+    "系统",
+    "改进",
+    "偏好",
+    "决策",
+    "方案",
+    "结果",
+    "报告",
+    "问题",
+    "体验",
+    "喜欢",
+)
 _IDENTITY_QUERY_PATTERNS = (
     "你是谁",
     "你叫什么",
@@ -497,7 +514,16 @@ def recall_memories(
                 record_filter=record_filter,
             )
         )
-        if not plan.immediate_recency and plan.intent != "recent_conversation":
+        active_score = max(
+            (float(item.get("score") or 0.0) for item in candidates),
+            default=0.0,
+        )
+        if (
+            not plan.immediate_recency
+            and plan.intent != "recent_conversation"
+            and active_score < _ARCHIVE_FALLBACK_ACTIVE_SCORE
+            and _archive_fallback_query_is_specific(plan)
+        ):
             candidates.extend(
                 _archive_candidates(
                     conn,
@@ -1217,7 +1243,11 @@ def _archive_candidates(
             lexical,
             float(semantic_matches.get(("archive", str(row[0])), 0.0)),
         )
-        if lexical <= 0 and plan.terms and semantic < 0.35:
+        if (
+            lexical < _ARCHIVE_FALLBACK_MIN_LEXICAL
+            and plan.terms
+            and semantic < 0.35
+        ):
             continue
         query_relevance = _query_relevance_score(lexical, semantic)
         recency = _recency_score(row[5], now, decay_days=180.0)
@@ -1267,6 +1297,15 @@ def _archive_candidates(
             }
         )
     return results
+
+
+def _archive_fallback_query_is_specific(plan: RecallPlan) -> bool:
+    """Require a concrete anchor before searching the weak archive tier."""
+    if any(char.isascii() and (char.isalnum() or char in "-_.") for char in plan.normalized_query):
+        return True
+    if plan.topic:
+        return True
+    return not any(marker in plan.normalized_query for marker in _ARCHIVE_GENERIC_QUERY_MARKERS)
 
 
 def _graph_candidates(
@@ -1420,6 +1459,9 @@ def _tier1_candidates(
         "compressed_to_tier2 = 0",
         "owner_id = ?",
         "workspace_id = ?",
+        "(json_valid(COALESCE(tags, '[]')) = 0 OR NOT EXISTS ("
+        "SELECT 1 FROM json_each(COALESCE(tags, '[]')) "
+        f"WHERE lower(CAST(value AS TEXT)) = '{_EVALUATION_TAG}'))",
     ]
     params: list[Any] = [owner_id, workspace_id]
     domain_placeholders = ",".join("?" for _ in source_domains)
@@ -1555,7 +1597,35 @@ def _tier1_candidates(
                 },
             }
         )
+    if plan.current_state_intent:
+        results = _collapse_current_state_turns(results)
     return results
+
+
+def _collapse_current_state_turns(
+    results: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep the newest turn for each sufficiently specific state topic."""
+    retained: list[dict[str, Any]] = []
+    topic_matches: list[set[str]] = []
+    for item in results:
+        matched = {
+            normalize_text(term)
+            for term in item.get("matched_terms") or []
+            if str(term).strip()
+        }
+        if len(matched) < 2:
+            retained.append(item)
+            topic_matches.append(set())
+            continue
+        if any(
+            len(previous) >= 2 and len(matched & previous) >= 2
+            for previous in topic_matches
+        ):
+            continue
+        retained.append(item)
+        topic_matches.append(matched)
+    return retained
 
 
 def _semantic_ids(
@@ -1672,6 +1742,8 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     ):
         preference_bonus = 0.38
         matched.append("preference_signal")
+    if preference_query and preference_bonus <= 0 and not _preference_topic_bridge(plan, haystack):
+        return 0.0, matched
     return min(1.0, coverage + phrase_bonus + preference_bonus), matched
 
 

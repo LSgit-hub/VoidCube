@@ -29,6 +29,7 @@ from systems.memory.recall import (
     normalize_text,
 )
 from systems.memory.tier1_to_tier2_bridge import (
+    Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
 )
 
@@ -91,6 +92,7 @@ def _insert_turn(
     text: str,
     timestamp: datetime,
     speaker: str = "user",
+    tags: list[str] | None = None,
     owner_id: str = "local-user",
     workspace_id: str = "default",
 ) -> None:
@@ -116,7 +118,7 @@ def _insert_turn(
                 stamp,
                 1.0,
                 0.01,
-                "[]",
+                json.dumps(tags or [], ensure_ascii=False),
                 "{}",
                 owner_id,
                 workspace_id,
@@ -964,6 +966,190 @@ async def test_recall_uses_archived_original_as_evidence_fallback(tmp_path):
     assert result["results"][0]["id"] == "archived-detail"
     assert result["results"][0]["tier"] == "archive"
     assert result["results"][0]["signals"]["archive_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_current_state_recall_keeps_newest_turn_for_same_topic(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="state-old",
+        session_id="state-old-session",
+        text="409 conflict 修复状态仍然是旧方案，等待进一步确认。",
+        timestamp=now - timedelta(hours=2),
+    )
+    _insert_turn(
+        service,
+        turn_id="state-new",
+        session_id="state-new-session",
+        text="409 conflict 修复状态当前有效，已完成验证。",
+        timestamp=now - timedelta(hours=1),
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="409 conflict 修复状态 当前有效性",
+            include_tier2=False,
+            limit=5,
+        )
+    )
+
+    assert result["query_plan"]["current_state_intent"] is True
+    assert [item["id"] for item in result["results"]] == ["state-new"]
+
+
+@pytest.mark.asyncio
+async def test_evaluation_tagged_turns_are_excluded_from_recall(tmp_path):
+    service = _service(tmp_path)
+    await service.add_turn(
+        "evaluation-session",
+        TurnCreate(
+            speaker="user",
+            text="深海章鱼 QWERT-9901 evaluation fixture",
+            tags=["evaluation", "evaluation"],
+        ),
+    )
+    await service.add_turn(
+        "normal-session",
+        TurnCreate(
+            speaker="user",
+            text="正常记忆记录，不包含评估样例。",
+        ),
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="深海章鱼 QWERT-9901",
+            include_tier2=False,
+            min_score=0.0,
+        )
+    )
+
+    assert result["results"] == []
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        tags = conn.execute(
+            "SELECT tags FROM turns WHERE session_id = 'evaluation-session'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert json.loads(tags) == ["evaluation"]
+
+
+@pytest.mark.asyncio
+async def test_evaluation_tagged_turns_are_not_promoted_to_tier2(tmp_path):
+    service = _service(tmp_path)
+    await service.add_turn(
+        "evaluation-session",
+        TurnCreate(
+            speaker="user",
+            text="evaluation fixture must stay out of durable memory",
+            tags=["evaluation"],
+        ),
+    )
+    await service.add_turn(
+        "normal-session",
+        TurnCreate(speaker="user", text="normal durable memory"),
+    )
+
+    batch = Tier1ToTier2Bridge(
+        service._db_path,
+        retention_days=0,
+    ).select_candidate_turns(force_oldest=True)
+
+    assert [turn["session_id"] for turn in batch.turns] == ["normal-session"]
+
+
+@pytest.mark.asyncio
+async def test_archive_fallback_does_not_compete_with_strong_tier1_result(tmp_path):
+    service = _service(tmp_path)
+    stamp = datetime.now(timezone.utc).isoformat()
+    _insert_turn(
+        service,
+        turn_id="active-detail",
+        session_id="active-session",
+        text="数据库迁移使用校验码 backup-4821 作为恢复证据。",
+        timestamp=datetime.now(timezone.utc),
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?)",
+            (
+                "archived-duplicate",
+                "archive-session",
+                "user",
+                "迁移细节",
+                "数据库迁移使用校验码 backup-4821 作为恢复证据。",
+                stamp,
+                stamp,
+                "local-user",
+                "default",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service.recall(
+        RecallRequest(
+            query="数据库迁移校验码 backup-4821",
+            include_tier2=False,
+            min_score=0.0,
+        )
+    )
+
+    assert [item["id"] for item in result["results"]] == ["active-detail"]
+
+
+@pytest.mark.asyncio
+async def test_generic_preference_query_does_not_trigger_archive_fallback(tmp_path):
+    service = _service(tmp_path)
+    stamp = datetime.now(timezone.utc).isoformat()
+    _insert_compressed(
+        service,
+        memory_id="generic-tier2",
+        title="记忆系统诊断",
+        summary="记忆系统改进记录了压缩桥接和召回架构决策。",
+        timestamp=datetime.now(timezone.utc),
+        topics=["记忆系统"],
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?)",
+            (
+                "generic-archive",
+                "archive-session",
+                "user",
+                "grounding review",
+                "用户对记忆系统改进的偏好和决策记录。",
+                stamp,
+                stamp,
+                "local-user",
+                "default",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service.recall(
+        RecallRequest(
+            query="用户对记忆系统改进的偏好和决策",
+            include_tier2=False,
+            min_score=0.0,
+        )
+    )
+
+    assert result["results"] == []
 
 
 @pytest.mark.asyncio

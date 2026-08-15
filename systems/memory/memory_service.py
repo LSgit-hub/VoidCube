@@ -144,6 +144,7 @@ class SessionCreate(BaseModel):
 class TurnCreate(BaseModel):
     speaker: str  # "user" | "agent" | "system"
     text: str
+    tags: List[str] = Field(default_factory=list)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
     memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
@@ -2172,6 +2173,13 @@ class MemoryApplicationService:
             request.memory_actor, request.memory_domain
         )
         stored_text = str(_redact_for_memory_storage(request.text))
+        stored_tags = list(
+            dict.fromkeys(
+                str(_redact_for_memory_storage(tag)).strip()
+                for tag in request.tags
+                if str(tag).strip()
+            )
+        )
         stored_metadata = _redact_for_memory_storage(request.metadata)
         now = datetime.now().astimezone().isoformat()
         # Ensure session exists in the same DB transaction as the turn write.
@@ -2232,7 +2240,7 @@ class MemoryApplicationService:
                 request.speaker,
                 stored_text,
                 now,
-                json.dumps([]),
+                json.dumps(stored_tags, ensure_ascii=False),
                 json.dumps(stored_metadata),
                 dedup_key,
                 now,

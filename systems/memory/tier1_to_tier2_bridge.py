@@ -410,6 +410,9 @@ class Tier1ToTier2Bridge:
             "compression_retry_count < ?",
             "(compression_retry_after IS NULL OR compression_retry_after <= ?)",
             "memory_domain = ?",
+            "(json_valid(COALESCE(tags, '[]')) = 0 OR NOT EXISTS ("
+            "SELECT 1 FROM json_each(COALESCE(tags, '[]')) "
+            "WHERE lower(CAST(value AS TEXT)) = 'evaluation'))",
         ]
         base_params: list[Any] = [
             _MAX_QUALITY_RETRIES,
