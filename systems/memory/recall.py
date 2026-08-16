@@ -31,6 +31,17 @@ from systems.memory.scope import (
 )
 
 
+_EVALUATION_SOURCE_EXCLUSION_SQL = (
+    "NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN "
+    "json_valid(COALESCE(compressed_memories.source_turns, '[]')) "
+    "THEN compressed_memories.source_turns ELSE '[]' END) source "
+    "JOIN turns source_turn ON source_turn.turn_id = CAST(source.value AS TEXT) "
+    "WHERE json_valid(COALESCE(source_turn.tags, '[]')) AND EXISTS ("
+    "SELECT 1 FROM json_each(source_turn.tags) source_tag "
+    "WHERE lower(CAST(source_tag.value AS TEXT)) = 'evaluation'))"
+)
+
+
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]*", re.IGNORECASE)
 _CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _RECENCY_MARKERS = (
@@ -883,6 +894,7 @@ def _tier2_candidates(
             "hidden = 0",
             "((owner_id = ? AND workspace_id = ?) OR "
             "(owner_id = ? AND workspace_id = ?))",
+            _EVALUATION_SOURCE_EXCLUSION_SQL,
         ]
         params: list[Any] = [
             plan.as_of,
@@ -898,6 +910,7 @@ def _tier2_candidates(
             "hidden = 0",
             "((owner_id = ? AND workspace_id = ?) OR "
             "(owner_id = ? AND workspace_id = ?))",
+            _EVALUATION_SOURCE_EXCLUSION_SQL,
         ]
         params: list[Any] = [
             owner_id,

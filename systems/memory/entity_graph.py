@@ -26,6 +26,17 @@ from typing import Any, Iterable, Sequence
 from systems.memory.scope import GLOBAL_SCOPE_ID
 
 
+_EVALUATION_SOURCE_EXCLUSION_SQL = (
+    "NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN "
+    "json_valid(COALESCE(cm.source_turns, '[]')) "
+    "THEN cm.source_turns ELSE '[]' END) source "
+    "JOIN turns source_turn ON source_turn.turn_id = CAST(source.value AS TEXT) "
+    "WHERE json_valid(COALESCE(source_turn.tags, '[]')) AND EXISTS ("
+    "SELECT 1 FROM json_each(source_turn.tags) source_tag "
+    "WHERE lower(CAST(source_tag.value AS TEXT)) = 'evaluation'))"
+)
+
+
 def normalize_entity(name: object) -> str:
     """Canonical form of an entity name (NFKC + casefold + trim)."""
     return unicodedata.normalize("NFKC", str(name or "")).casefold().strip()
@@ -299,7 +310,7 @@ def graph_expand_memory_ids(
     domains = tuple(dict.fromkeys(str(d) for d in source_domains))
     domain_placeholders = ",".join("?" for _ in domains) if domains else "''"
     scope_params = [owner_id, workspace_id, GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID]
-    visible = "status = 'active' AND hidden = 0"
+    visible = "status = 'active' AND hidden = 0 AND " + _EVALUATION_SOURCE_EXCLUSION_SQL
     as_of_clause = ""
     as_of_params: list[Any] = []
     if as_of:

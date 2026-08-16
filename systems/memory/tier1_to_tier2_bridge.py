@@ -38,6 +38,10 @@ _NON_EVALUATION_TURN_SQL = (
     "SELECT 1 FROM json_each(COALESCE(tags, '[]')) "
     "WHERE lower(CAST(value AS TEXT)) = 'evaluation'))"
 )
+_RETRY_ELIGIBLE_TURN_SQL = (
+    "compression_retry_count < ? AND "
+    "(compression_retry_after IS NULL OR compression_retry_after <= ?)"
+)
 
 
 def _iso_value(value: Any) -> str:
@@ -412,8 +416,7 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         base_conditions = [
             "compressed_to_tier2 = 0",
-            "compression_retry_count < ?",
-            "(compression_retry_after IS NULL OR compression_retry_after <= ?)",
+            _RETRY_ELIGIBLE_TURN_SQL,
             "memory_domain = ?",
             _NON_EVALUATION_TURN_SQL,
         ]
@@ -484,52 +487,47 @@ class Tier1ToTier2Bridge:
         force_oldest = self._active_turn_count() >= self.max_turns
         return self.select_candidate_turns(force_oldest=force_oldest).turns
 
-    def _active_turn_count(self) -> int:
-        conn = open_memory_sqlite(self.db_path)
+    def _active_turn_count(self, *, conn=None) -> int:
+        owns_connection = conn is None
+        if conn is None:
+            conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
             "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
             + self._scope_sql_suffix(),
             [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
-        conn.close()
+        if owns_connection:
+            conn.close()
         return int(count)
 
     def count_candidates(self) -> int:
-        """Count how many turns are eligible for compression."""
+        """Count turns that can be selected for compression right now."""
+        now = datetime.now(timezone.utc).isoformat()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
+        retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-            "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
-            + self._scope_sql_suffix(),
-            [cutoff, self.memory_domain, *self._scope_params()],
+            "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
+            + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
+            [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         if count == 0:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
-                "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
-                + self._scope_sql_suffix(),
-                [self.memory_domain, *self._scope_params()],
-            ).fetchone()[0]
+            total = self._active_turn_count(conn=conn)
             if total >= self.max_turns:
-                count = total
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND "
+                    + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
+                    + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
+                    [*retry_params, self.memory_domain, *self._scope_params()],
+                ).fetchone()[0]
         conn.close()
-        return count
+        return int(count)
 
     def needs_compression(self) -> bool:
-        """Check if compression is needed (by age or by volume)."""
-        if self.count_candidates() > 0:
-            return True
-        conn = open_memory_sqlite(self.db_path)
-        total = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
-            "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
-            + self._scope_sql_suffix(),
-            [self.memory_domain, *self._scope_params()],
-        ).fetchone()[0]
-        conn.close()
-        return total >= self.max_turns
+        """Return whether at least one compression batch can run now."""
+        return self.count_candidates() > 0
 
     def _scope_sql_suffix(self) -> str:
         conditions = []
