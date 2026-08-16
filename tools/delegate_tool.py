@@ -57,6 +57,9 @@ _TOOLSET_LIST_STR = ", ".join(f"'{n}'" for n in _SUBAGENT_TOOLSETS)
 
 _DEFAULT_MAX_CONCURRENT_CHILDREN = 3
 MAX_DEPTH = 2  # parent (0) -> child (1) -> grandchild rejected (2)
+_SUBAGENT_DISPLAY_HISTORY_LIMIT = 8
+_SUBAGENT_DISPLAY_STATE_LOCK = threading.RLock()
+_SUBAGENT_DISPLAY_INVOCATION_SEQUENCE = 0
 
 
 def _get_max_concurrent_children() -> int:
@@ -86,6 +89,49 @@ def _get_max_concurrent_children() -> int:
 DEFAULT_MAX_ITERATIONS = 50
 _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during delegation
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
+
+
+def _allocate_display_task_indexes(parent_agent, count: int) -> list[int]:
+    """Allocate stable, session-wide display indexes for one delegation."""
+    if count <= 0:
+        return []
+    if parent_agent is None:
+        return list(range(count))
+    with _SUBAGENT_DISPLAY_STATE_LOCK:
+        start = int(getattr(parent_agent, "_subagent_display_task_sequence", 0) or 0)
+        parent_agent._subagent_display_task_sequence = start + count
+    return list(range(start, start + count))
+
+
+def _next_display_invocation_id() -> str:
+    """Return a process-unique invocation id even for same-millisecond calls."""
+    global _SUBAGENT_DISPLAY_INVOCATION_SEQUENCE
+    with _SUBAGENT_DISPLAY_STATE_LOCK:
+        _SUBAGENT_DISPLAY_INVOCATION_SEQUENCE += 1
+        sequence = _SUBAGENT_DISPLAY_INVOCATION_SEQUENCE
+    return f"delegate-{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}-{sequence}"
+
+
+def _archive_display_manager(parent_agent, invocation_id: str, display_manager) -> None:
+    """Move a completed display manager from the active set to recent history."""
+    if parent_agent is None or display_manager is None:
+        return
+    with _SUBAGENT_DISPLAY_STATE_LOCK:
+        managers = getattr(parent_agent, "_subagent_display_managers", None)
+        if isinstance(managers, dict):
+            managers.pop(invocation_id, None)
+
+        history = getattr(parent_agent, "_subagent_display_history", None)
+        if not isinstance(history, dict):
+            history = {}
+            parent_agent._subagent_display_history = history
+        history[invocation_id] = display_manager
+        while len(history) > _SUBAGENT_DISPLAY_HISTORY_LIMIT:
+            history.pop(next(iter(history)))
+
+        if getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
+            active = list(managers.values()) if isinstance(managers, dict) else []
+            parent_agent._subagent_display_manager = active[-1] if active else None
 
 
 def check_delegate_requirements() -> bool:
@@ -186,8 +232,8 @@ def _build_child_event_sink(
     """Build a sink that relays child tool events to the parent display.
 
     Three display paths (in order of priority):
-      1. SubagentDisplayManager: bounded CLI lifecycle and tool events
-      2. CLI spinner: Tree-view lines above the parent's delegation spinner
+      1. SubagentDisplayManager: compact CLI lifecycle and failure events
+      2. CLI spinner: one-line current-tool projection
       3. Gateway: Batches tool names and relays to the parent's event sink
 
     Returns None if no display mechanism is available, in which case the
@@ -236,17 +282,12 @@ def _build_child_event_sink(
             return
 
         if spinner:
-            preview = event.preview
-            short = (preview[:35] + "...") if len(preview) > 35 else preview
             from agent.display import get_tool_emoji
-            emoji = get_tool_emoji(event.name)
-            line = f" {prefix}├─ {emoji} {event.name}"
-            if short:
-                line += f"  \"{short}\""
+
             try:
-                spinner.print_above(line)
+                spinner.update_text(f"{prefix}{get_tool_emoji(event.name)} {event.name}")
             except Exception as e:
-                logger.debug("Spinner print_above failed: %s", e)
+                logger.debug("Spinner update failed: %s", e)
 
         if parent_sink:
             _batch.append(event.name)
@@ -276,7 +317,7 @@ def _build_subagent_display_sink(task_id: str, task_index: int, display_manager,
     """Build a structured event sink for subagent tracking.
     
     This provides structured tracking with:
-    - Event-driven tool completion output
+    - Compact lifecycle state
     - Thinking/reasoning state
     - Background task management
     
@@ -826,7 +867,7 @@ def delegate_task(
     # Track goal labels for progress display (truncated for readability)
     task_labels = [t["goal"][:40] for t in task_list]
 
-    invocation_id = f"delegate-{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}"
+    invocation_id = _next_display_invocation_id()
 
     # Initialize display manager for rich CLI visualization
     display_manager = None
@@ -841,13 +882,20 @@ def delegate_task(
             logger.debug("SubagentDisplayManager not available, using legacy display")
             display_manager = None
     if parent_agent is not None:
-        managers = getattr(parent_agent, "_subagent_display_managers", None)
-        if managers is None:
-            managers = {}
-            parent_agent._subagent_display_managers = managers
-        if display_manager is not None:
-            managers[invocation_id] = display_manager
-        parent_agent._subagent_display_manager = display_manager
+        with _SUBAGENT_DISPLAY_STATE_LOCK:
+            managers = getattr(parent_agent, "_subagent_display_managers", None)
+            if not isinstance(managers, dict):
+                managers = {}
+                parent_agent._subagent_display_managers = managers
+            if display_manager is not None:
+                managers[invocation_id] = display_manager
+            parent_agent._subagent_display_manager = display_manager
+
+    display_task_indexes = (
+        _allocate_display_task_indexes(parent_agent, n_tasks)
+        if display_manager is not None
+        else list(range(n_tasks))
+    )
 
     # Save parent tool names BEFORE any child construction mutates the global.
     # _build_child_agent() calls AIAgent() which calls get_tool_definitions(),
@@ -869,7 +917,7 @@ def delegate_task(
                     display_manager.create_task(
                         task_id=task_id,
                         goal=t["goal"],
-                        task_index=i,
+                        task_index=display_task_indexes[i],
                         max_iterations=effective_max_iter,
                     )
                     display_manager.on_start(task_id)
@@ -919,12 +967,23 @@ def delegate_task(
                         child.close()
                 except Exception:
                     logger.debug("Failed to close child after build failure", exc_info=True)
-            if parent_agent is not None:
-                managers = getattr(parent_agent, "_subagent_display_managers", None)
-                if isinstance(managers, dict):
-                    managers.pop(invocation_id, None)
-                if getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
-                    parent_agent._subagent_display_manager = None
+            if display_manager:
+                # The task whose child construction raised has no child tuple;
+                # close every remaining non-terminal display entry before
+                # archiving the manager so history cannot retain a false active.
+                try:
+                    for task in display_manager.list_tasks():
+                        status = getattr(getattr(task, "status", None), "value", getattr(task, "status", ""))
+                        if str(status).lower() not in {"completed", "failed", "interrupted", "cancelled"}:
+                            display_manager.on_complete(
+                                task.task_id,
+                                summary="",
+                                error=f"Delegated task cancelled during child setup: {exc}",
+                                exit_reason="error",
+                            )
+                except Exception:
+                    logger.debug("Display manager pending-task cleanup failed", exc_info=True)
+            _archive_display_manager(parent_agent, invocation_id, display_manager)
             return tool_error(f"Failed to build delegated child agents: {exc}")
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
@@ -1035,11 +1094,7 @@ def delegate_task(
             # Sort by task_index so results match input order
             results.sort(key=lambda r: r["task_index"])
     finally:
-        if parent_agent is not None and getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
-            parent_agent._subagent_display_manager = None
-        managers = getattr(parent_agent, "_subagent_display_managers", None) if parent_agent is not None else None
-        if isinstance(managers, dict):
-            managers.pop(invocation_id, None)
+        _archive_display_manager(parent_agent, invocation_id, display_manager)
 
     # Notify parent's memory provider of delegation outcomes
     if parent_agent and hasattr(parent_agent, '_memory_manager') and parent_agent._memory_manager:

@@ -3,7 +3,7 @@
 Subagent Display System - structured subagent visualization
 
 Provides CLI tracking for subagent execution including:
-- Event-driven tool completion output
+- Compact lifecycle output
 - Thinking/reasoning state
 - Background task management (/tasks command)
 - Color-coded output with depth indicators
@@ -80,6 +80,17 @@ class ToolCallEntry:
     duration_ms: float = 0
 
 
+@dataclass(frozen=True)
+class SubagentEvent:
+    """One ordered lifecycle event retained for explicit task inspection."""
+
+    timestamp: float
+    kind: str
+    label: str
+    detail: str = ""
+    state: str = ""
+
+
 @dataclass
 class SubagentTask:
     """Represents a subagent task with full tracking."""
@@ -95,6 +106,7 @@ class SubagentTask:
     
     # Tool call tracking
     tool_calls: List[ToolCallEntry] = field(default_factory=list)
+    events: List[SubagentEvent] = field(default_factory=list)
     
     # Reasoning/thinking
     thinking_steps: List[str] = field(default_factory=list)
@@ -130,7 +142,7 @@ class SubagentDisplayManager:
     Tracks subagent execution and emits bounded lifecycle events.
     
     Features:
-    - Event-driven progress output
+    - Compact lifecycle output
     - Tool call and reasoning state
     - Background task tracking
     - Color-coded output with depth indicators
@@ -158,6 +170,18 @@ class SubagentDisplayManager:
         SubagentStatus.FAILED: "✗",
         SubagentStatus.INTERRUPTED: "⊘",
         SubagentStatus.CANCELLED: "⊗",
+    }
+
+    STATUS_LABELS = {
+        SubagentStatus.PENDING: "排队",
+        SubagentStatus.STARTING: "启动中",
+        SubagentStatus.RUNNING: "工作中",
+        SubagentStatus.THINKING: "思考中",
+        SubagentStatus.TOOL_CALL: "执行中",
+        SubagentStatus.COMPLETED: "完成",
+        SubagentStatus.FAILED: "失败",
+        SubagentStatus.INTERRUPTED: "已中断",
+        SubagentStatus.CANCELLED: "已取消",
     }
     
     # Tool emojis for quick recognition
@@ -250,6 +274,7 @@ class SubagentDisplayManager:
         )
         
         with self._lock:
+            self._record_event(task, "created", "已创建", task.goal_preview)
             self._tasks[task_id] = task
             if is_background:
                 self._background_tasks[task_id] = task
@@ -303,6 +328,24 @@ class SubagentDisplayManager:
     # =====================================================================
     # Event Handlers (called from callbacks)
     # =====================================================================
+
+    @staticmethod
+    def _record_event(
+        task: SubagentTask,
+        kind: str,
+        label: str,
+        detail: str = "",
+        state: str = "",
+    ) -> None:
+        task.events.append(
+            SubagentEvent(
+                timestamp=time.time(),
+                kind=kind,
+                label=label,
+                detail=detail,
+                state=state,
+            )
+        )
     
     def on_start(self, task_id: str) -> None:
         """Mark task as started without adding scrollback noise."""
@@ -311,6 +354,7 @@ class SubagentDisplayManager:
             with self._lock:
                 task.status = SubagentStatus.STARTING
                 task.started_at = time.time()
+                self._record_event(task, "started", "已启动")
     
     def on_thinking(self, task_id: str, thinking: str, iteration: int = 0) -> None:
         """Record thinking/reasoning step."""
@@ -327,6 +371,12 @@ class SubagentDisplayManager:
             if len(task.thinking_steps) > 5:
                 task.thinking_steps = task.thinking_steps[-5:]
             task.thinking_steps.append(thinking)
+            self._record_event(
+                task,
+                "progress",
+                "进展",
+                self._compact_text(thinking, 300),
+            )
     
     def on_tool_start(
         self,
@@ -360,6 +410,7 @@ class SubagentDisplayManager:
             task.current_tool_preview = args_preview
             task.iteration = iteration
             task.tool_calls.append(tool_call)
+            self._record_event(task, "tool_started", tool_name, args_preview)
             
             # Track nesting
             if depth > 1:
@@ -397,11 +448,31 @@ class SubagentDisplayManager:
                             self._active_tools[task_id].remove(tool_name)
                         except ValueError:
                             pass
+                    if task.current_tool == tool_name:
+                        task.current_tool = ""
+                        task.current_tool_preview = ""
+                        if task.status is SubagentStatus.TOOL_CALL:
+                            task.status = SubagentStatus.RUNNING
+                    self._record_event(
+                        task,
+                        "tool_completed",
+                        tool_name,
+                        " · ".join(
+                            part
+                            for part in (
+                                f"{tc.duration_ms / 1000:.1f}s",
+                                tc.result_preview,
+                            )
+                            if part
+                        ),
+                        state.value,
+                    )
                     break
 
-        # Ignore orphaned or duplicate terminal events. Printing them was the
-        # source of repeated subagent CLI completion lines.
-        if matched:
+        # Successful tool calls remain in the task record and live status
+        # projection. Only failures belong in scrollback; printing every
+        # successful tool completion turns observation into a second tool log.
+        if matched and state is not ExecutionState.SUCCEEDED:
             self._print_tool_completion(task, tool_name, state)
     
     def on_api_call(self, task_id: str, iteration: int = 0) -> None:
@@ -439,13 +510,22 @@ class SubagentDisplayManager:
             else:
                 task.status = SubagentStatus.COMPLETED
             task.completed_at = time.time()
-            task.duration_seconds = task.completed_at - task.started_at
+            task.duration_seconds = task.completed_at - (
+                task.started_at or task.created_at
+            )
             task.summary = summary
             task.exit_reason = exit_reason
             if tokens:
                 task.tokens_used = tokens
             if model:
                 task.model = model
+            self._record_event(
+                task,
+                "finished",
+                self.STATUS_LABELS.get(task.status, task.status.value),
+                self._compact_text(task.error or task.summary, 500),
+                task.status.value,
+            )
             
 
         if task.status is SubagentStatus.CANCELLED:
@@ -456,24 +536,42 @@ class SubagentDisplayManager:
     def on_interrupt(self, task_id: str) -> None:
         """Mark task as interrupted."""
         task = self._tasks.get(task_id)
-        if task:
-            with self._lock:
-                task.status = SubagentStatus.INTERRUPTED
-                task.completed_at = time.time()
-                task.duration_seconds = task.completed_at - task.started_at
-                task.exit_reason = "interrupted"
+        if task is None:
+            return
+        with self._lock:
+            task.status = SubagentStatus.INTERRUPTED
+            task.completed_at = time.time()
+            task.duration_seconds = task.completed_at - (
+                task.started_at or task.created_at
+            )
+            task.exit_reason = "interrupted"
+            self._record_event(
+                task,
+                "finished",
+                "已中断",
+                state=SubagentStatus.INTERRUPTED.value,
+            )
 
         self._print_interrupt(task)
     
     def on_cancel(self, task_id: str) -> None:
         """Mark task as cancelled."""
         task = self._tasks.get(task_id)
-        if task:
-            with self._lock:
-                task.status = SubagentStatus.CANCELLED
-                task.completed_at = time.time()
-                task.duration_seconds = task.completed_at - task.started_at
-                task.exit_reason = "cancelled"
+        if task is None:
+            return
+        with self._lock:
+            task.status = SubagentStatus.CANCELLED
+            task.completed_at = time.time()
+            task.duration_seconds = task.completed_at - (
+                task.started_at or task.created_at
+            )
+            task.exit_reason = "cancelled"
+            self._record_event(
+                task,
+                "finished",
+                "已取消",
+                state=SubagentStatus.CANCELLED.value,
+            )
 
         self._print_cancel(task)
     
@@ -504,10 +602,6 @@ class SubagentDisplayManager:
     ) -> None:
         """Print tool completion inline."""
         emoji = self.TOOL_EMOJIS.get(tool_name, "🔧")
-
-        if state is ExecutionState.SUCCEEDED:
-            self.print_fn(f"  {Colors.SUCCESS}✓{Colors.RESET} {emoji} {tool_name} 已完成")
-            return
         marker = {
             ExecutionState.FAILED: "✗",
             ExecutionState.CANCELLED: "⊘",
@@ -524,21 +618,21 @@ class SubagentDisplayManager:
 
         lines: list[str] = []
         if task.status == SubagentStatus.COMPLETED:
-            lines.append(f"\n{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ 子代理已完成{Colors.RESET}")
-            lines.append(f"  {Colors.DIM}耗时: {task.duration_seconds:.1f}s{Colors.RESET}")
-            lines.append(f"  {Colors.DIM}模型调用: {task.api_calls} 次{Colors.RESET}")
-
+            lines.append(
+                f"{Colors.PURPLE}{Colors.BOLD}{prefix} ✓ 子代理完成{Colors.RESET}"
+                f" {Colors.DIM}· {task.duration_seconds:.1f}s{Colors.RESET}"
+            )
             if task.summary:
-                # Truncate summary for display
                 summary = task.summary[:500]
                 if len(task.summary) > 500:
                     summary += "..."
-                lines.append(f"\n{Colors.BOLD}摘要:{Colors.RESET}")
                 lines.append(f"  {summary}")
         else:
-            lines.append(f"\n{Colors.ERROR}{Colors.BOLD}{prefix} ✗ 子代理执行失败{Colors.RESET}")
+            lines.append(
+                f"{Colors.ERROR}{Colors.BOLD}{prefix} ✗ 子代理失败{Colors.RESET}"
+            )
             if task.error:
-                lines.append(f"  {Colors.ERROR}{task.error[:200]}{Colors.RESET}")
+                lines[-1] += f" {Colors.ERROR}· {task.error[:200]}{Colors.RESET}"
 
         self.print_fn("\n".join(lines))
     
@@ -558,38 +652,24 @@ class SubagentDisplayManager:
     
     def render_tasks_command(self) -> str:
         """
-        Render output for /tasks command.
-        Returns a formatted string showing all tasks.
+        Render the compact status list for /tasks.
+
+        Tool arguments and call history stay in the task record for explicit
+        diagnostics, but the default command shows only user-facing progress.
         """
-        lines = []
-        lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-        lines.append(f"{Colors.BOLD}子代理任务{Colors.RESET}\n")
+        lines = [f"{Colors.BOLD}子代理{Colors.RESET}"]
 
         foreground_tasks = self.list_tasks(include_background=False)
         background_tasks = self.list_background_tasks()
 
         if not foreground_tasks and not background_tasks:
-            lines.append(f"{Colors.DIM}  当前没有运行中的子代理任务{Colors.RESET}")
+            lines.append(f"{Colors.DIM}  空闲{Colors.RESET}")
         else:
-            if foreground_tasks:
-                lines.append(f"{Colors.INFO}前台任务{Colors.RESET}")
-                for task in foreground_tasks:
-                    lines.append(self._render_task_summary_line(task))
-            if background_tasks:
-                if foreground_tasks:
-                    lines.append("")
-                lines.append(f"{Colors.INFO}后台任务{Colors.RESET}")
-                for task in sorted(background_tasks, key=lambda t: t.task_index):
-                    lines.append(self._render_task_summary_line(task))
-        
-        lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}\n")
-        
-        # Tips
-        lines.append(f"{Colors.DIM}说明:{Colors.RESET}")
-        lines.append(f"  API-A 会在多步骤工作中自动管理子代理。")
-        lines.append(f"  {Colors.INFO}/tasks{Colors.RESET}        - 查看当前子代理状态")
-        lines.append(f"  {Colors.DIM}/tasks bg <任务>{Colors.RESET} - 调试操作：将前台任务转入后台")
-        lines.append(f"  {Colors.DIM}/tasks fg <任务>{Colors.RESET} - 调试操作：将后台任务调回前台")
+            tasks = foreground_tasks + sorted(
+                background_tasks,
+                key=lambda task: task.task_index,
+            )
+            lines.extend(self._render_task_summary_line(task) for task in tasks)
         
         return "\n".join(lines)
     
@@ -600,26 +680,158 @@ class SubagentDisplayManager:
         
         # Duration
         if task.completed_at > 0:
-            duration_str = f" ({task.duration_seconds:.1f}s)"
+            duration_str = f" · {task.duration_seconds:.1f}s"
         elif task.started_at > 0:
             elapsed = time.time() - task.started_at
-            duration_str = f" ({elapsed:.1f}s elapsed)"
+            duration_str = f" · {elapsed:.1f}s"
         else:
             duration_str = ""
         
-        # Status line
+        # Status line: goal first, then one actionable phase. Tool arguments
+        # are intentionally omitted from the default view.
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
-        lane = "后台" if task.is_background else "前台"
+        phase = self.STATUS_LABELS.get(task.status, task.status.value)
+        lane = " · 后台" if task.is_background else ""
         line = f"  {status_color}{status_icon}{Colors.RESET} {prefix} {task.goal_preview}"
-        line += f"{Colors.DIM}{duration_str}{Colors.RESET}"
-        line += f" {Colors.DIM}({lane} id={task.task_id}){Colors.RESET}"
-        
-        # Additional info for running tasks
-        if task.status == SubagentStatus.TOOL_CALL and task.current_tool:
-            emoji = self.TOOL_EMOJIS.get(task.current_tool, "🔧")
-            line += f" {Colors.PURPLE}{emoji} {task.current_tool}{Colors.RESET}"
+        line += f" {Colors.DIM}· {phase}{duration_str}{lane}{Colors.RESET}"
         
         return line
+
+    def render_task_detail(self, task_ref: str) -> str | None:
+        """Render one task's diagnostics without expanding the default list."""
+        task = self.resolve_task_ref(task_ref)
+        if task is None:
+            return None
+
+        status_color = self._get_status_color(task.status)
+        status_icon = self.STATUS_ICONS.get(task.status, "○")
+        phase = self.STATUS_LABELS.get(task.status, task.status.value)
+        prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
+        lane = "后台" if task.is_background else "前台"
+        elapsed = self._task_elapsed(task)
+        lines = [
+            f"{Colors.BOLD}{prefix} {self._compact_text(task.goal or task.goal_preview, 300)}{Colors.RESET}",
+            (
+                f"{status_color}{status_icon} {phase}{Colors.RESET}"
+                f" {Colors.DIM}· {elapsed:.1f}s · {lane} · {task.task_id}{Colors.RESET}"
+            ),
+        ]
+
+        if task.current_tool:
+            current = f"当前工具: {task.current_tool}"
+            if task.current_tool_preview:
+                current += f" · {self._compact_text(task.current_tool_preview, 100)}"
+            lines.append(current)
+        elif task.current_thinking:
+            lines.append(
+                f"当前进展: {self._compact_text(task.current_thinking, 140)}"
+            )
+
+        recent_tools = task.tool_calls[-5:]
+        if recent_tools:
+            lines.append("")
+            lines.append(f"{Colors.BOLD}最近工具{Colors.RESET}")
+            for tool in recent_tools:
+                marker = {
+                    "running": "◌",
+                    ExecutionState.SUCCEEDED.value: "✓",
+                    ExecutionState.FAILED.value: "✗",
+                    ExecutionState.CANCELLED.value: "⊘",
+                    ExecutionState.TIMED_OUT.value: "⌛",
+                    ExecutionState.UNKNOWN.value: "?",
+                }.get(tool.status, "?")
+                duration = (
+                    f" · {tool.duration_ms / 1000:.1f}s"
+                    if tool.duration_ms > 0
+                    else ""
+                )
+                preview = (
+                    f" · {self._compact_text(tool.args_preview, 80)}"
+                    if tool.args_preview
+                    else ""
+                )
+                lines.append(f"  {marker} {tool.tool_name}{duration}{preview}")
+                if tool.result_preview and tool.status != ExecutionState.SUCCEEDED.value:
+                    lines.append(
+                        f"    {Colors.ERROR}{self._compact_text(tool.result_preview, 140)}{Colors.RESET}"
+                    )
+
+        outcome = task.error or task.summary
+        if outcome:
+            heading = "错误" if task.error else "结果"
+            lines.extend(
+                [
+                    "",
+                    f"{Colors.BOLD}{heading}{Colors.RESET}",
+                    f"  {self._compact_text(outcome, 500)}",
+                ]
+            )
+        return "\n".join(lines)
+
+    def render_task_log(self, task_ref: str) -> str | None:
+        """Render the full ordered lifecycle log for one subagent task."""
+        task = self.resolve_task_ref(task_ref)
+        if task is None:
+            return None
+        with self._lock:
+            events = tuple(task.events)
+
+        prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
+        lines = [
+            f"{Colors.BOLD}{prefix} {self._compact_text(task.goal or task.goal_preview, 300)}{Colors.RESET}",
+            f"{Colors.DIM}事件记录 · {task.task_id}{Colors.RESET}",
+        ]
+        for event in events:
+            offset = max(0.0, event.timestamp - task.created_at)
+            marker = self._event_marker(event)
+            line = (
+                f"{Colors.DIM}+{offset:06.1f}s{Colors.RESET} "
+                f"{marker} {event.label}"
+            )
+            if event.detail:
+                line += f" · {self._compact_text(event.detail, 220)}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _event_marker(event: SubagentEvent) -> str:
+        if event.kind == "tool_completed":
+            return {
+                ExecutionState.SUCCEEDED.value: "✓",
+                ExecutionState.FAILED.value: "✗",
+                ExecutionState.CANCELLED.value: "⊘",
+                ExecutionState.TIMED_OUT.value: "⌛",
+                ExecutionState.UNKNOWN.value: "?",
+            }.get(event.state, "?")
+        if event.kind == "finished":
+            return {
+                SubagentStatus.COMPLETED.value: "✓",
+                SubagentStatus.FAILED.value: "✗",
+                SubagentStatus.INTERRUPTED.value: "⊘",
+                SubagentStatus.CANCELLED.value: "⊗",
+            }.get(event.state, "○")
+        return {
+            "created": "○",
+            "started": "●",
+            "progress": "◔",
+            "tool_started": "◆",
+            "lane": "↔",
+        }.get(event.kind, "·")
+
+    @staticmethod
+    def _task_elapsed(task: SubagentTask) -> float:
+        if task.completed_at > 0:
+            return max(0.0, task.duration_seconds)
+        if task.started_at > 0:
+            return max(0.0, time.time() - task.started_at)
+        return 0.0
+
+    @staticmethod
+    def _compact_text(value: str, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)] + "..."
     
     # =====================================================================
     # Background Task Management
@@ -643,10 +855,10 @@ class SubagentDisplayManager:
         with self._lock:
             task.is_background = True
             self._background_tasks[task_id] = task
+            self._record_event(task, "lane", "转入后台")
         
         self.print_fn(
-            f"\n{Colors.INFO}→ 已应用调试操作: {task.goal_preview}{Colors.RESET}\n"
-            f"{Colors.DIM}  任务已转入后台运行，可使用 /tasks 查看{Colors.RESET}"
+            f"{Colors.INFO}→ 子代理转入后台{Colors.RESET}  {task.goal_preview}"
         )
         
         return True
@@ -661,8 +873,11 @@ class SubagentDisplayManager:
             task.is_background = False
             if task_id in self._background_tasks:
                 del self._background_tasks[task_id]
+            self._record_event(task, "lane", "恢复到前台")
         
-        self.print_fn(f"\n{Colors.INFO}← 已应用调试操作: {task.goal_preview}{Colors.RESET}")
+        self.print_fn(
+            f"{Colors.INFO}← 子代理恢复到前台{Colors.RESET}  {task.goal_preview}"
+        )
         
         return True
     

@@ -129,7 +129,9 @@ class CliMiddleStatusRuntime:
             if subagent.get("active"):
                 if fragments:
                     fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
-                icon = "[SA]" if ascii_mode else "🧩"
+                # Keep the parent status strip symbolic and quiet; the task
+                # goal is the readable part, while `/tasks` owns details.
+                icon = "[SA]" if ascii_mode else "↗"
                 fragments.append((f"{self._BACKGROUND} #F59E0B", icon))
                 fragments.append(
                     (f"{self._BACKGROUND} #F59E0B bold", f" {subagent.get('counts_label', '0')}")

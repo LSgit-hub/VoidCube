@@ -20,6 +20,8 @@ class TaskMoveResult:
 class TasksCommandPorts:
     has_display_managers: Callable[[], bool]
     render_subagent_tasks: Callable[[], str]
+    render_subagent_task: Callable[[str], str | None]
+    render_subagent_task_log: Callable[[str], str | None]
     background_tasks: Callable[[], Sequence[BackgroundTaskSnapshot]]
     now: Callable[[], float]
     move_to_background: Callable[[str], TaskMoveResult]
@@ -30,17 +32,31 @@ class TasksCommandPorts:
 
 
 def handle_tasks_command(request: ParsedCliCommand, *, ports: TasksCommandPorts) -> None:
-    """Show subagent tasks or apply an explicit advanced-debug lane change."""
+    """Show compact task state, one task's detail, or apply a lane change."""
     parts = request.arguments.split()
     action = parts[0].lower() if parts else "show"
     task_ref = parts[1].strip() if len(parts) >= 2 else ""
 
     if action in {"show", "list"}:
-        _render_tasks(ports)
+        if task_ref:
+            _render_task_detail(task_ref, ports)
+        else:
+            _render_tasks(ports)
+        return
+
+    if action == "log":
+        if task_ref:
+            _render_task_log(task_ref, ports)
+        else:
+            ports.emit("  用法：/tasks <task> log")
+        return
+
+    if len(parts) >= 2 and parts[1].lower() == "log":
+        _render_task_log(parts[0], ports)
         return
 
     if action not in {"bg", "background", "fg", "foreground"}:
-        _render_usage(ports)
+        _render_task_detail(parts[0], ports)
         return
 
     if not ports.has_display_managers():
@@ -95,8 +111,31 @@ def _render_tasks(ports: TasksCommandPorts) -> None:
     ports.render_output("\n".join(lines))
 
 
-def _render_usage(ports: TasksCommandPorts) -> None:
-    ports.emit("  用法：/tasks")
-    ports.emit("  API-A 会自动管理子代理；bg/fg 是调试操作。")
-    ports.emit("         /tasks bg <task-id|index>")
-    ports.emit("         /tasks fg <task-id|index>")
+def _render_task_detail(task_ref: str, ports: TasksCommandPorts) -> None:
+    if not ports.has_display_managers():
+        ports.emit("  当前没有可查看的子代理任务。")
+        return
+    try:
+        detail = ports.render_subagent_task(task_ref)
+    except Exception as exc:
+        ports.emit(f"  Failed to render subagent task: {exc}")
+        return
+    if detail is None:
+        ports.emit(f"  未知的子代理任务：{task_ref}")
+        return
+    ports.render_output(detail)
+
+
+def _render_task_log(task_ref: str, ports: TasksCommandPorts) -> None:
+    if not ports.has_display_managers():
+        ports.emit("  当前没有可查看的子代理任务。")
+        return
+    try:
+        log = ports.render_subagent_task_log(task_ref)
+    except Exception as exc:
+        ports.emit(f"  Failed to render subagent task log: {exc}")
+        return
+    if log is None:
+        ports.emit(f"  未知的子代理任务：{task_ref}")
+        return
+    ports.render_output(log)

@@ -872,13 +872,42 @@ def _tasks_command_ports(
             for manager in manager_map.values():
                 if manager is not None and manager not in result:
                     result.append(manager)
+        history = getattr(agent, "_subagent_display_history", None)
+        if isinstance(history, dict):
+            for manager in reversed(tuple(history.values())):
+                if manager is not None and manager not in result:
+                    result.append(manager)
         manager = getattr(agent, "_subagent_display_manager", None)
         if manager is not None and manager not in result:
             result.append(manager)
         return result
 
     def render_subagent_tasks() -> str:
-        return "\n\n".join(str(manager.render_tasks_command()) for manager in managers())
+        panels = [str(manager.render_tasks_command()) for manager in managers()]
+        if len(panels) <= 1:
+            return panels[0] if panels else ""
+        merged = [panels[0]]
+        for panel in panels[1:]:
+            lines = panel.splitlines()
+            if lines and "子代理" in lines[0]:
+                lines = lines[1:]
+            if lines:
+                merged.append("\n".join(lines))
+        return "\n".join(merged)
+
+    def render_subagent_task(task_ref: str) -> str | None:
+        for manager in managers():
+            detail = manager.render_task_detail(task_ref)
+            if detail is not None:
+                return str(detail)
+        return None
+
+    def render_subagent_task_log(task_ref: str) -> str | None:
+        for manager in managers():
+            log = manager.render_task_log(task_ref)
+            if log is not None:
+                return str(log)
+        return None
 
     def background_tasks() -> tuple[BackgroundTaskSnapshot, ...]:
         return tuple(host._list_background_tasks())
@@ -905,6 +934,8 @@ def _tasks_command_ports(
     return TasksCommandPorts(
         has_display_managers=lambda: bool(managers()),
         render_subagent_tasks=render_subagent_tasks,
+        render_subagent_task=render_subagent_task,
+        render_subagent_task_log=render_subagent_task_log,
         background_tasks=background_tasks,
         now=time,
         move_to_background=lambda task_ref: move(task_ref, background=True),

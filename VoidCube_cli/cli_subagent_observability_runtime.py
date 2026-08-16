@@ -54,12 +54,15 @@ class CliSubagentObservabilityRuntime:
         active_background.sort(key=lambda task: getattr(task, "task_index", 0))
         focus_task = active_foreground[0] if active_foreground else active_background[0]
         focus_tool = str(getattr(focus_task, "current_tool", "") or "").strip()
+        # The parent view is a task navigator, not a child tool log. Prefer
+        # the delegated goal; retain the current tool separately for optional
+        # diagnostics and compatibility with the status API.
         preview_source = (
-            focus_tool
-            or str(getattr(focus_task, "current_tool_preview", "") or "").strip()
-            or str(getattr(focus_task, "current_thinking", "") or "").strip()
-            or str(getattr(focus_task, "goal_preview", "") or "").strip()
+            str(getattr(focus_task, "goal_preview", "") or "").strip()
             or str(getattr(focus_task, "goal", "") or "").strip()
+            or str(getattr(focus_task, "current_thinking", "") or "").strip()
+            or focus_tool
+            or str(getattr(focus_task, "current_tool_preview", "") or "").strip()
         )
         foreground_count = len(active_foreground)
         background_count = len(active_background)

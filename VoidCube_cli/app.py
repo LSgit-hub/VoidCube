@@ -1925,6 +1925,11 @@ class VoidcubeCLI:
             for manager in manager_map.values():
                 if manager is not None and manager not in managers:
                     managers.append(manager)
+        history = getattr(agent, "_subagent_display_history", None)
+        if isinstance(history, dict):
+            for manager in reversed(tuple(history.values())):
+                if manager is not None and manager not in managers:
+                    managers.append(manager)
         single = getattr(agent, "_subagent_display_manager", None)
         if single is not None and single not in managers:
             managers.append(single)
