@@ -21,6 +21,7 @@ from systems.memory.domain import (
     MemoryActor,
     MemoryDomain,
     MemoryDomainAccessError,
+    authorize_identity_experience_verification,
     authorize_read,
     authorize_write,
     domain_values,
@@ -116,6 +117,16 @@ def _authorized_write_domain(
 ) -> str:
     try:
         return authorize_write(actor, domain).value
+    except (MemoryDomainAccessError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _authorized_identity_experience_domain(
+    actor: MemoryActor | str,
+    domain: MemoryDomain | str,
+) -> str:
+    try:
+        return authorize_identity_experience_verification(actor, domain).value
     except (MemoryDomainAccessError, ValueError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -428,6 +439,75 @@ def _turn_row_to_dict(row) -> Dict[str, Any]:
         "compressed_to_tier2": bool(row[9]),
         "memory_domain": row[10] if len(row) > 10 else DEFAULT_MEMORY_DOMAIN.value,
     }
+
+
+def _json_string_set(raw: Any) -> set[str]:
+    if not raw:
+        return set()
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return set()
+    if not isinstance(values, list):
+        return set()
+    return {str(value).strip() for value in values if str(value).strip()}
+
+
+def _collect_dependent_memory_ids(
+    conn: sqlite3.Connection,
+    *,
+    scope: MemoryScope,
+    memory_domain: str,
+    seed_references: set[str],
+    direct_memory_ids: set[str],
+) -> tuple[set[str], set[str]]:
+    """Resolve all scoped durable memories that transitively cite the seeds."""
+    compressed_rows = conn.execute(
+        "SELECT memory_id, source_turns, evidence_refs, parent_id, origin_id "
+        "FROM compressed_memories WHERE owner_id = ? AND workspace_id = ? "
+        "AND memory_domain = ?",
+        (scope.owner_id, scope.workspace_id, memory_domain),
+    ).fetchall()
+    profile_rows = conn.execute(
+        "SELECT memory_id, source_turns, evidence_refs FROM profile_memories "
+        "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+        (scope.owner_id, scope.workspace_id, memory_domain),
+    ).fetchall()
+
+    references = set(seed_references)
+    compressed_ids: set[str] = set()
+    profile_ids: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for memory_id, source_turns, evidence_refs, parent_id, origin_id in compressed_rows:
+            resolved_id = str(memory_id)
+            if resolved_id in compressed_ids:
+                continue
+            row_references = {
+                *_json_string_set(source_turns),
+                *_json_string_set(evidence_refs),
+                str(parent_id or "").strip(),
+                str(origin_id or "").strip(),
+            }
+            row_references.discard("")
+            if resolved_id in direct_memory_ids or row_references & references:
+                compressed_ids.add(resolved_id)
+                references.add(resolved_id)
+                changed = True
+        for memory_id, source_turns, evidence_refs in profile_rows:
+            resolved_id = str(memory_id)
+            if resolved_id in profile_ids:
+                continue
+            row_references = {
+                *_json_string_set(source_turns),
+                *_json_string_set(evidence_refs),
+            }
+            if resolved_id in direct_memory_ids or row_references & references:
+                profile_ids.add(resolved_id)
+                references.add(resolved_id)
+                changed = True
+    return compressed_ids, profile_ids
 
 
 class MemoryApplicationService:
@@ -1173,11 +1253,14 @@ class MemoryApplicationService:
     async def verify_identity_experience(self, request: IdentityExperienceVerification):
         """Mark one existing Tier 1 turn as a verified identity experience."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
-        authorized_domain = _authorized_write_domain(
+        authorized_domain = _authorized_identity_experience_domain(
             request.memory_actor, request.memory_domain
         )
         evidence_refs = list(
-            dict.fromkeys(str(item).strip() for item in request.evidence_refs)
+            dict.fromkeys(
+                str(item).strip()
+                for item in _redact_for_memory_storage(request.evidence_refs)
+            )
         )
         if not evidence_refs or any(not item for item in evidence_refs):
             raise HTTPException(status_code=400, detail="evidence_refs cannot be empty")
@@ -1222,10 +1305,14 @@ class MemoryApplicationService:
                 "identity_title": str(_redact_for_memory_storage(request.title)).strip(),
                 "identity_summary": str(_redact_for_memory_storage(request.summary)).strip(),
                 "evidence_refs": evidence_refs,
-                "verified_by": request.verified_by.strip(),
+                "verified_by": str(
+                    _redact_for_memory_storage(request.verified_by)
+                ).strip(),
                 "topics": list(dict.fromkeys(_redact_for_memory_storage(request.topics))),
                 "entities": list(dict.fromkeys(_redact_for_memory_storage(request.entities))),
-                "event_kind": request.event_kind.strip(),
+                "event_kind": str(
+                    _redact_for_memory_storage(request.event_kind)
+                ).strip(),
                 "importance": request.importance,
             }
             verification_changed = any(
@@ -3579,6 +3666,8 @@ class MemoryApplicationService:
         counts = {
             "compressed_memories": 0,
             "profile_memories": 0,
+            "profile_memory_tombstones": 0,
+            "compression_quality_audit": 0,
             "turns": 0,
             "turns_archive": 0,
             "sessions": 0,
@@ -3592,197 +3681,239 @@ class MemoryApplicationService:
         target_kind = "memory" if memory_id else "session"
         target = memory_id or session_id
         try:
+            turn_query = (
+                "SELECT turn_id FROM turns WHERE {predicate} AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ? UNION SELECT turn_id "
+                "FROM turns_archive WHERE {predicate} AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ?"
+            )
+            predicate = "session_id = ?" if session_id else "turn_id = ?"
+            turn_rows = conn.execute(
+                turn_query.format(predicate=predicate),
+                (
+                    target,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    memory_domain,
+                    target,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    memory_domain,
+                ),
+            ).fetchall()
+            turn_ids = {str(row[0]) for row in turn_rows}
+            seed_references = {
+                *turn_ids,
+                *(f"turn:{turn_id}" for turn_id in turn_ids),
+            }
+            if session_id:
+                seed_references.add(f"session:{session_id}")
             if memory_id:
-                for table in ("compressed_memories", "profile_memories"):
-                    cursor = conn.execute(
-                        f"DELETE FROM {table} WHERE memory_id = ? "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
-                    )
-                    counts[table] += max(0, int(cursor.rowcount or 0))
-                for table in ("turns", "turns_archive"):
-                    cursor = conn.execute(
-                        f"DELETE FROM {table} WHERE turn_id = ? "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
-                    )
-                    counts[table] += max(0, int(cursor.rowcount or 0))
-                counts["memory_promotions_revoked"] += revoke_promotions_for_source(
+                seed_references.add(memory_id)
+            compressed_ids, profile_ids = _collect_dependent_memory_ids(
+                conn,
+                scope=scope,
+                memory_domain=memory_domain,
+                seed_references=seed_references,
+                direct_memory_ids={memory_id} if memory_id else set(),
+            )
+            source_ids = {
+                *turn_ids,
+                *compressed_ids,
+                *profile_ids,
+                *({memory_id} if memory_id else set()),
+            }
+
+            counts["memory_promotions_revoked"] = revoke_promotions_for_source(
+                conn,
+                source_memory_ids=sorted(source_ids),
+                source_domain=memory_domain,
+                scope=scope,
+                revoked_by=request.memory_actor.value,
+            )
+            counts["memory_promotion_candidates_rejected"] = (
+                reject_promotion_candidates_for_source(
                     conn,
-                    source_memory_ids=[memory_id],
+                    source_memory_ids=sorted(source_ids),
                     source_domain=memory_domain,
                     scope=scope,
-                    revoked_by=request.memory_actor.value,
                 )
-                counts["memory_promotion_candidates_rejected"] += (
-                    reject_promotion_candidates_for_source(
-                        conn,
-                        source_memory_ids=[memory_id],
-                        source_domain=memory_domain,
-                        scope=scope,
-                    )
-                )
+            )
+
+            trace_rows = conn.execute(
+                "SELECT trace_id, session_id, source_domains, selected_results "
+                "FROM recall_traces WHERE owner_id = ? AND workspace_id = ?",
+                (scope.owner_id, scope.workspace_id),
+            ).fetchall()
+            trace_ids_to_delete = {
+                str(trace_id)
+                for trace_id, trace_session_id, source_domains, _ in trace_rows
+                if session_id
+                and str(trace_session_id or "") == session_id
+                and memory_domain in _json_string_set(source_domains)
+            }
+            if trace_ids_to_delete:
+                placeholders = ",".join("?" for _ in trace_ids_to_delete)
                 cursor = conn.execute(
-                    "DELETE FROM recall_feedback WHERE memory_id = ? "
-                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
+                    "DELETE FROM recall_feedback WHERE owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ? "
+                    f"AND trace_id IN ({placeholders})",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        *sorted(trace_ids_to_delete),
+                    ),
                 )
                 counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
-                trace_rows = conn.execute(
-                    "SELECT trace_id, selected_results FROM recall_traces WHERE "
-                    "owner_id = ? AND workspace_id = ? AND ((EXISTS (SELECT 1 FROM "
-                    "json_each(recall_traces.source_domains) domains WHERE domains.value = ?) "
-                    "AND EXISTS (SELECT 1 FROM "
-                    "json_each(recall_traces.selected_results) "
-                    "WHERE json_extract(value, '$.id') = ?)) OR EXISTS (SELECT 1 FROM "
-                    "json_each(recall_traces.selected_results) "
-                    "WHERE json_extract(value, '$.source_memory_id') = ?))",
+                cursor = conn.execute(
+                    "DELETE FROM recall_traces WHERE owner_id = ? AND workspace_id = ? "
+                    f"AND trace_id IN ({placeholders})",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        *sorted(trace_ids_to_delete),
+                    ),
+                )
+                counts["recall_traces"] += max(0, int(cursor.rowcount or 0))
+
+            for trace_id, _, _, selected_json in trace_rows:
+                if str(trace_id) in trace_ids_to_delete:
+                    continue
+                try:
+                    selected = json.loads(selected_json or "[]")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    selected = []
+                if not isinstance(selected, list):
+                    selected = []
+                retained = [
+                    item
+                    for item in selected
+                    if not isinstance(item, dict)
+                    or (
+                        str(item.get("id") or "") not in source_ids
+                        and str(item.get("source_memory_id") or "") not in source_ids
+                    )
+                ]
+                if len(retained) == len(selected):
+                    continue
+                conn.execute(
+                    "UPDATE recall_traces SET selected_results = ?, result_count = ? "
+                    "WHERE trace_id = ? AND owner_id = ? AND workspace_id = ?",
+                    (
+                        json.dumps(retained, ensure_ascii=False),
+                        len(retained),
+                        trace_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                    ),
+                )
+                counts["recall_trace_references"] += 1
+
+            if source_ids:
+                placeholders = ",".join("?" for _ in source_ids)
+                cursor = conn.execute(
+                    "DELETE FROM recall_feedback WHERE owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
                     (
                         scope.owner_id,
                         scope.workspace_id,
                         memory_domain,
-                        memory_id,
-                        memory_id,
+                        *sorted(source_ids),
                     ),
-                ).fetchall()
-                for trace_id, selected_json in trace_rows:
-                    selected = [
-                        item
-                        for item in json.loads(selected_json or "[]")
-                        if str(item.get("id") or "") != memory_id
-                        and str(item.get("source_memory_id") or "") != memory_id
-                    ]
-                    conn.execute(
-                        "UPDATE recall_traces SET selected_results = ?, result_count = ? "
-                        "WHERE trace_id = ? AND owner_id = ? AND workspace_id = ?",
-                        (
-                            json.dumps(selected, ensure_ascii=False),
-                            len(selected),
-                            trace_id,
-                            scope.owner_id,
-                            scope.workspace_id,
-                        ),
-                    )
-                counts["recall_trace_references"] += len(trace_rows)
+                )
+                counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
                 cursor = conn.execute(
-                    "DELETE FROM memory_embeddings WHERE memory_id = ? "
-                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
+                    "DELETE FROM memory_embeddings WHERE owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        *sorted(source_ids),
+                    ),
                 )
                 counts["memory_embeddings"] += max(0, int(cursor.rowcount or 0))
-            else:
-                turn_rows = conn.execute(
-                    "SELECT turn_id FROM turns WHERE session_id = ? AND owner_id = ? "
-                    "AND workspace_id = ? AND memory_domain = ? UNION SELECT turn_id FROM turns_archive "
-                    "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
-                    "AND memory_domain = ?",
+
+            for table, identifiers in (
+                ("compressed_memories", compressed_ids),
+                ("profile_memories", profile_ids),
+            ):
+                if not identifiers:
+                    continue
+                placeholders = ",".join("?" for _ in identifiers)
+                cursor = conn.execute(
+                    f"DELETE FROM {table} WHERE owner_id = ? AND workspace_id = ? "
+                    f"AND memory_domain = ? AND memory_id IN ({placeholders})",
                     (
-                        session_id,
                         scope.owner_id,
                         scope.workspace_id,
                         memory_domain,
-                        session_id,
-                        scope.owner_id,
-                        scope.workspace_id,
-                        memory_domain,
+                        *sorted(identifiers),
                     ),
-                ).fetchall()
-                derived_memory_ids: set[str] = set()
-                for (turn_id,) in turn_rows:
-                    for table in ("compressed_memories", "profile_memories"):
-                        derived_memory_ids.update(
-                            str(row[0])
-                            for row in conn.execute(
-                                f"SELECT memory_id FROM {table} WHERE owner_id = ? "
-                                "AND workspace_id = ? AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
-                                f"json_each({table}.source_turns) WHERE value = ?)",
-                                (scope.owner_id, scope.workspace_id, memory_domain, turn_id),
-                            ).fetchall()
-                        )
-                        cursor = conn.execute(
-                            f"DELETE FROM {table} WHERE owner_id = ? AND workspace_id = ? "
-                            "AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
-                            f"json_each({table}.source_turns) WHERE value = ?)",
-                            (scope.owner_id, scope.workspace_id, memory_domain, turn_id),
-                        )
-                        counts[table] += max(0, int(cursor.rowcount or 0))
-                for source_type, identifiers in (
-                    ("turn", {str(row[0]) for row in turn_rows}),
-                    ("archive", {str(row[0]) for row in turn_rows}),
-                    ("compressed", derived_memory_ids),
-                    ("profile", derived_memory_ids),
-                ):
-                    if not identifiers:
-                        continue
-                    placeholders = ",".join("?" for _ in identifiers)
+                )
+                counts[table] += max(0, int(cursor.rowcount or 0))
+
+            if turn_ids:
+                placeholders = ",".join("?" for _ in turn_ids)
+                cursor = conn.execute(
+                    "DELETE FROM profile_memory_tombstones WHERE owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ? AND ("
+                    f"source_turn_id IN ({placeholders}) OR EXISTS (SELECT 1 FROM "
+                    "json_each(profile_memory_tombstones.evidence_turns) "
+                    f"WHERE value IN ({placeholders})))",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        *sorted(turn_ids),
+                        *sorted(turn_ids),
+                    ),
+                )
+                counts["profile_memory_tombstones"] += max(0, int(cursor.rowcount or 0))
+                cursor = conn.execute(
+                    "DELETE FROM compression_quality_audit WHERE owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
+                    "json_each(compression_quality_audit.sample_turn_ids) "
+                    f"WHERE value IN ({placeholders}))",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        *sorted(turn_ids),
+                    ),
+                )
+                counts["compression_quality_audit"] += max(0, int(cursor.rowcount or 0))
+                for table in ("turns", "turns_archive"):
                     cursor = conn.execute(
-                        "DELETE FROM memory_embeddings WHERE source_type = ? AND "
-                        f"memory_id IN ({placeholders}) AND owner_id = ? AND workspace_id = ? "
-                        "AND memory_domain = ?",
+                        f"DELETE FROM {table} WHERE owner_id = ? AND workspace_id = ? "
+                        f"AND memory_domain = ? AND turn_id IN ({placeholders})",
                         (
-                            source_type,
-                            *sorted(identifiers),
                             scope.owner_id,
                             scope.workspace_id,
                             memory_domain,
+                            *sorted(turn_ids),
                         ),
                     )
-                    counts["memory_embeddings"] += max(0, int(cursor.rowcount or 0))
-                promotion_source_ids = {
-                    *(str(row[0]) for row in turn_rows),
-                    *derived_memory_ids,
-                }
-                counts["memory_promotions_revoked"] += revoke_promotions_for_source(
-                    conn,
-                    source_memory_ids=sorted(promotion_source_ids),
-                    source_domain=memory_domain,
-                    scope=scope,
-                    revoked_by=request.memory_actor.value,
-                )
-                counts["memory_promotion_candidates_rejected"] += (
-                    reject_promotion_candidates_for_source(
-                        conn,
-                        source_memory_ids=sorted(promotion_source_ids),
-                        source_domain=memory_domain,
-                        scope=scope,
-                    )
-                )
-                cursor = conn.execute(
-                    "DELETE FROM recall_feedback WHERE memory_domain = ? AND trace_id IN ("
-                    "SELECT trace_id FROM recall_traces WHERE session_id = ? "
-                    "AND owner_id = ? AND workspace_id = ? AND memory_actor = ? "
-                    "AND EXISTS (SELECT 1 FROM "
-                    "json_each(recall_traces.source_domains) WHERE value = ?))",
-                    (
-                        memory_domain,
-                        session_id,
-                        scope.owner_id,
-                        scope.workspace_id,
-                        request.memory_actor.value,
-                        memory_domain,
-                    ),
-                )
-                counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
-                cursor = conn.execute(
-                    "DELETE FROM recall_traces WHERE session_id = ? AND owner_id = ? "
-                    "AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
-                    "json_each(recall_traces.source_domains) WHERE value = ?)",
-                    (session_id, scope.owner_id, scope.workspace_id, memory_domain),
-                )
-                counts["recall_traces"] += max(0, int(cursor.rowcount or 0))
-                for table in ("turns", "turns_archive"):
-                    cursor = conn.execute(
-                        f"DELETE FROM {table} WHERE session_id = ? "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (session_id, scope.owner_id, scope.workspace_id, memory_domain),
-                    )
                     counts[table] += max(0, int(cursor.rowcount or 0))
+            if session_id:
                 cursor = conn.execute(
                     "DELETE FROM sessions WHERE session_id = ? AND owner_id = ? "
                     "AND workspace_id = ? AND memory_domain = ?",
                     (session_id, scope.owner_id, scope.workspace_id, memory_domain),
                 )
                 counts["sessions"] += max(0, int(cursor.rowcount or 0))
+
+            from systems.memory.entity_graph import rebuild_entity_graph
+
+            rebuild_entity_graph(
+                conn,
+                owner_id=scope.owner_id,
+                workspace_id=scope.workspace_id,
+                memory_domain=memory_domain,
+            )
             deleted_total = sum(counts.values())
             if deleted_total == 0:
                 raise HTTPException(status_code=404, detail="Scoped memory target not found")
@@ -3827,9 +3958,16 @@ class MemoryApplicationService:
         title = str(_redact_for_memory_storage(request.title)).strip()
         summary = str(_redact_for_memory_storage(request.summary)).strip()
         evidence_refs = list(
-            dict.fromkeys(str(item).strip() for item in request.evidence_refs)
+            dict.fromkeys(
+                str(item).strip()
+                for item in _redact_for_memory_storage(request.evidence_refs)
+            )
         )
         evidence_refs = [item for item in evidence_refs if item]
+        source_actor = str(
+            _redact_for_memory_storage(request.source_actor)
+        ).strip()
+        event_kind = str(_redact_for_memory_storage(request.event_kind)).strip()
         supersedes_memory_ids = list(
             dict.fromkeys(
                 str(item).strip() for item in request.supersedes_memory_ids
@@ -3844,7 +3982,7 @@ class MemoryApplicationService:
                 "summary": summary,
                 "evidence_refs": evidence_refs,
                 "supersedes_memory_ids": supersedes_memory_ids,
-                "source_actor": request.source_actor.strip(),
+                "source_actor": source_actor,
                 "owner_id": scope.owner_id,
                 "workspace_id": scope.workspace_id,
                 "memory_domain": memory_domain,
@@ -3917,9 +4055,9 @@ class MemoryApplicationService:
                     json.dumps(entities, ensure_ascii=False),
                     json.dumps(source_turns, ensure_ascii=False),
                     now,
-                    request.event_kind.strip(),
+                    event_kind,
                     json.dumps(evidence_refs, ensure_ascii=False),
-                    f"{request.source_actor.strip()}:{memory_id}",
+                    f"{source_actor}:{memory_id}",
                     now,
                     scope.owner_id,
                     scope.workspace_id,

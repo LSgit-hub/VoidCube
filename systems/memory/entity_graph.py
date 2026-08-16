@@ -208,13 +208,13 @@ def rebuild_entity_graph(
     now = datetime.now(timezone.utc).isoformat()
     clauses = ["status = 'active'"]
     params: list[Any] = []
-    if memory_domain:
-        clauses.append("memory_domain = ?")
-        params.append(memory_domain)
-    elif scoped and not all_scopes:
+    if scoped and not all_scopes:
         clauses.append("owner_id = ?")
         clauses.append("workspace_id = ?")
         params.extend([owner_id, workspace_id])
+    if memory_domain:
+        clauses.append("memory_domain = ?")
+        params.append(memory_domain)
     rows = conn.execute(
         "SELECT memory_id, memory_type, entities, owner_id, workspace_id, memory_domain "
         "FROM compressed_memories WHERE "

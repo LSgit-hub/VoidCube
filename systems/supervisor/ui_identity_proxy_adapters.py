@@ -8,6 +8,12 @@ from typing import Any, Callable, Dict
 
 from fastapi import HTTPException
 
+from systems.memory.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
+
+
+_IDENTITY_MEMORY_ACTOR = "stellar_companion"
+_IDENTITY_MEMORY_DOMAIN = "agent_interaction"
+
 
 @dataclass(frozen=True, slots=True)
 class SupervisorUIIdentityProxyContext:
@@ -28,10 +34,16 @@ async def get_identity_archive(
 
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            memory_url = await resolve_memory_service_url(
-                session, context.gateway_url
-            )
-            async with session.get(f"{memory_url}/identity/archive") as response:
+            async with session.get(
+                f"{context.gateway_url}/api/mem/identity/archive",
+                params={
+                    "owner_id": DEFAULT_OWNER_ID,
+                    "workspace_id": CLI_WORKSPACE_ID,
+                },
+                headers=context.gateway_memory_headers(
+                    memory_actor=_IDENTITY_MEMORY_ACTOR
+                ),
+            ) as response:
                 if response.status != 200:
                     raise HTTPException(
                         status_code=503,
@@ -60,12 +72,18 @@ async def get_identity_turns(
         bounded_limit = max(1, min(int(limit), 50))
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            memory_url = await resolve_memory_service_url(
-                session, context.gateway_url
-            )
             async with session.get(
-                f"{memory_url}/turns",
-                params={"limit": bounded_limit, "newest_first": "true"},
+                f"{context.gateway_url}/api/mem/turns",
+                params={
+                    "limit": bounded_limit,
+                    "newest_first": "true",
+                    "owner_id": DEFAULT_OWNER_ID,
+                    "workspace_id": CLI_WORKSPACE_ID,
+                    "memory_domain": _IDENTITY_MEMORY_DOMAIN,
+                },
+                headers=context.gateway_memory_headers(
+                    memory_actor=_IDENTITY_MEMORY_ACTOR
+                ),
             ) as response:
                 if response.status != 200:
                     raise HTTPException(
@@ -302,15 +320,23 @@ async def verify_identity_experience(
 
         from systems.memory.memory_service import IdentityExperienceVerification
 
-        payload = IdentityExperienceVerification.model_validate(request).model_dump()
+        payload = IdentityExperienceVerification.model_validate(
+            {
+                **request,
+                "owner_id": DEFAULT_OWNER_ID,
+                "workspace_id": CLI_WORKSPACE_ID,
+                "memory_actor": _IDENTITY_MEMORY_ACTOR,
+                "memory_domain": _IDENTITY_MEMORY_DOMAIN,
+            }
+        ).model_dump(mode="json")
         timeout = aiohttp.ClientTimeout(total=8)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            memory_url = await resolve_memory_service_url(
-                session, context.gateway_url
-            )
             async with session.post(
-                f"{memory_url}/identity/experiences/verify",
+                f"{context.gateway_url}/api/mem/identity/experiences/verify",
                 json=payload,
+                headers=context.gateway_memory_headers(
+                    memory_actor=_IDENTITY_MEMORY_ACTOR
+                ),
             ) as response:
                 response_payload = await response.json()
                 if response.status != 200:
@@ -333,35 +359,3 @@ async def verify_identity_experience(
             status_code=503,
             detail=f"Identity experience verification unavailable: {type(exc).__name__}",
         ) from exc
-
-
-async def resolve_memory_service_url(session: Any, gateway_url: str) -> str:
-    """Resolve the canonical memory service from the Gateway registry."""
-
-    async with session.get(f"{gateway_url}/admin/services") as response:
-        if response.status != 200:
-            raise HTTPException(
-                status_code=503,
-                detail="Gateway service registry unavailable",
-            )
-        services_payload = (await response.json()).get("services", {})
-    services = (
-        list(services_payload.values())
-        if isinstance(services_payload, dict)
-        else list(services_payload)
-        if isinstance(services_payload, list)
-        else []
-    )
-    memory_url = next(
-        (
-            str(service.get("address") or "").rstrip("/")
-            for service in services
-            if isinstance(service, dict)
-            and service.get("service_type") == "memory"
-            and service.get("address")
-        ),
-        "",
-    )
-    if not memory_url:
-        raise HTTPException(status_code=503, detail="Memory Service is not registered")
-    return memory_url

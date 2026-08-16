@@ -65,6 +65,21 @@ def authorize_write(
     return resolved_domain
 
 
+def authorize_identity_experience_verification(
+    actor: MemoryActor | str,
+    domain: MemoryDomain | str,
+) -> MemoryDomain:
+    """Authorize the narrow identity-verification write capability."""
+    resolved_actor = MemoryActor(actor)
+    resolved_domain = MemoryDomain(domain)
+    if (
+        resolved_actor is MemoryActor.STELLAR_COMPANION
+        and resolved_domain is MemoryDomain.AGENT_INTERACTION
+    ):
+        return resolved_domain
+    return authorize_write(resolved_actor, resolved_domain)
+
+
 def authorize_read(
     actor: MemoryActor | str,
     requested_domains: tuple[MemoryDomain | str, ...] | list[MemoryDomain | str] | None,

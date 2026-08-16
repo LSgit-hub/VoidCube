@@ -14,6 +14,7 @@ stages:
           - python3 -m pip install --upgrade pip
           - python3 -m pip install -e ".[all,dev]"
           - python3 scripts/smoke_memory_outbox.py --mode soak --duration-seconds 180
+          - python3 scripts/run_ci_tests.py -- tests/test_memory_outbox_operational.py -q
 triggers:
   schedule:
     - cron: '0 18 * * *'
