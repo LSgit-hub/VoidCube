@@ -1,10 +1,10 @@
-# Query Planner v0.2
+# 查询规划器 v0.2
 
-## 1. Purpose
+## 1. 目的
 
-This document defines a planning layer above the existing query interface.
+本文定义现有查询接口之上的一层规划层。
 
-MemAI v1 already exposes strong structural queries such as:
+MemAI v1 已经暴露了强大的结构化查询，例如：
 
 - `point_query`
 - `range_query`
@@ -13,70 +13,70 @@ MemAI v1 already exposes strong structural queries such as:
 - `chapter_summary`
 - `evidence_trace`
 
-These are useful for system integration and precise tooling, but they still require downstream callers to know which query type to use.
+这些对于系统集成和精确的工具化很有用，但仍要求下游调用方知道该用哪种查询类型。
 
-The purpose of the query planner is to let a caller ask in natural task language and have MemAI decide:
+查询规划器的目的是让调用方用自然任务语言提问，并让 MemAI 决定：
 
-- which query operations to run,
-- in which order,
-- how to merge their outputs,
-- how to keep the answer evidence-bound and uncertainty-aware.
+- 运行哪些查询操作，
+- 以何种顺序，
+- 如何合并它们的输出，
+- 如何让回答保持证据有界且对不确定性敏感。
 
-## 2. Design Goal
+## 2. 设计目标
 
-The query planner should turn requests like:
+查询规划器应把如下请求：
 
-- "What changed in the project this month?"
-- "What is the current state of retrieval work?"
-- "What unresolved blockers still affect the mainline?"
-- "What stable constraints should I remember before answering?"
+- “这个月项目发生了什么变化？”
+- “检索工作的当前状态如何？”
+- “还有哪些未解决的阻塞影响主线？”
+- “在回答之前我应记住哪些稳定的约束？”
 
-into a structured retrieval plan.
+转化为结构化的检索计划。
 
-The planner should not:
+规划器不应：
 
-- replace the core query engine,
-- bypass evidence handling,
-- silently hallucinate unsupported structure,
-- become an opaque agent that cannot explain its decisions.
+- 取代核心查询引擎，
+- 绕过证据处理，
+- 静默虚构无依据的结构，
+- 变成一个无法解释其决策的不透明代理。
 
-## 3. Position in the Architecture
+## 3. 架构中的位置
 
-The planner sits above the query engine and below final answer assembly.
+规划器位于查询引擎之上、最终回答组装之下。
 
-Suggested flow:
+建议的流程：
 
 ```text
-user request
--> query planner
--> query plan
--> query engine execution
--> evidence-aware answer assembler
--> final response
+用户请求
+-> 查询规划器
+-> 查询计划
+-> 查询引擎执行
+-> 证据感知的回答组装器
+-> 最终响应
 ```
 
-It should use the existing query layer rather than duplicate retrieval logic.
+它应使用现有的查询层，而不是重复实现检索逻辑。
 
-## 4. Core Principle
+## 4. 核心原则
 
-The planner is a retrieval orchestrator, not a summarizer.
+规划器是检索编排器，而不是摘要器。
 
-Its job is to decide:
+它的职责是决定：
 
-- what information to retrieve,
-- what structure to prefer,
-- when more evidence is needed,
-- when to stop and admit uncertainty.
+- 检索哪些信息，
+- 优先采用哪种结构，
+- 何时需要更多证据，
+- 何时停止并承认不确定性。
 
-The summarization step should happen after planning and retrieval, not inside the planner itself.
+摘要步骤应在规划和检索之后进行，而不是在规划器内部。
 
-## 5. Canonical Inputs
+## 5. 规范输入
 
-Suggested planner input shape:
+建议的规划器输入形态：
 
 ```json
 {
-  "request": "What changed in the memory system this month?",
+  "request": "这个月记忆系统发生了什么变化？",
   "reference_time": "2026-03-31T00:00:00Z",
   "detail_level": "standard",
   "include_evidence": true,
@@ -85,18 +85,18 @@ Suggested planner input shape:
 }
 ```
 
-### Input Fields
+### 输入字段
 
-- `request`: natural-language retrieval request
-- `reference_time`: optional current time anchor for relative phrases
-- `detail_level`: brief, standard, or deep
-- `include_evidence`: whether final assembly should expose evidence refs
-- `max_results`: soft output limit
-- `mode`: planner posture such as default, audit, or conservative
+- `request`：自然语言检索请求
+- `reference_time`：可选的当前时间锚点，用于相对时间短语
+- `detail_level`：brief、standard 或 deep
+- `include_evidence`：最终组装是否应暴露证据引用
+- `max_results`：软性输出上限
+- `mode`：规划器姿态，如 default、audit 或 conservative
 
-## 6. Canonical Outputs
+## 6. 规范输出
 
-Suggested planner output shape:
+建议的规划器输出形态：
 
 ```json
 {
@@ -110,12 +110,12 @@ Suggested planner output shape:
         "time_end": "2026-03-31T23:59:59Z",
         "topic": "memory-system"
       },
-      "reason": "The request asks for changes during a bounded recent period."
+      "reason": "请求询问一段有界近期内发生的变化。"
     },
     {
       "step_type": "evidence_trace",
       "target_source": "top_main_arc",
-      "reason": "The response should remain evidence-aware."
+      "reason": "响应应保持证据感知。"
     }
   ],
   "answer_strategy": "timeline_first",
@@ -124,219 +124,219 @@ Suggested planner output shape:
 }
 ```
 
-## 7. Planner Responsibilities
+## 7. 规划器职责
 
-The planner should perform five tasks:
+规划器应执行五项任务：
 
-1. identify intent
-2. infer temporal scope
-3. choose retrieval primitives
-4. choose answer strategy
-5. attach uncertainty notes when planning confidence is limited
+1. 识别意图
+2. 推断时间范围
+3. 选择检索原语
+4. 选择回答策略
+5. 在规划置信度有限时附加不确定性说明
 
-## 8. Intent Classes
+## 8. 意图类别
 
-The first cut of v0.2 should support a small, explicit intent set.
+v0.2 的首个切片应支持一个小而明确的意图集。
 
 ### `summarize_recent_changes`
 
-Use when the request asks what changed over a period.
+当请求询问一段时期内发生了什么变化时使用。
 
-Preferred primitives:
+优先原语：
 
 - `range_query`
-- optional `chapter_summary`
-- optional `evidence_trace`
+- 可选的 `chapter_summary`
+- 可选的 `evidence_trace`
 
 ### `trace_theme`
 
-Use when the request asks how a topic evolved.
+当请求询问某一主题如何演变时使用。
 
-Preferred primitives:
+优先原语：
 
 - `theme_evolution`
-- optional `range_query`
-- optional `evidence_trace`
+- 可选的 `range_query`
+- 可选的 `evidence_trace`
 
 ### `inspect_current_state`
 
-Use when the request asks what is currently active, stalled, or unresolved.
+当请求询问当前哪些处于活跃、停滞或未解决状态时使用。
 
-Preferred primitives:
+优先原语：
 
 - `active_arcs`
-- optional `range_query`
+- 可选的 `range_query`
 
 ### `explain_memory`
 
-Use when the request asks where a summary or conclusion came from.
+当请求询问某条摘要或结论的来源时使用。
 
-Preferred primitives:
+优先原语：
 
 - `evidence_trace`
 
 ### `retrieve_stable_context`
 
-Use when the request asks for persistent preferences, facts, or constraints.
+当请求询问持久偏好、事实或约束时使用。
 
-Preferred primitives:
+优先原语：
 
-- future `profile_lookup`
-- future `fact_lookup`
-- optional `memory_audit`
+- 未来的 `profile_lookup`
+- 未来的 `fact_lookup`
+- 可选的 `memory_audit`
 
 ### `audit_or_dispute`
 
-Use when the request asks about prior versions, contradictions, or uncertain memories.
+当请求询问先前版本、矛盾或不确定记忆时使用。
 
-Preferred primitives:
+优先原语：
 
 - `evidence_trace`
-- future `memory_audit`
-- future conflict-aware profile retrieval
+- 未来的 `memory_audit`
+- 未来的冲突感知画像检索
 
-## 9. Temporal Scope Resolution
+## 9. 时间范围解析
 
-The planner should resolve time expressions conservatively.
+规划器应保守地解析时间表达。
 
-Examples:
+示例：
 
-- "today" -> point or short range around `reference_time`
-- "this week" -> bounded week interval
-- "this month" -> bounded month interval
-- "recently" -> soft recent interval, possibly last 14 or 30 days depending on system policy
-- "historically" -> broad range or chapter-level strategy
+- “今天” -> 以 `reference_time` 为中心的时点或短区间
+- “本周” -> 有界的周区间
+- “本月” -> 有界的月区间
+- “最近” -> 软性的近期区间，视系统策略而定，可能是最近 14 或 30 天
+- “历史上” -> 宽范围或章节级策略
 
-When the request lacks a clear time span:
+当请求缺少明确的时间跨度时：
 
-- prefer current-state or theme retrieval if the wording suggests it
-- otherwise attach an uncertainty note rather than inventing an arbitrary window silently
+- 如果措辞暗示如此，优先采用当前状态或主题检索
+- 否则附加不确定性说明，而不是静默编造一个任意的窗口
 
-## 10. Entity and Theme Extraction
+## 10. 实体与主题抽取
 
-The planner should identify lightweight retrieval anchors from the request:
+规划器应从请求中识别轻量级的检索锚点：
 
-- topic
-- entity
-- subject
-- memory kind
-- status targets such as active, stalled, blocked, unresolved
+- 主题
+- 实体
+- 主体
+- 记忆类型
+- 状态目标，如 active、stalled、blocked、unresolved
 
-The first cut can do this with rule-based extraction:
+首个切片可用基于规则的抽取来实现：
 
-- keyword dictionaries
-- simple alias maps
-- exact phrase matches from known topics and entities
+- 关键词词典
+- 简单的别名映射
+- 来自已知主题和实体的精确短语匹配
 
-This should remain explainable and deterministic before adding optional LLM planning later.
+在日后加入可选的 LLM 规划之前，这应保持可解释且确定性。
 
-## 11. Step Selection Rules
+## 11. 步骤选择规则
 
-### 11.1 When to Use `range_query`
+### 11.1 何时使用 `range_query`
 
-Prefer `range_query` when:
+在以下情况优先使用 `range_query`：
 
-- the request includes a bounded period
-- the user asks "what changed"
-- the user asks for recent developments or progress
+- 请求包含有界的时期
+- 用户询问“发生了什么变化”
+- 用户询问近期进展或进度
 
-### 11.2 When to Use `theme_evolution`
+### 11.2 何时使用 `theme_evolution`
 
-Prefer `theme_evolution` when:
+在以下情况优先使用 `theme_evolution`：
 
-- the user asks "how has X evolved"
-- the request centers on one theme or entity across time
+- 用户询问“X 是如何演变的”
+- 请求以某一跨时间的主题或实体为中心
 
-### 11.3 When to Use `active_arcs`
+### 11.3 何时使用 `active_arcs`
 
-Prefer `active_arcs` when:
+在以下情况优先使用 `active_arcs`：
 
-- the user asks what is current
-- the user asks about active, stalled, dormant, or unresolved work
+- 用户询问当前状态
+- 用户询问活跃、停滞、休眠或未解决的工作
 
-### 11.4 When to Use `chapter_summary`
+### 11.4 何时使用 `chapter_summary`
 
-Prefer `chapter_summary` when:
+在以下情况优先使用 `chapter_summary`：
 
-- the requested horizon is large
-- the user asks for phase-level or historical overview
-- the time span is too broad for scene/arc-heavy narration alone
+- 请求的时间跨度很大
+- 用户请求阶段级或历史性概览
+- 时间跨度太宽，无法仅靠场景/脉络密集的叙述来覆盖
 
-### 11.5 When to Use `evidence_trace`
+### 11.5 何时使用 `evidence_trace`
 
-Prefer `evidence_trace` when:
+在以下情况优先使用 `evidence_trace`：
 
-- the user asks "why"
-- the user asks for support
-- the planner is in audit mode
-- the answer uses a strong claim that should remain inspectable
+- 用户询问“为什么”
+- 用户请求证据支持
+- 规划器处于审计模式
+- 回答使用了应保持可核查的强主张
 
-## 12. Answer Strategies
+## 12. 回答策略
 
-The planner should explicitly choose an answer assembly strategy.
+规划器应明确选择一种回答组装策略。
 
-Suggested initial strategies:
+建议的初始策略：
 
 ### `timeline_first`
 
-Use for recent changes and bounded summaries.
+用于近期变化和有界摘要。
 
-Output posture:
+输出姿态：
 
-- observed developments first
-- main arcs and turning points second
-- evidence and uncertainties last
+- 先呈现已观察的进展
+- 其次是主要脉络和转折点
+- 最后是证据和不确定性
 
 ### `theme_first`
 
-Use for longitudinal topic evolution.
+用于纵向的主题演变。
 
-Output posture:
+输出姿态：
 
-- timeline of shifts
-- current state
-- major turning points
+- 变化的时间线
+- 当前状态
+- 主要转折点
 
 ### `state_first`
 
-Use for current status or blocker inspection.
+用于当前状态或阻塞检查。
 
-Output posture:
+输出姿态：
 
-- active lines
-- stalled or unresolved lines
-- open questions
+- 活跃脉络
+- 停滞或未解决的脉络
+- 开放问题
 
 ### `audit_first`
 
-Use for disputes, revisions, or provenance inspection.
+用于争议、修订或来源检查。
 
-Output posture:
+输出姿态：
 
-- current claim
-- prior versions
-- conflict branches
-- evidence chain
+- 当前主张
+- 先前版本
+- 冲突分支
+- 证据链
 
 ### `stable_context_first`
 
-Use for future profile/fact memory requests.
+用于未来的画像/事实记忆请求。
 
-Output posture:
+输出姿态：
 
-- stable constraints, preferences, and facts
-- timeline context only if needed
+- 稳定的约束、偏好和事实
+- 仅在需要时提供时间线上下文
 
-## 13. Uncertainty Handling
+## 13. 不确定性处理
 
-The planner should produce uncertainty notes when:
+规划器应在以下情况产生不确定性说明：
 
-- the time range cannot be resolved cleanly
-- the request mixes several intents
-- no query primitive clearly dominates
-- available retrieval signals are too weak
+- 时间范围无法干净地解析
+- 请求混合了多种意图
+- 没有任何查询原语明显占优
+- 可用的检索信号过于薄弱
 
-Example flags:
+标志示例：
 
 ```json
 {
@@ -347,38 +347,38 @@ Example flags:
 }
 ```
 
-These flags should later help downstream answer assembly produce honest wording.
+这些标志日后应帮助下游回答组装产生诚实的措辞。
 
-## 14. Planner Modes
+## 14. 规划器模式
 
-Suggested initial modes:
+建议的初始模式：
 
 ### `default`
 
-- balanced planning
-- evidence-aware but concise
+- 均衡的规划
+- 证据感知但简洁
 
 ### `conservative`
 
-- narrower retrieval
-- stronger preference for uncertainty notes
-- avoid combining too many query types
+- 更窄的检索
+- 更强的不确定性说明倾向
+- 避免组合过多查询类型
 
 ### `audit`
 
-- maximize traceability
-- prefer evidence and supersession visibility
-- include disputed or weak memories only with explicit warnings
+- 最大化可追踪性
+- 优先呈现证据和取代可见性
+- 仅在附有明确警告时纳入存在争议或薄弱的记忆
 
-## 15. Canonical Step Schema
+## 15. 规范步骤 Schema
 
-Suggested step shape:
+建议的步骤形态：
 
 ```json
 {
   "step_type": "range_query",
   "arguments": {},
-  "reason": "Why this query was selected",
+  "reason": "为何选择此查询",
   "required": true,
   "optional": false,
   "consumes": [],
@@ -386,113 +386,113 @@ Suggested step shape:
 }
 ```
 
-Field semantics:
+字段语义：
 
-- `step_type`: retrieval primitive
-- `arguments`: exact query arguments
-- `reason`: human-readable rationale
-- `required`: whether final answer depends on this step
-- `optional`: whether the plan may skip this step when upstream results are weak
-- `consumes`: identifiers of prior outputs needed by this step
-- `produces`: labeled output artifact
+- `step_type`：检索原语
+- `arguments`：精确的查询参数
+- `reason`：人类可读的理由
+- `required`：最终回答是否依赖此步骤
+- `optional`：当上游结果薄弱时，计划是否可跳过此步骤
+- `consumes`：此步骤所需的前序输出标识符
+- `produces`：带标签的输出产物
 
-## 16. Example Plans
+## 16. 示例计划
 
-### Example A: Recent Changes
+### 示例 A：近期变化
 
-Request:
+请求：
 
-- "What changed in the project this month?"
+- “这个月项目发生了什么变化？”
 
-Plan:
+计划：
 
-1. resolve current month bounds
-2. run `range_query`
-3. if a strong main arc exists, run `evidence_trace` on the top result
-4. assemble with `timeline_first`
+1. 解析当前月的边界
+2. 运行 `range_query`
+3. 若存在强主线脉络，则对顶部结果运行 `evidence_trace`
+4. 以 `timeline_first` 组装
 
-### Example B: Theme Evolution
+### 示例 B：主题演变
 
-Request:
+请求：
 
-- "How has retrieval evolved so far?"
+- “到目前为止，检索是如何演变的？”
 
-Plan:
+计划：
 
-1. extract topic = retrieval
-2. run `theme_evolution`
-3. optionally run broad `range_query` if timeline density is low
-4. assemble with `theme_first`
+1. 抽取主题 = retrieval
+2. 运行 `theme_evolution`
+3. 若时间线密度较低，可选运行宽泛的 `range_query`
+4. 以 `theme_first` 组装
 
-### Example C: Current Blockers
+### 示例 C：当前阻塞
 
-Request:
+请求：
 
-- "What unresolved blockers still affect the mainline?"
+- “还有哪些未解决的阻塞影响主线？”
 
-Plan:
+计划：
 
-1. run `active_arcs`
-2. filter for stalled, blocked, or unresolved patterns
-3. optionally run `range_query` over recent period for supporting developments
-4. assemble with `state_first`
+1. 运行 `active_arcs`
+2. 过滤出停滞、阻塞或未解决的模式
+3. 可选地在近期时段运行 `range_query` 以获取支撑性进展
+4. 以 `state_first` 组装
 
-### Example D: Explain a Summary
+### 示例 D：解释某条摘要
 
-Request:
+请求：
 
-- "Where did this conclusion come from?"
+- “这个结论从何而来？”
 
-Plan:
+计划：
 
-1. identify target memory id if available
-2. run `evidence_trace`
-3. assemble with `audit_first`
+1. 若可用，识别目标记忆 ID
+2. 运行 `evidence_trace`
+3. 以 `audit_first` 组装
 
-## 17. Interaction with Profile and Fact Memory
+## 17. 与画像和事实记忆的交互
 
-Once v0.2 adds profile/fact memory, the planner should also detect requests such as:
+一旦 v0.2 加入画像/事实记忆，规划器还应识别如下请求：
 
-- "What preferences should I remember?"
-- "What stable constraints apply before answering?"
-- "Has the user's language preference changed?"
+- “我应记住哪些偏好？”
+- “回答前有哪些稳定约束适用？”
+- “用户的语言偏好是否已经改变？”
 
-In those cases:
+在这些情形下：
 
-- stable memory retrieval should happen before timeline retrieval
-- timeline retrieval should be used only as supporting context
+- 稳定记忆检索应先于时间线检索进行
+- 时间线检索仅作为支撑性上下文使用
 
-This is why the planner should choose an explicit answer strategy rather than assuming timeline-first for every request.
+这就是规划器应为每个请求明确选择回答策略、而不是一律假设时间线优先的原因。
 
-## 18. Failure Rules
+## 18. 失败规则
 
-The planner should fail conservatively.
+规划器应保守地失败。
 
-Bad planner behavior includes:
+糟糕的规划器行为包括：
 
-- selecting a broad historical summary when the user asked about a recent bounded period
-- inventing a theme not grounded in the request
-- omitting evidence planning for audit-oriented questions
-- answering mixed-intent requests as if they were unambiguous
+- 用户询问近期有界时期时却选择了宽泛的历史摘要
+- 编造一个请求中没有依据的主题
+- 对审计导向的问题遗漏证据规划
+- 把混合意图的请求当作无歧义来处理
 
-Preferred failure posture:
+偏好的失败姿态：
 
-- generate a narrower plan
-- attach uncertainty flags
-- request a limited clarification only if absolutely necessary
+- 生成更窄的计划
+- 附加不确定性标志
+- 仅在绝对必要时请求一次有限的澄清
 
-## 19. Benchmark Guidance
+## 19. 基准测试指导
 
-Add planner-specific fixture families such as:
+增加规划器专用的测试夹具族，例如：
 
-- recent period summary requests
-- theme evolution requests
-- current-state requests
-- audit and provenance requests
-- mixed-intent ambiguous requests
-- profile/fact retrieval requests
+- 近期时段摘要请求
+- 主题演变请求
+- 当前状态请求
+- 审计与来源请求
+- 混合意图的模糊请求
+- 画像/事实检索请求
 
-Suggested metrics:
+建议的指标：
 
 - intent_classification_accuracy
 - temporal_scope_accuracy
@@ -500,39 +500,39 @@ Suggested metrics:
 - evidence_step_recall
 - uncertainty_restraint
 
-## 20. Minimal Viable v0.2 Slice
+## 20. 最小可行 v0.2 切片
 
-The first usable planner is good enough if it can:
+若首个可用的规划器能够做到以下各项，即已足够：
 
-- classify 4 to 6 common intents
-- resolve simple temporal phrases
-- generate explicit plans using existing query primitives
-- explain why each step was selected
-- attach uncertainty flags for ambiguous requests
+- 分类 4 到 6 种常见意图
+- 解析简单的时间短语
+- 使用现有查询原语生成明确的计划
+- 解释每个步骤为何被选中
+- 为模糊请求附加不确定性标志
 
-This can all be implemented heuristically at first.
+这些最初都可以用启发式方法实现。
 
-## 21. Recommended Implementation Order
+## 21. 建议的实施顺序
 
-1. define planner input and output schema
-2. add rule-based intent classifier
-3. add temporal scope resolver
-4. add step selection rules
-5. add answer strategy selection
-6. add uncertainty flags
-7. add planner benchmark fixtures
-8. later consider optional LLM-assisted planning
+1. 定义规划器的输入和输出 schema
+2. 增加基于规则的意图分类器
+3. 增加时间范围解析器
+4. 增加步骤选择规则
+5. 增加回答策略选择
+6. 增加不确定性标志
+7. 增加规划器基准测试夹具
+8. 日后考虑可选的 LLM 辅助规划
 
-## 22. Success Criteria
+## 22. 成功标准
 
-The planner is successful when a caller no longer needs to know MemAI's internal query taxonomy to use the system effectively.
+当调用方无需了解 MemAI 的内部查询分类法即可有效使用系统时，规划器即告成功。
 
-That means the caller can ask:
+这意味着调用方可以这样提问：
 
-- "What changed?"
-- "What is still active?"
-- "How did this evolve?"
-- "What should I remember?"
-- "Where did this come from?"
+- “发生了什么变化？”
+- “什么仍然处于活跃状态？”
+- “这是如何演变的？”
+- “我应记住什么？”
+- “这从何而来？”
 
-and MemAI can translate those into retrieval behavior that remains structured, evidence-aware, and auditable.
+而 MemAI 能将其转化为保持结构化、证据感知且可审计的检索行为。

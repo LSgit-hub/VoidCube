@@ -1,104 +1,104 @@
-# Prompt Framework and Evaluation v1
+# 提示词框架与评估 v1
 
-## 1. Purpose
+## 1. 目的
 
-This document defines the prompt posture and evaluation plan for the Chronicle Scholar LM. The objective is to make the model behave like a careful historical assistant rather than a shallow life commentator.
+本文定义 Chronicle Scholar LM 的提示词姿态与评估方案。目标是让模型表现得像一位审慎的历史助理，而不是肤浅的人生评论者。
 
-## 2. System Prompt Core
+## 2. 系统提示词核心
 
-The system prompt should impose five persistent behaviors:
-- separate observed facts from inference and unknowns;
-- treat time as the primary organizing axis;
-- preserve mainlines, sidelines, and turning points;
-- revise explicitly rather than silently rewriting history;
-- avoid personality judgments and unsupported interpretation.
+系统提示词应强制以下五种持久行为：
+- 将已观察事实与推断和未知区分开；
+- 以时间作为首要组织轴；
+- 保留主线、支线和转折点；
+- 明确地修订，而不是静默改写历史；
+- 避免性格评判和缺乏依据的解读。
 
-## 3. Recommended Core System Prompt
+## 3. 推荐的系统提示词核心
 
 ```text
-You are Chronicle Scholar LM, a chronicle-oriented memory assistant.
-Your job is to transform long conversational history into structured, time-anchored external memory.
+你是 Chronicle Scholar LM，一个以编年史为导向的记忆助理。
+你的工作是把漫长的对话历史转化为结构化的、以时间为锚的外部记忆。
 
-You are not a personality analyst and you are not the primary assistant.
-You must organize memory as events, scenes, arcs, and epochs.
+你不是人格分析师，也不是主助理。
+你必须把记忆组织为事件、场景、脉络和纪元。
 
-Always distinguish:
-- Observed: directly supported by evidence.
-- Inferred: cautious cross-time patterning that remains provisional.
-- Unknown: what the current record cannot justify.
+始终区分：
+- 已观察（Observed）：直接由证据支持。
+- 已推断（Inferred）：谨慎的跨时间模式归纳，仍属临时。
+- 未知（Unknown）：当前记录无法证明的内容。
 
-Prioritize time order over semantic similarity.
-Preserve turning points, unresolved questions, and line status changes.
-Do not convert a single emotional moment, self-description, wish, joke, or hypothetical into a stable life conclusion.
-If evidence is insufficient, say so plainly.
+优先考虑时间顺序，而非语义相似性。
+保留转折点、未解问题和脉络状态变化。
+不要把某个单一的情绪瞬间、自我描述、愿望、玩笑或假设转化为稳定的生活结论。
+如果证据不足，就直说。
 
-When revising memory, do not erase prior history silently. Create an explicit superseding record.
-Your tone is disciplined, clear, and historically careful.
+修订记忆时，不要静默抹去先前的历史。要创建明确的取代记录。
+你的语气应当克制、清晰且具有历史审慎性。
 ```
 
-## 4. Submodule Prompt Contracts
+## 4. 子模块提示词契约
 
-### Temporal Normalizer
+### 时间归一化器
 
-Goal:
-- convert relative time expressions to normalized ranges.
+目标：
+- 将相对时间表达转换为归一化的时间范围。
 
-Rules:
-- prefer explicit bounds;
-- preserve uncertainty via `time_precision`;
-- do not invent exact timestamps when only rough dates are available.
+规则：
+- 优先采用显式边界；
+- 通过 `time_precision` 保留不确定性；
+- 只有粗略日期可用时，不凭空编造精确时间戳。
 
-### Event Extractor
+### 事件抽取器
 
-Goal:
-- extract only durable changes worth remembering.
+目标：
+- 只抽取值得记住的持久变化。
 
-Rules:
-- focus on decisions, progress, blockers, shifts, completions, conflicts, and corrections;
-- ignore filler and low-impact chatter;
-- attach source turn ids.
+规则：
+- 关注决策、进展、阻塞、转变、完成、冲突和纠正；
+- 忽略填充性和低影响的闲聊；
+- 附带来源 Turn ID。
 
-### Scene Builder
+### 场景构建器
 
-Goal:
-- group nearby related events into compact local episodes.
+目标：
+- 把邻近的相关事件归并为紧凑的局部片段。
 
-Rules:
-- preserve local goal, key events, turning points, and open questions;
-- do not overgeneralize beyond the covered interval.
+规则：
+- 保留局部目标、关键事件、转折点和开放问题；
+- 不要超出所覆盖区间过度泛化。
 
-### Arc Binder
+### 脉络绑定器
 
-Goal:
-- connect scenes to sustained narrative lines.
+目标：
+- 把场景连接到持续性的叙事脉络。
 
-Rules:
-- use continuity, reactivation, downstream impact, and goal coherence;
-- prefer side classification when evidence is mixed.
+规则：
+- 使用连续性、再激活、下游影响和目标一致性；
+- 证据混杂时，优先归为支线。
 
-### Compressor
+### 压缩器
 
-Goal:
-- reduce detail burden while preserving historical structure.
+目标：
+- 在保留历史结构的同时降低细节负担。
 
-Rules:
-- keep turning points and milestones;
-- remove repetition before removing unique structure;
-- preserve evidence traceability.
+规则：
+- 保留转折点和里程碑；
+- 在考虑移除独特结构前，先去除重复内容；
+- 保留证据可追踪性。
 
-### Reviser
+### 修订器
 
-Goal:
-- update prior memory when new evidence changes the current-valid interpretation.
+目标：
+- 当新证据改变当前有效的解读时更新先前记忆。
 
-Rules:
-- never overwrite silently;
-- assign revision reason;
-- refresh parent summaries when child meaning changes.
+规则：
+- 绝不静默覆盖；
+- 指定修订原因；
+- 当子级含义变化时刷新父级摘要。
 
-## 5. Standard Output Templates
+## 5. 标准输出模板
 
-### Period Summary Template
+### 周期摘要模板
 
 ```json
 {
@@ -112,7 +112,7 @@ Rules:
 }
 ```
 
-### Event Extraction Template
+### 事件抽取模板
 
 ```json
 {
@@ -128,97 +128,97 @@ Rules:
 }
 ```
 
-### Revision Template
+### 修订模板
 
 ```json
 {
   "revision_type": "classification_revision",
   "target_id": "arc_001",
-  "reason": "New evidence shows the line is structurally central",
+  "reason": "新证据表明该脉络在结构上居于核心",
   "supersedes": ["arc_001_old"],
   "updated_summary": ""
 }
 ```
 
-## 6. Evaluation Philosophy
+## 6. 评估理念
 
-The system should be judged less on eloquence and more on historical discipline.
+对系统的评判应少看重文采，多看重历史纪律。
 
-Good evaluation asks:
-- Is time correct?
-- Is the right line treated as central?
-- Did compression preserve the trajectory?
-- Did revision correct history cleanly?
-- Did the model avoid inflated interpretation?
-- Does retrieval help the primary model act better?
+好的评估会追问：
+- 时间是否正确？
+- 正确的脉络是否被视为核心？
+- 压缩是否保留了轨迹？
+- 修订是否干净地纠正了历史？
+- 模型是否避免了夸大的解读？
+- 检索是否帮助主模型表现得更好？
 
-## 7. Benchmark Families
+## 7. 基准测试族
 
-### A. Temporal Accuracy
-Test whether the system correctly handles:
-- yesterday, last week, earlier this month,
-- delayed references,
-- reordered narration,
-- approximate time spans.
+### A. 时间准确性
+测试系统是否正确处理：
+- 昨天、上周、本月早些时候，
+- 延迟引用，
+- 乱序叙述，
+- 近似时间跨度。
 
-Target metric:
+目标指标：
 - `Temporal Accuracy`
 
-### B. Mainline Stability
-Test whether the system preserves a true long-running line despite many noisy side events.
+### B. 主线稳定性
+测试系统是否在大量嘈杂的支线事件中仍保留一条真实的长期脉络。
 
-Target metric:
+目标指标：
 - `Arc Consistency`
 
-### C. Compression Fidelity
-Test whether higher-level summaries preserve:
-- major goal,
-- turning points,
-- status shifts,
-- unresolved problems.
+### C. 压缩保真度
+测试高层摘要是否保留：
+- 主要目标，
+- 转折点，
+- 状态变化，
+- 未解决的问题。
 
-Target metric:
+目标指标：
 - `Compression Fidelity`
 
-### D. Revision Precision
-Test whether contradictory new evidence causes:
-- proper supersession,
-- correct reclassification,
-- updated parent summaries.
+### D. 修订精确度
+测试相互矛盾的新证据是否引发：
+- 恰当的取代，
+- 正确的重新分类，
+- 父级摘要的更新。
 
-Target metric:
+目标指标：
 - `Revision Precision`
 
-### E. Interpretation Restraint
-Test whether the model avoids:
-- trait inflation,
-- psychologizing,
-- false closure,
-- unsupported certainty.
+### E. 解读克制
+测试模型是否避免：
+- 特质夸大，
+- 过度心理分析，
+- 虚假的收束，
+- 缺乏依据的确定性。
 
-Target metric:
+目标指标：
 - `Interpretation Restraint`
 
-### F. Retrieval Utility
-Test whether retrieved memory materially improves downstream task success, consistency, or continuity.
+### F. 检索效用
+测试检索到的记忆是否实质性改善下游任务的成功率、一致性或连续性。
 
-Target metric:
+目标指标：
 - `Retrieval Utility`
 
-## 8. Example Failure Cases
+## 8. 失败案例示例
 
-Bad outputs include:
-- turning one emotional outburst into a long-term identity statement;
-- classifying a one-session issue as a mainline;
-- losing a key reversal during compression;
-- returning a superseded summary as if current;
-- answering a range query with semantically similar but temporally irrelevant material.
+糟糕的输出包括：
+- 把一次情绪爆发变成长期身份陈述；
+- 把只出现一次的问题归为主线；
+- 在压缩过程中丢失关键反转；
+- 把已被取代的摘要当作当前版本返回；
+- 用语义相似但时间上无关的内容回答范围查询。
 
-## 9. Suggested Scoring Rubric
+## 9. 建议的评分量规
 
-Use a 1-5 or 0-1 scale per benchmark family.
+每个基准测试族使用 1-5 或 0-1 评分尺度。
 
-Example weighted aggregate:
+加权汇总示例：
 
 ```text
 overall_score =
@@ -230,29 +230,29 @@ overall_score =
   0.10 * Retrieval_Utility
 ```
 
-## 10. Minimum v1 Evaluation Set
+## 10. 最低 v1 评估集
 
-At minimum, prepare:
-- 20 temporal normalization cases,
-- 20 event extraction cases,
-- 15 arc classification cases,
-- 15 compression drift cases,
-- 15 revision cases,
-- 10 downstream retrieval utility cases.
+至少应准备：
+- 20 个时间归一化用例，
+- 20 个事件抽取用例，
+- 15 个脉络分类用例，
+- 15 个压缩漂移用例，
+- 15 个修订用例，
+- 10 个下游检索效用用例。
 
-## 11. Tuning Guidance
+## 11. 调优指导
 
-If the model overclaims:
-- raise penalties on unsupported inference,
-- add negative examples for personality overreach,
-- prefer `Unknown` outputs in ambiguous cases.
+如果模型过度断言：
+- 提高对缺乏依据推断的惩罚，
+- 增加针对性格越界的反例，
+- 在模棱两可的情况下优先输出 `Unknown`。
 
-If the model under-remembers:
-- relax extraction thresholds for repeated structural topics,
-- improve event-to-arc binding,
-- tune compression windows to retain recent local detail longer.
+如果模型记不住：
+- 放宽重复出现的结构主题的抽取阈值，
+- 改善事件到脉络的绑定，
+- 调整压缩窗口，让近期局部细节保留更久。
 
-If the model loses chronology:
-- strengthen temporal normalization prompts,
-- increase ranking weight for temporal overlap,
-- add contradiction tests with reordered narration.
+如果模型丢失时间顺序：
+- 加强时间归一化提示词，
+- 提高时间重叠的排序权重，
+- 增加乱序叙述的矛盾测试。

@@ -22,6 +22,8 @@ CACHE_TABLE = "mem_llm_cache"
 TASK_EXTRACT = "extractor.events"
 TASK_ESCALATE = "escalate"
 TASK_PURGE_REVIEW = "purge_review"
+TASK_SESSION_SUMMARY = "session_summary.v1"
+TASK_DAY_SUMMARY = "day_summary.v1"
 
 
 def build_cache_key(task: str, model: str, input_text: str) -> str:

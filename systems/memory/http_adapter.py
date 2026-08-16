@@ -28,6 +28,12 @@ MEMORY_HTTP_ROUTES = (
     MemoryHttpRoute("/sessions", "create_session", ("POST",)),
     MemoryHttpRoute("/sessions", "list_sessions", ("GET",)),
     MemoryHttpRoute("/sessions/{session_id}", "get_session", ("GET",)),
+    MemoryHttpRoute("/sessions/{session_id}/close", "close_session", ("POST",)),
+    MemoryHttpRoute(
+        "/time-summaries/days/{day_key}/aggregate",
+        "aggregate_day",
+        ("POST",),
+    ),
     MemoryHttpRoute("/sessions/{session_id}/turns", "add_turn", ("POST",)),
     MemoryHttpRoute("/sessions/{session_id}/turns", "get_session_turns", ("GET",)),
     MemoryHttpRoute("/turn-pairs", "add_turn_pair", ("POST",)),

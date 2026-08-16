@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from functools import partial
 import hashlib
 import json
 import logging
@@ -84,6 +85,22 @@ from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _parse_utc_timestamp,
 )
+from systems.memory.time_summary import (
+    DaySnapshotChanged,
+    SessionSnapshotChanged,
+    day_bucket_for_timestamp,
+    day_source_hash,
+    get_active_day_summary,
+    get_active_session_summary,
+    load_day_session_summaries,
+    load_session_turns,
+    normalize_day_summary,
+    normalize_session_summary,
+    persist_day_summary,
+    persist_session_summary,
+    session_source_hash,
+    supersede_empty_day_summary,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
@@ -157,6 +174,17 @@ class SessionCreate(BaseModel):
     memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
     memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionCloseRequest(BaseModel):
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
+
+
+class DayAggregateRequest(SessionCloseRequest):
+    """Scope and authorization for rebuilding one natural-day index."""
 
 
 class TurnCreate(BaseModel):
@@ -1044,6 +1072,8 @@ class MemoryApplicationService:
             "create_session": self.create_session,
             "list_sessions": self.list_sessions,
             "get_session": self.get_session,
+            "close_session": self.close_session,
+            "aggregate_day": self.aggregate_day,
             "add_turn": self.add_turn,
             "get_session_turns": self.get_session_turns,
             "add_turn_pair": self.add_turn_pair,
@@ -1655,6 +1685,155 @@ class MemoryApplicationService:
             self._llm_resolution_status = "resolution_failed"
             self._llm_resolution_detail = type(exc).__name__
             return None, ""
+
+    async def _generate_session_summary(
+        self,
+        *,
+        session_id: str,
+        source_hash: str,
+        turns,
+    ):
+        from systems.memory.llm_cache import (
+            TASK_SESSION_SUMMARY,
+            build_cache_key,
+            open_cached,
+            store_cached,
+        )
+
+        client, model = self._resolve_mem_llm_client(role="summarization")
+        if client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Mem summarization model is unavailable",
+            )
+        cache_key = build_cache_key(TASK_SESSION_SUMMARY, model, source_hash)
+        cached = open_cached(self._db_path, cache_key)
+        if isinstance(cached, dict):
+            try:
+                return normalize_session_summary(cached)
+            except ValueError:
+                pass
+
+        request_call = partial(
+            client.complete_json,
+            system_prompt=(
+                "你是长期记忆的会话编目员。请只依据给定的有序对话，记录本次会话"
+                "主要做了什么、产生了哪些结果、还有哪些明确未决问题。不要推断人格，"
+                "不要补写未发生的结果，不要把讨论中的假设写成事实。输出必须是 JSON。"
+            ),
+            user_payload={
+                "session_id": session_id,
+                "turns": [turn.as_prompt_item() for turn in turns],
+                "required_output": {
+                    "title": "简短会话标题",
+                    "summary": "按发生顺序概括本次会话主要做了什么",
+                    "outcomes": ["已经确认或完成的结果"],
+                    "open_questions": ["会话结束时仍未解决的问题"],
+                },
+            },
+            task="scholar.session_summary",
+            response_schema=(
+                '{"title":"string","summary":"string",'
+                '"outcomes":["string"],"open_questions":["string"]}'
+            ),
+        )
+        try:
+            payload = await asyncio.to_thread(request_call)
+            draft = normalize_session_summary(payload)
+        except Exception as exc:
+            logger.warning("Session summary generation failed for %s: %s", session_id, exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Mem session summarization failed",
+            ) from exc
+        try:
+            store_cached(
+                self._db_path,
+                cache_key=cache_key,
+                task=TASK_SESSION_SUMMARY,
+                model=model,
+                input_text=source_hash,
+                result=draft.as_dict(),
+            )
+        except Exception:
+            logger.debug("Session summary cache write failed", exc_info=True)
+        return draft
+
+    async def _generate_day_summary(
+        self,
+        *,
+        day_key: str,
+        source_hash: str,
+        summaries,
+    ):
+        from systems.memory.llm_cache import (
+            TASK_DAY_SUMMARY,
+            build_cache_key,
+            open_cached,
+            store_cached,
+        )
+
+        client, model = self._resolve_mem_llm_client(role="summarization")
+        if client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Mem summarization model is unavailable",
+            )
+        cache_key = build_cache_key(TASK_DAY_SUMMARY, model, source_hash)
+        cached = open_cached(self._db_path, cache_key)
+        if isinstance(cached, dict):
+            try:
+                return normalize_day_summary(cached)
+            except ValueError:
+                pass
+
+        request_call = partial(
+            client.complete_json,
+            system_prompt=(
+                "你是长期记忆的日目录编目员。请只依据给定的有序会话摘要，记录这个"
+                "自然日主要做了什么、形成了哪些结果、还留下哪些明确未决问题。保持"
+                "不同会话的先后顺序和边界，不要按主题虚构合并，不要添加输入中没有的"
+                "事实。输出必须是 JSON。"
+            ),
+            user_payload={
+                "day": day_key,
+                "session_summaries": [
+                    summary.as_prompt_item() for summary in summaries
+                ],
+                "required_output": {
+                    "title": "简短日期标题",
+                    "summary": "按会话发生顺序概括当日主要工作",
+                    "outcomes": ["当日已经确认或完成的结果"],
+                    "open_questions": ["当日结束时仍未解决的问题"],
+                },
+            },
+            task="scholar.day_summary",
+            response_schema=(
+                '{"title":"string","summary":"string",'
+                '"outcomes":["string"],"open_questions":["string"]}'
+            ),
+        )
+        try:
+            payload = await asyncio.to_thread(request_call)
+            draft = normalize_day_summary(payload)
+        except Exception as exc:
+            logger.warning("Day summary generation failed for %s: %s", day_key, exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Mem day summarization failed",
+            ) from exc
+        try:
+            store_cached(
+                self._db_path,
+                cache_key=cache_key,
+                task=TASK_DAY_SUMMARY,
+                model=model,
+                input_text=source_hash,
+                result=draft.as_dict(),
+            )
+        except Exception:
+            logger.debug("Day summary cache write failed", exc_info=True)
+        return draft
 
     async def _app_lifespan(self, app: FastAPI):
         """Own Gateway registration and memory maintenance background tasks."""
@@ -2634,6 +2813,219 @@ class MemoryApplicationService:
             "turn_count": turn_count,
             "memory_domain": authorized_domain,
         }
+
+    async def close_session(
+        self,
+        session_id: str,
+        request: SessionCloseRequest,
+    ):
+        """Publish a SessionSummary and bring its natural-day index current."""
+        scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor,
+            request.memory_domain,
+        )
+        session_summary = None
+        for _attempt in range(2):
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                session = conn.execute(
+                    "SELECT 1 FROM sessions WHERE session_id = ? AND owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ?",
+                    (
+                        session_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                    ),
+                ).fetchone()
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                turns = load_session_turns(
+                    conn,
+                    session_id=session_id,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                )
+                if not turns:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Cannot close a session without stored turns",
+                    )
+                source_hash = session_source_hash(turns)
+                current = get_active_session_summary(
+                    conn,
+                    session_id=session_id,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                )
+                if current and current["source_hash"] == source_hash:
+                    session_summary = {**current, "write_status": "current"}
+            finally:
+                conn.close()
+
+            if session_summary is not None:
+                break
+            draft = await self._generate_session_summary(
+                session_id=session_id,
+                source_hash=source_hash,
+                turns=turns,
+            )
+            try:
+                session_summary = await asyncio.to_thread(
+                    persist_session_summary,
+                    self._db_path,
+                    session_id=session_id,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                    timezone_name=self.config.time_summary_timezone,
+                    expected_source_hash=source_hash,
+                    draft=draft,
+                )
+                break
+            except SessionSnapshotChanged:
+                continue
+        if session_summary is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Session kept changing while its summary was generated; retry close",
+            )
+
+        affected_day_keys: set[str] = set()
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            historical_periods = conn.execute(
+                "SELECT period_start FROM time_summaries WHERE summary_type = 'session' "
+                "AND bucket_key = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
+                (
+                    session_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    memory_domain,
+                ),
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in historical_periods:
+            affected_day_keys.add(
+                day_bucket_for_timestamp(
+                    str(row[0]),
+                    timezone_name=self.config.time_summary_timezone,
+                )
+            )
+        day_key = day_bucket_for_timestamp(
+            str(session_summary["period_start"]),
+            timezone_name=self.config.time_summary_timezone,
+        )
+        day_summary = None
+        for affected_day_key in sorted(affected_day_keys):
+            refreshed = await self.aggregate_day(
+                affected_day_key,
+                DayAggregateRequest(
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_actor=request.memory_actor,
+                    memory_domain=request.memory_domain,
+                ),
+            )
+            if affected_day_key == day_key:
+                day_summary = refreshed
+        if day_summary is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Session summary did not resolve to a day bucket",
+            )
+        return {**session_summary, "day_summary": day_summary}
+
+    async def aggregate_day(
+        self,
+        day_key: str,
+        request: DayAggregateRequest,
+    ):
+        """Publish an immutable DaySummary for one stable child-summary snapshot."""
+        scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor,
+            request.memory_domain,
+        )
+        for _attempt in range(2):
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                try:
+                    summaries = load_day_session_summaries(
+                        conn,
+                        day_key=day_key,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                current = get_active_day_summary(
+                    conn,
+                    day_key=day_key,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                )
+                if not summaries:
+                    if current is None:
+                        return {
+                            "summary_type": "day",
+                            "bucket_key": day_key,
+                            "write_status": "absent",
+                        }
+                    expected_summary_id = str(current["summary_id"])
+                else:
+                    source_hash = day_source_hash(summaries)
+                if summaries and current and current["source_hash"] == source_hash:
+                    return {**current, "write_status": "current"}
+            finally:
+                conn.close()
+
+            if not summaries:
+                try:
+                    return await asyncio.to_thread(
+                        supersede_empty_day_summary,
+                        self._db_path,
+                        day_key=day_key,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                        expected_summary_id=expected_summary_id,
+                    )
+                except DaySnapshotChanged:
+                    continue
+
+            draft = await self._generate_day_summary(
+                day_key=day_key,
+                source_hash=source_hash,
+                summaries=summaries,
+            )
+            try:
+                return await asyncio.to_thread(
+                    persist_day_summary,
+                    self._db_path,
+                    day_key=day_key,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                    timezone_name=self.config.time_summary_timezone,
+                    expected_source_hash=source_hash,
+                    draft=draft,
+                )
+            except DaySnapshotChanged:
+                continue
+        raise HTTPException(
+            status_code=409,
+            detail="Day kept changing while its summary was generated; retry aggregation",
+        )
 
     def _derive_turn_dedup_key(
         self,
@@ -4084,6 +4476,9 @@ class MemoryApplicationService:
             "memory_embeddings": 0,
             "memory_promotions_revoked": 0,
             "memory_promotion_candidates_rejected": 0,
+            "time_summaries": 0,
+            "time_summary_links": 0,
+            "session_summary_sources": 0,
         }
         target_kind = "memory" if memory_id else "session"
         target = memory_id or session_id
@@ -4124,10 +4519,67 @@ class MemoryApplicationService:
                 seed_references=seed_references,
                 direct_memory_ids={memory_id} if memory_id else set(),
             )
+            summary_seed_rows = []
+            if session_id:
+                summary_seed_rows = conn.execute(
+                    "SELECT summary_id FROM time_summaries WHERE summary_type = 'session' "
+                    "AND bucket_key = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ?",
+                    (
+                        session_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                    ),
+                ).fetchall()
+            elif memory_id:
+                summary_seed_rows = conn.execute(
+                    "SELECT summary_id FROM time_summaries WHERE summary_id = ? "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    "UNION SELECT source.summary_id FROM session_summary_sources AS source "
+                    "JOIN time_summaries AS summary ON summary.summary_id = source.summary_id "
+                    "WHERE summary.owner_id = ? AND summary.workspace_id = ? "
+                    "AND summary.memory_domain = ? "
+                    "AND source.turn_id IN (SELECT value FROM json_each(?))",
+                    (
+                        memory_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        json.dumps(sorted(turn_ids)),
+                    ),
+                ).fetchall()
+            summary_seed_ids = {str(row[0]) for row in summary_seed_rows}
+            summary_ids: set[str] = set()
+            if summary_seed_ids:
+                placeholders = ",".join("?" for _ in summary_seed_ids)
+                summary_ids = {
+                    str(row[0])
+                    for row in conn.execute(
+                        "WITH RECURSIVE affected(summary_id) AS ("
+                        f"SELECT summary_id FROM time_summaries WHERE summary_id IN ({placeholders}) "
+                        "UNION SELECT sibling.summary_id FROM affected "
+                        "JOIN time_summaries AS current ON current.summary_id = affected.summary_id "
+                        "JOIN time_summaries AS sibling ON sibling.owner_id = current.owner_id "
+                        "AND sibling.workspace_id = current.workspace_id "
+                        "AND sibling.memory_domain = current.memory_domain "
+                        "AND sibling.summary_type = current.summary_type "
+                        "AND sibling.bucket_key = current.bucket_key "
+                        "UNION SELECT link.parent_summary_id FROM affected "
+                        "JOIN time_summary_links AS link "
+                        "ON link.child_summary_id = affected.summary_id) "
+                        "SELECT DISTINCT summary_id FROM affected",
+                        tuple(sorted(summary_seed_ids)),
+                    ).fetchall()
+                }
             source_ids = {
                 *turn_ids,
                 *compressed_ids,
                 *profile_ids,
+                *summary_ids,
                 *({memory_id} if memory_id else set()),
             }
 
@@ -4262,6 +4714,37 @@ class MemoryApplicationService:
                     ),
                 )
                 counts[table] += max(0, int(cursor.rowcount or 0))
+
+            if summary_ids:
+                placeholders = ",".join("?" for _ in summary_ids)
+                cursor = conn.execute(
+                    "DELETE FROM time_summary_links WHERE "
+                    f"parent_summary_id IN ({placeholders}) OR "
+                    f"child_summary_id IN ({placeholders})",
+                    (*sorted(summary_ids), *sorted(summary_ids)),
+                )
+                counts["time_summary_links"] += max(0, int(cursor.rowcount or 0))
+                cursor = conn.execute(
+                    "DELETE FROM session_summary_sources WHERE "
+                    f"summary_id IN ({placeholders})",
+                    tuple(sorted(summary_ids)),
+                )
+                counts["session_summary_sources"] += max(
+                    0,
+                    int(cursor.rowcount or 0),
+                )
+                cursor = conn.execute(
+                    "DELETE FROM time_summaries WHERE owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ? "
+                    f"AND summary_id IN ({placeholders})",
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        *sorted(summary_ids),
+                    ),
+                )
+                counts["time_summaries"] += max(0, int(cursor.rowcount or 0))
 
             if turn_ids:
                 placeholders = ",".join("?" for _ in turn_ids)

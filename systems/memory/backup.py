@@ -74,6 +74,9 @@ class MemoryBackupManager:
         "compressed_memories",
         "profile_memories",
         "profile_memory_tombstones",
+        "time_summaries",
+        "time_summary_links",
+        "session_summary_sources",
         "compression_quality_audit",
         "recall_traces",
         "recall_feedback",
@@ -278,7 +281,7 @@ class MemoryBackupManager:
 
         payload = {
             "format": "voidcube.memory.export",
-            "format_version": 1,
+            "format_version": 2,
             "exported_at": exported_at,
             "tables": tables,
         }

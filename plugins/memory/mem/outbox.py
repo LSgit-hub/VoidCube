@@ -187,6 +187,37 @@ class MemoryWriteOutbox:
                     ),
                 )
 
+    def defer(self, write_id: str, *, delay_seconds: float = 1.0) -> None:
+        """Release a claimed item without counting a transport failure."""
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE pending_writes SET status = 'pending', next_attempt_at = ?, "
+                    "lease_owner = NULL, lease_until = NULL WHERE write_id = ? "
+                    "AND lease_owner = ?",
+                    (
+                        time.time() + max(0.001, float(delay_seconds)),
+                        write_id,
+                        self._worker_id,
+                    ),
+                )
+
+    def has_blocking_writes_before(self, write_id: str) -> bool:
+        """Return whether an older write or dead letter must precede this item."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT rowid FROM pending_writes WHERE write_id = ?",
+                (write_id,),
+            ).fetchone()
+            if not row:
+                return False
+            blocker = conn.execute(
+                "SELECT 1 FROM pending_writes WHERE rowid < ? AND "
+                "status IN ('pending', 'inflight', 'dead_letter') LIMIT 1",
+                (int(row[0]),),
+            ).fetchone()
+            return blocker is not None
+
     def pending_count(self) -> int:
         with closing(self._connect()) as conn:
             return int(

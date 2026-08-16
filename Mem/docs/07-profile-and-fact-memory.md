@@ -1,114 +1,114 @@
-# Profile and Fact Memory v0.2
+# 画像与事实记忆 v0.2
 
-## 1. Purpose
+## 1. 目的
 
-This document defines the first non-timeline memory layer for MemAI v0.2.
+本文定义 MemAI v0.2 的第一个非时间线记忆层。
 
-The v1 system is strong at organizing historical development through:
+v1 系统擅长通过以下结构组织历史发展：
 
 - `Event`
 - `Scene`
 - `Arc`
 - `Epoch`
 
-However, many durable memories are not naturally expressed as time-bounded episodes. Examples include:
+然而，许多持久记忆并非天然以有界时间的片段来表达。例如：
 
-- stable user preferences,
-- persistent project constraints,
-- long-lived terminology definitions,
-- explicit identity statements,
-- durable factual assertions that remain relevant across many scenes.
+- 稳定的用户偏好，
+- 持续的项目约束，
+- 长期的术语定义，
+- 明确的身份陈述，
+- 跨多个场景仍然有效的持久事实断言。
 
-The goal of v0.2 is to add a structured memory family for these items without weakening the time-first design of the existing timeline chain.
+v0.2 的目标是为这些条目增加一个结构化的记忆族，同时不削弱现有时间线链以时间优先的设计。
 
-## 2. Design Goal
+## 2. 设计目标
 
-The new layer should let the system remember:
+新层应让系统记住：
 
-- what remains true across time,
-- what the user or project consistently prefers,
-- what definitions or rules govern future work,
-- what facts have been corrected, disputed, or replaced.
+- 跨时间仍然成立的事物，
+- 用户或项目一贯偏好的事物，
+- 指导未来工作的定义或规则，
+- 已被纠正、争议或替换的事实。
 
-It should not:
+它不应：
 
-- replace the timeline chain,
-- infer personality traits from sparse signals,
-- turn one-off statements into stable identity claims,
-- silently overwrite prior fact states.
+- 取代时间线链，
+- 从稀疏信号推断人格特质，
+- 把一次性陈述变成稳定的身份主张，
+- 静默覆盖先前的事实状态。
 
-## 3. Core Concept
+## 3. 核心概念
 
-Profile and fact memory is a parallel memory family, not a new step inside `Event -> Scene -> Arc -> Epoch`.
+画像与事实记忆是一个并行的记忆族，而不是 `Event -> Scene -> Arc -> Epoch` 内部的新步骤。
 
-That means:
+这意味着：
 
-- timeline memory answers: "what happened and how did it evolve?"
-- profile/fact memory answers: "what should remain stably known right now?"
+- 时间线记忆回答：“发生了什么，以及它是如何演变的？”
+- 画像/事实记忆回答：“现在哪些内容应被稳定地知晓？”
 
-These two layers should reference each other, but they serve different retrieval purposes.
+这两层应互相引用，但它们服务于不同的检索目的。
 
-## 4. Memory Types
+## 4. 记忆类型
 
-v0.2 should begin with a single shared type family called `ProfileMemory`, with a required subtype field:
+v0.2 应从一个名为 `ProfileMemory` 的单一共享类型族开始，并带有一个必填的子类型字段：
 
 ```text
 preference | identity | constraint | definition | fact
 ```
 
-This keeps the initial implementation small while still allowing differentiated behavior.
+这样既能保持初始实现小巧，又允许差异化的行为。
 
 ### `preference`
 
-Use for durable user or project preferences.
+用于持久性的用户或项目偏好。
 
-Examples:
+示例：
 
-- prefers Chinese responses
-- prefers concise summaries
-- prefers evidence-first answers
+- 偏好中文回复
+- 偏好简洁摘要
+- 偏好证据优先的回答
 
 ### `identity`
 
-Use for explicit self-described roles or persistent identity facts only when directly stated or strongly evidenced.
+仅当被直接陈述或有强证据时，才用于明确的自我描述角色或持久身份事实。
 
-Examples:
+示例：
 
-- user is the project owner
-- assistant acts as a memory steward
+- 用户是项目负责人
+- 助理充当记忆管家
 
 ### `constraint`
 
-Use for operating rules, guardrails, or non-negotiable project constraints.
+用于操作规则、护栏或不可协商的项目约束。
 
-Examples:
+示例：
 
-- do not silently rewrite history
-- evidence must remain visible
-- provider compatibility must be regression tested
+- 不得静默改写历史
+- 证据必须保持可见
+- 提供方兼容性必须进行回归测试
 
 ### `definition`
 
-Use for stable terminology or conceptual mappings.
+用于稳定的术语或概念映射。
 
-Examples:
+示例：
 
-- mainline means structurally central long-running development
-- epoch means chapter-level historical period
+- 主线意味着在结构上居于核心的长期发展
+- 纪元意味着章节级别的历史时期
 
 ### `fact`
 
-Use for durable assertions that remain useful outside a single moment.
+用于在单一时刻之外仍然有用的持久断言。
 
-Examples:
+示例：
 
-- heuristic backend is the default
-- LLM backend is optional
-- state updates are incremental rather than full rebuilds
+- 启发式后端是默认选项
+- LLM 后端是可选项
+- 状态更新是增量式的，而非完全重建
 
-## 5. Canonical Shape
+## 5. 规范形态
 
-Suggested initial shape:
+建议的初始形态：
 
 ```json
 {
@@ -117,8 +117,8 @@ Suggested initial shape:
   "memory_kind": "constraint",
   "subject": "project",
   "predicate": "requires",
-  "value": "evidence-first retrieval",
-  "summary": "The project requires evidence-first retrieval rather than unsupported abstraction.",
+  "value": "证据优先的检索",
+  "summary": "该项目要求证据优先的检索，而非缺乏依据的抽象。",
   "confidence": 0.92,
   "certainty_state": "observed",
   "status": "active",
@@ -135,29 +135,29 @@ Suggested initial shape:
 }
 ```
 
-## 6. Field Semantics
+## 6. 字段语义
 
-- `id`: immutable memory identifier
-- `type`: fixed as `profile_memory`
-- `memory_kind`: subtype classifier
-- `subject`: the entity, actor, or scope the memory is about
-- `predicate`: normalized relation label
-- `value`: the current asserted value
-- `summary`: human-readable restatement
-- `confidence`: confidence in the assertion
-- `certainty_state`: epistemic state of the assertion
-- `status`: lifecycle state such as active, dormant, superseded
-- `valid_from`: when the assertion becomes valid
-- `valid_to`: when the assertion stops being valid, if known
-- `evidence_refs`: supporting source refs
-- `source_turns`: direct supporting turns, when available
-- `parent_timeline_refs`: timeline memories that gave rise to the fact memory
-- `supersedes`: older versions of the same logical fact
-- `conflict_refs`: parallel assertions that conflict with this one
+- `id`：不可变记忆标识符
+- `type`：固定为 `profile_memory`
+- `memory_kind`：子类型分类器
+- `subject`：该记忆所指向的实体、行为者或范围
+- `predicate`：规范化关系标签
+- `value`：当前断定的值
+- `summary`：人类可读的复述
+- `confidence`：对断言的置信度
+- `certainty_state`：断言的认知状态
+- `status`：生命周期状态，如 active、dormant、superseded
+- `valid_from`：断言开始生效的时间
+- `valid_to`：断言停止生效的时间（若已知）
+- `evidence_refs`：支撑性的来源引用
+- `source_turns`：直接支撑的 Turn（若可用）
+- `parent_timeline_refs`：衍生出该事实记忆的时间线记忆
+- `supersedes`：同一逻辑事实的旧版本
+- `conflict_refs`：与此相冲突的并行断言
 
-## 7. New Epistemic State
+## 7. 新增认知状态
 
-Profile/fact memory should introduce a new common field:
+画像/事实记忆应引入一个新的公共字段：
 
 ```text
 certainty_state = observed | inferred | disputed | pending_verification | confirmed
@@ -165,111 +165,111 @@ certainty_state = observed | inferred | disputed | pending_verification | confir
 
 ### `observed`
 
-Directly supported by explicit source material.
+直接由明确的来源材料支持。
 
 ### `inferred`
 
-Supported by repeated or structural evidence, but still interpretive.
+由重复或结构性证据支持，但仍带解读成分。
 
 ### `disputed`
 
-Conflicts with another active assertion.
+与另一个处于活跃状态的断言冲突。
 
 ### `pending_verification`
 
-Plausible but not yet strong enough for default retrieval.
+看似合理，但尚不足以进行默认检索。
 
 ### `confirmed`
 
-Observed and reinforced across multiple sources or revisions.
+已观察并在多个来源或修订中得到强化。
 
-This field should likely be generalized later to more of the memory system, but v0.2 can start here.
+这一字段日后很可能需要推广到记忆系统的更多部分，但 v0.2 可以先从这里开始。
 
-## 8. Extraction Rules
+## 8. 抽取规则
 
-### 8.1 Positive Extraction Criteria
+### 8.1 正向抽取准则
 
-Create profile/fact memory only when at least one of these is true:
+仅当以下至少一项为真时才创建画像/事实记忆：
 
-- the source explicitly states a stable preference, role, constraint, or fact
-- the same claim recurs across multiple turns or scenes
-- the claim governs downstream decisions repeatedly
-- the claim remains useful even when detached from the original local scene
+- 来源明确陈述了一个稳定的偏好、角色、约束或事实
+- 同一主张在多个 Turn 或场景中反复出现
+- 该主张反复主导下游决策
+- 该主张即使脱离原始局部场景仍然有用
 
-### 8.2 Negative Extraction Criteria
+### 8.2 负向抽取准则
 
-Do not create profile/fact memory for:
+不要为以下内容创建画像/事实记忆：
 
-- transient mood
-- one-off wishes with no repetition
-- hypothetical ideas not adopted
-- unsupported personality conclusions
-- isolated emotional expressions
-- weakly implied preferences without reinforcement
+- 短暂的情绪
+- 没有重复的一次性愿望
+- 未被采纳的假设性想法
+- 缺乏依据的性格结论
+- 孤立的情绪表达
+- 没有强化支持的弱暗示偏好
 
-### 8.3 Escalation Threshold
+### 8.3 升级阈值
 
-A safe initial heuristic:
+一个稳妥的初始启发式：
 
-- one explicit strong statement may create `preference`, `constraint`, or `definition`
-- `identity` and more sensitive `fact` memories should require stronger support or repeated evidence
+- 一次明确的强陈述即可创建 `preference`、`constraint` 或 `definition`
+- `identity` 和更敏感的 `fact` 记忆应要求更强的支持或重复证据
 
-## 9. Relationship to Timeline Memory
+## 9. 与时间线记忆的关系
 
-Profile/fact memory should not break the canonical containment chain.
+画像/事实记忆不应破坏规范的包含链。
 
-Instead, it should connect to timeline memory through references:
+相反，它应通过引用连接到时间线记忆：
 
 - `parent_timeline_refs`
 - `evidence_refs`
 
-Recommended behavior:
+建议的行为：
 
-- events and scenes remain the extraction source
-- arcs and epochs may reinforce profile/fact confidence
-- profile/fact memory may be surfaced alongside timeline query results when relevant
+- 事件和场景仍是抽取来源
+- 脉络和纪元可强化画像/事实的置信度
+- 画像/事实记忆可在相关时与时间线查询结果一并呈现
 
-## 10. Revision and Conflict Rules
+## 10. 修订与冲突规则
 
-### 10.1 Supersession
+### 10.1 取代
 
-Use `supersedes` when a newer memory replaces an older assertion of the same logical fact.
+当较新的记忆取代同一逻辑事实的较旧断言时使用 `supersedes`。
 
-Example:
+示例：
 
-- old: prefers long explanations
-- new: now prefers concise responses
+- 旧：偏好详细解释
+- 新：现在偏好简洁回复
 
-The old record should remain auditable, not deleted.
+旧记录应保持可审计，而不是被删除。
 
-### 10.2 Conflict
+### 10.2 冲突
 
-Use `conflict_refs` when two live assertions cannot both be treated as current-valid.
+当两个存续中的断言无法同时被视为当前有效时使用 `conflict_refs`。
 
-Example:
+示例：
 
-- one memory says the user prefers Chinese
-- another says the user now prefers English for code review sessions
+- 一条记忆说用户偏好中文
+- 另一条说用户现在在代码评审会话中偏好英文
 
-This may later resolve through revision, but should not be flattened immediately.
+这可能在日后通过修订解决，但不应立即被抹平。
 
-### 10.3 Validity Window
+### 10.3 有效期窗口
 
-`valid_from` and `valid_to` should allow time-sensitive facts such as:
+`valid_from` 和 `valid_to` 应能表达对时间敏感的事实，例如：
 
-- temporary preference changes
-- project constraints that only apply during a phase
-- role shifts over time
+- 临时的偏好变化
+- 仅在某一阶段适用的项目约束
+- 随时间变化的角色转变
 
-## 11. Query Surface
+## 11. 查询接口
 
-Suggested v0.2 query additions:
+建议的 v0.2 查询新增：
 
 ### `profile_lookup`
 
-Return current stable memories for a subject or scope.
+返回某一主体或范围的当前稳定记忆。
 
-Example request:
+请求示例：
 
 ```json
 {
@@ -282,22 +282,22 @@ Example request:
 
 ### `fact_lookup`
 
-Return stable facts and constraints for a project, person, or entity.
+返回某一项目、个人或实体的稳定事实和约束。
 
 ### `memory_audit`
 
-Return active, superseded, and disputed versions of the same logical assertion.
+返回同一逻辑断言的活跃、已取代和存在争议的版本。
 
-## 12. Retrieval Behavior
+## 12. 检索行为
 
-Default retrieval should:
+默认检索应：
 
-- prioritize `confirmed` and `observed`
-- include `inferred` only when confidence is sufficient
-- hide `disputed` unless audit mode is requested
-- hide `pending_verification` from concise answers by default
+- 优先 `confirmed` 和 `observed`
+- 仅当置信度足够时才纳入 `inferred`
+- 除非请求审计模式，否则隐藏 `disputed`
+- 默认在简洁回答中隐藏 `pending_verification`
 
-When a timeline answer is assembled, relevant profile/fact memory may be attached under a separate section such as:
+组装时间线回答时，相关的画像/事实记忆可附加在单独的分区下，例如：
 
 ```json
 {
@@ -306,17 +306,17 @@ When a timeline answer is assembled, relevant profile/fact memory may be attache
 }
 ```
 
-This avoids mixing "what happened" with "what remains true."
+这样可避免把“发生了什么”和“什么仍然成立”混在一起。
 
-## 13. Storage Strategy
+## 13. 存储策略
 
-Recommended initial implementation:
+建议的初始实现：
 
-- store profile/fact memory alongside the persistent state file
-- keep it as a separate collection from events/scenes/arcs/epochs
-- preserve references to timeline ids and source turns
+- 把画像/事实记忆与持久状态文件一并存储
+- 将其作为与 events/scenes/arcs/epochs 分离的集合保存
+- 保留对时间线 ID 和来源 Turn 的引用
 
-Suggested top-level state split:
+建议的顶层状态划分：
 
 ```json
 {
@@ -332,19 +332,19 @@ Suggested top-level state split:
 }
 ```
 
-## 14. Benchmark Guidance
+## 14. 基准测试指导
 
-v0.2 should add dedicated fixture families for profile/fact memory:
+v0.2 应为画像/事实记忆增加专门的测试夹具族：
 
-- repeated preference extraction
-- one-off preference non-extraction
-- explicit constraint capture
-- terminology definition capture
-- conflict creation between facts
-- revision from old fact to new fact
-- refusal to create unsupported personality memory
+- 重复偏好的抽取
+- 一次性偏好的不抽取
+- 明确约束的捕获
+- 术语定义的捕获
+- 事实之间冲突的创建
+- 从旧事实到新事实的修订
+- 拒绝创建缺乏依据的性格记忆
 
-Key metrics:
+关键指标：
 
 - profile_precision
 - fact_precision
@@ -352,44 +352,44 @@ Key metrics:
 - overreach_restraint
 - revision_traceability
 
-## 15. Minimum Viable v0.2 Slice
+## 15. 最小可行 v0.2 切片
 
-An initial implementation is good enough if it can:
+若初始实现能够做到以下各项，即已足够：
 
-- extract explicit `preference`, `constraint`, and `definition` memories
-- keep them outside the timeline containment chain
-- support explicit supersession
-- expose a small query surface for current-valid profile/fact retrieval
-- preserve evidence links and auditability
+- 抽取明确的 `preference`、`constraint` 和 `definition` 记忆
+- 将其保持在线包含链之外
+- 支持明确的取代
+- 暴露一个用于当前有效画像/事实检索的小型查询接口
+- 保留证据链接和可审计性
 
-## 16. Non-Goals for the First Cut
+## 16. 首个切片的非目标
 
-The first v0.2 slice should not try to do all of the following yet:
+首个 v0.2 切片暂时不应尝试以下全部事项：
 
-- full ontology learning
-- personality modeling
-- probabilistic graph reasoning
-- automatic conflict resolution without explicit policy
-- complex LLM-only extraction pipelines
+- 完整的本体学习
+- 人格建模
+- 概率图推理
+- 没有明确策略的自动冲突解决
+- 仅依赖 LLM 的复杂抽取流水线
 
-The first cut should remain conservative, explainable, and evidence-bound.
+首个切片应保持保守、可解释并以证据为界。
 
-## 17. Recommended Implementation Order
+## 17. 建议的实施顺序
 
-1. Add the schema definition for `ProfileMemory`
-2. Extend persistent state storage
-3. Implement heuristic extraction for explicit preferences, constraints, and definitions
-4. Add query support for current-valid profile/fact retrieval
-5. Add revision and conflict handling
-6. Add benchmark fixtures
-7. Add optional LLM-backed extraction later
+1. 添加 `ProfileMemory` 的 schema 定义
+2. 扩展持久状态存储
+3. 为明确的偏好、约束和定义实现启发式抽取
+4. 为当前有效的画像/事实检索增加查询支持
+5. 增加修订和冲突处理
+6. 增加基准测试夹具
+7. 日后再增加可选的基于 LLM 的抽取
 
-## 18. Success Criteria
+## 18. 成功标准
 
-This design is successful when MemAI can cleanly answer both of these classes of questions:
+当 MemAI 能够清晰回答以下两类问题时，本设计即告成功：
 
-- "What happened over time in this project?"
-- "What stable preferences, constraints, and facts should the system remember right now?"
+- “这个项目随时间发生了什么？”
+- “系统现在应记住哪些稳定的偏好、约束和事实？”
 
-Without this layer, MemAI remains primarily a timeline system.
-With this layer, it starts becoming a fuller long-term memory framework.
+没有这一层，MemAI 主要仍是一个时间线系统。
+有了这一层，它开始成为一个更完整的长期记忆框架。

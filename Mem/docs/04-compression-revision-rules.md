@@ -1,103 +1,103 @@
-# Compression and Revision Rules v1
+# 压缩与修订规则 v1
 
-## 1. Purpose
+## 1. 目的
 
-This document defines how the memory system compresses old material, revises outdated summaries, and forgets low-value detail without losing historical coherence.
+本文档定义记忆系统如何压缩旧材料、修订过时摘要，以及如何在不损害历史连贯性的前提下遗忘低价值细节。
 
-## 2. Central Idea
+## 2. 核心理念
 
-The system should age memory in the same way a careful historian ages notes:
-- recent material remains detailed,
-- older material becomes structured summary,
-- long-range history becomes chapter-level abstraction,
-- but major transitions and valid corrections remain recoverable.
+系统应当像审慎的历史学家整理陈年笔记一样处理老化的记忆：
+- 近期材料保持详细，
+- 较旧材料转化为结构化摘要，
+- 长期历史转化为篇章层级的抽象，
+- 但重大转变和有效修正仍可恢复。
 
-## 3. Compression Ladder
+## 3. 压缩阶梯
 
-The default abstraction ladder is:
+默认抽象阶梯为：
 
 `Event -> Scene -> Arc -> Epoch`
 
-Compression means transferring informational value upward while reducing local detail burden.
+压缩意味着将信息价值向上转移，同时减少局部细节负担。
 
-## 4. Temporal Compression Windows
+## 4. 时间压缩窗口
 
-Recommended v1 windows:
-- `0-7 days`: keep detailed events and provisional scenes.
-- `7-30 days`: consolidate events into scenes and remove low-value duplicates.
-- `30-180 days`: strengthen arc summaries and retire redundant scene detail.
-- `180+ days`: maintain epoch-level chapter summaries plus selected arc anchors.
+建议的 v1 窗口：
+- `0-7 days`：保留详细事件和暂定场景。
+- `7-30 days`：将事件整合成场景，并移除低价值重复项。
+- `30-180 days`：强化脉络摘要，并使冗余场景细节退役。
+- `180+ days`：维护纪元层级的篇章摘要以及选定的脉络锚点。
 
-These are policy defaults and may later become adaptive.
+这些是策略默认值，以后可以改为自适应设置。
 
-## 5. Compression Priorities
+## 5. 压缩优先级
 
-When compressing, preserve in this order:
-1. turning points,
-2. corrections and reversals,
-3. milestones,
-4. active unresolved questions,
-5. structural continuity,
-6. supporting detail only if still useful.
+压缩时，按以下顺序保留：
+1. 转折点，
+2. 修正与逆转，
+3. 里程碑，
+4. 活跃的未解决问题，
+5. 结构连续性，
+6. 仅在仍有用时保留支持性细节。
 
-## 6. What Compression May Remove
+## 6. 压缩可以移除的内容
 
-Compression may remove or collapse:
-- repeated phrasing,
-- near-duplicate events,
-- low-impact local detail,
-- temporary wording differences,
-- filler that does not affect trajectory.
+压缩可以移除或归并：
+- 重复措辞，
+- 近乎重复的事件，
+- 影响较低的局部细节，
+- 暂时性的措辞差异，
+- 不影响轨迹的填充内容。
 
-## 7. What Compression Must Preserve
+## 7. 压缩必须保留的内容
 
-Compression must preserve:
-- event order,
-- changes in direction,
-- status changes,
-- line classification changes,
-- evidence traceability,
-- unresolved historically significant tensions.
+压缩必须保留：
+- 事件顺序，
+- 方向变化，
+- 状态变化，
+- 脉络分类变化，
+- 证据可追溯性，
+- 尚未解决且具有历史意义的矛盾。
 
-## 8. Compression Pass Types
+## 8. 压缩处理类型
 
-### Scene Consolidation
-- merge overlapping or redundant events;
-- generate a compact local summary;
-- keep key events and local turning points.
+### 场景整合
+- 合并重叠或冗余事件；
+- 生成紧凑的局部摘要；
+- 保留关键事件和局部转折点。
 
-### Arc Consolidation
-- absorb aging scenes into a trajectory summary;
-- retain milestones and turning points;
-- downgrade detailed scenes when their information is fully represented.
+### 脉络整合
+- 将老化场景吸收到轨迹摘要中；
+- 保留里程碑和转折点；
+- 当详细场景的信息已得到完整表示时，降低其层级。
 
-### Epoch Consolidation
-- summarize major historical periods;
-- preserve major arcs and chapter shifts;
-- reduce the need to load old intermediate detail unless requested.
+### 纪元整合
+- 总结重大历史时期；
+- 保留主要脉络和篇章变化；
+- 除非收到请求，否则减少加载旧有中间细节的需求。
 
-## 9. Compression Preconditions
+## 9. 压缩前置条件
 
-Before compressing an object, the system should verify:
-- the object is older than the relevant policy window,
-- its children have enough evidence to support a higher-level summary,
-- no unresolved revision is pending,
-- and the summary target will preserve critical structure.
+压缩对象前，系统应验证：
+- 对象早于相关策略窗口，
+- 其子对象具备足够证据来支持更高层级摘要，
+- 没有尚待处理的修订，
+- 且摘要目标会保留关键结构。
 
-## 10. Revision Triggers
+## 10. 修订触发条件
 
-Revision should trigger when:
-- a timestamp or temporal order was wrong,
-- an event was attached to the wrong line,
-- a sideline became a mainline,
-- a mainline was overstated,
-- a prior summary omitted a turning point,
-- new evidence contradicts an old conclusion,
-- compression produced drift or overstatement.
+在以下情况下应触发修订：
+- 时间戳或时间顺序有误，
+- 事件依附到了错误的脉络，
+- 支线成为主线，
+- 主线被夸大，
+- 先前摘要遗漏了转折点，
+- 新证据与旧结论相矛盾，
+- 压缩造成漂移或夸大。
 
-## 11. Revision Types
+## 11. 修订类型
 
-Recommended v1 revision taxonomy:
+建议的 v1 修订分类：
 
 ```text
 time_correction
@@ -109,84 +109,84 @@ confidence_update
 closure_update
 ```
 
-## 12. Revision Procedure
+## 12. 修订流程
 
-When revision is required:
-1. identify the affected object,
-2. locate supporting and conflicting evidence,
-3. generate a revised object,
-4. mark the older object as `superseded`,
-5. link the new object via `supersedes`,
-6. propagate updates to parent summaries if needed,
-7. retain auditability.
+需要修订时：
+1. 识别受影响的对象，
+2. 定位支持证据与冲突证据，
+3. 生成修订后的对象，
+4. 将较旧对象标记为 `superseded`，
+5. 通过 `supersedes` 链接新对象，
+6. 必要时将更新传播到父级摘要，
+7. 保持可审计性。
 
-## 13. Revision Invariants
+## 13. 修订不变量
 
-- Revisions must never silently overwrite historical state.
-- Revised summaries must remain traceable to evidence.
-- Superseded objects should not appear in default retrieval unless audit or historical comparison is requested.
-- Parent summaries must be refreshed when child meaning materially changes.
+- 修订绝不能静默覆盖历史状态。
+- 修订后的摘要必须保持可追溯到证据。
+- 除非请求审计或历史比较，否则已取代对象不应出现在默认检索中。
+- 当子对象的含义发生实质变化时，必须刷新父级摘要。
 
-## 14. Controlled Forgetting
+## 14. 受控遗忘
 
-The system forgets by stages.
+系统分阶段遗忘。
 
-### Stage 1: detail thinning
-- remove redundant and low-impact event detail.
+### 阶段 1：细节削减
+- 移除冗余且影响较低的事件细节。
 
-### Stage 2: summary substitution
-- replace older clusters with scene or arc summaries.
+### 阶段 2：摘要替代
+- 用场景或脉络摘要替代较旧的聚类。
 
-### Stage 3: archival retirement
-- retain only compact historical anchors for very low-value material.
+### 阶段 3：归档退役
+- 对价值很低的材料，仅保留紧凑的历史锚点。
 
-Hard deletion should be rare in v1 and limited to low-value, non-structural residue.
+在 v1 中，硬删除应极少使用，并仅限于低价值、非结构性的残余内容。
 
-## 15. Mainline Preservation Rule
+## 15. 主线保留规则
 
-Mainlines are compressed, not discarded.
+主线应被压缩，而非丢弃。
 
-Even when a mainline becomes dormant or resolved, the system must preserve:
-- its arc summary,
-- its major milestones,
-- its turning points,
-- its closure or dormancy state.
+即使主线进入休眠或已解决状态，系统也必须保留：
+- 其脉络摘要，
+- 其主要里程碑，
+- 其转折点，
+- 其关闭或休眠状态。
 
-## 16. Sideline Retirement Rule
+## 16. 支线退役规则
 
-Sidelines may be retired when all of the following hold:
-- low importance,
-- low reactivation,
-- no major downstream dependency,
-- no role in chapter shifts,
-- and content already represented elsewhere.
+当以下所有条件均成立时，支线可以退役：
+- 重要性低，
+- 重新激活程度低，
+- 没有重大下游依赖，
+- 不参与篇章变化，
+- 且内容已在其他位置得到表示。
 
-Before retirement, the system should attempt one final compressed label or sentence-level archive.
+退役前，系统应尝试生成最后一个压缩标签或句子级归档。
 
-## 17. Drift Detection
+## 17. 漂移检测
 
-Compression drift occurs when a summary becomes more interpretive, more certain, or more global than its evidence supports.
+当摘要变得比其证据所支持的内容更具解读性、更为确定或更具全局性时，就发生了压缩漂移。
 
-Signals of drift:
-- stronger claims than source evidence,
-- trait-like language absent in the record,
-- omitted turning points,
-- inverted event order,
-- false closure.
+漂移信号：
+- 断言强于源证据，
+- 使用记录中没有的特质式语言，
+- 遗漏转折点，
+- 颠倒事件顺序，
+- 错误关闭。
 
-Drift should trigger review and possible revision.
+漂移应触发审查，并可能触发修订。
 
-## 18. Review Cadence
+## 18. 审查周期
 
-Recommended v1 background maintenance:
-- daily: event and scene hygiene,
-- weekly: scene consolidation and line rescoring,
-- monthly: arc review and dormancy checks,
-- quarterly: epoch review and deep compression audit.
+建议的 v1 后台维护周期：
+- 每日：整理事件和场景，
+- 每周：整合场景并重新评估脉络，
+- 每月：审查脉络并检查休眠状态，
+- 每季度：审查纪元并进行深度压缩审计。
 
-## 19. Audit Metadata
+## 19. 审计元数据
 
-Each compression or revision action should log:
+每次压缩或修订操作都应记录：
 
 ```json
 {
@@ -198,9 +198,9 @@ Each compression or revision action should log:
 }
 ```
 
-## 20. Safety Posture
+## 20. 安全姿态
 
-If unsure whether to compress or revise aggressively, the system should choose the more conservative operation:
-- compress less,
-- preserve more,
-- and mark uncertainty explicitly.
+如果不确定是否应采取激进的压缩或修订，系统应选择更保守的操作：
+- 少压缩，
+- 多保留，
+- 并明确标记不确定性。

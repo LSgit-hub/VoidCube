@@ -6,6 +6,7 @@ import pytest
 
 from agent.memory_manager import MemoryManager
 from plugins.memory.mem import MemMemoryProvider
+from plugins.memory.mem.outbox import MemoryWriteOutbox
 from run_agent import AIAgent
 
 
@@ -92,3 +93,62 @@ def test_resume_rebinds_mem_remember_evidence_to_target_session(monkeypatch):
         "session:resumed-session",
     ]
     assert "session:before-resume" not in calls[0][2]["evidence_refs"]
+
+
+def test_session_end_queues_ordered_durable_close(tmp_path, monkeypatch):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider.bind_session("closing-session")
+    provider._outbox = MemoryWriteOutbox(
+        tmp_path / "outbox.sqlite3",
+        retry_base_seconds=60.0,
+        retry_max_seconds=60.0,
+    )
+    provider._outbox.enqueue(
+        {
+            "write_id": "turn-before-close",
+            "session_id": "closing-session",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    provider.on_session_end([])
+
+    turn_item = provider._outbox.next_due()
+    assert turn_item is not None
+    assert turn_item["write_id"] == "turn-before-close"
+    provider._outbox.mark_failed(
+        "turn-before-close",
+        attempts=1,
+        error="temporary outage",
+    )
+    close_item = provider._outbox.next_due()
+    assert close_item is not None
+    assert close_item["operation"] == "close_session"
+    assert provider._outbox.has_blocking_writes_before(close_item["write_id"])
+    provider._outbox.defer(close_item["write_id"])
+
+    calls = []
+    monkeypatch.setattr(
+        provider,
+        "_request_json",
+        lambda method, path, payload=None, **kwargs: calls.append(
+            (method, path, payload, kwargs)
+        )
+        or {},
+    )
+    provider._deliver_outbox_item(close_item)
+
+    assert calls == [
+        (
+            "POST",
+            "/sessions/closing-session/close",
+            {
+                "owner_id": "local-user",
+                "workspace_id": "default",
+                "memory_domain": "agent_interaction",
+            },
+            {"identity_session_id": "closing-session"},
+        )
+    ]

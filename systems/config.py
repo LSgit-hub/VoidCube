@@ -129,6 +129,10 @@ def load_config_from_env() -> SystemConfig:
     config.memory.host = os.getenv("MEMORY_HOST", config.memory.host)
     config.memory.port = int(os.getenv("MEMORY_PORT", config.memory.port))
     config.memory.db_path = os.getenv("MEMORY_DB_PATH", config.memory.db_path)
+    config.memory.time_summary_timezone = os.getenv(
+        "MEMORY_TIME_SUMMARY_TIMEZONE",
+        config.memory.time_summary_timezone,
+    )
     config.memory.gateway_address = os.getenv("MEMORY_GATEWAY_ADDRESS", config.memory.gateway_address)
     config.memory.gateway_registration_check_interval = int(
         os.getenv(

@@ -442,6 +442,77 @@ class MemoryDatabaseBootstrap:
         self._migrate_profile_memories_schema(cursor)
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS time_summaries (
+                summary_id TEXT PRIMARY KEY,
+                summary_type TEXT NOT NULL
+                    CHECK(summary_type IN ('session', 'day', 'week', 'month')),
+                owner_id TEXT NOT NULL DEFAULT 'local-user',
+                workspace_id TEXT NOT NULL DEFAULT 'default',
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
+                bucket_key TEXT NOT NULL,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                outcomes TEXT NOT NULL DEFAULT '[]'
+                    CHECK(json_valid(outcomes) AND json_type(outcomes) = 'array'),
+                open_questions TEXT NOT NULL DEFAULT '[]'
+                    CHECK(
+                        json_valid(open_questions)
+                        AND json_type(open_questions) = 'array'
+                    ),
+                source_count INTEGER NOT NULL DEFAULT 0 CHECK(source_count >= 0),
+                source_hash TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(status IN ('active', 'superseded')),
+                supersedes_summary_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(
+                    owner_id, workspace_id, memory_domain,
+                    summary_type, bucket_key, version
+                ),
+                FOREIGN KEY (supersedes_summary_id)
+                    REFERENCES time_summaries(summary_id)
+            )
+            """
+        )
+        self._migrate_time_summaries_schema(cursor)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS time_summary_links (
+                parent_summary_id TEXT NOT NULL,
+                child_summary_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (parent_summary_id, child_summary_id),
+                CHECK(parent_summary_id <> child_summary_id),
+                FOREIGN KEY (parent_summary_id)
+                    REFERENCES time_summaries(summary_id),
+                FOREIGN KEY (child_summary_id)
+                    REFERENCES time_summaries(summary_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_summary_sources (
+                summary_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+                turn_timestamp TEXT NOT NULL,
+                evidence_hash TEXT NOT NULL,
+                PRIMARY KEY (summary_id, turn_id),
+                UNIQUE (summary_id, ordinal),
+                FOREIGN KEY (summary_id) REFERENCES time_summaries(summary_id)
+            )
+            """
+        )
+        self._create_time_summary_triggers(cursor)
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS identity_revision_proposals (
                 proposal_id TEXT PRIMARY KEY,
                 target_memory_id TEXT NOT NULL,
@@ -819,6 +890,96 @@ class MemoryDatabaseBootstrap:
                 tuple(sorted(LEGACY_HEURISTIC_PROFILE_PREDICATES)),
             )
 
+    def _migrate_time_summaries_schema(self, cursor: sqlite3.Cursor) -> None:
+        existing = self._column_names(cursor, "time_summaries")
+        if "source_hash" not in existing:
+            cursor.execute(
+                "ALTER TABLE time_summaries ADD COLUMN source_hash "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+
+    @staticmethod
+    def _create_time_summary_triggers(cursor: sqlite3.Cursor) -> None:
+        immutable_columns = (
+            "summary_type",
+            "owner_id",
+            "workspace_id",
+            "memory_domain",
+            "bucket_key",
+            "period_start",
+            "period_end",
+            "timezone",
+            "title",
+            "summary",
+            "outcomes",
+            "open_questions",
+            "source_count",
+            "source_hash",
+            "content_hash",
+            "version",
+            "supersedes_summary_id",
+            "created_at",
+        )
+        mutation_condition = " OR ".join(
+            f"OLD.{column} IS NOT NEW.{column}" for column in immutable_columns
+        )
+        cursor.execute(
+            "CREATE TRIGGER IF NOT EXISTS prevent_time_summary_version_mutation "
+            f"BEFORE UPDATE OF {', '.join(immutable_columns)} ON time_summaries "
+            f"WHEN {mutation_condition} BEGIN "
+            "SELECT RAISE(ABORT, 'time summary versions are immutable'); END"
+        )
+
+        valid_direct_link = (
+            "EXISTS (SELECT 1 FROM time_summaries AS parent "
+            "JOIN time_summaries AS child "
+            "ON child.summary_id = NEW.child_summary_id "
+            "WHERE parent.summary_id = NEW.parent_summary_id "
+            "AND parent.owner_id = child.owner_id "
+            "AND parent.workspace_id = child.workspace_id "
+            "AND parent.memory_domain = child.memory_domain "
+            "AND ((parent.summary_type = 'month' AND child.summary_type = 'week') "
+            "OR (parent.summary_type = 'week' AND child.summary_type = 'day') "
+            "OR (parent.summary_type = 'day' AND child.summary_type = 'session')))"
+        )
+        for operation in ("INSERT", "UPDATE"):
+            cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS validate_time_summary_link_"
+                f"{operation.lower()} BEFORE {operation} ON time_summary_links "
+                f"WHEN NOT {valid_direct_link} BEGIN "
+                "SELECT RAISE(ABORT, 'time summary links require same-scope "
+                "direct levels'); END"
+            )
+
+        valid_supersession = (
+            "NEW.supersedes_summary_id IS NULL OR EXISTS ("
+            "SELECT 1 FROM time_summaries AS previous "
+            "WHERE previous.summary_id = NEW.supersedes_summary_id "
+            "AND previous.owner_id = NEW.owner_id "
+            "AND previous.workspace_id = NEW.workspace_id "
+            "AND previous.memory_domain = NEW.memory_domain "
+            "AND previous.summary_type = NEW.summary_type "
+            "AND previous.bucket_key = NEW.bucket_key "
+            "AND previous.version < NEW.version)"
+        )
+        for operation in ("INSERT", "UPDATE"):
+            cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS validate_time_summary_supersession_"
+                f"{operation.lower()} BEFORE {operation} ON time_summaries "
+                f"WHEN NOT ({valid_supersession}) BEGIN "
+                "SELECT RAISE(ABORT, 'time summary supersession requires an older "
+                "version of the same bucket'); END"
+            )
+
+        cursor.execute(
+            "CREATE TRIGGER IF NOT EXISTS validate_session_summary_source_insert "
+            "BEFORE INSERT ON session_summary_sources WHEN NOT EXISTS ("
+            "SELECT 1 FROM time_summaries WHERE summary_id = NEW.summary_id "
+            "AND summary_type = 'session') BEGIN "
+            "SELECT RAISE(ABORT, 'session summary sources require a session summary'); "
+            "END"
+        )
+
     @staticmethod
     def _create_indexes(cursor: sqlite3.Cursor) -> None:
         statements = (
@@ -863,6 +1024,18 @@ class MemoryDatabaseBootstrap:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_active_slot ON "
             "profile_memories(owner_id, workspace_id, memory_domain, subject, predicate, "
             "slot_key) WHERE status = 'active'",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_time_summary_active_bucket ON "
+            "time_summaries(owner_id, workspace_id, memory_domain, summary_type, "
+            "bucket_key) WHERE status = 'active'",
+            "CREATE INDEX IF NOT EXISTS idx_time_summary_scope_period ON "
+            "time_summaries(owner_id, workspace_id, memory_domain, summary_type, "
+            "status, period_start, period_end)",
+            "CREATE INDEX IF NOT EXISTS idx_time_summary_supersedes ON "
+            "time_summaries(supersedes_summary_id)",
+            "CREATE INDEX IF NOT EXISTS idx_time_summary_links_child ON "
+            "time_summary_links(child_summary_id)",
+            "CREATE INDEX IF NOT EXISTS idx_session_summary_sources_turn ON "
+            "session_summary_sources(turn_id)",
             "CREATE INDEX IF NOT EXISTS idx_identity_revision_status ON "
             "identity_revision_proposals(status, created_at)",
         )

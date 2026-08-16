@@ -11,7 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from agent.effect_outcomes import EffectOutcome, failed_effect
@@ -515,6 +515,21 @@ class MemMemoryProvider(MemoryProvider):
             },
         )
 
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+        """Queue session closure after all earlier durable Turn writes."""
+        del messages
+        if not self._initialized or self._outbox is None or not self._session_id:
+            return
+        self._outbox.enqueue(
+            {
+                "write_id": f"session-close:{self._session_id}",
+                "operation": "close_session",
+                "session_id": self._session_id,
+                **self._scope_payload(),
+            }
+        )
+        self._sync_wake.set()
+
     def shutdown(self) -> None:
         if not self._initialized:
             return
@@ -579,11 +594,19 @@ class MemMemoryProvider(MemoryProvider):
                 self._sync_wake.clear()
                 continue
             try:
-                self._write_turn_pair(item)
+                write_id = str(item["write_id"])
+                if (
+                    item.get("operation") == "close_session"
+                    and self._outbox is not None
+                    and self._outbox.has_blocking_writes_before(write_id)
+                ):
+                    self._outbox.defer(write_id)
+                    continue
+                self._deliver_outbox_item(item)
                 if self._outbox is not None:
-                    self._outbox.mark_delivered(str(item["write_id"]))
+                    self._outbox.mark_delivered(write_id)
             except Exception as exc:
-                logger.warning("Memory Service turn sync failed: %s", exc)
+                logger.warning("Memory Service outbox delivery failed: %s", exc)
                 if self._outbox is not None:
                     attempts = int(item.get("_outbox_attempts") or 0) + 1
                     self._outbox.mark_failed(
@@ -592,6 +615,12 @@ class MemMemoryProvider(MemoryProvider):
                         error=f"{type(exc).__name__}: {exc}",
                     )
             self._report_outbox_health_if_due(force=True)
+
+    def _deliver_outbox_item(self, item: dict[str, Any]) -> None:
+        if item.get("operation") == "close_session":
+            self._write_session_close(str(item.get("session_id") or ""))
+            return
+        self._write_turn_pair(item)
 
     def _report_outbox_health_if_due(self, *, force: bool = False) -> None:
         if self._outbox is None or not self._session_id:
@@ -626,6 +655,17 @@ class MemMemoryProvider(MemoryProvider):
                 for key, value in item.items()
                 if not key.startswith("_outbox_")
             },
+        )
+
+    def _write_session_close(self, session_id: str) -> None:
+        resolved_session_id = str(session_id or "").strip()
+        if not resolved_session_id:
+            raise ValueError("Session close requires a session ID")
+        self._request_json(
+            "POST",
+            f"/sessions/{quote(resolved_session_id, safe='')}/close",
+            self._scope_payload(),
+            identity_session_id=resolved_session_id,
         )
 
     def _scope_payload(self) -> dict[str, str]:
@@ -689,11 +729,14 @@ class MemMemoryProvider(MemoryProvider):
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
+        *,
+        identity_session_id: str | None = None,
     ) -> dict[str, Any]:
         if not self._gateway_is_reachable():
             raise ConnectionError("Memory Gateway is unreachable")
         identity_session_id = str(
-            (payload or {}).get("session_id")
+            identity_session_id
+            or (payload or {}).get("session_id")
             or (payload or {}).get("current_session_id")
             or self._session_id
             or ""

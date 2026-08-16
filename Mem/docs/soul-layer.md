@@ -1,125 +1,125 @@
-# Soul Layer
+# 灵魂层
 
-## 1. Position
+## 1. 定位
 
-This document defines Mem as the soul layer of VoidCube.
+本文定义 Mem 为 VoidCube 的灵魂层。
 
-It answers five practical questions:
+它回答五个实际问题：
 
-- what the soul is in this system
-- how memory and governance coexist inside Mem
-- what the soul layer's memory stewardship and supervisor governance roles mean
-- which inputs and outputs belong to the soul layer
-- how soul-side governance relates to gateway, CLI, and executors
+- 这个系统中的灵魂是什么
+- 记忆与治理如何在 Mem 内部共存
+- 灵魂层的记忆管家与监督者治理角色意味着什么
+- 哪些输入和输出属于灵魂层
+- 灵魂侧治理如何与网关、CLI 和执行器关联
 
-## 2. Definition
+## 2. 定义
 
-In VoidCube, the soul is not:
+在 VoidCube 中，灵魂不是：
 
-- the current process
-- the current model context
-- the current active body
+- 当前进程
+- 当前模型上下文
+- 当前活跃主体
 
-The soul is the long-lived identity and governance substrate that persists across body replacement.
+灵魂是跨主体替换而持久存在的长生命周期身份与治理基底。
 
-Today, Mem already carries the key soul responsibilities:
+如今，Mem 已经承担了关键的灵魂职责：
 
-- long-term memory
-- identity continuity
-- evolution history
-- body lineage
-- switch and rollback records
-- governance decisions
+- 长期记忆
+- 身份连续性
+- 演化历史
+- 主体谱系
+- 切换与回滚记录
+- 治理决策
 
-So Mem is not just a memory backend. It is the identity and governance core of the system.
+因此 Mem 不只是记忆后端，而是系统的身份与治理核心。
 
-In the current VoidCube architecture, this soul-side governance does not exist for its own sake. It exists to support the continuous improvement, replacement, and safe activation of better Agent bodies for the user-facing system.
+在当前的 VoidCube 架构中，这种灵魂侧治理并非为自身而存在，而是为了支撑面向用户的系统对更好的 Agent 主体进行持续改进、替换与安全激活。
 
-Another baseline framing is now important:
+另一个基线框架现在也很重要：
 
-- VoidCube acts as the mother system
-- the dual body slots act as two child Agent instances
-- Mem does not deliver the whole mother system to the user
-- Mem helps the mother system decide which improved child Agent may become user-facing
+- VoidCube 充当母系统
+- 双主体槽位充当两个子 Agent 实例
+- Mem 不把整个母系统交付给用户
+- Mem 帮助母系统决定哪个改进后的子 Agent 可以面向用户
 
-## 3. Internal Roles
+## 3. 内部角色
 
-The soul layer is best understood as three internal roles inside the same Mem domain.
+灵魂层最好被理解为同一 Mem 域内的三个内部角色。
 
-### 3.1 Memory Core
+### 3.1 记忆核心
 
-Responsible for durable state:
+负责持久状态：
 
-- user long-term memory
-- agent long-term memory
-- constitutional rules
-- evolution events
-- body switch history
-- rollback history
+- 用户长期记忆
+- 代理长期记忆
+- 宪章规则
+- 演化事件
+- 主体切换历史
+- 回滚历史
 
-### 3.2 Governor Engine
+### 3.2 治理引擎
 
-Responsible for structured governance decisions.
+负责结构化的治理决策。
 
-At the current stage, this is primarily deterministic rather than fully model-driven.
+在当前阶段，它主要是确定性的，而非完全由模型驱动。
 
-It evaluates:
+它评估：
 
-- whether a shell body may become `candidate`
-- whether a `candidate` may enter `probe`
-- whether a `probe` body may become `active`
-- whether the current switch should be rolled back
-- whether a retired body may be recycled to `shell`
-- whether a queued self-evolution task may be approved, deferred, cancelled, or paused
+- 某个 shell 主体是否可以成为 `candidate`
+- 某个 `candidate` 是否可以进入 `probe`
+- 某个 `probe` 主体是否可以成为 `active`
+- 当前的切换是否应当回滚
+- 某个已退役主体是否可以回收为 `shell`
+- 某个排队中的自我演化任务是否可以被批准、延期、取消或暂停
 
-This is the core governance role inside the soul layer.
+这是灵魂层内部的核心治理角色。
 
-### 3.3 Governance Audit Store
+### 3.3 治理审计存储
 
-Responsible for preserving soul-side traceability:
+负责保留灵魂侧的可追踪性：
 
-- review requests
-- decisions
-- execution outcomes
-- watch-window observations
-- rollback causes
+- 评审请求
+- 决策
+- 执行结果
+- 观察窗口观察
+- 回滚原因
 
-The current implementation already writes governance history into soul-side storage.
+当前实现已经把治理历史写入灵魂侧存储。
 
-## 4. Modes
+## 4. 模式
 
-Mem has two main operating roles:
+Mem 有两个主要的运行角色：
 
-- memory stewardship
-- supervisor governance
+- 记忆管家
+- 监督者治理
 
-These are not two separate systems. They are two responsibilities of the same soul layer.
+它们不是两个独立的系统，而是同一灵魂层的两项职责。
 
-In VoidCube architecture terms, they share one API-B governance and memory domain.
+用 VoidCube 架构术语来说，它们共享同一个 API-B 治理与记忆域。
 
-Historical docs often called them `Memory Mode` and `Governor Mode`. In the current baseline, the runtime should be understood as a continuous background governance system with a shared soul-side memory/governance domain, not as two time-window-driven modes.
+历史文档常称之为 `Memory Mode` 和 `Governor Mode`。在当前基线中，运行时应被理解为一个具有共享灵魂侧记忆/治理域的持续后台治理系统，而不是两个由时间窗口驱动的模式。
 
-That is also why this side of the system uses a separately configured model/API capability:
+这也解释了为何系统这一侧使用单独配置的模型/API 能力：
 
-- the Agent-side working model handles task execution and short-term work memory
-- the Mem-side model handles long-term memory compression, organization, interpretation, and governance decisions
+- Agent 侧的工作模型处理任务执行和短期工作记忆
+- Mem 侧的模型处理长期记忆压缩、组织、解读和治理决策
 
-## 5. Memory Stewardship Role
+## 5. 记忆管家角色
 
-### 5.1 Purpose
+### 5.1 目的
 
-The baseline responsibility of the soul layer.
+灵魂层的基线职责。
 
-### 5.2 Responsibilities
+### 5.2 职责
 
-- write long-term memory
-- search long-term memory
-- compress history
-- update identity description
-- preserve evolution archives
-- prepare memory-side summaries for governance use
+- 写入长期记忆
+- 搜索长期记忆
+- 压缩历史
+- 更新身份描述
+- 保留演化档案
+- 为治理使用准备记忆侧摘要
 
-### 5.3 Typical Inputs
+### 5.3 典型输入
 
 - `memory_write`
 - `memory_search`
@@ -127,49 +127,49 @@ The baseline responsibility of the soul layer.
 - `identity_update`
 - `history_compress`
 
-### 5.4 Constraints
+### 5.4 约束
 
-This role must not directly approve:
+该角色不得直接批准：
 
-- `probe` entry
-- `active` promotion
-- rollback
-- retired-body recycling
+- `probe` 进入
+- `active` 晋升
+- 回滚
+- 已退役主体回收
 
-It may summarize facts, but it must not replace governance.
+它可以摘要事实，但不得取代治理。
 
-## 6. Supervisor Governance Role
+## 6. 监督者治理角色
 
-### 6.1 Purpose
+### 6.1 目的
 
-This governance role is responsible whenever the system enters body governance or self-evolution governance scenarios:
+每当系统进入主体治理或自我演化治理场景时，该治理角色即承担职责：
 
-- candidate review
-- probe approval
-- body switch
-- rollback
-- post-switch observation
-- self-evolution task planning
-- execution release / defer decisions
+- 候选评审
+- 探测批准
+- 主体切换
+- 回滚
+- 切换后观察
+- 自我演化任务规划
+- 执行放行 / 延期决策
 
-### 6.2 Current Implementation Direction
+### 6.2 当前实施方向
 
-At the current phase, supervisor governance is taking shape as a structured protocol rather than a free-form model persona.
+在当前阶段，监督者治理正在以结构化协议而非自由形式的模型人格成形。
 
-The implemented path now includes:
+目前已实现的路径包括：
 
-- dual body slots
-- structured probe reports
-- deterministic switch approval
-- active body pointer updates
-- isolated runtime per body slot
-- automatic watch-window supervision
-- automatic recycle or rollback after observation
-- explicit task states for self-evolution governance
+- 双主体槽位
+- 结构化探测报告
+- 确定性切换批准
+- 活跃主体指针更新
+- 每个主体槽位隔离的运行时
+- 自动观察窗口监督
+- 观察后自动回收或回滚
+- 用于自我演化治理的明确任务状态
 
-This means soul-side governance already exists in executable protocol form.
+这意味着灵魂侧治理已经以可执行协议的形式存在。
 
-### 6.3 Typical Inputs
+### 6.3 典型输入
 
 - `body_upgrade_request`
 - `health_review_request`
@@ -179,7 +179,7 @@ This means soul-side governance already exists in executable protocol form.
 - `self_evolution_plan_request`
 - `execution_review`
 
-### 6.4 Typical Outputs
+### 6.4 典型输出
 
 - `approve`
 - `reject`
@@ -190,82 +190,82 @@ This means soul-side governance already exists in executable protocol form.
 - `pause`
 - `request_more_evidence`
 
-### 6.5 Constraints
+### 6.5 约束
 
-This governance role must:
+该治理角色必须：
 
-- produce structured outputs
-- preserve evidence summaries
-- preserve auditability
-- separate judgment from mechanical execution
+- 产生结构化输出
+- 保留证据摘要
+- 保留可审计性
+- 把判断与机械执行分离
 
-This governance role must not directly perform body actions itself. It decides. Deterministic executors act.
+该治理角色不得直接执行主体动作。它负责决策，由确定性的执行器去执行。
 
-## 7. Governance Capability Requirement
+## 7. 治理能力要求
 
-VoidCube does require a soul-side governance capability.
+VoidCube 确实需要灵魂侧治理能力。
 
-What is not mandatory is a separate free-form supervisor model detached from protocol.
+并非强制要求一个脱离协议、独立且自由形式的监督者模型。
 
-The current recommended structure is:
+当前推荐的结构是：
 
-- `Mem = soul layer`
-- `Governor Engine = required governance capability inside the soul layer`
-- `LLM = brain / work reasoning / optional governance reasoning support`
+- `Mem` = 灵魂层
+- `Governor Engine` = 灵魂层内必需的治理能力
+- `LLM` = 大脑 / 工作推理 / 可选的治理推理支持
 
-So the architectural requirement is not "a special supervisor persona must exist as a fourth being".
+因此，架构上的要求并不是“必须存在一个作为第四存在的特殊监督者人格”。
 
-The actual requirement is:
+实际的要求是：
 
-- governance authority must exist,
-- it must live in the soul-side domain,
-- it must be audit-safe, and
-- it must remain separate from mechanical execution.
+- 治理权威必须存在，
+- 它必须存在于灵魂侧域中，
+- 它必须可审计安全，并且
+- 它必须与机械执行保持分离。
 
-That governance authority mainly serves one upgrade target:
+该治理权威主要服务于一个升级目标：
 
-- the Agent body and its future replacement
+- Agent 主体及其未来的替代
 
-It is not primarily about self-upgrading the memory system, executor, or gateway first.
+它主要不是先自我升级记忆系统、执行器或网关。
 
-## 8. Optional Future Reasoner
+## 8. 可选的未来推理器
 
-A model-assisted governance reasoner can still exist later, but it should be layered above the deterministic governor instead of replacing the governance protocol.
+模型辅助的治理推理器日后仍可出现，但它应分层置于确定性治理器之上，而不是取代治理协议。
 
-Recommended future split:
+推荐的未来拆分：
 
 - `Governor Engine`
-  - deterministic
-  - protocol-safe
-  - primary authority for switch, rollback, and execution-window decisions
+  - 确定性的
+  - 协议安全的
+  - 切换、回滚和执行窗口决策的主要权威
 - `Governor Reasoner`
-  - optional model-assisted analysis
-  - used for ambiguous cases
-  - used for rule proposal, anomaly interpretation, and long-term evolution analysis
+  - 可选的模型辅助分析
+  - 用于模糊情形
+  - 用于规则提议、异常解读和长期演化分析
 
-This keeps identity continuity anchored in protocol rather than model drift.
+这使身份连续性锚定在协议上，而不是锚定在模型漂移上。
 
-## 9. Soul Inputs And Outputs
+## 9. 灵魂的输入与输出
 
-### 9.1 Inputs
+### 9.1 输入
 
-Soul-layer inputs should be structured events, not loose prose.
+灵魂层输入应是结构化事件，而不是松散的散文。
 
-Recommended sources:
+推荐的来源：
 
-- active body
-- candidate body
-- gateway
-- lifecycle executor
-- self-learning system
+- 活跃主体
+- 候选主体
+- 网关
+- 生命周期执行器
+- 自学习系统
 
-In practice, these body-originated events should still be attributable to a concrete child Agent slot with its own isolated `worktree`, `runtime`, `logs`, and metadata.
+在实践中，这些源于主体的事件仍应可归属于一个具体的子 Agent 槽位，该槽位拥有自己隔离的 `worktree`、`runtime`、`logs` 和元数据。
 
-For user-originated operations, CLI should enter through gateway or controlled protocol rather than become a second governance truth source.
+对于源于用户的操作，CLI 应通过网关或受控协议进入，而不是成为第二个治理真相源。
 
-### 9.2 Minimum Request Shape
+### 9.2 最小请求形态
 
-Requests should include:
+请求应包含：
 
 - `request_id`
 - `mode`
@@ -277,9 +277,9 @@ Requests should include:
 - `constraints`
 - `timestamp`
 
-### 9.3 Minimum Response Shape
+### 9.3 最小响应形态
 
-Responses should include:
+响应应包含：
 
 - `decision`
 - `confidence`
@@ -289,80 +289,80 @@ Responses should include:
 - `watch_window_hint`
 - `writeback_events`
 
-## 10. Decisions Reserved For Supervisor Governance
+## 10. 保留给监督者治理的决策
 
-Only supervisor governance may decide:
+只有监督者治理可以决定：
 
-- whether a body may enter `probe`
-- whether a `probe` body may become `active`
-- whether rollback is required
-- whether a retired body may be recycled
-- whether a body switch preserves identity continuity
-- whether a planned self-evolution task may enter execution
+- 某个主体是否可以进入 `probe`
+- 某个 `probe` 主体是否可以成为 `active`
+- 是否需要回滚
+- 某个已退役主体是否可以回收
+- 某次主体切换是否保持身份连续性
+- 某个已规划的自我演化任务是否可以进入执行
 
-These decisions must not be made by:
+这些决策不得由以下对象做出：
 
-- the active body alone
-- the gateway alone
-- the CLI alone
-- the executor alone
+- 仅活跃主体
+- 仅网关
+- 仅 CLI
+- 仅执行器
 
-## 11. Automatic Governance State
+## 11. 自动治理状态
 
-The current architecture supports an automatic governance state as part of supervisor governance.
+当前架构支持将自动治理状态作为监督者治理的一部分。
 
-Its current shape is:
+其当前形态是：
 
-- switch approval creates a watch window
-- governance state triggers a background watch-window task
-- the task evaluates health during the observation period
-- if healthy and window expires cleanly, the retired body is recycled
-- if unhealthy, rollback is triggered automatically
-- in self-evolution governance cycles, governance may also release, defer, cancel, or pause queued work
+- 切换批准会创建一个观察窗口
+- 治理状态触发一个后台观察窗口任务
+- 该任务在观察期内评估健康状况
+- 若健康且窗口干净地到期，则回收已退役主体
+- 若不健康，则自动触发回滚
+- 在自我演化治理周期中，治理还可以放行、延期、取消或暂停排队中的工作
 
-This is the first practical form of soul-side self-regulation in the project.
+这是项目中灵魂侧自我调节的第一个实用形态。
 
-## 12. Current Soul Facts Reflected In Runtime
+## 12. 运行时中已反映的当前灵魂事实
 
-At the current stage, the following facts are already represented in implementation:
+在当前阶段，以下事实已在实现中得到体现：
 
-- active body pointer
-- per-slot launch target
-- per-slot runtime identity
-- probe report persistence
-- governance history persistence
-- automatic watch-window outcome recording
-- governance decisions separated from executor actions
+- 活跃主体指针
+- 每个槽位的启动目标
+- 每个槽位的运行时身份
+- 探测报告持久化
+- 治理历史持久化
+- 自动观察窗口结果记录
+- 治理决策与执行器动作分离
 
-This matters because the soul layer is no longer only conceptual. It is now partially embodied in executable protocol.
+这很重要，因为灵魂层不再只是概念性的，如今它已部分体现在可执行协议中。
 
-## 13. Conclusion
+## 13. 结论
 
-Mem as soul layer is now best defined as:
+作为灵魂层的 Mem 如今最好被定义为：
 
-- memory organ
-- identity organ
-- governance organ
+- 记忆器官
+- 身份器官
+- 治理器官
 
-The supervisor is not a required fourth metaphysical layer.
+监督者并不是必需的第四层形而上学层次。
 
-But soul-side governance is a required architectural capability.
+但灵魂侧治理是必需的架构能力。
 
-In the current architecture, that capability is carried by Mem-aligned governance protocol:
+在当前架构中，这一能力由与 Mem 对齐的治理协议承载：
 
-- memory core
-- deterministic governor
-- audit history
-- watch-window supervision
-- rollback authority
-- execution-window decisions
+- 记忆核心
+- 确定性治理器
+- 审计历史
+- 观察窗口监督
+- 回滚权威
+- 执行窗口决策
 
-If a model-assisted governance reasoner appears later, it should be an enhancement to this foundation, not a replacement for it.
+若日后出现模型辅助的治理推理器，它应是对这一基础的增强，而不是替代。
 
-## 14. Related Docs
+## 14. 相关文档
 
-- project constitution: [constitution.md](../../docs/constitution.md)
-- architecture baseline: [voidcube架构基线.md](../../docs/voidcube架构基线.md)
-- switch protocol: [switch-protocol.md](../../docs/switch-protocol.md)
-- body lifecycle: [body-lifecycle.md](../../docs/body-lifecycle.md)
-- state boundary: [state-boundary.md](../../docs/state-boundary.md)
+- 项目宪章：[constitution.md](../../docs/constitution.md)
+- 架构基线：[voidcube架构基线.md](../../docs/voidcube架构基线.md)
+- 切换协议：[switch-protocol.md](../../docs/switch-protocol.md)
+- 主体生命周期：[body-lifecycle.md](../../docs/body-lifecycle.md)
+- 状态边界：[state-boundary.md](../../docs/state-boundary.md)

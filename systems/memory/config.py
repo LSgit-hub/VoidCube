@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -22,6 +23,7 @@ class MemoryServiceConfig(BaseModel):
     gateway_address: str = "http://127.0.0.1:6000"
     gateway_registration_check_interval: int = 30
     redact_before_store: bool = False
+    time_summary_timezone: str = "Asia/Shanghai"
     decay_interval_hours: int = Field(default=24, gt=0)
     compression_interval: int = Field(default=3600, ge=60)
     tier2_trigger_candidate_count: int = Field(default=100, ge=1, le=100000)
@@ -79,3 +81,18 @@ class MemoryServiceConfig(BaseModel):
                 "authenticated proxy instead of exposing port 6001"
             )
         return host
+
+    @field_validator("time_summary_timezone")
+    @classmethod
+    def _require_valid_time_summary_timezone(cls, value: str) -> str:
+        timezone_name = str(value or "").strip()
+        if not timezone_name:
+            raise ValueError("Memory time-summary timezone is required")
+        if timezone_name != "UTC" and not re.fullmatch(
+            r"[A-Za-z_]+(?:/[A-Za-z0-9._+-]+)+",
+            timezone_name,
+        ):
+            raise ValueError(
+                f"Invalid Memory time-summary timezone name: {timezone_name}"
+            )
+        return timezone_name

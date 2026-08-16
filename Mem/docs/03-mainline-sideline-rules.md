@@ -1,49 +1,49 @@
-# Mainline and Sideline Rules v1
+# 主线与支线规则 v1
 
-## 1. Purpose
+## 1. 目的
 
-This document defines how the system classifies developments into mainlines, sidelines, dormant lines, and noise. The purpose is to ensure that long-term memory reflects enduring narrative structure rather than isolated dramatic moments.
+本文档定义系统如何将发展内容分类为主线、支线、休眠脉络和噪声。其目的是确保长期记忆反映持久的叙事结构，而非孤立的戏剧性时刻。
 
-## 2. Definitions
+## 2. 定义
 
-- `Mainline`: a sustained and structurally central line of development.
-- `Sideline`: a secondary but still memory-worthy line with weaker continuity or impact.
-- `Dormant Line`: a previously important line currently inactive but not historically closed.
-- `Noise`: material not worth promoting into durable long-term memory.
+- `Mainline`：持续且处于结构中心的发展脉络。
+- `Sideline`：连续性或影响较弱，但仍值得记忆的次要脉络。
+- `Dormant Line`：先前重要、当前不活跃但尚未在历史上完结的脉络。
+- `Noise`：不值得提升为持久长期记忆的材料。
 
-## 3. Governing Principle
+## 3. 管理原则
 
-Line importance is determined by continuity and historical consequence, not by emotional vividness alone.
+脉络的重要性由连续性和历史影响决定，而非仅由情绪鲜明程度决定。
 
-## 4. Scoring Dimensions
+## 4. 评分维度
 
-Each candidate line receives normalized scores in the range `[0.0, 1.0]` across the following dimensions.
+每条候选脉络都在以下维度上获得 `[0.0, 1.0]` 范围内的归一化分数。
 
 ### `frequency`
-- How often the line or theme reappears.
-- High score when it recurs across multiple turns, scenes, or sessions.
+- 该脉络或主题重新出现的频率。
+- 当它在多个轮次、场景或会话中反复出现时得分较高。
 
 ### `duration`
-- How long the line remains active.
-- High score when it spans meaningful time intervals rather than a single burst.
+- 该脉络保持活跃的时长。
+- 当它跨越有意义的时间区间，而非只短暂出现一次时得分较高。
 
 ### `impact`
-- How much the line affects downstream events, decisions, or summaries.
-- High score when later scenes depend on it.
+- 该脉络对下游事件、决策或摘要的影响程度。
+- 当后续场景依赖于它时得分较高。
 
 ### `goal_coherence`
-- Whether the line has a stable objective, tension, or organizing question.
-- High score when developments can be read as part of one continuing thread.
+- 该脉络是否具有稳定的目标、矛盾或组织性问题。
+- 当各项发展能够被视为同一条持续线索的一部分时得分较高。
 
 ### `reactivation`
-- Whether the line returns after pauses.
-- High score when it is reintroduced and remains relevant.
+- 该脉络是否会在暂停后再次出现。
+- 当它被重新引入且仍然相关时得分较高。
 
 ### `dependency`
-- Whether other events are attached to or explained by this line.
-- High score when the line acts as a structural backbone.
+- 其他事件是否依附于该脉络，或可由其解释。
+- 当该脉络充当结构骨架时得分较高。
 
-## 5. Default Scoring Formula
+## 5. 默认评分公式
 
 ```text
 arc_score =
@@ -55,114 +55,114 @@ arc_score =
   0.10 * dependency
 ```
 
-This is a v1 default, not an immutable law. It may later be learned or tuned.
+这是 v1 的默认设置，而非不可改变的法则。以后可以通过学习或调优来调整。
 
-## 6. Classification Thresholds
+## 6. 分类阈值
 
-- `arc_score >= 0.70`: classify as `main`
-- `0.40 <= arc_score < 0.70`: classify as `side`
-- `arc_score < 0.40`: keep in short-term staging or discard as noise
+- `arc_score >= 0.70`：分类为 `main`
+- `0.40 <= arc_score < 0.70`：分类为 `side`
+- `arc_score < 0.40`：保留在短期暂存区，或作为噪声丢弃
 
-These thresholds should be applied after minimum evidence checks.
+这些阈值应在最低证据检查之后应用。
 
-## 7. Minimum Evidence Checks
+## 7. 最低证据检查
 
-A line should not be classified as `main` unless at least one of the following holds:
-- it spans at least three scenes,
-- it reappears across multiple sessions or dates,
-- it produces at least one turning point with downstream effects,
-- it clearly organizes a cluster of dependent events.
+除非至少满足下列条件之一，否则不应将一条脉络分类为 `main`：
+- 它跨越至少三个场景，
+- 它在多个会话或日期中重新出现，
+- 它产生至少一个对下游有影响的转折点，
+- 它明确组织了一组相互依赖的事件。
 
-## 8. Promotion Rules
+## 8. 提升规则
 
-Promotion from side to main is allowed when:
-- the line persists across new scenes,
-- downstream dependency increases,
-- a once-local issue becomes globally relevant,
-- or a repeated unresolved question becomes a dominant organizing force.
+在以下情况下，允许从支线提升为主线：
+- 该脉络在新场景中持续存在，
+- 下游依赖增加，
+- 一度局部的问题变得具有全局相关性，
+- 或某个反复出现的未解决问题成为主导性的组织力量。
 
-Promotion must create an explicit update in the current-valid view.
+提升操作必须在当前有效视图中创建显式更新。
 
-## 9. Demotion Rules
+## 9. 降级规则
 
-Demotion from main to side is allowed when:
-- prior centrality was overestimated,
-- evidence shows limited downstream influence,
-- the line resolves quickly and does not structure later history,
-- or its apparent continuity was due to duplicate phrasing rather than real persistence.
+在以下情况下，允许从主线降级为支线：
+- 先前高估了其中心性，
+- 证据表明其下游影响有限，
+- 该脉络很快得到解决，且未能组织后续历史，
+- 或其表面上的连续性源于措辞重复，而非真正持续存在。
 
-Demotion should trigger a revision record, not a silent relabel.
+降级应触发修订记录，而不是静默重新标记。
 
-## 10. Dormancy Rules
+## 10. 休眠规则
 
-A line becomes `dormant` when:
-- it was historically important,
-- it has not received significant updates for a configured interval,
-- and there is insufficient evidence that it has truly resolved.
+在以下情况下，一条脉络变为 `dormant`：
+- 它在历史上曾经重要，
+- 它在配置的时间区间内没有获得重要更新，
+- 且没有足够证据表明它已真正解决。
 
-Recommended v1 dormancy trigger:
-- no material update for 30 days or 5 scene windows,
-- with previous importance above a mainline-preservation threshold.
+建议的 v1 休眠触发条件：
+- 30 天或 5 个场景窗口内没有实质性更新，
+- 且先前重要性高于主线保留阈值。
 
-Dormant lines remain retrievable and should still influence chapter summaries when historically relevant.
+休眠脉络仍可检索；当其在历史上相关时，仍应影响篇章摘要。
 
-## 11. Closure Rules
+## 11. 关闭规则
 
-A line may be marked `resolved` or `closed` when:
-- its organizing goal has been completed,
-- its central tension is explicitly ended,
-- or later evidence confirms that the line no longer structures subsequent scenes.
+在以下情况下，一条脉络可以标记为 `resolved` 或 `closed`：
+- 其组织目标已经完成，
+- 其核心矛盾已明确结束，
+- 或后续证据确认该脉络不再组织之后的场景。
 
-Closure is not deletion.
+关闭不等于删除。
 
-## 12. Noise Rules
+## 12. 噪声规则
 
-Material should remain noise when:
-- it appears only once,
-- it has low novelty,
-- it produces no later dependency,
-- it carries no stable temporal or structural significance,
-- or it is pure conversational filler.
+在以下情况下，材料应保持为噪声：
+- 只出现一次，
+- 新颖性低，
+- 未产生后续依赖，
+- 不具备稳定的时间或结构意义，
+- 或纯属对话填充内容。
 
-Noise may remain in ephemeral cache for local context but should not enter durable memory.
+噪声可以保留在临时缓存中供局部上下文使用，但不应进入持久记忆。
 
-## 13. Guardrails Against False Mainlines
+## 13. 防止错误主线的护栏
 
-The following should not become mainlines by default:
-- isolated emotional spikes,
-- one-off complaints,
-- speculative self-descriptions,
-- hypothetical scenarios,
-- casual preferences stated once,
-- interruptions with no later consequence.
+以下内容默认不应成为主线：
+- 孤立的情绪激增，
+- 一次性抱怨，
+- 推测性的自我描述，
+- 假设场景，
+- 只陈述过一次的随意偏好，
+- 没有后续影响的中断。
 
-## 14. Evidence Escalation Policy
+## 14. 证据升级策略
 
-When evidence is mixed:
-- prefer `side` over `main`,
-- prefer `dormant` over `closed`,
-- prefer `unknown` over stable interpretation.
+当证据不一致时：
+- 优先选择 `side`，而非 `main`，
+- 优先选择 `dormant`，而非 `closed`，
+- 优先选择 `unknown`，而非稳定解读。
 
-The system should underclaim rather than overclaim.
+系统应少作断言，而非过度断言。
 
-## 15. Implementation Notes
+## 15. 实现说明
 
-Recommended v1 flow:
-1. cluster related events,
-2. compute dimension scores,
-3. apply minimum evidence checks,
-4. assign `main`, `side`, `dormant`, or `noise`,
-5. write explanation metadata for audit.
+建议的 v1 流程：
+1. 聚类相关事件，
+2. 计算各维度分数，
+3. 应用最低证据检查，
+4. 分配 `main`、`side`、`dormant` 或 `noise`，
+5. 写入用于审计的解释元数据。
 
-Suggested audit fields:
+建议的审计字段：
 
 ```json
 {
   "classification_score": 0.76,
   "classification_reason": [
-    "reappears across 4 scenes",
-    "organizes downstream decisions",
-    "remains active over 6 weeks"
+    "在 4 个场景中重新出现",
+    "组织下游决策",
+    "持续活跃超过 6 周"
   ]
 }
 ```

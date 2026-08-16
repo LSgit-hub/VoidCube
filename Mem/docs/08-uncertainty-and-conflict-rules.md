@@ -1,86 +1,86 @@
-# Uncertainty and Conflict Rules v0.2
+# 不确定性与冲突规则 v0.2
 
-## 1. Purpose
+## 1. 目的
 
-This document defines how MemAI v0.2 should represent uncertainty, disagreement, and revision without collapsing them into a single mechanism.
+本文定义 MemAI v0.2 应如何表示不确定性、分歧和修订，而不是把它们压缩成单一机制。
 
-The central problem is simple:
+核心问题很简单：
 
-- some memories are directly observed,
-- some are inferred from repeated evidence,
-- some remain weak and should not be surfaced by default,
-- some conflict with each other,
-- some are old versions that have been explicitly replaced.
+- 有些记忆是直接观察到的，
+- 有些是从重复证据中推断的，
+- 有些仍然薄弱，默认不应呈现，
+- 有些彼此冲突，
+- 有些是已被明确替换的旧版本。
 
-If all of these are modeled only through `status` or only through `supersedes`, the system becomes hard to trust and hard to audit.
+如果这些全部只通过 `status` 或只通过 `supersedes` 来建模，系统就会变得难以信任、难以审计。
 
-This document introduces explicit rules for:
+本文为以下方面引入明确规则：
 
-- epistemic state,
-- conflict state,
-- revision state,
-- default retrieval behavior.
+- 认知状态，
+- 冲突状态，
+- 修订状态，
+- 默认检索行为。
 
-## 2. Design Goal
+## 2. 设计目标
 
-MemAI should be able to answer all of the following distinctly:
+MemAI 应能逐一区分回答以下所有问题：
 
-- Is this memory directly supported?
-- Is this memory an inference?
-- Is this memory still unresolved?
-- Is this memory in conflict with another memory?
-- Was this memory replaced by a newer version?
+- 这条记忆是否有直接支持？
+- 这条记忆是否为推断？
+- 这条记忆是否仍未解决？
+- 这条记忆是否与另一条记忆冲突？
+- 这条记忆是否已被较新版本替换？
 
-These are different questions and should remain different in the data model.
+这些是不同的问题，在数据模型中也应保持不同。
 
-## 3. Three Separate Concepts
+## 3. 三个相互独立的概念
 
-### 3.1 Certainty
+### 3.1 确定性
 
-Certainty answers:
+确定性回答：
 
-- how justified is this memory right now?
+- 这条记忆当前有多少依据？
 
-This should be represented by:
+应通过以下字段表示：
 
 - `certainty_state`
 - `confidence`
 
-### 3.2 Conflict
+### 3.2 冲突
 
-Conflict answers:
+冲突回答：
 
-- does this memory disagree with another currently relevant memory?
+- 这条记忆是否与另一条当前相关的记忆相抵触？
 
-This should be represented by:
+应通过以下字段表示：
 
 - `conflict_refs`
 
-### 3.3 Revision
+### 3.3 修订
 
-Revision answers:
+修订回答：
 
-- was this memory explicitly replaced by a newer version of the same logical assertion?
+- 这条记忆是否已被同一逻辑断言的较新版本明确替换？
 
-This should be represented by:
+应通过以下字段表示：
 
 - `supersedes`
 - `status = superseded`
 
-## 4. Core Rule
+## 4. 核心规则
 
-MemAI must not treat these concepts as interchangeable.
+MemAI 不得把这些概念视为可互换。
 
-Specifically:
+具体而言：
 
-- a disputed memory is not automatically superseded
-- a superseded memory is not necessarily disputed
-- an inferred memory is not automatically disputed
-- a low-confidence memory is not automatically invalid
+- 存在争议的记忆不自动等于已取代
+- 已取代的记忆不一定存在争议
+- 推断出来的记忆不自动等于存在争议
+- 低置信度的记忆不自动等于无效
 
-## 5. Certainty State
+## 5. 确定性状态
 
-Suggested shared field:
+建议的共享字段：
 
 ```text
 certainty_state = observed | inferred | pending_verification | disputed | confirmed
@@ -88,91 +88,91 @@ certainty_state = observed | inferred | pending_verification | disputed | confir
 
 ### `observed`
 
-Use when the memory is directly supported by explicit source material.
+当记忆直接由明确的来源材料支持时使用。
 
-Examples:
+示例：
 
-- a user explicitly states a preference
-- a transcript explicitly records a decision
-- a repository command or code result confirms a change
+- 用户明确陈述某一偏好
+- 某条记录明确记载一个决定
+- 某条仓库命令或代码结果证实了一次变更
 
 ### `inferred`
 
-Use when the memory is supported by repeated or structural evidence, but still depends on interpretation.
+当记忆由重复或结构性证据支持、但仍依赖解读时使用。
 
-Examples:
+示例：
 
-- a project priority is inferred from repeated decisions
-- a user preference is inferred from several consistent requests
+- 某一项目优先级从重复的决策中推断得出
+- 某一用户偏好从多次一致的请求中推断得出
 
 ### `pending_verification`
 
-Use when the memory is plausible but not strong enough for default retrieval.
+当记忆看似合理但不足以进行默认检索时使用。
 
-Examples:
+示例：
 
-- only one weak mention exists
-- the evidence is indirect or context-dependent
-- the system believes the claim may be useful later but should not act on it yet
+- 只存在一次薄弱的提及
+- 证据是间接的或依赖上下文
+- 系统认为该主张日后可能有用，但暂时不应据此行动
 
 ### `disputed`
 
-Use when the memory remains live but conflicts with another active assertion.
+当记忆仍然存续、但与另一条活跃断言冲突时使用。
 
-Examples:
+示例：
 
-- one memory says the user prefers Chinese responses
-- another says the user prefers English during technical review
+- 一条记忆说用户偏好中文回复
+- 另一条说用户在技术评审期间偏好英文
 
-The system may later resolve this conflict through revision, scoping, or both.
+系统日后可通过修订、范围界定或两者并用解决这一冲突。
 
 ### `confirmed`
 
-Use when the memory began as observed or inferred but has since been reinforced strongly enough to be treated as highly stable.
+当记忆起初为已观察或已推断、但此后已得到足够强化而可被视为高度稳定时使用。
 
-Examples:
+示例：
 
-- the same preference recurs across many sessions
-- a project rule is restated and relied upon repeatedly
+- 同一偏好在多次会话中反复出现
+- 某条项目规则被反复重述并反复依赖
 
-## 6. Confidence vs Certainty State
+## 6. 置信度与确定性状态
 
-`confidence` and `certainty_state` should both exist because they answer different questions.
+`confidence` 和 `certainty_state` 应同时存在，因为它们回答不同的问题。
 
-- `confidence` is scalar
-- `certainty_state` is categorical
+- `confidence` 是标量
+- `certainty_state` 是分类值
 
-Examples:
+示例：
 
-- an `observed` memory may still have moderate confidence if the wording is ambiguous
-- an `inferred` memory may have high confidence if evidence is repeated and consistent
-- a `disputed` memory may have high confidence individually but still be in conflict with another strong memory
+- 如果措辞含糊，一条 `observed` 记忆仍可能只有中等置信度
+- 如果证据重复且一致，一条 `inferred` 记忆可能具有高置信度
+- 一条 `disputed` 记忆单独看可能置信度很高，但仍与另一条强记忆冲突
 
-## 7. Conflict Rules
+## 7. 冲突规则
 
-### 7.1 What Counts as Conflict
+### 7.1 什么算作冲突
 
-A conflict exists when two memory items cannot both be treated as current-valid under the same scope.
+当两条记忆在同一范围内无法同时被视为当前有效时，即存在冲突。
 
-Typical cases:
+典型情形：
 
-- contradictory preferences
-- conflicting factual claims
-- mutually exclusive constraints
-- identity claims that apply to the same subject and period
+- 相互矛盾的偏好
+- 相互冲突的事实主张
+- 互斥的约束
+- 适用于同一主体和同一时期的身份主张
 
-### 7.2 What Does Not Automatically Count as Conflict
+### 7.2 什么不自动算作冲突
 
-The following should not automatically be marked as conflict:
+以下内容不应被自动标记为冲突：
 
-- older superseded versions
-- broader vs narrower scopes
-- timeline progression where both statements can be true at different times
-- stylistic differences in summaries with equivalent substance
+- 较旧的已取代版本
+- 宽范围与窄范围的差异
+- 两个陈述可在不同时间分别成立的时间线演进
+- 实质相同、仅措辞风格不同的摘要差异
 
-### 7.3 Conflict Representation
+### 7.3 冲突表示
 
-Suggested fields:
+建议的字段：
 
 ```json
 {
@@ -181,119 +181,119 @@ Suggested fields:
 }
 ```
 
-Optional future fields:
+可选的未来字段：
 
 - `conflict_reason`
 - `scope_note`
 - `resolution_status`
 
-## 8. Revision Rules
+## 8. 修订规则
 
-### 8.1 When to Use Supersession
+### 8.1 何时使用取代
 
-Use supersession when a newer memory is the current-valid replacement for an older memory of the same logical assertion.
+当较新的记忆是同一逻辑断言中较旧记忆的当前有效替代时使用取代。
 
-Examples:
+示例：
 
-- old preference replaced by a new preference
-- old summary corrected by a revised summary
-- old fact updated due to explicit correction
+- 旧偏好被新偏好取代
+- 旧摘要被修订后的摘要纠正
+- 旧事实因明确的纠正而更新
 
-### 8.2 Supersession Effects
+### 8.2 取代的效果
 
-When a memory is superseded:
+当一条记忆被取代时：
 
-- the old memory remains stored
-- the new memory points to the old one in `supersedes`
-- the old memory becomes `status = superseded`
-- default retrieval should prefer the newest current-valid version
+- 旧记忆仍被保留
+- 新记忆在 `supersedes` 中指向旧记忆
+- 旧记忆变为 `status = superseded`
+- 默认检索应优先返回最新的当前有效版本
 
-### 8.3 Supersession Is Not Deletion
+### 8.3 取代不是删除
 
-MemAI should never erase the old version silently.
+MemAI 绝不静默抹去旧版本。
 
-The goal is auditability:
+目标是可审计性：
 
-- what used to be believed,
-- why it changed,
-- what is current-valid now.
+- 曾经相信什么，
+- 为何改变，
+- 现在什么当前有效。
 
-## 9. Timeline Examples
+## 9. 时间线示例
 
-### Example A: Revision Without Conflict
+### 示例 A：无冲突的修订
 
-1. March 1: "We plan to use provider profile A."
-2. March 10: "We switched to provider profile B."
+1. 3 月 1 日：“我们计划使用提供方配置 A。”
+2. 3 月 10 日：“我们切换到了提供方配置 B。”
 
-Correct modeling:
+正确的建模：
 
-- old memory becomes superseded
-- new memory is active
-- no persistent conflict is required if the switch is explicit and sequential
+- 旧记忆变为已取代
+- 新记忆为活跃状态
+- 如果切换是明确且顺序发生的，则无需保留持久冲突
 
-### Example B: Conflict Without Supersession
+### 示例 B：无取代的冲突
 
-1. March 1: transcript suggests the user prefers Chinese
-2. March 2: another transcript suggests the user prefers English for code review
+1. 3 月 1 日：记录显示用户偏好中文
+2. 3 月 2 日：另一条记录显示用户在代码评审时偏好英文
 
-Correct modeling:
+正确的建模：
 
-- both memories may remain active
-- both may carry `certainty_state = disputed`
-- conflict should remain visible until the scope is clarified or a revision resolves it
+- 两条记忆都可以保持活跃
+- 两者都可标记为 `certainty_state = disputed`
+- 冲突应保持可见，直到范围被澄清或修订解决它
 
-### Example C: Pending Verification
+### 示例 C：待验证
 
-1. A single weak statement suggests the user may dislike long responses
+1. 一次薄弱的陈述显示用户可能不喜欢冗长的回复
 
-Correct modeling:
+正确的建模：
 
-- create a low-surface memory only if the system policy allows it
-- mark it `pending_verification`
-- do not default to surfacing it in concise answers
+- 仅在系统策略允许时创建一条低呈现度记忆
+- 将其标记为 `pending_verification`
+- 不要默认在简洁回答中呈现它
 
-## 10. Retrieval Rules
+## 10. 检索规则
 
-### 10.1 Default Retrieval
+### 10.1 默认检索
 
-Default retrieval should prefer:
+默认检索应优先：
 
 1. `confirmed`
 2. `observed`
-3. sufficiently strong `inferred`
+3. 足够强的 `inferred`
 
-Default retrieval should suppress:
+默认检索应抑制：
 
 - `pending_verification`
 - `disputed`
 - `superseded`
 
-unless the user explicitly requests audit, conflict inspection, or historical lineage.
+除非用户明确请求审计、冲突检查或历史谱系。
 
-### 10.2 Audit Retrieval
+### 10.2 审计检索
 
-Audit retrieval should expose:
+审计检索应暴露：
 
-- current active version
-- superseded ancestors
-- conflicting parallel assertions
-- evidence traces for each branch
+- 当前活跃版本
+- 已取代的祖先版本
+- 相互冲突的并行断言
+- 每个分支的证据线索
 
-### 10.3 Answer Assembly Rule
+### 10.3 回答组装规则
 
-When a response contains a disputed or weak memory, the answer must say so plainly.
+当回答包含存在争议或薄弱的记忆时，回答必须明确说明。
 
-The system should avoid phrasing such as:
+系统应避免如下措辞：
 
-- "The user prefers X"
+- “用户偏好 X”
 
-when the safer phrasing is:
+而更稳妥的措辞是：
 
-- "There is mixed evidence about whether the user prefers X"
+- “关于用户是否偏好 X，证据不一”
 
-## 11. State Transitions
+## 11. 状态转移
 
-Suggested common transitions:
+建议的常见转移：
 
 ```text
 pending_verification -> observed
@@ -306,18 +306,18 @@ disputed -> confirmed
 disputed -> superseded
 ```
 
-Not all transitions need to be implemented in v0.2, but they provide a good conceptual map.
+v0.2 无需实现所有转移，但它们提供了一个良好的概念地图。
 
-## 12. Scope and Time Rules
+## 12. 范围与时间规则
 
-Many apparent conflicts are really missing scope.
+许多看似冲突的情形实际上只是缺少范围界定。
 
-Examples:
+示例：
 
-- prefers Chinese generally
-- prefers English for code review
+- 总体上偏好中文
+- 代码评审时偏好英文
 
-These may both be valid if the system supports scope fields such as:
+如果系统支持如下范围字段，两者可能同时成立：
 
 - `domain`
 - `context`
@@ -325,16 +325,16 @@ These may both be valid if the system supports scope fields such as:
 - `valid_from`
 - `valid_to`
 
-v0.2 does not need full scope modeling immediately, but conflict detection should leave room for this resolution path.
+v0.2 无需立即实现完整的范围建模，但冲突检测应为这一解决路径留出空间。
 
-## 13. Suggested Data Additions
+## 13. 建议的数据新增
 
-For v0.2, the smallest useful additions are:
+对于 v0.2，最小而有用的新增是：
 
 - `certainty_state`
 - `conflict_refs`
 
-For later versions, useful additions may include:
+对于后续版本，有用的新增可能包括：
 
 - `resolution_note`
 - `resolution_strategy`
@@ -342,25 +342,25 @@ For later versions, useful additions may include:
 - `verification_count`
 - `support_count`
 
-## 14. Benchmark Guidance
+## 14. 基准测试指导
 
-The evaluation layer should distinguish:
+评估层应区分：
 
-- correct supersession
-- correct conflict creation
-- correct suppression of weak memories
-- correct wording of uncertainty in retrieval
+- 正确的取代
+- 正确的冲突创建
+- 对薄弱记忆的正确抑制
+- 检索中对不确定性的正确措辞
 
-Suggested fixture families:
+建议的测试夹具族：
 
-- explicit correction with clean supersession
-- unresolved contradiction
-- time-scoped preference change
-- repeated reinforcement leading to confirmation
-- weak evidence remaining pending
-- ambiguous evidence that should not become stable memory
+- 明确纠正与干净的取代
+- 未解决的矛盾
+- 按时间限定范围的偏好变化
+- 反复强化导致确认
+- 薄弱证据保持待验证
+- 不应成为稳定记忆的含糊证据
 
-Suggested metrics:
+建议的指标：
 
 - uncertainty_precision
 - conflict_detection
@@ -368,44 +368,44 @@ Suggested metrics:
 - restraint_under_ambiguity
 - current_view_correctness
 
-## 15. Minimum Viable v0.2 Compliance
+## 15. 最小可行 v0.2 合规性
 
-An implementation is good enough for the first cut if it can:
+若首个切片的实现能够做到以下各项，即已足够：
 
-- assign `certainty_state` to profile/fact memory
-- mark explicit replacement through `supersedes`
-- represent parallel disagreement through `conflict_refs`
-- exclude `pending_verification`, `disputed`, and `superseded` from default concise retrieval
-- expose them through audit retrieval
+- 为画像/事实记忆赋予 `certainty_state`
+- 通过 `supersedes` 标记明确替换
+- 通过 `conflict_refs` 表示并行分歧
+- 将 `pending_verification`、`disputed` 和 `superseded` 排除在默认简洁检索之外
+- 通过审计检索暴露它们
 
-## 16. Non-Goals
+## 16. 非目标
 
-The first cut should not attempt:
+首个切片不应尝试：
 
-- full truth-maintenance logic
-- automatic probabilistic conflict resolution
-- global theorem-like consistency guarantees
-- complex ontology-driven contradiction reasoning
+- 完整的真值维护逻辑
+- 自动的概率式冲突解决
+- 全局的、定理式的一致性保证
+- 复杂的本体驱动的矛盾推理
 
-The right first step is explicit structure, not overly ambitious automation.
+正确的第一步是明确的结构，而不是过于雄心勃勃的自动化。
 
-## 17. Recommended Implementation Order
+## 17. 建议的实施顺序
 
-1. Add `certainty_state` to the new profile/fact memory layer
-2. Add `conflict_refs` to the same layer
-3. Update retrieval defaults and audit views
-4. Add revision rules that keep supersession and conflict separate
-5. Add benchmark fixtures for both positive and negative cases
-6. Later consider extending these concepts back into timeline memory
+1. 将 `certainty_state` 添加到新的画像/事实记忆层
+2. 将 `conflict_refs` 添加到同一层
+3. 更新检索默认值和审计视图
+4. 增加使取代与冲突保持分离的修订规则
+5. 为正反两种情况增加基准测试夹具
+6. 日后考虑将这些概念扩展回时间线记忆
 
-## 18. Success Criteria
+## 18. 成功标准
 
-This design is successful when MemAI can clearly separate:
+当 MemAI 能清晰区分以下各项时，本设计即告成功：
 
-- what is current-valid,
-- what is uncertain,
-- what is disputed,
-- what was previously believed,
-- what changed and why.
+- 什么是当前有效的，
+- 什么是不确定的，
+- 什么是存在争议的，
+- 什么曾被视为成立的，
+- 什么发生了变化以及为何变化。
 
-That separation is a prerequisite for turning MemAI from a memory summarizer into a trustworthy memory system.
+这种区分是 MemAI 从记忆摘要器转变为可信记忆系统的前提。
