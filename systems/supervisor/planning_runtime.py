@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -251,6 +252,10 @@ class PlanningRuntimeMixin:
                     drive_input,
                     evidence_packet=evidence_packet,
                 )
+            if request.get("include_memory_maintenance_status") and gate_active:
+                drive_input["memory_maintenance_status"] = (
+                    await self._fetch_memory_maintenance_status()
+                )
             return drive_input
 
         drive_input_request: Dict[str, Any] = {}
@@ -272,6 +277,10 @@ class PlanningRuntimeMixin:
                 drive_input_request["perception_scope"] = "autonomous_only"
                 drive_input_request["evidence_packet"] = evidence_packet
         drive_input = await self.evaluate_drive_input(drive_input_request)
+        if request.get("include_memory_maintenance_status") and gate_active:
+            drive_input["memory_maintenance_status"] = (
+                await self._fetch_memory_maintenance_status()
+            )
         return self._project_drive_input_snapshot(drive_input)
 
     def _build_endogenous_meta_governance(
@@ -1247,6 +1256,28 @@ class PlanningRuntimeMixin:
         logger.warning(f"Failed to fetch gateway activity snapshot: {last_error}")
         raise HTTPException(status_code=503, detail="网关活动快照暂不可用")
 
+    async def _fetch_memory_maintenance_status(self) -> Dict[str, Any]:
+        """Read Memory's cadence state for the Auto candidate gate."""
+        now = time.monotonic()
+        cached_at = getattr(self, "_memory_maintenance_status_cached_at", 0.0)
+        cached = getattr(self, "_memory_maintenance_status_cache", None)
+        if isinstance(cached, dict) and now - cached_at < 30.0:
+            return dict(cached)
+        url = f"{self.config.execution.gateway_address}/api/mem/compressed/rules-status"
+        try:
+            timeout = aiohttp.ClientTimeout(total=2)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"Memory rules status HTTP {response.status}")
+                    payload = await response.json()
+            status = dict(payload) if isinstance(payload, dict) else {}
+        except Exception as exc:
+            status = {"status": "unavailable", "error": type(exc).__name__}
+        self._memory_maintenance_status_cache = dict(status)
+        self._memory_maintenance_status_cached_at = now
+        return status
+
     async def get_runtime_activity(self):
         snapshot = await self._fetch_gateway_activity_snapshot()
         return {
@@ -1386,6 +1417,9 @@ class PlanningRuntimeMixin:
 
     async def evaluate_endogenous_drive(self, request: dict | None = None):
         """Evaluate endogenous cognition state and API-B judgement projections."""
+
+        request = dict(request or {})
+        request.setdefault("include_memory_maintenance_status", True)
 
         def schedule_candidate_items(candidates: list[Any]) -> list[Dict[str, Any]]:
             return self._schedule_allocator.apply_to_candidates(

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from systems.memory.backup import MemoryBackupManager
@@ -127,9 +130,15 @@ class MemoryDatabaseBootstrap:
             setup_memory_promotion_schema(connection)
             self._migrate_scope_schema(cursor)
             self._migrate_domain_schema(cursor)
+            quarantined = self._quarantine_evaluation_memories(cursor)
             self._setup_subsystem_schema(connection)
             self._create_indexes(cursor)
             connection.commit()
+            if quarantined:
+                logger.warning(
+                    "Quarantined %d compressed memories sourced from evaluation turns",
+                    quarantined,
+                )
         finally:
             connection.close()
 
@@ -457,6 +466,54 @@ class MemoryDatabaseBootstrap:
             seeded,
             released,
         )
+
+    @staticmethod
+    def _quarantine_evaluation_memories(cursor: sqlite3.Cursor) -> int:
+        rows = cursor.execute(
+            "SELECT DISTINCT cm.memory_id, cm.owner_id, cm.workspace_id, cm.memory_domain "
+            "FROM compressed_memories AS cm "
+            "JOIN json_each(CASE WHEN json_valid(COALESCE(cm.source_turns, '[]')) "
+            "THEN cm.source_turns ELSE '[]' END) AS source "
+            "JOIN turns AS turn_row ON turn_row.turn_id = CAST(source.value AS TEXT) "
+            "WHERE cm.hidden = 0 AND json_valid(COALESCE(turn_row.tags, '[]')) "
+            "AND EXISTS (SELECT 1 FROM json_each(turn_row.tags) AS tag "
+            "WHERE lower(CAST(tag.value AS TEXT)) = 'evaluation')"
+        ).fetchall()
+        if not rows:
+            return 0
+
+        now = datetime.now(timezone.utc).isoformat()
+        for memory_id, owner_id, workspace_id, memory_domain in rows:
+            cursor.execute(
+                "UPDATE compressed_memories SET hidden = 1 WHERE memory_id = ?",
+                (memory_id,),
+            )
+            audit_identity = "\0".join(
+                (
+                    str(owner_id),
+                    str(workspace_id),
+                    str(memory_domain),
+                    str(memory_id),
+                )
+            )
+            digest = hashlib.sha256(audit_identity.encode("utf-8")).hexdigest()
+            cursor.execute(
+                "INSERT OR IGNORE INTO memory_deletion_audit "
+                "(audit_id, memory_domain, target_kind, target_hash, reason, "
+                "deleted_counts, owner_id, workspace_id, created_at) "
+                "VALUES (?, ?, 'compressed_memory_quarantine', ?, ?, ?, ?, ?, ?)",
+                (
+                    f"evaluation-quarantine-{digest[:24]}",
+                    str(memory_domain),
+                    hashlib.sha256(str(memory_id).encode("utf-8")).hexdigest(),
+                    "Excluded compressed memory sourced from evaluation turns",
+                    json.dumps({"compressed_memories_hidden": 1}, sort_keys=True),
+                    str(owner_id),
+                    str(workspace_id),
+                    now,
+                ),
+            )
+        return len(rows)
 
     @staticmethod
     def _column_names(cursor: sqlite3.Cursor, table: str) -> set[str]:

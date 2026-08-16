@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from systems.supervisor.endogenous_candidate_pipeline import (
     active_api_b_judgement_candidate_kinds,
@@ -44,19 +44,39 @@ def resolve_candidate_stream_eligibility(
     body_projection_available: bool,
     body_growth_blocked: bool,
     body_growth_quota: int,
+    memory_maintenance_status: Mapping[str, Any] | None = None,
     now: Optional[datetime] = None,
 ) -> CandidateStreamEligibility:
     task_list = list(api_b_judgement_tasks)
     active = frozenset(active_api_b_judgement_candidate_kinds(task_list))
     existing = {str(key or "").strip() for key in existing_keys}
+    memory_status = dict(memory_maintenance_status or {})
+    memory_run_status = str(memory_status.get("status") or "").strip().lower()
+    memory_status_reliable = False
+    memory_due = True
+    if memory_run_status in {"accepted", "running", "in_progress"}:
+        memory_status_reliable = True
+        memory_due = False
+    elif memory_run_status in {"idle", "completed"} and "maintenance_due" in memory_status:
+        memory_status_reliable = True
+        memory_due = bool(memory_status.get("maintenance_due"))
+    elif memory_run_status in {"failed", "cancelled"}:
+        memory_status_reliable = True
+        memory_due = True
     memory_available = (
         memory_planning_eligible
         and "memory_maintenance" not in active
         and MEMORY_MAINTENANCE_STABLE_KEY not in existing
-        and not has_recent_static_governance_completion(
-            task_list,
-            stable_key=MEMORY_MAINTENANCE_STABLE_KEY,
-            now=now,
+        and (
+            (memory_due if memory_status_reliable else True)
+            and (
+                memory_status_reliable
+                or not has_recent_static_governance_completion(
+                    task_list,
+                    stable_key=MEMORY_MAINTENANCE_STABLE_KEY,
+                    now=now,
+                )
+            )
         )
     )
     truthfulness_available = (

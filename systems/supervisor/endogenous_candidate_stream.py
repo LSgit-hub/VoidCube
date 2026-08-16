@@ -112,6 +112,9 @@ def prepare_candidate_stream(
         body_projection_available=bool(body_projection.get("available")),
         body_growth_blocked=deliberation.reflection.body_growth_blocked,
         body_growth_quota=deliberation.adaptive_policy.body_growth_quota,
+        memory_maintenance_status=dict(
+            drive_input.get("memory_maintenance_status") or {}
+        ),
     )
     backlog_pressure_penalties = build_backlog_pressure_penalties(drive_context)
     intents_by_kind = {

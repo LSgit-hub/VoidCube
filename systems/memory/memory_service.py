@@ -1836,6 +1836,14 @@ class MemoryApplicationService:
             snapshot["rules"] = dict(rules)
         return snapshot
 
+    def _maintenance_due(self) -> bool:
+        if self._maintenance_lock.locked():
+            return False
+        last_runs = list(self._last_rule_run_monotonic.values())
+        if not last_runs:
+            return True
+        return time.monotonic() - min(last_runs) >= self.config.compression_interval
+
     @staticmethod
     def _maintenance_rule_errors(results: Dict[str, Any]) -> list[str]:
         return [
@@ -1935,6 +1943,7 @@ class MemoryApplicationService:
                 if key != "rules"
             },
             "maintenance_run": maintenance_run,
+            "maintenance_due": self._maintenance_due(),
             "rules": {
                 name: {
                     "last_run": self._last_rule_run.get(name),
