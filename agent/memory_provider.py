@@ -9,6 +9,7 @@ The active implementation is ``plugins.memory.mem.MemMemoryProvider``.
 
 Lifecycle (called by MemoryManager, wired in run_agent.py):
   initialize()          — connect, create resources, warm up
+  bind_session()        — switch provider state to the active session
   system_prompt_block()  — static text for the system prompt
   prefetch(query)        — synchronous recall before each turn
   sync_turn(user, asst)  — async write after each turn
@@ -74,6 +75,10 @@ class MemoryProvider(ABC):
           - parent_session_id (str): For subagents, the parent's session_id.
           - user_id (str): Platform user identifier (gateway sessions).
         """
+
+    @abstractmethod
+    def bind_session(self, session_id: str) -> None:
+        """Bind session-scoped provider state to the active Agent session."""
 
     def system_prompt_block(self) -> str:
         """Return text to include in the system prompt.

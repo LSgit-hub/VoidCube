@@ -169,7 +169,8 @@ compile_commands.json
 # ==========================================
 # 🗂️ 其他临时文件和缓存
 # ==========================================
-/tests/
+/tests/*
+!/tests/test_memory_session_rebinding.py
 /docs/
 .arts/
 .mypy_cache/

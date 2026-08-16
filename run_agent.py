@@ -973,6 +973,9 @@ class AIAgent:
         self.session_start = session_start
         self._session_persistence.set_session_id(session_id)
         self._session_persistence.session_start = session_start
+        memory_manager = getattr(self, "_memory_manager", None)
+        if memory_manager:
+            memory_manager.bind_session(session_id)
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_start(
                 session_id,

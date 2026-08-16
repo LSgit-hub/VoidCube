@@ -152,6 +152,11 @@ class MemoryManager:
                 return p
         return None
 
+    def bind_session(self, session_id: str) -> None:
+        """Bind every provider to the Agent's active session identity."""
+        for provider in self._providers:
+            provider.bind_session(session_id)
+
     # -- System prompt -------------------------------------------------------
 
     def build_system_prompt(self) -> str:

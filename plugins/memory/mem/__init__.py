@@ -83,8 +83,14 @@ class MemMemoryProvider(MemoryProvider):
     def is_available(self) -> bool:
         return True
 
+    def bind_session(self, session_id: str) -> None:
+        resolved_session_id = str(session_id or "").strip()
+        if not resolved_session_id:
+            raise ValueError("Memory provider session_id is required")
+        self._session_id = resolved_session_id
+
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        self._session_id = str(session_id or "").strip()
+        self.bind_session(session_id)
         try:
             from VoidCube_cli.config import load_config
 
