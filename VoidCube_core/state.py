@@ -818,6 +818,36 @@ class SessionDB:
             return matches[0]
         return None
 
+    def resolve_resumable_session_id(self, session_id: str) -> str:
+        """Resolve a logical session to its latest non-empty compression segment."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                WITH RECURSIVE compression_lineage(id, end_reason) AS (
+                    SELECT id, end_reason FROM sessions WHERE id = ?
+                    UNION ALL
+                    SELECT child.id, child.end_reason
+                    FROM sessions child
+                    JOIN compression_lineage parent
+                      ON child.parent_session_id = parent.id
+                    WHERE parent.end_reason = 'compression'
+                )
+                SELECT segment.id
+                FROM sessions segment
+                JOIN compression_lineage lineage ON lineage.id = segment.id
+                WHERE EXISTS (
+                    SELECT 1 FROM messages WHERE session_id = segment.id
+                )
+                ORDER BY COALESCE(
+                    (SELECT MAX(timestamp) FROM messages WHERE session_id = segment.id),
+                    segment.started_at
+                ) DESC, segment.started_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        return str(row["id"]) if row else session_id
+
     # Maximum length for session titles
     MAX_TITLE_LENGTH = 100
 

@@ -73,6 +73,7 @@ class CliAgentTurnExecutorPorts:
     execution_ports: Callable[[str], TurnExecutionPorts]
     result_ports: Callable[[], TurnResultApplicationPorts]
     postprocessing_ports: Callable[[], TurnPostprocessingPorts]
+    synchronize_session_identity: Callable[[], None]
     finish_turn: Callable[[AppliedTurnResult], None]
     handle_error: Callable[[Exception, bool, str, bool], None]
     finish_failed_turn: Callable[[Exception, bool], None] | None = None
@@ -157,6 +158,7 @@ class CliAgentTurnExecutorRuntime:
             autonomous_timeout_writeback_succeeded = (
                 execution.autonomous_timeout_writeback_succeeded
             )
+            ports.synchronize_session_identity()
             if cancellation.cancelled:
                 return None
 
@@ -195,6 +197,7 @@ class CliAgentTurnExecutorRuntime:
             return self._result(applied, postprocessed)
         except Exception as error:
             try:
+                ports.synchronize_session_identity()
                 ports.handle_error(
                     error,
                     autonomous_timeout_reported,

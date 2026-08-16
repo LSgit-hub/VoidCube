@@ -21,6 +21,8 @@ class SessionRepository(Protocol):
 
     def get_messages_as_conversation(self, session_id: str) -> list[Message]: ...
 
+    def resolve_resumable_session_id(self, session_id: str) -> str: ...
+
     def create_session(
         self,
         session_id: str,
@@ -204,13 +206,16 @@ def hydrate_session(
             status=SessionHydrationStatus.MISSING,
         )
 
-    history = _load_conversation_history(repository, session_id)
+    resolved_session_id = repository.resolve_resumable_session_id(session_id)
+    if resolved_session_id != session_id:
+        metadata = repository.get_session(resolved_session_id) or metadata
+    history = _load_conversation_history(repository, resolved_session_id)
     try:
-        repository.reopen_session(session_id)
+        repository.reopen_session(resolved_session_id)
     except Exception:
         pass
     return SessionHydration(
-        session_id=session_id,
+        session_id=resolved_session_id,
         status=(
             SessionHydrationStatus.READY
             if history
@@ -385,19 +390,22 @@ def resume_session(
     metadata = repository.get_session(target_session_id)
     if metadata is None:
         raise SessionNotFoundError(target_session_id)
-    if target_session_id == current_session_id:
+    resolved_session_id = repository.resolve_resumable_session_id(target_session_id)
+    if resolved_session_id != target_session_id:
+        metadata = repository.get_session(resolved_session_id) or metadata
+    if resolved_session_id == current_session_id:
         raise SessionAlreadyActiveError(target_session_id)
 
     _end_session_best_effort(repository, current_session_id, "resumed_other")
-    history = _load_conversation_history(repository, target_session_id)
+    history = _load_conversation_history(repository, resolved_session_id)
     try:
-        repository.reopen_session(target_session_id)
+        repository.reopen_session(resolved_session_id)
     except Exception:
         pass
 
     return ResumeSessionResult(
         state=SessionLifecycleState(
-            session_id=target_session_id,
+            session_id=resolved_session_id,
             session_start=session_start,
             conversation_history=history,
             resumed=True,

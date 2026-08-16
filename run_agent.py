@@ -962,16 +962,15 @@ class AIAgent:
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_reset()
 
-    def activate_session(
+    def _bind_session_identity(
         self,
         session_id: str,
         *,
         session_start: datetime,
     ) -> None:
-        """Switch this runtime to a session selected by the application layer."""
+        """Bind every session-aware runtime to the same persisted identity."""
         self.session_id = session_id
         self.session_start = session_start
-        self.reset_session_state()
         self._session_persistence.set_session_id(session_id)
         self._session_persistence.session_start = session_start
         if hasattr(self, "context_compressor") and self.context_compressor:
@@ -982,6 +981,16 @@ class AIAgent:
                 model=self.model,
                 context_length=getattr(self.context_compressor, "context_length", 0),
             )
+
+    def activate_session(
+        self,
+        session_id: str,
+        *,
+        session_start: datetime,
+    ) -> None:
+        """Switch this runtime to a session selected by the application layer."""
+        self.reset_session_state()
+        self._bind_session_identity(session_id, session_start=session_start)
 
         from tools.todo_tool import TodoStore
 
@@ -2826,12 +2835,15 @@ class AIAgent:
         if self._session_db:
             try:
                 # Propagate title to the new session with auto-numbering
-                old_title = self._session_db.get_session_title(self.session_id)
-                self._session_db.end_session(self.session_id, "compression")
                 old_session_id = self.session_id
-                self.session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+                old_title = self._session_db.get_session_title(old_session_id)
+                continuation_start = datetime.now()
+                continuation_session_id = (
+                    f"{continuation_start.strftime('%Y%m%d_%H%M%S')}_"
+                    f"{uuid.uuid4().hex[:6]}"
+                )
                 self._session_db.create_session(
-                    session_id=self.session_id,
+                    session_id=continuation_session_id,
                     source=self.platform or os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
                     model=self.model,
                     parent_session_id=old_session_id,
@@ -2840,10 +2852,21 @@ class AIAgent:
                 if old_title:
                     try:
                         new_title = self._session_db.get_next_title_in_lineage(old_title)
-                        self._session_db.set_session_title(self.session_id, new_title)
-                    except (ValueError, Exception) as e:
+                        self._session_db.set_session_title(
+                            continuation_session_id,
+                            new_title,
+                        )
+                    except Exception as e:
                         logger.debug("Could not propagate title on compression: %s", e)
-                self._session_db.update_system_prompt(self.session_id, new_system_prompt)
+                self._session_db.update_system_prompt(
+                    continuation_session_id,
+                    new_system_prompt,
+                )
+                self._session_db.end_session(old_session_id, "compression")
+                self._bind_session_identity(
+                    continuation_session_id,
+                    session_start=continuation_start,
+                )
             except Exception as e:
                 logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
 

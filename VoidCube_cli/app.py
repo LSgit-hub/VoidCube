@@ -4083,6 +4083,20 @@ class VoidcubeCLI:
                 emit=_cprint,
             )
 
+        def synchronize_session_identity() -> None:
+            agent = owner.agent
+            if agent is None:
+                return
+            agent_session_id = str(agent.session_id or "").strip()
+            if not agent_session_id or agent_session_id == application_runtime.state.session_id:
+                return
+            application_runtime.continue_session(
+                agent_session_id,
+                session_start=agent.session_start,
+            )
+            if owner is self:
+                self._chat_blocks().bind_session(agent_session_id, clear=False)
+
         def handle_error(
             error: Exception,
             timeout_reported: bool,
@@ -4142,6 +4156,7 @@ class VoidcubeCLI:
                 execution_ports=execution_ports,
                 result_ports=result_ports,
                 postprocessing_ports=postprocessing_ports,
+                synchronize_session_identity=synchronize_session_identity,
                 finish_turn=lambda applied: application_runtime.finish_turn(
                     applied.outcome,
                     history_applied=True,

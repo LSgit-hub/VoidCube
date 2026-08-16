@@ -152,6 +152,15 @@ class ApplicationRuntime:
     def clear_session_hydration(self) -> None:
         self.state.session_hydration = None
 
+    def continue_session(self, session_id: str, *, session_start: datetime) -> None:
+        """Rebind an active conversation to a persisted continuation session."""
+        normalized = str(session_id or "").strip()
+        if not normalized or normalized == self.state.session_id:
+            return
+        self.state.session_id = normalized
+        self.state.session_start = session_start
+        self.clear_session_hydration()
+
     def load_session_hydration(
         self,
         *,
@@ -166,6 +175,11 @@ class ApplicationRuntime:
                 repository=repository,
                 session_id=session_id,
             )
+            if hydration.session_id != self.state.session_id:
+                self.continue_session(
+                    hydration.session_id,
+                    session_start=self.state.session_start,
+                )
             self.set_session_hydration(hydration)
         if hydration.status is SessionHydrationStatus.READY:
             self.replace_history(hydration.conversation_history)
