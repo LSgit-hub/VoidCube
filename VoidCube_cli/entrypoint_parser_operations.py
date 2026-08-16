@@ -108,6 +108,17 @@ def register_operations_commands(subparsers: argparse._SubParsersAction) -> None
         memory_sub = memory_parser.add_subparsers(dest="memory_command")
         memory_sub.add_parser("setup", help="Initialize and show canonical Mem")
         memory_sub.add_parser("status", help="Show canonical Mem status")
+        redaction_parser = memory_sub.add_parser(
+            "redaction",
+            help="Enable or disable redaction for Memory persistence and recall",
+        )
+        redaction_parser.add_argument(
+            "state",
+            choices=("on", "off", "status"),
+            nargs="?",
+            default="status",
+            help="on, off, or status (default: status)",
+        )
 
 
         memory_parser.set_defaults(func=cmd_memory)

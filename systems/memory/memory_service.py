@@ -95,19 +95,21 @@ _CMEM_COLUMNS = (
 )
 
 
-def _redact_for_memory_storage(value: Any) -> Any:
-    """Recursively redact secrets before any value enters durable memory."""
+def _prepare_memory_storage_value(value: Any, *, redact: bool) -> Any:
+    """Prepare a nested value for Memory persistence under the active policy."""
+    if not redact:
+        return value
     if isinstance(value, str):
         return redact_sensitive_text(value, force=True)
     if isinstance(value, dict):
         return {
-            str(key): _redact_for_memory_storage(item)
+            str(key): _prepare_memory_storage_value(item, redact=True)
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_redact_for_memory_storage(item) for item in value]
+        return [_prepare_memory_storage_value(item, redact=True) for item in value]
     if isinstance(value, tuple):
-        return tuple(_redact_for_memory_storage(item) for item in value)
+        return tuple(_prepare_memory_storage_value(item, redact=True) for item in value)
     return value
 
 
@@ -566,6 +568,12 @@ class MemoryApplicationService:
         )
         self._database_bootstrap.initialize()
         self._semantic_index = SemanticMemoryIndex(self._db_path)
+
+    def _memory_storage_value(self, value: Any) -> Any:
+        return _prepare_memory_storage_value(
+            value,
+            redact=self.config.redact_before_store,
+        )
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
@@ -1272,7 +1280,7 @@ class MemoryApplicationService:
         evidence_refs = list(
             dict.fromkeys(
                 str(item).strip()
-                for item in _redact_for_memory_storage(request.evidence_refs)
+                for item in self._memory_storage_value(request.evidence_refs)
             )
         )
         if not evidence_refs or any(not item for item in evidence_refs):
@@ -1315,16 +1323,16 @@ class MemoryApplicationService:
             verified_fields = {
                 "identity_experience": True,
                 "verified": True,
-                "identity_title": str(_redact_for_memory_storage(request.title)).strip(),
-                "identity_summary": str(_redact_for_memory_storage(request.summary)).strip(),
+                "identity_title": str(self._memory_storage_value(request.title)).strip(),
+                "identity_summary": str(self._memory_storage_value(request.summary)).strip(),
                 "evidence_refs": evidence_refs,
                 "verified_by": str(
-                    _redact_for_memory_storage(request.verified_by)
+                    self._memory_storage_value(request.verified_by)
                 ).strip(),
-                "topics": list(dict.fromkeys(_redact_for_memory_storage(request.topics))),
-                "entities": list(dict.fromkeys(_redact_for_memory_storage(request.entities))),
+                "topics": list(dict.fromkeys(self._memory_storage_value(request.topics))),
+                "entities": list(dict.fromkeys(self._memory_storage_value(request.entities))),
                 "event_kind": str(
-                    _redact_for_memory_storage(request.event_kind)
+                    self._memory_storage_value(request.event_kind)
                 ).strip(),
                 "importance": request.importance,
             }
@@ -1497,13 +1505,13 @@ class MemoryApplicationService:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
                 (
                     proposal_id, proposal.target_memory_id, proposal.baseline_version,
-                    _redact_for_memory_storage(proposal.reason),
+                    self._memory_storage_value(proposal.reason),
                     json.dumps(
-                        _redact_for_memory_storage(proposal.proposed_changes),
+                        self._memory_storage_value(proposal.proposed_changes),
                         ensure_ascii=False,
                     ),
                     json.dumps(
-                        _redact_for_memory_storage(proposal.evidence),
+                        self._memory_storage_value(proposal.evidence),
                         ensure_ascii=False,
                     ),
                     proposal.source_actor, created_at,
@@ -2054,6 +2062,10 @@ class MemoryApplicationService:
             ),
             "service": "memory-service",
             "service_reachable": True,
+            "redaction": {
+                "enabled": self.config.redact_before_store,
+                "scope": "memory_persistence_and_recall",
+            },
             "gateway_registration": {
                 "healthy": self._gateway_registration_healthy,
                 "service_id": self._gateway_service_id,
@@ -2334,7 +2346,7 @@ class MemoryApplicationService:
                 memory_domain,
                 now,
                 now,
-                json.dumps(_redact_for_memory_storage(request.metadata)),
+                json.dumps(self._memory_storage_value(request.metadata)),
             ),
         )
         conn.commit()
@@ -2459,15 +2471,15 @@ class MemoryApplicationService:
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
         )
-        stored_text = str(_redact_for_memory_storage(request.text))
+        stored_text = str(self._memory_storage_value(request.text))
         stored_tags = list(
             dict.fromkeys(
-                str(_redact_for_memory_storage(tag)).strip()
+                str(self._memory_storage_value(tag)).strip()
                 for tag in request.tags
                 if str(tag).strip()
             )
         )
-        stored_metadata = _redact_for_memory_storage(request.metadata)
+        stored_metadata = self._memory_storage_value(request.metadata)
         now = datetime.now().astimezone().isoformat()
         # Ensure session exists in the same DB transaction as the turn write.
         ses = conn.execute(
@@ -2588,10 +2600,10 @@ class MemoryApplicationService:
                     json.dumps({"source": "agent_memory_provider"}),
                 ),
             )
-            stored_metadata = _redact_for_memory_storage(request.metadata)
+            stored_metadata = self._memory_storage_value(request.metadata)
             stored_tags = list(
                 dict.fromkeys(
-                    str(_redact_for_memory_storage(tag)).strip()
+                    str(self._memory_storage_value(tag)).strip()
                     for tag in request.tags
                     if str(tag).strip()
                 )
@@ -2601,7 +2613,7 @@ class MemoryApplicationService:
                 ("user", request.user_content),
                 ("agent", request.assistant_content),
             ):
-                text = str(_redact_for_memory_storage(content or "")).strip()
+                text = str(self._memory_storage_value(content or "")).strip()
                 if not text:
                     continue
                 dedup_key = f"{request.write_id}:{speaker}"
@@ -2753,9 +2765,9 @@ class MemoryApplicationService:
     ):
         request = request.model_copy(
             update={
-                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+                "reason": str(self._memory_storage_value(request.reason)).strip(),
                 "governance_ref": str(
-                    _redact_for_memory_storage(request.governance_ref)
+                    self._memory_storage_value(request.governance_ref)
                 ).strip(),
             }
         )
@@ -2816,7 +2828,7 @@ class MemoryApplicationService:
     ):
         request = request.model_copy(
             update={
-                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+                "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
         conn = open_memory_sqlite(self._db_path)
@@ -2889,7 +2901,7 @@ class MemoryApplicationService:
     ):
         request = request.model_copy(
             update={
-                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+                "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
         conn = open_memory_sqlite(self._db_path)
@@ -3589,7 +3601,10 @@ class MemoryApplicationService:
                     for item in payload["results"]
                     if item.get("promotion_ref_id")
                 )
-            payload["context"] = format_recall_context(payload["results"])
+            payload["context"] = format_recall_context(
+                payload["results"],
+                redact_sensitive=self.config.redact_before_store,
+            )
             payload["trace_id"] = trace_id
             payload["recall_status"] = (
                 "hit"
@@ -3690,11 +3705,11 @@ class MemoryApplicationService:
                     datetime.now().astimezone().isoformat(),
                     request.request_source,
                     request.current_session_id,
-                    _redact_for_memory_storage(request.query),
+                    self._memory_storage_value(request.query),
                     status,
                     (plan or {}).get("intent"),
                     json.dumps(
-                        _redact_for_memory_storage(plan or {}),
+                        self._memory_storage_value(plan or {}),
                         ensure_ascii=False,
                     ),
                     int((payload or {}).get("candidate_count") or 0),
@@ -3704,7 +3719,7 @@ class MemoryApplicationService:
                     latency_ms,
                     type(failure).__name__ if failure is not None else None,
                     (
-                        str(_redact_for_memory_storage(str(failure)))[:500]
+                        str(self._memory_storage_value(str(failure)))[:500]
                         if failure is not None
                         else None
                     ),
@@ -3836,7 +3851,7 @@ class MemoryApplicationService:
                     request.trace_id,
                     request.memory_id,
                     request.verdict,
-                    str(_redact_for_memory_storage(request.reason)).strip(),
+                    str(self._memory_storage_value(request.reason)).strip(),
                     scope.owner_id,
                     scope.workspace_id,
                     memory_domain,
@@ -4136,7 +4151,7 @@ class MemoryApplicationService:
                     memory_domain,
                     target_kind,
                     hashlib.sha256(target.encode("utf-8")).hexdigest(),
-                    str(_redact_for_memory_storage(request.reason)).strip(),
+                    str(self._memory_storage_value(request.reason)).strip(),
                     json.dumps(counts, sort_keys=True),
                     scope.owner_id,
                     scope.workspace_id,
@@ -4164,27 +4179,27 @@ class MemoryApplicationService:
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
         )
-        title = str(_redact_for_memory_storage(request.title)).strip()
-        summary = str(_redact_for_memory_storage(request.summary)).strip()
+        title = str(self._memory_storage_value(request.title)).strip()
+        summary = str(self._memory_storage_value(request.summary)).strip()
         evidence_refs = list(
             dict.fromkeys(
                 str(item).strip()
-                for item in _redact_for_memory_storage(request.evidence_refs)
+                for item in self._memory_storage_value(request.evidence_refs)
             )
         )
         evidence_refs = [item for item in evidence_refs if item]
         source_actor = str(
-            _redact_for_memory_storage(request.source_actor)
+            self._memory_storage_value(request.source_actor)
         ).strip()
-        event_kind = str(_redact_for_memory_storage(request.event_kind)).strip()
+        event_kind = str(self._memory_storage_value(request.event_kind)).strip()
         supersedes_memory_ids = list(
             dict.fromkeys(
                 str(item).strip() for item in request.supersedes_memory_ids
             )
         )
         supersedes_memory_ids = [item for item in supersedes_memory_ids if item]
-        topics = list(dict.fromkeys(_redact_for_memory_storage(request.topics)))
-        entities = list(dict.fromkeys(_redact_for_memory_storage(request.entities)))
+        topics = list(dict.fromkeys(self._memory_storage_value(request.topics)))
+        entities = list(dict.fromkeys(self._memory_storage_value(request.entities)))
         identity = json.dumps(
             {
                 "title": title,

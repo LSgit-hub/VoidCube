@@ -647,8 +647,8 @@ DEFAULT_CONFIG = {
             "outbox_max_attempts": 12,
             "outbox_health_report_interval_seconds": 10.0,
             "outbox_shutdown_drain_timeout_seconds": 5.0,
-            # Raw conversation is redacted before entering the durable outbox.
-            "redact_before_store": True,
+            # Optional Memory-only redaction. Logs and tool output use a separate policy.
+            "redact_before_store": False,
         },
         # Optional true semantic retrieval. This is deliberately independent
         # from memory.llm: a chat model is never treated as an embedding model.

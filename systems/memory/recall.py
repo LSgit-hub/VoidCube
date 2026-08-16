@@ -266,8 +266,14 @@ _CJK_STOP_TERMS = {
     "可以",
     "告诉",
     "做了",
+    "好的",
     "如何",
     "我们",
+    "仅需",
+    "进行",
+    "检查",
+    "请",
+    "仅",
     "是否",
     "曾经",
     "最近",
@@ -638,7 +644,11 @@ def merge_recall_results(
 _RECALL_SUMMARY_MAX_CHARS = 1200
 
 
-def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
+def format_recall_context(
+    results: Sequence[dict[str, Any]],
+    *,
+    redact_sensitive: bool = False,
+) -> str:
     lines: list[str] = []
     for result in results:
         tier = str(result.get("tier") or "memory")
@@ -647,10 +657,9 @@ def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
             result.get("timespan_start") or result.get("timestamp") or ""
         )[:10]
         title = str(result.get("title") or "Memory").strip()
-        summary = redact_sensitive_text(
-            str(result.get("summary") or "").strip(),
-            force=True,
-        )
+        summary = str(result.get("summary") or "").strip()
+        if redact_sensitive:
+            summary = redact_sensitive_text(summary, force=True)
         if len(summary) > _RECALL_SUMMARY_MAX_CHARS:
             summary = summary[:_RECALL_SUMMARY_MAX_CHARS].rstrip() + "... [truncated]"
         memory_id = str(result.get("id") or "unknown")

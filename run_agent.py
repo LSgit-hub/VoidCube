@@ -972,6 +972,7 @@ class AIAgent:
         self.session_id = session_id
         self.session_start = session_start
         self.reset_session_state()
+        self._session_persistence.set_session_id(session_id)
         self._session_persistence.session_start = session_start
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_start(

@@ -21,6 +21,7 @@ class MemoryServiceConfig(BaseModel):
     db_path: str = Field(default_factory=_default_memory_db_path)
     gateway_address: str = "http://127.0.0.1:6000"
     gateway_registration_check_interval: int = 30
+    redact_before_store: bool = False
     decay_interval_hours: int = Field(default=24, gt=0)
     compression_interval: int = Field(default=3600, ge=60)
     tier1_retention_days: int = Field(default=7, ge=1, le=365)

@@ -69,7 +69,7 @@ class MemMemoryProvider(MemoryProvider):
         self._last_outbox_health_report_at = 0.0
         self._owner_id = DEFAULT_OWNER_ID
         self._workspace_id = DEFAULT_WORKSPACE_ID
-        self._redact_before_store = True
+        self._redact_before_store = False
         self._gateway_session_credentials: dict[str, str] = {}
         self._gateway_credential_lock = threading.Lock()
         self._gateway_probe_lock = threading.Lock()
@@ -150,7 +150,7 @@ class MemMemoryProvider(MemoryProvider):
         self._owner_id = scope.owner_id
         self._workspace_id = scope.workspace_id
         self._redact_before_store = bool(
-            provider_config.get("redact_before_store", True)
+            provider_config.get("redact_before_store", False)
         )
         home = Path(str(kwargs.get("VoidCube_home") or "."))
         self._outbox = MemoryWriteOutbox(

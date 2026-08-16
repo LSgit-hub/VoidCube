@@ -54,6 +54,17 @@ def _apply_int_override(target: BaseModel, env_name: str, field_name: str) -> No
         return
 
 
+def _boolean_setting(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 class GatewayConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 6000
@@ -74,8 +85,8 @@ class SystemConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
 
-def _apply_canonical_supervisor_config(config: SystemConfig) -> None:
-    """Load Supervisor settings from VOIDCUBE_HOME/config.yaml.
+def _apply_canonical_file_config(config: SystemConfig) -> None:
+    """Load service settings owned by VOIDCUBE_HOME/config.yaml.
 
     Environment overrides are applied afterwards, preserving the repository's
     existing precedence contract.
@@ -87,6 +98,13 @@ def _apply_canonical_supervisor_config(config: SystemConfig) -> None:
         if not path.is_file():
             return
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        memory = dict(raw.get("memory") or {})
+        memory_provider = dict(memory.get("mem") or {})
+        if "redact_before_store" in memory_provider:
+            config.memory.redact_before_store = _boolean_setting(
+                memory_provider["redact_before_store"],
+                default=config.memory.redact_before_store,
+            )
         supervisor = dict(raw.get("supervisor") or {})
         service_runtime = dict(supervisor.get("service_runtime") or {})
         if service_runtime:
@@ -101,7 +119,7 @@ def _apply_canonical_supervisor_config(config: SystemConfig) -> None:
 
 def load_config_from_env() -> SystemConfig:
     config = SystemConfig()
-    _apply_canonical_supervisor_config(config)
+    _apply_canonical_file_config(config)
     
     config.gateway.host = os.getenv("GATEWAY_HOST", config.gateway.host)
     config.gateway.port = int(os.getenv("GATEWAY_PORT", config.gateway.port))
@@ -117,6 +135,13 @@ def load_config_from_env() -> SystemConfig:
             "MEMORY_GATEWAY_REGISTRATION_CHECK_INTERVAL",
             config.memory.gateway_registration_check_interval,
         )
+    )
+    config.memory.redact_before_store = _boolean_setting(
+        os.getenv(
+            "MEMORY_REDACT_BEFORE_STORE",
+            str(config.memory.redact_before_store),
+        ),
+        default=config.memory.redact_before_store,
     )
     config.memory.decay_interval_hours = int(os.getenv("MEMORY_DECAY_INTERVAL", config.memory.decay_interval_hours))
     for env_name, field_name in (

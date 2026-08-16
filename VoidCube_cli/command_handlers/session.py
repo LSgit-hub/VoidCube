@@ -121,15 +121,11 @@ def handle_resume_command(
     *,
     ports: ResumeCommandPorts,
 ) -> None:
-    requested = request.arguments
-    if not requested:
-        ports.emit(ports.text.usage)
-        if not ports.show_recent_sessions():
-            ports.emit(ports.text.hint)
-        return
+    requested = request.arguments or "1"
     if not ports.repository_available():
         ports.emit(ports.text.unavailable)
         return
+
     target = resolve_resume_target(
         requested,
         recent_sessions=(

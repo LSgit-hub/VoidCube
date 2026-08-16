@@ -75,6 +75,10 @@ class SessionPersistence:
         self.verbose_logging = verbose_logging
         self.messages: list[Message] = []
 
+    def set_session_id(self, session_id: str) -> None:
+        """切换持久化目标，使会话生命周期切换与 Agent 保持一致。"""
+        self._session_id = lambda: session_id
+
     @property
     def session_log_file(self) -> Path:
         return self.logs_dir / f"session_{self._session_id()}.json"

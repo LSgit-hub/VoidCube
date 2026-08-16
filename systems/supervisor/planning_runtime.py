@@ -1267,7 +1267,10 @@ class PlanningRuntimeMixin:
         try:
             timeout = aiohttp.ClientTimeout(total=2)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
+                async with session.get(
+                    url,
+                    headers=self._gateway_memory_headers(memory_actor="stellar_auto"),
+                ) as response:
                     if response.status != 200:
                         raise RuntimeError(f"Memory rules status HTTP {response.status}")
                     payload = await response.json()
