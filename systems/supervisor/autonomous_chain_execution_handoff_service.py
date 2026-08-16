@@ -14,6 +14,7 @@ class AutonomousChainExecutionHandoffService:
     """Run approved requests and own execution-lane status writeback."""
 
     _ERROR_STATUSES = frozenset({"error", "failed", "timeout", "unreachable"})
+    _MEMORY_ASYNC_SUCCESS_STATUSES = frozenset({"accepted", "in_progress"})
     _SUCCESS_STATUSES = frozenset(
         {
             "ok",
@@ -110,9 +111,14 @@ class AutonomousChainExecutionHandoffService:
             result.get("status") if isinstance(result, dict) else None
         )
         normalized_status = str(result_status).strip().lower() if result_status is not None else ""
+        governance_type = self._task_profile_policy.governance_type(task)
+        is_success = normalized_status in self._SUCCESS_STATUSES or (
+            governance_type == "memory_maintenance"
+            and normalized_status in self._MEMORY_ASYNC_SUCCESS_STATUSES
+        )
         is_failure = (
             normalized_status in self._ERROR_STATUSES
-            or normalized_status not in self._SUCCESS_STATUSES
+            or not is_success
         )
         if normalized_status == "upgrade_awaiting_user_consent":
             self._task_state.update_metadata(
@@ -141,13 +147,22 @@ class AutonomousChainExecutionHandoffService:
             )
             return result
 
-        governance_type = self._task_profile_policy.governance_type(task)
         if governance_type == "memory_maintenance":
             actor = "supervisor_memory_service"
-            completion_reason = (
-                "Memory-maintenance task completed by the supervisor's internal memory service "
-                f"(executor_status={str(result_status)[:60] if result_status else 'ok'})"
-            )
+            if normalized_status == "accepted":
+                completion_reason = (
+                    "Memory Service accepted the maintenance request; execution continues "
+                    "inside Memory Service."
+                )
+            elif normalized_status == "in_progress":
+                completion_reason = (
+                    "Memory Service is already processing maintenance; no duplicate run was started."
+                )
+            else:
+                completion_reason = (
+                    "Memory-maintenance handoff completed "
+                    f"(executor_status={str(result_status)[:60] if result_status else 'ok'})."
+                )
         elif governance_type == "self_evolution":
             actor = "supervisor_executor"
             completion_reason = (

@@ -517,15 +517,27 @@ class MemoryApplicationService:
         self._compression_task: asyncio.Task | None = None
         self._gateway_registration_task: asyncio.Task | None = None
         self._semantic_task: asyncio.Task | None = None
+        self._maintenance_request_task: asyncio.Task | None = None
         self._semantic_wake = asyncio.Event()
+        self._maintenance_lock = asyncio.Lock()
         self._gateway_service_id: Optional[str] = None
         self._gateway_registration_healthy = False
         self._last_gateway_registration_check_at: Optional[str] = None
         self._db_path = Path(self.config.db_path)
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
+        self._last_rule_run_monotonic: Dict[str, float] = {}
         self._rule_run_counts: Dict[str, int] = {}
         self._last_tier2_bridge_result: Dict[str, Any] | None = None
+        self._maintenance_run_status: Dict[str, Any] = {
+            "run_id": None,
+            "status": "idle",
+            "accepted_at": None,
+            "started_at": None,
+            "completed_at": None,
+            "rules": None,
+            "error": None,
+        }
         # P0-4 健康信号: last cycle that did real write work (not just "ran").
         self._last_effective_activity_at: Optional[str] = None
         # LLM status (re-verified each compression cycle, recovers after outage)
@@ -1585,6 +1597,7 @@ class MemoryApplicationService:
                 self._gateway_registration_task,
                 self._compression_task,
                 self._semantic_task,
+                self._maintenance_request_task,
             )
             for task in tasks:
                 if task and not task.done():
@@ -1596,6 +1609,11 @@ class MemoryApplicationService:
                     await task
                 except asyncio.CancelledError:
                     pass
+            if self._maintenance_run_status["status"] in {"accepted", "running"}:
+                self._maintenance_run_status.update(
+                    status="cancelled",
+                    completed_at=datetime.now(timezone.utc).isoformat(),
+                )
 
     async def _semantic_index_loop(self) -> None:
         while True:
@@ -1694,11 +1712,12 @@ class MemoryApplicationService:
                 logger.warning("Background compression loop failed", exc_info=True)
 
     async def _run_all_rules_internal(
-        self, *, respect_cadence: bool = False
+        self,
+        *,
+        respect_cadence: bool = False,
+        skip_if_busy: bool = True,
     ) -> Dict[str, Any]:
         """Execute all five memory rules in correct order (internal, track execution)."""
-        now = datetime.now().isoformat()
-        results: Dict[str, Any] = {}
         rules = [
             ("identity_experience", self._identity_experience_cycle),
             ("tier1_decay", self._tier1_decay_cycle),
@@ -1706,49 +1725,76 @@ class MemoryApplicationService:
             ("lifecycle_escalation", self._apply_compression_lifecycle),
             ("purge_expired", self._purge_expired_memories),
         ]
-        effective_work = 0
-        for rule_name, rule_fn in rules:
-            if respect_cadence and rule_name == "lifecycle_escalation":
-                cadence = claim_rule_execution(
-                    self._db_path,
-                    rule_name=rule_name,
-                    cadence_days=self.config.lifecycle_cadence_days,
-                )
-                if not cadence.due:
-                    results[rule_name] = {
-                        "skipped": cadence.skip_reason or "cadence",
-                        "last_succeeded_at": cadence.last_succeeded_at,
-                        "next_due_at": cadence.next_due_at,
-                    }
-                    continue
-            try:
-                result = await rule_fn()
-                results[rule_name] = result
-                self._last_rule_run[rule_name] = now
-                self._rule_run_counts[rule_name] = self._rule_run_counts.get(rule_name, 0) + 1
-                effective_work += self._rule_effective_count(result)
-                if rule_name == "lifecycle_escalation":
-                    record_rule_result(
-                        self._db_path, rule_name=rule_name, succeeded=True
-                    )
-            except Exception as exc:
-                logger.warning("Memory maintenance rule %s failed: %s", rule_name, exc, exc_info=True)
-                results[rule_name] = {"error": str(exc)}
-                if rule_name == "lifecycle_escalation":
-                    record_rule_result(
+        if skip_if_busy and self._maintenance_lock.locked():
+            return {
+                **{
+                    rule_name: {"skipped": "in_progress"}
+                    for rule_name, _ in rules
+                },
+                "_effective_work": 0,
+            }
+
+        async with self._maintenance_lock:
+            now = datetime.now().isoformat()
+            results: Dict[str, Any] = {}
+            effective_work = 0
+            for rule_name, rule_fn in rules:
+                if respect_cadence and rule_name != "lifecycle_escalation":
+                    last_run = self._last_rule_run_monotonic.get(rule_name)
+                    if (
+                        last_run is not None
+                        and time.monotonic() - last_run
+                        < self.config.compression_interval
+                    ):
+                        results[rule_name] = {"skipped": "cadence"}
+                        continue
+                if respect_cadence and rule_name == "lifecycle_escalation":
+                    cadence = claim_rule_execution(
                         self._db_path,
                         rule_name=rule_name,
-                        succeeded=False,
-                        error=str(exc),
+                        cadence_days=self.config.lifecycle_cadence_days,
                     )
-        # P0-4 健康信号: only stamp the "effective activity" marker when a rule
-        # actually wrote/changed rows this cycle. A no-op cycle (no candidates,
-        # nothing to decay) advances last_run but NOT this marker, so the UI no
-        # longer shows "记忆活跃 ✅" while the pipeline is idle or broken.
-        if effective_work > 0:
-            self._last_effective_activity_at = now
-        results["_effective_work"] = effective_work
-        return results
+                    if not cadence.due:
+                        results[rule_name] = {
+                            "skipped": cadence.skip_reason or "cadence",
+                            "last_succeeded_at": cadence.last_succeeded_at,
+                            "next_due_at": cadence.next_due_at,
+                        }
+                        continue
+                try:
+                    result = await rule_fn()
+                    results[rule_name] = result
+                    self._last_rule_run[rule_name] = now
+                    self._last_rule_run_monotonic[rule_name] = time.monotonic()
+                    self._rule_run_counts[rule_name] = (
+                        self._rule_run_counts.get(rule_name, 0) + 1
+                    )
+                    effective_work += self._rule_effective_count(result)
+                    if rule_name == "lifecycle_escalation":
+                        record_rule_result(
+                            self._db_path, rule_name=rule_name, succeeded=True
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Memory maintenance rule %s failed: %s",
+                        rule_name,
+                        exc,
+                        exc_info=True,
+                    )
+                    results[rule_name] = {"error": str(exc)}
+                    if rule_name == "lifecycle_escalation":
+                        record_rule_result(
+                            self._db_path,
+                            rule_name=rule_name,
+                            succeeded=False,
+                            error=str(exc),
+                        )
+            # Only real writes count as effective activity. Cadence and lock
+            # skips must not make an idle memory pipeline look active.
+            if effective_work > 0:
+                self._last_effective_activity_at = now
+            results["_effective_work"] = effective_work
+            return results
 
     async def _identity_experience_cycle(self) -> Dict[str, int]:
         from VoidCube_core.runtime_paths import get_runtime_layout
@@ -1783,8 +1829,59 @@ class MemoryApplicationService:
             return total
         return 0
 
+    def _maintenance_run_snapshot(self) -> Dict[str, Any]:
+        snapshot = dict(self._maintenance_run_status)
+        rules = snapshot.get("rules")
+        if isinstance(rules, dict):
+            snapshot["rules"] = dict(rules)
+        return snapshot
+
+    @staticmethod
+    def _maintenance_rule_errors(results: Dict[str, Any]) -> list[str]:
+        return [
+            f"{rule_name}: {rule_result['error']}"
+            for rule_name, rule_result in results.items()
+            if isinstance(rule_result, dict) and rule_result.get("error")
+        ]
+
+    async def _run_requested_maintenance(self, run_id: str) -> None:
+        self._maintenance_run_status.update(
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+        try:
+            results = await self._run_all_rules_internal(
+                respect_cadence=True,
+                skip_if_busy=False,
+            )
+            errors = self._maintenance_rule_errors(results)
+            self._maintenance_run_status.update(
+                status="failed" if errors else "completed",
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                rules=results,
+                error="; ".join(errors) if errors else None,
+            )
+        except asyncio.CancelledError:
+            self._maintenance_run_status.update(
+                status="cancelled",
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Requested memory maintenance %s failed: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
+            self._maintenance_run_status.update(
+                status="failed",
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                error=str(exc),
+            )
+
     async def run_all_rules(self, request: dict = None):
-        """Execute all five memory compression rules (public API for supervisor).
+        """Accept an asynchronous request to run all memory maintenance rules.
 
         Rules executed in order:
           1. identity_experience — Settle verified experiences and evidence-backed narrative
@@ -1793,13 +1890,51 @@ class MemoryApplicationService:
           4. lifecycle_escalation — Escalate ordinary entries through compression levels
           5. purge_expired       — Hard-delete ordinary purged entries past audit retention
         """
-        results = await self._run_all_rules_internal()
-        return {"status": "ok", "rules": results, "executed_at": datetime.now().isoformat()}
+        del request
+        active_task = self._maintenance_request_task
+        if active_task is not None and not active_task.done():
+            snapshot = self._maintenance_run_snapshot()
+            snapshot["status"] = "in_progress"
+            return snapshot
+        if self._maintenance_lock.locked():
+            return {
+                "run_id": None,
+                "status": "in_progress",
+                "accepted_at": None,
+                "started_at": None,
+                "completed_at": None,
+                "rules": None,
+                "error": None,
+            }
+
+        accepted_at = datetime.now(timezone.utc).isoformat()
+        run_id = str(uuid.uuid4())
+        self._maintenance_run_status = {
+            "run_id": run_id,
+            "status": "accepted",
+            "accepted_at": accepted_at,
+            "started_at": None,
+            "completed_at": None,
+            "rules": None,
+            "error": None,
+        }
+        self._maintenance_request_task = asyncio.create_task(
+            self._run_requested_maintenance(run_id),
+            name=f"memory-maintenance-{run_id}",
+        )
+        return self._maintenance_run_snapshot()
 
     async def rules_status(self):
         """Return the last execution time and count for each rule."""
         lifecycle_state = get_rule_state(self._db_path, "lifecycle_escalation")
+        maintenance_run = self._maintenance_run_snapshot()
         return {
+            **{
+                key: value
+                for key, value in maintenance_run.items()
+                if key != "rules"
+            },
+            "maintenance_run": maintenance_run,
             "rules": {
                 name: {
                     "last_run": self._last_rule_run.get(name),
@@ -1837,14 +1972,68 @@ class MemoryApplicationService:
         self._last_tier2_bridge_result = result
         return result
 
+    def _memory_reference_health_snapshot(self) -> Dict[str, Any]:
+        """统计 Tier2 来源引用类型，避免把外部证据误判为孤儿 turn。"""
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT source_turns
+                FROM compressed_memories
+                WHERE source_turns IS NOT NULL
+                  AND json_valid(source_turns)
+                """
+            ).fetchall()
+            active_turn_ids = {
+                row[0]
+                for row in conn.execute("SELECT turn_id FROM turns")
+            }
+            archived_turn_ids = {
+                row[0]
+                for row in conn.execute("SELECT turn_id FROM turns_archive")
+            }
+        finally:
+            conn.close()
+
+        total = active = archived = external = malformed = 0
+        for row in rows:
+            try:
+                references = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                malformed += 1
+                continue
+            if not isinstance(references, list):
+                malformed += 1
+                continue
+            for reference in references:
+                total += 1
+                if reference in active_turn_ids:
+                    active += 1
+                elif reference in archived_turn_ids:
+                    archived += 1
+                else:
+                    external += 1
+
+        return {
+            "source_references": total,
+            "active_turn_references": active,
+            "archived_turn_references": archived,
+            "external_references": external,
+            "malformed_source_lists": malformed,
+        }
+
     async def health_check(self):
         database = await asyncio.to_thread(self._database_health_snapshot)
+        reference_health = await asyncio.to_thread(
+            self._memory_reference_health_snapshot
+        )
         semantic = await asyncio.to_thread(self._semantic_health_snapshot)
         agent_outbox = self._agent_outbox_health_snapshot()
         maintenance = {
             "last_effective_activity_at": self._last_effective_activity_at,
             "last_rule_runs": dict(self._last_rule_run),
             "last_tier2_bridge_result": self._last_tier2_bridge_result,
+            "requested_run": self._maintenance_run_snapshot(),
         }
         service_healthy = bool(
             self._gateway_registration_healthy and agent_outbox["healthy"]
@@ -1877,6 +2066,7 @@ class MemoryApplicationService:
                 "last_status": self._last_recall_status,
             },
             "database": database,
+            "memory_references": reference_health,
             "semantic_index": semantic,
             "agent_outbox": agent_outbox,
             "maintenance": maintenance,

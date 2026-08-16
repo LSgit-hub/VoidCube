@@ -1,0 +1,151 @@
+{
+  "format": "voidcube.memory.recall-benchmark",
+  "version": 1,
+  "thresholds": {
+    "recall_at_5": 1.0,
+    "mrr": 0.8,
+    "map_at_5": 0.8,
+    "scope_leakage_rate": 0.0,
+    "forbidden_return_rate": 0.0
+  },
+  "query_shape_provenance": {
+    "source": "synthetic_generic_term_adversarial_cases",
+    "raw_query_text_retained": false,
+    "identifiers_retained": false,
+    "method": "Hand-written pairs preserve one domain cue while distractors overlap only on common generic terms."
+  },
+  "records": [
+    {
+      "source_type": "compressed",
+      "id": "memory-recall-calibration",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "记忆召回校准",
+      "summary": "记忆召回需要抑制低信息片段造成的假阳性，同时保留近义表达。",
+      "topics": ["记忆召回", "校准", "假阳性"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "video-id-repair",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "视频编号修复",
+      "summary": "视频播放失败的问题通过重新解析编号解决。",
+      "topics": ["视频", "编号", "问题"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "night-notification-preference",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "夜间通知偏好",
+      "summary": "晚上十点之后请勿推送通知。",
+      "topics": ["晚上", "通知", "勿扰"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "meeting-followup",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "会议后续",
+      "summary": "会议中提到的事情由项目负责人下周跟进。",
+      "topics": ["会议", "事情", "跟进"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "database-health",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "数据库健康状态",
+      "summary": "数据库完整性检查通过，备份可以恢复。",
+      "topics": ["数据库", "完整性", "备份"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "weather-status",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "天气情况",
+      "summary": "周末天气情况稳定，适合户外活动。",
+      "topics": ["天气", "情况"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "deployment-approval",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "部署审批要求",
+      "summary": "生产部署要求两名维护者批准并完成健康检查。",
+      "topics": ["部署", "批准", "要求"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "document-format",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "文档格式要求",
+      "summary": "技术文档要求统一使用 Markdown 标题层级。",
+      "topics": ["文档", "格式", "要求"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "outbox-recovery",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "写入队列恢复",
+      "summary": "写入队列失败后采用指数退避处理，并将永久失败送入死信队列。",
+      "topics": ["写入队列", "指数退避", "处理"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "image-cleanup",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "图片后处理",
+      "summary": "生成图片需要进行裁剪和颜色处理。",
+      "topics": ["图片", "处理"]
+    }
+  ],
+  "cases": [
+    {
+      "name": "generic problem false positive",
+      "query": "继续检查记忆召回的问题并改进校准",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["memory-recall-calibration"],
+      "relevance_forbidden_ids": ["video-id-repair"]
+    },
+    {
+      "name": "generic matter false positive",
+      "query": "晚上几点以后不要再通知这件事情",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["night-notification-preference"],
+      "relevance_forbidden_ids": ["meeting-followup"]
+    },
+    {
+      "name": "generic status false positive",
+      "query": "数据库目前是什么情况，备份能否恢复",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["database-health"],
+      "relevance_forbidden_ids": ["weather-status"]
+    },
+    {
+      "name": "generic requirement false positive",
+      "query": "生产发布的批准要求是什么",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["deployment-approval"],
+      "relevance_forbidden_ids": ["document-format"]
+    },
+    {
+      "name": "generic handling false positive",
+      "query": "写入队列失败应该怎么处理",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["outbox-recovery"],
+      "relevance_forbidden_ids": ["image-cleanup"]
+    }
+  ]
+}

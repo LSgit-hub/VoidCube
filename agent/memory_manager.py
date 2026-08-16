@@ -40,6 +40,40 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _FENCE_TAG_RE = re.compile(r'</?\s*memory-context\s*>', re.IGNORECASE)
+_EVALUATION_QUERY_MARKERS = (
+    "自检",
+    "自检查",
+    "自我检查",
+    "评估",
+    "审计",
+    "诊断",
+    "evaluation",
+    "audit",
+    "diagnostic",
+)
+_EVALUATION_MEMORY_MARKERS = (
+    "记忆系统",
+    "记忆库",
+    "记忆服务",
+    "memory system",
+    "memory store",
+    "memory service",
+)
+
+
+def infer_sync_tags(user_content: str, tags: Optional[List[str]] = None) -> List[str]:
+    """为明确的记忆系统评估回合补充隔离标签。
+
+    只在用户请求同时包含评估类词和记忆系统语境时标记，避免把普通
+    "请记住"或一般诊断请求误当成评估数据。显式标签按原顺序保留。
+    """
+    result = list(tags or [])
+    normalized = user_content.casefold()
+    has_evaluation_marker = any(marker.casefold() in normalized for marker in _EVALUATION_QUERY_MARKERS)
+    has_memory_marker = any(marker.casefold() in normalized for marker in _EVALUATION_MEMORY_MARKERS)
+    if has_evaluation_marker and has_memory_marker and "evaluation" not in result:
+        result.append("evaluation")
+    return result
 
 
 def sanitize_context(text: str) -> str:
@@ -177,6 +211,7 @@ class MemoryManager:
                 details={"reason": "no_provider"},
             )
 
+        tags = infer_sync_tags(user_content, tags)
         provider = self._providers[0]
         try:
             sync_turn = provider.sync_turn

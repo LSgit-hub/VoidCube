@@ -1267,11 +1267,16 @@ class MemoryMaintenanceExecutionAdapter:
 
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
+        maintenance_result = await self._run_memory_service_maintenance(request)
+        status = str(maintenance_result.get("status") or "error").strip().lower()
         result = {
-            "memory_service_maintenance": await self._run_memory_service_maintenance(
-                request
-            )
+            "status": status,
+            "memory_service_maintenance": maintenance_result,
         }
+        if status == "error":
+            result["error"] = str(
+                maintenance_result.get("error") or "Memory Service maintenance request failed"
+            )
         return self.attach_execution_route_hint(result, "memory.compress")
 
     async def _run_memory_service_maintenance(self, _request: dict) -> Dict[str, Any]:
@@ -1286,13 +1291,13 @@ class MemoryMaintenanceExecutionAdapter:
                     if resp.status == 200:
                         return await resp.json()
                     return {
-                        "status": "memory_service_maintenance_error",
+                        "status": "error",
                         "error": f"Memory Service returned HTTP {resp.status}",
                     }
         except Exception as exc:
             logger.warning("Memory Service maintenance failed: %s", exc)
             return {
-                "status": "memory_service_maintenance_error",
+                "status": "error",
                 "error": str(exc),
             }
 

@@ -28,9 +28,16 @@ logger = logging.getLogger(__name__)
 
 EmbeddingTransport = Callable[[Sequence[str]], list[list[float]]]
 
-def _calibrate_local_similarity(raw_similarity: float) -> float:
-    """Map collision-free local feature overlap to the shared recall scale."""
-    return min(1.0, 10.0 * max(0.0, float(raw_similarity)))
+def _calibrate_local_similarity(
+    raw_similarity: float,
+    *,
+    independent_evidence: int = 2,
+) -> float:
+    """Map collision-free local overlap to the shared recall score scale."""
+    if independent_evidence < 1:
+        return 0.0
+    multiplier = 12.5 if independent_evidence == 1 else 5.0
+    return min(1.0, multiplier * max(0.0, float(raw_similarity)))
 
 _VEC0_TABLE = "memory_embeddings_vec"
 _vec0_load_attempted = False
@@ -457,13 +464,25 @@ class SemanticMemoryIndex:
             ).fetchall()
         finally:
             conn.close()
+        def calibrated_score(content: object) -> float:
+            similarity, _ = CharNgramEmbedder.exact_similarity_evidence(
+                query,
+                str(content or ""),
+            )
+            evidence = CharNgramEmbedder.meaningful_similarity_evidence(
+                query,
+                str(content or ""),
+            )
+            return _calibrate_local_similarity(
+                similarity,
+                independent_evidence=evidence,
+            )
+
         ranked = sorted(
             (
                 (
                     (str(source_type), str(memory_id)),
-                    _calibrate_local_similarity(
-                        CharNgramEmbedder.exact_similarity(query, str(content or ""))
-                    ),
+                    calibrated_score(content),
                 )
                 for source_type, memory_id, content in rows
             ),

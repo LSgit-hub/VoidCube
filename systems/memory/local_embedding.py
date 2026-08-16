@@ -22,6 +22,13 @@ from typing import Sequence
 _CJK_RE = re.compile(r"[㐀-䶿一-鿿]+")
 _LATIN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]*", re.IGNORECASE)
 
+# These short terms occur in many unrelated user questions. They remain part
+# of the raw overlap signal, but must not be sufficient evidence for local
+# semantic recall on their own.
+_LOW_INFORMATION_FEATURES = frozenset(
+    {"事情", "情况", "问题", "处理", "要求"}
+)
+
 
 class CharNgramEmbedder:
     """Deterministic bag-of-character-ngram embedder (hashing trick)."""
@@ -52,17 +59,50 @@ class CharNgramEmbedder:
     @staticmethod
     def exact_similarity(left: str, right: str) -> float:
         """Return collision-free cosine similarity over the local features."""
+        similarity, _ = CharNgramEmbedder.exact_similarity_evidence(left, right)
+        return similarity
+
+    @staticmethod
+    def exact_similarity_evidence(left: str, right: str) -> tuple[float, int]:
+        """Return exact similarity and independent shared-feature evidence."""
         left_features = Counter(_tokens(left))
         right_features = Counter(_tokens(right))
         if not left_features or not right_features:
-            return 0.0
+            return 0.0, 0
         dot = sum(
             count * right_features.get(token, 0)
             for token, count in left_features.items()
         )
         left_magnitude = math.sqrt(sum(count * count for count in left_features.values()))
         right_magnitude = math.sqrt(sum(count * count for count in right_features.values()))
-        return dot / (left_magnitude * right_magnitude)
+        shared = set(left_features) & set(right_features)
+        independent = {
+            token
+            for token in shared
+            if not any(token != other and token in other for other in shared)
+        }
+        return dot / (left_magnitude * right_magnitude), len(independent)
+
+    @staticmethod
+    def meaningful_similarity_evidence(left: str, right: str) -> int:
+        """Count independent shared features after generic-term filtering."""
+        left_features = set(_tokens(left))
+        right_features = set(_tokens(right))
+        shared = left_features & right_features
+        independent = {
+            token
+            for token in shared
+            if not any(token != other and token in other for other in shared)
+        }
+        return sum(
+            not any(
+                generic == token
+                or generic in token
+                or token in generic
+                for generic in _LOW_INFORMATION_FEATURES
+            )
+            for token in independent
+        )
 
 
 def _tokens(text: str) -> list[str]:

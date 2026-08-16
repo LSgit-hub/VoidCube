@@ -185,6 +185,7 @@ async def evaluate_recall_benchmark(
         average_precisions = []
         hits = 0
         leak_cases = 0
+        forbidden_cases = 0
         for case in benchmark["cases"]:
             result = await service.recall(
                 RecallRequest(
@@ -199,12 +200,19 @@ async def evaluate_recall_benchmark(
             )
             returned = [str(item["id"]) for item in result["results"]]
             expected = {str(item) for item in case["expected_ids"]}
-            forbidden = {str(item) for item in case.get("forbidden_ids") or []}
+            scope_forbidden = {
+                str(item) for item in case.get("forbidden_ids") or []
+            }
+            relevance_forbidden = {
+                str(item) for item in case.get("relevance_forbidden_ids") or []
+            }
             ranks = [index + 1 for index, item in enumerate(returned) if item in expected]
             hit = bool(ranks)
-            leaked = bool(forbidden & set(returned))
+            leaked = bool(scope_forbidden & set(returned))
+            forbidden_returned = bool(relevance_forbidden & set(returned))
             hits += int(hit)
             leak_cases += int(leaked)
+            forbidden_cases += int(forbidden_returned)
             reciprocal_ranks.append(1.0 / min(ranks) if ranks else 0.0)
             expected_count = min(len(expected), 5)
             if expected_count:
@@ -226,6 +234,7 @@ async def evaluate_recall_benchmark(
                     "expected_ids": sorted(expected),
                     "hit": hit,
                     "scope_leak": leaked,
+                    "forbidden_returned": forbidden_returned,
                 }
             )
 
@@ -235,6 +244,7 @@ async def evaluate_recall_benchmark(
         "mrr": round(sum(reciprocal_ranks) / case_count, 6),
         "map_at_5": round(sum(average_precisions) / case_count, 6),
         "scope_leakage_rate": round(leak_cases / case_count, 6),
+        "forbidden_return_rate": round(forbidden_cases / case_count, 6),
     }
     thresholds = dict(benchmark["thresholds"])
     passed_checks = [
@@ -244,6 +254,11 @@ async def evaluate_recall_benchmark(
     ]
     if "map_at_5" in thresholds:
         passed_checks.append(metrics["map_at_5"] >= float(thresholds["map_at_5"]))
+    if "forbidden_return_rate" in thresholds:
+        passed_checks.append(
+            metrics["forbidden_return_rate"]
+            <= float(thresholds["forbidden_return_rate"])
+        )
     passed = all(passed_checks)
     return {
         "dataset": str(Path(dataset_path)),
