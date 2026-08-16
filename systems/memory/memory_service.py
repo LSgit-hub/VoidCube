@@ -167,6 +167,7 @@ class TurnPairCreate(BaseModel):
     session_id: str = Field(min_length=1, max_length=300)
     user_content: str = Field(min_length=1)
     assistant_content: str = ""
+    tags: List[str] = Field(default_factory=list)
     write_id: str = Field(min_length=1, max_length=300)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
@@ -2389,6 +2390,14 @@ class MemoryApplicationService:
                 ),
             )
             stored_metadata = _redact_for_memory_storage(request.metadata)
+            stored_tags = list(
+                dict.fromkeys(
+                    str(_redact_for_memory_storage(tag)).strip()
+                    for tag in request.tags
+                    if str(tag).strip()
+                )
+            )
+            stored_tags_json = json.dumps(stored_tags, ensure_ascii=False)
             for speaker, content in (
                 ("user", request.user_content),
                 ("agent", request.assistant_content),
@@ -2415,13 +2424,14 @@ class MemoryApplicationService:
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
                     "decay_factor, tags, metadata, dedup_key, compressed_to_tier2, "
                     "last_decay_at, owner_id, workspace_id, memory_domain) "
-                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, '[]', ?, ?, 0, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?, ?, ?, ?)",
                     (
                         turn_id,
                         session_id,
                         speaker,
                         text,
                         now,
+                        stored_tags_json,
                         json.dumps(metadata, ensure_ascii=False),
                         dedup_key,
                         now,

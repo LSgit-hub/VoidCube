@@ -47,6 +47,16 @@ python -m pytest Mem/tests -q
 
 根目录 `tests/` 仅保留在开发机用于本地验证，已加入 `.gitignore`，不会提交到远程仓库；`Mem/tests/` 仍是远程保留的记忆领域测试。
 
+周期验证由部署环境按需调用同一个本地入口，仓库不注册系统定时任务，也不依赖任何托管 CI 服务：
+
+```powershell
+.venv\Scripts\python.exe scripts\run_periodic_verification.py memory
+.venv\Scripts\python.exe scripts\run_periodic_verification.py full
+.venv\Scripts\python.exe scripts\run_periodic_verification.py supervisor-e2e
+```
+
+`memory` 会执行 Memory outbox HTTP smoke、恢复长稳检查和 operational 测试；`full` 复用全量 Python 测试 gate；`supervisor-e2e` 复用桌面端 Playwright 命令。调度频率和日志留存由本机任务计划、cron 或部署方已有调度器决定。
+
 ## 桌面端
 
 `desktop/` 提供 Electron 跨平台桌面容器：上半区加载 Supervisor Web UI，下半区通过 `xterm.js + node-pty` 运行真实 VoidCube CLI，并支持拖动调整分区、连接状态、页面重载和 CLI 重启。

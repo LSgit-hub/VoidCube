@@ -103,6 +103,7 @@ class MemoryProvider(ABC):
         assistant_content: str,
         *,
         session_id: str = "",
+        tags: List[str] | None = None,
     ) -> EffectOutcome:
         """Queue a completed turn and report whether durable handoff succeeded.
 

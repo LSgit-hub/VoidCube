@@ -456,6 +456,7 @@ class MemMemoryProvider(MemoryProvider):
         assistant_content: str,
         *,
         session_id: str = "",
+        tags: List[str] | None = None,
     ) -> EffectOutcome:
         if not self._initialized:
             return EffectOutcome(
@@ -491,6 +492,7 @@ class MemMemoryProvider(MemoryProvider):
                     "session_id": resolved_session_id,
                     "user_content": user_text,
                     "assistant_content": assistant_text,
+                    "tags": list(tags or []),
                     "write_id": write_id,
                     **self._scope_payload(),
                 }

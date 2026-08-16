@@ -33,6 +33,11 @@ from systems.memory.quality_signals import (
 logger = logging.getLogger(__name__)
 
 _MAX_QUALITY_RETRIES = 3
+_NON_EVALUATION_TURN_SQL = (
+    "(json_valid(COALESCE(tags, '[]')) = 0 OR NOT EXISTS ("
+    "SELECT 1 FROM json_each(COALESCE(tags, '[]')) "
+    "WHERE lower(CAST(value AS TEXT)) = 'evaluation'))"
+)
 
 
 def _iso_value(value: Any) -> str:
@@ -410,9 +415,7 @@ class Tier1ToTier2Bridge:
             "compression_retry_count < ?",
             "(compression_retry_after IS NULL OR compression_retry_after <= ?)",
             "memory_domain = ?",
-            "(json_valid(COALESCE(tags, '[]')) = 0 OR NOT EXISTS ("
-            "SELECT 1 FROM json_each(COALESCE(tags, '[]')) "
-            "WHERE lower(CAST(value AS TEXT)) = 'evaluation'))",
+            _NON_EVALUATION_TURN_SQL,
         ]
         base_params: list[Any] = [
             _MAX_QUALITY_RETRIES,
@@ -484,7 +487,8 @@ class Tier1ToTier2Bridge:
     def _active_turn_count(self) -> int:
         conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND memory_domain = ?"
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
+            "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
             + self._scope_sql_suffix(),
             [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
@@ -497,13 +501,15 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-            "AND memory_domain = ?" + self._scope_sql_suffix(),
+            "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
+            + self._scope_sql_suffix(),
             [cutoff, self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         if count == 0:
             total = conn.execute(
                 "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
-                "AND memory_domain = ?" + self._scope_sql_suffix(),
+                "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
+                + self._scope_sql_suffix(),
                 [self.memory_domain, *self._scope_params()],
             ).fetchone()[0]
             if total >= self.max_turns:
@@ -518,7 +524,8 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         total = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
-            "AND memory_domain = ?" + self._scope_sql_suffix(),
+            "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
+            + self._scope_sql_suffix(),
             [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
         conn.close()

@@ -22,6 +22,7 @@ Usage in run_agent.py:
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -167,6 +168,7 @@ class MemoryManager:
         assistant_content: str,
         *,
         session_id: str = "",
+        tags: List[str] | None = None,
     ) -> EffectOutcome:
         """Queue one completed turn with the canonical provider."""
         if not self._providers:
@@ -177,12 +179,27 @@ class MemoryManager:
 
         provider = self._providers[0]
         try:
-            outcome = require_effect_outcome(
-                provider.sync_turn(
+            sync_turn = provider.sync_turn
+            parameters = inspect.signature(sync_turn).parameters
+            supports_tags = "tags" in parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            if supports_tags:
+                raw_outcome = sync_turn(
                     user_content,
                     assistant_content,
                     session_id=session_id,
-                ),
+                    tags=tags,
+                )
+            else:
+                raw_outcome = sync_turn(
+                    user_content,
+                    assistant_content,
+                    session_id=session_id,
+                )
+            outcome = require_effect_outcome(
+                raw_outcome,
                 effect=f"memory provider '{provider.name}' sync_turn",
             )
         except Exception as exc:
