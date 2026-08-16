@@ -44,6 +44,19 @@ _RETRY_ELIGIBLE_TURN_SQL = (
 )
 
 
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    """Parse a stored ISO timestamp and normalize it to UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _iso_value(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
@@ -503,27 +516,47 @@ class Tier1ToTier2Bridge:
 
     def count_candidates(self) -> int:
         """Count turns that can be selected for compression right now."""
-        now = datetime.now(timezone.utc).isoformat()
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
+        return int(self.candidate_health_snapshot()["eligible_count"])
+
+    def candidate_health_snapshot(self) -> Dict[str, Any]:
+        """Describe the exact candidate set the bridge can select right now."""
+        current_time = datetime.now(timezone.utc)
+        now = current_time.isoformat()
+        cutoff = (current_time - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
         retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
-        count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+        row = conn.execute(
+            "SELECT COUNT(*), MIN(timestamp) FROM turns "
+            "WHERE timestamp < ? AND compressed_to_tier2 = 0 "
             "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
             + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
             [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
-        ).fetchone()[0]
+        ).fetchone()
+        count, oldest_at = int(row[0]), row[1]
+        force_oldest = False
         if count == 0:
             total = self._active_turn_count(conn=conn)
             if total >= self.max_turns:
-                count = conn.execute(
-                    "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND "
+                force_oldest = True
+                row = conn.execute(
+                    "SELECT COUNT(*), MIN(timestamp) FROM turns "
+                    "WHERE compressed_to_tier2 = 0 AND "
                     + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
                     + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
                     [*retry_params, self.memory_domain, *self._scope_params()],
-                ).fetchone()[0]
+                ).fetchone()
+                count, oldest_at = int(row[0]), row[1]
         conn.close()
-        return int(count)
+        oldest = _parse_utc_timestamp(oldest_at)
+        oldest_age_seconds = (
+            max(0.0, (current_time - oldest).total_seconds()) if oldest else 0.0
+        )
+        return {
+            "eligible_count": count,
+            "oldest_candidate_at": oldest_at,
+            "oldest_candidate_age_seconds": round(oldest_age_seconds, 3),
+            "force_oldest": force_oldest,
+        }
 
     def needs_compression(self) -> bool:
         """Return whether at least one compression batch can run now."""

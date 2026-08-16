@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from systems.memory.database import open_memory_sqlite
+from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
 
 
 async def run_tier1_decay_cycle(
@@ -82,25 +83,35 @@ async def run_tier2_bridge_cycle(
     logger: logging.Logger,
 ) -> dict[str, Any]:
     """Schedule independent Tier 1 to Tier 2 work for every active scope."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=config.tier1_retention_days)).isoformat()
     conn = open_memory_sqlite(db_path)
     try:
         scopes = conn.execute(
-            "SELECT memory_domain, owner_id, workspace_id, COUNT(*), "
-            "SUM(CASE WHEN timestamp < ? THEN 1 ELSE 0 END) "
+            "SELECT DISTINCT memory_domain, owner_id, workspace_id "
             "FROM turns WHERE compressed_to_tier2 = 0 "
             "GROUP BY memory_domain, owner_id, workspace_id "
             "ORDER BY memory_domain, owner_id, workspace_id",
-            (cutoff,),
         ).fetchall()
     finally:
         conn.close()
     processed = 0
     scope_results: list[dict[str, Any]] = []
-    for domain, owner_id, workspace_id, active_count, expired_count in scopes:
-        force_oldest = int(active_count or 0) >= config.tier1_max_turns
-        if not force_oldest and int(expired_count or 0) == 0:
+    for domain, owner_id, workspace_id in scopes:
+        if not domain or not owner_id or not workspace_id:
+            logger.warning(
+                "Skipping Tier 2 bridge scope with missing identity: "
+                "domain=%r owner=%r workspace=%r",
+                domain, owner_id, workspace_id,
+            )
             continue
+        bridge = Tier1ToTier2Bridge(
+            db_path, retention_days=config.tier1_retention_days,
+            max_turns=config.tier1_max_turns, memory_domain=str(domain),
+            owner_id=str(owner_id), workspace_id=str(workspace_id),
+        )
+        candidates = bridge.candidate_health_snapshot()
+        if candidates["eligible_count"] == 0:
+            continue
+        force_oldest = bool(candidates["force_oldest"])
         request = request_factory(
             retention_days=config.tier1_retention_days,
             batch_size=int(getattr(config, "tier2_batch_size", 25)),
@@ -168,6 +179,8 @@ async def run_tier2_bridge_cycle(
             "deadline_exceeded": elapsed > timeout_seconds,
             "errors": list(result.get("errors") or []),
             "quality_evidence": result.get("quality_evidence"),
+            "eligible_candidates_before": candidates["eligible_count"],
+            "oldest_candidate_at": candidates["oldest_candidate_at"],
         })
         if result.get("status") != "no_candidates":
             logger.info(

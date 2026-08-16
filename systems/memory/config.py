@@ -24,6 +24,11 @@ class MemoryServiceConfig(BaseModel):
     redact_before_store: bool = False
     decay_interval_hours: int = Field(default=24, gt=0)
     compression_interval: int = Field(default=3600, ge=60)
+    tier2_trigger_candidate_count: int = Field(default=100, ge=1, le=100000)
+    tier2_trigger_oldest_age_seconds: int = Field(
+        default=8 * 24 * 3600, ge=60, le=365 * 24 * 3600
+    )
+    tier2_bridge_failure_degraded_after: int = Field(default=3, ge=1, le=100)
     tier1_retention_days: int = Field(default=7, ge=1, le=365)
     tier1_max_turns: int = 10000
     tier1_decay_rate: float = Field(default=0.99, ge=0.0, le=1.0)

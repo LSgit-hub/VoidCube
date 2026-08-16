@@ -79,7 +79,10 @@ from systems.memory.scope import (
     MemoryScope,
 )
 from systems.memory.semantic_index import SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
+from systems.memory.tier1_to_tier2_bridge import (
+    Tier1ToTier2Bridge,
+    _parse_utc_timestamp,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
@@ -521,6 +524,7 @@ class MemoryApplicationService:
         self._semantic_task: asyncio.Task | None = None
         self._maintenance_request_task: asyncio.Task | None = None
         self._semantic_wake = asyncio.Event()
+        self._tier2_wake = asyncio.Event()
         self._maintenance_lock = asyncio.Lock()
         self._gateway_service_id: Optional[str] = None
         self._gateway_registration_healthy = False
@@ -531,6 +535,11 @@ class MemoryApplicationService:
         self._last_rule_run_monotonic: Dict[str, float] = {}
         self._rule_run_counts: Dict[str, int] = {}
         self._last_tier2_bridge_result: Dict[str, Any] | None = None
+        self._tier2_bridge_state = "idle"
+        self._tier2_bridge_consecutive_failures = 0
+        self._tier2_bridge_last_failure_reason: str | None = None
+        self._tier2_bridge_last_succeeded_at: str | None = None
+        self._tier2_bridge_last_trigger_reason: str | None = None
         self._maintenance_run_status: Dict[str, Any] = {
             "run_id": None,
             "status": "idle",
@@ -1597,6 +1606,7 @@ class MemoryApplicationService:
             self._gateway_registration_loop()
         )
         self._compression_task = asyncio.create_task(self._compression_loop())
+        self._tier2_wake.set()
         self._semantic_task = asyncio.create_task(self._semantic_index_loop())
         try:
             yield
@@ -1701,7 +1711,26 @@ class MemoryApplicationService:
         Now also runs Tier 1 decay + Tier 2 bridge (two-tier architecture).
         """
         while True:
-            await asyncio.sleep(self.config.compression_interval)
+            triggered = False
+            try:
+                await asyncio.wait_for(
+                    self._tier2_wake.wait(), timeout=self.config.compression_interval
+                )
+                self._tier2_wake.clear()
+                triggered = True
+            except asyncio.TimeoutError:
+                pass
+            if triggered:
+                snapshot = await asyncio.to_thread(self._tier2_candidate_health_snapshot)
+                reason = self._tier2_pressure_trigger_reason(snapshot)
+                if reason is None:
+                    continue
+                self._tier2_bridge_last_trigger_reason = reason
+                if self._maintenance_lock.locked():
+                    continue
+                async with self._maintenance_lock:
+                    await self._tier2_bridge_cycle()
+                continue
             try:
                 # P0-4 健康信号 (4-3.1): re-probe LLM each cycle so health recovers
                 # after a transient outage / late key configuration, instead of
@@ -1981,13 +2010,99 @@ class MemoryApplicationService:
         )
 
     async def _tier2_bridge_cycle(self) -> Dict[str, Any]:
-        result = await run_tier2_bridge_cycle(
-            self._db_path, self.config, request_factory=Tier2CompressRequest,
-            compress=self.tier2_compress,
-            maintenance_actor=MemoryActor.MEMORY_MAINTENANCE, logger=logger,
-        )
+        self._tier2_bridge_state = "running"
+        try:
+            result = await run_tier2_bridge_cycle(
+                self._db_path, self.config, request_factory=Tier2CompressRequest,
+                compress=self.tier2_compress,
+                maintenance_actor=MemoryActor.MEMORY_MAINTENANCE, logger=logger,
+            )
+        except Exception as exc:
+            self._record_tier2_bridge_failure(str(exc))
+            raise
         self._last_tier2_bridge_result = result
+        failed_scopes = [
+            scope for scope in result.get("scopes", [])
+            if scope.get("status") in {"failed", "quality_rejected", "no_events_generated"}
+        ]
+        if failed_scopes:
+            errors = [
+                str(error)
+                for scope in failed_scopes
+                for error in scope.get("errors", [])
+                if str(error)
+            ]
+            self._record_tier2_bridge_failure(
+                errors[0] if errors else str(failed_scopes[0].get("status"))
+            )
+        else:
+            self._tier2_bridge_consecutive_failures = 0
+            self._tier2_bridge_last_failure_reason = None
+            self._tier2_bridge_last_succeeded_at = datetime.now(timezone.utc).isoformat()
+            self._tier2_bridge_state = "idle"
         return result
+
+    def _record_tier2_bridge_failure(self, reason: str) -> None:
+        self._tier2_bridge_consecutive_failures += 1
+        self._tier2_bridge_last_failure_reason = reason
+        self._tier2_bridge_state = (
+            "degraded"
+            if self._tier2_bridge_consecutive_failures
+            >= self.config.tier2_bridge_failure_degraded_after
+            else "failed"
+        )
+
+    def _tier2_candidate_health_snapshot(self) -> Dict[str, Any]:
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            scopes = conn.execute(
+                "SELECT DISTINCT memory_domain, owner_id, workspace_id FROM turns "
+                "WHERE compressed_to_tier2 = 0"
+            ).fetchall()
+        finally:
+            conn.close()
+        eligible_count = 0
+        oldest_at: str | None = None
+        oldest_time: datetime | None = None
+        for domain, owner_id, workspace_id in scopes:
+            if not domain or not owner_id or not workspace_id:
+                continue
+            snapshot = Tier1ToTier2Bridge(
+                self._db_path,
+                retention_days=self.config.tier1_retention_days,
+                max_turns=self.config.tier1_max_turns,
+                memory_domain=str(domain), owner_id=str(owner_id),
+                workspace_id=str(workspace_id),
+            ).candidate_health_snapshot()
+            eligible_count += int(snapshot["eligible_count"])
+            candidate_at = snapshot["oldest_candidate_at"]
+            candidate_time = _parse_utc_timestamp(candidate_at)
+            if candidate_time is not None and (
+                oldest_time is None or candidate_time < oldest_time
+            ):
+                oldest_at = str(candidate_at)
+                oldest_time = candidate_time
+        oldest_age_seconds = 0.0
+        if oldest_time is not None:
+            oldest_age_seconds = max(
+                0.0,
+                (datetime.now(timezone.utc) - oldest_time).total_seconds(),
+            )
+        return {
+            "eligible_candidate_count": eligible_count,
+            "oldest_candidate_at": oldest_at,
+            "oldest_candidate_age_seconds": round(oldest_age_seconds, 3),
+        }
+
+    def _tier2_pressure_trigger_reason(self, snapshot: Dict[str, Any]) -> str | None:
+        if snapshot["eligible_candidate_count"] >= self.config.tier2_trigger_candidate_count:
+            return "candidate_count"
+        if (
+            snapshot["oldest_candidate_age_seconds"]
+            >= self.config.tier2_trigger_oldest_age_seconds
+        ):
+            return "oldest_candidate_age"
+        return None
 
     def _memory_reference_health_snapshot(self) -> Dict[str, Any]:
         """统计 Tier2 来源引用类型，避免把外部证据误判为孤儿 turn。"""
@@ -2046,14 +2161,27 @@ class MemoryApplicationService:
         )
         semantic = await asyncio.to_thread(self._semantic_health_snapshot)
         agent_outbox = self._agent_outbox_health_snapshot()
+        tier2_candidates = await asyncio.to_thread(
+            self._tier2_candidate_health_snapshot
+        )
         maintenance = {
             "last_effective_activity_at": self._last_effective_activity_at,
             "last_rule_runs": dict(self._last_rule_run),
             "last_tier2_bridge_result": self._last_tier2_bridge_result,
             "requested_run": self._maintenance_run_snapshot(),
+            "tier2_bridge": {
+                **tier2_candidates,
+                "state": self._tier2_bridge_state,
+                "consecutive_failures": self._tier2_bridge_consecutive_failures,
+                "last_failure_reason": self._tier2_bridge_last_failure_reason,
+                "last_succeeded_at": self._tier2_bridge_last_succeeded_at,
+                "last_trigger_reason": self._tier2_bridge_last_trigger_reason,
+            },
         }
         service_healthy = bool(
-            self._gateway_registration_healthy and agent_outbox["healthy"]
+            self._gateway_registration_healthy
+            and agent_outbox["healthy"]
+            and self._tier2_bridge_state != "degraded"
         )
         database_healthy = database["readable"] and database["integrity"] == "ok"
         return {
@@ -2556,6 +2684,7 @@ class MemoryApplicationService:
         conn.close()
         logger.debug("Turn %s added to session %s", turn_id, session_id)
         self._semantic_wake.set()
+        self._tier2_wake.set()
         response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created", "memory_domain": memory_domain}
         if dedup_key:
             response["dedup_key"] = dedup_key
