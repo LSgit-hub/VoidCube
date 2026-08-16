@@ -108,7 +108,7 @@ def ensure_founding_memories(conn) -> int:
             INSERT INTO compressed_memories (
                 memory_id, memory_type, title, summary,
                 timespan_start, timespan_end, importance, confidence,
-                topics, entities, source_turns, parent_id, compressed_at,
+                topics, entities, source_turns, timeline_parent_id, compressed_at,
                 compression_level, status, weight, event_kind, pinned, hidden,
                 owner_id, workspace_id, identity_layer
             ) VALUES (?, 'event', ?, ?, ?, ?, 1.0, 1.0, ?, ?, ?, NULL, ?, 0,
@@ -124,7 +124,7 @@ def ensure_founding_memories(conn) -> int:
                 topics = excluded.topics,
                 entities = excluded.entities,
                 source_turns = excluded.source_turns,
-                parent_id = NULL,
+                timeline_parent_id = NULL,
                 compression_level = 0,
                 status = 'active',
                 superseded_by = NULL,

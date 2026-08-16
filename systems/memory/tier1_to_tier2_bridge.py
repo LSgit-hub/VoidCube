@@ -23,7 +23,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from systems.memory.database import open_memory_sqlite
 from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
-from systems.memory.profile_store import upsert_profile_memory
 from systems.memory.quality_signals import (
     has_explicit_negation as _has_explicit_negation,
     identifiers as _identifiers,
@@ -134,6 +133,50 @@ def _write_compressed_memories_to_db(
     )
     scope_key = f"{owner_id}\0{workspace_id}\0{memory_domain}"
     stable_ids = _build_stable_cmem_ids(pipeline_result, scope_key=scope_key)
+    memory_type_by_pipeline_id = {
+        str(item.id): memory_type
+        for memory_type, items in (
+            ("event", pipeline_result.events),
+            ("scene", pipeline_result.scenes),
+            ("arc", pipeline_result.arcs),
+            ("epoch", pipeline_result.epochs),
+        )
+        for item in items
+    }
+    inferred_parent_by_child: dict[tuple[str, str], str] = {}
+    for child_type, parents in (
+        ("event", pipeline_result.scenes),
+        ("scene", pipeline_result.arcs),
+        ("arc", pipeline_result.epochs),
+    ):
+        for parent in parents:
+            for child_id in list(getattr(parent, "child_ids", []) or []):
+                key = (child_type, str(child_id))
+                inferred_parent_by_child.setdefault(key, str(parent.id))
+
+    def timeline_parent_id(
+        item,
+        *,
+        memory_type: str,
+        expected_type: str,
+    ) -> str | None:
+        parent_ids = list(getattr(item, "parent_ids", []) or [])
+        source_id = (
+            str(parent_ids[0])
+            if parent_ids
+            else inferred_parent_by_child.get((memory_type, str(item.id)))
+        )
+        if not source_id:
+            return None
+        if memory_type_by_pipeline_id.get(source_id) != expected_type:
+            logger.warning(
+                "Discarded invalid %s -> %s timeline relation for %s",
+                getattr(item, "type", "memory"),
+                memory_type_by_pipeline_id.get(source_id, "missing"),
+                item.id,
+            )
+            return None
+        return stable_ids[source_id]
     event_kind_by_id = {
         str(event.id): (
             event.event_kind.value
@@ -146,13 +189,17 @@ def _write_compressed_memories_to_db(
     scene_kind_by_id: dict[str, str | None] = {}
     arc_kind_by_id: dict[str, str | None] = {}
     for event in pipeline_result.events:
-        parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
+        resolved_parent_id = timeline_parent_id(
+            event,
+            memory_type="event",
+            expected_type="scene",
+        )
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
             "owner_id, workspace_id, memory_domain, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -160,13 +207,17 @@ def _write_compressed_memories_to_db(
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
-                json.dumps(event.source_turns), parent_id, now,
+                json.dumps(event.source_turns), resolved_parent_id, now,
                 0, "active", 1.0, ek, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
     for scene in pipeline_result.scenes:
-        parent_id = stable_ids.get(scene.parent_ids[0], scene.parent_ids[0]) if scene.parent_ids else None
+        resolved_parent_id = timeline_parent_id(
+            scene,
+            memory_type="scene",
+            expected_type="arc",
+        )
         child_ids = set(getattr(scene, "child_ids", []) or [])
         child_kinds = [
             event_kind_by_id[str(item)]
@@ -179,7 +230,7 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
             "owner_id, workspace_id, memory_domain, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -187,13 +238,17 @@ def _write_compressed_memories_to_db(
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
-                json.dumps(scene.evidence_refs), parent_id, now,
+                json.dumps(scene.evidence_refs), resolved_parent_id, now,
                 1, "active", 0.7, scene_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
     for arc in pipeline_result.arcs:
-        parent_id = stable_ids.get(arc.parent_ids[0], arc.parent_ids[0]) if arc.parent_ids else None
+        resolved_parent_id = timeline_parent_id(
+            arc,
+            memory_type="arc",
+            expected_type="epoch",
+        )
         arc_child_kinds = [
             scene_kind_by_id[str(item)]
             for item in (getattr(arc, "child_ids", []) or [])
@@ -205,7 +260,7 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
             "owner_id, workspace_id, memory_domain, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -213,7 +268,7 @@ def _write_compressed_memories_to_db(
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
-                json.dumps(arc.evidence_refs), parent_id, now,
+                json.dumps(arc.evidence_refs), resolved_parent_id, now,
                 2, "active", 0.4, arc_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
@@ -229,7 +284,7 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
             "owner_id, workspace_id, memory_domain, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -242,23 +297,6 @@ def _write_compressed_memories_to_db(
             ),
         )
         written += 1
-    for profile in getattr(pipeline_result, "profile_memories", []) or []:
-        profile.evidence_refs = [
-            stable_ids.get(str(item), str(item))
-            for item in (getattr(profile, "evidence_refs", []) or [])
-        ]
-        profile.parent_timeline_refs = [
-            stable_ids.get(str(item), str(item))
-            for item in (getattr(profile, "parent_timeline_refs", []) or [])
-        ]
-        written += upsert_profile_memory(
-            conn,
-            profile,
-            owner_id=owner_id,
-            workspace_id=workspace_id,
-            memory_domain=memory_domain,
-            now=now,
-        )
     # Backfill the immutable transaction-time anchor for rows written without
     # an explicit created_at (COALESCE(created_at, compressed_at) readers).
     conn.execute(
@@ -290,7 +328,7 @@ def _write_compressed_memories_to_db(
 
 def _pipeline_scope(conn, pipeline_result) -> tuple[str, str, str]:
     source_turn_ids: list[str] = []
-    for collection_name in ("events", "profile_memories"):
+    for collection_name in ("events",):
         for item in getattr(pipeline_result, collection_name, []) or []:
             source_turn_ids.extend(
                 str(value)
@@ -428,7 +466,7 @@ class Tier1ToTier2Bridge:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
         base_conditions = [
-            "compressed_to_tier2 = 0",
+            "compression_status IN ('pending', 'retry_wait')",
             _RETRY_ELIGIBLE_TURN_SQL,
             "memory_domain = ?",
             _NON_EVALUATION_TURN_SQL,
@@ -505,7 +543,7 @@ class Tier1ToTier2Bridge:
         if conn is None:
             conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
+            "SELECT COUNT(*) FROM turns WHERE compression_status IN ('pending', 'retry_wait') "
             "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
             + self._scope_sql_suffix(),
             [self.memory_domain, *self._scope_params()],
@@ -527,7 +565,7 @@ class Tier1ToTier2Bridge:
         retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
         row = conn.execute(
             "SELECT COUNT(*), MIN(timestamp) FROM turns "
-            "WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+            "WHERE timestamp < ? AND compression_status IN ('pending', 'retry_wait') "
             "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
             + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
             [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
@@ -540,7 +578,7 @@ class Tier1ToTier2Bridge:
                 force_oldest = True
                 row = conn.execute(
                     "SELECT COUNT(*), MIN(timestamp) FROM turns "
-                    "WHERE compressed_to_tier2 = 0 AND "
+                    "WHERE compression_status IN ('pending', 'retry_wait') AND "
                     + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
                     + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
                     [*retry_params, self.memory_domain, *self._scope_params()],
@@ -618,6 +656,9 @@ class Tier1ToTier2Bridge:
 
         pipeline = self._build_pipeline()
         result = pipeline.ingest(transcript_turns)
+        # VoidCube Profile memory is captured at user-turn ingestion. Tier 2
+        # extraction owns only timeline resources.
+        result.profile_memories = []
         compression_degraded = self.compression_degraded
         if compression_degraded is None:
             backend = getattr(getattr(pipeline, "event_extractor", None), "backend", None)
@@ -628,7 +669,6 @@ class Tier1ToTier2Bridge:
             "scenes": [s.to_dict() for s in result.scenes],
             "arcs": [a.to_dict() for a in result.arcs],
             "epochs": [ep.to_dict() for ep in result.epochs],
-            "profile_memories": [p.to_dict() for p in result.profile_memories],
             "_pipeline_result": result,
             "_compression_degraded": bool(compression_degraded),
         }
@@ -844,17 +884,6 @@ class Tier1ToTier2Bridge:
             if not children or not children <= arc_ids:
                 continue
             epochs.append(epoch)
-        for profile in getattr(result, "profile_memories", []):
-            profile.parent_timeline_refs = [
-                str(item)
-                for item in (getattr(profile, "parent_timeline_refs", []) or [])
-                if str(item) not in original_scene_ids or str(item) in scene_ids
-            ]
-            profile.evidence_refs = [
-                str(item)
-                for item in (getattr(profile, "evidence_refs", []) or [])
-                if str(item) not in original_scene_ids or str(item) in scene_ids
-            ]
         result.events, result.scenes, result.arcs, result.epochs = events, scenes, arcs, epochs
         tier2_output["events"] = [event.to_dict() for event in events]
         tier2_output["scenes"] = [scene.to_dict() for scene in scenes]
@@ -935,16 +964,16 @@ class Tier1ToTier2Bridge:
                 ).fetchone()
                 retry_count = int(row[0] or 0) + 1 if row else 1
                 if retry_count >= _MAX_QUALITY_RETRIES:
-                    state = -1
+                    state = "quality_quarantined"
                     retry_after = None
                 else:
-                    state = 0
+                    state = "retry_wait"
                     retry_after = (
                         datetime.now(timezone.utc) + timedelta(hours=2 ** (retry_count - 1))
                     ).isoformat()
                 conn.execute(
                     "UPDATE turns SET compression_retry_count = ?, "
-                    "compression_retry_after = ?, compressed_to_tier2 = ? "
+                    "compression_retry_after = ?, compression_status = ? "
                     "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
                     "AND memory_domain = ?",
                     (retry_count, retry_after, state, turn["turn_id"], turn["owner_id"],
@@ -1025,7 +1054,7 @@ class Tier1ToTier2Bridge:
                         ),
                     )
                     conn.execute(
-                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ? "
+                        "UPDATE turns SET compression_status = 'compressed' WHERE turn_id = ? "
                         "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
                         (turn_id, t["owner_id"], t["workspace_id"], t["memory_domain"]),
                     )
@@ -1176,12 +1205,12 @@ class Tier1ToTier2Bridge:
         conn = open_memory_sqlite(self.db_path)
         total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
         active_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+            "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed'"
         ).fetchone()[0]
         archived = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
         sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         oldest = conn.execute(
-            "SELECT MIN(timestamp) FROM turns WHERE compressed_to_tier2 = 0"
+            "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed'"
         ).fetchone()[0]
         conn.close()
         return {

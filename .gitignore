@@ -171,7 +171,9 @@ compile_commands.json
 # ==========================================
 /tests/*
 !/tests/test_memory_session_rebinding.py
-/docs/
+!/tests/test_memory_resource_contract.py
+/docs/*
+!/docs/memory-resource-contract.md
 .arts/
 .mypy_cache/
 .pytest_tmp/

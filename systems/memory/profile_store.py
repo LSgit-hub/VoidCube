@@ -8,6 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from systems.memory.resource_contract import (
+    SET_VALUED_PROFILE_PREDICATES,
+    profile_slot_key,
+)
+
 
 def _enum_value(value: Any) -> str:
     return str(getattr(value, "value", value))
@@ -25,6 +30,7 @@ def upsert_profile_memory(
     workspace_id: str,
     memory_domain: str = "agent_interaction",
     now: str,
+    capture_source: str = "explicit_user",
 ) -> int:
     """Insert or revise one scoped profile fact without losing evidence."""
     valid_from = _iso_value(profile.valid_from)
@@ -37,15 +43,27 @@ def upsert_profile_memory(
     if tombstone and _as_utc(valid_from) < _as_utc(str(tombstone[0])):
         return 0
 
+    predicate = str(profile.predicate).strip()
+    slot_key = profile_slot_key(predicate, profile.value)
+    set_valued = predicate.lower() in SET_VALUED_PROFILE_PREDICATES
+    existing_clause = "AND slot_key = ?" if set_valued else ""
+    existing_params = (
+        owner_id,
+        workspace_id,
+        memory_domain,
+        profile.subject,
+        predicate,
+        *((slot_key,) if set_valued else ()),
+    )
     existing = conn.execute(
         "SELECT memory_id, value, confidence, evidence_refs, source_turns "
         "FROM profile_memories WHERE owner_id = ? AND workspace_id = ? "
-        "AND memory_domain = ? AND subject = ? AND predicate = ? AND status = 'active' "
-        "ORDER BY valid_from DESC LIMIT 1",
-        (owner_id, workspace_id, memory_domain, profile.subject, profile.predicate),
+        "AND memory_domain = ? AND subject = ? AND predicate = ? "
+        f"{existing_clause} AND status = 'active' ORDER BY valid_from DESC LIMIT 1",
+        existing_params,
     ).fetchone()
     supersedes = list(getattr(profile, "supersedes", []) or [])
-    if existing and str(existing[1]) != str(profile.value):
+    if existing and str(existing[1]) != str(profile.value) and not set_valued:
         conn.execute(
             "UPDATE profile_memories SET status = 'superseded', valid_to = ?, "
             "updated_at = ? WHERE memory_id = ? AND owner_id = ? "
@@ -63,11 +81,12 @@ def upsert_profile_memory(
             else _enum_value(profile.certainty_state)
         )
         conn.execute(
-            "UPDATE profile_memories SET summary = ?, confidence = ?, "
+            "UPDATE profile_memories SET value = ?, summary = ?, confidence = ?, "
             "certainty_state = ?, evidence_refs = ?, source_turns = ?, updated_at = ? "
             "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
             "AND memory_domain = ?",
             (
+                profile.value,
                 profile.summary,
                 confidence,
                 certainty,
@@ -89,16 +108,17 @@ def upsert_profile_memory(
     )
     conn.execute(
         "INSERT OR REPLACE INTO profile_memories "
-        "(memory_id, memory_domain, memory_kind, subject, predicate, value, summary, confidence, "
+        "(memory_id, memory_domain, memory_kind, subject, predicate, slot_key, value, summary, confidence, "
         "certainty_state, status, valid_from, valid_to, evidence_refs, source_turns, "
-        "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id, "
+        "capture_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             memory_id,
             memory_domain,
             _enum_value(profile.memory_kind),
             profile.subject,
-            profile.predicate,
+            predicate,
+            slot_key,
             profile.value,
             profile.summary,
             profile.confidence,
@@ -114,6 +134,7 @@ def upsert_profile_memory(
             now,
             owner_id,
             workspace_id,
+            capture_source,
         ),
     )
     return 1
@@ -185,7 +206,7 @@ def revoke_profile_predicates(
     if evidence_turns:
         turn_placeholders = ",".join("?" for _ in evidence_turns)
         conn.execute(
-            "UPDATE turns SET compressed_to_tier2 = 1 WHERE owner_id = ? "
+            "UPDATE turns SET compression_status = 'compressed' WHERE owner_id = ? "
             "AND workspace_id = ? AND memory_domain = ? "
             f"AND turn_id IN ({turn_placeholders})",
             (owner_id, workspace_id, memory_domain, *evidence_turns),

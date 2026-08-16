@@ -35,6 +35,7 @@ from systems.memory.profile_store import (
     upsert_profile_memory,
 )
 from systems.memory.ranking_policy import compute_dynamic_weight
+from systems.memory.resource_contract import TurnCompressionStatus
 from systems.memory.promotion import (
     MemoryPromotionAccessError,
     MemoryPromotionCandidateCreate,
@@ -89,7 +90,8 @@ logger = logging.getLogger("memory_service")
 
 _CMEM_COLUMNS = (
     "memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-    "importance, confidence, topics, entities, source_turns, parent_id, "
+    "importance, confidence, topics, entities, source_turns, timeline_parent_id, "
+    "derived_from_id, "
     "compressed_at, compression_level, status, superseded_by, weight, event_kind, "
     "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
     "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
@@ -197,7 +199,7 @@ class TurnResponse(BaseModel):
     timestamp: str
     relevance_score: float = 1.0
     decay_factor: float = 0.01
-    compressed_to_tier2: bool = False
+    compression_status: TurnCompressionStatus = TurnCompressionStatus.PENDING
     tags: List[str] = []
     metadata: Dict[str, Any] = {}
 
@@ -364,18 +366,18 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
             "memory_id": 0, "memory_type": 1, "title": 2,
             "summary": 3, "timespan_start": 4, "timespan_end": 5,
             "importance": 6, "confidence": 7, "topics": 8,
-            "entities": 9, "source_turns": 10, "parent_id": 11,
-            "compressed_at": 12, "compression_level": 13,
-            "status": 14, "superseded_by": 15, "weight": 16,
-            "event_kind": 17, "access_count": 18,
-            "last_accessed_at": 19, "citation_count": 20,
-            "pinned": 21, "hidden": 22, "identity_layer": 23,
-            "evidence_refs": 24, "origin_type": 25,
-            "origin_id": 26, "verified_at": 27,
-            "owner_id": 28, "workspace_id": 29,
-            "memory_domain": 30, "created_at": 31,
-            "lifecycle_retry_count": 32, "lifecycle_retry_after": 33,
-            "lifecycle_last_error": 34,
+            "entities": 9, "source_turns": 10, "timeline_parent_id": 11,
+            "derived_from_id": 12, "compressed_at": 13, "compression_level": 14,
+            "status": 15, "superseded_by": 16, "weight": 17,
+            "event_kind": 18, "access_count": 19,
+            "last_accessed_at": 20, "citation_count": 21,
+            "pinned": 22, "hidden": 23, "identity_layer": 24,
+            "evidence_refs": 25, "origin_type": 26,
+            "origin_id": 27, "verified_at": 28,
+            "owner_id": 29, "workspace_id": 30,
+            "memory_domain": 31, "created_at": 32,
+            "lifecycle_retry_count": 33, "lifecycle_retry_after": 34,
+            "lifecycle_last_error": 35,
         }
         position = index.get(name)
         return row[position] if position is not None and len(row) > position else default
@@ -396,7 +398,9 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "importance": value("importance"), "confidence": value("confidence"),
         "topics": json_value("topics", []), "entities": json_value("entities", []),
         "source_turns": json_value("source_turns", []),
-        "parent_id": value("parent_id"), "compressed_at": value("compressed_at"),
+        "timeline_parent_id": value("timeline_parent_id"),
+        "derived_from_id": value("derived_from_id"),
+        "compressed_at": value("compressed_at"),
         "compression_level": value("compression_level", 0),
         "status": value("status", "active"),
         "superseded_by": value("superseded_by"),
@@ -442,8 +446,68 @@ def _turn_row_to_dict(row) -> Dict[str, Any]:
         "decay_factor": row[6],
         "tags": json.loads(row[7]) if row[7] else [],
         "metadata": json.loads(row[8]) if row[8] else {},
-        "compressed_to_tier2": bool(row[9]),
+        "compression_status": row[9],
         "memory_domain": row[10] if len(row) > 10 else DEFAULT_MEMORY_DOMAIN.value,
+    }
+
+
+def _settle_explicit_profile_capture(
+    conn: sqlite3.Connection,
+    *,
+    text: str,
+    turn_id: str,
+    timestamp: str,
+    scope: MemoryScope,
+    memory_domain: str,
+    now: str,
+) -> dict[str, Any]:
+    capture = capture_explicit_user_profile(
+        text,
+        turn_id=turn_id,
+        timestamp=datetime.fromisoformat(timestamp),
+    )
+    predicates = capture.revoke_predicates
+    if predicates == ("*",):
+        active_predicates = (
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT predicate FROM profile_memories "
+                "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                "AND subject = 'user' AND status = 'active'",
+                (scope.owner_id, scope.workspace_id, memory_domain),
+            ).fetchall()
+        )
+        predicates = tuple(
+            dict.fromkeys((*ALL_PROFILE_PREDICATES, *active_predicates))
+        )
+    if predicates:
+        return revoke_profile_predicates(
+            conn,
+            predicates,
+            owner_id=scope.owner_id,
+            workspace_id=scope.workspace_id,
+            memory_domain=memory_domain,
+            turn_id=turn_id,
+            now=now,
+        )
+    if not capture.profiles:
+        return {"action": "none"}
+    inserted = sum(
+        upsert_profile_memory(
+            conn,
+            profile,
+            owner_id=scope.owner_id,
+            workspace_id=scope.workspace_id,
+            memory_domain=memory_domain,
+            now=now,
+            capture_source="explicit_user",
+        )
+        for profile in capture.profiles
+    )
+    return {
+        "action": "upserted",
+        "predicates": [profile.predicate for profile in capture.profiles],
+        "inserted": inserted,
     }
 
 
@@ -469,7 +533,8 @@ def _collect_dependent_memory_ids(
 ) -> tuple[set[str], set[str]]:
     """Resolve all scoped durable memories that transitively cite the seeds."""
     compressed_rows = conn.execute(
-        "SELECT memory_id, source_turns, evidence_refs, parent_id, origin_id "
+        "SELECT memory_id, source_turns, evidence_refs, timeline_parent_id, "
+        "derived_from_id, origin_id "
         "FROM compressed_memories WHERE owner_id = ? AND workspace_id = ? "
         "AND memory_domain = ?",
         (scope.owner_id, scope.workspace_id, memory_domain),
@@ -486,14 +551,22 @@ def _collect_dependent_memory_ids(
     changed = True
     while changed:
         changed = False
-        for memory_id, source_turns, evidence_refs, parent_id, origin_id in compressed_rows:
+        for (
+            memory_id,
+            source_turns,
+            evidence_refs,
+            timeline_parent_id,
+            derived_from_id,
+            origin_id,
+        ) in compressed_rows:
             resolved_id = str(memory_id)
             if resolved_id in compressed_ids:
                 continue
             row_references = {
                 *_json_string_set(source_turns),
                 *_json_string_set(evidence_refs),
-                str(parent_id or "").strip(),
+                str(timeline_parent_id or "").strip(),
+                str(derived_from_id or "").strip(),
                 str(origin_id or "").strip(),
             }
             row_references.discard("")
@@ -706,7 +779,7 @@ class MemoryApplicationService:
                     )
                     continue
 
-                parent_id = str(
+                successor_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         "voidcube-memory-lifecycle:"
@@ -720,11 +793,11 @@ class MemoryApplicationService:
                     "INSERT OR REPLACE INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
-                    "parent_id, compressed_at, compression_level, status, weight, "
+                    "derived_from_id, compressed_at, compression_level, status, weight, "
                     "owner_id, workspace_id, memory_domain, event_kind, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        parent_id, next_type, escalated_title, escalated_summary,
+                        successor_id, next_type, escalated_title, escalated_summary,
                         ts_start, ts_end,
                         importance * 0.85, confidence * 0.9,
                         topics_json, entities_json,
@@ -739,14 +812,14 @@ class MemoryApplicationService:
                     "UPDATE compressed_memories SET status = 'superseded', "
                     "superseded_by = ?, weight = weight * 0.3 WHERE memory_id = ? "
                     "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (parent_id, mem_id, owner_id, workspace_id, memory_domain),
+                    (successor_id, mem_id, owner_id, workspace_id, memory_domain),
                 )
                 # Increment citation_count on the new parent (Dimension 3)
                 conn.execute(
                     "UPDATE compressed_memories SET citation_count = citation_count + 1 "
                     "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
                     "AND memory_domain = ?",
-                    (parent_id, owner_id, workspace_id, memory_domain),
+                    (successor_id, owner_id, workspace_id, memory_domain),
                 )
                 # Record the new parent's entities in the entity graph.
                 from systems.memory.entity_graph import update_entity_graph
@@ -759,7 +832,7 @@ class MemoryApplicationService:
                         parent_entities = []
                 update_entity_graph(
                     conn,
-                    memory_id=parent_id,
+                    memory_id=successor_id,
                     memory_type=next_type,
                     entities=parent_entities,
                     owner_id=str(owner_id),
@@ -2057,7 +2130,7 @@ class MemoryApplicationService:
         try:
             scopes = conn.execute(
                 "SELECT DISTINCT memory_domain, owner_id, workspace_id FROM turns "
-                "WHERE compressed_to_tier2 = 0"
+                "WHERE compression_status IN ('pending', 'retry_wait')"
             ).fetchall()
         finally:
             conn.close()
@@ -2659,8 +2732,8 @@ class MemoryApplicationService:
         conn.execute(
             "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
             "relevance_score, decay_factor, tags, metadata, dedup_key, "
-            "compressed_to_tier2, last_decay_at, owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?, ?, ?, ?)",
+            "compression_status, last_decay_at, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 'pending', ?, ?, ?, ?)",
             (
                 turn_id,
                 session_id,
@@ -2676,6 +2749,17 @@ class MemoryApplicationService:
                 memory_domain,
             ),
         )
+        profile_settlement = {"action": "none"}
+        if request.speaker == "user":
+            profile_settlement = _settle_explicit_profile_capture(
+                conn,
+                text=stored_text,
+                turn_id=turn_id,
+                timestamp=now,
+                scope=scope,
+                memory_domain=memory_domain,
+                now=now,
+            )
         conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
             (now, session_id),
@@ -2686,6 +2770,7 @@ class MemoryApplicationService:
         self._semantic_wake.set()
         self._tier2_wake.set()
         response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created", "memory_domain": memory_domain}
+        response["profile_settlement"] = profile_settlement
         if dedup_key:
             response["dedup_key"] = dedup_key
         return response
@@ -2762,9 +2847,9 @@ class MemoryApplicationService:
                 conn.execute(
                     "INSERT INTO turns "
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
-                    "decay_factor, tags, metadata, dedup_key, compressed_to_tier2, "
+                    "decay_factor, tags, metadata, dedup_key, compression_status, "
                     "last_decay_at, owner_id, workspace_id, memory_domain) "
-                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 'pending', ?, ?, ?, ?)",
                     (
                         turn_id,
                         session_id,
@@ -2793,56 +2878,15 @@ class MemoryApplicationService:
                     ),
                 ).fetchone()
                 if user_turn:
-                    capture = capture_explicit_user_profile(
-                        str(user_turn[0]),
+                    profile_settlement = _settle_explicit_profile_capture(
+                        conn,
+                        text=str(user_turn[0]),
                         turn_id=turn_ids["user"],
-                        timestamp=datetime.fromisoformat(str(user_turn[1])),
+                        timestamp=str(user_turn[1]),
+                        scope=scope,
+                        memory_domain=memory_domain,
+                        now=now,
                     )
-                    predicates = capture.revoke_predicates
-                    if predicates == ("*",):
-                        active_predicates = (
-                            str(row[0])
-                            for row in conn.execute(
-                                "SELECT DISTINCT predicate FROM profile_memories "
-                                "WHERE owner_id = ? AND workspace_id = ? "
-                                "AND subject = 'user' AND status = 'active'",
-                                (scope.owner_id, scope.workspace_id),
-                            ).fetchall()
-                        )
-                        predicates = tuple(
-                            dict.fromkeys(
-                                (*ALL_PROFILE_PREDICATES, *active_predicates)
-                            )
-                        )
-                    if predicates:
-                        profile_settlement = revoke_profile_predicates(
-                            conn,
-                            predicates,
-                            owner_id=scope.owner_id,
-                            workspace_id=scope.workspace_id,
-                            memory_domain=memory_domain,
-                            turn_id=turn_ids["user"],
-                            now=now,
-                        )
-                    elif capture.profiles:
-                        inserted = sum(
-                            upsert_profile_memory(
-                                conn,
-                                profile,
-                                owner_id=scope.owner_id,
-                                workspace_id=scope.workspace_id,
-                                memory_domain=memory_domain,
-                                now=now,
-                            )
-                            for profile in capture.profiles
-                        )
-                        profile_settlement = {
-                            "action": "upserted",
-                            "predicates": [
-                                profile.predicate for profile in capture.profiles
-                            ],
-                            "inserted": inserted,
-                        }
             conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
                 (now, session_id),
@@ -3065,7 +3109,7 @@ class MemoryApplicationService:
         conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compressed_to_tier2, memory_domain "
+            "decay_factor, tags, metadata, compression_status, memory_domain "
             "FROM turns WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
             "AND memory_domain = ? "
             "ORDER BY timestamp ASC LIMIT ? OFFSET ?",
@@ -3098,7 +3142,7 @@ class MemoryApplicationService:
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
-              "decay_factor, tags, metadata, compressed_to_tier2, memory_domain FROM turns " \
+              "decay_factor, tags, metadata, compression_status, memory_domain FROM turns " \
               "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?"
         params: list = [scope.owner_id, scope.workspace_id, authorized_domain]
         if start:
@@ -3136,7 +3180,7 @@ class MemoryApplicationService:
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compressed_to_tier2, memory_domain "
+            "decay_factor, tags, metadata, compression_status, memory_domain "
             "FROM turns WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
             "AND memory_domain = ?",
             (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
@@ -3335,12 +3379,12 @@ class MemoryApplicationService:
             private,
         ).fetchone()[0]
         active_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 "
+            "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed' "
             "AND owner_id = ? AND workspace_id = ?",
             private,
         ).fetchone()[0]
         compressed_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 1 "
+            "SELECT COUNT(*) FROM turns WHERE compression_status = 'compressed' "
             "AND owner_id = ? AND workspace_id = ?",
             private,
         ).fetchone()[0]
@@ -3353,7 +3397,7 @@ class MemoryApplicationService:
             private,
         ).fetchone()[0]
         oldest = conn.execute(
-            "SELECT MIN(timestamp) FROM turns WHERE compressed_to_tier2 = 0 "
+            "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed' "
             "AND owner_id = ? AND workspace_id = ?",
             private,
         ).fetchone()[0]

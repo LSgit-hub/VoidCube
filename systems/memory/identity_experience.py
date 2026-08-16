@@ -367,7 +367,7 @@ def _upsert_identity_memory(
         """
         INSERT INTO compressed_memories (
             memory_id, memory_type, title, summary, timespan_start, timespan_end,
-            importance, confidence, topics, entities, source_turns, parent_id,
+            importance, confidence, topics, entities, source_turns, timeline_parent_id,
             compressed_at, compression_level, status, superseded_by, weight,
             event_kind, pinned, hidden, identity_layer, evidence_refs,
             origin_type, origin_id, verified_at, owner_id, workspace_id, memory_domain

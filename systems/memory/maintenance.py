@@ -36,7 +36,7 @@ async def run_tier1_decay_cycle(
         rows = conn.execute(
             "SELECT turn_id, relevance_score, timestamp, last_decay_at, "
             "owner_id, workspace_id, memory_domain FROM turns "
-            "WHERE compressed_to_tier2 = 0"
+            "WHERE compression_status != 'compressed'"
         ).fetchall()
         for turn_id, score, timestamp, last_decay_at, owner_id, workspace_id, domain in rows:
             anchor_value = last_decay_at or timestamp
@@ -60,7 +60,7 @@ async def run_tier1_decay_cycle(
             conn.executemany(
                 "UPDATE turns SET relevance_score = ?, last_decay_at = ? "
                 "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
-                "AND memory_domain = ? AND compressed_to_tier2 = 0",
+                "AND memory_domain = ? AND compression_status != 'compressed'",
                 updates,
             )
         conn.commit()
@@ -87,7 +87,7 @@ async def run_tier2_bridge_cycle(
     try:
         scopes = conn.execute(
             "SELECT DISTINCT memory_domain, owner_id, workspace_id "
-            "FROM turns WHERE compressed_to_tier2 = 0 "
+            "FROM turns WHERE compression_status IN ('pending', 'retry_wait') "
             "GROUP BY memory_domain, owner_id, workspace_id "
             "ORDER BY memory_domain, owner_id, workspace_id",
         ).fetchall()

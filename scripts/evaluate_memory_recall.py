@@ -11,6 +11,7 @@ from typing import Any
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.memory_service import MemoryService, RecallRequest
 from systems.memory.database import open_memory_sqlite
+from systems.memory.resource_contract import profile_slot_key
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,8 +82,8 @@ def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> No
                 conn.execute(
                     "INSERT INTO turns "
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
-                    "decay_factor, tags, metadata, compressed_to_tier2, owner_id, workspace_id) "
-                    "VALUES (?, ?, 'user', ?, ?, 1.0, 0.01, '[]', '{}', 0, ?, ?)",
+                    "decay_factor, tags, metadata, compression_status, owner_id, workspace_id) "
+                    "VALUES (?, ?, 'user', ?, ?, 1.0, 0.01, '[]', '{}', 'pending', ?, ?)",
                     (memory_id, session_id, record["text"], timestamp, owner_id, workspace_id),
                 )
             elif source_type == "archive":
@@ -142,15 +143,17 @@ def _seed_benchmark(service: MemoryService, records: list[dict[str, Any]]) -> No
                 valid_from = days_ago(record.get("valid_from_days_ago", 0))
                 conn.execute(
                     "INSERT INTO profile_memories "
-                    "(memory_id, memory_kind, subject, predicate, value, summary, confidence, "
+                    "(memory_id, memory_kind, subject, predicate, slot_key, value, summary, confidence, "
                     "certainty_state, status, valid_from, evidence_refs, source_turns, "
-                    "supersedes, conflict_refs, owner_id, workspace_id, created_at, updated_at) "
-                    "VALUES (?, 'preference', ?, ?, ?, ?, 0.95, 'confirmed', 'active', ?, "
-                    "'[]', '[]', '[]', '[]', ?, ?, ?, ?)",
+                    "supersedes, conflict_refs, owner_id, workspace_id, created_at, updated_at, "
+                    "capture_source) VALUES (?, 'preference', ?, ?, ?, ?, ?, 0.95, "
+                    "'confirmed', 'active', ?, '[]', '[]', '[]', '[]', ?, ?, ?, ?, "
+                    "'benchmark')",
                     (
                         memory_id,
                         record["subject"],
                         record["predicate"],
+                        profile_slot_key(record["predicate"], record["value"]),
                         record["value"],
                         record["summary"],
                         valid_from,

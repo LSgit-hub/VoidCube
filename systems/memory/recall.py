@@ -1492,7 +1492,7 @@ def _tier1_candidates(
         if marker in plan.normalized_query
     )
     clauses = [
-        "compressed_to_tier2 = 0",
+        "compression_status != 'compressed'",
         "owner_id = ?",
         "workspace_id = ?",
         "(json_valid(COALESCE(tags, '[]')) = 0 OR NOT EXISTS ("

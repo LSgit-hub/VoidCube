@@ -300,7 +300,7 @@ class SemanticMemoryIndex:
             "turn": (
                 "SELECT COALESCE(text, '') FROM turns "
                 "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
-                "AND memory_domain = ? AND compressed_to_tier2 = 0"
+                "AND memory_domain = ? AND compression_status != 'compressed'"
             ),
             "archive": (
                 "SELECT COALESCE(original_text, text_summary, '') FROM turns_archive "
@@ -443,7 +443,7 @@ class SemanticMemoryIndex:
                 "WITH source_records(source_type, memory_id, owner_id, workspace_id, "
                 "memory_domain, content) AS ("
                 "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, text "
-                "FROM turns WHERE compressed_to_tier2 = 0 "
+                "FROM turns WHERE compression_status != 'compressed' "
                 "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, "
                 "memory_domain, COALESCE(original_text, text_summary, '') "
                 "FROM turns_archive "
@@ -735,7 +735,7 @@ class SemanticMemoryIndex:
             rows = conn.execute(
                 "WITH source_records(source_type, memory_id, owner_id, workspace_id, memory_domain, content) AS ("
                 "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, COALESCE(text, '') "
-                "FROM turns WHERE compressed_to_tier2 = 0 "
+                "FROM turns WHERE compression_status != 'compressed' "
                 "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(original_text, text_summary, '') FROM turns_archive "
                 "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, memory_domain, "

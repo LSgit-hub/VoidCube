@@ -175,8 +175,8 @@ def seed_instance(
                 conn.execute(
                     "INSERT INTO turns "
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
-                    "decay_factor, tags, metadata, compressed_to_tier2, owner_id, workspace_id, "
-                    "memory_domain) VALUES (?, ?, ?, ?, ?, 1.0, 0.01, '[]', '{}', 0, "
+                    "decay_factor, tags, metadata, compression_status, owner_id, workspace_id, "
+                    "memory_domain) VALUES (?, ?, ?, ?, ?, 1.0, 0.01, '[]', '{}', 'pending', "
                     "'local-user', 'default', 'agent_interaction')",
                     (turn_id, session_id, speaker, content, _iso(timestamp)),
                 )

@@ -13,6 +13,13 @@ from pathlib import Path
 from systems.memory.backup import MemoryBackupManager
 from systems.memory.lexical_index import setup_memory_fts
 from systems.memory.promotion import setup_memory_promotion_schema
+from systems.memory.resource_contract import (
+    LEGACY_HEURISTIC_PROFILE_PREDICATES,
+    TurnCompressionStatus,
+    expected_timeline_parent_type,
+    is_derived_relation,
+    profile_slot_key,
+)
 from systems.memory.runtime_migration import migrate_memory_database
 from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 
@@ -99,6 +106,19 @@ class MemoryDatabaseBootstrap:
                 }
                 if "embedding" in columns:
                     reasons.append("compressed_memories.embedding")
+                if "parent_id" in columns:
+                    reasons.append("compressed_memories.parent_id")
+            turns_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'turns'"
+            ).fetchone()
+            if turns_exists:
+                turn_columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(turns)").fetchall()
+                }
+                if "compressed_to_tier2" in turn_columns:
+                    reasons.append("turns.compressed_to_tier2")
             obsolete_exists = connection.execute(
                 "SELECT 1 FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'memories'"
@@ -188,7 +208,10 @@ class MemoryDatabaseBootstrap:
                 tags TEXT,
                 metadata TEXT,
                 dedup_key TEXT,
-                compressed_to_tier2 INTEGER DEFAULT 0,
+                compression_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(compression_status IN (
+                        'pending', 'retry_wait', 'compressed', 'quality_quarantined'
+                    )),
                 compression_retry_count INTEGER NOT NULL DEFAULT 0,
                 compression_retry_after TEXT,
                 last_decay_at TEXT,
@@ -359,7 +382,8 @@ class MemoryDatabaseBootstrap:
                 topics TEXT,
                 entities TEXT,
                 source_turns TEXT,
-                parent_id TEXT,
+                timeline_parent_id TEXT,
+                derived_from_id TEXT,
                 compressed_at TEXT NOT NULL,
                 compression_level INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'active',
@@ -395,6 +419,7 @@ class MemoryDatabaseBootstrap:
                 memory_kind TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 predicate TEXT NOT NULL,
+                slot_key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 confidence REAL NOT NULL DEFAULT 0.5,
@@ -409,10 +434,12 @@ class MemoryDatabaseBootstrap:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default'
+                workspace_id TEXT NOT NULL DEFAULT 'default',
+                capture_source TEXT NOT NULL DEFAULT 'explicit_user'
             )
             """
         )
+        self._migrate_profile_memories_schema(cursor)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS identity_revision_proposals (
@@ -535,6 +562,28 @@ class MemoryDatabaseBootstrap:
             )
         if "compression_retry_after" not in existing:
             cursor.execute("ALTER TABLE turns ADD COLUMN compression_retry_after TEXT")
+        if "compression_status" not in existing:
+            cursor.execute(
+                "ALTER TABLE turns ADD COLUMN compression_status TEXT NOT NULL "
+                "DEFAULT 'pending'"
+            )
+        if "compressed_to_tier2" in existing:
+            cursor.execute(
+                "UPDATE turns SET compression_status = CASE "
+                "WHEN compressed_to_tier2 = 1 THEN ? "
+                "WHEN compressed_to_tier2 = -1 THEN ? "
+                "WHEN compression_retry_count > 0 "
+                "AND compression_retry_after IS NOT NULL THEN ? ELSE ? END",
+                (
+                    TurnCompressionStatus.COMPRESSED.value,
+                    TurnCompressionStatus.QUALITY_QUARANTINED.value,
+                    TurnCompressionStatus.RETRY_WAIT.value,
+                    TurnCompressionStatus.PENDING.value,
+                ),
+            )
+            cursor.execute("DROP INDEX IF EXISTS idx_turns_compressed")
+            cursor.execute("DROP INDEX IF EXISTS idx_turns_scope_time")
+            cursor.execute("ALTER TABLE turns DROP COLUMN compressed_to_tier2")
 
     def _migrate_scope_schema(self, cursor: sqlite3.Cursor) -> None:
         for table in (
@@ -668,6 +717,8 @@ class MemoryDatabaseBootstrap:
             ("lifecycle_retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("lifecycle_retry_after", "TEXT"),
             ("lifecycle_last_error", "TEXT"),
+            ("timeline_parent_id", "TEXT"),
+            ("derived_from_id", "TEXT"),
         )
         for column, definition in migrations:
             if column not in existing:
@@ -681,6 +732,92 @@ class MemoryDatabaseBootstrap:
         )
         if "embedding" in existing:
             cursor.execute("ALTER TABLE compressed_memories DROP COLUMN embedding")
+        if "parent_id" in existing:
+            scoped_columns = self._column_names(cursor, "compressed_memories")
+            owner_expression = (
+                "owner_id" if "owner_id" in scoped_columns else f"'{DEFAULT_OWNER_ID}'"
+            )
+            workspace_expression = (
+                "workspace_id"
+                if "workspace_id" in scoped_columns
+                else f"'{DEFAULT_WORKSPACE_ID}'"
+            )
+            domain_expression = (
+                "memory_domain"
+                if "memory_domain" in scoped_columns
+                else "'agent_interaction'"
+            )
+            rows = cursor.execute(
+                "SELECT memory_id, memory_type, parent_id, "
+                f"{owner_expression}, {workspace_expression}, {domain_expression} "
+                "FROM compressed_memories WHERE parent_id IS NOT NULL"
+            ).fetchall()
+            types_by_scope = {
+                (str(row[0]), str(row[2]), str(row[3]), str(row[4])): str(row[1])
+                for row in cursor.execute(
+                    "SELECT memory_id, memory_type, "
+                    f"{owner_expression}, {workspace_expression}, {domain_expression} "
+                    "FROM compressed_memories"
+                ).fetchall()
+            }
+            repaired_dangling = 0
+            for memory_id, memory_type, parent_id, owner_id, workspace_id, domain in rows:
+                referenced_type = types_by_scope.get(
+                    (str(parent_id), str(owner_id), str(workspace_id), str(domain))
+                )
+                timeline_parent_id = None
+                derived_from_id = None
+                if referenced_type == expected_timeline_parent_type(memory_type):
+                    timeline_parent_id = parent_id
+                elif referenced_type and is_derived_relation(memory_type, referenced_type):
+                    derived_from_id = parent_id
+                elif referenced_type:
+                    derived_from_id = parent_id
+                else:
+                    repaired_dangling += 1
+                cursor.execute(
+                    "UPDATE compressed_memories SET timeline_parent_id = ?, "
+                    "derived_from_id = ? WHERE memory_id = ?",
+                    (timeline_parent_id, derived_from_id, memory_id),
+                )
+            cursor.execute("ALTER TABLE compressed_memories DROP COLUMN parent_id")
+            if repaired_dangling:
+                logger.warning(
+                    "Removed %d dangling compressed-memory parent references",
+                    repaired_dangling,
+                )
+
+    def _migrate_profile_memories_schema(self, cursor: sqlite3.Cursor) -> None:
+        existing = self._column_names(cursor, "profile_memories")
+        if "slot_key" not in existing:
+            cursor.execute(
+                "ALTER TABLE profile_memories ADD COLUMN slot_key TEXT NOT NULL DEFAULT ''"
+            )
+        if "capture_source" not in existing:
+            cursor.execute(
+                "ALTER TABLE profile_memories ADD COLUMN capture_source TEXT NOT NULL "
+                "DEFAULT 'legacy_tier2'"
+            )
+        rows = cursor.execute(
+            "SELECT memory_id, predicate, value FROM profile_memories "
+            "WHERE slot_key = ''"
+        ).fetchall()
+        cursor.executemany(
+            "UPDATE profile_memories SET slot_key = ? WHERE memory_id = ?",
+            [
+                (profile_slot_key(predicate, value), memory_id)
+                for memory_id, predicate, value in rows
+            ],
+        )
+        if LEGACY_HEURISTIC_PROFILE_PREDICATES:
+            placeholders = ",".join("?" for _ in LEGACY_HEURISTIC_PROFILE_PREDICATES)
+            cursor.execute(
+                "UPDATE profile_memories SET status = 'quarantined', "
+                "valid_to = COALESCE(valid_to, updated_at) "
+                f"WHERE status = 'active' AND predicate IN ({placeholders}) "
+                "AND capture_source = 'legacy_tier2'",
+                tuple(sorted(LEGACY_HEURISTIC_PROFILE_PREDICATES)),
+            )
 
     @staticmethod
     def _create_indexes(cursor: sqlite3.Cursor) -> None:
@@ -688,9 +825,9 @@ class MemoryDatabaseBootstrap:
             "CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_turns_relevance ON turns(relevance_score)",
-            "CREATE INDEX IF NOT EXISTS idx_turns_compressed ON turns(compressed_to_tier2)",
+            "CREATE INDEX IF NOT EXISTS idx_turns_compression_status ON turns(compression_status)",
             "CREATE INDEX IF NOT EXISTS idx_turns_scope_time ON turns("
-            "owner_id, workspace_id, memory_domain, compressed_to_tier2, timestamp)",
+            "owner_id, workspace_id, memory_domain, compression_status, timestamp)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_session_dedup ON "
             "turns(session_id, dedup_key) WHERE dedup_key IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
@@ -717,8 +854,15 @@ class MemoryDatabaseBootstrap:
             "compressed_memories(identity_layer, status, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_scope_status ON "
             "compressed_memories(owner_id, workspace_id, memory_domain, status, timespan_end)",
+            "CREATE INDEX IF NOT EXISTS idx_cmem_timeline_parent ON "
+            "compressed_memories(timeline_parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cmem_derived_from ON "
+            "compressed_memories(derived_from_id)",
             "CREATE INDEX IF NOT EXISTS idx_profile_scope_status ON "
             "profile_memories(owner_id, workspace_id, memory_domain, status, valid_from)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_active_slot ON "
+            "profile_memories(owner_id, workspace_id, memory_domain, subject, predicate, "
+            "slot_key) WHERE status = 'active'",
             "CREATE INDEX IF NOT EXISTS idx_identity_revision_status ON "
             "identity_revision_proposals(status, created_at)",
         )
