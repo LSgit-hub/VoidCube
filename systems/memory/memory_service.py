@@ -3282,8 +3282,9 @@ class MemoryApplicationService:
     async def search_compressed(self, request: dict):
         """Search compressed memories by type, topic, time range, or text.
 
-        Default: excludes superseded and purged entries, sorts by weight DESC.
-        Pass include_superseded=true to see historical versions.
+        Default: excludes superseded, purged, and hidden entries, then sorts by
+        weight DESC. Pass ``include_superseded`` or ``include_hidden`` when an
+        explicit administrative view is required.
         """
         conn = open_memory_sqlite(self._db_path)
         memory_type = request.get("memory_type")  # "event"|"scene"|"arc"|"epoch"
@@ -3291,9 +3292,16 @@ class MemoryApplicationService:
         query_text = request.get("query", "")
         start = request.get("timespan_start")
         end = request.get("timespan_end")
-        limit = request.get("limit", 20)
+        try:
+            limit = max(1, min(int(request.get("limit", 20)), 200))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="limit must be an integer",
+            ) from exc
         min_weight = request.get("min_weight", 0.0)
         include_superseded = request.get("include_superseded", False)
+        include_hidden = bool(request.get("include_hidden", False))
         scope = MemoryScope.create(
             request.get("owner_id"),
             request.get("workspace_id"),
@@ -3320,6 +3328,8 @@ class MemoryApplicationService:
         # Default: only active entries
         if not include_superseded:
             sql += " AND status = 'active'"
+        if not include_hidden:
+            sql += " AND hidden = 0"
         if memory_type:
             sql += " AND memory_type = ?"
             params.append(memory_type)
@@ -4265,8 +4275,7 @@ class MemoryApplicationService:
                 "title = excluded.title, summary = excluded.summary, "
                 "importance = excluded.importance, topics = excluded.topics, "
                 "entities = excluded.entities, source_turns = excluded.source_turns, "
-                "event_kind = excluded.event_kind, evidence_refs = excluded.evidence_refs, "
-                "status = 'active', hidden = 0",
+                "event_kind = excluded.event_kind, evidence_refs = excluded.evidence_refs",
                 (
                     memory_id,
                     memory_domain,
