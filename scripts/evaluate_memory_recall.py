@@ -8,10 +8,10 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-from systems.memory.config import MemoryServiceConfig
-from systems.memory.memory_service import MemoryService, RecallRequest
-from systems.memory.database import open_memory_sqlite
-from systems.memory.resource_contract import profile_slot_key
+from memai.application.config import MemoryServiceConfig
+from memai.application.memory_service import MemoryService, RecallRequest
+from memai.repository.sqlite import open_memory_sqlite
+from memai.domain.resource_contract import profile_slot_key
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

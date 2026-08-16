@@ -26,11 +26,11 @@ VoidCube/
 ├─ agent/                 API-A Agent、上下文、工具回合和记忆接入
 ├─ tools/                 工具注册、安全、审批和执行后端
 ├─ systems/gateway/       服务发现、路由、活动与任务泳道
-├─ systems/memory/        Memory Service、召回、压缩、Profile 和索引
+├─ Mem/src/memai/         持久化记忆领域、应用、仓储、索引和可选 HTTP 服务
 ├─ systems/supervisor/    日常伴侣、Auto 驱动、治理投影和 UI
 ├─ systems/voice/         录音、声纹、STT/TTS 和可中断会话
 ├─ systems/execution/     Execution Facade、Adapter 与身体执行
-├─ Mem/src/memai/         MemAI 领域包
+├─ plugins/memory/mem/    Agent 侧 Mem 插件注册、配置和协议适配
 ├─ tests/                 本地测试（不随远程仓库分发）
 └─ docs/                  本地架构与开发文档（不随远程仓库分发）
 ```
@@ -71,4 +71,4 @@ python -m pytest tests/test_integration_policy.py tests/test_packaging_contract.
 
 ## License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE) —— 非商业用途免费使用；商业使用需另行获得授权。

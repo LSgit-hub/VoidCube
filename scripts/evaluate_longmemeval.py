@@ -54,9 +54,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from systems.memory.config import MemoryServiceConfig
-from systems.memory.memory_service import MemoryService, RecallRequest
-from systems.memory.database import open_memory_sqlite
+from memai.application.config import MemoryServiceConfig
+from memai.application.memory_service import MemoryService, RecallRequest
+from memai.repository.sqlite import open_memory_sqlite
 
 
 DEFAULT_DATASET = REPO_ROOT / "Mem" / "benchmarks" / "longmemeval_zh.v1.json"
@@ -220,7 +220,7 @@ def _semantic_config_from_overrides(
     """
     if not (provider or model or base_url):
         return None
-    from systems.memory.semantic_index import SemanticIndexConfig
+    from memai.indexes.semantic_index import SemanticIndexConfig
 
     return SemanticIndexConfig(
         enabled=True,
@@ -280,7 +280,7 @@ async def evaluate_longmemeval(
                 )
             )
             if semantic_config is not None:
-                from systems.memory.semantic_index import SemanticMemoryIndex
+                from memai.indexes.semantic_index import SemanticMemoryIndex
 
                 service._semantic_index = SemanticMemoryIndex(
                     service._db_path, semantic_config

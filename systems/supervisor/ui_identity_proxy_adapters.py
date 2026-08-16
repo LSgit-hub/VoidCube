@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict
 
 from fastapi import HTTPException
 
-from systems.memory.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
+from memai.domain.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
 
 
 _IDENTITY_MEMORY_ACTOR = "stellar_companion"
@@ -272,7 +272,7 @@ async def consent_evolution_promotion_candidate(
     try:
         import aiohttp
 
-        from systems.memory.promotion import MemoryPromotionConsent
+        from memai.application.promotion import MemoryPromotionConsent
 
         consent = MemoryPromotionConsent.model_validate(
             {
@@ -318,7 +318,7 @@ async def verify_identity_experience(
     try:
         import aiohttp
 
-        from systems.memory.memory_service import IdentityExperienceVerification
+        from memai.application.memory_service import IdentityExperienceVerification
 
         payload = IdentityExperienceVerification.model_validate(
             {

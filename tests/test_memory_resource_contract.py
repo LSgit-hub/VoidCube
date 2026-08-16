@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from systems.memory.config import MemoryServiceConfig
-from systems.memory.database import open_memory_sqlite
-from systems.memory.memory_service import (
+from memai.application.config import MemoryServiceConfig
+from memai.repository.sqlite import open_memory_sqlite
+from memai.application.memory_service import (
     DayAggregateRequest,
     ForgetRequest,
     MemoryService,
@@ -17,8 +17,8 @@ from systems.memory.memory_service import (
     SessionCreate,
     TurnCreate,
 )
-from systems.memory.profile_store import upsert_profile_memory
-from systems.memory.time_summary import day_bucket_for_timestamp, day_period
+from memai.repository.profile_store import upsert_profile_memory
+from memai.domain.time_summary import day_bucket_for_timestamp, day_period
 
 
 def _profile(memory_id: str, predicate: str, value: str):
@@ -206,7 +206,7 @@ def test_legacy_resource_fields_migrate_once_and_repair_relations(tmp_path):
 
 def test_time_summary_schema_is_idempotent_and_versioned(tmp_path):
     service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
-    service._database_bootstrap.reconcile_schema()
+    service._repository.reconcile_schema()
     conn = open_memory_sqlite(service._db_path)
     try:
         tables = {

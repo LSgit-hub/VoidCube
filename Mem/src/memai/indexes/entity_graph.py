@@ -23,7 +23,7 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
-from systems.memory.scope import GLOBAL_SCOPE_ID
+from memai.domain.scope import GLOBAL_SCOPE_ID
 
 
 _EVALUATION_SOURCE_EXCLUSION_SQL = (

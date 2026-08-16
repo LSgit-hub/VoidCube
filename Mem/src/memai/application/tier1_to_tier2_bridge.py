@@ -21,9 +21,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from systems.memory.database import open_memory_sqlite
-from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
-from systems.memory.quality_signals import (
+from memai.repository.sqlite import open_memory_sqlite
+from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+from memai.domain.quality_signals import (
     has_explicit_negation as _has_explicit_negation,
     identifiers as _identifiers,
     source_support as _source_support,
@@ -304,7 +304,7 @@ def _write_compressed_memories_to_db(
         "WHERE created_at IS NULL"
     )
     # Build the entity graph from this pipeline output (co-occurrence edges).
-    from systems.memory.entity_graph import update_entity_graph
+    from memai.indexes.entity_graph import update_entity_graph
 
     for memory_type, items in (
         ("event", pipeline_result.events),
@@ -632,7 +632,7 @@ class Tier1ToTier2Bridge:
         if self.pipeline_factory is not None:
             return self.pipeline_factory()
 
-        from systems.memory.llm_extraction import build_llm_first_pipeline
+        from memai.application.llm_extraction import build_llm_first_pipeline
 
         return build_llm_first_pipeline(self.db_path, role="extraction")
 
@@ -1229,10 +1229,10 @@ class Tier1ToTier2Bridge:
 
 if __name__ == "__main__":
     import argparse
-    from VoidCube_core.runtime_paths import get_runtime_layout
+    from memai.repository.paths import get_mem_runtime_layout
 
     parser = argparse.ArgumentParser(description="Tier 1 → Tier 2 Bridge")
-    parser.add_argument("--db-path", default=str(get_runtime_layout().memory_db))
+    parser.add_argument("--db-path", default=str(get_mem_runtime_layout().memory_db))
     parser.add_argument("--retention-days", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--dry-run", action="store_true")

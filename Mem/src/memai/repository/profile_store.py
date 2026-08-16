@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from systems.memory.resource_contract import (
+from memai.domain.resource_contract import (
     SET_VALUED_PROFILE_PREDICATES,
     profile_slot_key,
 )

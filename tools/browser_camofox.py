@@ -532,7 +532,7 @@ def camofox_vision(question: str, annotate: bool = False,
         # Redact secrets from annotation context before sending to vision LLM.
         # The screenshot image itself cannot be redacted, but at least the
         # text-based accessibility tree snippet won't leak secret values.
-        from agent.redact import redact_sensitive_text
+        from VoidCube_core.redaction import redact_sensitive_text
         annotation_context = redact_sensitive_text(annotation_context)
 
         # Send to vision LLM
@@ -570,7 +570,7 @@ def camofox_vision(question: str, annotate: bool = False,
         analysis = (response.choices[0].message.content or "").strip() if response.choices else ""
 
         # Redact secrets the vision LLM may have read from the screenshot.
-        from agent.redact import redact_sensitive_text
+        from VoidCube_core.redaction import redact_sensitive_text
         analysis = redact_sensitive_text(analysis)
 
         return ToolExecutionResult(

@@ -14,13 +14,13 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
-from systems.memory.domain import (
+from memai.domain.domain import (
     MemoryActor,
     MemoryDomain,
     MemoryDomainAccessError,
     authorize_read,
 )
-from systems.memory.scope import (
+from memai.domain.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
     GLOBAL_SCOPE_ID,

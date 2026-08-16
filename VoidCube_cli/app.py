@@ -659,7 +659,7 @@ def _get_AIAgent():
 
 def _register_with_gateway(session_id: str, model: str, provider: str) -> bool:
     """Register this CLI session through the shared Gateway client."""
-    from systems.memory.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
+    from memai.domain.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
 
     return _register_gateway_session(
         session_id,

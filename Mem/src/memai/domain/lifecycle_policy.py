@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from systems.memory.quality_signals import identifiers, source_support
+from memai.domain.quality_signals import identifiers, source_support
 
 
 @dataclass(frozen=True, slots=True)

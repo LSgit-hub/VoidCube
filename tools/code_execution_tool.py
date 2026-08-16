@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Optional, Dict, Any, List
 
-from agent.redact import redact_sensitive_text
+from VoidCube_core.redaction import redact_sensitive_text
 from tools.ansi_strip import strip_ansi
 from tools.registry import registry, tool_error
 

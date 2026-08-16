@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from typing import Sequence
 
-from systems.memory.scope import GLOBAL_SCOPE_ID
+from memai.domain.scope import GLOBAL_SCOPE_ID
 
 
 logger = logging.getLogger(__name__)

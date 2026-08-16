@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-from systems.memory.scope import (
+from memai.domain.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
     GLOBAL_SCOPE_ID,

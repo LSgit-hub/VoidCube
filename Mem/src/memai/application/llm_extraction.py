@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from systems.memory.llm_cache import (
+from memai.repository.llm_cache import (
     TASK_EXTRACT,
     build_cache_key,
     open_cached,

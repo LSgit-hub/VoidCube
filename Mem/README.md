@@ -18,10 +18,15 @@ SessionSummary 和 DaySummary 层已实现：真实的会话结束钩子会将�
 
 ## VoidCube 集成定位
 
-MemAI 是 VoidCube 当前使用的长期记忆领域层。Memory Service 负责 HTTP、Tier 1 层 SQLite 状态、维护调度、备份/恢复，以及唯一的 Tier 1 层到 Tier 2 层事务。MemAI 负责 `Event`、`Scene`、`Arc`、`Epoch`、提取、层级构建、查询语义和维护策略。
+MemAI 是 VoidCube 当前使用的完整持久化记忆插件。Mem 拥有领域对象、应用用例、
+SQLite 仓储、Schema 迁移、备份、召回、维护以及并列索引能力；可选 HTTP transport
+也属于 Mem。VoidCube 只负责宿主启动和服务发现，Agent 侧
+`plugins/memory/mem/` 只负责插件注册、配置转换与协议适配。
 
 当前集成契约定义于
-[`docs/mem-integration-contract.md`](../docs/mem-integration-contract.md)。两层均不得维护第二个桥接机制或第二个长期事实存储。
+[`docs/mem-integration-contract.md`](../docs/mem-integration-contract.md)。不得在
+`systems/memory` 恢复 Mem 主逻辑，也不得维护第二个桥接机制或第二个长期事实
+存储。
 
 VoidCube 将 Memory 运行时数据存储在
 `VOIDCUBE_HOME/runtime/memory/` 下：
@@ -44,7 +49,12 @@ VoidCube 提供一条有界的 `/recall` 路径，覆盖活跃的 Tier 1 层轮�
 ## 项目布局
 
 - `docs/`：设计规范和规则
-- `src/memai/`：实现代码
+- `src/memai/domain/`：记忆对象、作用域、生命周期与时间摘要契约
+- `src/memai/application/`：会话封口、日聚合、召回和维护用例
+- `src/memai/repository/`：Repository 接口、SQLite、备份和缓存
+- `src/memai/migrations/`：Mem Schema 与运行时数据迁移
+- `src/memai/indexes/`：词法、语义、实体和时间轴索引能力
+- `src/memai/transport/`：可选 HTTP 服务适配器
 - `tests/`：核心行为的冒烟测试
 - `examples/`：可运行示例
 - `benchmarks/recall_quality.v1.json`：版本化的召回基准真值和阈值

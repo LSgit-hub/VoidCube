@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import uuid
 
-from systems.memory.backup import backup_sqlite_database, check_sqlite_integrity
+from memai.repository.backup import backup_sqlite_database, check_sqlite_integrity
 
 
 class MemoryDatabaseMigrationConflict(RuntimeError):

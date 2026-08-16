@@ -33,7 +33,7 @@ from .governance import (
     GovernanceGitLineage,
     GovernanceRiskLevel,
 )
-from .governance_repository import (
+from .repository.governance import (
     GovernanceEvidenceSummary,
     GovernanceEventQuery,
     GovernanceEventRepository,
@@ -68,8 +68,8 @@ from .model_config import (
     MemLLMResolution,
     MemModelConfig,
     MemModelConfigSet,
-    load_voidcube_mem_model_config,
-    load_voidcube_mem_model_config_set,
+    load_mem_model_config,
+    load_mem_model_config_set,
     resolve_mem_llm,
 )
 from .modalities import (
@@ -103,7 +103,7 @@ from .schema import (
     TimePrecision,
     TranscriptTurn,
 )
-from .storage import JSONFileMemoryStore
+from .repository.json_store import JSONFileMemoryStore
 from .temporal_scoring import (
     HeuristicTemporalScorer,
     TemporalScore,
@@ -190,8 +190,8 @@ __all__ = [
     "OpenAICompatibleLLMClient",
     "BUILTIN_PROVIDER_CAPABILITIES",
     "load_provider_capabilities_profile",
-    "load_voidcube_mem_model_config",
-    "load_voidcube_mem_model_config_set",
+    "load_mem_model_config",
+    "load_mem_model_config_set",
     "PROTOCOL_VERSION",
     "resolve_provider_capabilities",
     "AdaptiveCompressionClient",

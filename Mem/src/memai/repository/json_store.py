@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .schema import BaseMemoryUnit
+from ..schema import BaseMemoryUnit
 
 
 class JSONFileMemoryStore:

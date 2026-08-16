@@ -20,7 +20,7 @@ import uvicorn
 from plugins.memory.mem import MemMemoryProvider
 from plugins.memory.mem.outbox import MemoryWriteOutbox
 from systems.gateway.internal_gateway import GatewayConfig, InternalGateway
-from systems.memory.memory_service import MemoryService, MemoryServiceConfig
+from memai.application.memory_service import MemoryService, MemoryServiceConfig
 
 
 def _free_port() -> int:

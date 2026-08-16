@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.request import Request, urlopen
 
-from systems.memory.scope import GLOBAL_SCOPE_ID
-from systems.memory.database import open_memory_sqlite
+from memai.domain.scope import GLOBAL_SCOPE_ID
+from memai.host_integration import get_mem_host_integration
+from memai.repository.sqlite import open_memory_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,14 @@ class SemanticIndexConfig:
     backfill_batch_size: int = 64
 
     @classmethod
-    def from_voidcube_config(cls) -> "SemanticIndexConfig":
+    def from_host_config(cls) -> "SemanticIndexConfig":
         try:
-            from VoidCube_app.config import get_env_value, load_config
-
-            raw = dict(load_config().get("memory", {}).get("semantic_recall", {}) or {})
+            host = get_mem_host_integration()
+            raw = dict(
+                host.load_config().get("memory", {}).get("semantic_recall", {}) or {}
+            )
             api_key_env = str(raw.get("api_key_env") or "").strip()
-            api_key = str(get_env_value(api_key_env) or "") if api_key_env else ""
+            api_key = str(host.get_env_value(api_key_env) or "") if api_key_env else ""
         except Exception:
             raw = {}
             api_key = ""
@@ -142,7 +144,7 @@ class SemanticMemoryIndex:
         transport: EmbeddingTransport | None = None,
     ) -> None:
         self.db_path = Path(db_path)
-        self.config = config or SemanticIndexConfig.from_voidcube_config()
+        self.config = config or SemanticIndexConfig.from_host_config()
         self._transport = transport
         self._local_fallback = False
         if (
@@ -150,7 +152,7 @@ class SemanticMemoryIndex:
             and self.config.enabled
             and (not self.config.provider or self.config.provider == "local")
         ):
-            from systems.memory.local_embedding import CharNgramEmbedder
+            from memai.indexes.local_embedding import CharNgramEmbedder
 
             if self.config.dimensions is not None and self.config.dimensions < 64:
                 self.config = replace(self.config, dimensions=64)
@@ -424,7 +426,7 @@ class SemanticMemoryIndex:
         source_domains: Sequence[str],
         limit: int,
     ) -> dict[tuple[str, str], float]:
-        from systems.memory.local_embedding import CharNgramEmbedder
+        from memai.indexes.local_embedding import CharNgramEmbedder
 
         domains = tuple(dict.fromkeys(str(item) for item in source_domains))
         if not domains:

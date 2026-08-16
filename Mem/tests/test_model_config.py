@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import pytest
+
 from memai import MEM_MODEL_ROLES, MemModelConfig, MemModelConfigSet
+from memai.host_integration import MemHostIntegration, configure_mem_host_integration
 from memai.model_config import (
     _resolve_mem_api_key,
     resolve_mem_llm,
     resolve_mem_llm_client,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_host_integration():
+    configure_mem_host_integration(MemHostIntegration())
+    yield
+    configure_mem_host_integration(MemHostIntegration())
 
 
 def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
@@ -179,14 +189,8 @@ def test_mem_model_config_repairs_stale_openai_key_env_when_provider_changed() -
 def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
     monkeypatch.setattr(
-        "VoidCube_app.provider_auth.resolve_api_key_provider_credentials",
-        lambda _provider: {},
-    )
-    monkeypatch.setattr("agent.credential_pool.load_pool", lambda _provider: None)
-    monkeypatch.setattr(
-        "memai.model_config.load_voidcube_mem_model_config_set",
+        "memai.model_config.load_mem_model_config_set",
         lambda: MemModelConfigSet.from_voidcube_config(
             {
                 "memory": {
@@ -210,7 +214,7 @@ def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(mo
 
 def test_resolve_mem_llm_reports_policy_block_reason(monkeypatch) -> None:
     monkeypatch.setattr(
-        "memai.model_config.load_voidcube_mem_model_config_set",
+        "memai.model_config.load_mem_model_config_set",
         lambda: MemModelConfigSet(
             default=MemModelConfig(
                 provider="blocked-provider",
@@ -221,9 +225,12 @@ def test_resolve_mem_llm_reports_policy_block_reason(monkeypatch) -> None:
             roles={},
         ),
     )
-    monkeypatch.setattr(
-        "agent.integration_policy.require_active_integration",
-        lambda *_values: (_ for _ in ()).throw(ValueError("retired integration")),
+    configure_mem_host_integration(
+        MemHostIntegration(
+            validate_integration=lambda *_values: (_ for _ in ()).throw(
+                ValueError("retired integration")
+            )
+        )
     )
 
     resolution = resolve_mem_llm()
@@ -236,7 +243,7 @@ def test_resolve_mem_llm_reports_policy_block_reason(monkeypatch) -> None:
 
 def test_resolve_mem_llm_reports_missing_credential_source(monkeypatch) -> None:
     monkeypatch.setattr(
-        "memai.model_config.load_voidcube_mem_model_config_set",
+        "memai.model_config.load_mem_model_config_set",
         lambda: MemModelConfigSet(
             default=MemModelConfig(
                 provider="deepseek",
@@ -258,10 +265,15 @@ def test_resolve_mem_llm_reports_missing_credential_source(monkeypatch) -> None:
 
 def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
-    monkeypatch.setattr(
-        "VoidCube_app.provider_auth._load_auth_store",
-        lambda: {"deepseek": {"api_key": "sk-deepseek-auth-store-token-123456"}},
+    configure_mem_host_integration(
+        MemHostIntegration(
+            get_env_value=lambda _key: "",
+            resolve_provider_credential=lambda provider: (
+                "sk-deepseek-auth-store-token-123456"
+                if provider == "deepseek"
+                else ""
+            ),
+        )
     )
 
     api_key = _resolve_mem_api_key(
@@ -278,9 +290,14 @@ def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> N
 
 def test_resolve_mem_api_key_reads_selected_voidcube_env_value(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr(
-        "VoidCube_app.config.get_env_value",
-        lambda key: "sk-deepseek-dotenv-token-123456789" if key == "DEEPSEEK_API_KEY" else "",
+    configure_mem_host_integration(
+        MemHostIntegration(
+            get_env_value=lambda key: (
+                "sk-deepseek-dotenv-token-123456789"
+                if key == "DEEPSEEK_API_KEY"
+                else ""
+            )
+        )
     )
 
     api_key = _resolve_mem_api_key(
@@ -297,11 +314,11 @@ def test_resolve_mem_api_key_reads_selected_voidcube_env_value(monkeypatch) -> N
 
 def test_resolve_mem_api_key_does_not_read_user_chat_provider(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.setattr("VoidCube_app.config.get_env_value", lambda _key: "")
-    monkeypatch.setattr("agent.credential_pool.load_pool", lambda _provider: None)
-    monkeypatch.setattr(
-        "VoidCube_app.provider_auth._load_auth_store",
-        lambda: {"agnes-ai": {"api_key": "sk-agnes-user-chat-token-123456"}},
+    configure_mem_host_integration(
+        MemHostIntegration(
+            get_env_value=lambda _key: "",
+            resolve_provider_credential=lambda _provider: "",
+        )
     )
 
     api_key = _resolve_mem_api_key(
@@ -318,9 +335,14 @@ def test_resolve_mem_api_key_does_not_read_user_chat_provider(monkeypatch) -> No
 
 def test_resolve_mem_api_key_ignores_placeholder_env(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-your-key-here")
-    monkeypatch.setattr(
-        "VoidCube_app.provider_auth._load_auth_store",
-        lambda: {"deepseek": {"api_key": "sk-real-deepseek-token-123456789"}},
+    configure_mem_host_integration(
+        MemHostIntegration(
+            resolve_provider_credential=lambda provider: (
+                "sk-real-deepseek-token-123456789"
+                if provider == "deepseek"
+                else ""
+            )
+        )
     )
 
     api_key = _resolve_mem_api_key(

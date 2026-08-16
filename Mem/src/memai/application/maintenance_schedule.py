@@ -37,7 +37,7 @@ def claim_rule_execution(
     lease_minutes: int = 120,
     now: datetime | None = None,
 ) -> RuleCadenceDecision:
-    from systems.memory.database import open_memory_sqlite
+    from memai.repository.sqlite import open_memory_sqlite
 
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     conn = open_memory_sqlite(db_path)
@@ -109,7 +109,7 @@ def record_rule_result(
     attempted_at: datetime | None = None,
     error: str = "",
 ) -> None:
-    from systems.memory.database import open_memory_sqlite
+    from memai.repository.sqlite import open_memory_sqlite
 
     timestamp = (attempted_at or datetime.now(timezone.utc)).astimezone(
         timezone.utc
@@ -142,7 +142,7 @@ def record_rule_result(
 
 
 def get_rule_state(db_path: str | Path, rule_name: str) -> dict[str, str | None]:
-    from systems.memory.database import open_memory_sqlite
+    from memai.repository.sqlite import open_memory_sqlite
 
     conn = open_memory_sqlite(db_path)
     try:

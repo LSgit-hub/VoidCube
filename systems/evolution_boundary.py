@@ -23,7 +23,6 @@ MOTHER_SYSTEM_FORBIDDEN_PATHS: tuple[str, ...] = (
     "systems/supervisor/",
     "systems/execution/",
     "systems/gateway/",
-    "systems/memory/",
     "systems/self_learning/",
     "docs/",
     "tests/",

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import threading
 
-from .governance import (
+from ..governance import (
     GovernanceDecision,
     GovernanceEvent,
     GovernanceEventType,

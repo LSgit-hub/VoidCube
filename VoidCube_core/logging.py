@@ -216,7 +216,7 @@ def setup_logging(
     backups = backup_count or cfg_backup or 3
 
     # Lazy import to avoid circular dependency at module load time.
-    from agent.redact import RedactingFormatter
+    from VoidCube_core.redaction import RedactingFormatter
 
     root = logging.getLogger()
 
@@ -269,7 +269,7 @@ def setup_verbose_logging() -> None:
 
     Called by ``AIAgent.__init__()`` when ``verbose_logging=True``.
     """
-    from agent.redact import RedactingFormatter
+    from VoidCube_core.redaction import RedactingFormatter
 
     root = logging.getLogger()
 

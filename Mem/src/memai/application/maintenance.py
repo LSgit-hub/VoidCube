@@ -8,8 +8,8 @@ import logging
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
-from systems.memory.database import open_memory_sqlite
-from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
+from memai.repository.sqlite import open_memory_sqlite
+from memai.application.tier1_to_tier2_bridge import Tier1ToTier2Bridge
 
 
 async def run_tier1_decay_cycle(

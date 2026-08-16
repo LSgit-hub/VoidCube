@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .host_integration import get_mem_host_integration
+
 PROVIDER_DEFAULTS = {
     "openai": {
         "api_key_env": "OPENAI_API_KEY",
@@ -207,15 +209,15 @@ class MemLLMResolution:
     detail: str = ""
 
 
-def load_voidcube_mem_model_config() -> MemModelConfig:
-    return load_voidcube_mem_model_config_set().default
+def load_mem_model_config() -> MemModelConfig:
+    return load_mem_model_config_set().default
 
 
-def load_voidcube_mem_model_config_set() -> MemModelConfigSet:
+def load_mem_model_config_set() -> MemModelConfigSet:
     try:
-        from VoidCube_app.config import load_config
-
-        return MemModelConfigSet.from_voidcube_config(load_config())
+        return MemModelConfigSet.from_voidcube_config(
+            get_mem_host_integration().load_config()
+        )
     except Exception:
         return MemModelConfigSet(default=MemModelConfig(), roles={})
 
@@ -227,7 +229,7 @@ def resolve_mem_llm(role: str = "default") -> MemLLMResolution:
     logger = logging.getLogger("memai.resolver")
 
     try:
-        config_set = load_voidcube_mem_model_config_set()
+        config_set = load_mem_model_config_set()
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Failed to load MemModelConfigSet: %s", exc)
         config_set = MemModelConfigSet(default=MemModelConfig(), roles={})
@@ -238,11 +240,11 @@ def resolve_mem_llm(role: str = "default") -> MemLLMResolution:
     config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
 
     try:
-        from agent.integration_policy import require_active_integration
-
-        require_active_integration(mem_cfg.provider, model, base_url)
-    except ImportError:
-        pass
+        get_mem_host_integration().validate_integration(
+            mem_cfg.provider,
+            model,
+            base_url,
+        )
     except ValueError as exc:
         detail = str(exc) or "blocked by project integration policy"
         logger.warning(
@@ -313,10 +315,9 @@ def resolve_mem_llm_client(role: str = "default"):
 
 
 def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
+    host = get_mem_host_integration()
     try:
-        from VoidCube_app.config import load_config
-
-        providers = load_config().get("providers")
+        providers = host.load_config().get("providers")
         entry = providers.get(str(mem_cfg.provider).strip().lower()) if isinstance(providers, dict) else None
         if isinstance(entry, dict):
             stored = _first_usable_secret(entry.get("api_key"))
@@ -324,9 +325,7 @@ def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
                 return stored
             env_name = str(entry.get("api_key_env") or "").strip()
             if env_name:
-                from VoidCube_app.config import get_env_value
-
-                env_key = _first_usable_secret(get_env_value(env_name) or "")
+                env_key = _first_usable_secret(host.get_env_value(env_name) or "")
                 if env_key:
                     return env_key
             if str(entry.get("auth_mode") or "").strip().lower() == "none":
@@ -335,14 +334,7 @@ def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
         pass
 
     if mem_cfg.api_key_env:
-        try:
-            from VoidCube_app.config import get_env_value
-
-            raw_api_key = get_env_value(mem_cfg.api_key_env) or ""
-        except Exception:
-            import os
-
-            raw_api_key = os.environ.get(mem_cfg.api_key_env, "")
+        raw_api_key = host.get_env_value(mem_cfg.api_key_env) or ""
         api_key = _first_usable_secret(raw_api_key)
         if api_key:
             return api_key
@@ -352,41 +344,16 @@ def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
         return ""
 
     try:
-        from VoidCube_app.provider_auth import resolve_api_key_provider_credentials
-
-        creds = resolve_api_key_provider_credentials(provider) or {}
-        api_key = _first_usable_secret(str(creds.get("api_key") or ""))
-        if api_key:
-            return api_key
+        return _first_usable_secret(host.resolve_provider_credential(provider))
     except Exception:
-        pass
-
-    try:
-        from agent.credential_pool import load_pool
-
-        pool = load_pool(provider)
-        entry = pool.select() if pool and pool.has_credentials() else None
-        if entry is not None:
-            return _first_usable_secret(
-                str(getattr(entry, "runtime_api_key", "") or ""),
-                str(getattr(entry, "access_token", "") or ""),
-            )
-    except Exception:
-        pass
-
-    return ""
+        return ""
 
 
 def _first_usable_secret(*values: object) -> str:
-    try:
-        from VoidCube_app.provider_auth import has_usable_secret
-    except Exception:
-        def has_usable_secret(value: str) -> bool:  # type: ignore[no-redef]
-            return bool(str(value or "").strip())
-
+    is_usable_secret = get_mem_host_integration().is_usable_secret
     for value in values:
         candidate = str(value or "").strip()
-        if has_usable_secret(candidate):
+        if is_usable_secret(candidate):
             return candidate
     return ""
 

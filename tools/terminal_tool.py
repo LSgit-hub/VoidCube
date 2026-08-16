@@ -2289,7 +2289,7 @@ def terminal_tool(
             output = strip_ansi(output)
 
             # Redact secrets from command output (catches env/printenv leaking keys)
-            from agent.redact import redact_sensitive_text
+            from VoidCube_core.redaction import redact_sensitive_text
             output = redact_sensitive_text(output.strip()) if output else ""
 
             # Interpret non-zero exit codes that aren't real errors

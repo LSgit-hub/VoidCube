@@ -44,7 +44,7 @@ from VoidCube_app.environment import load_VoidCube_dotenv
 from VoidCube_app.interaction_contract import ClarificationSink
 from VoidCube_app.contracts.execution import ExecutionState
 from VoidCube_app.tool_events import ToolEvent, ToolEventSink
-from systems.memory.scope import CLI_WORKSPACE_ID
+from memai.domain.scope import CLI_WORKSPACE_ID
 
 _VoidCube_home = get_VoidCube_home()
 _project_env = Path(__file__).parent / '.env'

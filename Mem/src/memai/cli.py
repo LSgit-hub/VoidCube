@@ -20,7 +20,7 @@ from .extraction import (
     LLMEventExtractionBackend,
 )
 from .llm_client import OpenAICompatibleLLMClient
-from .model_config import load_voidcube_mem_model_config_set
+from .model_config import load_mem_model_config_set
 from .pipeline import ChroniclePipeline
 from .prompt_registry import PromptRegistry
 from .repository import MemoryStateRepository
@@ -179,7 +179,7 @@ def _build_pipeline_from_args(args) -> ChroniclePipeline:
 def _build_pipeline_with_prompt_pack(args, prompt_pack: str) -> ChroniclePipeline:
     if getattr(args, "backend", "heuristic") == "llm":
         model_config = (
-            load_voidcube_mem_model_config_set()
+            load_mem_model_config_set()
             .for_role("extraction")
             .with_cli_overrides(args)
         )

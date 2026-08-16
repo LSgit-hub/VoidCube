@@ -106,7 +106,7 @@ SERVICES: Dict[str, ServiceInfo] = {
     "memory": ServiceInfo(
         name="memory",
         port=6001,
-        module="systems.memory.memory_service:MemoryService",
+        module="memai.application.memory_service:MemoryService",
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
@@ -306,11 +306,13 @@ _foreground_threads: list = []
 
 def _build_service_config(name: str, port: int, system_config: Any | None = None) -> Any:
     """Build the runtime config object used by a named service."""
+    from plugins.memory.mem.host_integration import configure_voidcube_mem_host
     from systems.gateway.internal_gateway import GatewayConfig
     from systems.supervisor.supervisor import SupervisorConfig
-    from systems.memory.config import MemoryServiceConfig
+    from memai.application.config import MemoryServiceConfig
     from systems.config import get_config
 
+    configure_voidcube_mem_host()
     system_config = system_config or get_config()
 
     if name == "gateway":
@@ -338,7 +340,7 @@ def _build_service_app(name: str, port: int):
     """Build the FastAPI app for a named service (shared by fg/bg paths)."""
     from systems.gateway.internal_gateway import InternalGateway
     from systems.supervisor.supervisor import Supervisor
-    from systems.memory.memory_service import MemoryService
+    from memai.application.memory_service import MemoryService
 
     service_config = _build_service_config(name, port)
 

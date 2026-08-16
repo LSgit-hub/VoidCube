@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from agent.redact import redact_sensitive_text
-from systems.memory.backup import MemoryBackupManager, MemoryRestoreError
-from systems.memory.config import MemoryServiceConfig
-from systems.memory.domain import (
+from VoidCube_core.redaction import redact_sensitive_text
+from memai.repository.backup import MemoryRestoreError
+from memai.application.config import MemoryServiceConfig
+from memai.domain.domain import (
     DEFAULT_MEMORY_ACTOR,
     DEFAULT_MEMORY_DOMAIN,
     MemoryActor,
@@ -27,17 +27,17 @@ from systems.memory.domain import (
     authorize_write,
     domain_values,
 )
-from systems.memory.profile_capture import (
+from memai.application.profile_capture import (
     ALL_PROFILE_PREDICATES,
     capture_explicit_user_profile,
 )
-from systems.memory.profile_store import (
+from memai.repository.profile_store import (
     revoke_profile_predicates,
     upsert_profile_memory,
 )
-from systems.memory.ranking_policy import compute_dynamic_weight
-from systems.memory.resource_contract import TurnCompressionStatus
-from systems.memory.promotion import (
+from memai.domain.ranking_policy import compute_dynamic_weight
+from memai.domain.resource_contract import TurnCompressionStatus
+from memai.application.promotion import (
     MemoryPromotionAccessError,
     MemoryPromotionCandidateCreate,
     MemoryPromotionConflictError,
@@ -55,50 +55,53 @@ from systems.memory.promotion import (
     revoke_memory_promotion,
     revoke_promotions_for_source,
 )
-from systems.memory.recall import (
+from memai.application.recall import (
     build_recall_plan,
     format_recall_context,
     merge_recall_results,
     recall_memories,
 )
-from systems.memory.database import MemoryDatabaseBootstrap, open_memory_sqlite
-from systems.memory.http_adapter import build_memory_http_app
-from systems.memory.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
-from systems.memory.lifecycle_policy import (
+from memai.repository.contracts import MemoryRepository
+from memai.repository.sqlite_repository import SQLiteMemoryRepository
+from memai.transport.http_adapter import build_memory_http_app
+from memai.application.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
+from memai.domain.lifecycle_policy import (
     evaluate_lifecycle_quality,
     lifecycle_age_thresholds,
     record_lifecycle_rejection,
 )
-from systems.memory.maintenance_schedule import (
+from memai.application.maintenance_schedule import (
     claim_rule_execution,
     get_rule_state,
     record_rule_result,
 )
-from systems.memory.scope import (
+from memai.domain.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
     GLOBAL_SCOPE_ID,
     MemoryScope,
 )
-from systems.memory.semantic_index import SemanticMemoryIndex
-from systems.memory.tier1_to_tier2_bridge import (
+from memai.indexes.semantic_index import SemanticMemoryIndex
+from memai.application.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _parse_utc_timestamp,
 )
-from systems.memory.time_summary import (
+from memai.domain.time_summary import (
     DaySnapshotChanged,
     SessionSnapshotChanged,
     day_bucket_for_timestamp,
     day_source_hash,
+    normalize_day_summary,
+    normalize_session_summary,
+    session_source_hash,
+)
+from memai.indexes.timeline import (
     get_active_day_summary,
     get_active_session_summary,
     load_day_session_summaries,
     load_session_turns,
-    normalize_day_summary,
-    normalize_session_summary,
     persist_day_summary,
     persist_session_summary,
-    session_source_hash,
     supersede_empty_day_summary,
 )
 
@@ -618,7 +621,12 @@ def _collect_dependent_memory_ids(
 
 
 class MemoryApplicationService:
-    def __init__(self, config: MemoryServiceConfig = None):
+    def __init__(
+        self,
+        config: MemoryServiceConfig = None,
+        *,
+        repository: MemoryRepository | None = None,
+    ):
         self.config = config or MemoryServiceConfig()
         self._compression_task: asyncio.Task | None = None
         self._gateway_registration_task: asyncio.Task | None = None
@@ -630,7 +638,11 @@ class MemoryApplicationService:
         self._gateway_service_id: Optional[str] = None
         self._gateway_registration_healthy = False
         self._last_gateway_registration_check_at: Optional[str] = None
-        self._db_path = Path(self.config.db_path)
+        self._repository = repository or SQLiteMemoryRepository(
+            self.config.db_path,
+            backup_retention_count=self.config.backup_retention_count,
+        )
+        self._db_path = self._repository.db_path
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
         self._last_rule_run_monotonic: Dict[str, float] = {}
@@ -668,15 +680,8 @@ class MemoryApplicationService:
         self._last_recall_trace_id: Optional[str] = None
         self._last_recall_status: str = "idle"
         self._agent_outbox_reports: Dict[str, Dict[str, Any]] = {}
-        self._backup_manager = MemoryBackupManager(
-            self._db_path,
-            retention_count=self.config.backup_retention_count,
-        )
-        self._database_bootstrap = MemoryDatabaseBootstrap(
-            db_path=self._db_path,
-            backup_manager=self._backup_manager,
-        )
-        self._database_bootstrap.initialize()
+        self._backup_manager = self._repository.backup_manager
+        self._repository.initialize()
         self._semantic_index = SemanticMemoryIndex(self._db_path)
 
     def _memory_storage_value(self, value: Any) -> Any:
@@ -703,7 +708,7 @@ class MemoryApplicationService:
         (FinalSummary) entries are purged.
         """
         now = datetime.now(timezone.utc)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         escalated = 0
         purged = 0
         quality_rejected = 0
@@ -850,7 +855,7 @@ class MemoryApplicationService:
                     (successor_id, owner_id, workspace_id, memory_domain),
                 )
                 # Record the new parent's entities in the entity graph.
-                from systems.memory.entity_graph import update_entity_graph
+                from memai.indexes.entity_graph import update_entity_graph
 
                 parent_entities = []
                 if entities_json:
@@ -910,7 +915,7 @@ class MemoryApplicationService:
 
         # Try LLM via the unified resolver (summarization role; cached).
         try:
-            from systems.memory.llm_cache import (
+            from memai.repository.llm_cache import (
                 build_cache_key,
                 open_cached,
                 store_cached,
@@ -995,7 +1000,7 @@ class MemoryApplicationService:
         and Tier 2 compression.
         """
         try:
-            from systems.memory.llm_cache import (
+            from memai.repository.llm_cache import (
                 build_cache_key,
                 open_cached,
                 store_cached,
@@ -1046,7 +1051,7 @@ class MemoryApplicationService:
 
     async def _purge_expired_memories(self) -> int:
         """Hard-delete purged memories older than the audit retention period."""
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         # Only purge entries marked 'purged' for >90 days
         cursor = conn.execute(
@@ -1134,7 +1139,7 @@ class MemoryApplicationService:
             result = await asyncio.to_thread(
                 self._backup_manager.restore_backup,
                 backup_id,
-                post_restore=self._database_bootstrap.reconcile_schema,
+                post_restore=self._repository.reconcile_schema,
             )
         except MemoryRestoreError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1167,10 +1172,10 @@ class MemoryApplicationService:
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         source_domains: str | None = None,
     ):
-        from systems.memory.entity_graph import list_graph_entities as _list_entities
+        from memai.indexes.entity_graph import list_graph_entities as _list_entities
 
         domains = self._parse_graph_domains(source_domains)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             entities = _list_entities(
                 conn,
@@ -1191,10 +1196,10 @@ class MemoryApplicationService:
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         source_domains: str | None = None,
     ):
-        from systems.memory.entity_graph import list_graph_neighbors as _neighbors
+        from memai.indexes.entity_graph import list_graph_neighbors as _neighbors
 
         domains = self._parse_graph_domains(source_domains)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             neighbors = _neighbors(
                 conn,
@@ -1214,9 +1219,9 @@ class MemoryApplicationService:
         workspace_id: str | None = None,
         memory_domain: str | None = None,
     ):
-        from systems.memory.entity_graph import rebuild_entity_graph as _rebuild
+        from memai.indexes.entity_graph import rebuild_entity_graph as _rebuild
 
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             linked = _rebuild(conn, owner_id=owner_id, workspace_id=workspace_id, memory_domain=memory_domain)
             conn.commit()
@@ -1233,7 +1238,7 @@ class MemoryApplicationService:
         workspace_id: str | None = None,
     ):
         bounded = max(1, min(int(limit), 200))
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             clauses: list[str] = []
             params: list[Any] = []
@@ -1310,7 +1315,7 @@ class MemoryApplicationService:
         workspace_id: str = DEFAULT_WORKSPACE_ID,
     ):
         """Return the four-layer identity archive without mutating memory."""
-        from systems.memory.identity_seed import (
+        from memai.application.identity_seed import (
             founding_manifest_version,
             load_founding_manifest,
             load_founding_story,
@@ -1319,7 +1324,7 @@ class MemoryApplicationService:
         bounded_history = max(1, min(int(history_limit), 100))
         scope = MemoryScope.create(owner_id, workspace_id)
         manifest = load_founding_manifest()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             anchors = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories "
@@ -1398,7 +1403,7 @@ class MemoryApplicationService:
         if not evidence_refs or any(not item for item in evidence_refs):
             raise HTTPException(status_code=400, detail="evidence_refs cannot be empty")
 
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             row = conn.execute(
                 "SELECT metadata FROM turns WHERE turn_id = ? AND owner_id = ? "
@@ -1475,7 +1480,7 @@ class MemoryApplicationService:
         sync_result = await self._identity_experience_cycle()
         digest = hashlib.sha256(request.turn_id.strip().encode("utf-8")).hexdigest()[:20]
         memory_id = f"identity-experience-turn-{digest}"
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             experience_row = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
@@ -1497,7 +1502,7 @@ class MemoryApplicationService:
         request: InteractionExperienceSettlement,
     ):
         """Settle a dialogue only when the user supplied an explicit signal."""
-        from systems.memory.identity_experience import (
+        from memai.application.identity_experience import (
             classify_explicit_conversation_experience,
         )
 
@@ -1505,7 +1510,7 @@ class MemoryApplicationService:
         authorized_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             user_row = conn.execute(
                 "SELECT session_id, speaker, text FROM turns WHERE turn_id = ? "
@@ -1584,7 +1589,7 @@ class MemoryApplicationService:
         }
 
     async def propose_identity_revision(self, proposal: IdentityRevisionProposal):
-        from systems.memory.identity_seed import (
+        from memai.application.identity_seed import (
             founding_manifest_version,
             is_founding_memory_id,
         )
@@ -1608,7 +1613,7 @@ class MemoryApplicationService:
             raise HTTPException(status_code=400, detail="evidence entries cannot be empty")
         proposal_id = f"identity-revision-{uuid.uuid4()}"
         created_at = datetime.now(timezone.utc).isoformat()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             conn.execute(
                 "INSERT INTO identity_revision_proposals "
@@ -1647,7 +1652,7 @@ class MemoryApplicationService:
             raise HTTPException(status_code=400, detail="decision must be approve or reject")
         status = "approved_pending_release" if normalized == "approve" else "rejected"
         decided_at = datetime.now(timezone.utc).isoformat()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             current = conn.execute(
                 "SELECT status FROM identity_revision_proposals WHERE proposal_id = ?",
@@ -1693,7 +1698,7 @@ class MemoryApplicationService:
         source_hash: str,
         turns,
     ):
-        from systems.memory.llm_cache import (
+        from memai.repository.llm_cache import (
             TASK_SESSION_SUMMARY,
             build_cache_key,
             open_cached,
@@ -1766,7 +1771,7 @@ class MemoryApplicationService:
         source_hash: str,
         summaries,
     ):
-        from systems.memory.llm_cache import (
+        from memai.repository.llm_cache import (
             TASK_DAY_SUMMARY,
             build_cache_key,
             open_cached,
@@ -2086,14 +2091,14 @@ class MemoryApplicationService:
             return results
 
     async def _identity_experience_cycle(self) -> Dict[str, int]:
-        from VoidCube_core.runtime_paths import get_runtime_layout
-        from memai.governance_repository import GovernanceEventRepository
-        from systems.memory.identity_experience import sync_identity_experiences
+        from memai.repository.governance import GovernanceEventRepository
+        from memai.application.identity_experience import sync_identity_experiences
+        from memai.repository.paths import get_mem_runtime_layout
 
         events = GovernanceEventRepository(
-            get_runtime_layout().supervisor_governance_log
+            get_mem_runtime_layout().governance_log
         ).list_events()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             return sync_identity_experiences(conn, governance_events=events)
         except Exception:
@@ -2305,7 +2310,7 @@ class MemoryApplicationService:
         )
 
     def _tier2_candidate_health_snapshot(self) -> Dict[str, Any]:
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             scopes = conn.execute(
                 "SELECT DISTINCT memory_domain, owner_id, workspace_id FROM turns "
@@ -2358,7 +2363,7 @@ class MemoryApplicationService:
 
     def _memory_reference_health_snapshot(self) -> Dict[str, Any]:
         """统计 Tier2 来源引用类型，避免把外部证据误判为孤儿 turn。"""
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             rows = conn.execute(
                 """
@@ -2601,7 +2606,7 @@ class MemoryApplicationService:
         readable = False
         integrity = "unavailable"
         try:
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 readable = True
                 integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
@@ -2703,7 +2708,7 @@ class MemoryApplicationService:
             request.memory_actor, request.memory_domain
         )
         now = datetime.now().isoformat()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         existing = conn.execute(
             "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
             (session_id,),
@@ -2752,7 +2757,7 @@ class MemoryApplicationService:
         """List sessions in one private memory scope."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         rows = conn.execute(
             "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
             "COUNT(t.turn_id) as turn_count "
@@ -2790,7 +2795,7 @@ class MemoryApplicationService:
         """Get a session with its turn count."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         row = conn.execute(
             "SELECT session_id, created_at, updated_at, metadata FROM sessions "
             "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
@@ -2827,7 +2832,7 @@ class MemoryApplicationService:
         )
         session_summary = None
         for _attempt in range(2):
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 session = conn.execute(
                     "SELECT 1 FROM sessions WHERE session_id = ? AND owner_id = ? "
@@ -2895,7 +2900,7 @@ class MemoryApplicationService:
             )
 
         affected_day_keys: set[str] = set()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             historical_periods = conn.execute(
                 "SELECT period_start FROM time_summaries WHERE summary_type = 'session' "
@@ -2953,7 +2958,7 @@ class MemoryApplicationService:
             request.memory_domain,
         )
         for _attempt in range(2):
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 try:
                     summaries = load_day_session_summaries(
@@ -3059,7 +3064,7 @@ class MemoryApplicationService:
 
     async def add_turn(self, session_id: str, request: TurnCreate):
         """Add a conversation turn to a session."""
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
@@ -3175,7 +3180,7 @@ class MemoryApplicationService:
         )
         session_id = request.session_id.strip()
         now = datetime.now().astimezone().isoformat()
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         turn_ids: dict[str, str] = {}
         profile_settlement: dict[str, Any] = {"action": "none"}
         try:
@@ -3336,7 +3341,7 @@ class MemoryApplicationService:
                 ).strip(),
             }
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
             result = create_memory_promotion_candidate(conn, request)
@@ -3366,7 +3371,7 @@ class MemoryApplicationService:
         scope = MemoryScope.create(owner_id, workspace_id)
         try:
             authorize_promotion_manager(memory_actor)
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 candidates = list_memory_promotion_candidates(
                     conn,
@@ -3396,7 +3401,7 @@ class MemoryApplicationService:
                 "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
             candidate, promotion = consent_memory_promotion_candidate(
@@ -3439,7 +3444,7 @@ class MemoryApplicationService:
                 target_domains = None
             else:
                 target_domains = authorize_read(actor, None)
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 promotions = list_memory_promotions(
                     conn,
@@ -3469,7 +3474,7 @@ class MemoryApplicationService:
                 "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             result = revoke_memory_promotion(conn, promotion_id, request)
             conn.commit()
@@ -3498,7 +3503,7 @@ class MemoryApplicationService:
         """Get all turns for a session, ordered by timestamp."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "decay_factor, tags, metadata, compression_status, memory_domain "
@@ -3532,7 +3537,7 @@ class MemoryApplicationService:
         """Query turns by time range, speaker, or session."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
               "decay_factor, tags, metadata, compression_status, memory_domain FROM turns " \
               "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?"
@@ -3569,7 +3574,7 @@ class MemoryApplicationService:
         """Get a single turn by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         row = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "decay_factor, tags, metadata, compression_status, memory_domain "
@@ -3603,7 +3608,7 @@ class MemoryApplicationService:
 
     async def timeline_view(self, request: TimelineQuery):
         """Get timeline view for a specific date with turn summaries."""
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains
@@ -3753,7 +3758,7 @@ class MemoryApplicationService:
             logger.warning("LLM unhealthy — using heuristic compression (degraded mode)")
             return ChroniclePipeline()
 
-        from systems.memory.llm_extraction import build_llm_first_pipeline
+        from memai.application.llm_extraction import build_llm_first_pipeline
 
         return build_llm_first_pipeline(self._db_path, role="extraction")
 
@@ -3765,7 +3770,7 @@ class MemoryApplicationService:
         """Return storage statistics visible to one memory scope."""
         scope = MemoryScope.create(owner_id, workspace_id)
         private = (scope.owner_id, scope.workspace_id)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         total_turns = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE owner_id = ? AND workspace_id = ?",
             private,
@@ -3851,7 +3856,7 @@ class MemoryApplicationService:
         weight DESC. Pass ``include_superseded`` or ``include_hidden`` when an
         explicit administrative view is required.
         """
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         memory_type = request.get("memory_type")  # "event"|"scene"|"arc"|"epoch"
         topic = request.get("topic")
         query_text = request.get("query", "")
@@ -3961,7 +3966,7 @@ class MemoryApplicationService:
         target_domains: tuple[str, ...],
         plan,
     ) -> tuple[list[Dict[str, Any]], set[tuple[str, str, str]], int]:
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             promotions = list_memory_promotions(
                 conn,
@@ -4000,7 +4005,7 @@ class MemoryApplicationService:
             source_domains=source_domains,
             limit=max(self.config.recall_candidate_limit, len(promotions)),
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             source_payload = recall_memories(
                 conn,
@@ -4108,7 +4113,7 @@ class MemoryApplicationService:
                 source_domains=source_domains,
                 limit=self.config.recall_candidate_limit,
             )
-            conn = open_memory_sqlite(self._db_path)
+            conn = self._repository.connect()
             try:
                 payload = recall_memories(
                     conn,
@@ -4261,7 +4266,7 @@ class MemoryApplicationService:
             if failure is not None
             else ("hit" if payload and payload.get("count") else "empty")
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains
@@ -4332,7 +4337,7 @@ class MemoryApplicationService:
             clauses.append("status = ?")
             params.append(status)
         params.append(bounded_limit)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             rows = conn.execute(
                 "SELECT trace_id, created_at, completed_at, request_source, "
@@ -4372,7 +4377,7 @@ class MemoryApplicationService:
     async def record_recall_feedback(self, request: RecallFeedbackCreate):
         """Record scoped user feedback for one actually selected recall item."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             row = conn.execute(
                 "SELECT selected_results, source_domains FROM recall_traces "
@@ -4461,7 +4466,7 @@ class MemoryApplicationService:
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
         )
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         counts = {
             "compressed_memories": 0,
             "profile_memories": 0,
@@ -4796,7 +4801,7 @@ class MemoryApplicationService:
                 )
                 counts["sessions"] += max(0, int(cursor.rowcount or 0))
 
-            from systems.memory.entity_graph import rebuild_entity_graph
+            from memai.indexes.entity_graph import rebuild_entity_graph
 
             rebuild_entity_graph(
                 conn,
@@ -4888,7 +4893,7 @@ class MemoryApplicationService:
             for ref in evidence_refs
             if ref.startswith("turn:") and ref.removeprefix("turn:")
         ]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         try:
             if supersedes_memory_ids:
                 placeholders = ",".join("?" for _ in supersedes_memory_ids)
@@ -4967,7 +4972,7 @@ class MemoryApplicationService:
                         memory_domain,
                     ),
                 )
-            from systems.memory.entity_graph import update_entity_graph
+            from memai.indexes.entity_graph import update_entity_graph
 
             update_entity_graph(
                 conn,
@@ -5007,7 +5012,7 @@ class MemoryApplicationService:
         """Get a single compressed memory by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         row = conn.execute(
             f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND "
             "((owner_id = ? AND workspace_id = ?) OR "
@@ -5037,7 +5042,7 @@ class MemoryApplicationService:
         """Find all compressed memories that reference a given turn_id."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         rows = conn.execute(
             "SELECT c.* FROM compressed_memories c WHERE "
             "((c.owner_id = ? AND c.workspace_id = ?) OR "
@@ -5074,7 +5079,7 @@ class MemoryApplicationService:
 
     @staticmethod
     def _reject_founding_identity_mutation(memory_id: str) -> None:
-        from systems.memory.identity_seed import is_founding_memory_id
+        from memai.application.identity_seed import is_founding_memory_id
 
         if is_founding_memory_id(memory_id):
             raise HTTPException(
@@ -5097,7 +5102,7 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         cur = conn.execute(
             "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
             "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
@@ -5123,7 +5128,7 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         cur = conn.execute(
             "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
             "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
@@ -5149,7 +5154,7 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = open_memory_sqlite(self._db_path)
+        conn = self._repository.connect()
         row = conn.execute(
             "SELECT memory_type, compression_level FROM compressed_memories "
             "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
@@ -5243,8 +5248,13 @@ class MemoryApplicationService:
 class MemoryService(MemoryApplicationService):
     """HTTP composition root for the independently testable Memory use cases."""
 
-    def __init__(self, config: MemoryServiceConfig = None):
-        super().__init__(config)
+    def __init__(
+        self,
+        config: MemoryServiceConfig = None,
+        *,
+        repository: MemoryRepository | None = None,
+    ):
+        super().__init__(config, repository=repository)
         self.app = build_memory_http_app(
             self._http_handlers(),
             lifespan=asynccontextmanager(self._app_lifespan),
@@ -5270,14 +5280,14 @@ class MemoryService(MemoryApplicationService):
 
 if __name__ == "__main__":
     import argparse
-    from VoidCube_core.runtime_paths import get_runtime_layout
+    from memai.repository.paths import get_mem_runtime_layout
     
     parser = argparse.ArgumentParser(description="VoidCube Memory Service")
     parser.add_argument("--host", default="127.0.0.1", help="Service host")
     parser.add_argument("--port", type=int, default=6001, help="Service port")
     parser.add_argument(
         "--db-path",
-        default=str(get_runtime_layout().memory_db),
+        default=str(get_mem_runtime_layout().memory_db),
         help="SQLite database path",
     )
     parser.add_argument("--gateway", default="http://127.0.0.1:6000", help="Gateway address")

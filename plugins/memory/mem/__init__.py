@@ -16,9 +16,9 @@ from urllib.request import Request, urlopen
 
 from agent.effect_outcomes import EffectOutcome, failed_effect
 from agent.memory_provider import MemoryProvider
-from agent.redact import redact_sensitive_text
+from VoidCube_core.redaction import redact_sensitive_text
 from plugins.memory.mem.outbox import MemoryWriteOutbox
-from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
+from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
 
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,9 @@ class MemMemoryProvider(MemoryProvider):
         self._session_id = resolved_session_id
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
+        from plugins.memory.mem.host_integration import configure_voidcube_mem_host
+
+        configure_voidcube_mem_host()
         self.bind_session(session_id)
         try:
             from VoidCube_cli.config import load_config

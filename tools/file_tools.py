@@ -13,7 +13,7 @@ from tools.path_security import (
     validate_file_write_path,
     is_expected_write_exception
 )
-from agent.redact import redact_sensitive_text
+from VoidCube_core.redaction import redact_sensitive_text
 from tools.path_runtime import RuntimePath, resolve_runtime_path
 from tools.task_execution import TaskExecutionBlocked
 

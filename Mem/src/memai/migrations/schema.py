@@ -10,44 +10,22 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from systems.memory.backup import MemoryBackupManager
-from systems.memory.lexical_index import setup_memory_fts
-from systems.memory.promotion import setup_memory_promotion_schema
-from systems.memory.resource_contract import (
+from memai.repository.backup import MemoryBackupManager
+from memai.indexes.lexical_index import setup_memory_fts
+from memai.application.promotion import setup_memory_promotion_schema
+from memai.domain.resource_contract import (
     LEGACY_HEURISTIC_PROFILE_PREDICATES,
     TurnCompressionStatus,
     expected_timeline_parent_type,
     is_derived_relation,
     profile_slot_key,
 )
-from systems.memory.runtime_migration import migrate_memory_database
-from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+from memai.migrations.runtime_migration import migrate_memory_database
+from memai.repository.sqlite import open_memory_sqlite
+from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 
 
 logger = logging.getLogger(__name__)
-
-
-def open_memory_sqlite(
-    db_path: str | Path,
-    *,
-    timeout: float = 30.0,
-) -> sqlite3.Connection:
-    """Open a Memory connection with the one canonical pragma policy."""
-    connection = sqlite3.connect(str(db_path), timeout=timeout)
-    connection.execute("PRAGMA busy_timeout = 30000")
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        connection.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.DatabaseError as exc:
-        logger.debug("SQLite WAL pragma was not applied for %s: %s", db_path, exc)
-    try:
-        import sqlite_vec
-
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-    except (ImportError, sqlite3.DatabaseError, AttributeError) as exc:
-        logger.debug("Optional sqlite-vec was not loaded for %s: %s", db_path, exc)
-    return connection
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,16 +45,16 @@ class MemoryDatabaseBootstrap:
         self._setup_schema()
 
     def _migrate_legacy_default_database(self) -> None:
-        from VoidCube_core.runtime_paths import (
-            get_legacy_project_runtime_layout,
-            get_runtime_layout,
+        from memai.repository.paths import (
+            get_legacy_memory_db,
+            get_mem_runtime_layout,
         )
 
-        canonical = get_runtime_layout().memory_db
+        canonical = get_mem_runtime_layout().memory_db
         if self.db_path.resolve() != canonical.resolve():
             return
         result = migrate_memory_database(
-            source=get_legacy_project_runtime_layout(Path.cwd()).memory_db,
+            source=get_legacy_memory_db(Path.cwd()),
             target=canonical,
         )
         if result.status == "migrated":
@@ -543,13 +521,13 @@ class MemoryDatabaseBootstrap:
             )
 
     def _setup_subsystem_schema(self, connection: sqlite3.Connection) -> None:
-        from systems.memory.entity_graph import setup_entity_graph
-        from systems.memory.identity_seed import (
+        from memai.indexes.entity_graph import setup_entity_graph
+        from memai.application.identity_seed import (
             ensure_founding_memories,
             reconcile_released_identity_revisions,
         )
-        from systems.memory.llm_cache import setup_llm_cache
-        from systems.memory.maintenance_schedule import setup_memory_rule_state
+        from memai.repository.llm_cache import setup_llm_cache
+        from memai.application.maintenance_schedule import setup_memory_rule_state
 
         setup_memory_fts(connection)
         setup_entity_graph(connection)

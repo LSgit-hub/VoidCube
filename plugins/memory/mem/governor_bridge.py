@@ -64,7 +64,7 @@ class MemGovernorBridge:
         if governance_repo is not None:
             self._governance_repo = governance_repo
         else:
-            from memai.governance_repository import GovernanceEventRepository
+            from memai.repository.governance import GovernanceEventRepository
 
             repo_path = self.storage_root / "mem_governance.jsonl"
             self._governance_repo = GovernanceEventRepository(repo_path)

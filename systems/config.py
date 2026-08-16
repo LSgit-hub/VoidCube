@@ -4,7 +4,7 @@ from typing import Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, TypeAdapter
 
-from systems.memory.config import MemoryServiceConfig
+from memai.application.config import MemoryServiceConfig
 from systems.supervisor.config_models import SupervisorConfig
 
 

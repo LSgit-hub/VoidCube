@@ -5,11 +5,11 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from VoidCube_core.runtime_paths import get_runtime_layout
+from memai.repository.paths import get_mem_runtime_layout
 
 
 def _default_memory_db_path() -> str:
-    return str(get_runtime_layout().memory_db)
+    return str(get_mem_runtime_layout().memory_db)
 
 
 class MemoryServiceConfig(BaseModel):

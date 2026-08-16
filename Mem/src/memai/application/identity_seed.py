@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from importlib.resources import files
 from typing import Any
 
-from systems.memory.scope import GLOBAL_SCOPE_ID
+from memai.domain.scope import GLOBAL_SCOPE_ID
 
 
 _SOURCE_PREFIX = "founding-story:"

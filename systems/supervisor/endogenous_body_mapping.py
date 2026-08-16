@@ -38,7 +38,11 @@ _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
     (
         "memory_access",
         ("memory", "recall", "记忆", "召回"),
-        ("agent/memory_manager.py", "agent/memory_provider.py", "systems/memory/recall.py"),
+        (
+            "agent/memory_manager.py",
+            "agent/memory_provider.py",
+            "Mem/src/memai/application/recall.py",
+        ),
     ),
     (
         "model_routing",

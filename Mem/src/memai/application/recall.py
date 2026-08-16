@@ -17,14 +17,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from agent.redact import redact_sensitive_text
-from systems.memory.lexical_index import search_memory_fts
-from systems.memory.ranking_policy import (
+from VoidCube_core.redaction import redact_sensitive_text
+from memai.indexes.lexical_index import search_memory_fts
+from memai.domain.ranking_policy import (
     GRAPH_RECALL_SCORING_POLICY,
     bounded_weighted_score,
     compute_dynamic_weight,
 )
-from systems.memory.scope import (
+from memai.domain.scope import (
     DEFAULT_OWNER_ID,
     DEFAULT_WORKSPACE_ID,
     GLOBAL_SCOPE_ID,
@@ -1366,7 +1366,7 @@ def _graph_candidates(
     sources are skipped. Returns an empty list when the query matches no known
     entities, so recall is unaffected when the graph is empty.
     """
-    from systems.memory.entity_graph import (
+    from memai.indexes.entity_graph import (
         entity_names_matching_query,
         graph_expand_memory_ids,
     )
