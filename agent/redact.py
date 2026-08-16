@@ -52,12 +52,12 @@ _PREFIX_PATTERNS = [
 ]
 
 # ENV assignment patterns: KEY=value where KEY contains a secret-like name
-_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)"
+_SECRET_ENV_NAMES = r"(?:API_KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY|COOKIE|SESSDATA|BILI_JCT)"
 _ENV_ASSIGN_RE = re.compile(
     rf"([A-Z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Z0-9_]{{0,50}})\s*=\s*(['\"]?)(\S+)\2",
 )
 
-# JSON field patterns: "apiKey": "value", "token": "value", etc.
+# JSON field patterns: "apiKey": "***", "token": "***", etc.
 _JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material)"
 _JSON_FIELD_RE = re.compile(
     rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"',
@@ -70,7 +70,14 @@ _AUTH_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Private key blocks: -----BEGIN RSA PRIVATE KEY----- ... -----END RSA PRIVATE KEY-----
+# Cookie/session headers and common browser session fields.  These values are
+# credentials even when they do not use an API-key prefix.
+_COOKIE_HEADER_RE = re.compile(
+    r"((?:Cookie|Set-Cookie|SESSDATA|bili_jct|access_token|refresh_token)\s*[:=]\s*)([^;\s,]+)",
+    re.IGNORECASE,
+)
+
+
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"
 )
@@ -130,6 +137,12 @@ def redact_sensitive_text(text: str, *, force: bool = False) -> str:
 
     # Authorization headers
     text = _AUTH_HEADER_RE.sub(
+        lambda m: m.group(1) + _mask_token(m.group(2)),
+        text,
+    )
+
+    # Cookie/session headers
+    text = _COOKIE_HEADER_RE.sub(
         lambda m: m.group(1) + _mask_token(m.group(2)),
         text,
     )

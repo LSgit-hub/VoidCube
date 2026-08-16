@@ -92,6 +92,9 @@ async def fetch_tier1_stats(
             result["llm_error"] = rules_data.get("llm_error")
             result["effective_activity_at"] = rules_data.get("effective_activity_at")
             result["llm_health_checked_at"] = rules_data.get("llm_health_checked_at")
+            result["maintenance_run"] = dict(
+                rules_data.get("maintenance_run") or {}
+            )
             result["memory_active"] = _memory_active(
                 rules_data.get("effective_activity_at")
             )

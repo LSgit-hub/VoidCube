@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
+from agent.redact import redact_sensitive_text
 from systems.memory.lexical_index import search_memory_fts
 from systems.memory.ranking_policy import (
     GRAPH_RECALL_SCORING_POLICY,
@@ -634,6 +635,9 @@ def merge_recall_results(
     }
 
 
+_RECALL_SUMMARY_MAX_CHARS = 1200
+
+
 def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
     lines: list[str] = []
     for result in results:
@@ -643,7 +647,12 @@ def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
             result.get("timespan_start") or result.get("timestamp") or ""
         )[:10]
         title = str(result.get("title") or "Memory").strip()
-        summary = str(result.get("summary") or "").strip()
+        summary = redact_sensitive_text(
+            str(result.get("summary") or "").strip(),
+            force=True,
+        )
+        if len(summary) > _RECALL_SUMMARY_MAX_CHARS:
+            summary = summary[:_RECALL_SUMMARY_MAX_CHARS].rstrip() + "... [truncated]"
         memory_id = str(result.get("id") or "unknown")
         score = float(result.get("score") or 0.0)
         matched = ",".join(str(item) for item in result.get("matched_terms") or [])

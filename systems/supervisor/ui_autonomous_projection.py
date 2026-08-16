@@ -11,6 +11,7 @@ from systems.supervisor.ui_observation_projection import (
     is_api_a_execution_lane_task,
     is_api_a_lane_family_task,
     loop_stage_status_label,
+    memory_maintenance_handoff_status,
     observation_display_status,
     observation_role_tag,
     observation_stage_subtitle,
@@ -196,7 +197,9 @@ def project_autonomous_observation(
         build_observation_card(
             item,
             lane="mem",
-            observation_role="mem_writeback",
+            observation_role=str(
+                item.get("observation_role") or "mem_writeback"
+            ).strip(),
         )
         for item in recent_writebacks
     ]
@@ -414,7 +417,7 @@ def project_autonomous_observation(
             emphasis="mem",
             source_label="Mem",
             stage_label="写回回流",
-            summary="最近完成并已经回流到 Mem 的自主链路结果。",
+            summary="最近返回到 Memory 侧的执行结果与维护受理状态。",
             order=3,
             segment_kind="mem_writeback",
             decor_cls="mem",
@@ -638,13 +641,19 @@ def build_autonomous_writeback_summary(
         or task.get("summary")
         or ""
     )
+    display_status = observation_display_status(task)
+    observation_role = (
+        "memory_maintenance_receipt"
+        if memory_maintenance_handoff_status(task)
+        else "mem_writeback"
+    )
     return {
         "task_id": task.get("task_id"),
         "title": str(task.get("title") or "未命名"),
         "lane": observation_role_tag(task),
         "status": str(task.get("status") or "").strip().lower() or "completed",
-        "status_label": observation_display_status(task),
+        "status_label": display_status,
+        "display_status": display_status,
+        "observation_role": observation_role,
         "summary": str(summary).strip()[:120],
     }
-
-

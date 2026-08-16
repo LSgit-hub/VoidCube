@@ -50,7 +50,45 @@ def chain_projection_order_key(task: Dict[str, Any]) -> tuple[int, str, str]:
     title = str(task.get("title") or task.get("task_id") or "")
     return (chain_projection_phase_rank(task), updated, title)
 
+def memory_maintenance_handoff_status(task: Dict[str, Any]) -> str:
+    metadata = dict(task.get("metadata") or {})
+    identity = dict(task.get("task_identity") or {})
+    task_types = {
+        str(value or "").strip().lower()
+        for value in (
+            task.get("governance_task_type"),
+            task.get("task_family"),
+            task.get("execution_kind"),
+            metadata.get("governance_task_type"),
+            metadata.get("task_family"),
+            metadata.get("execution_kind"),
+            identity.get("governance_task_type"),
+            identity.get("task_family"),
+            identity.get("execution_kind"),
+        )
+    }
+    if "memory_maintenance" not in task_types:
+        return ""
+
+    execution_result = dict(metadata.get("execution_result") or {})
+    adapter_result = dict(execution_result.get("result") or {})
+    maintenance_result = dict(
+        adapter_result.get("memory_service_maintenance")
+        or execution_result.get("memory_service_maintenance")
+        or {}
+    )
+    for result in (maintenance_result, adapter_result, execution_result):
+        status = str(result.get("status") or "").strip().lower()
+        if status in {"accepted", "in_progress"}:
+            return status
+    return ""
+
 def observation_display_status(task: Dict[str, Any]) -> str:
+    memory_status = memory_maintenance_handoff_status(task)
+    if memory_status == "accepted":
+        return "已受理"
+    if memory_status == "in_progress":
+        return "维护中"
     return observation_status_label(task.get("status"))
 
 def loop_stage_status_label(status: str) -> str:
@@ -68,6 +106,7 @@ def observation_task_type_label(task: Dict[str, Any]) -> str:
     observation_role = str(task.get("observation_role") or "").strip()
     mapping = {
         "mem_writeback": "Mem 写回",
+        "memory_maintenance_receipt": "Memory 受理回执",
         "api_b_reread": "再次判断",
         "api_b_judgement": "API-B 判断",
         "api_a_execution": "API-A 执行回报",
