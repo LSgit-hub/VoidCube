@@ -50,6 +50,7 @@ class CliTuiInputPorts:
     command_available: Callable[[str], bool]
     command_running: Callable[[], bool]
     password_mask_active: Callable[[], bool]
+    input_locked: Callable[[], bool] = lambda: False
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,12 +127,22 @@ class CliTuiModalStateRuntime:
     def password_mask_active(self) -> bool:
         return bool(self.ports.sudo_state() or self.ports.secret_state())
 
+    def input_locked(self) -> bool:
+        """Lock the draft while a selection modal owns Enter and arrows."""
+        return bool(
+            self.ports.approval_state()
+            or self.ports.model_picker_state()
+            or (self.ports.clarify_state() and not self.ports.clarify_freetext_active())
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class CliTuiCompositionPorts:
     cursor: object | None
     store_application: Callable[[object], None]
     install_resize_cleanup: Callable[[object], None]
+    input: object | None = None
+    output: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +206,7 @@ class CliTuiHostAssemblyRuntime:
                     command_available=ports.input.command_available,
                     command_running=ports.input.command_running,
                     password_mask_active=ports.input.password_mask_active,
+                    input_locked=ports.input.input_locked,
                 ),
                 placeholder_text=ports.placeholder_text,
                 modal=ModalWidgetPorts(
@@ -226,6 +238,8 @@ class CliTuiHostAssemblyRuntime:
                     cursor=ports.extensions.composition.cursor,
                     store_application=ports.extensions.composition.store_application,
                     install_resize_cleanup=ports.extensions.composition.install_resize_cleanup,
+                    input=ports.extensions.composition.input,
+                    output=ports.extensions.composition.output,
                 ),
                 extra_widgets=ports.extensions.extra_widgets,
             )

@@ -6,8 +6,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout
+from prompt_toolkit.layout.containers import Container
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.layout.dimension import Dimension
 
 from VoidCube_cli.tui_application import create_tui_application
 from VoidCube_cli.tui_layout import build_tui_layout_children
@@ -31,6 +34,7 @@ class TuiCompositionWidgets:
     input_area: object
     input_rule_bot: object
     voice_status_bar: object
+    modal_visible: Callable[[], bool] = lambda: False
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +44,8 @@ class TuiCompositionPorts:
     cursor: object | None
     store_application: Callable[[object], None]
     install_resize_cleanup: Callable[[object], None]
+    input: object | None = None
+    output: object | None = None
 
 
 class TuiCompositionRuntime:
@@ -73,11 +79,47 @@ class TuiCompositionRuntime:
             input_rule_bot=widgets.input_rule_bot,
             voice_status_bar=widgets.voice_status_bar,
             completions_menu=completions_menu,
+            include_modals=False,
+        )
+        modal_stack = HSplit(
+            [
+                widget
+                for widget in (
+                    widgets.sudo_widget,
+                    widgets.secret_widget,
+                    widgets.approval_widget,
+                    widgets.clarify_widget,
+                    widgets.model_picker_widget,
+                )
+                if isinstance(widget, Container)
+            ],
+            height=Dimension(max=20),
+        )
+        modal_overlay = ConditionalContainer(
+            modal_stack,
+            filter=Condition(widgets.modal_visible),
         )
         application = create_tui_application(
-            layout=Layout(HSplit(children)),
+            layout=Layout(
+                FloatContainer(
+                    content=HSplit(children),
+                    floats=[
+                        Float(
+                            content=modal_overlay,
+                            top=1,
+                            left=2,
+                            right=2,
+                            bottom=1,
+                            z_index=100,
+                        )
+                    ],
+                    modal=True,
+                )
+            ),
             key_bindings=key_bindings,
             cursor=self.ports.cursor,
+            input=self.ports.input,
+            output=self.ports.output,
         )
         self.ports.store_application(application)
         self.ports.install_resize_cleanup(application)

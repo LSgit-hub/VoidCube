@@ -35,6 +35,7 @@ class InputWidgetPorts:
     command_available: Callable[[str], bool]
     command_running: Callable[[], bool]
     password_mask_active: Callable[[], bool]
+    input_locked: Callable[[], bool] = lambda: False
 
 
 def build_input_area(*, ports: InputWidgetPorts) -> TextArea:
@@ -49,7 +50,7 @@ def build_input_area(*, ports: InputWidgetPorts) -> TextArea:
         style="class:input-area",
         multiline=True,
         wrap_lines=True,
-        read_only=Condition(ports.command_running),
+        read_only=Condition(lambda: ports.command_running() or ports.input_locked()),
         history=FileHistory(ports.history_path),
         completer=completer,
         complete_while_typing=True,
@@ -71,10 +72,8 @@ def build_input_area(*, ports: InputWidgetPorts) -> TextArea:
                 terminal_size = shutil.get_terminal_size((80, 24))
                 terminal_columns = terminal_size.columns
                 terminal_rows = terminal_size.lines
-            available_width = terminal_columns - prompt_width
+            available_width = max(1, terminal_columns - prompt_width)
             max_input_height = max(1, min(8, terminal_rows - 3))
-            if available_width < 10:
-                available_width = 40
             visual_lines = 0
             for line in document.lines:
                 line_width = get_cwidth(line)

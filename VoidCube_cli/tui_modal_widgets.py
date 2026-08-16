@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-import textwrap
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -13,6 +12,7 @@ from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
 
 from VoidCube_app.interaction_contract import ClarificationRequest
+from VoidCube_cli.terminal_text_layout import display_width, pad_to_width
 
 
 ModalState = Mapping[str, object]
@@ -72,7 +72,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
             ("class:clarify-title", "Voidcube needs your input"),
             (
                 "class:clarify-border",
-                " " + ("─" * max(0, box_width - len("Voidcube needs your input") - 3)) + "╮\n",
+                " " + ("─" * max(0, box_width - display_width("Voidcube needs your input") - 3)) + "╮\n",
             ),
         ]
         _append_blank_panel_line(lines, "class:clarify-border", box_width)
@@ -130,7 +130,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
             ("class:sudo-title", "🔑 Skill Setup Required"),
             (
                 "class:sudo-border",
-                " " + ("─" * max(0, box_width - len("🔑 Skill Setup Required") - 3)) + "╮\n",
+                " " + ("─" * max(0, box_width - display_width("🔑 Skill Setup Required") - 3)) + "╮\n",
             ),
         ]
         _append_blank_panel_line(lines, "class:sudo-border", box_width)
@@ -154,7 +154,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         lines: list[tuple[str, str]] = [
             ("class:clarify-border", "╭─ "),
             ("class:clarify-title", title),
-            ("class:clarify-border", " " + ("─" * max(0, box_width - len(title) - 3)) + "╮\n"),
+            ("class:clarify-border", " " + ("─" * max(0, box_width - display_width(title) - 3)) + "╮\n"),
         ]
         _append_blank_panel_line(lines, "class:clarify-border", box_width)
         _append_panel_line(lines, "class:clarify-border", "class:clarify-hint", hint, box_width)
@@ -198,7 +198,7 @@ def _simple_panel(*, title: str, content: list[str]) -> list[tuple[str, str]]:
     lines: list[tuple[str, str]] = [
         ("class:sudo-border", "╭─ "),
         ("class:sudo-title", title),
-        ("class:sudo-border", " " + ("─" * max(0, box_width - len(title) - 3)) + "╮\n"),
+        ("class:sudo-border", " " + ("─" * max(0, box_width - display_width(title) - 3)) + "╮\n"),
     ]
     _append_blank_panel_line(lines, "class:sudo-border", box_width)
     for text in content:
@@ -235,20 +235,54 @@ def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
 
 
 def _panel_box_width(title: str, content_lines: list[str], min_width: int = 46, max_width: int = 76) -> int:
-    term_cols = shutil.get_terminal_size((100, 20)).columns
-    longest = max([len(title)] + [len(line) for line in content_lines] + [min_width - 4])
+    try:
+        from prompt_toolkit.application import get_app
+
+        term_cols = get_app().output.get_size().columns
+    except Exception:
+        term_cols = shutil.get_terminal_size((100, 20)).columns
+    longest = max(
+        [display_width(title)]
+        + [display_width(line) for line in content_lines]
+        + [min_width - 4]
+    )
     inner = min(max(longest + 4, min_width - 2), max_width - 2, max(24, term_cols - 6))
     return inner + 2
 
 
 def _wrap_panel_text(text: str, width: int, subsequent_indent: str = "") -> list[str]:
-    wrapped = textwrap.wrap(text, width=max(8, width), break_long_words=False, break_on_hyphens=False, subsequent_indent=subsequent_indent)
-    return wrapped or [""]
+    width = max(8, width)
+    lines: list[str] = []
+    continuation_width = max(1, width - display_width(subsequent_indent))
+    for source_line in (text.splitlines() or [""]):
+        if not source_line:
+            lines.append("")
+            continue
+        chunks: list[str] = []
+        current: list[str] = []
+        current_width = 0
+        target = width
+        for char in source_line:
+            char_width = display_width(char)
+            if current and current_width + char_width > target:
+                chunks.append("".join(current))
+                current = []
+                current_width = 0
+                target = continuation_width
+            current.append(char)
+            current_width += char_width
+        if current:
+            chunks.append("".join(current))
+        lines.extend(
+            [chunks[0]]
+            + [subsequent_indent + chunk for chunk in chunks[1:]]
+        )
+    return lines or [""]
 
 
 def _append_panel_line(lines: list[tuple[str, str]], border_style: str, content_style: str, text: str, box_width: int) -> None:
     inner_width = max(0, box_width - 2)
-    lines.extend([(border_style, "│ "), (content_style, text.ljust(inner_width)), (border_style, " │\n")])
+    lines.extend([(border_style, "│ "), (content_style, pad_to_width(text, inner_width)), (border_style, " │\n")])
 
 
 def _append_blank_panel_line(lines: list[tuple[str, str]], border_style: str, box_width: int) -> None:

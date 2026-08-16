@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from threading import Thread
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_tui_refresh_loop(
@@ -26,15 +30,24 @@ def run_tui_refresh_loop(
             continue
         now = monotonic_time()
         if now - last_presence_refresh >= 5.0 and presence_refresh_needed():
-            refresh_presence()
+            try:
+                refresh_presence()
+            except Exception:
+                logger.warning("TUI presence refresh failed", exc_info=True)
             last_presence_refresh = now
         if command_running():
-            invalidate(0.1)
+            try:
+                invalidate(0.1)
+            except Exception:
+                logger.debug("TUI command repaint failed", exc_info=True)
             sleep(0.1)
             continue
         if now - last_idle_refresh >= 1.0:
             last_idle_refresh = now
-            invalidate(1.0)
+            try:
+                invalidate(1.0)
+            except Exception:
+                logger.debug("TUI idle repaint failed", exc_info=True)
         sleep(0.2)
 
 

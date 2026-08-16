@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from prompt_toolkit.application import Application
@@ -9,6 +10,9 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.styles import Style
+
+
+logger = logging.getLogger(__name__)
 
 
 TUI_STYLE: Mapping[str, str] = {
@@ -97,11 +101,17 @@ def create_tui_application(
     layout: Layout,
     key_bindings: KeyBindings,
     cursor: object | None,
+    input: object | None = None,
+    output: object | None = None,
 ) -> Application:
     """Create a terminal application with the stable CLI presentation style."""
     options: dict[str, object] = {}
     if cursor is not None:
         options["cursor"] = cursor
+    if input is not None:
+        options["input"] = input
+    if output is not None:
+        options["output"] = output
     application = Application(
         layout=layout,
         key_bindings=key_bindings,
@@ -114,12 +124,19 @@ def create_tui_application(
 
 
 def install_resize_reflow_cleanup(application: Application) -> None:
-    """Clear terminal rows made stale when a narrower terminal reflows output."""
-    original_on_resize = application._on_resize
+    """Adapt prompt-toolkit's renderer resize behavior for narrow terminals.
+
+    The renderer fields used here are private prompt-toolkit implementation
+    details. Keep the compatibility shim isolated and fail open if a future
+    prompt-toolkit release changes them.
+    """
+    original_on_resize = getattr(application, "_on_resize", None)
+    if not callable(original_on_resize):
+        return
 
     def clear_reflowed_rows() -> None:
-        renderer = application.renderer
         try:
+            renderer = application.renderer
             old_size = renderer._last_size
             new_size = renderer.output.get_size()
             if old_size and new_size.columns < old_size.columns and new_size.columns > 0:
@@ -131,8 +148,8 @@ def install_resize_reflow_cleanup(application: Application) -> None:
                         x=renderer._cursor_pos.x,
                         y=renderer._cursor_pos.y + extra_rows,
                     )
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError):
+            logger.debug("prompt-toolkit resize compatibility shim skipped", exc_info=True)
         original_on_resize()
 
     application._on_resize = clear_reflowed_rows

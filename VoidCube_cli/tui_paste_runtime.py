@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,11 +82,21 @@ class TuiPasteRuntime:
     def _write_paste_file(self, text: str) -> Path:
         directory = self.ports.paste_directory
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / (
-            f"paste_{self._paste_counter}_{self.ports.timestamp()}.txt"
-        )
-        path.write_text(text, encoding="utf-8")
-        return path
+        for _ in range(3):
+            path = directory / (
+                f"paste_{self._paste_counter}_{self.ports.timestamp()}_{uuid4().hex[:12]}.txt"
+            )
+            try:
+                with path.open("x", encoding="utf-8") as handle:
+                    handle.write(text)
+                try:
+                    path.chmod(0o600)
+                except OSError:
+                    pass
+                return path
+            except FileExistsError:
+                continue
+        raise RuntimeError("could not allocate a unique paste file")
 
     @staticmethod
     def _normalize(text: str) -> str:

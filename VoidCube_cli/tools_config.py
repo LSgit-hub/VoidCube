@@ -613,9 +613,10 @@ def _toolset_has_keys(ts_key: str, config: dict = None) -> bool:
 # ─── Menu Helpers ─────────────────────────────────────────────────────────────
 
 def _prompt_choice(question: str, choices: list, default: int = 0) -> int:
-    """Single-select menu (arrow keys). Delegates to curses_radiolist."""
-    from VoidCube_cli.curses_ui import curses_radiolist
-    return curses_radiolist(question, choices, selected=default, cancel_returns=default)
+    """Single-select menu returning the selected zero-based index."""
+    from VoidCube_cli.curses_ui import curses_single_select
+    result = curses_single_select(question, [str(choice) for choice in choices], default=default)
+    return default if result is None else result
 
 
 # ─── Token Estimation ────────────────────────────────────────────────────────

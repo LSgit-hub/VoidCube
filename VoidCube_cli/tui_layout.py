@@ -25,6 +25,7 @@ def build_tui_layout_children(
     input_rule_bot: object,
     voice_status_bar: object,
     completions_menu: object,
+    include_modals: bool = True,
 ) -> list[object]:
     """Return the fixed root-widget order for the terminal application.
 
@@ -32,15 +33,18 @@ def build_tui_layout_children(
     state and visibility condition, while wrappers may insert display-only
     widgets through ``extra_widgets``.
     """
+    modal_widgets = (
+        sudo_widget,
+        secret_widget,
+        approval_widget,
+        clarify_widget,
+        model_picker_widget,
+    ) if include_modals else ()
     return [
         widget
         for widget in (
             Window(height=0),
-            sudo_widget,
-            secret_widget,
-            approval_widget,
-            clarify_widget,
-            model_picker_widget,
+            *modal_widgets,
             spinner_widget,
             spacer,
             *extra_widgets(),

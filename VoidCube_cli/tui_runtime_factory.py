@@ -104,6 +104,15 @@ class TuiRuntimeFactory:
                 input_area=widget_graph.input_area,
                 input_rule_bot=indicator_widgets.input_rule_bottom,
                 voice_status_bar=indicator_widgets.voice_status_bar,
+                modal_visible=lambda: any(
+                    (
+                        ports.modal.clarify_state(),
+                        ports.modal.sudo_state(),
+                        ports.modal.secret_state(),
+                        ports.modal.approval_state(),
+                        ports.modal.model_picker_state(),
+                    )
+                ),
             ),
             extra_widgets=ports.extra_widgets,
         )
