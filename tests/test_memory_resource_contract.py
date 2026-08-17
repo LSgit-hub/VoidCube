@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import sqlite3
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -18,6 +18,9 @@ from memai.application.memory_service import (
     TurnCreate,
 )
 from memai.repository.profile_store import upsert_profile_memory
+from memai.repository.profile_store import revoke_profile_predicates
+from memai.indexes.entity_graph import rebuild_entity_graph, update_entity_graph
+from memai.application.recall import build_recall_plan, recall_memories
 from memai.domain.time_summary import day_bucket_for_timestamp, day_period
 
 
@@ -612,3 +615,599 @@ async def test_session_time_correction_retires_the_old_day_index(
 
     assert active_days == [("2020-01-01",)]
     assert old_day_statuses == [("superseded",)]
+
+
+def test_profile_revoke_removes_derived_entity_graph_records(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        profile = _profile("profile-1", "preferred_language", "中文")
+        profile.source_turns = ["turn-profile"]
+        upsert_profile_memory(
+            conn,
+            profile,
+            owner_id="local-user",
+            workspace_id="default",
+            now=now,
+        )
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "source_turns, entities, compressed_at, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "derived-1",
+                "profile-derived",
+                "profile-derived",
+                now,
+                now,
+                json.dumps(["turn-profile"]),
+                json.dumps(["private-entity"]),
+                now,
+                "local-user",
+                "default",
+                "agent_interaction",
+            ),
+        )
+        update_entity_graph(
+            conn,
+            memory_id="derived-1",
+            memory_type="event",
+            entities=["private-entity"],
+            owner_id="local-user",
+            workspace_id="default",
+            memory_domain="agent_interaction",
+            now=now,
+        )
+        result = revoke_profile_predicates(
+            conn,
+            ["preferred_language"],
+            owner_id="local-user",
+            workspace_id="default",
+            memory_domain="agent_interaction",
+            turn_id="turn-profile",
+            now=now,
+        )
+        conn.commit()
+        assert result["action"] == "revoked"
+        assert not conn.execute(
+            "SELECT 1 FROM entity_memory_links WHERE memory_id = ?", ("derived-1",)
+        ).fetchone()
+        assert not conn.execute(
+            "SELECT 1 FROM entity_nodes WHERE entity_id = ?", ("private-entity",)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def test_promotion_record_filter_blocks_entity_graph_bypass(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        for memory_id, summary in (
+            ("promoted-source", "Project decision allowed for promotion"),
+            ("unpromoted-source", "Project decision must remain private"),
+        ):
+            conn.execute(
+                "INSERT INTO compressed_memories "
+                "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+                "topics, entities, source_turns, compressed_at, owner_id, workspace_id, memory_domain) "
+                "VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    memory_id,
+                    "Project decision",
+                    summary,
+                    now,
+                    now,
+                    json.dumps(["project"]),
+                    json.dumps(["project"]),
+                    json.dumps([]),
+                    now,
+                    "local-user",
+                    "default",
+                    "agent_interaction",
+                ),
+            )
+            update_entity_graph(
+                conn,
+                memory_id=memory_id,
+                memory_type="event",
+                entities=["project"],
+                owner_id="local-user",
+                workspace_id="default",
+                memory_domain="agent_interaction",
+                now=now,
+            )
+        conn.commit()
+        payload = recall_memories(
+            conn,
+            build_recall_plan("project decision"),
+            include_tier1=False,
+            include_tier2=True,
+            owner_id="local-user",
+            workspace_id="default",
+            record_filter={"compressed": ["promoted-source"]},
+            min_score=0.0,
+        )
+        assert "promoted-source" in {item["id"] for item in payload["results"]}
+        assert "unpromoted-source" not in {item["id"] for item in payload["results"]}
+    finally:
+        conn.close()
+
+
+def test_regular_recall_excludes_founding_memory_from_entity_graph(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "topics, entities, source_turns, compressed_at, status, pinned, "
+            "identity_layer, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'identity', ?, ?, ?, ?, ?, ?, '[]', ?, 'active', 1, "
+            "'founding', '*', '*', 'agent_interaction')",
+            (
+                "founding-project",
+                "Founding project",
+                "Founding identity linked to graph-only-project-token",
+                now,
+                now,
+                json.dumps(["graph-only-project-token"]),
+                json.dumps(["graph-only-project-token"]),
+                now,
+            ),
+        )
+        update_entity_graph(
+            conn,
+            memory_id="founding-project",
+            memory_type="identity",
+            entities=["graph-only-project-token"],
+            owner_id="*",
+            workspace_id="*",
+            memory_domain="agent_interaction",
+            now=now,
+        )
+        conn.commit()
+        plan = build_recall_plan("graph-only-project-token decision")
+        assert plan.intent != "identity"
+        payload = recall_memories(
+            conn,
+            plan,
+            include_tier1=False,
+            include_tier2=True,
+            owner_id="local-user",
+            workspace_id="default",
+            min_score=0.0,
+        )
+        assert "founding-project" not in {item["id"] for item in payload["results"]}
+    finally:
+        conn.close()
+
+
+def test_recent_conversation_prefetch_keeps_newest_low_relevance_turn(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    reference = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+    try:
+        conn.execute(
+            "INSERT INTO sessions "
+            "(session_id, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES ('recent-session', 'local-user', 'default', "
+            "'agent_interaction', ?)",
+            (reference.isoformat(),),
+        )
+        older_rows = [
+            (
+                f"older-{index}",
+                f"Older important turn {index}",
+                reference.replace(day=10 + index).isoformat(),
+                1.0,
+            )
+            for index in range(5)
+        ]
+        conn.executemany(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "tags, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'recent-session', 'user', ?, ?, ?, '[]', "
+            "'local-user', 'default', 'agent_interaction')",
+            older_rows,
+        )
+        conn.execute(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "tags, owner_id, workspace_id, memory_domain) "
+            "VALUES ('newest-low-relevance', 'recent-session', 'user', ?, ?, 0.01, "
+            "'[]', 'local-user', 'default', 'agent_interaction')",
+            ("Newest turn that must remain recallable", reference.isoformat()),
+        )
+        conn.commit()
+
+        plan = build_recall_plan("刚才聊了什么", now=reference)
+        payload = recall_memories(
+            conn,
+            plan,
+            limit=1,
+            candidate_limit=1,
+            include_tier2=False,
+            min_score=0.0,
+            now=reference,
+        )
+        assert payload["results"][0]["id"] == "newest-low-relevance"
+    finally:
+        conn.close()
+
+
+def test_entity_graph_rebuild_keeps_domain_scope_and_excludes_invisible_rows(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    def insert_memory(
+        memory_id: str,
+        entity: str,
+        domain: str,
+        *,
+        hidden: int = 0,
+        identity_layer: str | None = None,
+        source_turns: list[str] | None = None,
+    ) -> None:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "entities, source_turns, compressed_at, status, hidden, identity_layer, "
+            "owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+            (
+                memory_id,
+                memory_id,
+                memory_id,
+                now,
+                now,
+                json.dumps([entity]),
+                json.dumps(source_turns or []),
+                now,
+                hidden,
+                identity_layer,
+                "owner-a",
+                "workspace-a",
+                domain,
+            ),
+        )
+        update_entity_graph(
+            conn,
+            memory_id=memory_id,
+            memory_type="event",
+            entities=[entity],
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+            memory_domain=domain,
+            now=now,
+        )
+
+    try:
+        conn.execute(
+            "INSERT INTO sessions "
+            "(session_id, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "evaluation-session",
+                "owner-a",
+                "workspace-a",
+                "domain-a",
+                now,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, tags, owner_id, "
+            "workspace_id, memory_domain) VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?)",
+            (
+                "evaluation-turn",
+                "evaluation-session",
+                "evaluation input",
+                now,
+                json.dumps(["evaluation"]),
+                "owner-a",
+                "workspace-a",
+                "domain-a",
+            ),
+        )
+        insert_memory("visible", "visible-entity", "domain-a")
+        insert_memory("hidden", "hidden-entity", "domain-a", hidden=1)
+        insert_memory(
+            "founding",
+            "founding-entity",
+            "domain-a",
+            identity_layer="founding",
+        )
+        insert_memory(
+            "evaluation",
+            "evaluation-entity",
+            "domain-a",
+            source_turns=["evaluation-turn"],
+        )
+        insert_memory("other-domain", "other-domain-entity", "domain-b")
+        linked = rebuild_entity_graph(
+            conn,
+            owner_id="*",
+            workspace_id="*",
+            memory_domain="domain-a",
+        )
+        conn.commit()
+
+        domain_a_links = conn.execute(
+            "SELECT memory_id FROM entity_memory_links "
+            "WHERE memory_domain = 'domain-a' ORDER BY memory_id"
+        ).fetchall()
+        domain_b_links = conn.execute(
+            "SELECT memory_id FROM entity_memory_links "
+            "WHERE memory_domain = 'domain-b' ORDER BY memory_id"
+        ).fetchall()
+        assert linked == 1
+        assert domain_a_links == [("visible",)]
+        assert domain_b_links == [("other-domain",)]
+    finally:
+        conn.close()
+
+
+def test_entity_graph_update_preserves_display_names_and_is_idempotent(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    conn = open_memory_sqlite(service._db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "entities, source_turns, compressed_at, owner_id, workspace_id, memory_domain) "
+            "VALUES ('display-memory', 'event', 'Display names', 'Display names', "
+            "?, ?, ?, '[]', ?, 'local-user', 'default', 'agent_interaction')",
+            (now, now, json.dumps(["Alpha Name", "Beta Name"]), now),
+        )
+        for _ in range(2):
+            update_entity_graph(
+                conn,
+                memory_id="display-memory",
+                memory_type="event",
+                entities=["Alpha Name", "Beta Name"],
+                owner_id="local-user",
+                workspace_id="default",
+                memory_domain="agent_interaction",
+                now=now,
+            )
+        nodes = conn.execute(
+            "SELECT entity_id, display_name, reference_count FROM entity_nodes "
+            "WHERE owner_id = 'local-user' ORDER BY entity_id"
+        ).fetchall()
+        edge = conn.execute(
+            "SELECT source_entity, target_entity, strength FROM entity_edges "
+            "WHERE owner_id = 'local-user'"
+        ).fetchone()
+        assert nodes == [
+            ("alpha name", "Alpha Name", 1),
+            ("beta name", "Beta Name", 1),
+        ]
+        assert edge == ("alpha name", "beta name", 1)
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_upgrade_preserves_provenance(tmp_path, monkeypatch):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+
+    async def fake_escalate(self, **kwargs):
+        return "Project scene", "Project scene preserves the durable decision and evidence."
+
+    monkeypatch.setattr(service, "_llm_escalate_summary", MethodType(fake_escalate, service))
+    old = "2020-01-01T00:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+                "topics, entities, source_turns, evidence_refs, origin_type, origin_id, "
+                "verified_at, compressed_at, compression_level, status, weight, owner_id, workspace_id, memory_domain) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "event-provenance",
+                "event",
+                "Project decision",
+                "The project made a durable decision and completed the retrieval work with evidence tracking.",
+                old,
+                old,
+                json.dumps(["project"]),
+                json.dumps(["project"]),
+                json.dumps(["turn-1"]),
+                json.dumps(["turn:turn-1"]),
+                "explicit",
+                "origin-1",
+                old,
+                old,
+                0,
+                "active",
+                1.0,
+                "local-user",
+                "default",
+                "agent_interaction",
+            ),
+        )
+        update_entity_graph(
+            conn,
+            memory_id="event-provenance",
+            memory_type="event",
+            entities=["project"],
+            owner_id="local-user",
+            workspace_id="default",
+            memory_domain="agent_interaction",
+            now=old,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service._apply_compression_lifecycle()
+    assert result["escalated"] == 1
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        successor = conn.execute(
+            "SELECT memory_id, evidence_refs, origin_type, origin_id, verified_at, derived_from_id "
+            "FROM compressed_memories WHERE derived_from_id = ?",
+            ("event-provenance",),
+        ).fetchone()
+        graph_links = conn.execute(
+            "SELECT memory_id FROM entity_memory_links WHERE entity_id = 'project'"
+        ).fetchall()
+        reference_count = conn.execute(
+            "SELECT reference_count FROM entity_nodes WHERE entity_id = 'project'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert successor[1:] == (
+        '["turn:turn-1"]',
+        "explicit",
+        "origin-1",
+        old,
+        "event-provenance",
+    )
+    assert graph_links == [(successor[0],)]
+    assert reference_count == (1,)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_upgrade_does_not_invent_source_turn_id(tmp_path, monkeypatch):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+
+    async def fake_escalate(self, **kwargs):
+        return "Project scene", "Project scene preserves the durable decision."
+
+    monkeypatch.setattr(service, "_llm_escalate_summary", MethodType(fake_escalate, service))
+    old = "2020-01-01T00:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "topics, entities, source_turns, compressed_at, compression_level, "
+            "status, weight, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'event', ?, ?, ?, ?, '[]', '[]', '[]', ?, 0, "
+            "'active', 1.0, 'local-user', 'default', 'agent_interaction')",
+            (
+                "event-without-source-turn",
+                "Project decision",
+                "The project completed a durable decision with sufficient detail.",
+                old,
+                old,
+                old,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service._apply_compression_lifecycle()
+    assert result["escalated"] == 1
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        successor = conn.execute(
+            "SELECT source_turns FROM compressed_memories WHERE derived_from_id = ?",
+            ("event-without-source-turn",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert successor == ("[]",)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_does_not_resurface_hidden_memories(tmp_path, monkeypatch):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+
+    async def fail_escalate(self, **kwargs):
+        pytest.fail("hidden memory must not enter lifecycle escalation")
+
+    monkeypatch.setattr(service, "_llm_escalate_summary", MethodType(fail_escalate, service))
+    old = "2020-01-01T00:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "topics, entities, source_turns, compressed_at, compression_level, "
+            "status, hidden, weight, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, 'event', ?, ?, ?, ?, '[]', '[]', '[]', ?, 0, "
+            "'active', 1, 1.0, 'local-user', 'default', 'agent_interaction')",
+            (
+                "hidden-lifecycle-memory",
+                "Hidden decision",
+                "An evaluation decision that must stay quarantined.",
+                old,
+                old,
+                old,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service._apply_compression_lifecycle()
+    assert result["escalated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_hide_and_unhide_reconcile_entity_graph(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    now = datetime.now(timezone.utc).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "entities, source_turns, compressed_at, status, owner_id, workspace_id, "
+            "memory_domain) VALUES (?, 'event', ?, ?, ?, ?, ?, '[]', ?, 'active', "
+            "'local-user', 'default', 'agent_interaction')",
+            (
+                "graph-visibility-memory",
+                "Private project",
+                "Private project details",
+                now,
+                now,
+                json.dumps(["private-project-entity"]),
+                now,
+            ),
+        )
+        update_entity_graph(
+            conn,
+            memory_id="graph-visibility-memory",
+            memory_type="event",
+            entities=["private-project-entity"],
+            owner_id="local-user",
+            workspace_id="default",
+            memory_domain="agent_interaction",
+            now=now,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    await service.hide_memory("graph-visibility-memory")
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        assert not conn.execute(
+            "SELECT 1 FROM entity_nodes WHERE entity_id = ?",
+            ("private-project-entity",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    await service.unpin_memory("graph-visibility-memory")
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM entity_nodes WHERE entity_id = ?",
+            ("private-project-entity",),
+        ).fetchone()
+    finally:
+        conn.close()

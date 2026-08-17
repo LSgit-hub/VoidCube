@@ -236,6 +236,19 @@ def revoke_profile_predicates(
             "AND workspace_id = ? AND memory_domain = ?",
             (*derived_memory_ids, owner_id, workspace_id, memory_domain),
         )
+        graph_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'entity_memory_links'"
+        ).fetchone()
+        if graph_table_exists:
+            from memai.indexes.entity_graph import rebuild_entity_graph
+
+            rebuild_entity_graph(
+                conn,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_domain=memory_domain,
+            )
     trace_references = 0
     revoked_memory_ids = list(
         dict.fromkeys((*profile_memory_ids, *derived_memory_ids, *evidence_turns))

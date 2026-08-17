@@ -303,26 +303,14 @@ def _write_compressed_memories_to_db(
         "UPDATE compressed_memories SET created_at = compressed_at "
         "WHERE created_at IS NULL"
     )
-    # Build the entity graph from this pipeline output (co-occurrence edges).
-    from memai.indexes.entity_graph import update_entity_graph
+    from memai.indexes.entity_graph import rebuild_entity_graph
 
-    for memory_type, items in (
-        ("event", pipeline_result.events),
-        ("scene", pipeline_result.scenes),
-        ("arc", pipeline_result.arcs),
-        ("epoch", pipeline_result.epochs),
-    ):
-        for item in items:
-            update_entity_graph(
-                conn,
-                memory_id=stable_ids.get(item.id, item.id),
-                memory_type=memory_type,
-                entities=getattr(item, "entities", []) or [],
-                owner_id=owner_id,
-                workspace_id=workspace_id,
-                memory_domain=memory_domain,
-                now=now,
-            )
+    rebuild_entity_graph(
+        conn,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        memory_domain=memory_domain,
+    )
     return written
 
 

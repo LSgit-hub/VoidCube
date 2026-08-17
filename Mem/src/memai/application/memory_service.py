@@ -554,6 +554,18 @@ def _json_string_set(raw: Any) -> set[str]:
     return {str(value).strip() for value in values if str(value).strip()}
 
 
+def _json_string_list(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
 def _collect_dependent_memory_ids(
     conn: sqlite3.Connection,
     *,
@@ -712,6 +724,7 @@ class MemoryApplicationService:
         escalated = 0
         purged = 0
         quality_rejected = 0
+        graph_scopes: set[tuple[str, str, str]] = set()
 
         # ── Escalate: find entries past their level's max age ──
         for (mem_type, level), max_age_days in lifecycle_age_thresholds(self.config):
@@ -719,10 +732,11 @@ class MemoryApplicationService:
             rows = conn.execute(
                 "SELECT memory_id, title, summary, topics, entities, event_kind, "
                 "timespan_start, timespan_end, importance, confidence, source_turns, "
+                "evidence_refs, origin_type, origin_id, verified_at, "
                 "owner_id, workspace_id, memory_domain "
                 "FROM compressed_memories "
                 "WHERE memory_type = ? AND compression_level = ? "
-                "AND status = 'active' AND pinned = 0 "
+                "AND status = 'active' AND hidden = 0 AND pinned = 0 "
                 "AND identity_layer IS NULL "
                 "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ? "
                 "AND lifecycle_retry_count < ? "
@@ -739,13 +753,14 @@ class MemoryApplicationService:
             for row in rows:
                 mem_id, title, summary, topics_json, entities_json, event_kind, \
                     ts_start, ts_end, importance, confidence, source_turns_json, \
+                    evidence_refs_json, origin_type, origin_id, verified_at, \
                     owner_id, workspace_id, memory_domain = row
 
                 if level >= 4:
                     # Final level: LLM reviews before permanent deletion
                     should_keep = await self._llm_purge_review(
                         mem_id=mem_id, title=title, summary=summary,
-                        topics=json.loads(topics_json) if topics_json else [],
+                        topics=_json_string_list(topics_json),
                     )
                     if should_keep:
                         conn.execute(
@@ -763,6 +778,9 @@ class MemoryApplicationService:
                             (now.isoformat(), mem_id, owner_id, workspace_id, memory_domain),
                         )
                         purged += 1
+                        graph_scopes.add(
+                            (str(owner_id), str(workspace_id), str(memory_domain))
+                        )
                     continue
 
                 # Escalate to next level with LLM re-summarization
@@ -779,7 +797,7 @@ class MemoryApplicationService:
                     from_level=level,
                     to_type=next_type,
                     to_level=next_level,
-                    topics=json.loads(topics_json) if topics_json else [],
+                    topics=_json_string_list(topics_json),
                 )
                 quality = evaluate_lifecycle_quality(
                     source_title=str(title or ""),
@@ -819,22 +837,22 @@ class MemoryApplicationService:
                         f"{owner_id}:{workspace_id}:{memory_domain}:{mem_id}:{next_level}",
                     )
                 )
-                source_turns = json.loads(source_turns_json) if source_turns_json else []
-                if not source_turns:
-                    source_turns = [mem_id]
+                source_turns = _json_string_list(source_turns_json)
                 conn.execute(
                     "INSERT OR REPLACE INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
+                    "evidence_refs, origin_type, origin_id, verified_at, "
                     "derived_from_id, compressed_at, compression_level, status, weight, "
                     "owner_id, workspace_id, memory_domain, event_kind, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         successor_id, next_type, escalated_title, escalated_summary,
                         ts_start, ts_end,
                         importance * 0.85, confidence * 0.9,
                         topics_json, entities_json,
                         json.dumps(source_turns),
+                        evidence_refs_json, origin_type, origin_id, verified_at,
                         mem_id, now.isoformat(), next_level, "active", next_weight,
                         owner_id, workspace_id, memory_domain, event_kind, now.isoformat(),
                     ),
@@ -854,26 +872,21 @@ class MemoryApplicationService:
                     "AND memory_domain = ?",
                     (successor_id, owner_id, workspace_id, memory_domain),
                 )
-                # Record the new parent's entities in the entity graph.
-                from memai.indexes.entity_graph import update_entity_graph
-
-                parent_entities = []
-                if entities_json:
-                    try:
-                        parent_entities = json.loads(entities_json)
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        parent_entities = []
-                update_entity_graph(
-                    conn,
-                    memory_id=successor_id,
-                    memory_type=next_type,
-                    entities=parent_entities,
-                    owner_id=str(owner_id),
-                    workspace_id=str(workspace_id),
-                    memory_domain=str(memory_domain),
-                    now=now.isoformat(),
+                graph_scopes.add(
+                    (str(owner_id), str(workspace_id), str(memory_domain))
                 )
                 escalated += 1
+
+        if graph_scopes:
+            from memai.indexes.entity_graph import rebuild_entity_graph
+
+            for owner_id, workspace_id, memory_domain in sorted(graph_scopes):
+                rebuild_entity_graph(
+                    conn,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    memory_domain=memory_domain,
+                )
 
         # Backfill the transaction-time anchor for any row still missing one.
         conn.execute(
@@ -3918,7 +3931,10 @@ class MemoryApplicationService:
         if min_weight > 0:
             sql += " AND weight >= ?"
             params.append(min_weight)
-        sql += " ORDER BY timespan_start DESC LIMIT ?"
+        sql += (
+            " ORDER BY pinned DESC, weight DESC, importance DESC, "
+            "confidence DESC, timespan_start DESC LIMIT ?"
+        )
         params.append(limit)
 
         rows = conn.execute(sql, params).fetchall()
@@ -4972,17 +4988,13 @@ class MemoryApplicationService:
                         memory_domain,
                     ),
                 )
-            from memai.indexes.entity_graph import update_entity_graph
+            from memai.indexes.entity_graph import rebuild_entity_graph
 
-            update_entity_graph(
+            rebuild_entity_graph(
                 conn,
-                memory_id=memory_id,
-                memory_type="event",
-                entities=entities,
                 owner_id=scope.owner_id,
                 workspace_id=scope.workspace_id,
                 memory_domain=memory_domain,
-                now=now,
             )
             conn.commit()
             row = conn.execute(
@@ -5090,6 +5102,22 @@ class MemoryApplicationService:
                 ),
             )
 
+    @staticmethod
+    def _rebuild_scoped_entity_graph(
+        conn: sqlite3.Connection,
+        *,
+        scope: MemoryScope,
+        memory_domain: str,
+    ) -> None:
+        from memai.indexes.entity_graph import rebuild_entity_graph
+
+        rebuild_entity_graph(
+            conn,
+            owner_id=scope.owner_id,
+            workspace_id=scope.workspace_id,
+            memory_domain=memory_domain,
+        )
+
     async def pin_memory(
         self,
         memory_id: str,
@@ -5112,6 +5140,11 @@ class MemoryApplicationService:
         if cur.rowcount == 0:
             conn.close()
             raise HTTPException(status_code=404, detail="Memory not found")
+        self._rebuild_scoped_entity_graph(
+            conn,
+            scope=scope,
+            memory_domain=authorized_domain,
+        )
         conn.commit()
         conn.close()
         return {"memory_id": memory_id, "pinned": True, "status": "ok"}
@@ -5138,6 +5171,11 @@ class MemoryApplicationService:
         if cur.rowcount == 0:
             conn.close()
             raise HTTPException(status_code=404, detail="Memory not found")
+        self._rebuild_scoped_entity_graph(
+            conn,
+            scope=scope,
+            memory_domain=authorized_domain,
+        )
         conn.commit()
         conn.close()
         return {"memory_id": memory_id, "hidden": True, "status": "ok"}
@@ -5171,6 +5209,11 @@ class MemoryApplicationService:
             "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
             "AND memory_domain = ?",
             (base_w, memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+        )
+        self._rebuild_scoped_entity_graph(
+            conn,
+            scope=scope,
+            memory_domain=authorized_domain,
         )
         conn.commit()
         conn.close()

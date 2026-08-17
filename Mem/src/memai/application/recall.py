@@ -584,6 +584,7 @@ def recall_memories(
                     0.0,
                     min(float(graph_min_relevance), 1.0),
                 ),
+                record_filter=record_filter,
             )
         )
 
@@ -974,7 +975,7 @@ def _tier2_candidates(
     if plan.timespan_end:
         clauses.append("timespan_start <= ?")
         params.append(plan.timespan_end)
-    params.append(candidate_limit)
+    params.append(min(candidate_limit * 4, 2000))
     rows = conn.execute(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
@@ -982,7 +983,8 @@ def _tier2_candidates(
         "identity_layer, evidence_refs, memory_domain "
         "FROM compressed_memories WHERE "
         + " AND ".join(clauses)
-        + " ORDER BY pinned DESC, timespan_end DESC LIMIT ?",
+        + " ORDER BY pinned DESC, weight DESC, importance DESC, "
+        "confidence DESC, timespan_end DESC LIMIT ?",
         params,
     ).fetchall()
     results: list[dict[str, Any]] = []
@@ -1141,7 +1143,7 @@ def _profile_candidates(
     if plan.timespan_end:
         clauses.append("valid_from <= ?")
         params.append(plan.timespan_end)
-    params.append(candidate_limit)
+    params.append(min(candidate_limit * 4, 2000))
     rows = conn.execute(
         "SELECT memory_id, memory_kind, subject, predicate, value, summary, "
         "confidence, certainty_state, valid_from, valid_to, evidence_refs, "
@@ -1271,7 +1273,7 @@ def _archive_candidates(
     if plan.as_of:
         clauses.append("timestamp <= ?")
         params.append(plan.as_of)
-    params.append(candidate_limit)
+    params.append(min(candidate_limit * 4, 2000))
     rows = conn.execute(
         "SELECT turn_id, session_id, speaker, original_text, text_summary, "
         "timestamp, event_ids, scene_ids, memory_domain FROM turns_archive WHERE "
@@ -1366,6 +1368,7 @@ def _graph_candidates(
     existing_ids: set[str],
     semantic_matches: dict[tuple[str, str], float],
     min_query_relevance: float,
+    record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
     """Entity-graph expansion: surface memories connected to query entities.
 
@@ -1402,14 +1405,41 @@ def _graph_candidates(
     )
     if not expanded:
         return []
+    if record_filter is not None:
+        allowed_ids = {
+            str(item)
+            for item in record_filter.get("compressed", ())
+            if str(item)
+        }
+        if not allowed_ids:
+            return []
+        expanded = {
+            memory_id: proximity
+            for memory_id, proximity in expanded.items()
+            if memory_id in allowed_ids
+        }
+        if not expanded:
+            return []
     placeholders = ",".join("?" for _ in expanded)
     rows = conn.execute(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
         "event_kind, access_count, citation_count, pinned, weight, "
         "identity_layer, evidence_refs, memory_domain "
-        f"FROM compressed_memories WHERE memory_id IN ({placeholders})",
-        list(expanded),
+        f"FROM compressed_memories WHERE memory_id IN ({placeholders}) "
+        "AND status = 'active' AND hidden = 0 AND "
+        "COALESCE(identity_layer, '') != 'founding' AND "
+        "((owner_id = ? AND workspace_id = ?) OR "
+        "(owner_id = ? AND workspace_id = ?)) "
+        f"AND memory_domain IN ({','.join('?' for _ in source_domains)})",
+        [
+            *expanded,
+            owner_id,
+            workspace_id,
+            GLOBAL_SCOPE_ID,
+            GLOBAL_SCOPE_ID,
+            *source_domains,
+        ],
     ).fetchall()
     results: list[dict[str, Any]] = []
     for row in rows:
@@ -1540,12 +1570,19 @@ def _tier1_candidates(
     if plan.as_of:
         clauses.append("timestamp <= ?")
         params.append(plan.as_of)
-    params.append(candidate_limit)
+    params.append(min(candidate_limit * 4, 2000))
+    order_by = (
+        "timestamp DESC"
+        if plan.intent == "recent_conversation"
+        or plan.immediate_recency
+        or plan.current_state_intent
+        else "relevance_score DESC, timestamp DESC"
+    )
     rows = conn.execute(
         "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, tags, memory_domain "
         "FROM turns WHERE "
         + " AND ".join(clauses)
-        + " ORDER BY timestamp DESC LIMIT ?",
+        + f" ORDER BY {order_by} LIMIT ?",
         params,
     ).fetchall()
     results: list[dict[str, Any]] = []

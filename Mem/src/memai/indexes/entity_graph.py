@@ -121,14 +121,34 @@ def update_entity_graph(
     memory_id = str(memory_id or "").strip()
     if not memory_id:
         return
-    seen: list[str] = []
+    display_names: dict[str, str] = {}
     for raw in entities:
         entity_id = normalize_entity(raw)
-        if not entity_id or entity_id in seen:
+        if not entity_id or entity_id in display_names:
             continue
-        seen.append(entity_id)
+        display_names[entity_id] = str(raw).strip()
 
-    for entity_id in seen:
+    existing_entities = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT entity_id FROM entity_memory_links WHERE memory_id = ? "
+            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+            (memory_id, owner_id, workspace_id, memory_domain),
+        ).fetchall()
+    }
+    if existing_entities == set(display_names):
+        return
+    if existing_entities:
+        rebuild_entity_graph(
+            conn,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+        )
+        return
+
+    entity_ids = list(display_names)
+    for entity_id, display_name in display_names.items():
         conn.execute(
             "INSERT INTO entity_nodes "
             "(entity_id, display_name, owner_id, workspace_id, memory_domain, "
@@ -139,7 +159,7 @@ def update_entity_graph(
             "last_seen_at = excluded.last_seen_at",
             (
                 entity_id,
-                str(raw).strip(),
+                display_name,
                 owner_id,
                 workspace_id,
                 memory_domain,
@@ -162,9 +182,9 @@ def update_entity_graph(
             ),
         )
 
-    for i in range(len(seen)):
-        for j in range(i + 1, len(seen)):
-            left, right = seen[i], seen[j]
+    for i in range(len(entity_ids)):
+        for j in range(i + 1, len(entity_ids)):
+            left, right = entity_ids[i], entity_ids[j]
             if left == right:
                 continue
             if left < right:
@@ -213,22 +233,31 @@ def rebuild_entity_graph(
         if memory_domain:
             delete_scope += " AND memory_domain = ?"
             delete_params.append(memory_domain)
+    elif all_scopes and memory_domain:
+        # A global rebuild with a domain still targets that domain only.
+        delete_scope = " WHERE memory_domain = ?"
+        delete_params = [memory_domain]
     for table in ("entity_memory_links", "entity_edges", "entity_nodes"):
         conn.execute(f"DELETE FROM {table}{delete_scope}", delete_params)
 
     now = datetime.now(timezone.utc).isoformat()
-    clauses = ["status = 'active'"]
+    clauses = [
+        "cm.status = 'active'",
+        "cm.hidden = 0",
+        "COALESCE(cm.identity_layer, '') != 'founding'",
+        _EVALUATION_SOURCE_EXCLUSION_SQL,
+    ]
     params: list[Any] = []
     if scoped and not all_scopes:
-        clauses.append("owner_id = ?")
-        clauses.append("workspace_id = ?")
+        clauses.append("cm.owner_id = ?")
+        clauses.append("cm.workspace_id = ?")
         params.extend([owner_id, workspace_id])
     if memory_domain:
-        clauses.append("memory_domain = ?")
+        clauses.append("cm.memory_domain = ?")
         params.append(memory_domain)
     rows = conn.execute(
-        "SELECT memory_id, memory_type, entities, owner_id, workspace_id, memory_domain "
-        "FROM compressed_memories WHERE "
+        "SELECT cm.memory_id, cm.memory_type, cm.entities, cm.owner_id, "
+        "cm.workspace_id, cm.memory_domain FROM compressed_memories AS cm WHERE "
         + " AND ".join(clauses)
         + " ORDER BY memory_id",
         params,
@@ -310,7 +339,11 @@ def graph_expand_memory_ids(
     domains = tuple(dict.fromkeys(str(d) for d in source_domains))
     domain_placeholders = ",".join("?" for _ in domains) if domains else "''"
     scope_params = [owner_id, workspace_id, GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID]
-    visible = "status = 'active' AND hidden = 0 AND " + _EVALUATION_SOURCE_EXCLUSION_SQL
+    visible = (
+        "status = 'active' AND hidden = 0 AND "
+        "COALESCE(identity_layer, '') != 'founding' AND "
+        + _EVALUATION_SOURCE_EXCLUSION_SQL
+    )
     as_of_clause = ""
     as_of_params: list[Any] = []
     if as_of:
