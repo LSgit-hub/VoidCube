@@ -214,13 +214,19 @@ def _semantic_config_from_overrides(
 ):
     """Build an explicit SemanticIndexConfig from CLI embedding overrides.
 
-    Returns None when no embedding override is requested, in which case the
-    service uses its configured default (the local CharNgramEmbedder, or any
-    provider set in ~/.VoidCube/config.yaml).
+    The benchmark defaults explicitly to the local CharNgramEmbedder so its
+    result does not depend on whether host configuration is registered in the
+    calling process.
     """
-    if not (provider or model or base_url):
-        return None
     from memai.indexes.semantic_index import SemanticIndexConfig
+
+    if not (provider or model or base_url):
+        return SemanticIndexConfig(
+            enabled=True,
+            provider="local",
+            model="char-ngram-v1",
+            dimensions=256,
+        )
 
     return SemanticIndexConfig(
         enabled=True,

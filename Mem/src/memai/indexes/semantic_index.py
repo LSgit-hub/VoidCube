@@ -604,6 +604,29 @@ class SemanticMemoryIndex:
                 "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_scope_v3 "
                 "ON memory_embeddings(provider, model, owner_id, workspace_id, memory_domain, source_type)"
             )
+            # Embeddings are derived from active source records. Reconcile rows
+            # left behind by status transitions performed before lifecycle
+            # triggers were installed.
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE source_type = 'turn' "
+                "AND NOT EXISTS (SELECT 1 FROM turns WHERE turn_id = memory_embeddings.memory_id "
+                "AND owner_id = memory_embeddings.owner_id AND workspace_id = memory_embeddings.workspace_id "
+                "AND memory_domain = memory_embeddings.memory_domain "
+                "AND compression_status != 'compressed')"
+            )
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
+                "AND NOT EXISTS (SELECT 1 FROM compressed_memories WHERE memory_id = memory_embeddings.memory_id "
+                "AND owner_id = memory_embeddings.owner_id AND workspace_id = memory_embeddings.workspace_id "
+                "AND memory_domain = memory_embeddings.memory_domain AND status = 'active' "
+                "AND hidden = 0 AND COALESCE(identity_layer, '') != 'founding')"
+            )
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE source_type = 'profile' "
+                "AND NOT EXISTS (SELECT 1 FROM profile_memories WHERE memory_id = memory_embeddings.memory_id "
+                "AND owner_id = memory_embeddings.owner_id AND workspace_id = memory_embeddings.workspace_id "
+                "AND memory_domain = memory_embeddings.memory_domain AND status = 'active')"
+            )
             conn.execute(
                 "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
                 "AND memory_id IN (SELECT memory_id FROM compressed_memories "
@@ -711,6 +734,64 @@ class SemanticMemoryIndex:
                         "OR OLD.workspace_id IS NOT NEW.workspace_id "
                         "OR OLD.memory_domain IS NOT NEW.memory_domain "
                         "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
+                        f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                        "AND memory_domain = OLD.memory_domain; END"
+                    )
+            lifecycle_specs = (
+                (
+                    "memory_embeddings_turn_status_delete",
+                    "turns",
+                    "turn_id",
+                    "turn",
+                    "compression_status",
+                    "NEW.compression_status = 'compressed'",
+                ),
+                (
+                    "memory_embeddings_compressed_status_delete",
+                    "compressed_memories",
+                    "memory_id",
+                    "compressed",
+                    "status, hidden, identity_layer",
+                    "NEW.status != 'active' OR NEW.hidden != 0 "
+                    "OR COALESCE(NEW.identity_layer, '') = 'founding'",
+                ),
+                (
+                    "memory_embeddings_profile_status_delete",
+                    "profile_memories",
+                    "memory_id",
+                    "profile",
+                    "status",
+                    "NEW.status != 'active'",
+                ),
+            )
+            for (
+                trigger_name,
+                table,
+                id_column,
+                source_type,
+                update_columns,
+                condition,
+            ) in lifecycle_specs:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+                if self._vec0_ready:
+                    conn.execute(
+                        f"CREATE TRIGGER {trigger_name} AFTER UPDATE OF {update_columns} ON {table} "
+                        f"WHEN {condition} BEGIN "
+                        f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ("
+                        "SELECT rowid FROM memory_embeddings WHERE source_type = "
+                        f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                        "AND memory_domain = OLD.memory_domain); "
+                        "DELETE FROM memory_embeddings WHERE source_type = "
+                        f"'{source_type}' AND memory_id = OLD.{id_column} "
+                        "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
+                        "AND memory_domain = OLD.memory_domain; END"
+                    )
+                else:
+                    conn.execute(
+                        f"CREATE TRIGGER {trigger_name} AFTER UPDATE OF {update_columns} ON {table} "
+                        f"WHEN {condition} BEGIN DELETE FROM memory_embeddings WHERE source_type = "
                         f"'{source_type}' AND memory_id = OLD.{id_column} "
                         "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
                         "AND memory_domain = OLD.memory_domain; END"

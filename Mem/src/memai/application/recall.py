@@ -217,6 +217,8 @@ _PREFERENCE_EVIDENCE_MARKERS = (
     "prefer",
     "favorite",
 )
+_CONSTRAINT_QUERY_MARKERS = ("不要", "请勿", "勿", "别再", "禁止")
+_CONSTRAINT_EVIDENCE_MARKERS = ("不要", "请勿", "勿", "禁止")
 _PREFERENCE_TOPIC_BRIDGES = (
     (
         ("语言", "代码", "编程", "language", "coding"),
@@ -266,6 +268,7 @@ _LATIN_STOP_WORDS = {
     "you",
 }
 _CJK_STOP_TERMS = {
+    "助手",
     "为什么",
     "怎么回事",
     "为何",
@@ -292,12 +295,15 @@ _CJK_STOP_TERMS = {
     "用户",
     "记得",
     "过去",
+    "多久",
+    "提议",
     "先前",
     "上次",
     "刚才",
     "刚刚",
     "方才",
     "这个",
+    "这件",
     "那个",
     "事情",
     "情况",
@@ -826,6 +832,10 @@ def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
         for segment in conceptual.split():
             if len(segment) <= 4:
                 add(segment, len(segment) + 8)
+            if len(segment) >= 4:
+                # Sliding windows favor longer fragments. Preserve the tail
+                # topic anchor without promoting generic leading context.
+                add(segment[-2:], 10)
             for size, base_weight in ((4, 8), (3, 6), (2, 4)):
                 if len(segment) < size:
                     continue
@@ -1728,6 +1738,7 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     )
     concept_matched = _concept_matches(plan, haystack)
     preference_query = _is_preference_query(plan)
+    constraint_query = _is_constraint_query(plan)
     scoring_exact = (
         [term for term in exact_matched if not _is_preference_relation_term(term)]
         if preference_query
@@ -1759,6 +1770,12 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     total_weight = len(cjk_query) + non_cjk_total
     matched_weight = cjk_coverage + concept_coverage + non_cjk_coverage
     coverage = matched_weight / max(total_weight, 1)
+    maximal_exact = _maximal_terms(scoring_exact)
+    multi_anchor_bonus = 0.0
+    if len(cjk_query) >= 24 and len(maximal_exact) >= 3:
+        # Verbose requests contain substantial framing text. Several distinct
+        # exact anchors are stronger evidence than their raw character ratio.
+        multi_anchor_bonus = min(0.18, 0.05 * len(maximal_exact))
     phrase_bonus = 0.0
     if (
         plan.normalized_query
@@ -1778,9 +1795,28 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     ):
         preference_bonus = 0.38
         matched.append("preference_signal")
-    if preference_query and preference_bonus <= 0 and not _preference_topic_bridge(plan, haystack):
+    if (
+        preference_query
+        and preference_bonus <= 0
+        and not _preference_topic_bridge(plan, haystack)
+    ):
         return 0.0, matched
-    return min(1.0, coverage + phrase_bonus + preference_bonus), matched
+    constraint_bonus = 0.0
+    if (
+        constraint_query
+        and any(marker in haystack for marker in _CONSTRAINT_EVIDENCE_MARKERS)
+        and (bool(scoring_exact) or bool(scoring_concepts))
+    ):
+        constraint_bonus = 0.38
+        matched.append("constraint_signal")
+    return min(
+        1.0,
+        coverage
+        + multi_anchor_bonus
+        + phrase_bonus
+        + preference_bonus
+        + constraint_bonus,
+    ), matched
 
 
 def _query_relevance_score(lexical: float, semantic: float) -> float:
@@ -1797,6 +1833,10 @@ def _query_relevance_score(lexical: float, semantic: float) -> float:
 
 def _is_preference_query(plan: RecallPlan) -> bool:
     return any(marker in plan.normalized_query for marker in _PREFERENCE_QUERY_MARKERS)
+
+
+def _is_constraint_query(plan: RecallPlan) -> bool:
+    return any(marker in plan.normalized_query for marker in _CONSTRAINT_QUERY_MARKERS)
 
 
 def _is_preference_relation_term(value: str) -> bool:

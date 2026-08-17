@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from email.parser import Parser
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ PACKAGE_DIRS = (
 TOP_LEVEL_MODULES = ("voidcube.py", "cli.py", "run_agent.py")
 MEM_SOURCE_ROOT = Path("Mem/src")
 MEM_PACKAGE = MEM_SOURCE_ROOT / "memai"
+MEM_FORBIDDEN_IMPORT_ROOTS = frozenset({"agent", "VoidCube_app", "systems"})
+RETIRED_MEMORY_PACKAGE_PREFIX = "systems/memory/"
 SUPERVISOR_UI_RESOURCE = Path("systems/supervisor/web/supervisor.html")
 PODMAN_CONTAINERFILE_RESOURCE = Path("tools/containerfiles/podman-agent.Containerfile")
 
@@ -131,6 +134,45 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
     return expected
 
 
+def mem_ownership_errors(root: Path = ROOT) -> list[str]:
+    """Return source violations of Mem's canonical runtime ownership."""
+    root = root.resolve()
+    errors: list[str] = []
+    retired_root = root / "systems" / "memory"
+    retired_sources = sorted(
+        path.relative_to(root).as_posix()
+        for path in retired_root.rglob("*.py")
+        if path.is_file()
+    )
+    if retired_sources:
+        errors.append(
+            "retired systems/memory contains Python sources: "
+            + ", ".join(retired_sources)
+        )
+
+    violations: list[str] = []
+    mem_root = root / MEM_PACKAGE
+    for source in sorted(mem_root.rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            imported_roots: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.append(node.module.split(".", 1)[0])
+            elif isinstance(node, ast.Import):
+                imported_roots.extend(
+                    alias.name.split(".", 1)[0] for alias in node.names
+                )
+            if MEM_FORBIDDEN_IMPORT_ROOTS.intersection(imported_roots):
+                violations.append(
+                    f"{source.relative_to(root).as_posix()}:{node.lineno}"
+                )
+    if violations:
+        errors.append(
+            "Mem runtime imports host-owned packages: " + ", ".join(violations)
+        )
+    return errors
+
+
 def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
     """Return source-to-wheel parity errors for packaged code and resources."""
     expected = expected_wheel_files(root)
@@ -158,6 +200,11 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 archive.read(name).decode("utf-8", errors="ignore")
             )
         )
+        retired_memory_files = sorted(
+            name
+            for name in packaged
+            if name.startswith(RETIRED_MEMORY_PACKAGE_PREFIX)
+        )
         metadata_files = [
             name for name in archive_names if name.endswith(".dist-info/METADATA")
         ]
@@ -167,7 +214,7 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 archive.read(metadata_files[0]).decode("utf-8", errors="replace")
             )
 
-    errors: list[str] = []
+    errors = mem_ownership_errors(root)
     unexpected = sorted(packaged - expected)
     missing = sorted(expected - packaged)
     if unexpected:
@@ -178,6 +225,11 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
         errors.append(
             "wheel contains project-retired integration markers: "
             + ", ".join(retired_files)
+        )
+    if retired_memory_files:
+        errors.append(
+            "wheel contains retired systems/memory entries: "
+            + ", ".join(retired_memory_files)
         )
     if len(metadata_files) != 1:
         errors.append(

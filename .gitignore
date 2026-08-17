@@ -172,6 +172,7 @@ compile_commands.json
 /tests/*
 !/tests/test_memory_session_rebinding.py
 !/tests/test_memory_resource_contract.py
+!/tests/test_packaging_contract.py
 /docs/*
 !/docs/memory-resource-contract.md
 .arts/
