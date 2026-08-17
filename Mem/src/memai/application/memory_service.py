@@ -713,6 +713,21 @@ class MemoryApplicationService:
     _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
+        """Run lifecycle maintenance in one commit-or-rollback transaction."""
+        conn = self._repository.connect()
+        try:
+            result = await self._apply_compression_lifecycle_in_transaction(conn)
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    async def _apply_compression_lifecycle_in_transaction(
+        self, conn: sqlite3.Connection
+    ) -> Dict[str, Any]:
         """Cascade compressed memories through compression levels.
 
         For each memory, if its age exceeds the threshold for its current level,
@@ -720,7 +735,6 @@ class MemoryApplicationService:
         (FinalSummary) entries are purged.
         """
         now = datetime.now(timezone.utc)
-        conn = self._repository.connect()
         escalated = 0
         purged = 0
         quality_rejected = 0
@@ -893,8 +907,6 @@ class MemoryApplicationService:
             "UPDATE compressed_memories SET created_at = compressed_at "
             "WHERE created_at IS NULL"
         )
-        conn.commit()
-        conn.close()
         if escalated or purged:
             logger.info(
                 "Compression lifecycle: %d escalated, %d purged", escalated, purged
@@ -1178,16 +1190,30 @@ class MemoryApplicationService:
             dict.fromkeys(str(item).strip() for item in source_domains.split(",") if item.strip())
         )
 
+    def _authorized_graph_domains(
+        self,
+        source_domains: str | None,
+        memory_actor: MemoryActor | str,
+    ) -> tuple[str, ...]:
+        if source_domains:
+            requested = tuple(
+                MemoryDomain(item)
+                for item in self._parse_graph_domains(source_domains)
+            )
+            return _authorized_read_domains(memory_actor, requested)
+        return _authorized_read_domains(memory_actor, None)
+
     async def list_graph_entities(
         self,
         limit: int = 50,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         source_domains: str | None = None,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
     ):
         from memai.indexes.entity_graph import list_graph_entities as _list_entities
 
-        domains = self._parse_graph_domains(source_domains)
+        domains = self._authorized_graph_domains(source_domains, memory_actor)
         conn = self._repository.connect()
         try:
             entities = _list_entities(
@@ -1208,10 +1234,11 @@ class MemoryApplicationService:
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
         source_domains: str | None = None,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
     ):
         from memai.indexes.entity_graph import list_graph_neighbors as _neighbors
 
-        domains = self._parse_graph_domains(source_domains)
+        domains = self._authorized_graph_domains(source_domains, memory_actor)
         conn = self._repository.connect()
         try:
             neighbors = _neighbors(
@@ -1231,12 +1258,33 @@ class MemoryApplicationService:
         owner_id: str | None = None,
         workspace_id: str | None = None,
         memory_domain: str | None = None,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
     ):
         from memai.indexes.entity_graph import rebuild_entity_graph as _rebuild
 
+        if (
+            owner_id is None
+            and workspace_id is None
+            and memory_actor != MemoryActor.MEMORY_MAINTENANCE
+        ):
+            owner_id = DEFAULT_OWNER_ID
+            workspace_id = DEFAULT_WORKSPACE_ID
+        if memory_domain is None:
+            authorized_domain = None
+            if memory_actor != MemoryActor.MEMORY_MAINTENANCE:
+                authorized_domain = _authorized_write_domain(
+                    memory_actor, DEFAULT_MEMORY_DOMAIN
+                )
+        else:
+            authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
         conn = self._repository.connect()
         try:
-            linked = _rebuild(conn, owner_id=owner_id, workspace_id=workspace_id, memory_domain=memory_domain)
+            linked = _rebuild(
+                conn,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_domain=authorized_domain,
+            )
             conn.commit()
         finally:
             conn.close()

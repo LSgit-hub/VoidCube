@@ -205,7 +205,10 @@ def search_memory_fts(
             (match_query, owner_id, workspace_id, GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID,
              *domains, max(1, min(int(limit), 4000))),
         ).fetchall())
-    if short_terms:
+    # Two-character CJK LIKE fallback is intentionally reserved for queries
+    # that have no longer anchors. Mixing it with long-term FTS matches turns
+    # generic fragments into broad candidates and suppresses graph expansion.
+    if short_terms and not eligible:
         short_clauses = " OR ".join("content LIKE ?" for _ in short_terms)
         rows.extend(conn.execute(
             "SELECT source_type, memory_id FROM memory_fts WHERE (" + short_clauses + ") "

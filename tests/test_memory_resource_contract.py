@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 from types import MethodType, SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from memai.application.config import MemoryServiceConfig
 from memai.repository.sqlite import open_memory_sqlite
 from memai.application.memory_service import (
     DayAggregateRequest,
+    DurableMemoryCreate,
     ForgetRequest,
     MemoryService,
     SessionCloseRequest,
@@ -20,6 +22,7 @@ from memai.application.memory_service import (
 from memai.repository.profile_store import upsert_profile_memory
 from memai.repository.profile_store import revoke_profile_predicates
 from memai.indexes.entity_graph import rebuild_entity_graph, update_entity_graph
+from memai.indexes.lexical_index import search_memory_fts
 from memai.application.recall import build_recall_plan, recall_memories
 from memai.domain.time_summary import day_bucket_for_timestamp, day_period
 
@@ -1157,6 +1160,106 @@ async def test_lifecycle_does_not_resurface_hidden_memories(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_rolls_back_when_entity_graph_rebuild_fails(
+    tmp_path, monkeypatch
+):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "topics, entities, compressed_at, compression_level, status, source_turns) "
+            "VALUES ('event-transactional', 'event', 'Release', "
+            "'Release completed with durable evidence.', ?, ?, ?, ?, ?, 0, 'active', '[]')",
+            (old, old, json.dumps(["release"]), json.dumps(["project"]), old),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def escalate(self, **kwargs):
+        return "Release scene", "Release completed with durable evidence."
+
+    def fail_rebuild(*args, **kwargs):
+        raise RuntimeError("entity graph unavailable")
+
+    monkeypatch.setattr(
+        service,
+        "_llm_escalate_summary",
+        MethodType(escalate, service),
+    )
+    monkeypatch.setattr(
+        "memai.indexes.entity_graph.rebuild_entity_graph",
+        fail_rebuild,
+    )
+
+    with pytest.raises(RuntimeError, match="entity graph unavailable"):
+        await service._apply_compression_lifecycle()
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        original = conn.execute(
+            "SELECT status, superseded_by FROM compressed_memories "
+            "WHERE memory_id = 'event-transactional'"
+        ).fetchone()
+        successor_count = conn.execute(
+            "SELECT COUNT(*) FROM compressed_memories "
+            "WHERE derived_from_id = 'event-transactional'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert original == ("active", None)
+    assert successor_count == 0
+
+
+def test_long_fts_anchor_does_not_mix_two_character_fallback(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    now = datetime.now(timezone.utc).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "topics, entities, source_turns, compressed_at, status) "
+            "VALUES (?, 'event', ?, ?, ?, ?, '[]', '[]', '[]', ?, 'active')",
+            (
+                (
+                    "fts-long-anchor",
+                    "记忆系统设计",
+                    "记忆系统设计方案与角色定义。",
+                    now,
+                    now,
+                    now,
+                ),
+                (
+                    "fts-short-only",
+                    "压缩策略",
+                    "记忆的压缩策略把事件凝练为弧线。",
+                    now,
+                    now,
+                    now,
+                ),
+            ),
+        )
+        conn.commit()
+
+        matches = search_memory_fts(
+            conn,
+            ("记忆系统", "记忆"),
+            owner_id="local-user",
+            workspace_id="default",
+            limit=20,
+        )
+    finally:
+        conn.close()
+
+    assert matches["compressed"] == ("fts-long-anchor",)
+
+
+@pytest.mark.asyncio
 async def test_hide_and_unhide_reconcile_entity_graph(tmp_path):
     service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
     now = datetime.now(timezone.utc).isoformat()
@@ -1211,3 +1314,40 @@ async def test_hide_and_unhide_reconcile_entity_graph(tmp_path):
         ).fetchone()
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_ports_enforce_domain_authorization(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    await service.remember(
+        DurableMemoryCreate(
+            title="Companion graph fact",
+            summary="Companion graph authorization marker.",
+            entities=["companion-private-entity"],
+            memory_actor="stellar_companion",
+            memory_domain="companion",
+        )
+    )
+
+    with pytest.raises(HTTPException) as list_denied:
+        await service.list_graph_entities(source_domains="companion")
+    assert list_denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as neighbors_denied:
+        await service.get_graph_neighbors(
+            "companion-private-entity",
+            source_domains="companion",
+        )
+    assert neighbors_denied.value.status_code == 403
+
+    with pytest.raises(HTTPException) as rebuild_denied:
+        await service.rebuild_entity_graph(memory_domain="companion")
+    assert rebuild_denied.value.status_code == 403
+
+    visible = await service.list_graph_entities(
+        source_domains="companion",
+        memory_actor="stellar_companion",
+    )
+    assert "companion-private-entity" in {
+        item["entity_id"] for item in visible["entities"]
+    }
