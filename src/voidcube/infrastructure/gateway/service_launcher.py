@@ -25,13 +25,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..config.runtime_paths import get_VoidCube_home
+
 logger = logging.getLogger(__name__)
 
 # ── Default ports ──────────────────────────────────────────────────────
 GATEWAY_PORT = 6000
 SUPERVISOR_PORT = 6002
-# PID file directory
-PID_DIR = Path.home() / ".VoidCube" / "run"
+# PID and service log directory follows the configured VoidCube home so
+# installed, isolated, and development runtimes do not share process state.
+PID_DIR = get_VoidCube_home() / "run"
 
 try:
     from ..config.environment import load_VoidCube_dotenv
@@ -251,6 +254,27 @@ def _process_is_service(pid: int, name: str) -> bool:
     return "voidcube" in command_line and any(marker in command_line for marker in markers)
 
 
+def _process_belongs_to_runtime(pid: int) -> bool:
+    """Return whether a service process was launched for this VoidCube home.
+
+    Service subprocesses embed their log path in the generated command line.
+    Using that path as the ownership marker prevents one checkout or isolated
+    test home from adopting or terminating another runtime's process.
+    """
+    try:
+        import psutil
+
+        command_line = os.path.normcase(" ".join(psutil.Process(pid).cmdline()))
+    except Exception:
+        return False
+    runtime_path = str(PID_DIR.resolve())
+    runtime_markers = {
+        os.path.normcase(runtime_path),
+        os.path.normcase(json.dumps(runtime_path)[1:-1]),
+    }
+    return any(marker in command_line for marker in runtime_markers)
+
+
 def _health_endpoint_is_service(port: int, name: str) -> bool:
     """Verify an occupied port from the service's own health identity."""
     try:
@@ -381,16 +405,33 @@ def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
     import sysconfig
 
     from ..config.system import get_config
-    from ...systems.mem_source_binding import sync_canonical_mem_binding
+    from ...systems.mem_source_binding import (
+        CanonicalMemBindingError,
+        sync_canonical_mem_binding,
+    )
     from ..runtime.layout import get_runtime_layout
 
     config = get_config()
     source_root = Path(config.supervisor.execution.git_repo_path).resolve()
-    result = sync_canonical_mem_binding(
-        source_root=source_root,
-        site_packages=sysconfig.get_paths()["purelib"],
-        audit_path=get_runtime_layout().memory_root / "mem-source-binding.json",
-    )
+    try:
+        result = sync_canonical_mem_binding(
+            source_root=source_root,
+            site_packages=sysconfig.get_paths()["purelib"],
+            audit_path=get_runtime_layout().memory_root / "mem-source-binding.json",
+        )
+    except CanonicalMemBindingError:
+        # Installed wheels use the packaged memai distribution.  Repository
+        # source binding is only available for a checkout with Mem/src.
+        from memai import model_config
+
+        installed_model_config = Path(model_config.__file__).resolve()
+        if installed_model_config.parent.name != "memai":
+            raise
+        return {
+            "source_path": str(installed_model_config.parent),
+            "pth_path": "",
+            "mode": "installed",
+        }
     return result.to_dict()
 
 
@@ -455,17 +496,25 @@ def _restart_foreground_with_service_python() -> None:
 def _verify_canonical_mem_import_source() -> Dict[str, str]:
     """Fail startup when Python resolves memai outside the shared source."""
     from ..config.system import get_config
-    from ...systems.mem_source_binding import validate_canonical_mem_source
+    from ...systems.mem_source_binding import (
+        CanonicalMemBindingError,
+        validate_canonical_mem_source,
+    )
 
     config = get_config()
-    source_path = validate_canonical_mem_source(
-        config.supervisor.execution.git_repo_path
-    )
-    expected = source_path / "memai" / "model_config.py"
-
     from memai import model_config
 
     actual = Path(model_config.__file__).resolve()
+    try:
+        source_path = validate_canonical_mem_source(
+            config.supervisor.execution.git_repo_path
+        )
+    except CanonicalMemBindingError:
+        if actual.parent.name != "memai":
+            raise
+        return {"expected": str(actual), "loaded": str(actual), "mode": "installed"}
+
+    expected = source_path / "memai" / "model_config.py"
     if actual != expected:
         raise RuntimeError(
             "memai import source does not match the canonical shared binding: "
@@ -504,15 +553,22 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
 
     # Check if already running (PID file)
     existing_pid = _read_pid(svc.pid_file)
-    if existing_pid and _pid_alive(existing_pid):
+    if (
+        existing_pid
+        and _pid_alive(existing_pid)
+        and _process_belongs_to_runtime(existing_pid)
+    ):
         _safe_print(f"  {svc.name:12s} already running (pid {existing_pid})")
         svc.pid = existing_pid
         return None
+    if existing_pid and _pid_alive(existing_pid):
+        _delete_pid(svc.pid_file)
+        existing_pid = None
 
     # Check if port is occupied by an unknown/stale process
     if _port_listening(svc.port) and not (existing_pid and _pid_alive(existing_pid)):
         owner_pid = _port_owner_pid(svc.port)
-        if owner_pid and (
+        if owner_pid and _process_belongs_to_runtime(owner_pid) and (
             _process_is_service(owner_pid, svc.name)
             or _health_endpoint_is_service(svc.port, svc.name)
         ):
@@ -603,6 +659,14 @@ def stop_service(name: str, silent: bool = False) -> bool:
             _safe_print(f"  {svc.name:12s} not running")
         _delete_pid(svc.pid_file)
         return True
+
+    if not _process_belongs_to_runtime(pid):
+        _delete_pid(svc.pid_file)
+        if not silent:
+            _safe_print(
+                f"  {svc.name:12s} belongs to another VoidCube home; left running"
+            )
+        return False
 
     try:
         if sys.platform == "win32":

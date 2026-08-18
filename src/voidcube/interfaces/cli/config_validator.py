@@ -14,6 +14,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import uuid
 from types import SimpleNamespace
 from typing import Any, Iterator, List, Optional
 from urllib.parse import urlparse
@@ -778,7 +779,7 @@ def _diagnose_terminal_probe() -> AgentCheck:
     from ...extensions.tools.model_tools import handle_function_call
     from ...infrastructure.execution.terminal_tool import cleanup_vm
 
-    task_id = "doctor-terminal-probe"
+    task_id = f"doctor-terminal-probe-{uuid.uuid4().hex}"
     try:
         payload = json.loads(
             handle_function_call(
@@ -827,8 +828,11 @@ def _diagnose_tool_call_smoke() -> AgentCheck:
     from ...extensions.tools.model_tools import handle_function_call
     from ...infrastructure.execution.terminal_tool import cleanup_vm
 
-    task_id = "doctor-tool-smoke"
     with tempfile.TemporaryDirectory(prefix="voidcube-doctor-") as tmpdir:
+        # Each diagnostic run gets a fresh journal identity.  Reusing a fixed
+        # task id would make successful write/patch probes look like duplicate
+        # side effects on the next ``doctor`` invocation.
+        task_id = f"doctor-tool-smoke-{Path(tmpdir).name}"
         env_updates = {
             "TERMINAL_ENV": "local",
             "TERMINAL_CWD": tmpdir,
