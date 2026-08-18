@@ -6,12 +6,8 @@ adds latency to the user-facing reply.
 
 import logging
 import threading
-from typing import Optional
-
-try:
-    from ..infrastructure.providers.auxiliary_client import call_llm
-except ImportError:
-    from src.voidcube.infrastructure.providers.auxiliary_client import call_llm
+from collections.abc import Callable
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +18,13 @@ _TITLE_PROMPT = (
 )
 
 
-def generate_title(user_message: str, assistant_response: str, timeout: float = 30.0) -> Optional[str]:
+def generate_title(
+    user_message: str,
+    assistant_response: str,
+    *,
+    llm_call: Callable[..., Any],
+    timeout: float = 30.0,
+) -> Optional[str]:
     """Generate a session title from the first exchange.
 
     Uses the auxiliary LLM client (cheapest/fastest available model).
@@ -38,7 +40,7 @@ def generate_title(user_message: str, assistant_response: str, timeout: float = 
     ]
 
     try:
-        response = call_llm(
+        response = llm_call(
             task="title_generation",
             messages=messages,
             max_tokens=30,
@@ -64,6 +66,8 @@ def auto_title_session(
     session_id: str,
     user_message: str,
     assistant_response: str,
+    *,
+    llm_call: Callable[..., Any],
 ) -> None:
     """Generate and set a session title if one doesn't already exist.
 
@@ -84,7 +88,11 @@ def auto_title_session(
     except Exception:
         return
 
-    title = generate_title(user_message, assistant_response)
+    title = generate_title(
+        user_message,
+        assistant_response,
+        llm_call=llm_call,
+    )
     if not title:
         return
 
@@ -101,6 +109,8 @@ def maybe_auto_title(
     user_message: str,
     assistant_response: str,
     conversation_history: list,
+    *,
+    llm_call: Callable[..., Any],
 ) -> None:
     """Fire-and-forget title generation after the first exchange.
 
@@ -122,6 +132,7 @@ def maybe_auto_title(
     thread = threading.Thread(
         target=auto_title_session,
         args=(session_db, session_id, user_message, assistant_response),
+        kwargs={"llm_call": llm_call},
         daemon=True,
         name="auto-title",
     )

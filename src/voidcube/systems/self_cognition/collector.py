@@ -28,12 +28,7 @@ _CONFIG_FILES = (
     ".python-version",
 )
 _SOURCE_ROOTS = (
-    "agent",
-    "systems",
-    "VoidCube_app",
-    "VoidCube_cli",
-    "VoidCube_core",
-    "tools",
+    "src/voidcube",
 )
 _MEMORY_ROOTS = ("Mem", "memai")
 _SKIP_PARTS = {
@@ -235,7 +230,7 @@ class SelfCognitionCollector:
             if not present:
                 gaps.add(f"health_failed:{name}")
 
-        path_metric("startup_entrypoint", "run_agent.py", "run_agent.py")
+        path_metric("startup_entrypoint", "src/voidcube/interfaces/cli/root_launcher.py", "src/voidcube/interfaces/cli/root_launcher.py")
         path_metric("configuration", "config.yaml", "config.yaml")
         path_metric("memory_runtime", "Mem", "Mem/")
         path_metric("test_suite", "tests", "tests/")

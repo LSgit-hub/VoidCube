@@ -2,7 +2,7 @@
 
 These operations are infrastructure concerns shared by repositories, config
 adapters, and plugins. Keeping them here prevents storage mechanics leaking
-into the legacy core utility module.
+into domain and application rules.
 """
 
 from __future__ import annotations

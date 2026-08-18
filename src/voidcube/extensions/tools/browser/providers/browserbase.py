@@ -155,7 +155,7 @@ class BrowserbaseProvider(CloudBrowserProvider):
 
         return {
             "session_name": session_name,
-            "bb_session_id": session_data["id"],
+            "session_id": session_data["id"],
             "cdp_url": session_data["connectUrl"],
             "features": features_enabled,
         }

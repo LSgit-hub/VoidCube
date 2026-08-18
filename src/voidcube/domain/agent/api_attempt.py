@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
-    from ...infrastructure.llm.response import ChatResponseInspection
+    from .response import ChatResponseInspection
 
 
 @dataclass(slots=True)

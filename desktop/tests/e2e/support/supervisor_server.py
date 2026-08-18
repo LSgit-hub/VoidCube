@@ -6,8 +6,8 @@ import argparse
 import asyncio
 from typing import Optional
 
-from systems.supervisor.config_models import SupervisorConfig
-from systems.supervisor.supervisor import Supervisor
+from voidcube.systems.supervisor.config_models import SupervisorConfig
+from voidcube.systems.supervisor.supervisor import Supervisor
 
 
 class PlaywrightSupervisor(Supervisor):

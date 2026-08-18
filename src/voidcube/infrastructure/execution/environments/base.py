@@ -657,10 +657,6 @@ class BaseEnvironment(ABC):
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def stop(self):
-        """Alias for cleanup (compat with older callers)."""
-        self.cleanup()
-
     def __del__(self):
         try:
             self.cleanup()

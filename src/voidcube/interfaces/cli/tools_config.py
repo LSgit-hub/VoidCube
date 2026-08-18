@@ -19,6 +19,7 @@ from ...infrastructure.config.configuration import (
     load_config, save_config, get_env_value, save_env_value,
 )
 from .colors import Colors, color
+from ...extensions.tools import configuration as _tool_configuration
 from ...extensions.tools.backend_helpers import managed_nous_tools_enabled
 
 
@@ -46,55 +47,18 @@ from .cli_output import (  # noqa: E402 — late import block
 
 # ─── Toolset Registry ─────────────────────────────────────────────────────────
 
-# Toolsets shown in the configurator, grouped for display.
-# Each entry: (toolset_name, label, description)
-# These map to keys in toolsets.py TOOLSETS dict.
-CONFIGURABLE_TOOLSETS = [
-    ("terminal",        "💻 终端执行",      "执行Shell命令、进程管理"),
-    ("file",            "📁 文件操作",      "读写文件、搜索、补丁"),
-    ("web",             "🔍 Web搜索",       "网络搜索、网页抓取"),
-    ("playback",        "▶ 媒体播放",      "在 VoidCube Web UI 播放 B 站和直链音视频"),
-    ("browser",         "🌐 浏览器自动化",  "网页导航、截图、点击、输入"),
-    ("code_execution",  "🔧 代码执行",      "Python/Shell代码执行"),
-]
-
+CONFIGURABLE_TOOLSETS = list(_tool_configuration.CONFIGURABLE_TOOLSETS)
+PLATFORMS = dict(_tool_configuration.PLATFORMS)
+_get_effective_configurable_toolsets = _tool_configuration.get_effective_configurable_toolsets
+_get_plugin_toolset_keys = _tool_configuration.get_plugin_toolset_keys
+_get_enabled_platforms = _tool_configuration.get_enabled_platforms
+_platform_toolset_summary = _tool_configuration.platform_toolset_summary
+_parse_enabled_flag = _tool_configuration.parse_enabled_flag
+_get_platform_tools = _tool_configuration.get_platform_tools
+_save_platform_tools = _tool_configuration.save_platform_tools
+_apply_toolset_change = _tool_configuration.apply_toolset_change
+_apply_mcp_change = _tool_configuration.apply_mcp_change
 _DEFAULT_OFF_TOOLSETS: set = set()
-
-
-def _get_effective_configurable_toolsets():
-    """Return CONFIGURABLE_TOOLSETS + any plugin-provided toolsets.
-
-    Plugin toolsets are appended at the end so they appear after the
-    built-in toolsets in the TUI checklist.
-    """
-    result = list(CONFIGURABLE_TOOLSETS)
-    try:
-        from ...extensions.plugins.cli_adapter import discover_plugins, get_plugin_toolsets
-        discover_plugins()  # idempotent — ensures plugins are loaded
-        result.extend(get_plugin_toolsets())
-    except Exception:
-        pass
-    return result
-
-
-def _get_plugin_toolset_keys() -> set:
-    """Return the set of toolset keys provided by plugins."""
-    try:
-        from ...extensions.plugins.cli_adapter import discover_plugins, get_plugin_toolsets
-        discover_plugins()  # idempotent — ensures plugins are loaded
-        return {ts_key for ts_key, _, _ in get_plugin_toolsets()}
-    except Exception:
-        return set()
-
-# Platform display config — derived from the canonical registry so every
-# module shares the same data.  Kept as dict-of-dicts for backward
-# compatibility with existing ``PLATFORMS[key]["label"]`` access patterns.
-from .platforms import PLATFORMS as _PLATFORMS_REGISTRY
-
-PLATFORMS = {
-    k: {"label": info.label, "default_toolset": info.default_toolset}
-    for k, info in _PLATFORMS_REGISTRY.items()
-}
 
 
 # ─── Tool Categories (provider-aware configuration) ──────────────────────────
@@ -389,10 +353,7 @@ def _toolset_has_keys(ts_key: str, config: dict = None) -> bool:
 
     if ts_key == "vision":
         try:
-            try:
-                from voidcube.infrastructure.providers.auxiliary_client import resolve_vision_provider_client
-            except ModuleNotFoundError:
-                from src.voidcube.infrastructure.providers.auxiliary_client import resolve_vision_provider_client
+            from voidcube.infrastructure.providers.auxiliary_client import resolve_vision_provider_client
 
             _provider, client, _model = resolve_vision_provider_client()
             return client is not None
@@ -446,7 +407,7 @@ def _estimate_tool_tokens() -> Dict[str, int]:
     try:
         from voidcube.extensions.tools.token_estimation import estimate_tool_tokens
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.token_estimation import estimate_tool_tokens
+        from voidcube.extensions.tools.token_estimation import estimate_tool_tokens
     return estimate_tool_tokens()
 
 
@@ -519,7 +480,7 @@ def _visible_providers(cat: dict, config: dict) -> list[dict]:
     try:
         from voidcube.extensions.tools.provider_configuration import visible_providers
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.provider_configuration import visible_providers
+        from voidcube.extensions.tools.provider_configuration import visible_providers
     return visible_providers(
         cat,
         features=get_nous_subscription_features(config),
@@ -532,7 +493,7 @@ def _toolset_needs_configuration_prompt(ts_key: str, config: dict) -> bool:
     try:
         from voidcube.extensions.tools.provider_configuration import needs_configuration_prompt
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.provider_configuration import needs_configuration_prompt
+        from voidcube.extensions.tools.provider_configuration import needs_configuration_prompt
     return needs_configuration_prompt(
         ts_key,
         config,
@@ -613,7 +574,7 @@ def _is_provider_active(provider: dict, config: dict) -> bool:
     try:
         from voidcube.extensions.tools.provider_configuration import is_provider_active
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.provider_configuration import is_provider_active
+        from voidcube.extensions.tools.provider_configuration import is_provider_active
     return is_provider_active(
         provider,
         config,
@@ -626,7 +587,7 @@ def _detect_active_provider_index(providers: list, config: dict) -> int:
     try:
         from voidcube.extensions.tools.provider_configuration import detect_active_provider_index
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.provider_configuration import detect_active_provider_index
+        from voidcube.extensions.tools.provider_configuration import detect_active_provider_index
     return detect_active_provider_index(
         providers,
         config,
@@ -1176,7 +1137,7 @@ def _configure_mcp_tools_interactive(config: dict):
     try:
         from voidcube.interfaces.cli.tools_mcp import configure_mcp_tools
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.interfaces.cli.tools_mcp import configure_mcp_tools
+        from voidcube.interfaces.cli.tools_mcp import configure_mcp_tools
     try:
             from ...extensions.tools.mcp.mcp_tool import probe_mcp_server_tools
     except ImportError:
@@ -1199,41 +1160,6 @@ def _configure_mcp_tools_interactive(config: dict):
 
 
 # ─── Non-interactive disable/enable ──────────────────────────────────────────
-
-
-def _apply_toolset_change(config: dict, platform: str, toolset_names: List[str], action: str):
-    """Add or remove built-in toolsets for a platform."""
-    return _tool_configuration.apply_toolset_change(config, platform, toolset_names, action)
-
-
-def _apply_mcp_change(config: dict, targets: List[str], action: str) -> Set[str]:
-    """Add or remove specific MCP tools from a server's exclude list.
-
-    Returns the set of server names that were not found in config.
-    """
-    return _tool_configuration.apply_mcp_change(config, targets, action)
-
-
-# Platform/toolset policy is frontend-independent and now lives in the
-# canonical extensions package.  Keep the names below as compatibility
-# exports because the interactive wizard and external integrations still
-# import them from this module.
-try:
-    from voidcube.extensions.tools import configuration as _tool_configuration
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.extensions.tools import configuration as _tool_configuration
-
-CONFIGURABLE_TOOLSETS = list(_tool_configuration.CONFIGURABLE_TOOLSETS)
-PLATFORMS = dict(_tool_configuration.PLATFORMS)
-_get_effective_configurable_toolsets = _tool_configuration.get_effective_configurable_toolsets
-_get_plugin_toolset_keys = _tool_configuration.get_plugin_toolset_keys
-_get_enabled_platforms = _tool_configuration.get_enabled_platforms
-_platform_toolset_summary = _tool_configuration.platform_toolset_summary
-_parse_enabled_flag = _tool_configuration.parse_enabled_flag
-_get_platform_tools = _tool_configuration.get_platform_tools
-_save_platform_tools = _tool_configuration.save_platform_tools
-_apply_toolset_change = _tool_configuration.apply_toolset_change
-_apply_mcp_change = _tool_configuration.apply_mcp_change
 
 
 def _print_tools_list(enabled_toolsets: set, mcp_servers: dict, platform: str = "cli"):

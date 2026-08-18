@@ -171,7 +171,7 @@ def main(
     # Single-query (-q), list commands, and other short-lived operations
     # skip the daemon lifecycle to keep startup fast.
     #
-    # When VOIDCUBE_DAEMONS_STARTED=1 (set by voidcube.py), daemons were
+    # When VOIDCUBE_DAEMONS_STARTED=1 (set by the canonical root launcher), daemons were
     # already started by the wrapper — skip the start but still register
     # cleanup so /quit and atexit can stop them. The desktop shell owns its
     # service processes independently, so its embedded CLI neither starts
@@ -191,7 +191,7 @@ def main(
         atexit.register(clear_execution_context, os.getpid())
     if is_interactive and not desktop_manages_services:
         if daemons_already_started:
-            # Daemons were started by voidcube.py — we still own cleanup
+            # Daemons were started by the canonical root launcher; we still own cleanup.
             _daemon_runtime.mark_daemons_auto_started()
             atexit.register(_maybe_stop_daemons_on_exit)
         else:

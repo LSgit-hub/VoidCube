@@ -307,7 +307,7 @@ from .interaction_adapter import (
 from .tool_event_adapter import project_tool_event as _project_tool_event_view
 
 if TYPE_CHECKING:
-    from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
+    from voidcube.runtime.agent.runner import AIAgent  # noqa: F401 — only for static type-checkers
 
 from .autonomous.events import (
     AutonomousPanelEventPorts,
@@ -371,7 +371,7 @@ except (ImportError, AttributeError):
 import threading
 import queue
 
-# Lazy import for agent.usage_pricing — defers ~180ms (openai + usage_pricing import chain)
+# Lazy import for usage pricing — defers the provider pricing import chain.
 _format_duration_compact = None
 
 def _lazy_import_usage_pricing():
@@ -409,7 +409,7 @@ _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧
 
 
 class ChatConsole(_BaseChatConsole):
-    """Compatibility export bound to this module's patchable emitter."""
+    """CLI-bound chat console using the application's patchable emitter."""
 
     def __init__(self):
         super().__init__(emit=_cprint)
@@ -569,7 +569,7 @@ def _init_cli_runtime():
         pass
     # Initialize tool preview length from config
     try:
-        from .display import set_tool_preview_max_len
+        from ...runtime.agent.display import set_tool_preview_max_len
         _tpl = cfg.get("display", {}).get("tool_preview_length", 0)
         set_tool_preview_max_len(int(_tpl) if _tpl else 0)
     except Exception:
@@ -593,10 +593,7 @@ def _ensure_async_httpx_neutered():
         return
     _neutered_async_httpx = True
     try:
-        try:
-            from voidcube.infrastructure.providers.auxiliary_client import neuter_async_httpx_del
-        except ModuleNotFoundError:
-            from src.voidcube.infrastructure.providers.auxiliary_client import neuter_async_httpx_del
+        from voidcube.infrastructure.providers.auxiliary_client import neuter_async_httpx_del
         neuter_async_httpx_del()
     except Exception:
         pass
@@ -609,9 +606,8 @@ from rich.panel import Panel
 from .banner import build_welcome_banner
 
 # =============================================================================
-# Lazy import helpers — defer heavy imports (run_agent, tools.*, agent.*) until
-# first use. This shaves ~500ms off CLI startup time (the import cascade
-# run_agent → tools.model_tools → all tool modules is the dominant cost).
+# Lazy import helpers defer the agent runtime and tool registry until first use.
+# This avoids loading the full tool module graph during CLI startup.
 # =============================================================================
 
 _AIAgent_class = None
@@ -635,7 +631,7 @@ def _get_AIAgent():
     global _AIAgent_class
     if _AIAgent_class is None:
         _ensure_async_httpx_neutered()
-        from run_agent import AIAgent as _AIAgent
+        from voidcube.runtime.agent.runner import AIAgent as _AIAgent
         _AIAgent_class = _AIAgent
     return _AIAgent_class
 
@@ -682,10 +678,7 @@ def _get_cleanup_all_terminals():
 def _get_cleanup_all_browsers():
     global _cleanup_all_browsers_fn
     if _cleanup_all_browsers_fn is None:
-        try:
-            from ...extensions.tools.browser.browser_tool import _emergency_cleanup_all_sessions as _fn
-        except ModuleNotFoundError:
-            from src.voidcube.extensions.tools.browser.browser_tool import _emergency_cleanup_all_sessions as _fn
+        from voidcube.extensions.tools.browser.browser_tool import _emergency_cleanup_all_sessions as _fn
         _cleanup_all_browsers_fn = _fn
     return _cleanup_all_browsers_fn()
 
@@ -750,10 +743,7 @@ def _run_cleanup():
     # AsyncHttpxClientWrapper.__del__ doesn't fire on a closed event loop
     # and trigger prompt_toolkit's "Press ENTER to continue..." handler.
     try:
-        try:
-            from voidcube.infrastructure.providers.auxiliary_client import shutdown_cached_clients
-        except ModuleNotFoundError:
-            from src.voidcube.infrastructure.providers.auxiliary_client import shutdown_cached_clients
+        from voidcube.infrastructure.providers.auxiliary_client import shutdown_cached_clients
         shutdown_cached_clients()
     except Exception:
         pass
@@ -802,7 +792,7 @@ VOIDCUBE_HERO = ""
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
 
-# Lazy import for skill commands — defers tools.skills_tool → VoidCube_app.config
+# Lazy import for skill commands to keep CLI startup lightweight.
 # (~62ms import chain) until first skill command is processed.
 _skill_commands_cache = None
 _skill_cmd_imports = None
@@ -812,18 +802,11 @@ def _get_skill_commands():
     """Lazy-load and cache the skill commands dictionary."""
     global _skill_commands_cache, _skill_cmd_imports
     if _skill_commands_cache is None:
-        try:
-            from voidcube.extensions.skills.commands import (
-                scan_skill_commands as _sc,
-                build_skill_invocation_message as _bi,
-                build_preloaded_skills_prompt as _bl,
-            )
-        except ModuleNotFoundError:
-            from src.voidcube.extensions.skills.commands import (
-                scan_skill_commands as _sc,
-                build_skill_invocation_message as _bi,
-                build_preloaded_skills_prompt as _bl,
-            )
+        from voidcube.extensions.skills.commands import (
+            scan_skill_commands as _sc,
+            build_skill_invocation_message as _bi,
+            build_preloaded_skills_prompt as _bl,
+        )
         _skill_cmd_imports = (_bi, _bl)
         _skill_commands_cache = _sc()
     return _skill_commands_cache
@@ -1214,12 +1197,7 @@ class VoidcubeCLI:
         self._provider_data_collection = pr.get("data_collection")
         
         # Fallback provider chain — tried in order when primary fails after retries.
-        # Supports new list format (fallback_providers) and legacy single-dict (fallback_model).
-        fb = CLI_CONFIG.get("fallback_providers") or CLI_CONFIG.get("fallback_model") or []
-        # Normalize legacy single-dict to a one-element list
-        if isinstance(fb, dict):
-            fb = [fb] if fb.get("provider") and fb.get("model") else []
-        self._fallback_model = fb
+        self._fallback_providers = CLI_CONFIG.get("fallback_providers") or []
 
         # Optional cheap-vs-strong routing for simple turns
         self._smart_model_routing = CLI_CONFIG.get("smart_model_routing", {}) or {}
@@ -1448,6 +1426,18 @@ class VoidcubeCLI:
 
     def _create_scheduled_executor_runtime(self) -> ScheduledTaskExecutorRuntime:
         """Assemble scheduled execution from explicit CLI-owned state ports."""
+        from ...infrastructure.config.scheduled import scheduled_timeout_seconds
+        from ...infrastructure.gateway.scheduled_tasks import SupervisorScheduledTaskClient
+        from ...infrastructure.llm.scheduled_errors import scheduled_rate_limit_metadata
+        from ...infrastructure.persistence.scheduled_writeback import (
+            SqliteScheduledWritebackOutbox,
+        )
+        from ...infrastructure.runtime.layout import get_runtime_layout
+
+        gateway_client = SupervisorScheduledTaskClient()
+        outbox = SqliteScheduledWritebackOutbox(
+            get_runtime_layout().runtime_root / "cli" / "scheduled_writebacks.db"
+        )
         return ScheduledTaskExecutorRuntime(
             ScheduledTaskExecutorPorts(
                 autonomous_mode_active=lambda: bool(
@@ -1467,7 +1457,16 @@ class VoidcubeCLI:
                     task_id, reason
                 ),
                 start_background_task=self._start_scheduled_execution_task,
-            )
+                post_supervisor=gateway_client.post,
+                rate_limit_metadata=scheduled_rate_limit_metadata,
+                writeback_outbox=outbox,
+            ),
+            request_timeout_seconds=scheduled_timeout_seconds(
+                "VOIDCUBE_SCHEDULED_REQUEST_TIMEOUT_SECONDS", default=120.0
+            ),
+            execution_timeout_seconds=scheduled_timeout_seconds(
+                "VOIDCUBE_SCHEDULED_EXECUTION_TIMEOUT_SECONDS", default=600.0
+            ),
         )
 
     def _should_emit_scrollback_output(self) -> bool:
@@ -2479,7 +2478,7 @@ class VoidcubeCLI:
                         self._clarification_sink
                     ),
                     reasoning_callback=self._current_reasoning_callback(),
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                     thinking_callback=self._on_thinking,
                     checkpoints_enabled=self.checkpoints_enabled,
                     checkpoint_max_snapshots=self.checkpoint_max_snapshots,
@@ -3117,10 +3116,10 @@ class VoidcubeCLI:
                 session_db=None if minimal_scheduled_host else self._session_db,
                 clarification_sink=None,
                 reasoning_callback=None,
-                fallback_model=(
+                fallback_providers=(
                     None
                     if turn_route.get("worker_provider_explicit")
-                    else self._fallback_model
+                    else self._fallback_providers
                 ),
                 thinking_callback=None,
                 checkpoints_enabled=False,
@@ -3266,7 +3265,7 @@ class VoidcubeCLI:
                 session_db=None,
                 clarification_sink=None,
                 reasoning_callback=None,
-                fallback_model=self._fallback_model,
+                fallback_providers=self._fallback_providers,
                 thinking_callback=None,
                 checkpoints_enabled=False,
                 checkpoint_max_snapshots=0,
@@ -3355,7 +3354,10 @@ class VoidcubeCLI:
         else:
             logging.getLogger().setLevel(logging.INFO)
             for quiet_logger in (
-                "tools", "run_agent", "trajectory_compressor", "VoidCube_cli",
+                "voidcube.extensions.tools",
+                "voidcube.runtime.agent",
+                "trajectory_compressor",
+                "voidcube.interfaces.cli",
             ):
                 logging.getLogger(quiet_logger).setLevel(logging.ERROR)
 
@@ -3452,7 +3454,7 @@ class VoidcubeCLI:
             self._stream_render_state.response_box_open = False
         self._close_reasoning_box()
 
-        from .display import get_tool_emoji
+        from ...runtime.agent.display import get_tool_emoji
         emoji = get_tool_emoji(tool_name, default="🔧")
         _cprint(f"  ┊ {emoji} preparing {tool_name}…")
 
@@ -3790,7 +3792,7 @@ class VoidcubeCLI:
                     session_db=owner._session_db,
                     clarification_sink=None,
                     reasoning_callback=None,
-                    fallback_model=self._fallback_model,
+                    fallback_providers=self._fallback_providers,
                     thinking_callback=lambda text: setattr(
                         owner,
                         "_spinner_text",
@@ -3953,10 +3955,7 @@ class VoidcubeCLI:
 
             def cleanup_async_clients() -> None:
                 try:
-                    try:
-                        from voidcube.infrastructure.providers.auxiliary_client import cleanup_stale_async_clients
-                    except ModuleNotFoundError:
-                        from src.voidcube.infrastructure.providers.auxiliary_client import cleanup_stale_async_clients
+                    from voidcube.infrastructure.providers.auxiliary_client import cleanup_stale_async_clients
 
                     cleanup_stale_async_clients()
                 except Exception:
@@ -4737,9 +4736,7 @@ def main(
     version: bool = False,
     serve: Optional[str] = None,
 ):
-    """Compatibility facade for the canonical launcher."""
-    # ``VoidCube_cli.launcher`` remains a compatibility import for callers of
-    # the historical package; the implementation lives beside this module.
+    """Run the canonical launcher when this application module is executed directly."""
     from .launcher import main as _launcher_main
 
     return _launcher_main(

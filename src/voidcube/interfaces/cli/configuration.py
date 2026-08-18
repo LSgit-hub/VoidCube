@@ -767,14 +767,9 @@ def get_provider_models_from_api(
         return []
 
 
-# The non-interactive Provider/configuration service now lives in the
-# canonical infrastructure package.  Keep these names exported here for
-# existing extensions and third-party integrations while the CLI wizard is
-# migrated independently.
-try:
-    from voidcube.infrastructure.config import provider_config as _provider_config
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.config import provider_config as _provider_config
+# The non-interactive Provider/configuration service lives in infrastructure;
+# this module only exposes the CLI wizard adapter.
+from voidcube.infrastructure.config import provider_config as _provider_config
 
 load_current_config = _provider_config.load_current_config
 save_env_value = _provider_config.save_env_value
@@ -783,9 +778,6 @@ save_provider_pool_entry = _provider_config.save_provider_pool_entry
 persist_provider_pool_entry = _provider_config.persist_provider_pool_entry
 provider_model_catalog = _provider_config.provider_model_catalog
 provider_pool_api_key = _provider_config.provider_pool_api_key
-# Keep this compatibility function local for one release so tests and plugins
-# that monkeypatch ``VoidCube_cli.api_config.get_provider_models_from_api``
-# continue to affect the wizard refresh path.
 persist_api_a_selection = _provider_config.persist_api_a_selection
 persist_api_b_config = _provider_config.persist_api_b_config
 has_configured_api_key = _provider_config.has_configured_api_key

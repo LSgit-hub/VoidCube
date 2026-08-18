@@ -11,10 +11,7 @@ from typing import Any, Iterable
 
 import httpx
 
-try:
-    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from voidcube.runtime.agent.tool_execution import ToolExecutionResult
 from ....domain.contracts.artifacts import Artifact
 from ....infrastructure.providers.media_generation import (
     AGNES_IMAGE_MODEL,

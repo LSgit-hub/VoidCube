@@ -15,7 +15,7 @@ class PlatformInfo(NamedTuple):
 
 
 PLATFORMS: OrderedDict[str, PlatformInfo] = OrderedDict([
-    ("cli", PlatformInfo(label="🖥️  CLI终端", default_toolset="VoidCube-cli")),
+    ("cli", PlatformInfo(label="🖥️  CLI终端", default_toolset="voidcube")),
 ])
 
 

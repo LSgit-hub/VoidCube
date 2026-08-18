@@ -1,14 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { findProjectRoot, normalizeMonitorUrl, resolveRuntimePaths } from '../src/main/runtime-locator'
 
 describe('runtime locator', () => {
-  it('finds the first directory with both launcher and project metadata', () => {
+  it('finds the first directory with canonical source and project metadata', () => {
     const root = mkdtempSync(join(tmpdir(), 'voidcube-desktop-'))
     try {
-      writeFileSync(join(root, 'voidcube.py'), '')
+      mkdirSync(join(root, 'src', 'voidcube'), { recursive: true })
       writeFileSync(join(root, 'pyproject.toml'), '')
       expect(findProjectRoot([join(root, 'missing'), root])).toBe(root)
     } finally {
@@ -27,7 +27,7 @@ describe('runtime locator', () => {
       platform: 'win32'
     })
     expect(runtime.pythonCommand).toBe('C:\\Python314\\python.exe')
-    expect(runtime.cliArgs).toEqual(['-m', 'voidcube'])
+    expect(runtime.cliArgs).toEqual(['-m', 'voidcube.interfaces.cli.main'])
   })
 })
 

@@ -375,7 +375,7 @@ DEFAULT_CONFIG = {
         "poll_interval_seconds": 3,
         "timeout_seconds": 600,
     },
-    "toolsets": ["VoidCube-cli"],
+    "toolsets": ["voidcube"],
     "agent": {
         "max_turns": 90,
         # Inactivity timeout for gateway agent execution (seconds).
@@ -1302,7 +1302,7 @@ def check_config_version() -> Tuple[int, int]:
 
 # Fields that are valid at root level of config.yaml
 _KNOWN_ROOT_KEYS = {
-    "_config_version", "model", "runtime", "providers", "fallback_model",
+    "_config_version", "model", "runtime", "providers",
     "fallback_providers", "credential_pool_strategies", "companion_workers", "image_generation",
     "video_generation", "toolsets",
     "agent", "terminal", "display", "clarify", "compression", "delegation",
@@ -1337,32 +1337,6 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
             return [ConfigWarning("error", "Could not load config.yaml", "Run '/api' to create a valid config")]
 
     issues: List[ConfigWarning] = []
-
-    # ── fallback_model must be a top-level dict with provider + model ────
-    fb = config.get("fallback_model")
-    if fb is not None:
-        if not isinstance(fb, dict):
-            issues.append(ConfigWarning(
-                "error",
-                f"fallback_model should be a dict with 'provider' and 'model', got {type(fb).__name__}",
-                "Change to:\n"
-                "  fallback_model:\n"
-                "    provider: openrouter\n"
-                "    model: <provider-model-id>",
-            ))
-        elif fb:
-            if not fb.get("provider"):
-                issues.append(ConfigWarning(
-                    "warning",
-                    "fallback_model is missing 'provider' field — fallback will be disabled",
-                    "Add: provider: openrouter (or another provider)",
-                ))
-            if not fb.get("model"):
-                issues.append(ConfigWarning(
-                    "warning",
-                    "fallback_model is missing 'model' field — fallback will be disabled",
-                    "Add the exact model ID returned by the provider API",
-                ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
     for key in config:
@@ -2294,7 +2268,7 @@ _SECURITY_COMMENT = """
 """
 
 _FALLBACK_COMMENT = """
-# ── Fallback Model ────────────────────────────────────────────────────
+# ── Fallback Providers ───────────────────────────────────────────────
 # Automatic provider failover when primary is unavailable.
 # Uncomment and configure to enable. Triggers on rate limits (429),
 # overload (529), service errors (503), or connection failures.
@@ -2309,9 +2283,9 @@ _FALLBACK_COMMENT = """
 #
 # For custom OpenAI-compatible endpoints, add base_url and api_key_env.
 #
-# fallback_model:
-#   provider: openrouter
-#   model: <provider-model-id>
+# fallback_providers:
+#   - provider: openrouter
+#     model: <provider-model-id>
 #
 # ── Smart Model Routing ────────────────────────────────────────────────
 # Optional cheap-vs-strong routing for simple turns.
@@ -2336,7 +2310,7 @@ _COMMENTED_SECTIONS = """
 # security:
 #   redact_secrets: false
 
-# ── Fallback Model ────────────────────────────────────────────────────
+# ── Fallback Providers ───────────────────────────────────────────────
 # Automatic provider failover when primary is unavailable.
 # Uncomment and configure to enable. Triggers on rate limits (429),
 # overload (529), service errors (503), or connection failures.
@@ -2351,9 +2325,9 @@ _COMMENTED_SECTIONS = """
 #
 # For custom OpenAI-compatible endpoints, add base_url and api_key_env.
 #
-# fallback_model:
-#   provider: openrouter
-#   model: <provider-model-id>
+# fallback_providers:
+#   - provider: openrouter
+#     model: <provider-model-id>
 #
 # ── Smart Model Routing ────────────────────────────────────────────────
 # Optional cheap-vs-strong routing for simple turns.
@@ -2397,8 +2371,8 @@ def save_config(config: Dict[str, Any], *, preserve_structure: bool = False):
     sec = normalized.get("security", {})
     if not sec or sec.get("redact_secrets") is None:
         parts.append(_SECURITY_COMMENT)
-    fb = normalized.get("fallback_model", {})
-    if not fb or not (fb.get("provider") and fb.get("model")):
+    fb = normalized.get("fallback_providers", [])
+    if not isinstance(fb, list) or not fb:
         parts.append(_FALLBACK_COMMENT)
 
     atomic_yaml_write(

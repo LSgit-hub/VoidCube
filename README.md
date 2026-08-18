@@ -23,25 +23,25 @@ Memory Service 使用单一存储和统一备份，但所有读写都带有 `own
 
 ```text
 VoidCube/
-├─ src/voidcube/         规范包：interfaces、infrastructure、extensions（新代码主路径）
-│  ├─ interfaces/cli/    CLI launcher、application host 和配置交互边界
-│  ├─ infrastructure/    Provider、配置、持久化、网络和运行时适配器
-│  └─ extensions/        plugin、skill、tool manifest/registry
-├─ agent/                 API-A Agent、上下文、工具回合和记忆接入
-├─ tools/                 工具注册、安全、审批和执行后端
-├─ systems/gateway/       服务发现、路由、活动与任务泳道
+├─ src/voidcube/         唯一运行时包：domain、application、runtime、interfaces、systems、extensions
+│  ├─ domain/             Agent/session/execution 领域模型与稳定 contracts
+│  ├─ application/        对话、会话、调度和自治用例编排
+│  ├─ runtime/agent/      API-A Agent runner、client/session bootstrap、回合运行时和执行期展示
+│  ├─ interfaces/cli/     CLI launcher、application host 和配置交互边界
+│  ├─ infrastructure/     Provider、配置、持久化、网络和执行适配器
+│  ├─ systems/            Supervisor、evolution、research 和 voice 产品系统
+│  └─ extensions/         plugin、skill、tool manifest/registry
 ├─ Mem/src/memai/         持久化记忆领域、应用、仓储、索引和可选 HTTP 服务
-├─ systems/supervisor/    日常伴侣、Auto 驱动、治理投影和 UI
-├─ systems/voice/         录音、声纹、STT/TTS 和可中断会话
-├─ systems/execution/     Execution Facade、Adapter 与身体执行
 ├─ plugins/memory/mem/    Agent 侧 Mem 插件注册、配置和协议适配
 ├─ tests/                 本地测试（不随远程仓库分发）
 └─ docs/                  本地架构与开发文档（不随远程仓库分发）
 ```
 
-`VoidCube_app/`、`VoidCube_cli/` 和 `VoidCube_core/` 目前只承担迁移期兼容入口；新增实现应按职责进入 `src/voidcube/`，而不是继续扩大这些历史目录。
+运行时只从 `voidcube` 规范包加载；`VoidCube_app`、`VoidCube_cli`、`VoidCube_core`、顶层 `agent`、`tools` 和历史 `systems` 包不再属于发行版，也不提供兼容入口。`AIAgent` runner 唯一实现位于 `src/voidcube/runtime/agent/runner.py`。
 
 目录职责、依赖方向和分阶段迁移方案见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+架构边界和 wheel 契约可在本地用 `scripts/python_architecture.py`、`tests/test_packaging_contract.py` 和 `scripts/build_wheel.py` 复现；同一组检查也由 CI 自动执行。
 
 ## 安装与验证
 
@@ -67,7 +67,7 @@ npm run dev
 
 开发、测试、环境变量和打包说明见 [desktop/README.md](desktop/README.md)。
 
-语音能力是可选依赖：`edge-tts`、`faster-whisper`、`sherpa-onnx`、`numpy`、`sounddevice`、`soundfile`；支持按钮单轮会话和显式启停的持续监听，默认唤醒词为“你好，星子”。两种入口共用持久麦克风流和 Silero VAD，在连续 3 秒静音时提交完整话语，再进行声纹、STT、API-B 和 TTS；按钮会话点击后直接聆听并在一轮后结束，持续监听由本地 KWS 唤醒并在回复后返回待唤醒。STT 在未配置远程地址时使用本地 `faster-whisper base/int8`，默认以“你好 星子 西子 VoidCube 语音系统”为热词，也可通过 `VOIDCUBE_STT_HOTWORDS` 调整或切换至 OpenAI-compatible 音频转写端点；播放默认由 `soundfile + sounddevice` 在进程内完成，`ffplay` 仅作为兼容回退。声纹采用 3D-Speaker CAM++ 的 192 维说话人嵌入和三段录入模板，只承担本机说话人过滤；可通过 UI 或 `/voice/fingerprint` 临时关闭，关闭不会删除模板。原始音频默认不保留。
+语音能力是可选依赖：`edge-tts`、`faster-whisper`、`sherpa-onnx`、`numpy`、`sounddevice`、`soundfile`；支持按钮单轮会话和显式启停的持续监听，默认唤醒词为“你好，星子”。两种入口共用持久麦克风流和 Silero VAD，在连续 3 秒静音时提交完整话语，再进行声纹、STT、API-B 和 TTS；按钮会话点击后直接聆听并在一轮后结束，持续监听由本地 KWS 唤醒并在回复后返回待唤醒。STT 在未配置远程地址时使用本地 `faster-whisper base/int8`，默认以“你好 星子 西子 VoidCube 语音系统”为热词，也可通过 `VOIDCUBE_STT_HOTWORDS` 调整或切换至 OpenAI-compatible 音频转写端点；播放默认由 `soundfile + sounddevice` 在进程内完成，`ffplay` 仅作为外部播放器回退。声纹采用 3D-Speaker CAM++ 的 192 维说话人嵌入和三段录入模板，只承担本机说话人过滤；可通过 UI 或 `/voice/fingerprint` 临时关闭，关闭不会删除模板。原始音频默认不保留。
 
 模型、鉴权、协议、技能或打包相关改动还必须运行：
 

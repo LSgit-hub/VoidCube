@@ -400,11 +400,7 @@ class ProcessRegistry:
         wrapper_command = [
             sys.executable,
             "-m",
-            (
-                "src.voidcube.infrastructure.execution.process_spool_wrapper"
-                if __package__.startswith("src.")
-                else "voidcube.infrastructure.execution.process_spool_wrapper"
-            ),
+            "voidcube.infrastructure.execution.process_spool_wrapper",
             "--spool",
             str(spool_path),
             "--marker",
@@ -992,10 +988,7 @@ def process_tool(args: dict | None = None, **_: Any) -> str:
         return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
 
 
-try:
-    from ...extensions.tools.registry import registry
-except ImportError:
-    from ...extensions.tools.registry import registry
+from ...extensions.tools.registry import registry
 
 registry.register(
     name="process",

@@ -29,7 +29,7 @@ _CONTAINER_MARKERS = (
     "containerfile",
     "dockerfile",
     "podman",
-    "tools/environments/",
+    "src/voidcube/infrastructure/execution/environments/",
 )
 _WINDOWS_MARKERS = (
     ".bat",

@@ -9,9 +9,9 @@ share the same core pipeline:
 
 This module ties together the foundation layers:
 
-- ``agent.models_dev``            -- models.dev catalog, ModelInfo, ProviderInfo
-- ``VoidCube_cli.providers``        -- canonical provider identity + overlays
-- ``VoidCube_cli.model_normalize``  -- per-provider name formatting
+- ``voidcube.infrastructure.providers.models_dev`` -- models.dev catalog
+- ``voidcube.interfaces.cli.providers``            -- provider identity
+- ``voidcube.infrastructure.providers.model_normalization`` -- provider formatting
 
 Provider switching uses the ``--provider`` flag exclusively.
 No colon-based ``provider:model`` syntax — colons are reserved for
@@ -29,7 +29,7 @@ from .providers import (
     is_aggregator,
     resolve_provider_full,
 )
-from .model_normalize import (
+from ...infrastructure.providers.model_normalization import (
     normalize_model_for_provider,
 )
 from ...infrastructure.providers.models_dev import (
@@ -149,7 +149,7 @@ def parse_model_flags(raw_args: str) -> tuple[str, str, bool]:
         is_global = False
         raw_args = raw_args.replace("--session-only", "").strip()
     elif "--global" in raw_args:
-        # Keep --global for backward compatibility, it's the default now
+        # Explicitly select the default persistent scope.
         is_global = True
         raw_args = raw_args.replace("--global", "").strip()
 
@@ -428,7 +428,7 @@ def switch_model(
             error_message=msg,
         )
 
-    # --- Get capabilities (legacy) ---
+    # --- Get model capabilities ---
     capabilities = get_model_capabilities(target_provider, new_model)
 
     # --- Get full model info from models.dev ---

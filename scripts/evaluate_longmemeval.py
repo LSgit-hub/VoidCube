@@ -49,8 +49,8 @@ import tempfile
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# Running as a script puts only ``scripts/`` on sys.path; add the repo root so
-# first-party top-level packages (VoidCube_app, systems, agent) resolve.
+# Running as a script puts only ``scripts/`` on sys.path; add the repository
+# root so the in-repository ``memai`` package resolves without installation.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

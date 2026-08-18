@@ -151,8 +151,9 @@ def project_body_slot_cards(
         if isinstance(item, dict)
     ]
     known_node_order = [
-        "run_agent.py", "config.yaml", "agent", "systems", "tools", "skills",
-        "prompts", "tests", "Mem",
+        "src/voidcube/interfaces/cli", "config.yaml", "src/voidcube/runtime",
+        "src/voidcube/systems", "src/voidcube/extensions", "skills", "prompts",
+        "tests", "Mem",
     ]
     cards: list[dict[str, Any]] = []
     for slot_id in ordered_slot_ids:
@@ -201,7 +202,7 @@ def project_body_slot_cards(
             )
         present_roots = [
             node["label"] for node in tree_nodes
-            if node["key"] not in {"run_agent.py", "config.yaml"}
+            if node["key"] not in {"src/voidcube/interfaces/cli", "config.yaml"}
         ]
         summary = " / ".join(present_roots[:4]) if present_roots else "结构待观察"
         if signals:

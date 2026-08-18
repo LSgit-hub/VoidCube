@@ -206,9 +206,14 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     global _skill_commands
     _skill_commands = {}
     try:
-        from .tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, _get_disabled_skill_names
-        from .catalog import get_external_skills_dirs
-        disabled = _get_disabled_skill_names()
+        from .tool import SKILLS_DIR
+        from .catalog import (
+            get_disabled_skill_names,
+            get_external_skills_dirs,
+            parse_frontmatter,
+            skill_matches_platform,
+        )
+        disabled = get_disabled_skill_names()
         seen_names: set = set()
 
         # Scan local dir first, then external dirs
@@ -223,7 +228,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     continue
                 try:
                     content = skill_md.read_text(encoding='utf-8')
-                    frontmatter, body = _parse_frontmatter(content)
+                    frontmatter, body = parse_frontmatter(content)
                     # Skip skills incompatible with the current OS platform
                     if not skill_matches_platform(frontmatter):
                         continue

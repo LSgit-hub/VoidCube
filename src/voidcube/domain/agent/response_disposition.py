@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from ...infrastructure.llm.response import (
+from .response import (
     extract_reasoning,
     has_visible_content,
     strip_thinking_blocks,

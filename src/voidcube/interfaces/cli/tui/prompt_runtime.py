@@ -76,7 +76,7 @@ class CliTuiPromptRuntime:
         symbol = "❯ "
         symbol = (symbol or "❯ ").rstrip() + " "
         try:
-            from ..profiles import get_active_profile_name
+            from ....infrastructure.config.profiles import get_active_profile_name
 
             profile = get_active_profile_name()
             if profile and profile not in ("default", "custom"):

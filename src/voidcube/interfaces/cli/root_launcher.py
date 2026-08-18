@@ -4,7 +4,7 @@ voidcube — Unified launcher for the VoidCube Agent system.
 
 This is the SINGLE entry point.  It orchestrates:
   1. Auto-start daemon services (Gateway → Memory → Supervisor)
-  2. Delegate to the full CLI (VoidCube_cli/main.py)
+  2. Delegate to the canonical CLI command dispatcher
 
 Usage:
     voidcube                     Interactive chat (auto-starts daemons)
@@ -80,7 +80,7 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
             # Show daemon status first, then enter watch loop
             try:
                 from ...infrastructure.gateway.service_launcher import print_status
-                print_status(full=False)
+                print_status()
             except ImportError:
                 pass
             watch_dashboard()
@@ -91,7 +91,15 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
         except ImportError as exc:
             print(f"Failed to import serve module: {exc}")
             return True
-        print_status(full=full)
+        print_status()
+        if full:
+            try:
+                from .ops.dashboard import print_dashboard
+
+                print_dashboard()
+            except Exception as exc:
+                print(f"  Dashboard unavailable: {exc}")
+                print("    Is the supervisor running?  http://127.0.0.1:6002/ui")
         return True
 
     return False
@@ -152,7 +160,7 @@ def main(
     if cli_main is None:
         from .main import main as cli_main
 
-    # VoidCube_cli.main:main() parses sys.argv directly.
+    # The canonical CLI main parses sys.argv directly.
     # We need to restore the original argv so arg parsing works.
     # The first element should be the program name.
     original_argv = sys.argv[:]

@@ -1,0 +1,24 @@
+name: architecture
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Compile canonical package
+        run: python -m compileall -q src/voidcube plugins
+      - name: Check architecture boundaries
+        run: python scripts/python_architecture.py
+      - name: Run packaging contract tests
+        run: python -m pytest tests/test_packaging_contract.py -q
+      - name: Build and verify wheel
+        run: python scripts/build_wheel.py

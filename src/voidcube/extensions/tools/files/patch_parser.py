@@ -19,7 +19,7 @@ V4A Format:
     *** End Patch
 
 Usage:
-    from tools.patch_parser import parse_v4a_patch, apply_v4a_operations
+    from voidcube.extensions.tools.files.patch_parser import parse_v4a_patch, apply_v4a_operations
     
     operations, error = parse_v4a_patch(patch_content)
     if error:

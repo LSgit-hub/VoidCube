@@ -6,7 +6,7 @@ vision_tools, mixture_of_agents_tool, and image_generation_tool.
 
 Usage in a tool module:
 
-    from tools.debug_helpers import DebugSession
+    from voidcube.extensions.tools.debug_helpers import DebugSession
 
     _debug = DebugSession("web_tools", env_var="WEB_TOOLS_DEBUG")
 

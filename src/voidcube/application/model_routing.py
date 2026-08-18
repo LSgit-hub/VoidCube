@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import re
+from collections.abc import Callable, Mapping
 from typing import Any, Dict, Optional
 
-from ..infrastructure.shared.value_helpers import is_truthy_value
+from ..domain.value_rules import is_truthy_value
 
 _COMPLEX_KEYWORDS = {
     "debug",
@@ -106,7 +106,14 @@ def choose_cheap_model_route(user_message: str, routing_config: Optional[Dict[st
     return route
 
 
-def resolve_turn_route(user_message: str, routing_config: Optional[Dict[str, Any]], primary: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_turn_route(
+    user_message: str,
+    routing_config: Optional[Dict[str, Any]],
+    primary: Dict[str, Any],
+    *,
+    runtime_resolver: Callable[..., Mapping[str, Any]],
+    env_reader: Callable[[str], str | None],
+) -> Dict[str, Any]:
     """Resolve the effective model/runtime for one turn.
 
     Returns a dict with model/runtime/signature/label fields.
@@ -133,15 +140,13 @@ def resolve_turn_route(user_message: str, routing_config: Optional[Dict[str, Any
             ),
         }
 
-    from ..infrastructure.providers.runtime import resolve_runtime_provider
-
     explicit_api_key = None
     api_key_env = str(route.get("api_key_env") or "").strip()
     if api_key_env:
-        explicit_api_key = os.getenv(api_key_env) or None
+        explicit_api_key = env_reader(api_key_env) or None
 
     try:
-        runtime = resolve_runtime_provider(
+        runtime = runtime_resolver(
             requested=route.get("provider"),
             explicit_api_key=explicit_api_key,
             explicit_base_url=route.get("base_url"),

@@ -6,7 +6,7 @@ VoidCube Desktop 是现有 Supervisor Web UI 与 Agent CLI 的跨平台容器。
 
 ## 控制边界
 
-Electron 不解析终端输出。主进程通过 `python -m VoidCube_cli.desktop_control <action>` 调用 Python 服务所有者，使用版本化 JSON 协议执行 `status`、`start`、`restart` 和 `stop`。渲染进程只能通过受限 preload IPC 读取状态或请求生命周期操作，不能直接访问 Node.js 或创建任意进程。
+Electron 不解析终端输出。主进程通过 `python -m voidcube.interfaces.desktop.desktop_control <action>` 调用 Python 服务所有者，使用版本化 JSON 协议执行 `status`、`start`、`restart` 和 `stop`。渲染进程只能通过受限 preload IPC 读取状态或请求生命周期操作，不能直接访问 Node.js 或创建任意进程。
 
 桌面通过 `VOIDCUBE_DESKTOP_MANAGED_SERVICES=1` 明确取得后台服务生命周期所有权。关闭桌面窗口只结束嵌入式 CLI，不停止 Gateway、Memory 和 Supervisor；需要停止服务时使用工具栏服务菜单中的“停止”。
 
@@ -31,7 +31,7 @@ npm run dev
 
 | 变量 | 作用 |
 |---|---|
-| `VOIDCUBE_PROJECT_ROOT` | 指定包含 `voidcube.py` 的项目根目录 |
+| `VOIDCUBE_PROJECT_ROOT` | 指定包含 `pyproject.toml` 和 `src/voidcube` 的项目根目录 |
 | `VOIDCUBE_DESKTOP_PYTHON` | 指定 Python 3.14 可执行文件 |
 | `VOIDCUBE_DESKTOP_WORKSPACE` | 指定 CLI 的初始工作目录 |
 | `VOIDCUBE_SUPERVISOR_URL` | 指定 Supervisor UI，仅接受本机回环 HTTP 地址 |

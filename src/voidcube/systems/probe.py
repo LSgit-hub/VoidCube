@@ -198,7 +198,10 @@ class ProbeExecutor:
         soul_store_path = Path(soul_store_path).resolve()
 
         entrypoint_path = Path(
-            options.get("entrypoint_path", worktree_path / "run_agent.py")
+            options.get(
+                "entrypoint_path",
+                worktree_path / "src" / "voidcube" / "interfaces" / "cli" / "root_launcher.py",
+            )
         ).resolve()
         config_path = Path(
             options.get("config_path", worktree_path / "config.yaml")

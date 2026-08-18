@@ -1,8 +1,7 @@
 """Execution infrastructure adapters.
 
 The package owns task-scoped execution contracts, terminal dispatch, and the
-concrete local/container/remote environment backends.  Legacy ``tools``
-imports are compatibility aliases only.
+concrete local/container/remote environment backends.
 """
 
 from .task_execution import (

@@ -53,14 +53,8 @@ logger = logging.getLogger(__name__)
 # The terminal tool polls this during command execution so it can kill
 # long-running subprocesses immediately instead of blocking until timeout.
 # ---------------------------------------------------------------------------
-from .interrupt import is_interrupted, _interrupt_event  # noqa: F401 — re-exported
-from ...interfaces.cli.i18n import t as _t
+from .interrupt import is_interrupted
 # display_VoidCube_home imported lazily at call site (stale-module safety during VoidCube update)
-
-
-def ensure_minisweagent_on_path(_repo_root: Path | None = None) -> None:
-    """Backward-compatible no-op after minisweagent_path.py removal."""
-    return
 
 
 # =============================================================================
@@ -203,8 +197,12 @@ def _handle_sudo_failure(output: str, env_type: str) -> str:
     
     for failure in sudo_failures:
         if failure in output:
-            from ...config.runtime_paths import display_VoidCube_home as _dhh
-            return output + f"\n\n💡 {_t('tips.sudo_password_hint', default='Tip: To enable sudo over messaging, add SUDO_PASSWORD to {path}/.env on the agent machine.', path=_dhh())}"
+            from ..config.runtime_paths import display_VoidCube_home as _dhh
+            return (
+                output
+                + "\n\n💡 Tip: To enable sudo over messaging, add SUDO_PASSWORD "
+                f"to {_dhh()}/.env on the agent machine."
+            )
     
     return output
 
@@ -1525,7 +1523,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
             if hasattr(env, 'cleanup'):
                 env.cleanup()
             elif hasattr(env, 'stop'):
-                env.stop()
+                env.cleanup()
             elif hasattr(env, 'terminate'):
                 env.terminate()
 
@@ -1655,7 +1653,7 @@ def cleanup_vm(task_id: str):
         if hasattr(env, 'cleanup'):
             env.cleanup()
         elif hasattr(env, 'stop'):
-            env.stop()
+            env.cleanup()
         elif hasattr(env, 'terminate'):
             env.terminate()
 
@@ -1720,34 +1718,34 @@ def _interpret_exit_code(command: str, exit_code: int) -> str | None:
     # Command-specific semantics
     semantics: dict[str, dict[int, str]] = {
         # grep/rg/ag/ack: 1=no matches found (normal), 2+=real error
-        "grep":  {1: "terminal.no_matches"},
-        "egrep": {1: "terminal.no_matches"},
-        "fgrep": {1: "terminal.no_matches"},
-        "rg":    {1: "terminal.no_matches"},
-        "ag":    {1: "terminal.no_matches"},
-        "ack":   {1: "terminal.no_matches"},
+        "grep":  {1: "Command completed with no matches."},
+        "egrep": {1: "Command completed with no matches."},
+        "fgrep": {1: "Command completed with no matches."},
+        "rg":    {1: "Command completed with no matches."},
+        "ag":    {1: "Command completed with no matches."},
+        "ack":   {1: "Command completed with no matches."},
         # diff: 1=files differ (expected), 2+=real error
-        "diff":  {1: "terminal.files_differ"},
-        "colordiff": {1: "terminal.files_differ"},
+        "diff":  {1: "Files differ."},
+        "colordiff": {1: "Files differ."},
         # find: 1=some dirs inaccessible but results may still be valid
-        "find":  {1: "terminal.dirs_inaccessible"},
+        "find":  {1: "Some directories were inaccessible."},
         # test/[: 1=condition is false (expected)
-        "test":  {1: "terminal.condition_false"},
-        "[":     {1: "terminal.condition_false"},
+        "test":  {1: "Condition evaluated to false."},
+        "[":     {1: "Condition evaluated to false."},
         # curl: common non-error codes
         "curl":  {
-            6: "terminal.could_not_resolve_host",
-            7: "terminal.failed_to_connect",
-            22: "terminal.http_error",
-            28: "terminal.operation_timed_out",
+            6: "Could not resolve host.",
+            7: "Failed to connect.",
+            22: "HTTP request failed.",
+            28: "Operation timed out.",
         },
         # git: 1 is context-dependent but often normal (e.g. git diff with changes)
-        "git":   {1: "terminal.git_non_zero"},
+        "git":   {1: "Git returned a non-zero status."},
     }
 
     cmd_semantics = semantics.get(base_cmd)
     if cmd_semantics and exit_code in cmd_semantics:
-        return _t(cmd_semantics[exit_code])
+        return cmd_semantics[exit_code]
 
     return None
 

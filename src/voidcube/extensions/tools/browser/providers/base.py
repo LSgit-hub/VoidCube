@@ -33,14 +33,13 @@ class CloudBrowserProvider(ABC):
 
             {
                 "session_name": str,   # unique name for agent-browser --session
-                "bb_session_id": str,  # provider session ID (for close/cleanup)
+                "session_id": str,  # provider session ID (for close/cleanup)
                 "cdp_url": str,        # CDP websocket URL
                 "features": dict,      # feature flags that were enabled
             }
 
-        ``bb_session_id`` is a legacy key name kept for backward compat with
-        the rest of browser_tool.py — it holds the provider's session ID
-        regardless of which provider is in use.
+        ``session_id`` holds the provider's session ID regardless of which
+        provider is in use.
         """
 
     @abstractmethod

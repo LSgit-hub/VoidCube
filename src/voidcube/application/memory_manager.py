@@ -1,12 +1,12 @@
 """MemoryManager — orchestrates canonical Mem integration.
 
-Single integration point in run_agent.py. Replaces scattered per-backend
+Single integration point in the Agent runtime. Replaces scattered per-backend
 code with one manager that delegates to registered providers.
 
 Only one canonical service-backed provider is registered here, which prevents
 tool schema bloat and conflicting long-term recall backends.
 
-Usage in run_agent.py:
+Usage in the Agent runtime:
     self._memory_manager = MemoryManager()
     self._memory_manager.add_provider(plugin_provider)
 
@@ -34,9 +34,12 @@ from ..domain.agent.effect_outcomes import (
     require_effect_outcome,
 )
 from ..domain.contracts.memory import MemoryProvider
-from ..extensions.tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
+
+
+def _tool_error(message: str) -> str:
+    return json.dumps({"success": False, "error": message}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +300,7 @@ class MemoryManager:
         """
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
-            return tool_error(f"No memory provider handles tool '{tool_name}'")
+            return _tool_error(f"No memory provider handles tool '{tool_name}'")
         try:
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:
@@ -305,7 +308,7 @@ class MemoryManager:
                 "Memory provider '%s' handle_tool_call(%s) failed: %s",
                 provider.name, tool_name, e,
             )
-            return tool_error(f"Memory tool '{tool_name}' failed: {e}")
+            return _tool_error(f"Memory tool '{tool_name}' failed: {e}")
 
     # -- Lifecycle hooks -----------------------------------------------------
 
@@ -379,15 +382,7 @@ class MemoryManager:
                 )
 
     def initialize_all(self, session_id: str, **kwargs) -> None:
-        """Initialize all providers.
-
-        Automatically injects ``VoidCube_home`` into *kwargs* so that every
-        provider can resolve profile-scoped storage paths without importing
-        ``get_VoidCube_home()`` themselves.
-        """
-        if "VoidCube_home" not in kwargs:
-            from ...infrastructure.config.runtime_paths import get_VoidCube_home
-            kwargs["VoidCube_home"] = str(get_VoidCube_home())
+        """Initialize all providers with composition-root supplied settings."""
         for provider in self._providers:
             try:
                 provider.initialize(session_id=session_id, **kwargs)

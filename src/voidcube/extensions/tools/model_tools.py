@@ -2,7 +2,7 @@
 """
 Model Tools Module
 
-Thin orchestration layer over the tool registry. Each tool file in tools/
+Thin orchestration layer over the tool registry. Each tool file in
 self-registers its schema, handler, and metadata via tools.registry.register().
 Tool discovery is deferred until the first public API call so importing the
 agent or gateway does not eagerly load every tool integration.
@@ -26,10 +26,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 
 from .registry import registry
 from .toolsets import resolve_toolset, validate_toolset
-try:
-    from voidcube.runtime.agent.tool_execution import classify_tool_result
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.tool_execution import classify_tool_result
+from voidcube.runtime.agent.tool_execution import classify_tool_result
 from ...domain.contracts.execution import ExecutionState
 
 logger = logging.getLogger(__name__)
@@ -143,10 +140,10 @@ def _discover_tools():
     """
     _modules = [
         "voidcube.extensions.tools.web.web_tools",
-        "tools.terminal_tool",
+        "voidcube.infrastructure.execution.terminal_tool",
         "voidcube.extensions.tools.files.file_tools",
         "voidcube.extensions.tools.media.vision_tools",
-        "tools.skills_tool",
+        "voidcube.extensions.skills.tool",
         "voidcube.extensions.skills.manager",
         "voidcube.extensions.tools.browser.browser_tool",
         "voidcube.extensions.tools.media.media_tool",
@@ -157,7 +154,7 @@ def _discover_tools():
         "voidcube.extensions.tools.scheduled_task_tool",
         "voidcube.infrastructure.execution.code_execution_tool",
         "voidcube.extensions.tools.delegate_tool",
-        "tools.process_registry",
+        "voidcube.infrastructure.execution.process_registry",
 
         # Media generation tools (image/video)
         "voidcube.extensions.tools.media.media_generation_tool",
@@ -171,15 +168,6 @@ def _discover_tools():
         try:
             importlib.import_module(mod_name)
         except ImportError as e:
-            fallback_name = (
-                f"src.{mod_name}" if mod_name.startswith("voidcube.") else None
-            )
-            if fallback_name:
-                try:
-                    importlib.import_module(fallback_name)
-                    continue
-                except ImportError as fallback_error:
-                    e = fallback_error
             logger.warning("Could not import tool module %s: %s", mod_name, e)
 
 
@@ -219,25 +207,6 @@ _last_resolved_tool_names: List[str] = []
 
 
 # =============================================================================
-# Legacy toolset name mapping  (old _tools-suffixed names -> tool name lists)
-# =============================================================================
-
-_LEGACY_TOOLSET_MAP = {
-    "web_tools": ["web_search", "web_extract", "web_crawl"],
-    "terminal_tools": ["terminal"],
-    "moa_tools": ["mixture_of_agents"],
-    "image_tools": ["image_generate"],
-    "skills_tools": ["skills_list", "skill_view", "skill_manage"],
-    "browser_tools": [
-        "browser_navigate", "browser_snapshot", "browser_click",
-        "browser_type", "browser_scroll", "browser_back",
-        "browser_press", "browser_get_images",
-        "browser_vision", "browser_console"
-    ],
-}
-
-
-# =============================================================================
 # get_tool_definitions  (the main schema provider)
 # =============================================================================
 
@@ -266,19 +235,16 @@ def get_tool_definitions(
 
     if enabled_toolsets is not None:
         for toolset_name in enabled_toolsets:
-            if validate_toolset(toolset_name):
-                resolved = resolve_toolset(toolset_name)
-                tools_to_include.update(resolved)
-                if not quiet_mode:
-                    print(f"✅ Enabled toolset '{toolset_name}': {', '.join(resolved) if resolved else 'no tools'}")
-            elif toolset_name in _LEGACY_TOOLSET_MAP:
-                legacy_tools = _LEGACY_TOOLSET_MAP[toolset_name]
-                tools_to_include.update(legacy_tools)
-                if not quiet_mode:
-                    print(f"✅ Enabled legacy toolset '{toolset_name}': {', '.join(legacy_tools)}")
-            else:
+            try:
+                canonical_name = validate_toolset(toolset_name)
+            except ValueError:
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
+                continue
+            resolved = resolve_toolset(canonical_name)
+            tools_to_include.update(resolved)
+            if not quiet_mode:
+                print(f"✅ Enabled toolset '{canonical_name}': {', '.join(resolved) if resolved else 'no tools'}")
 
     elif disabled_toolsets:
         from .toolsets import get_all_toolsets
@@ -286,19 +252,16 @@ def get_tool_definitions(
             tools_to_include.update(resolve_toolset(ts_name))
 
         for toolset_name in disabled_toolsets:
-            if validate_toolset(toolset_name):
-                resolved = resolve_toolset(toolset_name)
-                tools_to_include.difference_update(resolved)
-                if not quiet_mode:
-                    print(f"🚫 Disabled toolset '{toolset_name}': {', '.join(resolved) if resolved else 'no tools'}")
-            elif toolset_name in _LEGACY_TOOLSET_MAP:
-                legacy_tools = _LEGACY_TOOLSET_MAP[toolset_name]
-                tools_to_include.difference_update(legacy_tools)
-                if not quiet_mode:
-                    print(f"🚫 Disabled legacy toolset '{toolset_name}': {', '.join(legacy_tools)}")
-            else:
+            try:
+                canonical_name = validate_toolset(toolset_name)
+            except ValueError:
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
+                continue
+            resolved = resolve_toolset(canonical_name)
+            tools_to_include.difference_update(resolved)
+            if not quiet_mode:
+                print(f"🚫 Disabled toolset '{canonical_name}': {', '.join(resolved) if resolved else 'no tools'}")
     else:
         from .toolsets import get_all_toolsets
         for ts_name in get_all_toolsets():
@@ -369,7 +332,7 @@ def get_tool_definitions(
 # handle_function_call  (the main dispatcher)
 # =============================================================================
 
-# Tools whose execution is intercepted by the agent loop (run_agent.py)
+# Tools whose execution is intercepted by the Agent runtime.
 # because they need agent-level state (for example TodoStore).
 # The registry still holds their schemas; dispatch just returns a stub error
 # so if something slips through, the LLM sees a sensible message.
@@ -491,7 +454,7 @@ def handle_function_call(
         enabled_tools: Tool names enabled for this session.  When provided,
                        execute_code uses this list to determine which sandbox
                        tools to generate.  Falls back to the process-global
-                       ``_last_resolved_tool_names`` for backward compat.
+                       ``_last_resolved_tool_names`` when omitted.
 
     Returns:
         Function result as a JSON string.
@@ -505,10 +468,7 @@ def handle_function_call(
     # so the *consecutive* counter resets (reads after other work are fine).
     if function_name not in _READ_SEARCH_TOOLS:
         try:
-            try:
-                from voidcube.extensions.tools.files.file_tools import notify_other_tool_call
-            except ModuleNotFoundError:
-                from src.voidcube.extensions.tools.files.file_tools import notify_other_tool_call
+            from voidcube.extensions.tools.files.file_tools import notify_other_tool_call
             notify_other_tool_call(task_id or "default")
         except ImportError:
             pass  # file_tools may not be loaded yet
@@ -714,7 +674,7 @@ def handle_function_call(
 
 
 # =============================================================================
-# Backward-compat wrapper functions
+# Public registry query functions
 # =============================================================================
 
 def get_all_tool_names() -> List[str]:

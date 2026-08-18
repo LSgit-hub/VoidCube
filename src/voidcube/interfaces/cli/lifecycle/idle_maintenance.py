@@ -43,10 +43,7 @@ class CliIdleMaintenanceRuntime:
 def drain_process_notifications(enqueue_pending_input: Callable[[str], None]) -> None:
     """Move completed terminal-process notifications into the CLI input queue."""
     try:
-        try:
-            from voidcube.infrastructure.execution.process_registry import process_registry
-        except ModuleNotFoundError:
-            from src.voidcube.infrastructure.execution.process_registry import process_registry
+        from voidcube.infrastructure.execution.process_registry import process_registry
         from ..runtime_handlers import _format_process_notification
 
         while not process_registry.completion_queue.empty():

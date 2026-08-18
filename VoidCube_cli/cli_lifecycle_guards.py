@@ -1,8 +1,0 @@
-"""Compatibility alias for the canonical CLI lifecycle guards."""
-
-import sys
-try:
-    from voidcube.interfaces.cli.lifecycle import guards as _implementation
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.interfaces.cli.lifecycle import guards as _implementation
-sys.modules[__name__] = _implementation

@@ -13,7 +13,7 @@ export interface RuntimePaths {
 type Platform = NodeJS.Platform
 
 function isProjectRoot(path: string): boolean {
-  return existsSync(join(path, 'voidcube.py')) && existsSync(join(path, 'pyproject.toml'))
+  return existsSync(join(path, 'src', 'voidcube')) && existsSync(join(path, 'pyproject.toml'))
 }
 
 export function findProjectRoot(candidates: Array<string | undefined>): string | undefined {
@@ -62,7 +62,7 @@ export function resolveRuntimePaths(options: {
   const pathPython = executableFromPath(platform === 'win32' ? 'python' : 'python3', env.PATH, platform)
   const pythonCommand = configuredPython || (existsSync(bundledPython) ? bundledPython : undefined) || localPython || pathPython || (platform === 'win32' ? 'python.exe' : 'python3')
   const workingDirectory = resolve(env.VOIDCUBE_DESKTOP_WORKSPACE?.trim() || projectRoot || homedir())
-  const cliArgs = projectRoot ? [join(projectRoot, 'voidcube.py')] : ['-m', 'voidcube']
+  const cliArgs = ['-m', 'voidcube.interfaces.cli.main']
 
   return {
     projectRoot,

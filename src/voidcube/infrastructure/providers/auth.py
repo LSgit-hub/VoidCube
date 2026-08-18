@@ -165,11 +165,6 @@ def _get_auth_store_path() -> Path:
     return credential_store.auth_store_path()
 
 
-# Captured once so the credential store can distinguish the default hook from
-# an explicit replacement made by a legacy integration or test.
-credential_store._CANONICAL_AUTH_STORE_GETTER_CODE = _get_auth_store_path.__code__
-
-
 def _load_auth_store() -> Dict[str, Any]:
     """Load the persistent auth store from disk."""
     return credential_store.load_auth_store()

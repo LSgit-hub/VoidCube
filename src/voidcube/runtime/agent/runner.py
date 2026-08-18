@@ -14,7 +14,7 @@ Features:
 - Support for multiple model providers
 
 Usage:
-    from run_agent import AIAgent
+    from voidcube.runtime.agent.runner import AIAgent
     
     agent = AIAgent(base_url="http://localhost:30000/v1", model="qwen3.5-plus")
     response = agent.run_conversation("Tell me about the latest Python updates")
@@ -47,7 +47,11 @@ from ...domain.contracts.tool_events import ToolEvent, ToolEventSink
 from memai.domain.scope import CLI_WORKSPACE_ID
 
 _VoidCube_home = get_VoidCube_home()
-_project_env = Path(__file__).parent / '.env'
+# In a source checkout the project root is four levels above this module;
+# installed wheels have no repository root, so use the caller's working tree.
+_source_root = Path(__file__).resolve().parents[4]
+_project_root = _source_root if (_source_root / "pyproject.toml").exists() else Path.cwd()
+_project_env = _project_root / '.env'
 _loaded_env_paths = load_VoidCube_dotenv(VoidCube_home=_VoidCube_home, project_env=_project_env)
 if _loaded_env_paths:
     if len(_loaded_env_paths) == 2:
@@ -62,10 +66,7 @@ else:
 
 # Load max workers from SOUL config or use default
 try:
-    try:
-        from voidcube.infrastructure.config.soul_config import parse_soul_config
-    except ModuleNotFoundError:
-        from src.voidcube.infrastructure.config.soul_config import parse_soul_config
+    from voidcube.infrastructure.config.soul_config import parse_soul_config
     from ...domain.agent.tool_scheduler import MAX_TOOL_WORKERS as SCHEDULER_MAX_TOOL_WORKERS
     _soul_config = parse_soul_config()
     MAX_TOOL_WORKERS = int(_soul_config.get("agent", {}).get("max_tool_workers", SCHEDULER_MAX_TOOL_WORKERS))
@@ -108,30 +109,16 @@ from ...infrastructure.llm.error_classifier import (
     retry_after_seconds,
     summarize_api_error,
 )
-try:
-    from voidcube.runtime.agent.prompt_builder import (
-        DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
-        MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
-    )
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.prompt_builder import (
-        DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
-        MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
-    )
-try:
-    from voidcube.infrastructure.providers.model_metadata import (
+from .prompt_builder import (
+    DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
+    MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+)
+from ...infrastructure.providers.model_metadata import (
         fetch_model_metadata,
         estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
         save_context_length, is_local_endpoint,
         query_ollama_num_ctx,
-    )
-except ModuleNotFoundError:
-    from src.voidcube.infrastructure.providers.model_metadata import (
-        fetch_model_metadata,
-        estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
-        save_context_length, is_local_endpoint,
-        query_ollama_num_ctx,
-    )
+)
 from .context_compressor import (
     CompressionRecoveryResult,
     ContextCompressor,
@@ -147,25 +134,14 @@ from .client_initialization import (
     build_client_kwargs_for_credentials,
     build_qwen_portal_headers,
 )
-try:
-    from voidcube.infrastructure.llm.transport_runtime import ChatTransport
-except ModuleNotFoundError:
-    from src.voidcube.infrastructure.llm.transport_runtime import ChatTransport
+from ...infrastructure.llm.transport_runtime import ChatTransport
 from ...infrastructure.llm.stream_response import StreamChunkUpdate
-try:
-    from voidcube.runtime.agent.tool_execution import (
-        PreparedToolCall,
-        ToolCallOutcome,
-        ToolExecutionCoordinator,
-        ToolExecutionResult,
-    )
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.tool_execution import (
-        PreparedToolCall,
-        ToolCallOutcome,
-        ToolExecutionCoordinator,
-        ToolExecutionResult,
-    )
+from .tool_execution import (
+    PreparedToolCall,
+    ToolCallOutcome,
+    ToolExecutionCoordinator,
+    ToolExecutionResult,
+)
 from .tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
@@ -181,26 +157,18 @@ from ...domain.agent.conversation_runtime import (
 )
 from ...domain.agent.iteration_control import IterationBudget
 from .subdirectory_hints import SubdirectoryHintTracker
-try:
-    from voidcube.runtime.agent.prompt_builder import (
+from .prompt_builder import (
         build_skills_system_prompt, build_context_files_prompt, build_environment_hints,
         ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md,
         TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS,
         GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
-    )
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.prompt_builder import (
-        build_skills_system_prompt, build_context_files_prompt, build_environment_hints,
-        ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md,
-        TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS,
-        GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
-    )
+)
 from ...infrastructure.llm.request import (
     ChatRequestConfig,
     build_chat_completion_kwargs,
     prepare_chat_messages,
 )
-from ...infrastructure.llm.response import (
+from ...domain.agent.response import (
     TruncationAction,
     decide_truncation_recovery,
     inspect_chat_response,
@@ -220,20 +188,12 @@ from ...infrastructure.providers.usage_pricing import estimate_usage_cost, norma
 from ...domain.agent.tool_scheduler import (
     is_destructive_command, should_parallelize_tool_batch,
 )
-try:
-    from voidcube.interfaces.cli.display import (
+from .display import (
         KawaiiSpinner, build_tool_preview as _build_tool_preview,
         get_cute_tool_message as _get_cute_tool_message_impl,
         _detect_tool_failure,
         get_tool_emoji as _get_tool_emoji,
-    )
-except ModuleNotFoundError:
-    from src.voidcube.interfaces.cli.display import (
-        KawaiiSpinner, build_tool_preview as _build_tool_preview,
-        get_cute_tool_message as _get_cute_tool_message_impl,
-        _detect_tool_failure,
-        get_tool_emoji as _get_tool_emoji,
-    )
+)
 from ...domain.agent.message_sanitizer import (
     sanitize_messages_non_ascii,
     sanitize_messages_surrogates,
@@ -266,9 +226,7 @@ def _install_safe_stdio() -> None:
             setattr(sys, stream_name, _SafeWriter(stream))
 
 
-# IterationBudget imported from agent.iteration_control (was duplicated here)
-
-# Tool scheduling logic moved to agent/tool_scheduler.py
+# Iteration budgeting and tool scheduling live in the canonical domain modules.
 
 
 
@@ -341,7 +299,7 @@ class AIAgent:
         session_db=None,
         parent_session_id: str = None,
         iteration_budget: "IterationBudget" = None,
-        fallback_model: Dict[str, Any] = None,
+        fallback_providers: List[Dict[str, Any]] = None,
         credential_pool=None,
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 50,
@@ -421,7 +379,7 @@ class AIAgent:
         self.acp_args = list(acp_args or args or [])
 
         try:
-            from VoidCube_app.model_normalization import (
+            from ...infrastructure.providers.model_normalization import (
                 AGGREGATOR_PROVIDERS,
                 normalize_model_for_provider,
             )
@@ -504,7 +462,7 @@ class AIAgent:
         # Centralized logging — agent.log (INFO+) and errors.log (WARNING+)
         # both live under ~/.VoidCube/logs/.  Idempotent, so gateway mode
         # (which creates a new AIAgent per message) won't duplicate handlers.
-        from VoidCube_app.infrastructure.observability.logging import setup_logging, setup_verbose_logging
+        from ...infrastructure.observability.logging import setup_logging, setup_verbose_logging
         setup_logging(VoidCube_home=_VoidCube_home)
 
         if self.verbose_logging:
@@ -517,10 +475,10 @@ class AIAgent:
                 # for status; logger INFO/WARNING messages just clutter it.
                 # File handlers (agent.log, errors.log) still capture everything.
                 for quiet_logger in [
-                    'tools',               # all tools.* (terminal, browser, web, file, etc.)
-                    'run_agent',            # agent runner internals
+                    'voidcube.extensions.tools',
+                    'voidcube.runtime.agent',
                     'trajectory_compressor',
-                    'VoidCube_cli',         # CLI helpers
+                    'voidcube.interfaces.cli',
                 ]:
                     logging.getLogger(quiet_logger).setLevel(logging.ERROR)
         
@@ -585,21 +543,16 @@ class AIAgent:
         
         # Provider fallback chain — ordered list of backup providers tried
         # when the primary is exhausted (rate-limit, overload, connection
-        # failure).  Supports both legacy single-dict ``fallback_model`` and
-        # new list ``fallback_providers`` format.
-        if isinstance(fallback_model, list):
-            self._fallback_chain = [
-                f for f in fallback_model
-                if isinstance(f, dict) and f.get("provider") and f.get("model")
-            ]
-        elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-            self._fallback_chain = [fallback_model]
-        else:
-            self._fallback_chain = []
+        # failure).
+        self._fallback_chain = [
+            provider
+            for provider in (fallback_providers or [])
+            if isinstance(provider, dict)
+            and provider.get("provider")
+            and provider.get("model")
+        ]
         self._fallback_index = 0
         self._fallback_activated = False
-        # Legacy attribute kept for backward compat (tests, external callers)
-        self._fallback_model = self._fallback_chain[0] if self._fallback_chain else None
         if self._fallback_chain and not self.quiet_mode:
             if len(self._fallback_chain) == 1:
                 fb = self._fallback_chain[0]
@@ -690,12 +643,12 @@ class AIAgent:
         )
         
         # In-memory todo list for task planning (one per agent/session)
-        from tools.todo_tool import TodoStore
+        from ...extensions.tools.todo_tool import TodoStore
         self._todo_store = TodoStore()
         
         # Load config once for memory, skills, and compression sections
         try:
-            from VoidCube_app.config import load_config as _load_agent_config
+            from ...infrastructure.config.configuration import load_config as _load_agent_config
             _agent_cfg = _load_agent_config()
         except Exception:
             _agent_cfg = {}
@@ -706,12 +659,12 @@ class AIAgent:
         self._memory_manager = None
         if not skip_memory:
             try:
-                from agent.memory_manager import MemoryManager as _MemoryManager
+                from ...application.memory_manager import MemoryManager as _MemoryManager
                 from plugins.memory.mem import MemMemoryProvider
 
                 self._memory_manager = _MemoryManager()
                 self._memory_manager.add_provider(MemMemoryProvider())
-                from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home as _ghh
+                from ...infrastructure.config.runtime_paths import get_VoidCube_home as _ghh
                 _init_kwargs = {
                     "session_id": self.session_id,
                     "platform": platform or "cli",
@@ -722,7 +675,7 @@ class AIAgent:
                 if self._user_id:
                     _init_kwargs["user_id"] = self._user_id
                 try:
-                    from VoidCube_cli.profiles import get_active_profile_name
+                    from ...infrastructure.config.profiles import get_active_profile_name
                     _profile = get_active_profile_name()
                     _init_kwargs["agent_identity"] = _profile
                 except Exception:
@@ -828,7 +781,7 @@ class AIAgent:
             # Try general plugin system as fallback
             if _selected_engine is None:
                 try:
-                    from VoidCube_cli.plugins import get_plugin_context_engine
+                    from ...extensions.plugins.cli_adapter import get_plugin_context_engine
                     _candidate = get_plugin_context_engine()
                     if _candidate and _candidate.name == _engine_name:
                         _selected_engine = _candidate
@@ -863,10 +816,7 @@ class AIAgent:
 
         # Reject models whose context window is below the minimum required
         # for reliable tool-calling workflows (64K tokens).
-        try:
-            from voidcube.infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
-        except ModuleNotFoundError:
-            from src.voidcube.infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
+        from voidcube.infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
         _ctx = getattr(self.context_compressor, "context_length", 0)
         if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH:
             raise ValueError(
@@ -1047,7 +997,7 @@ class AIAgent:
         self.reset_session_state()
         self._bind_session_identity(session_id, session_start=session_start)
 
-        from tools.todo_tool import TodoStore
+        from ...extensions.tools.todo_tool import TodoStore
 
         self._todo_store = TodoStore()
         self._invalidate_system_prompt()
@@ -1109,10 +1059,7 @@ class AIAgent:
 
         # ── Update context compressor ──
         if hasattr(self, "context_compressor") and self.context_compressor:
-            try:
-                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
-            except ModuleNotFoundError:
-                from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
+            from voidcube.infrastructure.providers.model_metadata import get_model_context_length
             new_context_length = get_model_context_length(
                 self.model,
                 base_url=self.base_url,
@@ -1296,11 +1243,8 @@ class AIAgent:
         if not self.compression_enabled:
             return
         try:
-            from agent.auxiliary_client import get_text_auxiliary_client
-            try:
-                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
-            except ModuleNotFoundError:
-                from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
+            from ...infrastructure.providers.auxiliary_client import get_text_auxiliary_client
+            from ...infrastructure.providers.model_metadata import get_model_context_length
 
             client, aux_model = get_text_auxiliary_client(
                 "compression",
@@ -1415,8 +1359,8 @@ class AIAgent:
         """
         terminal_outcome = EffectOutcome(status="succeeded")
         try:
-            from tools.terminal_tool import cleanup_vm, is_persistent_env
-            from tools.task_execution import get_task_execution_contract
+            from ...infrastructure.execution.terminal_tool import cleanup_vm, is_persistent_env
+            from ...infrastructure.execution.task_execution import get_task_execution_contract
 
             contract = get_task_execution_contract(task_id)
             executor_owned = bool(
@@ -1447,7 +1391,7 @@ class AIAgent:
 
         browser_outcome = EffectOutcome(status="succeeded")
         try:
-            from tools.browser_tool import cleanup_browser
+            from ...extensions.tools.browser.browser_tool import cleanup_browser
             cleanup_browser(task_id)
         except Exception as exc:
             logging.warning("Failed to cleanup browser for task %s: %s", task_id, exc)
@@ -1936,7 +1880,7 @@ class AIAgent:
         if not headers:
             return
         try:
-            from agent.rate_limit_tracker import parse_rate_limit_headers
+            from ...infrastructure.providers.rate_limit import parse_rate_limit_headers
             state = parse_rate_limit_headers(headers, provider=self.provider)
             if state is not None:
                 self._rate_limit_state = state
@@ -2009,21 +1953,21 @@ class AIAgent:
 
         # 1. Kill background processes for this task
         try:
-            from tools.process_registry import process_registry
+            from ...infrastructure.execution.process_registry import process_registry
             process_registry.kill_all(task_id=task_id)
         except Exception:
             pass
 
         # 2. Clean terminal sandbox environments
         try:
-            from tools.terminal_tool import cleanup_vm
+            from ...infrastructure.execution.terminal_tool import cleanup_vm
             cleanup_vm(task_id)
         except Exception:
             pass
 
         # 3. Clean browser daemon sessions
         try:
-            from tools.browser_tool import cleanup_browser
+            from ...extensions.tools.browser.browser_tool import cleanup_browser
             cleanup_browser(task_id)
         except Exception:
             pass
@@ -2211,7 +2155,7 @@ class AIAgent:
             if context_files_prompt:
                 prompt_parts.append(context_files_prompt)
 
-        from VoidCube_app.infrastructure.shared.clock import now as _VoidCube_now
+        from ...infrastructure.shared.clock import now as _VoidCube_now
         now = _VoidCube_now()
         timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
         if self.pass_session_id and self.session_id:
@@ -2260,7 +2204,7 @@ class AIAgent:
 
         Returns the original list if no truncation was needed.
         """
-        from tools.delegate_tool import _get_max_concurrent_children
+        from ...extensions.tools.delegate_tool import _get_max_concurrent_children
         max_children = _get_max_concurrent_children()
         delegate_count = sum(1 for tc in tool_calls if tc.function.name == "delegate_task")
         if delegate_count <= max_children:
@@ -2340,7 +2284,7 @@ class AIAgent:
             return False
 
         try:
-            from VoidCube_app.provider_auth import resolve_nous_runtime_credentials
+            from ...infrastructure.providers.auth import resolve_nous_runtime_credentials
 
             creds = resolve_nous_runtime_credentials(
                 min_key_ttl_seconds=max(60, int(os.getenv("VOIDCUBE_NOUS_MIN_KEY_TTL_SECONDS", "1800"))),
@@ -2601,7 +2545,7 @@ class AIAgent:
 
         # Use centralized router for client construction.
         try:
-            from agent.auxiliary_client import resolve_provider_client
+            from ...infrastructure.providers.auxiliary_client import resolve_provider_client
             # Pass base_url and api_key from fallback config so custom
             # endpoints (e.g. Ollama Cloud) resolve correctly instead of
             # falling through to OpenRouter defaults.
@@ -2621,7 +2565,7 @@ class AIAgent:
                     fb_provider)
                 return self._try_activate_fallback()  # try next in chain
             try:
-                from VoidCube_app.model_normalization import normalize_model_for_provider
+                from ...infrastructure.providers.model_normalization import normalize_model_for_provider
 
                 fb_model = normalize_model_for_provider(fb_model, fb_provider)
             except Exception:
@@ -2657,10 +2601,7 @@ class AIAgent:
             # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
             # causing oversized sessions to overflow the fallback.
             if hasattr(self, 'context_compressor') and self.context_compressor:
-                try:
-                    from voidcube.infrastructure.providers.model_metadata import get_model_context_length
-                except ModuleNotFoundError:
-                    from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
+                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
                 fb_context_length = get_model_context_length(
                     self.model, base_url=self.base_url,
                     api_key=self.api_key, provider=self.provider,
@@ -2966,10 +2907,7 @@ class AIAgent:
         # read content is summarised away — if the model re-reads the same
         # file it needs the full content, not a "file unchanged" stub.
         try:
-            try:
-                from voidcube.extensions.tools.files.file_tools import reset_file_dedup
-            except ModuleNotFoundError:
-                from src.voidcube.extensions.tools.files.file_tools import reset_file_dedup
+            from voidcube.extensions.tools.files.file_tools import reset_file_dedup
             reset_file_dedup(task_id)
         except Exception:
             pass
@@ -3162,7 +3100,7 @@ class AIAgent:
         parallel: bool,
     ) -> str:
         try:
-            from tools.environments.base import set_activity_callback
+            from ...infrastructure.execution.environments.base import set_activity_callback
 
             set_activity_callback(self._touch_activity)
         except Exception:
@@ -3229,7 +3167,7 @@ class AIAgent:
         function_name = call.name
         function_args = call.arguments
         if function_name == "todo":
-            from tools.todo_tool import todo_tool as _todo_tool
+            from ...extensions.tools.todo_tool import todo_tool as _todo_tool
             return _todo_tool(
                 todos=function_args.get("todos"),
                 merge=function_args.get("merge", False),
@@ -3238,7 +3176,7 @@ class AIAgent:
         elif function_name == "session_search":
             if not self._session_db:
                 return json.dumps({"success": False, "error": "Session database not available."})
-            from tools.session_search_tool import session_search as _session_search
+            from ...extensions.tools.session_search_tool import session_search as _session_search
             return _session_search(
                 query=function_args.get("query", ""),
                 role_filter=function_args.get("role_filter"),
@@ -3282,7 +3220,7 @@ class AIAgent:
                 ),
             )
         elif function_name == "clarify":
-            from tools.clarify_tool import clarify_tool as _clarify_tool
+            from ...extensions.tools.clarify_tool import clarify_tool as _clarify_tool
             return _clarify_tool(
                 question=function_args.get("question", ""),
                 options=function_args.get("options"),
@@ -3298,7 +3236,7 @@ class AIAgent:
             )
 
     def _invoke_delegate_tool(self, call: PreparedToolCall) -> ToolExecutionResult:
-        from tools.delegate_tool import delegate_task as _delegate_task
+        from ...extensions.tools.delegate_tool import delegate_task as _delegate_task
 
         tasks = call.arguments.get("tasks")
         if tasks and isinstance(tasks, list):
@@ -3424,7 +3362,7 @@ class AIAgent:
         result = outcome.content
         action_refs = []
         try:
-            from agent.action_journal import get_action_journal
+            from ...infrastructure.persistence.action_journal import get_action_journal
 
             action_ref = get_action_journal().find_by_call_id(
                 call.call_id,
@@ -3566,10 +3504,7 @@ class AIAgent:
         For CLI: prints a formatted line with a progress bar.
         For gateway: fires status_callback so the platform can send a chat message.
         """
-        try:
-            from voidcube.interfaces.cli.display import format_context_pressure, format_context_pressure_gateway
-        except ModuleNotFoundError:
-            from src.voidcube.interfaces.cli.display import format_context_pressure, format_context_pressure_gateway
+        from .display import format_context_pressure, format_context_pressure_gateway
 
         threshold_pct = compressor.threshold_tokens / compressor.context_length if compressor.context_length else 0.5
 
@@ -3700,7 +3635,7 @@ class AIAgent:
 
         # Tag all log records on this thread with the session ID so
         # ``VoidCube logs --session <id>`` can filter a single conversation.
-        from VoidCube_app.infrastructure.observability.logging import set_session_context
+        from ...infrastructure.observability.logging import set_session_context
         set_session_context(self.session_id)
 
         # If the previous turn activated fallback, restore the primary
@@ -3822,7 +3757,7 @@ class AIAgent:
                 # continuation).  Plugins can use this to initialise
                 # session-scoped state (e.g. warm a memory cache).
                 try:
-                    from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+                    from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
                     _invoke_hook(
                         "on_session_start",
                         session_id=self.session_id,
@@ -3913,7 +3848,7 @@ class AIAgent:
         # All injected context is ephemeral (not persisted to session DB).
         _plugin_user_context = ""
         try:
-            from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+            from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
             _pre_results = _invoke_hook(
                 "pre_llm_call",
                 session_id=self.session_id,
@@ -4086,7 +4021,7 @@ class AIAgent:
                         api_messages,
                     )
                     try:
-                        from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+                        from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
                         _invoke_hook(
                             "pre_api_request",
                             task_id=effective_task_id,
@@ -5029,7 +4964,7 @@ class AIAgent:
                 )
 
                 try:
-                    from VoidCube_cli.plugins import invoke_hook as _invoke_hook
+                    from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
                     _assistant_tool_calls = getattr(assistant_message, "tool_calls", None) or []
                     _assistant_text = assistant_message.content or ""
                     _invoke_hook(
@@ -5399,63 +5334,19 @@ def main(
     
     # Handle tool listing
     if list_tools:
-        from tools.model_tools import get_all_tool_names, get_toolset_for_tool, get_available_toolsets
-        from tools.toolsets import get_all_toolsets, get_toolset_info
+        from ...extensions.tools.model_tools import get_all_tool_names, get_toolset_for_tool
+        from ...extensions.tools.toolsets import get_all_toolsets, get_toolset_info
         
         print("📋 Available Tools & Toolsets:")
         print("-" * 50)
         
-        # Show new toolsets system
-        print("\n🎯 Predefined Toolsets (New System):")
+        print("\n🎯 Toolsets:")
         print("-" * 40)
-        all_toolsets = get_all_toolsets()
-        
-        # Group by category
-        basic_toolsets = []
-        composite_toolsets = []
-        scenario_toolsets = []
-        
-        for name, toolset in all_toolsets.items():
+        for name in get_all_toolsets():
             info = get_toolset_info(name)
-            if info:
-                entry = (name, info)
-                if name in ["web", "terminal", "vision", "creative", "reasoning"]:
-                    basic_toolsets.append(entry)
-                elif name in ["research", "development", "analysis", "content_creation", "full_stack"]:
-                    composite_toolsets.append(entry)
-                else:
-                    scenario_toolsets.append(entry)
-        
-        # Print basic toolsets
-        print("\n📌 Basic Toolsets:")
-        for name, info in basic_toolsets:
-            tools_str = ', '.join(info['resolved_tools']) if info['resolved_tools'] else 'none'
-            print(f"  • {name:15} - {info['description']}")
-            print(f"    Tools: {tools_str}")
-        
-        # Print composite toolsets
-        print("\n📂 Composite Toolsets (built from other toolsets):")
-        for name, info in composite_toolsets:
-            includes_str = ', '.join(info['includes']) if info['includes'] else 'none'
-            print(f"  • {name:15} - {info['description']}")
-            print(f"    Includes: {includes_str}")
-            print(f"    Total tools: {info['tool_count']}")
-        
-        # Print scenario-specific toolsets
-        print("\n🎭 Scenario-Specific Toolsets:")
-        for name, info in scenario_toolsets:
+            tools = ", ".join(info["tools"]) or "none"
             print(f"  • {name:20} - {info['description']}")
-            print(f"    Total tools: {info['tool_count']}")
-        
-        
-        # Show legacy toolset compatibility
-        print("\n📦 Legacy Toolsets (for backward compatibility):")
-        legacy_toolsets = get_available_toolsets()
-        for name, info in legacy_toolsets.items():
-            status = "✅" if info["available"] else "❌"
-            print(f"  {status} {name}: {info['description']}")
-            if not info["available"]:
-                print(f"    Requirements: {', '.join(info['requirements'])}")
+            print(f"    Tools: {tools}")
         
         # Show individual tools
         all_tools = get_all_tool_names()
@@ -5464,18 +5355,6 @@ def main(
             toolset = get_toolset_for_tool(tool_name)
             print(f"  📌 {tool_name} (from {toolset})")
         
-        print("\n💡 Usage Examples:")
-        print("  # Use predefined toolsets")
-        print("  python run_agent.py --enabled_toolsets=research --query='search for Python news'")
-        print("  python run_agent.py --enabled_toolsets=development --query='debug this code'")
-        print("  python run_agent.py --enabled_toolsets=safe --query='analyze without terminal'")
-        print("  ")
-        print("  # Combine multiple toolsets")
-        print("  python run_agent.py --enabled_toolsets=web,vision --query='analyze website'")
-        print("  ")
-        print("  # Disable toolsets")
-        print("  python run_agent.py --disabled_toolsets=terminal --query='no command execution'")
-        print("  ")
         return
     
     # Parse toolset selection arguments

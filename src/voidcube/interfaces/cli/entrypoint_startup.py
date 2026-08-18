@@ -109,7 +109,7 @@ def _apply_profile_override() -> None:
     # 3. If we found a profile, resolve and set VOIDCUBE_HOME
     if profile_name is not None:
         try:
-            from .profiles import resolve_profile_env
+            from ...infrastructure.config.profiles import resolve_profile_env
             VoidCube_home = resolve_profile_env(profile_name)
         except (ValueError, FileNotFoundError) as exc:
             print(f"Error: {exc}", file=sys.stderr)

@@ -34,7 +34,7 @@ class CliAgentInitializationPorts:
     session_db: Any
     clarification_sink: Any
     reasoning_callback: Any
-    fallback_model: Any
+    fallback_providers: Any
     thinking_callback: Any
     checkpoints_enabled: bool
     checkpoint_max_snapshots: int
@@ -86,7 +86,7 @@ class CliAgentInitializationRuntime:
             "session_db": ports.session_db,
             "clarification_sink": ports.clarification_sink,
             "reasoning_callback": ports.reasoning_callback,
-            "fallback_model": ports.fallback_model,
+            "fallback_providers": ports.fallback_providers,
             "thinking_callback": ports.thinking_callback,
             "checkpoints_enabled": ports.checkpoints_enabled,
             "checkpoint_max_snapshots": ports.checkpoint_max_snapshots,

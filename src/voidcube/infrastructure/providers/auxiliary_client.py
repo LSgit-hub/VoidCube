@@ -44,8 +44,8 @@ from .credential_pool import load_pool
 try:
     from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
-from ..llm.response import visible_or_reasoning_text
+    from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
+from ...domain.agent.response import visible_or_reasoning_text
 from ...domain.contracts.integration_policy import require_active_integration
 from ..config.runtime_paths import get_VoidCube_home
 from .endpoints import OPENROUTER_BASE_URL
@@ -97,7 +97,7 @@ _AUTH_JSON_PATH = get_VoidCube_home() / "auth.json"
 try:
     from voidcube.infrastructure.providers import client_factory as _client_factory
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import client_factory as _client_factory
+    from voidcube.infrastructure.providers import client_factory as _client_factory
 
 _to_openai_base_url = _client_factory.normalize_base_url
 _first_live_model = _client_factory.first_live_model
@@ -468,7 +468,7 @@ def _is_connection_error(exc: Exception) -> bool:
 try:
     from voidcube.infrastructure.providers import auxiliary_fallback as _auxiliary_fallback
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import auxiliary_fallback as _auxiliary_fallback
+    from voidcube.infrastructure.providers import auxiliary_fallback as _auxiliary_fallback
 
 
 def _get_provider_chain() -> List[tuple]:
@@ -778,7 +778,7 @@ def resolve_provider_client(
             resolve_api_key_provider_credentials,
         )
     except ImportError:
-        logger.debug("VoidCube_app.provider_auth not available for provider %s", provider)
+        logger.debug("Provider credential adapter not available for provider %s", provider)
         return None, None
 
     pconfig = PROVIDER_REGISTRY.get(provider)
@@ -951,13 +951,13 @@ try:
         resolve_vision_client as _resolve_vision_client_policy,
     )
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import auxiliary_vision as _auxiliary_vision
-    from src.voidcube.infrastructure.providers.auxiliary_client_cache import (
+    from voidcube.infrastructure.providers import auxiliary_vision as _auxiliary_vision
+    from voidcube.infrastructure.providers.auxiliary_client_cache import (
         AuxiliaryClientCache,
         force_close_async_httpx as _force_close_cached_httpx,
         neuter_async_httpx_del as _neuter_cached_httpx_del,
     )
-    from src.voidcube.infrastructure.providers.auxiliary_vision_clients import (
+    from voidcube.infrastructure.providers.auxiliary_vision_clients import (
         resolve_vision_client as _resolve_vision_client_policy,
     )
 
@@ -1212,13 +1212,8 @@ def _resolve_task_provider_model(
     return "auto", resolved_model, None, None
 
 
-# Shared auxiliary routing policy lives in infrastructure.  Keep the legacy
-# names exported here for existing tool integrations while requests migrate to
-# the canonical provider policy module.
-try:
-    from voidcube.infrastructure.providers import auxiliary_policy as _auxiliary_policy
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import auxiliary_policy as _auxiliary_policy
+# Shared auxiliary routing policy lives in the provider infrastructure module.
+from voidcube.infrastructure.providers import auxiliary_policy as _auxiliary_policy
 
 _normalize_main_runtime = _auxiliary_policy.normalize_main_runtime
 _is_payment_error = _auxiliary_policy.is_payment_error
@@ -1361,7 +1356,7 @@ def _missing_provider_error(task: Optional[str], provider: str) -> RuntimeError:
 try:
     from voidcube.infrastructure.providers import auxiliary_orchestration as _auxiliary_orchestration
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import auxiliary_orchestration as _auxiliary_orchestration
+    from voidcube.infrastructure.providers import auxiliary_orchestration as _auxiliary_orchestration
 
 AuxiliaryCallTarget = _auxiliary_orchestration.AuxiliaryCallTarget
 AuxiliaryFallbackCall = _auxiliary_orchestration.AuxiliaryFallbackCall
@@ -1447,20 +1442,14 @@ def _prepare_fallback_call(
 
 
 # Provider-neutral response validation and token-limit retry policy are shared
-# infrastructure primitives; keep these legacy names as compatibility exports.
-try:
-    from voidcube.infrastructure.llm import transport as _auxiliary_transport
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.llm import transport as _auxiliary_transport
+# infrastructure primitives.
+from voidcube.infrastructure.llm import transport as _auxiliary_transport
 
 _completion_token_retry_kwargs = _auxiliary_transport.completion_token_retry_kwargs
 _validate_llm_response = _auxiliary_transport.validate_llm_response
 
 
-try:
-    from voidcube.infrastructure.providers import auxiliary_execution as _auxiliary_execution
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.providers import auxiliary_execution as _auxiliary_execution
+from voidcube.infrastructure.providers import auxiliary_execution as _auxiliary_execution
 
 
 def _execute_sync_auxiliary_call(
@@ -1475,7 +1464,7 @@ def _execute_sync_auxiliary_call(
     timeout: float,
     extra_body: Optional[dict],
 ) -> Any:
-    """Compatibility adapter around the canonical sync execution policy."""
+    """Execute a synchronous auxiliary request through the provider policy."""
     return _auxiliary_execution.execute_sync(
         target=target,
         task=task,

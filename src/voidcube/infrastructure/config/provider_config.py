@@ -22,7 +22,7 @@ def _provider_auth_module():
     try:
         from voidcube.infrastructure.providers import auth
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.infrastructure.providers import auth  # pragma: no cover
+        from voidcube.infrastructure.providers import auth  # pragma: no cover
     return auth
 
 
@@ -210,7 +210,7 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
             try:
                 from voidcube.infrastructure.config.runtime_paths import get_env_path
             except (ModuleNotFoundError, ImportError):
-                from src.voidcube.infrastructure.config.runtime_paths import get_env_path
+                from voidcube.infrastructure.config.runtime_paths import get_env_path
             sources.append({"source": "voidcube_env", "status": _secret_status(env_vars.get(api_key_env)), "detail": f"{get_env_path()}::{api_key_env}"})
         except Exception as exc:
             sources.append({"source": "voidcube_env", "status": "error", "detail": f"{api_key_env}: {exc}"})

@@ -282,10 +282,7 @@ def _build_child_event_sink(
             return
 
         if spinner:
-            try:
-                from voidcube.interfaces.cli.display import get_tool_emoji
-            except ModuleNotFoundError:
-                from src.voidcube.interfaces.cli.display import get_tool_emoji
+            from voidcube.runtime.agent.display import get_tool_emoji
 
             try:
                 spinner.update_text(f"{prefix}{get_tool_emoji(event.name)} {event.name}")
@@ -390,7 +387,7 @@ def _build_child_agent(
     routing subagents to a different provider:model pair (e.g. cheap/fast
     model on OpenRouter while the parent runs on Nous Portal).
     """
-    from run_agent import AIAgent
+    from voidcube.runtime.agent.runner import AIAgent
 
     # When no explicit toolsets given, inherit from parent's enabled toolsets
     # so disabled tools (e.g. web) don't leak to subagents.
@@ -875,18 +872,10 @@ def delegate_task(
     # Initialize display manager for rich CLI visualization
     display_manager = None
     if enable_display:
-        try:
-            try:
-                from voidcube.interfaces.cli.subagent_display import SubagentDisplayManager
-            except ModuleNotFoundError:
-                from src.voidcube.interfaces.cli.subagent_display import SubagentDisplayManager
-            display_manager = SubagentDisplayManager(
-                max_tool_args_len=50,
-            )
-            display_manager.print_fn = getattr(parent_agent, "_print_fn", None) or print
-        except ImportError:
-            logger.debug("SubagentDisplayManager not available, using legacy display")
-            display_manager = None
+        from voidcube.runtime.agent.subagent_display import SubagentDisplayManager
+
+        display_manager = SubagentDisplayManager(max_tool_args_len=50)
+        display_manager.print_fn = getattr(parent_agent, "_print_fn", None) or print
     if parent_agent is not None:
         with _SUBAGENT_DISPLAY_STATE_LOCK:
             managers = getattr(parent_agent, "_subagent_display_managers", None)

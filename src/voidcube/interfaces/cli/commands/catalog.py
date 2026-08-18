@@ -285,7 +285,7 @@ def _resolve_config_gates() -> set[str]:
     if not gated:
         return set()
     try:
-        from ...infrastructure.config.configuration import read_raw_config
+        from ....infrastructure.config.configuration import read_raw_config
         cfg = read_raw_config()
     except Exception:
         return set()

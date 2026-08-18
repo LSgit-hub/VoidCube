@@ -4,7 +4,9 @@ description: Hugging Face Hub CLI (hf) — 搜索、下载和上传模型与数�
 version: 1.0.0
 author: Hugging Face
 license: MIT
-tags: [huggingface, hf, models, datasets, hub, mlops]
+metadata:
+  VoidCube:
+    tags: [huggingface, hf, models, datasets, hub, mlops]
 ---
 
 # Hugging Face CLI (`hf`) 参考指南

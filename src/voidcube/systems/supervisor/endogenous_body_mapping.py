@@ -18,8 +18,8 @@ from .endogenous_learning import stable_learning_topic_key
 
 
 _BODY_STRUCTURE_PATH_RE = re.compile(
-    r"(?<![\w.-])((?:(?:agent|tools|skills|presets)/"
-    r"[A-Za-z0-9_.\-/]+|run_agent\.py))"
+    r"(?<![\w.-])((?:(?:src/voidcube/runtime/agent|src/voidcube/extensions/tools|skills|presets)/"
+    r"[A-Za-z0-9_.\-/]+))"
 )
 _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
     tuple[str, tuple[str, ...], tuple[str, ...]],
@@ -28,61 +28,61 @@ _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
     (
         "prompt_context",
         ("prompt", "context", "reasoning", "提示词", "上下文", "推理"),
-        ("agent/prompt_builder.py", "agent/context_engine.py", "agent/context_compressor.py"),
+        ("src/voidcube/runtime/agent/prompt_builder.py", "src/voidcube/domain/agent/context_engine.py", "src/voidcube/runtime/agent/context_compressor.py"),
     ),
     (
         "stream_display",
         ("stream", "display", "render", "输出", "展示", "流式"),
-        ("agent/stream_handler.py", "agent/display.py", "agent/subagent_display.py"),
+        ("src/voidcube/runtime/agent/stream_handler.py", "src/voidcube/runtime/agent/display.py", "src/voidcube/runtime/agent/subagent_display.py"),
     ),
     (
         "memory_access",
         ("memory", "recall", "记忆", "召回"),
         (
-            "agent/memory_manager.py",
-            "agent/memory_provider.py",
+            "src/voidcube/application/memory_manager.py",
+            "src/voidcube/domain/contracts/memory.py",
             "Mem/src/memai/application/recall.py",
         ),
     ),
     (
         "model_routing",
         ("model", "provider", "routing", "模型", "路由", "供应商"),
-        ("agent/smart_model_routing.py", "agent/model_metadata.py", "agent/auxiliary_client.py"),
+        ("src/voidcube/application/model_routing.py", "src/voidcube/infrastructure/providers/model_metadata.py", "src/voidcube/infrastructure/providers/auxiliary_client.py"),
     ),
     (
         "tool_execution",
         ("tool", "terminal", "scheduler", "工具", "终端", "调度"),
-        ("agent/tool_scheduler.py", "tools/registry.py", "tools/terminal_tool.py"),
+        ("src/voidcube/domain/agent/tool_scheduler.py", "src/voidcube/extensions/tools/registry.py", "src/voidcube/infrastructure/execution/terminal_tool.py"),
     ),
     (
         "delegation",
         ("delegate", "subagent", "multi-agent", "委派", "子代理", "多代理"),
-        ("tools/delegate_tool.py", "tools/mixture_of_agents_tool.py", "agent/subagent_display.py"),
+        ("src/voidcube/extensions/tools/delegate_tool.py", "src/voidcube/extensions/tools/mixture_of_agents_tool.py", "src/voidcube/runtime/agent/subagent_display.py"),
     ),
     (
         "skills",
         ("skill", "skills", "技能"),
-        ("agent/skill_utils.py", "agent/skill_commands.py", "tools/skills_tool.py"),
+        ("src/voidcube/extensions/skills/catalog.py", "src/voidcube/extensions/skills/commands.py", "src/voidcube/extensions/skills/tool.py"),
     ),
     (
         "error_resilience",
         ("error", "retry", "rate limit", "错误", "重试", "限流"),
-        ("agent/error_classifier.py", "agent/retry_utils.py", "agent/rate_limit_tracker.py"),
+        ("src/voidcube/infrastructure/llm/error_classifier.py", "src/voidcube/infrastructure/llm/retry_policy.py", "src/voidcube/infrastructure/providers/rate_limit.py"),
     ),
     (
         "security",
         ("security", "redact", "credential", "安全", "脱敏", "凭证"),
-        ("agent/redact.py", "agent/message_sanitizer.py", "tools/approval.py"),
+        ("src/voidcube/domain/agent/message_sanitizer.py", "src/voidcube/infrastructure/persistence/redaction.py", "src/voidcube/infrastructure/execution/approval.py"),
     ),
     (
         "browser_web",
         ("browser", "web", "crawl", "浏览器", "网页", "抓取"),
-        ("tools/browser_tool.py", "tools/web_tools.py", "tools/web_tools_local.py"),
+        ("src/voidcube/extensions/tools/browser/browser_tool.py", "src/voidcube/extensions/tools/web/web_tools.py", "src/voidcube/extensions/tools/web/web_tools_local.py"),
     ),
     (
         "file_operations",
         ("file", "path", "filesystem", "文件", "路径"),
-        ("tools/file_tools.py", "tools/file_operations.py", "tools/path_security.py"),
+        ("src/voidcube/extensions/tools/files/file_tools.py", "src/voidcube/extensions/tools/files/file_operations.py", "src/voidcube/extensions/tools/files/path_security.py"),
     ),
 )
 

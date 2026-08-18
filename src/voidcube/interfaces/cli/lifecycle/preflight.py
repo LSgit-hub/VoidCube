@@ -24,7 +24,7 @@ class CliInteractivePreflightPorts:
 def ensure_tirith_security_scanner() -> None:
     """Best-effort security scanner installation for interactive commands."""
     try:
-        from ...infrastructure.execution.tirith_security import ensure_installed
+        from ....infrastructure.execution.tirith_security import ensure_installed
 
         ensure_installed(log_failures=False)
     except Exception:

@@ -1,51 +1,32 @@
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
-import sqlite3
 import threading
 import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Protocol
 from typing import Any, Dict
-
-from ...infrastructure.llm.error_classifier import FailoverReason, classify_api_error
-from ...infrastructure.gateway.presence import default_gateway_url
-from ...infrastructure.runtime.layout import get_runtime_layout
 
 
 logger = logging.getLogger(__name__)
 
 
-def _rate_limit_writeback(error: str) -> Dict[str, Any]:
-    message = str(error or "").strip()
-    if not message:
-        return {
-            "rate_limited": False,
-            "retry_after_seconds": None,
-            "error_code": None,
-        }
-    classified = classify_api_error(RuntimeError(message))
-    explicit_429 = bool(re.search(r"\b429\b", message))
-    rate_limited = classified.reason is FailoverReason.rate_limit or explicit_429
-    retry_after: float | None = None
-    reset_at = classified.error_context.get("reset_at")
-    if rate_limited and reset_at not in (None, ""):
-        try:
-            retry_after = max(0.0, float(reset_at) - time.time())
-        except (TypeError, ValueError):
-            retry_after = None
-    return {
-        "rate_limited": rate_limited,
-        "retry_after_seconds": retry_after,
-        "error_code": 429 if rate_limited else None,
-    }
+class ScheduledRequestRejected(RuntimeError):
+    """A scheduled-task gateway request was permanently or temporarily rejected."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = int(status_code)
+
+
+class ScheduledWritebackOutbox(Protocol):
+    def enqueue(self, run_id: str, payload: Dict[str, Any]) -> None: ...
+    def next_due(self) -> Dict[str, Any] | None: ...
+    def mark_delivered(self, run_id: str) -> None: ...
+    def mark_failed(self, run_id: str, *, attempts: int, error: str) -> None: ...
+    def mark_dead(self, run_id: str, *, attempts: int, error: str) -> None: ...
+    def pending_count(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,113 +40,10 @@ class ScheduledTaskExecutorPorts:
     set_execution_active: Callable[[bool], None]
     set_companion_active: Callable[[bool], None]
     start_background_task: Callable[..., bool]
+    post_supervisor: Callable[[str, Dict[str, Any]], Dict[str, Any]]
+    rate_limit_metadata: Callable[[str], Mapping[str, Any]]
+    writeback_outbox: ScheduledWritebackOutbox
     cancel_background_task: Callable[[str, str], bool] | None = None
-
-
-def _scheduled_timeout_seconds(
-    env_name: str,
-    *,
-    default: float,
-    explicit: float | None,
-) -> float:
-    value: Any = explicit
-    if value is None:
-        raw = os.getenv(env_name)
-        if raw not in (None, ""):
-            try:
-                value = float(raw)
-            except ValueError:
-                logger.warning("Ignoring invalid %s=%r; using %.0f", env_name, raw, default)
-    if value is None:
-        value = default
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(0.1, min(parsed, 86400.0))
-
-
-class ScheduledWritebackOutbox:
-    """Durable completion queue for scheduled API-A executions."""
-
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS pending_writebacks ("
-                    "run_id TEXT PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
-                    "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', "
-                    "dead_letter INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_scheduled_writebacks_due "
-                    "ON pending_writebacks(dead_letter, next_attempt_at, created_at)"
-                )
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.path), timeout=10.0)
-        connection.execute("PRAGMA busy_timeout = 10000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
-
-    def enqueue(self, run_id: str, payload: Dict[str, Any]) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    "INSERT OR REPLACE INTO pending_writebacks "
-                    "(run_id, payload, attempts, next_attempt_at, last_error, dead_letter, created_at) "
-                    "VALUES (?, ?, 0, 0, '', 0, ?)",
-                    (run_id, json.dumps(payload, ensure_ascii=False), time.time()),
-                )
-
-    def next_due(self) -> Dict[str, Any] | None:
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT run_id, payload, attempts FROM pending_writebacks "
-                "WHERE dead_letter = 0 AND next_attempt_at <= ? "
-                "ORDER BY created_at LIMIT 1",
-                (time.time(),),
-            ).fetchone()
-        if row is None:
-            return None
-        payload = json.loads(row[1])
-        payload["_outbox_run_id"] = str(row[0])
-        payload["_outbox_attempts"] = int(row[2])
-        return payload
-
-    def mark_delivered(self, run_id: str) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute("DELETE FROM pending_writebacks WHERE run_id = ?", (run_id,))
-
-    def mark_failed(self, run_id: str, *, attempts: int, error: str) -> None:
-        delay = min(60.0, float(2 ** min(max(attempts, 1), 6)))
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    "UPDATE pending_writebacks SET attempts = ?, next_attempt_at = ?, last_error = ? "
-                    "WHERE run_id = ?",
-                    (attempts, time.time() + delay, error[:1000], run_id),
-                )
-
-    def mark_dead(self, run_id: str, *, attempts: int, error: str) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    "UPDATE pending_writebacks SET attempts = ?, last_error = ?, dead_letter = 1 "
-                    "WHERE run_id = ?",
-                    (attempts, error[:1000], run_id),
-                )
-
-    def pending_count(self) -> int:
-        with closing(self._connect()) as connection:
-            return int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM pending_writebacks WHERE dead_letter = 0"
-                ).fetchone()[0]
-            )
 
 
 class ScheduledTaskExecutorRuntime:
@@ -178,9 +56,8 @@ class ScheduledTaskExecutorRuntime:
         poll_interval_seconds: float = 2.0,
         lease_seconds: int = 300,
         lease_renew_interval_seconds: float = 15.0,
-        request_timeout_seconds: float | None = None,
-        execution_timeout_seconds: float | None = None,
-        outbox_path: str | Path | None = None,
+        request_timeout_seconds: float = 120.0,
+        execution_timeout_seconds: float = 600.0,
     ):
         self.ports = ports
         self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
@@ -189,15 +66,11 @@ class ScheduledTaskExecutorRuntime:
             10.0,
             min(float(lease_renew_interval_seconds), self.lease_seconds / 2),
         )
-        self.request_timeout_seconds = _scheduled_timeout_seconds(
-            "VOIDCUBE_SCHEDULED_REQUEST_TIMEOUT_SECONDS",
-            default=120.0,
-            explicit=request_timeout_seconds,
+        self.request_timeout_seconds = max(
+            0.1, min(float(request_timeout_seconds), 86400.0)
         )
-        self.execution_timeout_seconds = _scheduled_timeout_seconds(
-            "VOIDCUBE_SCHEDULED_EXECUTION_TIMEOUT_SECONDS",
-            default=600.0,
-            explicit=execution_timeout_seconds,
+        self.execution_timeout_seconds = max(
+            0.1, min(float(execution_timeout_seconds), 86400.0)
         )
         self._last_poll_at = 0.0
         self._poll_lock = threading.Lock()
@@ -207,23 +80,7 @@ class ScheduledTaskExecutorRuntime:
         self._companion_run_ids: set[str] = set()
         self._run_task_ids: dict[str, str] = {}
         self._execution_gate_acquired = False
-        self._outbox = ScheduledWritebackOutbox(
-            outbox_path
-            or (get_runtime_layout().runtime_root / "cli" / "scheduled_writebacks.db")
-        )
-
-    @staticmethod
-    def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{default_gateway_url().rstrip('/')}/api/supervisor{path}"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            decoded = json.loads(response.read().decode("utf-8"))
-            return dict(decoded) if isinstance(decoded, dict) else {}
+        self._outbox = ports.writeback_outbox
 
     def _autonomous_mode_is_active(self) -> bool:
         return bool(self.ports.autonomous_mode_active())
@@ -279,10 +136,12 @@ class ScheduledTaskExecutorRuntime:
                 run_id = str(pending.pop("_outbox_run_id"))
                 attempts = int(pending.pop("_outbox_attempts", 0)) + 1
                 try:
-                    self._post(f"/scheduled-task-runs/{run_id}/finish", pending)
-                except urllib.error.HTTPError as exc:
-                    detail = f"HTTP {exc.code}: {exc.reason}"
-                    if exc.code in {400, 404, 409}:
+                    self.ports.post_supervisor(
+                        f"/scheduled-task-runs/{run_id}/finish", pending
+                    )
+                except ScheduledRequestRejected as exc:
+                    detail = str(exc)
+                    if exc.status_code in {400, 404, 409}:
                         self._outbox.mark_dead(run_id, attempts=attempts, error=detail)
                         logger.error("Scheduled task writeback permanently rejected for %s: %s", run_id, detail)
                     else:
@@ -307,15 +166,15 @@ class ScheduledTaskExecutorRuntime:
         def renew_loop() -> None:
             while not stop_event.wait(self.lease_renew_interval_seconds):
                 try:
-                    self._post(
+                    self.ports.post_supervisor(
                         f"/scheduled-task-runs/{run_id}/renew",
                         {
                             "owner_session_id": owner_session_id,
                             "lease_seconds": self.lease_seconds,
                         },
                     )
-                except urllib.error.HTTPError as exc:
-                    if exc.code in {400, 404, 409}:
+                except ScheduledRequestRejected as exc:
+                    if exc.status_code in {400, 404, 409}:
                         cancel = self.ports.cancel_background_task
                         if cancel is not None:
                             cancel(task_id, "任务已被星子取消")
@@ -362,7 +221,7 @@ class ScheduledTaskExecutorRuntime:
                 self._release_execution_slot()
                 return
             try:
-                response = self._post(
+                response = self.ports.post_supervisor(
                     "/scheduled-tasks/claim",
                     {
                         "owner_session_id": owner_session_id,
@@ -370,7 +229,7 @@ class ScheduledTaskExecutorRuntime:
                         "exclude_companion_work": self._autonomous_mode_is_active(),
                     },
                 )
-            except (OSError, ValueError, urllib.error.HTTPError):
+            except (OSError, ValueError, ScheduledRequestRejected):
                 self._release_execution_slot()
                 return
             claim = response.get("claim")
@@ -460,7 +319,7 @@ class ScheduledTaskExecutorRuntime:
                     if run_id not in self._active_run_ids:
                         return
                 heartbeat_stop.set()
-                limit_metadata = _rate_limit_writeback(error) if not success else {
+                limit_metadata = dict(self.ports.rate_limit_metadata(error)) if not success else {
                     "rate_limited": False,
                     "retry_after_seconds": None,
                     "error_code": None,

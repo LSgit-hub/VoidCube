@@ -8,8 +8,6 @@ metadata:
   VoidCube:
     tags: [LOC, Code Analysis, pygount, Codebase, Metrics, Repository]
     related_skills: [github-repo-management]
-prerequisites:
-  commands: [pygount]
 ---
 
 # 使用pygount进行代码库检查

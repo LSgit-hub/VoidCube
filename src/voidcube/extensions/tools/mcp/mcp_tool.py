@@ -1837,7 +1837,7 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
             tools=registered_names,
         )
         # Inject into VoidCube-* umbrella toolsets for default behavior
-        for ts_name in ("voidcube", "voidcube-cli"):
+        for ts_name in ("voidcube",):
             ts = TOOLSETS.get(ts_name)
             if ts is None:
                 continue

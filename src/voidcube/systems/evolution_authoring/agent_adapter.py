@@ -229,7 +229,7 @@ def _default_model_resolver() -> str:
 
 
 def _default_ai_agent_factory(**kwargs: object) -> ConversationAgent:
-    from run_agent import AIAgent
+    from voidcube.runtime.agent.runner import AIAgent
 
     return AIAgent(**kwargs)
 

@@ -1068,7 +1068,7 @@ def _compact_shell_body_profile(item: Dict[str, Any]) -> Dict[str, Any]:
             "candidate_commit",
             "present_roots",
             "top_level_entries",
-            "has_run_agent",
+            "has_agent_runner",
             "has_config",
         ),
     )

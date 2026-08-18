@@ -65,7 +65,9 @@ def build_shell_body_profile(shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:
             "profile_status": "ready",
             "present_roots": present_roots,
             "top_level_entries": top_level_entries,
-            "has_run_agent": (worktree / "run_agent.py").exists(),
+            "has_agent_runner": (
+                worktree / "src" / "voidcube" / "runtime" / "agent" / "runner.py"
+            ).exists(),
             "has_config": (worktree / "config.yaml").exists(),
         }
     )

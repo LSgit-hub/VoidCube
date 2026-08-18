@@ -10,16 +10,12 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import uuid
-import sys
 from typing import Optional
 
 from .base import BaseEnvironment, _build_bash_command, _popen_bash
 from .local import _VOIDCUBE_PROVIDER_ENV_BLOCKLIST
-
-sys.modules.setdefault("tools.environments.docker", sys.modules[__name__])
 
 logger = logging.getLogger(__name__)
 

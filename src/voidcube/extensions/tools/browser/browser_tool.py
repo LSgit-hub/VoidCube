@@ -66,12 +66,8 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from ....infrastructure.providers.auxiliary_client import call_llm
-try:
-    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from voidcube.runtime.agent.tool_execution import ToolExecutionResult
 from ....domain.contracts.artifacts import Artifact
-from ....interfaces.cli.i18n import t
 from ....infrastructure.config.runtime_paths import get_cache_dir, get_VoidCube_home
 
 try:
@@ -519,7 +515,7 @@ def _socket_safe_tmpdir() -> str:
 
 
 # Track active sessions per task
-# Stores: session_name (always), bb_session_id + cdp_url (cloud mode only)
+# Stores: session_name (always), session_id + cdp_url (cloud mode only)
 _active_sessions: Dict[str, Dict[str, str]] = {}  # task_id -> {session_name, ...}
 _recording_sessions: set = set()  # task_ids with active recordings
 
@@ -924,7 +920,7 @@ def _create_local_session(task_id: str) -> Dict[str, str]:
                 session_name, task_id)
     return {
         "session_name": session_name,
-        "bb_session_id": None,
+        "session_id": None,
         "cdp_url": None,
         "features": {"local": True},
     }
@@ -938,7 +934,7 @@ def _create_cdp_session(task_id: str, cdp_url: str) -> Dict[str, str]:
                 session_name, cdp_url, task_id)
     return {
         "session_name": session_name,
-        "bb_session_id": None,
+        "session_id": None,
         "cdp_url": cdp_url,
         "features": {"cdp_override": True},
     }
@@ -957,7 +953,7 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, str]:
         task_id: Unique identifier for the task
         
     Returns:
-        Dict with session_name (always), bb_session_id + cdp_url (cloud only)
+        Dict with session_name (always), session_id + cdp_url (cloud only)
     """
     if task_id is None:
         task_id = "default"
@@ -1368,7 +1364,7 @@ def _extract_relevant_content(
 
     # Redact secrets from snapshot before sending to auxiliary LLM.
     # Without this, a page displaying env vars or API keys would leak
-    # secrets to the extraction model before run_agent.py's general
+    # secrets to the extraction model before the Agent runtime's general
     # redaction layer ever sees the tool result.
     from ....infrastructure.persistence.redaction import redact_sensitive_text
     extraction_prompt = redact_sensitive_text(extraction_prompt)
@@ -1432,7 +1428,7 @@ def _inject_saved_account_cookies(
     try:
         from voidcube.systems.supervisor.account_store import cookies_for_url
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.systems.supervisor.account_store import cookies_for_url
+        from voidcube.systems.supervisor.account_store import cookies_for_url
 
     cookies = cookies_for_url(url)
     if not cookies:
@@ -2382,8 +2378,8 @@ def cleanup_browser(task_id: Optional[str] = None) -> None:
         session_info = _active_sessions.get(task_id)
     
     if session_info:
-        bb_session_id = session_info.get("bb_session_id", "unknown")
-        logger.debug("Found session for task %s: bb_session_id=%s", task_id, bb_session_id)
+        session_id = session_info.get("session_id", "unknown")
+        logger.debug("Found session for task %s: session_id=%s", task_id, session_id)
         
         # Stop auto-recording before closing (saves the file)
         _maybe_stop_recording(task_id)
@@ -2401,11 +2397,11 @@ def cleanup_browser(task_id: Optional[str] = None) -> None:
             _session_last_activity.pop(task_id, None)
         
         # Cloud mode: close the cloud browser session via provider API
-        if bb_session_id:
+        if session_id:
             provider = _get_cloud_provider()
             if provider is not None:
                 try:
-                    provider.close_session(bb_session_id)
+                    provider.close_session(session_id)
                 except Exception as e:
                     logger.warning("Could not close cloud browser session: %s", e)
         
@@ -2531,15 +2527,14 @@ if __name__ == "__main__":
             print(f"     Install: {_browser_install_hint()}")
         if _cp is not None and not _cp.is_configured():
             print(f"   - {_cp.provider_name()} credentials not configured")
-            _local_mode_default = "Tip: set browser.cloud_provider to 'local' to use free local mode instead"
-            print(f"   {t('tips.browser_local_mode', default=_local_mode_default)}")
+            print("   Tip: set browser.cloud_provider to 'local' to use free local mode instead")
     
     print("\n📋 Available Browser Tools:")
     for schema in BROWSER_TOOL_SCHEMAS:
         print(f"  🔹 {schema['name']}: {schema['description'][:60]}...")
     
     print("\n💡 Usage:")
-    print("  from tools.browser_tool import browser_navigate, browser_snapshot")
+    print("  from voidcube.extensions.tools.browser.browser_tool import browser_navigate, browser_snapshot")
     print("  result = browser_navigate('https://example.com', task_id='my_task')")
     print("  snapshot = browser_snapshot(task_id='my_task')")
 

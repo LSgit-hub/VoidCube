@@ -11,7 +11,7 @@
 - 支持多语言
 
 使用:
-    from tools.web_tools_local import local_web_search, local_web_extract
+    from voidcube.extensions.tools.web.web_tools_local import local_web_search, local_web_extract
     
     # 搜索
     results = local_web_search("Python 教程", limit=5)
@@ -111,7 +111,7 @@ def _request_html(url: str, timeout: float) -> str:
     try:
         from voidcube.systems.supervisor.account_store import cookie_header_for_url
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.systems.supervisor.account_store import cookie_header_for_url
+        from voidcube.systems.supervisor.account_store import cookie_header_for_url
     cookie_header = cookie_header_for_url(url)
     if cookie_header:
         headers['Cookie'] = cookie_header
@@ -262,7 +262,7 @@ def local_web_extract(
         try:
             from voidcube.systems.supervisor.account_store import cookie_header_for_url
         except (ModuleNotFoundError, ImportError):
-            from src.voidcube.systems.supervisor.account_store import cookie_header_for_url
+            from voidcube.systems.supervisor.account_store import cookie_header_for_url
         cookie_header = cookie_header_for_url(url)
         if cookie_header:
             headers['Cookie'] = cookie_header

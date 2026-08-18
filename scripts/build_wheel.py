@@ -16,31 +16,27 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SRC_ROOT = ROOT / "src"
+for import_root in (ROOT, SRC_ROOT):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
-from agent.integration_policy import matching_retired_integrations
-from VoidCube_cli import __version__
+from voidcube.domain.contracts.integration_policy import matching_retired_integrations
+from voidcube.version import __version__
 
 
-PACKAGE_DIRS = (
-    "agent",
-    "tools",
-    "VoidCube_app",
-    "VoidCube_cli",
-    "VoidCube_core",
-    "systems",
-    "plugins",
-)
-TOP_LEVEL_MODULES = ("cli.py", "run_agent.py")
+PACKAGE_DIRS = ("plugins",)
+TOP_LEVEL_MODULES: tuple[str, ...] = ()
 SOURCE_PACKAGES = (Path("src") / "voidcube",)
 MEM_SOURCE_ROOT = Path("Mem/src")
 MEM_PACKAGE = MEM_SOURCE_ROOT / "memai"
-MEM_FORBIDDEN_IMPORT_ROOTS = frozenset({"agent", "VoidCube_app", "systems"})
+MEM_FORBIDDEN_IMPORT_ROOTS = frozenset(
+    {"agent", "tools", "systems", "VoidCube_app", "VoidCube_cli", "VoidCube_core"}
+)
 RETIRED_MEMORY_PACKAGE_PREFIX = "systems/memory/"
-SUPERVISOR_UI_RESOURCE = Path("systems/supervisor/web/supervisor.html")
+SUPERVISOR_UI_RESOURCE = Path("voidcube/systems/supervisor/web/supervisor.html")
 CANONICAL_SUPERVISOR_UI_RESOURCE = Path("voidcube/systems/supervisor/web/supervisor.html")
-PODMAN_CONTAINERFILE_RESOURCE = Path("tools/containerfiles/podman-agent.Containerfile")
+PODMAN_CONTAINERFILE_RESOURCE = Path("voidcube/infrastructure/execution/containerfiles/podman-agent.Containerfile")
 PLUGIN_MANIFEST_GLOB = "plugins/*/plugin.json"
 
 
@@ -119,10 +115,10 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
             if path.is_file() and path.suffix in {".json", ".md"}
         )
 
-    locales = root / "VoidCube_cli" / "locales"
+    locales = root / "src" / "voidcube" / "interfaces" / "cli" / "locales"
     if locales.is_dir():
         expected.update(
-            path.relative_to(root).as_posix()
+            path.relative_to(root / "src").as_posix()
             for path in locales.rglob("*.json")
             if path.is_file()
         )
@@ -146,7 +142,7 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
     if dependency_manifest.is_file():
         expected.add(dependency_manifest.relative_to(root / "src").as_posix())
 
-    podman_containerfile = root / PODMAN_CONTAINERFILE_RESOURCE
+    podman_containerfile = root / "src" / PODMAN_CONTAINERFILE_RESOURCE
     if podman_containerfile.is_file():
         expected.add(PODMAN_CONTAINERFILE_RESOURCE.as_posix())
 
@@ -212,7 +208,7 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 name.startswith("memai/identity/")
                 and Path(name).suffix in {".json", ".md"}
             ) or (
-                name.startswith("VoidCube_cli/locales/") and name.endswith(".json")
+                name.startswith("voidcube/interfaces/cli/locales/") and name.endswith(".json")
             ) or name in {
                 SUPERVISOR_UI_RESOURCE.as_posix(),
                 CANONICAL_SUPERVISOR_UI_RESOURCE.as_posix(),
@@ -271,7 +267,7 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
             requires_python = str(tomllib.load(handle)["project"]["requires-python"])
         if wheel_metadata.get("Version") != __version__:
             errors.append(
-                "wheel version does not match VoidCube_cli.__version__: "
+                "wheel version does not match voidcube.version.__version__: "
                 f"{wheel_metadata.get('Version')!r} != {__version__!r}"
             )
         packaged_requires_python = wheel_metadata.get("Requires-Python")

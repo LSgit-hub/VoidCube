@@ -74,7 +74,7 @@ def _load_security_config() -> dict:
         "tirith_fail_open": True,
     }
     try:
-        from ...config.configuration import load_config
+        from ..config.configuration import load_config
         cfg = load_config().get("security", {}) or {}
     except Exception:
         cfg = {}

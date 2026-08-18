@@ -47,18 +47,14 @@ class i18n:
         
         Args:
             locales_dir: Directory containing language files. If None,
-                        uses default location (VoidCube_cli/locales).
+                        uses the canonical CLI package asset directory.
         """
         if locales_dir is None:
-            # Locale JSON remains a package asset during the migration. Prefer a
-            # future canonical asset directory, then use the shipped legacy asset.
             canonical_dir = Path(__file__).parent / "locales"
             if canonical_dir.exists():
                 locales_dir = canonical_dir
             else:
-                # Locale JSON remains packaged with the compatibility package
-                # until the asset move is completed.
-                locales_dir = Path(resource_files("VoidCube_cli")) / "locales"
+                locales_dir = Path(resource_files("voidcube.interfaces.cli")) / "locales"
         
         self._locales_dir = locales_dir
         
@@ -254,7 +250,7 @@ def init_i18n(locale: Optional[str] = None) -> None:
         target_locale = os.environ.get("VOIDCUBE_LANG")
     
     if target_locale is None:
-        # Check configuration file — read directly to avoid importing VoidCube_app.config
+        # Check the canonical runtime configuration directly.
         # (~62ms import chain) at module init time
         try:
             from ...infrastructure.config.runtime_paths import get_config_path

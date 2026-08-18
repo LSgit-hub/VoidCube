@@ -42,7 +42,7 @@ _LEVEL_RE = re.compile(r"\s(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s")
 
 # Logger name extraction — after level and optional session tag, the next
 # non-space token before ":" is the logger name.
-# Matches: "INFO gateway.run:" or "INFO [sess_abc] tools.terminal_tool:"
+# Matches: "INFO gateway.run:" or "INFO [sess_abc] voidcube.infrastructure.execution.terminal_tool:"
 _LOGGER_NAME_RE = re.compile(
     r"\s(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)"  # level
     r"(?:\s+\[.*?\])?"                           # optional session tag

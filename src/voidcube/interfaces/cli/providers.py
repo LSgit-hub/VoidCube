@@ -34,9 +34,7 @@ logger = logging.getLogger(__name__)
 class VoidcubeOverlay:
     """Voidcube-specific provider metadata layered on top of models.dev.
     
-    .. deprecated::
-        Use VoidCube_cli.provider_registry.ProviderEntry instead.
-        VoidcubeOverlay is retained as a data source for ProviderRegistry.
+    Provider metadata layered on top of the runtime provider registry.
     """
 
     is_aggregator: bool = False

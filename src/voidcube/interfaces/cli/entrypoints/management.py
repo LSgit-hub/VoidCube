@@ -171,9 +171,9 @@ def cmd_sessions(args):
         # Launch VoidCube --resume <id> by replacing the current process
         print(f"Resuming session: {selected_id}")
         import shutil
-        VoidCube_bin = shutil.which("VoidCube")
-        if VoidCube_bin:
-            os.execvp(VoidCube_bin, ["VoidCube", "--resume", selected_id])
+        voidcube_bin = shutil.which("VoidCube")
+        if voidcube_bin:
+            os.execvp(voidcube_bin, ["VoidCube", "--resume", selected_id])
         else:
             # Fallback: re-invoke via python -m
             os.execvp(
@@ -181,11 +181,7 @@ def cmd_sessions(args):
                 [
                     sys.executable,
                     "-m",
-                    (
-                        "src.voidcube.interfaces.cli.main"
-                        if __package__.startswith("src.")
-                        else "voidcube.interfaces.cli.main"
-                    ),
+                    "voidcube.interfaces.cli.main",
                     "--resume",
                     selected_id,
                 ],
@@ -228,10 +224,7 @@ def cmd_api(args):
     """Interactive API configuration wizard."""
     _require_tty("api")
     try:
-        try:
-            from voidcube.interfaces.cli.configuration import run_api_config_wizard
-        except (ModuleNotFoundError, ImportError):
-            from src.voidcube.interfaces.cli.configuration import run_api_config_wizard
+        from voidcube.interfaces.cli.configuration import run_api_config_wizard
         run_api_config_wizard()
     except ImportError:
         print("API configuration module not available.")
@@ -251,7 +244,7 @@ def cmd_gateway(args):
 
 def cmd_profile(args):
     """Profile management commands."""
-    from ..profiles import (
+    from ....infrastructure.config.profiles import (
         list_profiles, create_profile, delete_profile, set_active_profile, resolve_profile_env,
     )
 

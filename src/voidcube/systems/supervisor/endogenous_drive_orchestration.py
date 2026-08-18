@@ -72,13 +72,13 @@ def build_endogenous_drive_policy(runtime_config: Any) -> JsonDict:
         "body_improvement_editable_dirs": list(
             setting(
                 "body_improvement_editable_dirs",
-                ["skills/", "tools/", "agent/", "prompts/"],
+                ["skills/", "src/voidcube/runtime/agent/", "src/voidcube/extensions/tools/", "prompts/"],
             )
         ),
         "body_improvement_forbidden_patterns": list(
             setting(
                 "body_improvement_forbidden_patterns",
-                ["**/credential*", "**/.env*", "systems/**"],
+                ["**/credential*", "**/.env*", "src/voidcube/systems/**"],
             )
         ),
         "body_improvement_max_files": int(

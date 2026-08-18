@@ -19,23 +19,9 @@ from .manager import (
 _plugin_manager = get_plugin_manager()
 
 
-def _register_executable_plugin_tools() -> None:
-    """Register executable plugin tools with the tool registry.
-
-    Previously registered legacy tools (http_request, browser, append_file,
-    git_manage) that were superseded by the main tool system.  No-op now —
-    kept as an extension point for future plugin-provided tools.
-    """
-
-
 def discover_plugins() -> List[str]:
-    """Discover and auto-register built-in toolsets from VoidCube_cli/tools/."""
-    discovered: List[str] = []
-    try:
-        _register_executable_plugin_tools()
-    except Exception:
-        pass
-    return discovered
+    """Return names of explicitly registered executable plugins."""
+    return list(_plugin_manager.list_plugins())
 
 
 def get_plugin_toolsets() -> List[tuple]:

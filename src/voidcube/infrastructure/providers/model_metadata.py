@@ -1,7 +1,7 @@
 """Model metadata, context lengths, and token estimation utilities.
 
 Pure utility functions with no AIAgent dependency. Used by ContextCompressor
-and run_agent.py for pre-flight context checks.
+and the Agent runtime for pre-flight context checks.
 """
 
 import logging

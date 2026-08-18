@@ -34,10 +34,9 @@ SKILL.md Format (YAML Frontmatter, agentskills.io compatible):
     platforms: [macos]            # Optional — restrict to specific OS platforms
                                   #   Valid: macos, linux, windows
                                   #   Omit to load on all platforms (default)
-    prerequisites:                # Optional — legacy runtime requirements
-      env_vars: [API_KEY]         #   Legacy env var names are normalized into
-                                  #   required_environment_variables on load.
-      commands: [curl, jq]        #   Command checks remain advisory only.
+    required_environment_variables: # Optional runtime requirements
+      - name: API_KEY
+        prompt: Enter the API key
     compatibility: Requires X     # Optional (agentskills.io)
     metadata:                     # Optional, arbitrary key-value (agentskills.io)
       VoidCube:
@@ -77,6 +76,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
 from ..tools.registry import registry, tool_error
+from .catalog import get_disabled_skill_names, parse_frontmatter, skill_matches_platform
 
 logger = logging.getLogger(__name__)
 
@@ -116,36 +116,6 @@ class SkillReadinessStatus(str, Enum):
 def set_secret_capture_callback(callback) -> None:
     global _secret_capture_callback
     _secret_capture_callback = callback
-
-
-def skill_matches_platform(frontmatter: Dict[str, Any]) -> bool:
-    """Check if a skill is compatible with the current OS platform.
-
-    Delegates to ``agent.skill_utils.skill_matches_platform`` — kept here
-    as a public re-export so existing callers don't need updating.
-    """
-    from .catalog import skill_matches_platform
-    return skill_matches_platform(frontmatter)
-
-
-def _normalize_prerequisite_values(value: Any) -> List[str]:
-    if not value:
-        return []
-    if isinstance(value, str):
-        value = [value]
-    return [str(item) for item in value if str(item).strip()]
-
-
-def _collect_prerequisite_values(
-    frontmatter: Dict[str, Any],
-) -> Tuple[List[str], List[str]]:
-    prereqs = frontmatter.get("prerequisites")
-    if not prereqs or not isinstance(prereqs, dict):
-        return [], []
-    return (
-        _normalize_prerequisite_values(prereqs.get("env_vars")),
-        _normalize_prerequisite_values(prereqs.get("commands")),
-    )
 
 
 def _normalize_setup_metadata(frontmatter: Dict[str, Any]) -> Dict[str, Any]:
@@ -195,7 +165,6 @@ def _normalize_setup_metadata(frontmatter: Dict[str, Any]) -> Dict[str, Any]:
 
 def _get_required_environment_variables(
     frontmatter: Dict[str, Any],
-    legacy_env_vars: List[str] | None = None,
 ) -> List[Dict[str, Any]]:
     setup = _normalize_setup_metadata(frontmatter)
     required_raw = frontmatter.get("required_environment_variables")
@@ -250,11 +219,6 @@ def _get_required_environment_variables(
                 "help": item.get("provider_url") or setup.get("help"),
             }
         )
-
-    if legacy_env_vars is None:
-        legacy_env_vars, _ = _collect_prerequisite_values(frontmatter)
-    for env_var in legacy_env_vars:
-        _append_required({"name": env_var})
 
     return required
 
@@ -394,16 +358,6 @@ def check_skills_requirements() -> bool:
     return True
 
 
-def _parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
-    """Parse YAML frontmatter from markdown content.
-
-    Delegates to ``agent.skill_utils.parse_frontmatter`` — kept here
-    as a public re-export so existing callers don't need updating.
-    """
-    from .catalog import parse_frontmatter
-    return parse_frontmatter(content)
-
-
 def _get_category_from_path(skill_path: Path) -> Optional[str]:
     """
     Extract category from skill path based on directory structure.
@@ -435,51 +389,14 @@ def _get_category_from_path(skill_path: Path) -> Optional[str]:
 
 
 # Token estimation — use the shared implementation from model_metadata.
-try:
-    from voidcube.infrastructure.providers.model_metadata import estimate_tokens_rough as _estimate_tokens
-except ModuleNotFoundError:
-    from src.voidcube.infrastructure.providers.model_metadata import estimate_tokens_rough as _estimate_tokens
+from voidcube.infrastructure.providers.model_metadata import estimate_tokens_rough as _estimate_tokens
 
 
 def _parse_tags(tags_value) -> List[str]:
-    """
-    Parse tags from frontmatter value.
-
-    Handles:
-    - Already-parsed list (from yaml.safe_load): [tag1, tag2]
-    - String with brackets: "[tag1, tag2]"
-    - Comma-separated string: "tag1, tag2"
-
-    Args:
-        tags_value: Raw tags value — may be a list or string
-
-    Returns:
-        List of tag strings
-    """
-    if not tags_value:
+    if not isinstance(tags_value, list):
         return []
+    return [str(tag).strip() for tag in tags_value if str(tag).strip()]
 
-    # yaml.safe_load already returns a list for [tag1, tag2]
-    if isinstance(tags_value, list):
-        return [str(t).strip() for t in tags_value if t]
-
-    # String fallback — handle bracket-wrapped or comma-separated
-    tags_value = str(tags_value).strip()
-    if tags_value.startswith("[") and tags_value.endswith("]"):
-        tags_value = tags_value[1:-1]
-
-    return [t.strip().strip("\"'") for t in tags_value.split(",") if t.strip()]
-
-
-
-def _get_disabled_skill_names() -> Set[str]:
-    """Load disabled skill names from config.
-
-    Delegates to ``agent.skill_utils.get_disabled_skill_names`` — kept here
-    as a public re-export so existing callers don't need updating.
-    """
-    from .catalog import get_disabled_skill_names
-    return get_disabled_skill_names()
 
 
 def _is_skill_disabled(name: str, platform: str = None) -> bool:
@@ -515,7 +432,7 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
     seen_names: set = set()
 
     # Load disabled set once (not per-skill)
-    disabled = set() if skip_disabled else _get_disabled_skill_names()
+    disabled = set() if skip_disabled else get_disabled_skill_names()
 
     # Scan all runtime-visible skill dirs with local precedence first.
     dirs_to_scan = []
@@ -534,7 +451,7 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
 
             try:
                 content = skill_md.read_text(encoding="utf-8")[:4000]
-                frontmatter, body = _parse_frontmatter(content)
+                frontmatter, body = parse_frontmatter(content)
 
                 if not skill_matches_platform(frontmatter):
                     continue
@@ -594,7 +511,7 @@ def _load_category_description(category_dir: Path) -> Optional[str]:
     try:
         content = desc_file.read_text(encoding="utf-8")
         # Parse frontmatter if present
-        frontmatter, body = _parse_frontmatter(content)
+        frontmatter, body = parse_frontmatter(content)
 
         # Prefer frontmatter description, fall back to first non-header line
         description = frontmatter.get("description", "")
@@ -663,7 +580,7 @@ def skills_categories(verbose: bool = False, task_id: str = None) -> str:
                     continue
 
                 try:
-                    frontmatter, _ = _parse_frontmatter(
+                    frontmatter, _ = parse_frontmatter(
                         skill_md.read_text(encoding="utf-8")[:4000]
                     )
                 except (OSError, ValueError) as e:
@@ -816,9 +733,6 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
                 skill_dir = direct_path
                 skill_md = direct_path / "SKILL.md"
                 break
-            elif direct_path.with_suffix(".md").exists():
-                skill_md = direct_path.with_suffix(".md")
-                break
 
         # Search by directory name across all dirs
         if not skill_md:
@@ -827,16 +741,6 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
                     if found_skill_md.parent.name == name:
                         skill_dir = found_skill_md.parent
                         skill_md = found_skill_md
-                        break
-                if skill_md:
-                    break
-
-        # Legacy: flat .md files
-        if not skill_md:
-            for search_dir in all_dirs:
-                for found_md in search_dir.rglob(f"{name}.md"):
-                    if found_md.name != "SKILL.md":
-                        skill_md = found_md
                         break
                 if skill_md:
                     break
@@ -907,7 +811,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
 
         parsed_frontmatter: Dict[str, Any] = {}
         try:
-            parsed_frontmatter, _ = _parse_frontmatter(content)
+            parsed_frontmatter, _ = parse_frontmatter(content)
         except Exception:
             parsed_frontmatter = {}
 
@@ -1084,17 +988,14 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
                         [str(f.relative_to(skill_dir)) for f in scripts_dir.glob(ext)]
                     )
 
-        # Read tags/related_skills with backward compat:
-        # Check metadata.VoidCube.* first (agentskills.io convention), fall back to top-level
+        # Read VoidCube extensions from the canonical metadata namespace.
         VoidCube_meta: Dict[str, Any] = {}
         metadata = frontmatter.get("metadata")
         if isinstance(metadata, dict):
             VoidCube_meta = metadata.get("VoidCube", {}) or {}
 
-        tags = _parse_tags(VoidCube_meta.get("tags") or frontmatter.get("tags", ""))
-        related_skills = _parse_tags(
-            VoidCube_meta.get("related_skills") or frontmatter.get("related_skills", "")
-        )
+        tags = _parse_tags(VoidCube_meta.get("tags"))
+        related_skills = _parse_tags(VoidCube_meta.get("related_skills"))
 
         # Build linked files structure for clear discovery
         linked_files = {}
@@ -1115,10 +1016,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
         skill_name = frontmatter.get(
             "name", skill_md.stem if not skill_dir else skill_dir.name
         )
-        legacy_env_vars, _ = _collect_prerequisite_values(frontmatter)
-        required_env_vars = _get_required_environment_variables(
-            frontmatter, legacy_env_vars
-        )
+        required_env_vars = _get_required_environment_variables(frontmatter)
         backend = _get_terminal_backend_name()
         env_snapshot = load_env()
         missing_required_env_vars = [

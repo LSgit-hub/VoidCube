@@ -9,8 +9,9 @@ from typing import Any, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REFERENCE = ROOT / "VoidCube_cli" / "locales" / "en_US.json"
-DEFAULT_TRANSLATION = ROOT / "VoidCube_cli" / "locales" / "zh_CN.json"
+LOCALE_ROOT = ROOT / "src" / "voidcube" / "interfaces" / "cli" / "locales"
+DEFAULT_REFERENCE = LOCALE_ROOT / "en_US.json"
+DEFAULT_TRANSLATION = LOCALE_ROOT / "zh_CN.json"
 Issue = tuple[str, Any]
 
 

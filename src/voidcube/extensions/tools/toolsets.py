@@ -127,12 +127,6 @@ TOOLSETS = {
         "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
     },
 
-    "voidcube-cli": {
-        "description": "Core tools for server management (alias for voidcube)",
-        "tools": [],
-        "includes": ["voidcube"]
-    },
-    
     "mini": {
         "description": "Minimal toolset for quick tasks",
         "tools": ["web_search", "terminal", "read_file", "write_file"],

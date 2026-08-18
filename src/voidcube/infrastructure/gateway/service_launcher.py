@@ -330,12 +330,7 @@ _foreground_threads: list = []
 def _build_service_config(name: str, port: int, system_config: Any | None = None) -> Any:
     """Build the runtime config object used by a named service."""
     from ..memory.host_integration import configure_voidcube_mem_host
-    try:
-        from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig
-    except ModuleNotFoundError:
-        # The repository's root ``voidcube.py`` shadows the installed package
-        # during source-tree tests; keep the canonical package import first.
-        from src.voidcube.infrastructure.gateway.internal_gateway import GatewayConfig
+    from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig
     from ...systems.supervisor.supervisor import SupervisorConfig
     from memai.application.config import MemoryServiceConfig
     from ..config.system import get_config
@@ -366,10 +361,7 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
 
 def _build_service_app(name: str, port: int):
     """Build the FastAPI app for a named service (shared by fg/bg paths)."""
-    try:
-        from voidcube.infrastructure.gateway.internal_gateway import InternalGateway
-    except ModuleNotFoundError:
-        from src.voidcube.infrastructure.gateway.internal_gateway import InternalGateway
+    from voidcube.infrastructure.gateway.internal_gateway import InternalGateway
     from ...systems.supervisor.supervisor import Supervisor
     from memai.application.memory_service import MemoryService
 
@@ -452,11 +444,7 @@ def _restart_foreground_with_service_python() -> None:
         [
             service_python,
             "-m",
-            (
-                "src.voidcube.interfaces.cli.main"
-                if __package__.startswith("src.")
-                else "voidcube.interfaces.cli.main"
-            ),
+            "voidcube.interfaces.cli.main",
             "serve",
             "start",
             "--foreground",
@@ -655,12 +643,8 @@ def status_all() -> Dict[str, Any]:
     return result
 
 
-def print_status(full: bool = False) -> None:
-    """Print a formatted status table.
-
-    When ``full=True``, also fetches supervisor/gateway data and displays
-    the rich execution dashboard with autonomous-chain observation and agent status.
-    """
+def print_status() -> None:
+    """Print the infrastructure service status table."""
     # Always show daemon status
     status = status_all()
     _safe_print("\n  VoidCube Services")
@@ -673,17 +657,6 @@ def print_status(full: bool = False) -> None:
         _safe_print(f"  {name:12s} {info['port']:>6d} {pid_str:>8s} {running:>10s}")
     _safe_print("  " + "─" * 52)
     _safe_print()
-
-    # If full dashboard requested, fetch supervisor/gateway data
-    if full:
-        try:
-            from ...interfaces.cli.ops.dashboard import print_dashboard
-            print_dashboard()
-        except Exception as exc:
-            _safe_print(f"  ⚠ Dashboard unavailable: {exc}")
-            _safe_print(f"    Is the supervisor running?  http://127.0.0.1:6002/ui")
-            _safe_print()
-
 
 def start_all(foreground: bool = False) -> None:
     """Start default stable services.

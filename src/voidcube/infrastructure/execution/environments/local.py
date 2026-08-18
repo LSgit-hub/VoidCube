@@ -12,13 +12,8 @@ import threading
 import time
 import uuid
 
-import sys
-
 from .base import BaseEnvironment, _get_activity_callback, _pipe_stdin
 from ..interrupt import is_interrupted
-
-# Preserve the legacy module identity for callers that inspect loaded backends.
-sys.modules.setdefault("tools.environments.local", sys.modules[__name__])
 
 _IS_WINDOWS = platform.system() == "Windows"
 

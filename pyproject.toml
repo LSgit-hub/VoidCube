@@ -75,12 +75,8 @@ dev = [
     "pytest-cov>=6.0.0,<8",
     "ruff>=0.12.0,<1",
 ]
-# 完整安装（兼容两种命名习惯）
-full = [
-    "voidcube-agent[local,image,voice,web]",
-]
 all = [
-    "voidcube-agent[full]",
+    "voidcube-agent[local,image,voice,web]",
 ]
 
 [project.scripts]
@@ -93,21 +89,19 @@ Documentation = "https://gitee.com/LSgit-hub/voidcub-CLI#readme"
 Repository = "https://gitee.com/LSgit-hub/voidcub-CLI"
 
 [tool.setuptools]
-py-modules = ["cli", "run_agent"]
 
 [tool.setuptools.dynamic]
-version = {attr = "VoidCube_cli.__version__"}
+version = {attr = "voidcube.version.__version__"}
 
 [tool.setuptools.packages.find]
 where = [".", "src", "Mem/src"]
-include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*", "voidcube*"]
+include = ["voidcube*", "plugins*", "memai*"]
 
 [tool.setuptools.package-data]
 memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
-VoidCube_cli = ["locales/*.json"]
-systems = ["supervisor/web/*.html"]
+"voidcube.interfaces.cli" = ["locales/*.json"]
 "voidcube.systems.supervisor" = ["web/*.html"]
-tools = ["containerfiles/*.Containerfile"]
+"voidcube.infrastructure.execution" = ["containerfiles/*.Containerfile"]
 "voidcube.extensions.tools" = ["presets/*.yaml", "dependency_manifest.yaml"]
 plugins = ["*/plugin.json"]
 
@@ -123,17 +117,9 @@ select = ["E9", "F63", "F7"]
 [tool.coverage.run]
 branch = true
 source = [
-    "agent",
-    "tools",
-    "systems",
-    "VoidCube_app",
-    "VoidCube_cli",
-    "VoidCube_core",
+    "voidcube",
     "plugins",
     "memai",
-    "run_agent",
-    "voidcube",
-    "cli",
 ]
 omit = ["tests/*", "Mem/tests/*"]
 

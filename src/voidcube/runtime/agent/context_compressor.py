@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, List, Optional
 try:
     from voidcube.domain.agent.context_engine import ContextEngine
 except ModuleNotFoundError:
-    from src.voidcube.domain.agent.context_engine import ContextEngine
+    from voidcube.domain.agent.context_engine import ContextEngine
 from ...infrastructure.providers.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
     get_next_probe_tier,

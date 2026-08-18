@@ -13,7 +13,7 @@ def cmd_model(args):
 
 def select_provider_and_model(args=None):
     """Switch active provider/model only within the saved provider config."""
-    from ...infrastructure.config.configuration import (
+    from ....infrastructure.config.configuration import (
         get_active_provider_key,
         get_configured_providers,
         load_config,
@@ -21,7 +21,7 @@ def select_provider_and_model(args=None):
         set_active_provider,
         set_provider_model,
     )
-    from ...infrastructure.providers.model_catalog import curated_models_for_provider
+    from ....infrastructure.providers.model_catalog import curated_models_for_provider
 
     config = load_config()
     providers = get_configured_providers(config)

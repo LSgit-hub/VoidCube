@@ -147,7 +147,7 @@ export class ServiceController {
       const args = [
         ...this.runtime.pythonPrefixArgs,
         '-m',
-        'VoidCube_cli.desktop_control',
+        'voidcube.interfaces.desktop.desktop_control',
         action
       ]
       const child = spawn(this.runtime.pythonCommand, args, {

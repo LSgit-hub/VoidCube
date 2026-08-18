@@ -128,13 +128,6 @@ def _format_context_length(tokens: int) -> str:
     return str(tokens)
 
 
-def _display_toolset_name(toolset_name: str) -> str:
-    """Normalize internal/legacy toolset identifiers for banner display."""
-    if not toolset_name:
-        return "unknown"
-    return toolset_name[:-6] if toolset_name.endswith("_tools") else toolset_name
-
-
 # =========================================================================
 # Welcome banner with ASCII logo
 # =========================================================================

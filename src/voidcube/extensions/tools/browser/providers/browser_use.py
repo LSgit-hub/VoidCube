@@ -164,7 +164,7 @@ class BrowserUseProvider(CloudBrowserProvider):
 
         return {
             "session_name": session_name,
-            "bb_session_id": session_data["id"],
+            "session_id": session_data["id"],
             "cdp_url": cdp_url,
             "features": {"browser_use": True},
             "external_call_id": external_call_id,

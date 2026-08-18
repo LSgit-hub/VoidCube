@@ -32,10 +32,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-try:
-    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
-except ModuleNotFoundError:
-    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from voidcube.runtime.agent.tool_execution import ToolExecutionResult
 from ....infrastructure.config.configuration import load_config
 from ....domain.contracts.artifacts import Artifact
 from ....infrastructure.config.runtime_paths import get_cache_dir

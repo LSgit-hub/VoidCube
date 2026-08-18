@@ -147,9 +147,9 @@ class _ComponentFilter(logging.Filter):
 # Used by _ComponentFilter and exposed for ``VoidCube logs --component``.
 COMPONENT_PREFIXES = {
     "gateway": ("gateway",),
-    "agent": ("agent", "run_agent", "model_tools", "batch_runner"),
-    "tools": ("tools",),
-    "cli": ("VoidCube_cli", "cli"),
+    "agent": ("voidcube.runtime.agent", "voidcube.application"),
+    "tools": ("voidcube.extensions.tools",),
+    "cli": ("voidcube.interfaces.cli", "cli"),
 }
 
 

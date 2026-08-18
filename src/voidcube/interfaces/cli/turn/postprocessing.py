@@ -49,10 +49,8 @@ class TurnPostprocessingRuntime:
 
         if outcome.usable:
             try:
-                try:
-                    from voidcube.application.session_title import maybe_auto_title
-                except ModuleNotFoundError:
-                    from src.voidcube.application.session_title import maybe_auto_title
+                from voidcube.application.session_title import maybe_auto_title
+                from voidcube.infrastructure.providers.auxiliary_client import call_llm
 
                 maybe_auto_title(
                     self.ports.session_db(),
@@ -60,6 +58,7 @@ class TurnPostprocessingRuntime:
                     message,
                     response,
                     list(conversation_history),
+                    llm_call=call_llm,
                 )
             except Exception:
                 pass

@@ -56,7 +56,7 @@ from ...infrastructure.providers.auxiliary_client import extract_content_or_reas
 try:
     from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
+    from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
 from .debug_helpers import DebugSession
 from ...infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 

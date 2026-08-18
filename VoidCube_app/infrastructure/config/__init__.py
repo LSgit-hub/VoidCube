@@ -1,1 +1,0 @@
-"""Configuration persistence adapters."""

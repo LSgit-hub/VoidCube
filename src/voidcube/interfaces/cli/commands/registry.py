@@ -822,7 +822,7 @@ def _tools_command_ports(
     try:
         from voidcube.extensions.tools.configuration import get_platform_tools
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.tools.configuration import get_platform_tools
+        from voidcube.extensions.tools.configuration import get_platform_tools
 
     return ToolsCommandPorts(
         render_catalog=lambda: render_tools_for_host(
@@ -955,10 +955,7 @@ def _plan_command_ports(
     *,
     emit: Callable[[str], None],
 ) -> PlanCommandPorts:
-    try:
-        from voidcube.extensions.skills.commands import build_plan_path, build_skill_invocation_message
-    except ModuleNotFoundError:
-        from src.voidcube.extensions.skills.commands import build_plan_path, build_skill_invocation_message
+    from voidcube.extensions.skills.commands import build_plan_path, build_skill_invocation_message
     from ..cli_ui import ChatConsole
 
     pending_input = getattr(host, "_pending_input", None)
@@ -1005,10 +1002,7 @@ def _goal_command_ports(
 
 
 def _skills_command_ports(*, emit: Callable[[str], None]) -> SkillsCommandPorts:
-    try:
-        from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
-    except ModuleNotFoundError:
-        from src.voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
+    from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
     try:
         from voidcube.extensions.skills import get_all_skills_dirs
         from voidcube.extensions.skills.hub import (
@@ -1019,8 +1013,8 @@ def _skills_command_ports(*, emit: Callable[[str], None]) -> SkillsCommandPorts:
             uninstall_skill,
         )
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.extensions.skills import get_all_skills_dirs
-        from src.voidcube.extensions.skills.hub import (
+        from voidcube.extensions.skills import get_all_skills_dirs
+        from voidcube.extensions.skills.hub import (
             HubLockFile,
             create_source_router,
             install_skill_from_sources,
@@ -1284,10 +1278,7 @@ def _help_display_ports(
     chat_console_factory: Callable[[], Any] | None,
     skill_commands: Callable[[], Mapping[str, Mapping[str, str]]] | None,
 ) -> HelpDisplayPorts:
-    try:
-        from voidcube.extensions.skills.commands import get_skill_commands
-    except ModuleNotFoundError:
-        from src.voidcube.extensions.skills.commands import get_skill_commands
+    from voidcube.extensions.skills.commands import get_skill_commands
     from rich.markup import escape
     from ..cli_ui import _BOLD, _DIM, _RST, ChatConsole, _accent_hex
     from .catalog import COMMANDS_BY_CATEGORY
@@ -1542,10 +1533,7 @@ def _browser_command_ports(
 
     def cleanup_browsers() -> None:
         try:
-            try:
-                from ....extensions.tools.browser.browser_tool import cleanup_all_browsers
-            except ModuleNotFoundError:
-                from src.voidcube.extensions.tools.browser.browser_tool import cleanup_all_browsers
+            from voidcube.extensions.tools.browser.browser_tool import cleanup_all_browsers
 
             cleanup_all_browsers()
         except Exception:
@@ -1563,10 +1551,7 @@ def _browser_command_ports(
 
     def cloud_provider() -> Any | None:
         try:
-            try:
-                from ....extensions.tools.browser.browser_tool import _get_cloud_provider
-            except ModuleNotFoundError:
-                from src.voidcube.extensions.tools.browser.browser_tool import _get_cloud_provider
+            from voidcube.extensions.tools.browser.browser_tool import _get_cloud_provider
 
             return _get_cloud_provider()
         except Exception:
@@ -1599,7 +1584,7 @@ def _api_command_ports(host: Any) -> ApiCommandPorts:
     try:
         from voidcube.interfaces.cli.configuration import ApiConfigRuntime, run_api_config_wizard
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.interfaces.cli.configuration import ApiConfigRuntime, run_api_config_wizard
+        from voidcube.interfaces.cli.configuration import ApiConfigRuntime, run_api_config_wizard
 
     def runtime_setter(attribute: str) -> Callable[[str], None] | None:
         if not hasattr(host, attribute):
@@ -1953,19 +1938,13 @@ def _context_length(agent: Any) -> int | None:
 
 
 def _list_processes() -> list[dict[str, Any]]:
-    try:
-        from voidcube.infrastructure.execution.process_registry import process_registry
-    except ModuleNotFoundError:
-        from src.voidcube.infrastructure.execution.process_registry import process_registry
+    from voidcube.infrastructure.execution.process_registry import process_registry
 
     return process_registry.list_sessions()
 
 
 def _kill_all_processes() -> int:
-    try:
-        from voidcube.infrastructure.execution.process_registry import process_registry
-    except ModuleNotFoundError:
-        from src.voidcube.infrastructure.execution.process_registry import process_registry
+    from voidcube.infrastructure.execution.process_registry import process_registry
 
     return process_registry.kill_all()
 

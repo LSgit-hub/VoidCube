@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-from VoidCube_app.infrastructure.runtime.layout import get_runtime_layout
+from voidcube.infrastructure.runtime.layout import get_runtime_layout
 
 
 FORMAT = "voidcube.memory.recall-shapes"

@@ -323,8 +323,8 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     endogenous_drive_external_research_files: list[str] = []
     # ── Body improvement config (baseline §7.4) ──
     body_improvement_min_quality: float = 60.0  # learning quality threshold to trigger
-    body_improvement_editable_dirs: list[str] = ["skills/", "tools/", "agent/", "prompts/"]
-    body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "systems/**"]
+    body_improvement_editable_dirs: list[str] = ["skills/", "src/voidcube/runtime/agent/", "src/voidcube/extensions/tools/", "prompts/"]
+    body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "src/voidcube/systems/**"]
     body_improvement_max_files: int = 5
 class SupervisorBodyRuntimeConfig(BaseModel):
     state_root: str = Field(default_factory=_default_body_state_root)

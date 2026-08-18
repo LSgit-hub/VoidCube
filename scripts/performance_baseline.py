@@ -42,8 +42,8 @@ def _operation_code(setup: str, expression: str) -> str:
 def scenarios() -> tuple[Scenario, ...]:
     supervisor_code = (
         "import tempfile; from pathlib import Path; "
-        "from systems.supervisor.config_models import SupervisorConfig; "
-        "from systems.supervisor.supervisor import Supervisor; "
+        "from voidcube.systems.supervisor.config_models import SupervisorConfig; "
+        "from voidcube.systems.supervisor.supervisor import Supervisor; "
         "root=Path(tempfile.mkdtemp(prefix='voidcube-perf-')); "
         "config=SupervisorConfig(" 
         "execution={'git_repo_path': str(root)}, "
@@ -54,13 +54,13 @@ def scenarios() -> tuple[Scenario, ...]:
         "ui_auto_open=False); Supervisor(config)"
     )
     turn_code = _operation_code(
-        "from VoidCube_app.turn_contract import begin_turn,normalize_turn_outcome",
+        "from voidcube.domain.contracts.turn import begin_turn,normalize_turn_outcome",
         "turn=begin_turn([], 'baseline'); "
         "normalize_turn_outcome({'messages': turn.conversation_history, 'final_response': 'ok'}, "
         "fallback_history=turn.conversation_history)",
     )
     ui_code = _operation_code(
-        "from systems.supervisor.ui_state_projection import project_supervisor_scene,project_ui_metrics; "
+        "from voidcube.systems.supervisor.ui_state_projection import project_supervisor_scene,project_ui_metrics; "
         "observation={'counts': {}, 'board': {}, 'groups': {}, 'loop': {}}",
         "project_supervisor_scene(autonomous_observation=observation, observation_input_available=False); "
         "project_ui_metrics([], autonomous_observation=observation, body_status={}, error_count=0)"
@@ -70,7 +70,7 @@ def scenarios() -> tuple[Scenario, ...]:
             name="import_graph",
             description="Cold process import of the shared, CLI and Supervisor entry packages.",
             code=(
-                "import VoidCube_app,VoidCube_cli.app,systems.supervisor.supervisor"
+                "import voidcube,voidcube.interfaces.cli.application,voidcube.systems.supervisor.supervisor"
             ),
         ),
         Scenario(
@@ -109,7 +109,7 @@ def _subprocess_environment() -> dict[str, str]:
 def _run_scenario(scenario: Scenario) -> tuple[float, float | None]:
     command = [sys.executable]
     if scenario.name == "cli_help":
-        command.extend(("-m", "VoidCube_cli.main", "--help"))
+        command.extend(("-m", "voidcube.interfaces.cli.main", "--help"))
     else:
         command.extend(("-c", scenario.code))
 

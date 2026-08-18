@@ -67,7 +67,7 @@ class FirecrawlProvider(CloudBrowserProvider):
 
         return {
             "session_name": session_name,
-            "bb_session_id": data["id"],
+            "session_id": data["id"],
             "cdp_url": data["cdpUrl"],
             "features": {"firecrawl": True},
         }

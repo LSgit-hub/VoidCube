@@ -638,10 +638,7 @@ def skill_manage(
 
     if result.get("success"):
         try:
-            try:
-                from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
-            except ModuleNotFoundError:
-                from src.voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
+            from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
             clear_skills_system_prompt_cache(clear_snapshot=True)
         except Exception:
             pass

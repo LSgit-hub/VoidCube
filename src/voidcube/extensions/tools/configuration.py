@@ -26,7 +26,7 @@ CONFIGURABLE_TOOLSETS: tuple[tuple[str, str, str], ...] = (
 # This registry is intentionally data-only.  Message platforms were retired;
 # CLI is the only supported interactive platform in the current architecture.
 PLATFORMS: OrderedDict[str, dict[str, str]] = OrderedDict(
-    [("cli", {"label": "🖥️  CLI终端", "default_toolset": "VoidCube-cli"})]
+    [("cli", {"label": "🖥️  CLI终端", "default_toolset": "voidcube"})]
 )
 
 
@@ -93,7 +93,7 @@ def get_platform_tools(
     *,
     include_default_mcp_servers: bool = True,
 ) -> set[str]:
-    """Resolve enabled toolsets while preserving legacy config semantics."""
+    """Resolve enabled toolsets for a supported platform."""
     if platform not in PLATFORMS:
         raise ValueError(f"Unknown platform: {platform}")
 

@@ -172,7 +172,7 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
 
   const status = JSON.parse(execFileSync(
     projectPython(projectRoot),
-    ['-m', 'VoidCube_cli.desktop_control', 'status'],
+    ['-m', 'voidcube.interfaces.desktop.desktop_control', 'status'],
     { cwd: projectRoot, encoding: 'utf8' }
   )) as { ok: boolean }
   expect(status.ok).toBe(true)

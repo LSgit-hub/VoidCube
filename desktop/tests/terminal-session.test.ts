@@ -36,7 +36,7 @@ describe('terminal session sizing', () => {
     const runtime: RuntimePaths = {
       pythonCommand: 'python',
       pythonPrefixArgs: [],
-      cliArgs: ['voidcube.py'],
+      cliArgs: ['-m', 'voidcube.interfaces.cli.main'],
       workingDirectory: 'C:\\workspace'
     }
     const session = new TerminalSession(window, runtime)
@@ -46,7 +46,7 @@ describe('terminal session sizing', () => {
 
     expect(ptyMocks.spawn).toHaveBeenCalledWith(
       'python',
-      ['voidcube.py'],
+      ['-m', 'voidcube.interfaces.cli.main'],
       expect.objectContaining({ cols: 116, rows: 24 })
     )
   })

@@ -7,7 +7,7 @@ prevent tool schema bloat and conflicting long-term backends.
 Registration:
 The active implementation is ``plugins.memory.mem.MemMemoryProvider``.
 
-Lifecycle (called by MemoryManager, wired in run_agent.py):
+Lifecycle (called by MemoryManager, wired in the Agent runtime):
   initialize()          — connect, create resources, warm up
   bind_session()        — switch provider state to the active session
   system_prompt_block()  — static text for the system prompt

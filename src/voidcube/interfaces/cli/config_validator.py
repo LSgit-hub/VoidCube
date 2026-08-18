@@ -126,7 +126,7 @@ def _validate_api_a_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
         try:
             from voidcube.infrastructure.config.provider_config import api_a_key_configured
         except (ModuleNotFoundError, ImportError):
-            from src.voidcube.infrastructure.config.provider_config import api_a_key_configured
+            from voidcube.infrastructure.config.provider_config import api_a_key_configured
 
         key_configured = api_a_key_configured(active_cfg)
     except Exception:
@@ -233,7 +233,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
             provider_credential_sources,
         )
     except (ModuleNotFoundError, ImportError):
-        from src.voidcube.infrastructure.config.provider_config import (
+        from voidcube.infrastructure.config.provider_config import (
             credential_sources_have_usable_secret,
             provider_credential_sources,
         )

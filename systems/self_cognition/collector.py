@@ -1,7 +1,0 @@
-import sys
-try:
-    from voidcube.systems.self_cognition import collector as _implementation
-except (ModuleNotFoundError, ImportError):
-    from src.voidcube.systems.self_cognition import collector as _implementation
-sys.modules[__name__] = _implementation
-

@@ -10,7 +10,7 @@ This is a library module (not an agent tool). It provides:
   - HubLockFile: Track provenance of installed hub skills
   - Hub state directory management (quarantine, audit log, taps, index cache)
 
-Used by VoidCube_cli/skills_hub.py for CLI commands and the /skills slash command.
+Used by the canonical CLI skills commands and the /skills slash command.
 """
 
 import hashlib
@@ -66,8 +66,8 @@ try:
     from voidcube.extensions.skills.models import SkillBundle as SkillBundle
     from voidcube.extensions.skills.models import SkillMeta as SkillMeta
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.extensions.skills.models import SkillBundle as SkillBundle
-    from src.voidcube.extensions.skills.models import SkillMeta as SkillMeta
+    from voidcube.extensions.skills.models import SkillBundle as SkillBundle
+    from voidcube.extensions.skills.models import SkillMeta as SkillMeta
 
 
 def _normalize_bundle_path(path_value: str, *, field_name: str, allow_nested: bool) -> str:

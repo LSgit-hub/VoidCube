@@ -110,7 +110,7 @@ def account_status() -> str:
         try:
             from voidcube.systems.supervisor.account_store import account_for_api, load_accounts
         except (ModuleNotFoundError, ImportError):
-            from src.voidcube.systems.supervisor.account_store import account_for_api, load_accounts
+            from voidcube.systems.supervisor.account_store import account_for_api, load_accounts
 
         accounts = load_accounts()
         if not accounts:

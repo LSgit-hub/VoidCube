@@ -5,25 +5,21 @@ from typing import Iterable, List, Sequence
 
 
 AGENT_EVOLUTION_ALLOWED_PATHS: tuple[str, ...] = (
-    "agent/",
-    "tools/",
+    "src/voidcube/runtime/agent/",
+    "src/voidcube/extensions/tools/",
     "skills/",
-    "presets/",
+    "src/voidcube/extensions/tools/presets/",
 )
 
-AGENT_EVOLUTION_ALLOWED_FILES: tuple[str, ...] = (
-    "run_agent.py",
-)
+AGENT_EVOLUTION_ALLOWED_FILES: tuple[str, ...] = ()
 
 MOTHER_SYSTEM_FORBIDDEN_PATHS: tuple[str, ...] = (
-    "VoidCube_cli/",
-    "VoidCube_core/",
+    "src/voidcube/interfaces/",
+    "src/voidcube/infrastructure/",
+    "src/voidcube/systems/",
     "Mem/",
     "plugins/memory/",
-    "systems/supervisor/",
-    "systems/execution/",
-    "systems/gateway/",
-    "systems/self_learning/",
+    "plugins/memory/",
     "docs/",
     "tests/",
 )

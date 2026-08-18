@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from ...application.model_routing import resolve_turn_route
 from ...infrastructure.providers.model_catalog import resolve_fast_mode_overrides
+from ...infrastructure.providers.runtime import resolve_runtime_provider
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,8 @@ class CliTurnAgentRouteRuntime:
                 "args": list(credentials.get("args") or []),
                 "credential_pool": credentials.get("credential_pool"),
             },
+            runtime_resolver=resolve_runtime_provider,
+            env_reader=os.getenv,
         )
 
         if not self.ports.service_tier:

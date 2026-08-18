@@ -1,7 +1,6 @@
 """CLI command parsing, dispatch, and command handlers.
 
-This package is the canonical owner of the CLI command-entry layer.  The
-modules at ``VoidCube_cli.entrypoint_*`` are compatibility aliases only.
+This package is the canonical owner of the CLI command-entry layer.
 """
 
 from .dispatch import dispatch_cli

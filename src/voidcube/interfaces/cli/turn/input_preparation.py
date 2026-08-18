@@ -128,7 +128,7 @@ class CliTurnInputPreparationRuntime:
 
     @staticmethod
     def _default_expand_context(message: str, **kwargs: Any) -> Any:
-        from ....domain.agent.context_references import preprocess_context_references
+        from ....runtime.agent.context_references import preprocess_context_references
 
         return preprocess_context_references(message, **kwargs)
 

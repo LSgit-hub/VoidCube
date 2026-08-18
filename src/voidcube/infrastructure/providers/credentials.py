@@ -44,30 +44,9 @@ def has_usable_secret(value: str) -> bool:
 
 
 def auth_store_path() -> Path:
-    # Keep the legacy provider-auth path hook observable during migration.
-    # Normal execution uses the canonical runtime layout below; this branch
-    # only activates when callers explicitly replace the old hook (for tests
-    # or integrations that provide an isolated auth store).
-    try:
-        import sys
+    from ..config.runtime_paths import get_VoidCube_home
 
-        legacy_auth = sys.modules.get("VoidCube_app.provider_auth")
-        getter = getattr(legacy_auth, "_get_auth_store_path", None)
-        canonical_code = getattr(getter, "__code__", None)
-        expected_code = globals().get("_CANONICAL_AUTH_STORE_GETTER_CODE")
-        if getter is not None and canonical_code is not None and expected_code is not None:
-            if canonical_code is not expected_code:
-                override = getter()
-                if override:
-                    return Path(override)
-    except Exception:
-        pass
-    try:
-        from ..config.runtime_paths import get_VoidCube_home
-
-        home = get_VoidCube_home()
-    except Exception:
-        home = Path.home() / ".VoidCube"
+    home = get_VoidCube_home()
     home.mkdir(parents=True, exist_ok=True)
     return home / "auth_store.json"
 
