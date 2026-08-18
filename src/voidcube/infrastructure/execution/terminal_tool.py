@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 # The terminal tool polls this during command execution so it can kill
 # long-running subprocesses immediately instead of blocking until timeout.
 # ---------------------------------------------------------------------------
-from tools.interrupt import is_interrupted, _interrupt_event  # noqa: F401 — re-exported
-from VoidCube_cli.i18n import t as _t
+from .interrupt import is_interrupted, _interrupt_event  # noqa: F401 — re-exported
+from ...interfaces.cli.i18n import t as _t
 # display_VoidCube_home imported lazily at call site (stale-module safety during VoidCube update)
 
 
@@ -67,7 +67,7 @@ def ensure_minisweagent_on_path(_repo_root: Path | None = None) -> None:
 # Custom Singularity Environment with more space
 # =============================================================================
 
-from tools.tool_backend_helpers import (
+from ...extensions.tools.backend_helpers import (
     coerce_modal_mode,
     has_direct_modal_credentials,
     managed_nous_tools_enabled,
@@ -85,7 +85,7 @@ DISK_USAGE_WARNING_THRESHOLD_GB = float(os.getenv("TERMINAL_DISK_WARNING_GB", "5
 def _check_disk_usage_warning():
     """Check if total disk usage exceeds warning threshold."""
     try:
-        from tools.environments.singularity import _get_scratch_dir
+        from .environments.singularity import _get_scratch_dir
 
         scratch_dir = _get_scratch_dir()
 
@@ -137,7 +137,7 @@ def set_approval_sink(sink):
 # =============================================================================
 
 # Dangerous command detection + approval now consolidated in tools/approval.py
-from tools.approval import (
+from .approval import (
     check_dangerous_command as _check_dangerous_command_impl,
     check_all_command_guards as _check_all_guards_impl,
 )
@@ -150,7 +150,7 @@ def _check_all_guards(command: str, env_type: str) -> dict:
 
 def _check_tirith_security(command: str) -> dict:
     """Run the content-level scanner before a command reaches any backend."""
-    from tools.tirith_security import check_command_security
+    from .tirith_security import check_command_security
 
     return check_command_security(command)
 
@@ -203,7 +203,7 @@ def _handle_sudo_failure(output: str, env_type: str) -> str:
     
     for failure in sudo_failures:
         if failure in output:
-            from VoidCube_app.infrastructure.config.runtime_paths import display_VoidCube_home as _dhh
+            from ...config.runtime_paths import display_VoidCube_home as _dhh
             return output + f"\n\n💡 {_t('tips.sudo_password_hint', default='Tip: To enable sudo over messaging, add SUDO_PASSWORD to {path}/.env on the agent machine.', path=_dhh())}"
     
     return output
@@ -629,7 +629,7 @@ _ENVIRONMENT_PROBE_MARKER = "__VOIDCUBE_EXECUTION_ENVIRONMENT__"
 
 
 def _autonomous_podman_image() -> str:
-    from tools.podman_sandbox import DEFAULT_IMAGE
+    from .podman_sandbox import DEFAULT_IMAGE
 
     return DEFAULT_IMAGE
 
@@ -751,7 +751,7 @@ def prepare_task_git_worktree(
         "GIT_CONFIG_KEY_0": "safe.directory",
         "GIT_CONFIG_VALUE_0": "/workspace",
     }
-    from tools.task_execution import (
+    from .task_execution import (
         TaskExecutionContract,
         clear_task_execution_state,
         configure_task_execution,
@@ -857,7 +857,7 @@ def prepare_task_git_worktree(
         )
         if selected_backend == "podman" and not environment_probe.get("image_digest"):
             raise RuntimeError("Podman probe did not return the immutable image digest")
-        from systems.evolution_evaluation.environment import (
+        from ...systems.evolution_evaluation.environment import (
             build_container_environment_manifest,
         )
 
@@ -867,14 +867,14 @@ def prepare_task_git_worktree(
             execution_workspace_path="/workspace",
             probe=environment_probe,
         )
-        from tools.task_execution import validate_task_environment_manifest
+        from .task_execution import validate_task_environment_manifest
 
         validate_task_environment_manifest(normalized_task_id, manifest)
         return manifest.model_dump(mode="json")
     except Exception as exc:
         cleanup_vm(normalized_task_id)
         clear_task_env_overrides(normalized_task_id)
-        from tools.task_execution import TaskExecutionBlocked, block_task_execution
+        from .task_execution import TaskExecutionBlocked, block_task_execution
 
         if not isinstance(exc, TaskExecutionBlocked):
             block_task_execution(
@@ -898,7 +898,7 @@ def prepare_task_native_git_worktree(
     if not normalized_task_id:
         raise ValueError("Native authoring worktree binding requires a task id")
     if platform.system().lower() != "windows":
-        from tools.task_execution import TaskExecutionBlocked
+        from .task_execution import TaskExecutionBlocked
 
         raise TaskExecutionBlocked(
             normalized_task_id,
@@ -936,7 +936,7 @@ def prepare_task_native_git_worktree(
         or common_dir.parent / ".venv" / "Scripts" / "python.exe"
     ).expanduser().resolve()
     if not project_python.is_file():
-        from tools.task_execution import TaskExecutionBlocked
+        from .task_execution import TaskExecutionBlocked
 
         raise TaskExecutionBlocked(
             normalized_task_id,
@@ -948,7 +948,7 @@ def prepare_task_native_git_worktree(
         "VIRTUAL_ENV": str(project_python.parent.parent),
         "PATH": str(project_python.parent) + os.pathsep + os.environ.get("PATH", ""),
     }
-    from tools.task_execution import (
+    from .task_execution import (
         TaskExecutionContract,
         clear_task_execution_state,
         configure_task_execution,
@@ -999,7 +999,7 @@ def prepare_task_native_git_worktree(
         lines = str(probe.get("output") or "").splitlines()
         probed_root = str(lines[0]).strip() if lines else ""
         probed_head = str(lines[1]).strip() if len(lines) > 1 else ""
-        from tools.path_runtime import normalize_host_path
+        from .path_runtime import normalize_host_path
 
         normalized_probed_root = os.path.normcase(
             os.path.abspath(os.path.expanduser(normalize_host_path(probed_root)))
@@ -1013,10 +1013,10 @@ def prepare_task_native_git_worktree(
                 "native workspace or Git HEAD does not match the task: "
                 f"root={probed_root!r}, head={probed_head!r}"
             )
-        from systems.evolution_evaluation.environment import (
+        from ...systems.evolution_evaluation.environment import (
             capture_host_environment_manifest,
         )
-        from tools.task_execution import validate_task_environment_manifest
+        from .task_execution import validate_task_environment_manifest
 
         manifest = capture_host_environment_manifest(
             worktree,
@@ -1038,7 +1038,7 @@ def release_task_environment(task_id: str) -> None:
         return
     cleanup_vm(normalized_task_id)
     clear_task_env_overrides(normalized_task_id)
-    from tools.task_execution import release_task_execution
+    from .task_execution import release_task_execution
 
     release_task_execution(normalized_task_id)
 
@@ -1064,7 +1064,7 @@ def _parse_env_var(name: str, default: str, converter=int, type_label: str = "in
 def _get_env_config() -> Dict[str, Any]:
     """Resolve canonical terminal config with process-env overrides."""
     try:
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
 
         terminal_config = load_config().get("terminal") or {}
         if not isinstance(terminal_config, dict):
@@ -1222,7 +1222,7 @@ def _get_env_config() -> Dict[str, Any]:
 
 def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
     """Resolve direct vs managed Modal backend selection."""
-    from tools.managed_tool_gateway import is_managed_tool_gateway_ready
+    from ..gateway.managed_tool_gateway import is_managed_tool_gateway_ready
 
     return resolve_modal_backend_state(
         modal_mode,
@@ -1290,7 +1290,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     mount_host_integrations = cc.get("docker_mount_host_integrations", True)
 
     if env_type == "local":
-        from tools.environments.local import LocalEnvironment
+        from .environments.local import LocalEnvironment
 
         return LocalEnvironment(
             cwd=cwd,
@@ -1300,7 +1300,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         )
     
     elif env_type == "docker":
-        from tools.environments.docker import DockerEnvironment
+        from .environments.docker import DockerEnvironment
 
         return DockerEnvironment(
             image=image, cwd=cwd, timeout=timeout,
@@ -1316,7 +1316,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         )
 
     elif env_type == "podman":
-        from tools.environments.docker import PodmanEnvironment
+        from .environments.docker import PodmanEnvironment
 
         return PodmanEnvironment(
             image=image, cwd=cwd, timeout=timeout,
@@ -1332,7 +1332,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         )
     
     elif env_type == "singularity":
-        from tools.environments.singularity import SingularityEnvironment
+        from .environments.singularity import SingularityEnvironment
 
         return SingularityEnvironment(
             image=image, cwd=cwd, timeout=timeout,
@@ -1357,7 +1357,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         modal_state = _get_modal_backend_state(cc.get("modal_mode"))
 
         if modal_state["selected_backend"] == "managed":
-            from tools.environments.managed_modal import ManagedModalEnvironment
+            from .environments.managed_modal import ManagedModalEnvironment
 
             return ManagedModalEnvironment(
                 image=image, cwd=cwd, timeout=timeout,
@@ -1388,7 +1388,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
                 )
             raise ValueError(message)
 
-        from tools.environments.modal import ModalEnvironment
+        from .environments.modal import ModalEnvironment
 
         return ModalEnvironment(
             image=image, cwd=cwd, timeout=timeout,
@@ -1398,7 +1398,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     
     elif env_type == "daytona":
         # Lazy import so daytona SDK is only required when backend is selected.
-        from tools.environments.daytona import DaytonaEnvironment as _DaytonaEnvironment
+        from .environments.daytona import DaytonaEnvironment as _DaytonaEnvironment
         return _DaytonaEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=int(cpu), memory=memory, disk=disk,
@@ -1408,7 +1408,7 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     elif env_type == "ssh":
         if not ssh_config or not ssh_config.get("host") or not ssh_config.get("user"):
             raise ValueError("SSH environment requires ssh_host and ssh_user to be configured")
-        from tools.environments.ssh import SSHEnvironment
+        from .environments.ssh import SSHEnvironment
 
         return SSHEnvironment(
             host=ssh_config["host"],
@@ -1484,7 +1484,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
     # Check the process registry -- skip cleanup for sandboxes with active
     # background processes (their _last_activity gets refreshed to keep them alive).
     try:
-        from tools.process_registry import process_registry
+        from .process_registry import process_registry
         for task_id in list(_last_activity.keys()):
             if process_registry.has_active_processes(task_id):
                 _last_activity[task_id] = current_time  # Keep sandbox alive
@@ -1516,7 +1516,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
         # Invalidate stale file_ops cache entry (Bug fix: prevents
         # ShellFileOperations from referencing a dead sandbox)
         try:
-            from tools.file_tools import clear_file_ops_cache
+            from ...extensions.tools.files.file_tools import clear_file_ops_cache
             clear_file_ops_cache(task_id)
         except ImportError:
             pass
@@ -1643,7 +1643,7 @@ def cleanup_vm(task_id: str):
 
     # Invalidate stale file_ops cache entry
     try:
-        from tools.file_tools import clear_file_ops_cache
+        from ...extensions.tools.files.file_tools import clear_file_ops_cache
         clear_file_ops_cache(task_id)
     except ImportError:
         pass
@@ -1893,7 +1893,7 @@ def terminal_tool(
         configured_fallback = overrides.get(
             "fallback_to_local", config.get("fallback_to_local", True)
         )
-        from tools.task_execution import (
+        from .task_execution import (
             TaskExecutionBlocked,
             begin_task_execution,
             block_task_execution,
@@ -2135,7 +2135,7 @@ def terminal_tool(
             # Spawn a tracked background process via the process registry.
             # For local backends: uses subprocess.Popen with output buffering.
             # For non-local backends: runs inside the sandbox via env.execute().
-            from tools.process_registry import process_registry
+            from .process_registry import process_registry
 
             effective_cwd = workdir or cwd
             try:
@@ -2285,11 +2285,11 @@ def terminal_tool(
 
             # Strip ANSI escape sequences so the model never sees terminal
             # formatting — prevents it from copying escapes into file writes.
-            from tools.ansi_strip import strip_ansi
+            from .ansi_strip import strip_ansi
             output = strip_ansi(output)
 
             # Redact secrets from command output (catches env/printenv leaking keys)
-            from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+            from ..persistence.redaction import redact_sensitive_text
             output = redact_sensitive_text(output.strip()) if output else ""
 
             # Interpret non-zero exit codes that aren't real errors
@@ -2343,7 +2343,7 @@ def check_terminal_requirements() -> bool:
             return True
 
         elif env_type == "docker":
-            from tools.environments.docker import find_docker
+            from .environments.docker import find_docker
             docker = find_docker()
             if not docker:
                 logger.error("Docker executable not found in PATH or common install locations")
@@ -2352,7 +2352,7 @@ def check_terminal_requirements() -> bool:
             return result.returncode == 0
 
         elif env_type == "podman":
-            from tools.environments.docker import find_podman
+            from .environments.docker import find_podman
             podman = find_podman()
             if not podman:
                 logger.error("Podman executable not found in PATH or common install locations")
@@ -2486,7 +2486,7 @@ if __name__ == "__main__":
     print(f"  TERMINAL_MODAL_IMAGE: {os.getenv('TERMINAL_MODAL_IMAGE', default_img)}")
     print(f"  TERMINAL_DAYTONA_IMAGE: {os.getenv('TERMINAL_DAYTONA_IMAGE', default_img)}")
     print(f"  TERMINAL_CWD: {os.getenv('TERMINAL_CWD', os.getcwd())}")
-    from VoidCube_app.infrastructure.config.runtime_paths import display_VoidCube_home as _dhh
+    from ...infrastructure.config.runtime_paths import display_VoidCube_home as _dhh
     print(f"  TERMINAL_SANDBOX_DIR: {os.getenv('TERMINAL_SANDBOX_DIR', f'{_dhh()}/sandboxes')}")
     print(f"  TERMINAL_TIMEOUT: {os.getenv('TERMINAL_TIMEOUT', '60')}")
     print(f"  TERMINAL_LIFETIME_SECONDS: {os.getenv('TERMINAL_LIFETIME_SECONDS', '300')}")
@@ -2495,7 +2495,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-from tools.registry import registry
+from ...extensions.tools.registry import registry
 
 TERMINAL_SCHEMA = {
     "name": "terminal",

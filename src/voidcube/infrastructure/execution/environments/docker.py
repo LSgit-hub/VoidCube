@@ -13,10 +13,13 @@ import subprocess
 import sys
 import threading
 import uuid
+import sys
 from typing import Optional
 
-from tools.environments.base import BaseEnvironment, _build_bash_command, _popen_bash
-from tools.environments.local import _VOIDCUBE_PROVIDER_ENV_BLOCKLIST
+from .base import BaseEnvironment, _build_bash_command, _popen_bash
+from .local import _VOIDCUBE_PROVIDER_ENV_BLOCKLIST
+
+sys.modules.setdefault("tools.environments.docker", sys.modules[__name__])
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +100,7 @@ def _normalize_env_dict(env: dict | None) -> dict[str, str]:
 def _load_VoidCube_env_vars() -> dict[str, str]:
     """Load ~/.VoidCube/.env values without failing Docker command execution."""
     try:
-        from VoidCube_app.config import load_env
+        from ...config.configuration import load_env
 
         return load_env() or {}
     except Exception:
@@ -192,7 +195,7 @@ _storage_opt_ok: dict[str, Optional[bool]] = {}  # cached result across runtimes
 def _append_host_integration_mounts(volume_args: list[str], runtime_label: str) -> None:
     """Append the optional read-only credential, skill, and cache mounts."""
     try:
-        from tools.credential_files import (
+        from ..credential_files import (
             get_cache_directory_mounts,
             get_credential_file_mounts,
             get_skills_directory_mount,
@@ -377,7 +380,7 @@ class DockerEnvironment(BaseEnvironment):
         # Persistent workspace via bind mounts from a configurable host directory
         # (TERMINAL_SANDBOX_DIR, default ~/.VoidCube/sandboxes/). Non-persistent
         # mode uses tmpfs (ephemeral, fast, gone on cleanup).
-        from tools.environments.base import get_sandbox_dir
+        from .base import get_sandbox_dir
 
         # User-configured volume mounts (from config.yaml docker_volumes)
         volume_args = []
@@ -509,7 +512,7 @@ class DockerEnvironment(BaseEnvironment):
         explicit_forward_keys = set(self._forward_env)
         passthrough_keys: set[str] = set()
         try:
-            from tools.env_passthrough import get_all_passthrough
+            from ..env_passthrough import get_all_passthrough
             passthrough_keys = set(get_all_passthrough())
         except Exception:
             pass

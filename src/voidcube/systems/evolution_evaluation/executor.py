@@ -9,7 +9,7 @@ from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from systems.evolution_evaluation.models import (
+from .models import (
     BenchmarkCase,
     BenchmarkCaseExecutionEvidence,
     BenchmarkCommandEvidence,
@@ -26,7 +26,7 @@ from systems.evolution_evaluation.models import (
     SubjectCheckoutEvidence,
     benchmark_case_supports_platform,
 )
-from systems.evolution_evaluation.repository import EvaluationRepository
+from .repository import EvaluationRepository
 
 
 DEFAULT_BENCHMARK_EXECUTOR_VERSION = "benchmark-executor/1"

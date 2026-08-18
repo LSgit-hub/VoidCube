@@ -10,11 +10,11 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from systems.evolution_boundary import (
+from ..evolution_boundary import (
     classify_agent_evolution_changes,
     normalize_repo_path,
 )
-from systems.evolution_evaluation import MetricTarget
+from ..evolution_evaluation import MetricTarget
 
 
 _COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"

@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from difflib import unified_diff
 from pathlib import Path
 
-from VoidCube_app.infrastructure.shared.value_helpers import safe_json_loads
-from VoidCube_app.contracts.execution import ExecutionState
+from ...infrastructure.shared.value_helpers import safe_json_loads
+from ...domain.contracts.execution import ExecutionState
 
 # ANSI escape codes for coloring tool failure indicators
 _RED = "\033[31m"
@@ -76,7 +76,7 @@ def get_tool_emoji(tool_name: str, default: str = "🔧") -> str:
     Resolution order: tool registry metadata, then *default*.
     """
     try:
-        from tools.registry import registry
+        from ...extensions.tools.registry import registry
         emoji = registry.get_emoji(tool_name, default="")
         if emoji:
             return emoji
@@ -230,7 +230,7 @@ def _resolve_skill_manage_paths(args: dict) -> list[Path]:
     if not action or not name:
         return []
 
-    from tools.skill_manager_tool import _find_skill, _resolve_skill_dir
+    from ...extensions.skills.manager import _find_skill, _resolve_skill_dir
 
     if action == "create":
         skill_dir = _resolve_skill_dir(name, args.get("category"))
@@ -681,7 +681,10 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
     failures.  On success, returns ``(False, "")``.
     """
     del tool_name
-    from agent.tool_execution import classify_tool_result
+    try:
+        from voidcube.runtime.agent.tool_execution import classify_tool_result
+    except ModuleNotFoundError:
+        from src.voidcube.runtime.agent.tool_execution import classify_tool_result
 
     state, suffix = classify_tool_result(result)
     return state is ExecutionState.FAILED, suffix

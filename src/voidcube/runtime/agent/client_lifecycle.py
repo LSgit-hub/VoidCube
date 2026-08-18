@@ -8,7 +8,7 @@ import threading
 from typing import Any, Callable, Mapping
 from unittest.mock import Mock
 
-from agent.integration_policy import require_active_integration
+from ...domain.contracts.integration_policy import require_active_integration
 
 
 logger = logging.getLogger(__name__)
@@ -218,12 +218,6 @@ class ChatClientLifecycle:
     ) -> Any:
         if self._client_factory is not None:
             client = self._client_factory(dict(client_kwargs))
-        elif self._provider() == "copilot-acp" or str(
-            client_kwargs.get("base_url", "")
-        ).startswith("acp://copilot"):
-            from agent.copilot_acp_client import CopilotACPClient
-
-            client = CopilotACPClient(**client_kwargs)
         else:
             from openai import OpenAI
 

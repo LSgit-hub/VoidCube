@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 
-from systems.evolution_evaluation.models import (
+from .models import (
     BenchmarkCase,
     BenchmarkCommandEvidence,
     BenchmarkPack,
@@ -16,7 +16,7 @@ from systems.evolution_evaluation.models import (
     ScoringDimension,
     ScoringPolicy,
 )
-from systems.evolution_evaluation.runners import (
+from .runners import (
     BenchmarkCaseEvaluation,
     NativeFirstBenchmarkExecutorFactory,
     ValidationCaseEvaluator,
@@ -111,7 +111,7 @@ def _evaluate_native_case(request, task_id, _environment) -> BenchmarkCaseEvalua
     if probe is None:
         raise ValueError(f"unsupported native benchmark runner: {request.case.runner}")
     command = f"python -m systems.evolution_evaluation.windows_probes {probe}"
-    from tools.terminal_tool import terminal_tool
+    from ...infrastructure.execution.terminal_tool import terminal_tool
 
     payload = json.loads(
         terminal_tool(command, task_id=task_id, timeout=request.timeout_seconds)

@@ -10,10 +10,10 @@ from typing import Any, Awaitable, Callable, Dict, MutableMapping, Optional, Pro
 
 from fastapi import HTTPException
 
-from systems.governor import GovernorRequest
-from systems.lifecycle import LifecycleActionResult
-from systems.probe import ProbeReport
-from systems.runtime_task_profile import derive_runtime_task_profile
+from ..governor import GovernorRequest
+from ..lifecycle import LifecycleActionResult
+from ..probe import ProbeReport
+from ...domain.tasks.runtime_profile import derive_runtime_task_profile
 logger = logging.getLogger(__name__)
 
 

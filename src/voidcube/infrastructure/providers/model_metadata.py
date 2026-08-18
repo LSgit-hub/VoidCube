@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
-from VoidCube_app.infrastructure.providers.endpoints import OPENROUTER_MODELS_URL
+from .endpoints import OPENROUTER_MODELS_URL
 
 logger = logging.getLogger(__name__)
 
@@ -457,7 +457,7 @@ def fetch_endpoint_model_metadata(
 
 def _get_context_cache_path() -> Path:
     """Return path to the persistent context length cache file."""
-    from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+    from ..config.runtime_paths import get_VoidCube_home
     return get_VoidCube_home() / "context_length_cache.yaml"
 
 

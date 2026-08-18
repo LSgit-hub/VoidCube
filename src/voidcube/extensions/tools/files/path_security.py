@@ -13,7 +13,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, FrozenSet
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ....infrastructure.config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 

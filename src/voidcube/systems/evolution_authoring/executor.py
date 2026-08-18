@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping, Protocol
 
-from systems.evolution_authoring.models import (
+from .models import (
     AuthoringAgentReport,
     AuthoringCommandEvidence,
     EvolutionAuthoringContext,
@@ -20,12 +20,12 @@ from systems.evolution_authoring.models import (
     EvolutionAuthoringSpec,
     candidate_ref_for_task,
 )
-from systems.evolution_boundary import (
+from ..evolution_boundary import (
     classify_agent_evolution_changes,
     normalize_repo_path,
 )
-from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
-from tools.task_execution import TaskExecutionBlocked
+from ..evolution_evaluation.models import ExecutionEnvironmentManifest
+from ...infrastructure.execution.task_execution import TaskExecutionBlocked
 
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class EvolutionAuthoringExecutor:
         worktree: str,
         **kwargs: object,
     ) -> Mapping[str, object]:
-        from tools.terminal_tool import prepare_task_native_git_worktree
+        from ...infrastructure.execution.terminal_tool import prepare_task_native_git_worktree
 
         return prepare_task_native_git_worktree(
             task_id,
@@ -700,13 +700,13 @@ def _git_output_bytes(repository: Path, args: tuple[str, ...]) -> bytes:
 
 
 def _release_environment(task_id: str) -> None:
-    from tools.terminal_tool import release_task_environment
+    from ...infrastructure.execution.terminal_tool import release_task_environment
 
     release_task_environment(task_id)
 
 
 def _terminal_runner(command: str, **kwargs: object) -> str:
-    from tools.terminal_tool import terminal_tool
+    from ...infrastructure.execution.terminal_tool import terminal_tool
 
     return terminal_tool(command, **kwargs)
 

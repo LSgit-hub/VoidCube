@@ -8,9 +8,9 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from tools.browser_providers.base import CloudBrowserProvider
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import managed_nous_tools_enabled
+from .base import CloudBrowserProvider
+from .....infrastructure.gateway.managed_tool_gateway import resolve_managed_tool_gateway
+from ...backend_helpers import managed_nous_tools_enabled
 
 logger = logging.getLogger(__name__)
 _pending_create_keys: Dict[str, str] = {}

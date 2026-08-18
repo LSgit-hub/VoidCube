@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from ...infrastructure.gateway.presence import default_gateway_url
-from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
+from ..evolution_evaluation.models import ExecutionEnvironmentManifest
 
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"

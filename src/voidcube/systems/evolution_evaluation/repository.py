@@ -9,8 +9,8 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
-from systems.evolution_evaluation.models import (
+from ...infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
+from .models import (
     BenchmarkPack,
     ExperimentResult,
     ExperimentSpec,

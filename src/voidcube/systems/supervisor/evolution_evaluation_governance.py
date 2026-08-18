@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from systems.evolution_authoring import JsonEvolutionAuthoringRepository
-from systems.evolution_evaluation import (
+from ..evolution_authoring import JsonEvolutionAuthoringRepository
+from ..evolution_evaluation import (
     EXECUTION_ENVIRONMENT_GATE,
     EnvironmentCapabilityPolicy,
     JsonEvaluationRepository,
@@ -16,8 +16,8 @@ from systems.evolution_evaluation import (
     resolve_environment_capability_policy,
     select_benchmark_platforms,
 )
-from systems.research_knowledge import JsonKnowledgeRepository
-from systems.self_cognition import JsonSelfCognitionRepository
+from ..research_knowledge import JsonKnowledgeRepository
+from ..self_cognition import JsonSelfCognitionRepository
 
 
 EVALUATION_GOVERNANCE_SCHEMA_VERSION = 2

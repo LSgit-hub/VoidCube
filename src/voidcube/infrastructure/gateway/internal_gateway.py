@@ -241,7 +241,7 @@ class InternalGateway:
         # Skip under pytest to avoid test-isolation issues from shared
         # persisted state across gateway test cases.
         if not self.config.activity_log_path and not os.environ.get("PYTEST_CURRENT_TEST"):
-            from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+            from ..config.runtime_paths import get_VoidCube_home
             run_dir = get_VoidCube_home() / "run"
             run_dir.mkdir(parents=True, exist_ok=True)
             self.config.activity_log_path = str(run_dir / "gateway-activity.json")

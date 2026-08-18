@@ -14,21 +14,21 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from systems.evolution_evaluation.executor import (
+from .executor import (
     BenchmarkCaseFailed,
     BenchmarkCaseResult,
     BenchmarkPackExecutor,
     BenchmarkRunRequest,
     BenchmarkRunner,
 )
-from systems.evolution_evaluation.models import (
+from .models import (
     BenchmarkCommandEvidence,
     ExecutionEnvironmentManifest,
     HardGateResult,
     MetricValue,
     SubjectCheckoutEvidence,
 )
-from systems.evolution_evaluation.selection import BenchmarkPlatformSelection
+from .selection import BenchmarkPlatformSelection
 
 
 class BenchmarkCaseEvaluation(BaseModel):
@@ -209,7 +209,7 @@ class GitWorktreeValidationRunner:
         **kwargs: object,
     ) -> Mapping[str, object]:
         if self.platform == "windows":
-            from tools.terminal_tool import prepare_task_native_git_worktree
+            from ...infrastructure.execution.terminal_tool import prepare_task_native_git_worktree
 
             return prepare_task_native_git_worktree(
                 task_id,
@@ -224,7 +224,7 @@ class GitWorktreeValidationRunner:
                     else None
                 ),
             )
-        from tools.terminal_tool import prepare_task_git_worktree
+        from ...infrastructure.execution.terminal_tool import prepare_task_git_worktree
 
         return prepare_task_git_worktree(
             task_id,
@@ -490,7 +490,7 @@ def _validation_task_id(
 
 
 def _release_environment(task_id: str) -> None:
-    from tools.terminal_tool import release_task_environment
+    from ...infrastructure.execution.terminal_tool import release_task_environment
 
     release_task_environment(task_id)
 

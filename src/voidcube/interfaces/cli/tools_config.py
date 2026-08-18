@@ -389,7 +389,10 @@ def _toolset_has_keys(ts_key: str, config: dict = None) -> bool:
 
     if ts_key == "vision":
         try:
-            from agent.auxiliary_client import resolve_vision_provider_client
+            try:
+                from voidcube.infrastructure.providers.auxiliary_client import resolve_vision_provider_client
+            except ModuleNotFoundError:
+                from src.voidcube.infrastructure.providers.auxiliary_client import resolve_vision_provider_client
 
             _provider, client, _model = resolve_vision_provider_client()
             return client is not None
@@ -450,7 +453,7 @@ def _estimate_tool_tokens() -> Dict[str, int]:
 def _prompt_toolset_checklist(platform_label: str, enabled: Set[str]) -> Set[str]:
     """Multi-select checklist of toolsets. Returns set of selected toolset keys."""
     from .curses_ui import curses_checklist
-    from tools.toolsets import resolve_toolset
+    from ...extensions.tools.toolsets import resolve_toolset
 
     # Pre-compute per-tool token counts (cached after first call).
     tool_tokens = _estimate_tool_tokens()
@@ -1175,7 +1178,7 @@ def _configure_mcp_tools_interactive(config: dict):
     except (ModuleNotFoundError, ImportError):
         from src.voidcube.interfaces.cli.tools_mcp import configure_mcp_tools
     try:
-        from tools.mcp_tool import probe_mcp_server_tools
+            from ...extensions.tools.mcp.mcp_tool import probe_mcp_server_tools
     except ImportError:
         probe_mcp_server_tools = lambda: {}
     configure_mcp_tools(

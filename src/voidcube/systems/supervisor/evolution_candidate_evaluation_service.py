@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from systems.evolution_authoring import (
+from ..evolution_authoring import (
     EvolutionAuthoringRepository,
     EvolutionAuthoringResult,
     JsonEvolutionAuthoringRepository,
 )
 from ..evolution_boundary import normalize_repo_path
-from systems.evolution_evaluation import (
+from ..evolution_evaluation import (
     AllowedRegression,
     BenchmarkPack,
     BenchmarkPackExecutor,
@@ -29,8 +29,8 @@ from systems.evolution_evaluation import (
     select_benchmark_platforms,
     resolve_environment_capability_policy,
 )
-from systems.research_knowledge import JsonKnowledgeRepository
-from systems.self_cognition import (
+from ..research_knowledge import JsonKnowledgeRepository
+from ..self_cognition import (
     JsonSelfCognitionRepository,
     SelfCognitionRepository,
     SelfCognitionSnapshot,

@@ -10,8 +10,8 @@ from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
-from systems.evolution_candidate_generation.models import (
+from ...infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
+from .models import (
     EvolutionCandidateGenerationRequest,
     EvolutionCandidateGenerationState,
     attempt_identity,

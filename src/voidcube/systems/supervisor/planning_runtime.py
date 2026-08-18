@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 import aiohttp
 
-from systems.evolution_evaluation import EnvironmentCapabilityPolicy
+from ..evolution_evaluation import EnvironmentCapabilityPolicy
 from .endogenous_candidate_pipeline import CORE_VALUES
 from .endogenous_proposal_port import (
     LmGenerationApplicationState,

@@ -30,7 +30,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
-from agent.effect_outcomes import EffectOutcome
+from ..agent.effect_outcomes import EffectOutcome
 
 logger = logging.getLogger(__name__)
 

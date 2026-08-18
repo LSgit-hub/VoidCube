@@ -64,7 +64,7 @@ def render_clear_display(ports: ClearDisplayPorts) -> None:
 
 
 def _load_tools(enabled_toolsets: Sequence[str]) -> list[dict[str, object]]:
-    from tools.model_tools import get_tool_definitions
+    from ...extensions.tools.model_tools import get_tool_definitions
 
     return get_tool_definitions(
         enabled_toolsets=list(enabled_toolsets),

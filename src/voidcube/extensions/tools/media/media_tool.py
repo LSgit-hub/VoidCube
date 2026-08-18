@@ -26,7 +26,7 @@ def _supervisor_media_url(endpoint: str = "enqueue") -> str:
 
     # Supervisor 的主配置由 systems.config 统一解析，包含环境变量覆盖。
     try:
-        from systems.config import load_config_from_env
+        from ....infrastructure.config.system import load_config_from_env
 
         supervisor = load_config_from_env().supervisor
         return f"http://{supervisor.host}:{supervisor.port}/ui/media/{endpoint}"
@@ -238,7 +238,7 @@ def media_display(
 
 
 # ── Registry ──
-from tools.registry import registry
+from ..registry import registry
 
 MEDIA_PLAY_SCHEMA = {
     "name": "media_play",

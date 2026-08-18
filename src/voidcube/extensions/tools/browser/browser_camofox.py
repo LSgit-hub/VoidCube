@@ -32,12 +32,15 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from agent.tool_execution import ToolExecutionResult
-from VoidCube_app.config import load_config
-from VoidCube_app.contracts.artifacts import Artifact
-from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir
-from tools.browser_camofox_state import get_camofox_identity
-from tools.registry import tool_error
+try:
+    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from ....infrastructure.config.configuration import load_config
+from ....domain.contracts.artifacts import Artifact
+from ....infrastructure.config.runtime_paths import get_cache_dir
+from .browser_camofox_state import get_camofox_identity
+from ..registry import tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +270,7 @@ def camofox_navigate(url: str, task_id: Optional[str] = None) -> str:
                 params={"userId": session["user_id"]},
             )
             snapshot_text = snap_data.get("snapshot", "")
-            from tools.browser_tool import (
+            from .browser_tool import (
                 SNAPSHOT_SUMMARIZE_THRESHOLD,
                 _truncate_snapshot,
             )
@@ -310,7 +313,7 @@ def camofox_snapshot(full: bool = False, task_id: Optional[str] = None,
         refs_count = data.get("refsCount", 0)
 
         # Apply same summarization logic as the main browser tool
-        from tools.browser_tool import (
+        from .browser_tool import (
             SNAPSHOT_SUMMARIZE_THRESHOLD,
             _extract_relevant_content,
             _truncate_snapshot,
@@ -532,11 +535,11 @@ def camofox_vision(question: str, annotate: bool = False,
         # Redact secrets from annotation context before sending to vision LLM.
         # The screenshot image itself cannot be redacted, but at least the
         # text-based accessibility tree snippet won't leak secret values.
-        from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+        from ....infrastructure.persistence.redaction import redact_sensitive_text
         annotation_context = redact_sensitive_text(annotation_context)
 
         # Send to vision LLM
-        from agent.auxiliary_client import call_llm
+        from ....infrastructure.providers.auxiliary_client import call_llm
 
         vision_prompt = (
             f"Analyze this browser screenshot and answer: {question}"
@@ -544,7 +547,7 @@ def camofox_vision(question: str, annotate: bool = False,
         )
 
         try:
-            from VoidCube_app.config import load_config
+            from ....infrastructure.config.configuration import load_config
             _cfg = load_config()
             _vision_timeout = int(_cfg.get("auxiliary", {}).get("vision", {}).get("timeout", 120))
         except Exception:
@@ -570,7 +573,7 @@ def camofox_vision(question: str, annotate: bool = False,
         analysis = (response.choices[0].message.content or "").strip() if response.choices else ""
 
         # Redact secrets the vision LLM may have read from the screenshot.
-        from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+        from ....infrastructure.persistence.redaction import redact_sensitive_text
         analysis = redact_sensitive_text(analysis)
 
         return ToolExecutionResult(

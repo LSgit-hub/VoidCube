@@ -7,18 +7,18 @@ from typing import Any
 
 import aiohttp
 
-from systems.evolution_evaluation import EnvironmentCapabilityPolicy
-from systems.evolution_candidate_generation import (
+from ..evolution_evaluation import EnvironmentCapabilityPolicy
+from ..evolution_candidate_generation import (
     JsonEvolutionCandidateGenerationRepository,
 )
 from ...infrastructure.runtime.layout import (
     get_legacy_project_runtime_layout,
     get_runtime_layout,
 )
-from plugins.memory.mem.governor_bridge import MemGovernorBridge
-from systems.body_registry import BodyRegistryManager
+from ...infrastructure.memory.governor_bridge import MemGovernorBridge
+from ..body_registry import BodyRegistryManager
 from ..body_runtime_migration import migrate_body_runtime
-from systems.execution import (
+from ..execution import (
     BodyLifecycleExecutionAdapter,
     BodyUpgradeExecutionAdapter,
     GovernorReviewExecutionAdapter,
@@ -27,11 +27,11 @@ from systems.execution import (
     WatchWindowExecutionAdapter,
     attach_execution_route_hint,
 )
-from systems.execution.service import VoidCubeExecutionService
-from systems.lifecycle import BodyLifecycleExecutor
-from systems.governor import GovernorDecisionEngine
+from ..execution.service import VoidCubeExecutionService
+from ..lifecycle import BodyLifecycleExecutor
+from ..governor import GovernorDecisionEngine
 from ..governance_runtime_migration import consolidate_governance_event_logs
-from systems.probe import ProbeExecutor, ProbeRunner
+from ..probe import ProbeExecutor, ProbeRunner
 from .endogenous_drive import EndogenousDriveEngine
 from .evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,

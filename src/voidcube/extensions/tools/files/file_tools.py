@@ -6,16 +6,16 @@ import logging
 import os
 import threading
 from pathlib import Path
-from tools.binary_extensions import has_binary_extension
-from tools.file_operations import ShellFileOperations
-from tools.path_security import (
+from .binary_extensions import has_binary_extension
+from .file_operations import ShellFileOperations
+from .path_security import (
     is_blocked_device,
     validate_file_write_path,
     is_expected_write_exception
 )
-from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
-from tools.path_runtime import RuntimePath, resolve_runtime_path
-from tools.task_execution import TaskExecutionBlocked
+from ....infrastructure.persistence.redaction import redact_sensitive_text
+from ....infrastructure.execution.path_runtime import RuntimePath, resolve_runtime_path
+from ....infrastructure.execution.task_execution import TaskExecutionBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _get_max_read_chars() -> int:
     if _max_read_chars_cached is not None:
         return _max_read_chars_cached
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
         cfg = load_config()
         val = cfg.get("file_read_max_chars")
         if isinstance(val, (int, float)) and val > 0:
@@ -101,7 +101,7 @@ def _resolve_tool_path(
 ) -> RuntimePath:
     """Resolve a user-supplied path against the active file backend."""
     runtime_path = resolve_runtime_path(path, getattr(file_ops, "env", None))
-    from tools.task_execution import ensure_task_execution_path
+    from ....infrastructure.execution.task_execution import ensure_task_execution_path
 
     ensure_task_execution_path(task_id, runtime_path.backend_path)
     return runtime_path
@@ -117,14 +117,14 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     Thread-safe: uses the same per-task creation locks as terminal_tool to
     prevent duplicate sandbox creation from concurrent tool calls.
     """
-    from tools.terminal_tool import (
+    from ....infrastructure.execution.terminal_tool import (
         _active_environments, _env_lock, _create_environment,
         _get_env_config, _last_activity, _start_cleanup_thread,
         _creation_locks,
         _creation_locks_lock,
     )
     import time
-    from tools.task_execution import (
+    from ....infrastructure.execution.task_execution import (
         begin_task_execution,
         block_task_execution,
         ensure_task_execution_request,
@@ -172,7 +172,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                 terminal_env = None
 
         if terminal_env is None:
-            from tools.terminal_tool import _task_env_overrides
+            from ....infrastructure.execution.terminal_tool import _task_env_overrides
 
             config = _get_env_config()
             overrides = _task_env_overrides.get(task_id, {})
@@ -367,7 +367,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
 
         # ── Voidcube internal path guard ────────────────────────────────
         # Prevent prompt injection via catalog or hub metadata files.
-        from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home as _get_hh
+        from ....infrastructure.config.runtime_paths import get_VoidCube_home as _get_hh
         _VoidCube_home = _get_hh().resolve()
         _blocked_dirs = [
             _VoidCube_home / "skills" / ".hub" / "index-cache",
@@ -819,13 +819,13 @@ FILE_TOOLS = [
 # ---------------------------------------------------------------------------
 # Schemas + Registry
 # ---------------------------------------------------------------------------
-from tools.registry import registry, tool_error
+from ..registry import registry, tool_error
 
 
 def _check_file_reqs():
     """Lazy wrapper to avoid circular import with tools/__init__.py."""
-    from tools import check_file_requirements
-    return check_file_requirements()
+    from ....infrastructure.execution.terminal_tool import check_terminal_requirements
+    return check_terminal_requirements()
 
 READ_FILE_SCHEMA = {
     "name": "read_file",

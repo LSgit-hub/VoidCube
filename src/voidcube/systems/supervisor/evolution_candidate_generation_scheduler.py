@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
-from systems.evolution_candidate_generation import (
+from ..evolution_candidate_generation import (
     EvolutionCandidateGenerationRepository,
     EvolutionCandidateGenerationRequest,
     EvolutionCandidateGenerationState,

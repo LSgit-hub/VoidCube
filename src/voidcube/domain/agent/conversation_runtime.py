@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from agent.effect_outcomes import (
+from .effect_outcomes import (
     EffectOutcome,
     failed_effect,
     finalization_status,

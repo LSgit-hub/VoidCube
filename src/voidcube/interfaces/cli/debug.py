@@ -80,7 +80,7 @@ def _collect_debug_report(lines: int = 200) -> str:
     # Config (redacted)
     parts.append("--- Config ---")
     try:
-        from VoidCube_app.config import load_config, get_active_provider_key
+        from ...infrastructure.config.configuration import load_config, get_active_provider_key
         config = load_config()
         # Show active provider/model but redact keys
         active = get_active_provider_key(config)

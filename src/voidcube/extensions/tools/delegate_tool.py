@@ -26,13 +26,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.toolsets import TOOLSETS
-from VoidCube_app.tool_events import (
+from .toolsets import TOOLSETS
+from ...domain.contracts.tool_events import (
     TERMINAL_TOOL_EVENT_KINDS,
     ToolEvent,
     ToolEventKind,
 )
-from VoidCube_app.contracts.execution import ExecutionState
+from ...domain.contracts.execution import ExecutionState
 
 
 # Tools that children must never have access to
@@ -282,7 +282,10 @@ def _build_child_event_sink(
             return
 
         if spinner:
-            from agent.display import get_tool_emoji
+            try:
+                from voidcube.interfaces.cli.display import get_tool_emoji
+            except ModuleNotFoundError:
+                from src.voidcube.interfaces.cli.display import get_tool_emoji
 
             try:
                 spinner.update_text(f"{prefix}{get_tool_emoji(event.name)} {event.name}")
@@ -398,7 +401,7 @@ def _build_child_agent(
         parent_toolsets = set(parent_enabled)
     elif parent_agent and hasattr(parent_agent, "valid_tool_names"):
         # enabled_toolsets is None (all tools) — derive from loaded tool names
-        from tools import model_tools
+        from . import model_tools
         parent_toolsets = {
             ts for name in parent_agent.valid_tool_names
             if (ts := model_tools.get_toolset_for_tool(name)) is not None
@@ -467,7 +470,7 @@ def _build_child_agent(
         delegation_cfg = _load_config()
         delegation_effort = str(delegation_cfg.get("reasoning_effort") or "").strip()
         if delegation_effort:
-            from VoidCube_app.infrastructure.shared.reasoning import parse_reasoning_effort
+            from ...infrastructure.shared.reasoning import parse_reasoning_effort
             parsed = parse_reasoning_effort(delegation_effort)
             if parsed is not None:
                 child_reasoning = parsed
@@ -524,7 +527,7 @@ def _build_child_agent(
         child.cwd = worktree_path
         child._delegate_worktree_path = worktree_path
         try:
-            from agent.subdirectory_hints import SubdirectoryHintTracker
+            from ...runtime.agent.subdirectory_hints import SubdirectoryHintTracker
             child._subdirectory_hints = SubdirectoryHintTracker(working_dir=worktree_path)
         except Exception:
             logger.debug("Could not bind subagent directory hints to worktree", exc_info=True)
@@ -565,7 +568,7 @@ def _run_single_child(
 
     # Restore parent tool names using the value saved before child construction
     # mutated the global. This is the correct parent toolset, not the child's.
-    from tools import model_tools
+    from . import model_tools
     _saved_tool_names = getattr(child, "_delegate_saved_tool_names",
                                 list(model_tools._last_resolved_tool_names))
 
@@ -742,7 +745,7 @@ def _run_single_child(
 
         # Restore the parent's tool names so the process-global is correct
         # for any subsequent execute_code calls or other consumers.
-        from tools import model_tools
+        from . import model_tools
 
         saved_tool_names = getattr(child, "_delegate_saved_tool_names", None)
         if isinstance(saved_tool_names, list):
@@ -873,7 +876,10 @@ def delegate_task(
     display_manager = None
     if enable_display:
         try:
-            from agent.subagent_display import SubagentDisplayManager
+            try:
+                from voidcube.interfaces.cli.subagent_display import SubagentDisplayManager
+            except ModuleNotFoundError:
+                from src.voidcube.interfaces.cli.subagent_display import SubagentDisplayManager
             display_manager = SubagentDisplayManager(
                 max_tool_args_len=50,
             )
@@ -900,7 +906,7 @@ def delegate_task(
     # Save parent tool names BEFORE any child construction mutates the global.
     # _build_child_agent() calls AIAgent() which calls get_tool_definitions(),
     # which overwrites model_tools._last_resolved_tool_names with child's toolset.
-    from tools import model_tools as _model_tools
+    from . import model_tools as _model_tools
     _parent_tool_names = list(_model_tools._last_resolved_tool_names)
 
     # Build all child agents on the main thread (thread-safe construction)
@@ -1153,7 +1159,7 @@ def _resolve_child_credential_pool(effective_provider: Optional[str], parent_age
         return parent_pool
 
     try:
-        from agent.credential_pool import load_pool
+        from ...infrastructure.providers.credential_pool import load_pool
         pool = load_pool(effective_provider)
         if pool is not None and pool.has_credentials():
             return pool
@@ -1215,7 +1221,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
     # Provider is configured — resolve full credentials
     try:
-        from VoidCube_app.infrastructure.providers.runtime import resolve_runtime_provider
+        from ...infrastructure.providers.runtime import resolve_runtime_provider
         runtime = resolve_runtime_provider(requested=configured_provider)
     except Exception as exc:
         raise ValueError(
@@ -1245,8 +1251,8 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 def _load_config() -> dict:
     """Load delegation config through the shared application runtime."""
     try:
-        from VoidCube_app.configuration import application_config
-        from VoidCube_app.config import load_config
+        from ...application.configuration import application_config
+        from ...infrastructure.config.configuration import load_config
 
         return application_config.section("delegation", loader=load_config)
     except Exception:
@@ -1391,7 +1397,7 @@ DELEGATE_TASK_SCHEMA = {
 
 
 # --- Registry ---
-from tools.registry import registry, tool_error
+from .registry import registry, tool_error
 
 registry.register(
     name="delegate_task",

@@ -9,13 +9,13 @@ import subprocess
 import os
 from typing import Dict, Any, List
 
-from tools.registry import registry
+from .registry import registry
 
 
 def system_info_tool(args=None):
     """Return host and configured execution-environment information."""
     try:
-        from tools.terminal_tool import _get_env_config
+        from ...infrastructure.execution.terminal_tool import _get_env_config
 
         terminal = _get_env_config()
         backend = str(terminal.get("env_type") or "local")

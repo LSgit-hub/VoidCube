@@ -134,7 +134,7 @@ class CliProviderRuntime:
                 self.emit(f"    Capabilities: {model_info.format_capabilities()}")
         else:
             try:
-                from agent.model_metadata import get_model_context_length
+                from ...infrastructure.providers.model_metadata import get_model_context_length
 
                 context_length = get_model_context_length(
                     result.new_model,

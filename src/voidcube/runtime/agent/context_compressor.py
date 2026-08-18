@@ -28,8 +28,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.context_engine import ContextEngine
-from agent.model_metadata import (
+try:
+    from voidcube.domain.agent.context_engine import ContextEngine
+except ModuleNotFoundError:
+    from src.voidcube.domain.agent.context_engine import ContextEngine
+from ...infrastructure.providers.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
     get_next_probe_tier,
     get_model_context_length,
@@ -942,7 +945,7 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 "max_tokens": summary_budget * 2,
                 # timeout resolved from auxiliary.compression.timeout config by call_llm
             }
-            from agent.auxiliary_client import call_llm
+            from ...infrastructure.providers.auxiliary_client import call_llm
 
             response = call_llm(**call_kwargs)
             content = response.choices[0].message.content

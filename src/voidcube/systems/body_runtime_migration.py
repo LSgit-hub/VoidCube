@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 
 from ..infrastructure.runtime.layout import get_legacy_project_runtime_layout
-from systems.body_registry import BodyLaunchTarget, BodyRegistry, BodySlotMeta
+from .body_registry import BodyLaunchTarget, BodyRegistry, BodySlotMeta
 
 
 class BodyRuntimeMigrationConflict(RuntimeError):

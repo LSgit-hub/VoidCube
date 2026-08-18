@@ -7,14 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from systems.evolution_authoring import JsonEvolutionAuthoringRepository
-from systems.evolution_evaluation import (
+from ..evolution_authoring import JsonEvolutionAuthoringRepository
+from ..evolution_evaluation import (
     EnvironmentCapabilityPolicy,
     JsonEvaluationRepository,
     resolve_environment_capability_policy,
 )
-from systems.research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
-from systems.self_cognition import JsonSelfCognitionRepository
+from ..research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
+from ..self_cognition import JsonSelfCognitionRepository
 from .evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,
 )

@@ -2050,7 +2050,7 @@ class OptionalSkillSource(SkillSource):
     """
 
     def __init__(self):
-        from VoidCube_app.infrastructure.config.runtime_paths import get_optional_skills_dir
+        from ...infrastructure.config.runtime_paths import get_optional_skills_dir
 
         self._optional_dir = get_optional_skills_dir(
             Path(__file__).parent.parent / "optional-skills"

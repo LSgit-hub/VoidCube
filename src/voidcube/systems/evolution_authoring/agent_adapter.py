@@ -7,11 +7,11 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
-from systems.evolution_authoring.models import (
+from .models import (
     AuthoringAgentReport,
     EvolutionAuthoringContext,
 )
-from tools.task_execution import get_task_execution_state
+from ...infrastructure.execution.task_execution import get_task_execution_state
 
 
 AUTHORING_TOOLSETS = ("file", "terminal")
@@ -216,13 +216,13 @@ def _validate_task_scope(context: EvolutionAuthoringContext) -> None:
 
 
 def _default_runtime_provider_resolver(**kwargs: object) -> Mapping[str, Any]:
-    from VoidCube_app.infrastructure.providers.runtime import resolve_runtime_provider
+    from ...infrastructure.providers.runtime import resolve_runtime_provider
 
     return resolve_runtime_provider(**kwargs)
 
 
 def _default_model_resolver() -> str:
-    from VoidCube_app.config import get_active_model_config, load_config
+    from ...infrastructure.config.configuration import get_active_model_config, load_config
 
     config = get_active_model_config(load_config())
     return str(config.get("model") or config.get("default") or "").strip()

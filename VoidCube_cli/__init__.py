@@ -13,4 +13,16 @@ Provides subcommands for:
 try:
     from voidcube.version import __version__
 except (ModuleNotFoundError, ImportError):
-    from src.voidcube.version import __version__
+    try:
+        from src.voidcube.version import __version__
+    except (ModuleNotFoundError, ImportError):
+        # setuptools imports this compatibility package from an isolated
+        # build environment where the source-layout namespace is not importable.
+        from pathlib import Path
+        from runpy import run_path
+
+        _version_file = (
+            Path(__file__).resolve().parents[1] / "src" / "voidcube" / "version.py"
+        )
+        _version_namespace = run_path(str(_version_file))
+        __version__ = str(_version_namespace["__version__"])

@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal
 
-from VoidCube_app.contracts.artifacts import Artifact
-from VoidCube_app.contracts.execution import ExecutionState
+from ...domain.contracts.artifacts import Artifact
+from ...domain.contracts.execution import ExecutionState
 
 logger = logging.getLogger(__name__)
 

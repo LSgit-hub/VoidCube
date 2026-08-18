@@ -622,7 +622,7 @@ def _normalize_resolved_model(model_name: Optional[str], provider: str) -> Optio
     if not model_name:
         return model_name
     try:
-        from VoidCube_app.model_normalization import normalize_model_for_provider
+        from .model_normalization import normalize_model_for_provider
 
         return normalize_model_for_provider(model_name, provider)
     except Exception:

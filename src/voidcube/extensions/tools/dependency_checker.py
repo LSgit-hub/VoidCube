@@ -13,7 +13,7 @@ Concepts
 --------
 - **critical** deps — the agent should refuse meaningful work until fixed
 - **optional** deps — nice to have; tools degrade gracefully when absent
-- The manifest at ``tools/dependency_manifest.yaml`` is the single source
+- The manifest at ``extensions/tools/dependency_manifest.yaml`` is the single source
   of truth; the agent can read it directly to discover new dependencies.
 """
 
@@ -471,7 +471,7 @@ def check_bootstrap_requirements() -> bool:
 # Register with the tool registry
 # ---------------------------------------------------------------------------
 
-from tools.registry import registry
+from .registry import registry
 
 registry.register(
     name="check_dependencies",

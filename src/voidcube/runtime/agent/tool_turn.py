@@ -7,10 +7,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from agent.api_response import has_visible_content, strip_thinking_blocks
-from agent.conversation_runtime import ConversationTurnRuntime
-from agent.conversation_turn import ConversationTurnState
-from agent.model_metadata import estimate_messages_tokens_rough
+from ...infrastructure.llm.response import has_visible_content, strip_thinking_blocks
+from ...domain.agent.conversation_runtime import ConversationTurnRuntime
+from ...domain.agent.conversation_turn import ConversationTurnState
+from ...infrastructure.providers.model_metadata import estimate_messages_tokens_rough
 
 
 HOUSEKEEPING_TOOLS = frozenset(

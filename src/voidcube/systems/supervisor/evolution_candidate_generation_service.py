@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from systems.evolution_authoring import (
+from ..evolution_authoring import (
     AIAgentAuthoringAdapter,
     AuthoringAgent,
     EvolutionAuthoringExecutor,
@@ -21,12 +21,12 @@ from systems.evolution_authoring import (
     JsonEvolutionAuthoringRepository,
     candidate_ref_for_task,
 )
-from systems.evolution_candidate_generation import (
+from ..evolution_candidate_generation import (
     EvolutionCandidateGenerationRequest,
     EvolutionCandidateGenerationState,
     JsonEvolutionCandidateGenerationRepository,
 )
-from systems.evolution_evaluation import (
+from ..evolution_evaluation import (
     BenchmarkExecutionError,
     EvaluationRepository,
     MetricTarget,
@@ -36,7 +36,7 @@ from systems.evolution_evaluation import (
     create_native_first_scoring_policy,
     select_benchmark_platforms,
 )
-from systems.self_cognition import SelfCognitionCollector, SelfCognitionSnapshot
+from ..self_cognition import SelfCognitionCollector, SelfCognitionSnapshot
 from .evolution_candidate_evaluation_service import (
     EvolutionCandidateEvaluationBlocked,
     EvolutionCandidateEvaluationOutcome,

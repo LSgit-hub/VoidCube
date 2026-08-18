@@ -64,7 +64,7 @@ _RELEVANT_SKILL_CATEGORIES = {
 def get_available_skills() -> Dict[str, List[str]]:
     """Return skills grouped by category, filtered by platform and disabled state."""
     try:
-        from tools.skills_tool import _find_all_skills
+        from ...extensions.skills.tool import _find_all_skills
         all_skills = _find_all_skills()
     except Exception:
         return {}

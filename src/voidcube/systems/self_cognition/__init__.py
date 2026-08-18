@@ -1,16 +1,16 @@
 """Immutable self-cognition facts and their repository boundary."""
 
-from systems.self_cognition.collector import (
+from .collector import (
     DEFAULT_COLLECTOR_VERSION,
     SelfCognitionCollector,
 )
-from systems.self_cognition.models import (
+from .models import (
     HealthMetric,
     ModuleDependency,
     RuntimeCapability,
     SelfCognitionSnapshot,
 )
-from systems.self_cognition.repository import (
+from .repository import (
     JsonSelfCognitionRepository,
     SelfCognitionImmutableConflict,
     SelfCognitionRecordCorrupted,

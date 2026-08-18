@@ -185,7 +185,7 @@ def show_config() -> None:
                 print(f"  {label:12s}  {', '.join(parts)}")
 
     try:
-        from agent.skill_utils import discover_all_skill_config_vars, resolve_skill_config_values
+        from ...extensions.skills.catalog import discover_all_skill_config_vars, resolve_skill_config_values
 
         skill_vars = discover_all_skill_config_vars()
         if skill_vars:

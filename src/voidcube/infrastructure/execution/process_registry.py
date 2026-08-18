@@ -21,8 +21,8 @@ from typing import Any
 
 import psutil
 
-from VoidCube_app.contracts.execution import ExecutionState, state_from_exit_code, utc_now
-from VoidCube_app.infrastructure.runtime.layout import get_runtime_layout
+from ...domain.contracts.execution import ExecutionState, state_from_exit_code, utc_now
+from ..runtime.layout import get_runtime_layout
 
 
 _IS_WINDOWS = os.name == "nt"
@@ -385,7 +385,7 @@ class ProcessRegistry:
         notify_on_complete: bool = False,
         watch_patterns: list[str] | None = None,
     ) -> ProcessSession:
-        from tools.environments.local import _find_persistent_bash, _make_run_env
+        from .environments.local import _find_persistent_bash, _make_run_env
 
         self.cleanup()
         session_id = self._new_id()
@@ -400,7 +400,11 @@ class ProcessRegistry:
         wrapper_command = [
             sys.executable,
             "-m",
-            "tools.process_spool_wrapper",
+            (
+                "src.voidcube.infrastructure.execution.process_spool_wrapper"
+                if __package__.startswith("src.")
+                else "voidcube.infrastructure.execution.process_spool_wrapper"
+            ),
             "--spool",
             str(spool_path),
             "--marker",
@@ -803,7 +807,7 @@ class ProcessRegistry:
         self._persist(session)
         if session.kind == "remote":
             try:
-                from tools.terminal_tool import cleanup_vm
+                from .terminal_tool import cleanup_vm
                 cleanup_vm(session.task_id)
             finally:
                 self._finish(session, None, ExecutionState.CANCELLED, None)
@@ -988,7 +992,10 @@ def process_tool(args: dict | None = None, **_: Any) -> str:
         return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
 
 
-from tools.registry import registry
+try:
+    from ...extensions.tools.registry import registry
+except ImportError:
+    from ...extensions.tools.registry import registry
 
 registry.register(
     name="process",

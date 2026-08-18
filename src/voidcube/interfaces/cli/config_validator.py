@@ -280,7 +280,7 @@ def _icon_for_severity(severity: Severity) -> str:
 
 
 def _effective_terminal_config() -> dict[str, Any]:
-    from tools.terminal_tool import _get_env_config
+    from ...infrastructure.execution.terminal_tool import _get_env_config
 
     return _get_env_config()
 
@@ -440,7 +440,7 @@ def _diagnose_git_bash() -> AgentCheck:
         )
 
     try:
-        from tools.environments.local import _find_bash
+        from ...infrastructure.execution.environments.local import _find_bash
 
         bash_path = _find_bash()
         return AgentCheck(
@@ -472,7 +472,7 @@ def _diagnose_docker(cfg: dict) -> AgentCheck:
     requested = requested_backend == "docker"
 
     try:
-        from tools.environments.docker import find_docker
+        from ...infrastructure.execution.environments.docker import find_docker
 
         docker_exe = find_docker()
     except Exception as exc:
@@ -597,7 +597,7 @@ def _diagnose_podman(cfg: dict) -> AgentCheck:
 
 
 def _diagnose_tool_registration() -> AgentCheck:
-    from tools.model_tools import get_all_tool_names
+    from ...extensions.tools.model_tools import get_all_tool_names
 
     required_tools = ["terminal", "read_file", "write_file", "patch", "search_files"]
     registered_tools = set(get_all_tool_names())
@@ -622,7 +622,7 @@ def _diagnose_tool_registration() -> AgentCheck:
 
 
 def _diagnose_body_registry() -> AgentCheck:
-    from systems.body_registry import BodyRegistryManager
+    from ...systems.body_registry import BodyRegistryManager
     from ...infrastructure.config.system import get_config
 
     try:
@@ -727,7 +727,7 @@ def _diagnose_terminal_cwd(cfg: dict) -> AgentCheck:
 
 
 def _diagnose_path_runtime() -> AgentCheck:
-    from tools.path_runtime import resolve_runtime_path
+    from ...infrastructure.execution.path_runtime import resolve_runtime_path
 
     env = SimpleNamespace(
         _voidcube_active_backend="local",
@@ -775,8 +775,8 @@ def _diagnose_path_runtime() -> AgentCheck:
 
 
 def _diagnose_terminal_probe() -> AgentCheck:
-    from tools.model_tools import handle_function_call
-    from tools.terminal_tool import cleanup_vm
+    from ...extensions.tools.model_tools import handle_function_call
+    from ...infrastructure.execution.terminal_tool import cleanup_vm
 
     task_id = "doctor-terminal-probe"
     try:
@@ -824,8 +824,8 @@ def _diagnose_terminal_probe() -> AgentCheck:
 
 
 def _diagnose_tool_call_smoke() -> AgentCheck:
-    from tools.model_tools import handle_function_call
-    from tools.terminal_tool import cleanup_vm
+    from ...extensions.tools.model_tools import handle_function_call
+    from ...infrastructure.execution.terminal_tool import cleanup_vm
 
     task_id = "doctor-tool-smoke"
     with tempfile.TemporaryDirectory(prefix="voidcube-doctor-") as tmpdir:

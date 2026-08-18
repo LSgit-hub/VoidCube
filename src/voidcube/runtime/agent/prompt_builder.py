@@ -12,15 +12,15 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
-from VoidCube_app.infrastructure.runtime.environment import is_wsl
-from VoidCube_app.default_identity import (
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.runtime.environment import is_wsl
+from ...domain.identity.defaults import (
     DEFAULT_IDENTITY_PROMPT,
     PERSISTENT_IDENTITY_GUIDANCE,
 )
 from typing import Optional
 
-from agent.skill_utils import (
+from ...extensions.skills.catalog import (
     EXCLUDED_SKILL_DIRS,
     extract_skill_conditions,
     extract_skill_description,
@@ -30,7 +30,7 @@ from agent.skill_utils import (
     parse_frontmatter,
     skill_matches_platform,
 )
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write
+from ...infrastructure.persistence.file_store import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
@@ -750,7 +750,7 @@ def load_soul_md() -> Optional[str]:
     ``skip_soul=True`` so SOUL.md isn't injected twice.
     """
     try:
-        from VoidCube_app.config import ensure_VoidCube_home
+        from ...infrastructure.config.configuration import ensure_VoidCube_home
         ensure_VoidCube_home()
     except Exception as e:
         logger.debug("Could not ensure VOIDCUBE_HOME before loading SOUL.md: %s", e)
@@ -759,7 +759,7 @@ def load_soul_md() -> Optional[str]:
     if not soul_path.exists():
         # Create default SOUL.md if it doesn't exist
         try:
-            from VoidCube_app.default_identity import DEFAULT_SOUL_MD
+            from ...domain.identity.defaults import DEFAULT_SOUL_MD
             soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
             logger.info("Created default SOUL.md at %s", soul_path)
         except Exception as e:

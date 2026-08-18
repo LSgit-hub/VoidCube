@@ -49,7 +49,10 @@ class TurnPostprocessingRuntime:
 
         if outcome.usable:
             try:
-                from agent.title_generator import maybe_auto_title
+                try:
+                    from voidcube.application.session_title import maybe_auto_title
+                except ModuleNotFoundError:
+                    from src.voidcube.application.session_title import maybe_auto_title
 
                 maybe_auto_title(
                     self.ports.session_db(),

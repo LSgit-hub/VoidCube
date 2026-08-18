@@ -1,6 +1,6 @@
 """Immutable evolution evaluation records and their repository boundary."""
 
-from systems.evolution_evaluation.executor import (
+from .executor import (
     BENCHMARK_CONSISTENCY_GATE,
     DEFAULT_BENCHMARK_EXECUTOR_VERSION,
     EXECUTION_ENVIRONMENT_GATE,
@@ -13,7 +13,7 @@ from systems.evolution_evaluation.executor import (
     BenchmarkRunner,
     BenchmarkRunRequest,
 )
-from systems.evolution_evaluation.models import (
+from .models import (
     AllowedRegression,
     BenchmarkCase,
     BenchmarkCaseExecutionEvidence,
@@ -36,30 +36,30 @@ from systems.evolution_evaluation.models import (
     benchmark_case_platforms,
     benchmark_case_supports_platform,
 )
-from systems.evolution_evaluation.environment import (
+from .environment import (
     build_container_environment_manifest,
     capture_host_environment_manifest,
     capture_host_runtime_tools,
     dependency_fingerprint,
 )
-from systems.evolution_evaluation.repository import (
+from .repository import (
     EvaluationImmutableConflict,
     EvaluationRecordCorrupted,
     EvaluationRepository,
     JsonEvaluationRepository,
 )
-from systems.evolution_evaluation.runners import (
+from .runners import (
     BenchmarkCaseEvaluation,
     GitWorktreeValidationRunner,
     NativeFirstBenchmarkExecutorFactory,
     ValidationCaseEvaluator,
     build_native_first_platform_runners,
 )
-from systems.evolution_evaluation.selection import (
+from .selection import (
     BenchmarkPlatformSelection,
     select_benchmark_platforms,
 )
-from systems.evolution_evaluation.benchmark_packs import (
+from .benchmark_packs import (
     NATIVE_COMPATIBILITY_GATE,
     NATIVE_COMPATIBILITY_METRIC,
     NATIVE_FIRST_PACK_VERSION,
@@ -68,7 +68,7 @@ from systems.evolution_evaluation.benchmark_packs import (
     create_native_first_scoring_policy,
     native_first_benchmark_evaluators,
 )
-from systems.evolution_evaluation.capability_policy import (
+from .capability_policy import (
     CAPABILITY_POLICY_VERSION,
     CapabilityPolicyEvaluation,
     CapabilityPolicyProfile,

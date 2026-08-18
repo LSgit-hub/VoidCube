@@ -47,20 +47,20 @@ import re
 import asyncio
 from typing import List, Dict, Any, Optional
 import httpx
-from agent.auxiliary_client import (
+from ....infrastructure.providers.auxiliary_client import (
     async_call_llm,
     extract_content_or_reasoning,
     get_async_text_auxiliary_client,
 )
-from tools.debug_helpers import DebugSession
-from tools.managed_tool_gateway import (
+from ..debug_helpers import DebugSession
+from ....infrastructure.gateway.managed_tool_gateway import (
     build_vendor_gateway_url,
     read_nous_access_token as _read_nous_access_token,
     resolve_managed_tool_gateway,
 )
-from tools.tool_backend_helpers import managed_nous_tools_enabled
-from tools.url_safety import is_safe_url
-from tools.website_policy import check_website_access
+from ..backend_helpers import managed_nous_tools_enabled
+from .url_safety import is_safe_url
+from .website_policy import check_website_access
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def _has_env(name: str) -> bool:
 def _load_web_config() -> dict:
     """Load the ``web:`` section from ~/.VoidCube/config.yaml."""
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
         return load_config().get("web", {})
     except (ImportError, Exception):
         return {}
@@ -943,7 +943,7 @@ def _get_exa_client():
 
 def _exa_search(query: str, limit: int = 10) -> dict:
     """Search using the Exa SDK and return results as a dict."""
-    from tools.interrupt import is_interrupted
+    from ....infrastructure.execution.interrupt import is_interrupted
     if is_interrupted():
         return {"error": "Interrupted", "success": False}
 
@@ -975,7 +975,7 @@ def _exa_extract(urls: List[str]) -> List[Dict[str, Any]]:
     Returns a list of result dicts matching the structure expected by the
     LLM post-processing pipeline (url, title, content, metadata).
     """
-    from tools.interrupt import is_interrupted
+    from ....infrastructure.execution.interrupt import is_interrupted
     if is_interrupted():
         return [{"url": u, "error": "Interrupted", "title": ""} for u in urls]
 
@@ -1005,7 +1005,7 @@ def _exa_extract(urls: List[str]) -> List[Dict[str, Any]]:
 
 def _parallel_search(query: str, limit: int = 5) -> dict:
     """Search using the Parallel SDK and return results as a dict."""
-    from tools.interrupt import is_interrupted
+    from ....infrastructure.execution.interrupt import is_interrupted
     if is_interrupted():
         return {"error": "Interrupted", "success": False}
 
@@ -1040,7 +1040,7 @@ async def _parallel_extract(urls: List[str]) -> List[Dict[str, Any]]:
     Returns a list of result dicts matching the structure expected by the
     LLM post-processing pipeline (url, title, content, metadata).
     """
-    from tools.interrupt import is_interrupted
+    from ....infrastructure.execution.interrupt import is_interrupted
     if is_interrupted():
         return [{"url": u, "error": "Interrupted", "title": ""} for u in urls]
 
@@ -1123,7 +1123,7 @@ def web_search_tool(query: str, limit: int = 5) -> str:
     }
     
     try:
-        from tools.interrupt import is_interrupted
+        from ....infrastructure.execution.interrupt import is_interrupted
         if is_interrupted():
             return tool_error("Interrupted", success=False)
 
@@ -1133,7 +1133,7 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         # 本地模式 - 使用本地爬虫
         if backend == "local":
             try:
-                from tools.web_tools_local import local_web_search
+                from .web_tools_local import local_web_search
                 results = local_web_search(query, limit=limit)
                 web_results = [
                     {
@@ -1265,7 +1265,7 @@ async def web_extract_tool(
     """
     # Block URLs containing embedded secrets (exfiltration prevention).
     # URL-decode first so percent-encoded secrets (%73k- = sk-) are caught.
-    from VoidCube_app.infrastructure.persistence.redaction import _PREFIX_RE
+    from ....infrastructure.persistence.redaction import _PREFIX_RE
     from urllib.parse import unquote
     for _url in urls:
         if _PREFIX_RE.search(_url) or _PREFIX_RE.search(unquote(_url)):
@@ -1298,14 +1298,14 @@ async def web_extract_tool(
         warning: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         try:
-            from tools.web_tools_local import local_web_extract
+            from .web_tools_local import local_web_extract
         except ImportError as exc:
             raise RuntimeError(
                 "Local web extraction unavailable. Install beautifulsoup4 and lxml."
             ) from exc
 
         local_results: List[Dict[str, Any]] = []
-        from tools.interrupt import is_interrupted as _is_interrupted
+        from ....infrastructure.execution.interrupt import is_interrupted as _is_interrupted
 
         for url in target_urls:
             if _is_interrupted():
@@ -1402,7 +1402,7 @@ async def web_extract_tool(
                     # Batch scraping adds complexity without much benefit for small numbers of URLs
                     results = []
 
-                    from tools.interrupt import is_interrupted as _is_interrupted
+                    from ....infrastructure.execution.interrupt import is_interrupted as _is_interrupted
                     for url in safe_urls:
                         if _is_interrupted():
                             results.append({"url": url, "error": "Interrupted", "title": ""})
@@ -1786,7 +1786,7 @@ async def web_crawl_tool(
                 "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]}}]}, ensure_ascii=False)
 
         if backend == "local":
-            from tools.web_tools_local import local_web_crawl
+            from .web_tools_local import local_web_crawl
 
             max_depth = 2 if depth == "advanced" else 1
             local_result = local_web_crawl(
@@ -1822,7 +1822,7 @@ async def web_crawl_tool(
 
         # Tavily supports crawl via its /crawl endpoint
         if backend == "tavily":
-            from tools.interrupt import is_interrupted as _is_int
+            from ....infrastructure.execution.interrupt import is_interrupted as _is_int
             if _is_int():
                 return tool_error("Interrupted", success=False)
 
@@ -1875,7 +1875,7 @@ async def web_crawl_tool(
         if instructions:
             logger.info("Instructions parameter ignored (not supported in crawl API)")
         
-        from tools.interrupt import is_interrupted as _is_int
+        from ....infrastructure.execution.interrupt import is_interrupted as _is_int
         if _is_int():
             return tool_error("Interrupted", success=False)
 
@@ -2251,7 +2251,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-from tools.registry import registry, tool_error
+from ..registry import registry, tool_error
 
 WEB_SEARCH_SCHEMA = {
     "name": "web_search",

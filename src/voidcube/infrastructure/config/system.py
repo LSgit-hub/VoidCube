@@ -92,7 +92,7 @@ def _apply_canonical_file_config(config: SystemConfig) -> None:
     existing precedence contract.
     """
     try:
-        from VoidCube_app.infrastructure.config.runtime_paths import get_config_path
+        from .runtime_paths import get_config_path
 
         path = get_config_path()
         if not path.is_file():

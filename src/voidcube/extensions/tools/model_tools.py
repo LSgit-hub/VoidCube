@@ -24,10 +24,13 @@ import threading
 import concurrent.futures
 from typing import Dict, Any, List, Optional, Tuple, Set
 
-from tools.registry import registry
-from tools.toolsets import resolve_toolset, validate_toolset
-from agent.tool_execution import classify_tool_result
-from VoidCube_app.contracts.execution import ExecutionState
+from .registry import registry
+from .toolsets import resolve_toolset, validate_toolset
+try:
+    from voidcube.runtime.agent.tool_execution import classify_tool_result
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.tool_execution import classify_tool_result
+from ...domain.contracts.execution import ExecutionState
 
 logger = logging.getLogger(__name__)
 
@@ -139,35 +142,44 @@ def _discover_tools():
     rest from loading.
     """
     _modules = [
-        "tools.web_tools",
+        "voidcube.extensions.tools.web.web_tools",
         "tools.terminal_tool",
-        "tools.file_tools",
-        "tools.vision_tools",
+        "voidcube.extensions.tools.files.file_tools",
+        "voidcube.extensions.tools.media.vision_tools",
         "tools.skills_tool",
-        "tools.skill_manager_tool",
-        "tools.browser_tool",
-        "tools.media_tool",
-        "tools.todo_tool",
-        "tools.session_search_tool",
-        "tools.mixture_of_agents_tool",
-        "tools.clarify_tool",
-        "tools.scheduled_task_tool",
-        "tools.code_execution_tool",
-        "tools.delegate_tool",
+        "voidcube.extensions.skills.manager",
+        "voidcube.extensions.tools.browser.browser_tool",
+        "voidcube.extensions.tools.media.media_tool",
+        "voidcube.extensions.tools.todo_tool",
+        "voidcube.extensions.tools.session_search_tool",
+        "voidcube.extensions.tools.mixture_of_agents_tool",
+        "voidcube.extensions.tools.clarify_tool",
+        "voidcube.extensions.tools.scheduled_task_tool",
+        "voidcube.infrastructure.execution.code_execution_tool",
+        "voidcube.extensions.tools.delegate_tool",
         "tools.process_registry",
 
         # Media generation tools (image/video)
-        "tools.media_generation_tool",
+        "voidcube.extensions.tools.media.media_generation_tool",
         # Ops: Server operations tools (registered via ops_register)
-        "tools.ops_register",
+        "voidcube.extensions.tools.ops_register",
         # Bootstrap / environment dependency checker
-        "tools.dependency_checker",
+        "voidcube.extensions.tools.dependency_checker",
     ]
     import importlib
     for mod_name in _modules:
         try:
             importlib.import_module(mod_name)
         except ImportError as e:
+            fallback_name = (
+                f"src.{mod_name}" if mod_name.startswith("voidcube.") else None
+            )
+            if fallback_name:
+                try:
+                    importlib.import_module(fallback_name)
+                    continue
+                except ImportError as fallback_error:
+                    e = fallback_error
             logger.warning("Could not import tool module %s: %s", mod_name, e)
 
 
@@ -188,13 +200,13 @@ def ensure_tools_discovered() -> None:
         _discover_tools()
 
         try:
-            from tools.mcp_tool import discover_mcp_tools
+            from voidcube.extensions.tools.mcp.mcp_tool import discover_mcp_tools
             discover_mcp_tools()
         except (ImportError, RuntimeError) as e:
             logger.debug("MCP tool discovery failed: %s", e)
 
         try:
-            from VoidCube_cli.plugins import discover_plugins
+            from ..plugins.cli_adapter import discover_plugins
             discover_plugins()
         except (ImportError, RuntimeError) as e:
             logger.debug("Plugin discovery failed: %s", e)
@@ -269,7 +281,7 @@ def get_tool_definitions(
                     print(f"⚠️  Unknown toolset: {toolset_name}")
 
     elif disabled_toolsets:
-        from tools.toolsets import get_all_toolsets
+        from .toolsets import get_all_toolsets
         for ts_name in get_all_toolsets():
             tools_to_include.update(resolve_toolset(ts_name))
 
@@ -288,7 +300,7 @@ def get_tool_definitions(
                 if not quiet_mode:
                     print(f"⚠️  Unknown toolset: {toolset_name}")
     else:
-        from tools.toolsets import get_all_toolsets
+        from .toolsets import get_all_toolsets
         for ts_name in get_all_toolsets():
             tools_to_include.update(resolve_toolset(ts_name))
 
@@ -312,7 +324,7 @@ def get_tool_definitions(
     # execute_code" even when the API key isn't configured or the toolset is
     # disabled.
     if "execute_code" in available_tool_names:
-        from tools.code_execution_tool import SANDBOX_ALLOWED_TOOLS, build_execute_code_schema
+        from ...infrastructure.execution.code_execution_tool import SANDBOX_ALLOWED_TOOLS, build_execute_code_schema
         sandbox_enabled = set(SANDBOX_ALLOWED_TOOLS) & available_tool_names
         dynamic_schema = build_execute_code_schema(sandbox_enabled)
         for i, td in enumerate(filtered_tools):
@@ -493,7 +505,10 @@ def handle_function_call(
     # so the *consecutive* counter resets (reads after other work are fine).
     if function_name not in _READ_SEARCH_TOOLS:
         try:
-            from tools.file_tools import notify_other_tool_call
+            try:
+                from voidcube.extensions.tools.files.file_tools import notify_other_tool_call
+            except ModuleNotFoundError:
+                from src.voidcube.extensions.tools.files.file_tools import notify_other_tool_call
             notify_other_tool_call(task_id or "default")
         except ImportError:
             pass  # file_tools may not be loaded yet
@@ -505,7 +520,7 @@ def handle_function_call(
             return json.dumps({"error": f"{function_name} must be handled by the agent loop"})
 
         try:
-            from VoidCube_cli.plugins import invoke_hook
+            from ..plugins.cli_adapter import invoke_hook
             invoke_hook(
                 "pre_tool_call",
                 tool_name=function_name,
@@ -519,7 +534,7 @@ def handle_function_call(
 
         effect = dynamic_effect or registry.get_effect(function_name)
         if effect != "read_only":
-            from agent.action_journal import get_action_journal
+            from ...infrastructure.persistence.action_journal import get_action_journal
 
             journal = get_action_journal()
             lease = (
@@ -666,7 +681,7 @@ def handle_function_call(
             )
 
         try:
-            from VoidCube_cli.plugins import invoke_hook
+            from ..plugins.cli_adapter import invoke_hook
             invoke_hook(
                 "post_tool_call",
                 tool_name=function_name,

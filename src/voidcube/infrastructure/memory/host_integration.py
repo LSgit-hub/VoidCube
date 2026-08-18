@@ -8,13 +8,13 @@ from memai.host_integration import MemHostIntegration, configure_mem_host_integr
 
 
 def configure_voidcube_mem_host() -> None:
-    from VoidCube_app.config import get_env_value, load_config
-    from VoidCube_app.provider_auth import (
+    from ..config.configuration import get_env_value, load_config
+    from ..providers.auth import (
         has_usable_secret,
         resolve_api_key_provider_credentials,
     )
-    from agent.credential_pool import load_pool
-    from agent.integration_policy import require_active_integration
+    from ..providers.credential_pool import load_pool
+    from ...domain.contracts.integration_policy import require_active_integration
 
     def config_loader() -> dict[str, Any]:
         loaded = load_config()

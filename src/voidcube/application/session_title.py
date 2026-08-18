@@ -8,7 +8,10 @@ import logging
 import threading
 from typing import Optional
 
-from agent.auxiliary_client import call_llm
+try:
+    from ..infrastructure.providers.auxiliary_client import call_llm
+except ImportError:
+    from src.voidcube.infrastructure.providers.auxiliary_client import call_llm
 
 logger = logging.getLogger(__name__)
 

@@ -100,10 +100,8 @@ class AgentProxy:
     The local AIAgent mode has been removed per architecture baseline §3.1/§4.2:
     CLI must not create agent instances directly; all routing goes through Gateway.
 
-    READY: This is the canonical Gateway-routed agent.  It is currently unused
-    in production because CLI still creates local AIAgent instances (see
-    ``cli.py:_get_AIAgent``).  Once AgentProxy gains full AIAgent interface
-    parity, switch CLI's _get_AIAgent to use AgentProxy.
+    This adapter is the gateway-routed agent boundary. The CLI composes it
+    through the gateway ports rather than reaching into gateway internals.
     """
 
     def __init__(

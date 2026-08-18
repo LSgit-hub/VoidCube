@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from tools.browser_providers.base import CloudBrowserProvider
+from .base import CloudBrowserProvider
 
 logger = logging.getLogger(__name__)
 

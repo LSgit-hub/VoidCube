@@ -73,23 +73,32 @@ VoidCube/
 | `VoidCube_core/constants.py`, `time.py`, `redaction.py`, `logging.py` | `infrastructure/persistence`、`infrastructure/config` 或 `shared` | 按职责拆分；禁止继续增加新的 `core` 杂项 |
 | `VoidCube_core/state.py` | `infrastructure/persistence/session_db.py` | 它是存储实现，不是核心领域 |
 | `VoidCube_app/contracts/*`、`interaction_contract.py`、`tool_events.py`、`turn_contract.py` | `domain/contracts` | scheduler、turn、event、tool、execution、interaction 和 artifact 协议均已迁移；旧模块仅为兼容 alias |
+| `agent/memory_provider.py` | `domain/contracts/memory.py` | Memory provider port 已迁移；Mem 插件只实现 canonical port，旧模块仅为 alias |
 | `VoidCube_app/application.py`、`session_lifecycle.py`、`turn_scheduler.py` | `application/*` | shared application runtime 已迁移为 `application/application_runtime.py`；turn scheduler 已迁移为 `application/scheduling`；其余应用用例不应依赖 TUI/CLI |
 | `VoidCube_app/configuration.py` | `application/configuration.py` | 进程级 application config snapshot 已迁移；旧模块仅为兼容 facade |
 | `VoidCube_app/companion_workers.py` | `application/companion_workers.py` | Companion worker role/route rules 已迁移；旧模块仅为兼容 facade |
+| `agent/memory_manager.py` | `application/memory_manager.py` | Mem provider selection、lifecycle and turn orchestration 已迁移；旧模块仅为 alias |
+| `src/voidcube/application/session_title.py` | `application` | Session title generation and first-turn persistence orchestration；旧 `agent.title_generator` 仅模块 alias |
 | `VoidCube_app/default_identity.py` | `domain/identity/defaults.py` | Persistent identity defaults 已迁移；旧模块仅为兼容 facade |
 | `VoidCube_app/use_cases/sessions.py` | `src/voidcube/application/sessions.py` | Session 新建、恢复、分支、标题和历史变更用例；旧 `use_cases/sessions.py` 仅为兼容 facade |
 | `VoidCube_app/config.py`、`provider_auth.py`、`runtime_provider.py` | `infrastructure/config`、`infrastructure/providers` | `config.py` 已迁移为 `src/voidcube/infrastructure/config/configuration.py`；旧模块只转发，配置与外部 Provider 适配器分离 |
 | `VoidCube_app/infrastructure/config/provider_selection.py` | `infrastructure/config/provider_selection.py` | CLI 模型切换写入配置的唯一适配器；CLI 通过 callback 调用，不直接持有配置实现 |
 | `src/voidcube/infrastructure/providers/registry.py`、`auth.py`、`runtime.py`、`endpoints.py` | `infrastructure/providers` | Provider 元数据、鉴权、endpoint 和 runtime resolution 的唯一规范实现；`VoidCube_app/infrastructure/providers/*` 仅模块对象兼容 facade |
 | `VoidCube_app/models.py` | `infrastructure/providers/model_catalog.py` | Provider 模型目录、价格、tier 过滤和 `/models` 探测的唯一实现；旧模块仅为兼容 alias |
+| `agent/model_metadata.py` | `infrastructure/providers/model_metadata.py` | 模型 context length、token estimation 和 endpoint metadata probing 的唯一实现；旧模块仅为模块 alias |
 | `src/voidcube/infrastructure/providers/models_dev.py` | `infrastructure/providers` | models.dev 的轻量 `ModelInfo`/`ProviderInfo` 与查询协议；旧 `agent.models_dev` 仅模块 alias |
 | `src/voidcube/application/model_routing.py` | `application` | cheap-vs-strong turn route 策略唯一实现；旧 `agent.smart_model_routing` 仅模块 alias |
 | `src/voidcube/infrastructure/llm/response.py`、`tool_schema.py` | `infrastructure/llm` | Chat response normalization 与 function-tool schema normalization 的唯一实现；旧 `agent.api_response`、`agent.tool_schema` 仅模块 alias |
+| `src/voidcube/infrastructure/llm/{stream_response,retry_policy}.py` | `infrastructure/llm` | 流式 response assembler 与 retry policy 的唯一实现；旧 `agent.stream_response`、`agent.retry_utils` 仅模块 alias |
+| `src/voidcube/infrastructure/llm/transport_runtime.py` | `infrastructure/llm` | ChatTransport 的请求线程、流式传输、中断轮询和 provider fallback 唯一实现；旧 `agent.chat_transport` 仅模块 alias |
 | `Mem/src/memai/redaction.py` | `packages/memai` | Mem 独立发布边界内的 Secret redaction 唯一实现；主应用通过 infrastructure facade 使用 |
-| `VoidCube_app/infrastructure/persistence/redaction.py` | `infrastructure/persistence` | Host 对 Mem redaction 的薄适配 facade；不复制实现 |
+| `src/voidcube/infrastructure/persistence/redaction.py` | `infrastructure/persistence` | Host 对 Mem redaction 的唯一适配实现；旧 `VoidCube_app/infrastructure/persistence/redaction.py` 仅为模块 alias |
 | `VoidCube_app/infrastructure/persistence/session_db.py` | `infrastructure/persistence/session_db.py` | SQLite session persistence；`VoidCube_core.state` 仅为兼容 facade |
+| `agent/session_persistence.py` | `infrastructure/persistence/session_runtime.py` | Session transcript persistence and JSON mirror adapter；旧 `agent.session_persistence` 仅为模块 alias |
+| `agent/action_journal.py` | `infrastructure/persistence/action_journal.py` | Durable side-effect intent/outcome/evidence journal 已迁移；旧模块仅为 alias |
 | `src/voidcube/infrastructure/config/runtime_paths.py` | `infrastructure/config/runtime_paths.py` | 运行时 home、profile、cache、config、skills 和 subprocess 路径的唯一实现；旧 `VoidCube_app`/`VoidCube_core` 仅转发 |
 | `src/voidcube/infrastructure/persistence/file_store.py` | `infrastructure/persistence/file_store.py` | 原子 JSON/YAML 写入与跨进程文件锁的唯一实现；旧路径仅转发 |
+| `src/voidcube/infrastructure/persistence/checkpoint_manager.py` | `infrastructure/persistence` | 工作区 shadow-git checkpoint/rollback 持久化唯一实现；旧 `tools/checkpoint_manager.py` 仅模块 alias |
 | `src/voidcube/infrastructure/shared/value_helpers.py` | `infrastructure/shared/value_helpers.py` | 环境变量、JSON、字符串和字典等无领域 helper；旧路径仅转发 |
 | `src/voidcube/infrastructure/shared/clock.py` | `infrastructure/shared/clock.py` | 配置驱动的时区感知时钟；旧路径仅转发 |
 | `src/voidcube/domain/tasks/runtime_profile.py` | `domain/tasks/runtime_profile.py` | runtime task family/governance/execution profile 规范化唯一实现；旧 `systems.runtime_task_profile` 仅模块 alias |
@@ -99,7 +108,15 @@ VoidCube/
 | `src/voidcube/infrastructure/runtime/layout.py` | `infrastructure/runtime/layout.py` | canonical/legacy runtime data layout；旧路径仅转发 |
 | `src/voidcube/infrastructure/providers/endpoints.py` | `infrastructure/providers/endpoints.py` | Provider endpoint 常量；旧路径仅转发 |
 | `src/voidcube/infrastructure/network.py` | `infrastructure/network.py` | 显式 IPv4 preference patch；旧路径仅转发 |
-| `agent/*` | `runtime/agent` + `domain/agent` | `models`、状态和策略进 domain；HTTP/重试/流传输进 runtime/infrastructure |
+| `agent/{effect_outcomes,iteration_control,conversation_turn,conversation_runtime,response_disposition,message_sanitizer,context_references,api_attempt,manual_compression_feedback,tool_scheduler,context_engine}.py` | `domain/agent` | 单回合状态、效果结果、迭代预算、API attempt、响应处置、工具调度、context engine port 和输入清洗已迁移；旧 `agent.*` 仅为模块 alias |
+| `agent/{tool_turn,turn_finalization}.py` | `runtime/agent` | tool-turn、turn finalization 和执行期状态编排已迁移；旧 `agent.*` 仅为模块 alias |
+| `src/voidcube/runtime/agent/tool_execution.py` | `runtime/agent` | ToolExecutionCoordinator、准备/分类/取消结果的唯一实现；旧 `agent.tool_execution` 仅模块 alias |
+| `agent/{client_lifecycle,client_initialization,session_initialization}.py` | `runtime/agent` | Agent client/session bootstrap、生命周期和资源 ownership 已迁移；旧 `agent.*` 仅为模块 alias |
+| `agent/context_compressor.py` | `runtime/agent/context_compressor.py` | Context compression execution runtime 已迁移；旧模块仅为 alias |
+| `agent/stream_handler.py` | `runtime/agent/stream_handler.py` | Safe stdio and stream output handling 已迁移；旧模块仅为 alias |
+| `agent/subdirectory_hints.py` | `runtime/agent/subdirectory_hints.py` | Progressive context-file discovery runtime 已迁移；旧模块仅为 alias |
+| `src/voidcube/runtime/agent/prompt_builder.py` | `runtime/agent` | 系统提示、项目上下文、技能索引和环境提示组装唯一实现；旧 `agent.prompt_builder` 仅模块 alias |
+| `agent/*`（其余运行时模块） | `runtime/agent` + `infrastructure/llm` | `models`、状态和策略进 domain；HTTP/重试/流传输进 runtime/infrastructure，按依赖边界继续迁移 |
 | `src/voidcube/interfaces/cli/application.py` | `interfaces/cli/application.py` | CLI 交互 host 的唯一真实实现；旧 `VoidCube_cli/app.py` 仅模块对象 facade |
 | `VoidCube_cli/launcher.py` | `interfaces/cli/launcher.py` | 唯一真实的启动编排：参数路由、worktree、daemon policy、单轮/交互模式 |
 | `src/voidcube/interfaces/cli/session_runtime.py` | `interfaces/cli/session_runtime.py` | 组装 session browser/history runtime；`VoidCube_cli/session_display_adapter.py` 仅模块 alias |
@@ -126,19 +143,38 @@ VoidCube/
 | `VoidCube_cli/attachments.py`、`interaction_adapter.py`、`tool_event_adapter.py`、`cli_tool_progress.py` | `interfaces/cli/{attachments,interaction_adapter,tool_event_adapter,cli_tool_progress}.py` | CLI 输入附件、交互请求、工具事件和进度投影已迁移；旧路径仅为 alias |
 | `VoidCube_cli/cli_handlers.py` | `interfaces/cli/runtime_handlers.py` | worktree 生命周期、进程通知和改进 diff 适配已迁移；旧模块仅为 alias |
 | `VoidCube_cli/banner.py`、`cli_ui.py`、`clear_command_adapter.py` | `interfaces/cli/{banner,cli_ui,clear_command_adapter}.py` | Banner、ChatConsole 和 clear projection 已迁移；旧路径仅为 alias |
+| `agent/display.py`、`agent/subagent_display.py` | `interfaces/cli/{display,subagent_display}.py` | 工具预览、差异展示、spinner 和子 Agent 生命周期展示已迁移；旧 `agent.*` 仅模块 alias |
 | `VoidCube_cli/tui_*`、`chat_*`、`display*` | `interfaces/cli/tui`、`interfaces/cli/chat` | 仅负责展示和输入，不承载业务规则；chat block/stream 已迁移至 canonical chat 包 |
 | `VoidCube_cli/ops/*` | `interfaces/cli/ops` | CLI 到 gateway/system 的薄适配器 |
 | `src/voidcube/infrastructure/gateway/executor.py` | `infrastructure/gateway/executor.py` | ExecutorOpsClient 和 gateway URL 的唯一实现；旧 `VoidCube_cli/ops/executor.py` 仅模块 alias |
+| `systems/gateway/agent_adapter.py` | `infrastructure/gateway/agent_adapter.py` | GatewayAgentAdapter、AgentProxy 和 gateway health/query 协议的唯一实现；旧模块仅为 alias |
+| `tools/managed_tool_gateway.py` | `infrastructure/gateway/managed_tool_gateway.py` | Managed tool gateway adapter 已归入 gateway；旧模块仅为 alias |
+| `src/voidcube/infrastructure/execution/process_registry.py` | `infrastructure/execution` | 后台进程 session、输出 spool、持久化 registry 和 process tool 的唯一实现；旧 `tools.process_registry` 仅模块 alias |
+| `src/voidcube/infrastructure/execution/{code_execution_tool,process_spool_wrapper}.py` | `infrastructure/execution` | sandbox code execution 与 detached output spool 的唯一实现；旧 `tools.*` 仅模块 alias |
 | `VoidCube_cli/daemon_runtime.py` | `infrastructure/gateway` | Gateway/Memory/Supervisor 的启动、停止和进程所有权状态；不依赖 TUI |
 | `VoidCube_app/autonomous_execution_runtime.py` | `application/autonomous/execution_runtime.py` | UI-independent autonomous loop/stop ports；旧模块仅兼容转发 |
 | `VoidCube_cli/autonomous_{events,observation,panel,status_host,presence,runtime_host,execution_host,execution_output}.py` | `interfaces/cli/autonomous/*` | CLI autonomous host、观测、面板和事件适配器；旧模块仅模块 alias，执行器仍归 `systems/supervisor` |
 | `VoidCube_app/voice_session_runtime.py` | `interfaces/voice/session_runtime.py` | 独立 event-loop 的 voice manager adapter；旧模块仅兼容转发 |
 | `systems/voice/*` | `src/voidcube/systems/voice/*` | 录音、声纹、STT/TTS、VAD、唤醒和会话 runtime 的唯一系统实现；旧 `systems.voice.*` 仅模块 alias |
 | `src/voidcube/extensions/tools/registry.py`、`backend_helpers.py` | `extensions/tools` | 工具注册协议与 backend policy helper 唯一规范实现；`tools/registry.py`、`tools/tool_backend_helpers.py` 仅 facade |
-| `src/voidcube/infrastructure/execution/task_environment.py` | `infrastructure/execution` | Autonomous task environment/worktree lifecycle adapter；具体 terminal backend 仍按批次迁移 |
-| `tools/*` | `extensions/tools` + `infrastructure/execution` | 工具协议/策略与实际执行后端分开；当前已先迁移 registry，具体 backend 分批迁移 |
+| `src/voidcube/infrastructure/execution/{task_execution,terminal_tool,path_runtime,path_utils,interrupt,approval,tirith_security,podman_sandbox}.py`、`execution/environments/*` | `infrastructure/execution` | 严格任务契约、终端分发、跨平台路径、审批/安全扫描和 local/container/remote backend 的唯一实现；旧 `tools.*` 仅为兼容 alias |
+| `src/voidcube/infrastructure/execution/{ansi_strip,credential_files,env_passthrough,windows_host_executor}.py` | `infrastructure/execution` | ANSI 输出清理、凭据/技能挂载、沙箱环境透传和 Windows host execution 的唯一实现；旧 `tools.*` 仅为兼容 alias |
+| `src/voidcube/infrastructure/execution/task_environment.py` | `infrastructure/execution` | Autonomous task environment/worktree lifecycle adapter；只依赖 canonical terminal backend |
+| `src/voidcube/extensions/tools/{registry,toolsets,backend_helpers,configuration,provider_configuration,token_estimation}.py` | `extensions/tools` | 工具协议、工具集目录和 policy 的唯一实现；旧 `tools.*` 仅为兼容 alias |
+| `src/voidcube/extensions/tools/files/*` | `extensions/tools/files` | file read/write/search/patch、fuzzy matching、binary and path security policy 的唯一实现；旧 `tools/file_*.py`、`fuzzy_match.py`、`patch_parser.py`、`path_security.py`、`binary_extensions.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/browser/*` | `extensions/tools/browser` | browser tool、Camofox state/backend 与 Browserbase/Browser Use/Firecrawl adapters 唯一实现；旧 `tools/browser*.py`、`tools/browser_providers/*` 仅模块 alias |
+| `src/voidcube/extensions/tools/web/*` | `extensions/tools/web` | web search/extract/crawl、local backend、URL safety 和 website policy 的唯一实现；旧 `tools/web_tools*.py`、`website_policy.py`、`url_safety.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/media/*` | `extensions/tools/media` | media playback/delivery、Agnes image/video generation 和 vision analysis 的唯一实现；旧 `tools/media_tool.py`、`media_generation_tool.py`、`vision_tools.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/mcp/*` | `extensions/tools/mcp` | MCP stdio/HTTP client、dynamic tool registration 和 OAuth/PKCE token flow 的唯一实现；旧 `tools/mcp_tool.py`、`mcp_oauth.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/osv_check.py` | `extensions/tools` | MCP 外部包的 OSV malware advisory 检查唯一实现；旧 `tools/osv_check.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/preset_engine.py`、`presets/*` | `extensions/tools` | 只读部署 preset catalog 唯一实现；旧 `tools/preset_engine.py` 仅模块 alias |
+| `src/voidcube/extensions/tools/{model_tools,clarify_tool,todo_tool,session_search_tool,scheduled_task_tool}.py` | `extensions/tools` | 工具发现、dispatch、clarification、todo、session search 和 scheduled-task tool 的唯一实现；旧 `tools.*` 仅模块 alias |
+| `src/voidcube/extensions/tools/{delegate_tool,mixture_of_agents_tool,ops_register,dependency_checker}.py` | `extensions/tools` | delegation、MoA、系统运维和 dependency bootstrap 工具的唯一实现；旧 `tools.*` 仅模块 alias |
+| `src/voidcube/infrastructure/providers/openrouter_client.py` | `infrastructure/providers` | OpenRouter client helper 唯一实现；旧 `tools/openrouter_client.py` 仅模块 alias |
 | `VoidCube_cli/tools_config.py`、`mcp_config.py` | `interfaces/cli/tools_config.py`、`mcp_config.py` | toolset/MCP 配置交互、探测和持久化入口已迁移；旧路径仅为 alias |
 | `src/voidcube/extensions/skills/catalog.py` | `extensions/skills` | 技能 frontmatter、目录发现和外部目录协议唯一实现；`agent/skill_utils.py` 仅模块对象 facade |
+| `src/voidcube/extensions/skills/{commands,tool}.py` | `extensions/skills` | `/skill`、`/plan` 命令、技能发现、查看、配置和工具注册唯一实现；旧 `agent.skill_commands`、`tools.skills_tool` 仅模块 alias |
+| `src/voidcube/extensions/skills/manager.py` | `extensions/skills` | Agent-created skill create/edit/patch/delete/write operations and security gate 唯一实现；旧 `tools.skill_manager_tool` 仅模块 alias |
 | `tools/skills_guard.py`、`agent/integration_policy.py` | `extensions/skills/guard.py`、`domain/contracts/integration_policy.py` | 技能安全扫描和退役集成策略已迁移；旧路径仅为兼容 facade |
 | `skills/*` | `extensions/skills` | 技能内容保持 Markdown 优先并独立同步，不混入 Python 运行时代码 |
 | `src/voidcube/extensions/plugins/*` | `extensions/plugins` | manifest、生命周期和 hook 协议的唯一规范实现；`plugins/manifest.py`、`VoidCube_app/plugins.py` 仅 facade |
@@ -150,6 +186,10 @@ VoidCube/
 | `systems/supervisor/autonomous_chain_store.py`、Supervisor planning/service/UI/runtime 及 endogenous/evolution modules | `src/voidcube/systems/supervisor/*` | Supervisor 组合根、planning/service runtime、UI projections、autonomous chain services 和 endogenous/evolution rules 已迁移；旧模块仅为模块 alias |
 | `src/voidcube/infrastructure/config/system.py` | `infrastructure/config` | Gateway/Agent/System 配置模型与环境加载唯一实现；旧 `systems.config` 仅模块 alias |
 | `src/voidcube/systems/{evolution_boundary,body_runtime_migration,governance_runtime_migration,mem_source_binding}.py` | `systems` | Evolution boundary、body runtime、governance migration 与 Mem source binding 唯一实现；旧 `systems/*` 路径仅模块 alias |
+| `src/voidcube/systems/{body_registry,governor,lifecycle,probe}.py` | `systems` | Body registry、governor policy、lifecycle executor 和 probe runner 唯一实现；旧顶层 `systems.*` 仅模块 alias |
+| `src/voidcube/systems/execution/*` | `systems/execution` | execution adapters、facade、route hints 和 service 唯一实现；旧 `systems.execution.*` 仅模块 alias |
+| `src/voidcube/systems/{evolution_authoring,evolution_candidate_generation,evolution_evaluation,research_knowledge,self_cognition}/*` | `systems` | 演化 authoring、candidate/evaluation、研究知识和 self-cognition 的唯一实现；旧子包仅模块 facade/alias |
+| `src/voidcube/infrastructure/memory/{governor_bridge,host_integration}.py` | `infrastructure/memory` | Mem governance audit 与 host callback 适配唯一实现；旧 `plugins.memory.mem.*` 仅模块 alias |
 | `VoidCube_app/application.py` | `src/voidcube/application/application_runtime.py` | shared session/turn state、event sink 和 application lifecycle 的唯一实现；旧模块仅为模块 alias |
 | `VoidCube_app/contracts/*`、`interaction_contract.py`、`tool_events.py`、`turn_contract.py` | `src/voidcube/domain/contracts/*` | UI-independent artifact、execution、event、interaction、turn、tool 和 port 协议唯一实现；旧路径仅为 alias/re-export |
 | `systems/supervisor/account_store.py` | `src/voidcube/systems/supervisor/account_store.py` | 平台账号、Cookie 解析/验证和脱敏摘要的唯一实现；旧模块仅为模块 alias |
@@ -157,7 +197,7 @@ VoidCube/
 | `systems/supervisor/endogenous_state_repository.py` | `src/voidcube/systems/supervisor/endogenous_state_repository.py` | endogenous 状态快照的文件边界和原子读写唯一实现；旧模块仅为模块 alias |
 | `systems/supervisor/ui_{activity,delivery_state,media_state}_adapters.py` | `src/voidcube/systems/supervisor/ui_{activity,delivery_state,media_state}_adapters.py` | Supervisor UI 活动、交付和媒体状态持久化适配器唯一实现；旧模块仅为模块 alias |
 | `src/voidcube/interfaces/cli/launcher.py` | `interfaces/cli/launcher` | 规范包中的唯一公开 launcher 实现 |
-| `voidcube.py`, `cli.py`, `run_agent.py` | `interfaces` / `runtime` 入口 | 根文件只保留兼容转发；root `voidcube.py` 不再进入 wheel |
+| `voidcube.py`, `cli.py`, `run_agent.py` | `interfaces` / `runtime` 入口 | `src/voidcube/interfaces/cli/root_launcher.py` 持有统一 daemon/CLI 启动编排；根文件只保留兼容转发且不进入 wheel |
 
 ## 4. 依赖规则
 
@@ -234,26 +274,38 @@ extensions  ->  domain contracts（由 bootstrap 注册）
 | Auxiliary routing policy | `src/voidcube/infrastructure/providers/auxiliary_client.py`, `auxiliary_policy.py`, `client_factory.py`, `auxiliary_orchestration.py`, `auxiliary_execution.py`, `auxiliary_fallback.py`, `auxiliary_vision.py`, `auxiliary_vision_clients.py` | `agent/auxiliary_client.py` 仅为模块对象兼容 alias | provider resolution、vision 选择、sync/async client construction、fallback 和调用入口已迁移；后续仅收敛剩余 model normalization |
 | Auxiliary client lifecycle | `src/voidcube/infrastructure/providers/auxiliary_client_cache.py` | `agent/auxiliary_client.py` 保留 `_client_cache` 等兼容别名 | 已迁移缓存、跨 event-loop 隔离和关闭清理 |
 | Auxiliary response transport | `src/voidcube/infrastructure/llm/transport.py`, `request.py` | `agent/api_request.py` 兼容 facade；`agent/auxiliary_client.py` 为 provider facade | 已完成真实 ChatRequest protocol 和 client orchestration 迁移 |
+| Chat transport runtime | `src/voidcube/infrastructure/llm/transport_runtime.py` | `agent/chat_transport.py` 仅模块 alias | ChatTransport 的 interruptible completion/stream、retry 和 fallback 已迁移 |
 | LLM error classification | `src/voidcube/infrastructure/llm/error_classifier.py` | `agent/error_classifier.py` 仅为兼容 facade | 分类 taxonomy、重试提示和 stream-drop 判定已迁移 |
 | Session 生命周期 | `src/voidcube/application/sessions.py`, `domain/session/identity.py` | `VoidCube_app/use_cases/sessions.py`、`session_identity.py` 仅为兼容 facade | 用例、身份规则和 shared application runtime 已迁移；继续收敛 repository ports |
+| Session title generation | `src/voidcube/application/session_title.py` | `agent/title_generator.py` 仅模块 alias | 首轮会话标题生成与持久化已迁移到 application 层 |
 | Turn scheduling contract/runtime | `src/voidcube/domain/contracts/scheduler.py`, `application/scheduling/turn_scheduler.py` | `VoidCube_app/contracts/scheduler.py`, `turn_scheduler.py` 仅为兼容 facade | 已迁移；scheduler 只负责 admission/lifecycle，不依赖 CLI 或模型 API |
 | Scheduled task runtime adapters | `src/voidcube/application/scheduling/background_task_runtime.py`, `scheduled_execution_host.py`, `scheduled_task_polling.py`, `scheduled_executor.py` | `VoidCube_cli/*` 对应模块仅为兼容 facade | polling、background task state、lease/writeback 和 scheduled executor 已迁移；CLI 只组装 ports |
 | Supervisor scheduled-task store/config | `src/voidcube/systems/supervisor/scheduled_tasks.py`, `config_models.py` | 对应 `systems/supervisor/*.py` 模块 alias | store、claim、lease、历史、迁移和配置模型已迁移 |
 | Supervisor account store | `src/voidcube/systems/supervisor/account_store.py` | `systems/supervisor/account_store.py` 模块 alias | Cookie 解析、平台验证、账号持久化和 URL 匹配已迁移；工具调用点改用 canonical 路径 |
-| Supervisor Provider pool | `src/voidcube/systems/supervisor/provider_pool_service.py` | `systems/supervisor/provider_pool_service.py` 模块 alias | Provider/员工角色配置、鉴权环境变量和模型目录探测已迁移；工具集目录仍由 `tools.toolsets` 提供 |
+| Supervisor Provider pool | `src/voidcube/systems/supervisor/provider_pool_service.py` | `systems/supervisor/provider_pool_service.py` 模块 alias | Provider/员工角色配置、鉴权环境变量、模型目录和 canonical `extensions.tools.toolsets` 目录已迁移 |
 | Supervisor endogenous state repository | `src/voidcube/systems/supervisor/endogenous_state_repository.py` | `systems/supervisor/endogenous_state_repository.py` 模块 alias | 状态路径解析、对象校验和原子 JSON 持久化已迁移 |
 | Supervisor UI state adapters | `src/voidcube/systems/supervisor/ui_activity_adapters.py`, `ui_delivery_state_adapters.py`, `ui_media_state_adapters.py` | 对应 `systems/supervisor/*` 模块 alias | activity、delivery 和 media state 的读写适配器已迁移，UI runtime 仍作为后续 composition 边界处理 |
 | Supervisor autonomous chain and composition | `src/voidcube/systems/supervisor/{autonomous_chain_*,planning_runtime,service_runtime,runtime_assemblers,ui_runtime,supervisor}.py` | `systems/supervisor/*.py` 模块 alias | task lifecycle、execution lease、Mem governance recovery、planning/service/UI composition 和 Supervisor HTTP host 均已迁移 |
 | 规范包 launcher/application | `src/voidcube/interfaces/cli/launcher.py`, `application.py` | `VoidCube_cli/launcher.py`、`app.py` 兼容 facade | 迁移其余 interfaces/runtime 模块 |
+| CLI main/startup/console | `src/voidcube/interfaces/cli/{main,entrypoint_startup,console_fix}.py` | `VoidCube_cli/main.py` 是不承载业务的薄 wrapper；`entrypoint_startup.py`、`console_fix.py` 为 alias | 规范 CLI main、profile/env startup 和 Windows console setup 已迁移 |
+| Desktop control protocol | `src/voidcube/interfaces/desktop/desktop_control.py` | `VoidCube_cli/desktop_control.py` 仅 alias | Desktop shell 的 service lifecycle JSON protocol 已迁移 |
 | Core redaction | `VoidCube_app/infrastructure/persistence/redaction.py` | `VoidCube_core.redaction` 兼容 facade | 已完成 |
 | Session DB | `VoidCube_app/infrastructure/persistence/session_db.py` | `VoidCube_core.state` 兼容 facade | 已完成 |
 | Core paths, file store, value helpers, clock, environment and runtime layout | `src/voidcube/infrastructure/config/runtime_paths.py`, `persistence/file_store.py`, `shared/value_helpers.py`, `shared/clock.py`, `runtime/environment.py`, `runtime/layout.py` | `VoidCube_app`、`VoidCube_core` 兼容 facade | 已完成 |
 | Provider endpoints and network preference | `src/voidcube/infrastructure/providers/endpoints.py`, `infrastructure/network.py` | `VoidCube_app`、`VoidCube_core` 兼容 facade | 已完成 |
 | Plugin manifest and manager | `src/voidcube/extensions/plugins/manifest.py`, `manager.py` | `plugins.manifest`、`VoidCube_app.plugins` 兼容 facade | 已完成 |
 | CLI plugin adapter | `src/voidcube/extensions/plugins/cli_adapter.py` | `VoidCube_cli/plugins.py` 模块 alias | canonical CLI application, tools configuration and command registry use the canonical plugin manager adapter |
-| Skill catalog and hub | `src/voidcube/extensions/skills/catalog.py`, `models.py`, `sync.py`, `hub.py`, `guard.py` | `agent.skill_utils`、`tools/skills_sync.py`、`tools/skills_hub.py`、`tools/skills_guard.py` 仅为兼容 facade | catalog/models/sync/search/install/security backend 已迁移；后续收敛 CLI command adapter |
+| Skill catalog and operations | `src/voidcube/extensions/skills/{catalog,models,sync,hub,guard,commands,tool}.py` | `agent.skill_utils`、`agent.skill_commands`、`tools/skills_tool.py`、`tools/skills_sync.py`、`tools/skills_hub.py`、`tools/skills_guard.py` 仅为兼容 facade | catalog、slash commands、skill list/view/config and security backend 已迁移；后续只收敛其惰性工具后端依赖 |
+| Prompt assembly | `src/voidcube/runtime/agent/prompt_builder.py` | `agent/prompt_builder.py` 仅模块 alias | system prompt、项目上下文和 skills prompt 已迁移 |
+| Skill command adapter | `src/voidcube/extensions/skills/commands.py` | `agent/skill_commands.py` 仅模块 alias | slash command 扫描、`/plan` 和技能消息构建已迁移；后续收敛 `tools.skills_tool` 操作后端 |
 | Provider credentials and pool | `src/voidcube/infrastructure/providers/credentials.py`, `credential_pool.py` | `providers/auth.py` 保留认证状态与兼容私有别名；`agent/credential_pool.py` 仅为 module facade | API-key lookup、环境变量、auth store、pool runtime 和 config lookup 已迁移；后续收敛 Nous refresh 适配 |
+| Provider rate-limit tracking | `src/voidcube/infrastructure/providers/rate_limit.py` | `agent/rate_limit_tracker.py` 仅模块 alias | Provider header capture、usage buckets 和 CLI display projection 已迁移 |
+| Provider usage pricing | `src/voidcube/infrastructure/providers/usage_pricing.py` | `agent/usage_pricing.py` 仅模块 alias | Usage normalization、pricing routes and cost estimation 已迁移 |
+| Provider model alias/credentials/usage | `src/voidcube/infrastructure/providers/{model_alias_resolver,credential_manager,usage_tracker}.py` | `VoidCube_cli/*` 仅模块 alias | CLI 遗留的 provider alias、凭据和用量状态已迁移 |
+| SOUL configuration | `src/voidcube/infrastructure/config/soul_config.py` | `VoidCube_cli/soul_config.py` 仅模块 alias | SOUL frontmatter、personality 和 runtime config parsing 已迁移 |
+| Atomic file writer | `src/voidcube/infrastructure/persistence/file_atomic_writer.py` | `VoidCube_cli/file_atomic_writer.py` 仅模块 alias | CLI 原子写入实现已归入 persistence |
 | Toolset configuration policy | `src/voidcube/extensions/tools/configuration.py`, `provider_configuration.py`, `token_estimation.py`; `src/voidcube/interfaces/cli/tools_config.py`, `tools_mcp.py` | `VoidCube_cli/tools_config.py` 模块 alias | platform/provider policy、token estimation、MCP UI 和 CLI toolset wizard 已迁移；旧平台解析/保存实现已删除 |
+| Background process registry | `src/voidcube/infrastructure/execution/process_registry.py` | `tools/process_registry.py` 仅模块 alias | process spawn/poll/wait/kill、output spool 和 task-scoped cleanup 已迁移 |
 | Core logging | `VoidCube_app/infrastructure/observability/logging.py` | `VoidCube_core.logging` 兼容 facade | 已完成 |
 | CLI command handlers and registry | `src/voidcube/interfaces/cli/commands/handlers/*`, `registry.py` | `VoidCube_cli/command_handlers/*` 模块 alias | 27 个 handler 与 registry 已迁移；后续只收敛剩余 handler 的 UI/application 依赖 |
 | CLI internationalization | `src/voidcube/interfaces/cli/i18n.py` | `VoidCube_cli/i18n.py` 模块 alias | canonical CLI 入口、session、application 和 command registry 已改用规范 i18n 服务 |
@@ -269,8 +321,14 @@ extensions  ->  domain contracts（由 bootstrap 注册）
 | CLI input/event adapters | `src/voidcube/interfaces/cli/attachments.py`, `interaction_adapter.py`, `tool_event_adapter.py`, `cli_tool_progress.py` | 对应 `VoidCube_cli/*` 模块 alias | application host, launcher, registry and handlers use canonical adapter paths |
 | CLI startup/worktree adapters | `src/voidcube/interfaces/cli/runtime_handlers.py` | `VoidCube_cli/cli_handlers.py` 模块 alias | launcher and application host use canonical worktree/process-notification adapter |
 | CLI display/clear adapters | `src/voidcube/interfaces/cli/banner.py`, `cli_ui.py`, `clear_command_adapter.py` | 对应 `VoidCube_cli/*` 模块 alias | application, registry and chat renderer consume canonical display primitives |
+| CLI tool/subagent display | `src/voidcube/interfaces/cli/display.py`, `subagent_display.py` | `agent/display.py`, `agent/subagent_display.py` 仅模块 alias | tool preview/diff/spinner 与 delegated subagent lifecycle 展示已迁移 |
 | CLI runtime adapters | `src/voidcube/interfaces/cli/{application_runtime,model_picker_runtime,history_display_runtime,session_browser_runtime}.py`, `lifecycle/*`, `turn/*` | 对应 `VoidCube_cli/*_runtime.py` 模块 alias | application host 已改用 canonical lifecycle/session/turn/runtime ports |
 | Gateway executor adapter | `src/voidcube/infrastructure/gateway/executor.py` | `VoidCube_cli/ops/executor.py` 模块 alias | canonical operations/status/autonomous surfaces use infrastructure gateway client |
+| Agent domain turn contracts | `src/voidcube/domain/agent/{effect_outcomes,iteration_control,conversation_turn,conversation_runtime,response_disposition,message_sanitizer,context_references,api_attempt,manual_compression_feedback,tool_scheduler,context_engine}.py` | 对应 `agent/*` 仅模块 alias | 单回合状态、效果结果、预算、API attempt、响应处置、工具调度、context engine port 和上下文引用处理已迁移；其余 Agent runtime 按 provider/LLM 边界继续收敛 |
+| Agent runtime turn orchestration | `src/voidcube/runtime/agent/{tool_turn,turn_finalization}.py` | 对应 `agent/*` 仅模块 alias | tool-turn、turn finalization 和执行期状态编排已迁移；其余 client/session runtime 按边界继续收敛 |
+| Agent runtime bootstrap | `src/voidcube/runtime/agent/{client_lifecycle,client_initialization,session_initialization}.py` | 对应 `agent/*` 仅模块 alias | client/session bootstrap、lifecycle 和资源 ownership 已迁移；其余 Agent runtime 按 provider/LLM 边界继续收敛 |
+| Session transcript persistence | `src/voidcube/infrastructure/persistence/session_runtime.py` | `agent/session_persistence.py` 仅模块 alias | SQLite transcript、JSON mirror and session log persistence 已迁移 |
+| Execution backends and toolsets | `src/voidcube/infrastructure/execution/*`, `src/voidcube/extensions/tools/toolsets.py` | `tools/terminal_tool.py`、`task_execution.py`、`environments/*`、`toolsets.py` 仅兼容 alias | 终端、任务契约、环境 backend、路径与安全 guard 已迁移，规范包内部不再依赖旧入口 |
 
 判定规则：表中“当前真实实现”才是新代码应依赖的主路径；旧路径即使暂时可导入，也不得继续添加业务分支。
 
@@ -279,7 +337,7 @@ extensions  ->  domain contracts（由 bootstrap 注册）
 - 已建立 `src/voidcube/interfaces/cli`，公开 entry point 已指向规范包。
 - 当前 launcher 已迁入 `src/voidcube/interfaces/cli/launcher.py`；`VoidCube_cli.launcher` 仅保留兼容 facade。
 - `voidcube.py`、`cli.py` 仅保留兼容入口；root `voidcube.py` 已退出 wheel，待弃用周期后删除。
-- 后续继续把 `VoidCube_app`、`VoidCube_cli` 的真实实现迁入规范包，再移除兼容包。
+- `VoidCube_app`、`VoidCube_cli`、`VoidCube_core`、顶层 `agent`/`tools`/`systems` 的业务实现已收敛到规范包；旧路径只保留兼容 alias 或薄入口 wrapper。
 
 ### 兼容 facade 退役窗口
 
@@ -287,9 +345,9 @@ extensions  ->  domain contracts（由 bootstrap 注册）
 
 ### 阶段 4：插件化和可选服务
 
-- 为 tool/skill/plugin 定义 manifest 和版本化 protocol。
-- 用 entry points 或显式 registry 加载扩展；扩展不得通过隐式 import 修改全局状态。
-- `MemAI`、voice、desktop、gateway 作为可选能力或独立服务打包，主应用只依赖 ports。
+- tool/skill/plugin 已有 manifest 和版本化 protocol；`PluginManifest` 在加载 entrypoint 前完成校验。
+- 扩展通过显式 registry/manager 注册，manifest discovery 不会隐式 import entrypoint。
+- `MemAI`、voice、desktop、gateway 已按 optional dependency 与 infrastructure/interface ports 分离打包。
 
 ## 7. 判断文件放在哪里
 

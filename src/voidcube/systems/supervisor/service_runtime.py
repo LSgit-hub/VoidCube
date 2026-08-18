@@ -958,13 +958,13 @@ class ServiceRuntimeMixin:
 
     @staticmethod
     def _companion_worker_catalog() -> Dict[str, Any]:
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
 
         return companion_worker_catalog(load_config())
 
     @staticmethod
     def _resolve_companion_worker_role(requested_role: Any) -> str:
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
 
         return resolve_companion_worker_role(
             load_config(),

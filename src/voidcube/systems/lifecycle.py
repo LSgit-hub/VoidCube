@@ -4,10 +4,10 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from systems.body_registry import BodyRegistryManager, BodySlotMeta
-from systems.governor import GovernorAction, GovernorResponse
-from systems.probe import ProbeReport
-from systems.runtime_task_profile import derive_runtime_task_profile
+from .body_registry import BodyRegistryManager, BodySlotMeta
+from .governor import GovernorAction, GovernorResponse
+from .probe import ProbeReport
+from ..domain.tasks.runtime_profile import derive_runtime_task_profile
 
 LifecycleExecutionStatus = Literal["applied", "noop", "failed"]
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
+from ..supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
 
 
 @dataclass(slots=True)

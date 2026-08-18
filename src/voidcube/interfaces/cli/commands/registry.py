@@ -701,7 +701,7 @@ def _language_command_ports(*, emit: Callable[[str], None]) -> LanguageCommandPo
 
 
 def _preset_command_ports(*, emit: Callable[[str], None]) -> PresetCommandPorts:
-    from tools.preset_engine import apply_preset, list_presets, load_preset
+    from ....extensions.tools.preset_engine import apply_preset, list_presets, load_preset
 
     return PresetCommandPorts(
         list_presets=list_presets,
@@ -955,7 +955,10 @@ def _plan_command_ports(
     *,
     emit: Callable[[str], None],
 ) -> PlanCommandPorts:
-    from agent.skill_commands import build_plan_path, build_skill_invocation_message
+    try:
+        from voidcube.extensions.skills.commands import build_plan_path, build_skill_invocation_message
+    except ModuleNotFoundError:
+        from src.voidcube.extensions.skills.commands import build_plan_path, build_skill_invocation_message
     from ..cli_ui import ChatConsole
 
     pending_input = getattr(host, "_pending_input", None)
@@ -1002,7 +1005,10 @@ def _goal_command_ports(
 
 
 def _skills_command_ports(*, emit: Callable[[str], None]) -> SkillsCommandPorts:
-    from agent.prompt_builder import clear_skills_system_prompt_cache
+    try:
+        from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
+    except ModuleNotFoundError:
+        from src.voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
     try:
         from voidcube.extensions.skills import get_all_skills_dirs
         from voidcube.extensions.skills.hub import (
@@ -1143,8 +1149,8 @@ def _compression_command_ports(
     *,
     emit: Callable[[str], None],
 ) -> CompressionCommandPorts:
-    from agent.manual_compression_feedback import summarize_manual_compression
-    from agent.model_metadata import estimate_messages_tokens_rough
+    from ....domain.agent.manual_compression_feedback import summarize_manual_compression
+    from ....infrastructure.providers.model_metadata import estimate_messages_tokens_rough
 
     def compress(
         history: Sequence[Mapping[str, Any]],
@@ -1257,7 +1263,7 @@ def _tools_catalog_ports(
     emit: Callable[[str], None],
     translate: Callable[..., str],
 ) -> ToolsCatalogPorts:
-    from tools.model_tools import get_tool_definitions, get_toolset_for_tool
+    from ....extensions.tools.model_tools import get_tool_definitions, get_toolset_for_tool
 
     return ToolsCatalogPorts(
         tools=lambda: get_tool_definitions(
@@ -1278,7 +1284,10 @@ def _help_display_ports(
     chat_console_factory: Callable[[], Any] | None,
     skill_commands: Callable[[], Mapping[str, Mapping[str, str]]] | None,
 ) -> HelpDisplayPorts:
-    from agent.skill_commands import get_skill_commands
+    try:
+        from voidcube.extensions.skills.commands import get_skill_commands
+    except ModuleNotFoundError:
+        from src.voidcube.extensions.skills.commands import get_skill_commands
     from rich.markup import escape
     from ..cli_ui import _BOLD, _DIM, _RST, ChatConsole, _accent_hex
     from .catalog import COMMANDS_BY_CATEGORY
@@ -1349,8 +1358,8 @@ def _usage_command_ports(
     *,
     emit: Callable[[str], None],
 ) -> UsageCommandPorts:
-    from agent.rate_limit_tracker import format_rate_limit_display
-    from agent.usage_pricing import (
+    from ....infrastructure.providers.rate_limit import format_rate_limit_display
+    from ....infrastructure.providers.usage_pricing import (
         CanonicalUsage,
         estimate_usage_cost,
         format_duration_compact,
@@ -1468,13 +1477,13 @@ def _mcp_reload_runtime_ports(
     *,
     emit: Callable[[str], None],
 ) -> McpReloadRuntimePorts:
-    from tools.mcp_tool import (
+    from ....extensions.tools.mcp.mcp_tool import (
         _lock,
         _servers,
         discover_mcp_tools,
         shutdown_mcp_servers,
     )
-    from tools.model_tools import get_tool_definitions
+    from ....extensions.tools.model_tools import get_tool_definitions
 
     def server_names() -> set[str]:
         with _lock:
@@ -1533,7 +1542,10 @@ def _browser_command_ports(
 
     def cleanup_browsers() -> None:
         try:
-            from tools.browser_tool import cleanup_all_browsers
+            try:
+                from ....extensions.tools.browser.browser_tool import cleanup_all_browsers
+            except ModuleNotFoundError:
+                from src.voidcube.extensions.tools.browser.browser_tool import cleanup_all_browsers
 
             cleanup_all_browsers()
         except Exception:
@@ -1551,7 +1563,10 @@ def _browser_command_ports(
 
     def cloud_provider() -> Any | None:
         try:
-            from tools.browser_tool import _get_cloud_provider
+            try:
+                from ....extensions.tools.browser.browser_tool import _get_cloud_provider
+            except ModuleNotFoundError:
+                from src.voidcube.extensions.tools.browser.browser_tool import _get_cloud_provider
 
             return _get_cloud_provider()
         except Exception:
@@ -1791,7 +1806,7 @@ def _session_goal_snapshot(host: Any) -> Mapping[str, Any]:
 
 def _localized_toolsets() -> tuple[tuple[str, int, str], ...]:
     from ..i18n import get_i18n
-    from tools.toolsets import get_all_toolsets, get_toolset_info
+    from ....extensions.tools.toolsets import get_all_toolsets, get_toolset_info
 
     i18n = get_i18n()
     locale_data = i18n._translations.get(i18n.get_current_locale(), {})
@@ -1869,7 +1884,7 @@ def _rollback_command_ports(
 
 
 def _format_checkpoint_list(checkpoints: Sequence[dict[str, Any]], directory: str) -> str:
-    from tools.checkpoint_manager import format_checkpoint_list
+    from ....infrastructure.persistence.checkpoint_manager import format_checkpoint_list
 
     return format_checkpoint_list(checkpoints, directory)
 
@@ -1938,13 +1953,19 @@ def _context_length(agent: Any) -> int | None:
 
 
 def _list_processes() -> list[dict[str, Any]]:
-    from tools.process_registry import process_registry
+    try:
+        from voidcube.infrastructure.execution.process_registry import process_registry
+    except ModuleNotFoundError:
+        from src.voidcube.infrastructure.execution.process_registry import process_registry
 
     return process_registry.list_sessions()
 
 
 def _kill_all_processes() -> int:
-    from tools.process_registry import process_registry
+    try:
+        from voidcube.infrastructure.execution.process_registry import process_registry
+    except ModuleNotFoundError:
+        from src.voidcube.infrastructure.execution.process_registry import process_registry
 
     return process_registry.kill_all()
 

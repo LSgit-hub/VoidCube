@@ -134,13 +134,17 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
     if canonical_supervisor_ui.is_file():
         expected.add(CANONICAL_SUPERVISOR_UI_RESOURCE.as_posix())
 
-    preset_resources = root / "tools" / "presets"
+    preset_resources = root / "src" / "voidcube" / "extensions" / "tools" / "presets"
     if preset_resources.is_dir():
         expected.update(
-            path.relative_to(root).as_posix()
+            path.relative_to(root / "src").as_posix()
             for path in preset_resources.rglob("*.yaml")
             if path.is_file()
         )
+
+    dependency_manifest = root / "src" / "voidcube" / "extensions" / "tools" / "dependency_manifest.yaml"
+    if dependency_manifest.is_file():
+        expected.add(dependency_manifest.relative_to(root / "src").as_posix())
 
     podman_containerfile = root / PODMAN_CONTAINERFILE_RESOURCE
     if podman_containerfile.is_file():
@@ -213,8 +217,10 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 SUPERVISOR_UI_RESOURCE.as_posix(),
                 CANONICAL_SUPERVISOR_UI_RESOURCE.as_posix(),
             } or (
-                name.startswith("tools/presets/") and name.endswith(".yaml")
-            ) or name == PODMAN_CONTAINERFILE_RESOURCE.as_posix()
+                name.startswith("voidcube/extensions/tools/presets/")
+                and name.endswith(".yaml")
+            ) or name == "voidcube/extensions/tools/dependency_manifest.yaml"
+            or name == PODMAN_CONTAINERFILE_RESOURCE.as_posix()
             or (name.startswith("plugins/") and name.endswith("/plugin.json"))
         }
         retired_files = sorted(

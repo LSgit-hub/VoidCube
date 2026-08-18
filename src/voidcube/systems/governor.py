@@ -6,8 +6,8 @@ from typing import Any, Dict, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from systems.body_registry import BodySlotMeta
-from systems.runtime_task_profile import derive_runtime_task_profile
+from .body_registry import BodySlotMeta
+from ..domain.tasks.runtime_profile import derive_runtime_task_profile
 
 GovernorMode = Literal["governor"]
 GovernorEventType = Literal[

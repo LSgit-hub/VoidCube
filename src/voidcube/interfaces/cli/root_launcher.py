@@ -60,7 +60,7 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
 
     if cmd == "stop":
         try:
-            from VoidCube_cli.ops.serve import stop_all
+            from ...infrastructure.gateway.service_launcher import stop_all
         except ImportError as exc:
             print(f"Failed to import serve module: {exc}")
             return True
@@ -73,13 +73,13 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
 
         if watch:
             try:
-                from VoidCube_cli.ops.dashboard import watch_dashboard
+                from .ops.dashboard import watch_dashboard
             except ImportError as exc:
                 print(f"Failed to import dashboard: {exc}")
                 return True
             # Show daemon status first, then enter watch loop
             try:
-                from VoidCube_cli.ops.serve import print_status
+                from ...infrastructure.gateway.service_launcher import print_status
                 print_status(full=False)
             except ImportError:
                 pass
@@ -87,7 +87,7 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
             return True
 
         try:
-            from VoidCube_cli.ops.serve import print_status
+            from ...infrastructure.gateway.service_launcher import print_status
         except ImportError as exc:
             print(f"Failed to import serve module: {exc}")
             return True
@@ -106,7 +106,7 @@ def _auto_start_daemons() -> None:
     (cli.py) does not attempt a second auto-start.
     """
     try:
-        from VoidCube_cli.ops.serve import ensure_running
+        from ...infrastructure.gateway.service_launcher import ensure_running
     except ImportError:
         return
 
@@ -116,7 +116,12 @@ def _auto_start_daemons() -> None:
     os.environ["VOIDCUBE_DAEMONS_STARTED"] = "1"
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    cli_main: object | None = None,
+    auto_start_daemons: object | None = None,
+) -> int:
     """Unified entry point.  Returns exit code."""
     args = argv if argv is not None else sys.argv[1:]
 
@@ -128,9 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     desktop_manages_services = (
         os.environ.get("VOIDCUBE_DESKTOP_MANAGED_SERVICES") == "1"
     )
+    startup = auto_start_daemons or _auto_start_daemons
     if not _is_fast_path(args) and not desktop_manages_services:
         try:
-            _auto_start_daemons()
+            startup()
         except Exception as exc:
             # Best-effort: don't block the CLI, but log the failure so
             # the user knows daemons may be unavailable.
@@ -143,12 +149,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     # ── Delegate to the full CLI ───────────────────────────────────
-    try:
-        from VoidCube_cli.main import main as cli_main
-    except ImportError as exc:
-        print(f"Fatal: cannot load VoidCube CLI: {exc}", file=sys.stderr)
-        print("Ensure VoidCube is installed:  pip install -e .", file=sys.stderr)
-        return 1
+    if cli_main is None:
+        from .main import main as cli_main
 
     # VoidCube_cli.main:main() parses sys.argv directly.
     # We need to restore the original argv so arg parsing works.

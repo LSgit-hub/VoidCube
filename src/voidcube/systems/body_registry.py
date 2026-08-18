@@ -9,9 +9,9 @@ from typing import Any, Dict, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
+from .evolution_evaluation.models import ExecutionEnvironmentManifest
 
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write
+from ..infrastructure.persistence.file_store import atomic_json_write
 
 BodyState = Literal["shell", "candidate", "probe", "awaiting_user_consent", "active", "retired"]
 

@@ -9,8 +9,8 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
-from systems.evolution_authoring.models import EvolutionAuthoringResult
+from ...infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
+from .models import EvolutionAuthoringResult
 
 
 INDEX_SCHEMA_VERSION = 1

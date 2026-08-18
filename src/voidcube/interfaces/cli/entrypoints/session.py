@@ -464,7 +464,7 @@ def cmd_chat(args):
 
     # Sync bundled skills on every CLI launch (fast -- skips unchanged skills)
     try:
-        from tools.skills_sync import sync_skills
+        from ....extensions.skills.sync import sync_skills
         sync_skills(quiet=True)
     except Exception:
         pass

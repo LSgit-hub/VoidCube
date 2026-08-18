@@ -10,12 +10,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from tools.environments.modal_utils import (
+from .modal_utils import (
     BaseModalExecutionEnvironment,
     ModalExecStart,
     PreparedModalExec,
 )
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
+from ...gateway.managed_tool_gateway import resolve_managed_tool_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ class ManagedModalEnvironment(BaseModalExecutionEnvironment):
     def _guard_unsupported_credential_passthrough(self) -> None:
         """Managed Modal does not sync or mount host credential files."""
         try:
-            from tools.credential_files import get_credential_file_mounts
+            from ..credential_files import get_credential_file_mounts
         except Exception:
             return
 

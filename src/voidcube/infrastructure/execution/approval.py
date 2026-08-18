@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from VoidCube_app.interaction_contract import (
+from ...domain.contracts.interaction import (
     ApprovalRequest,
     ApprovalSink,
     resolve_approval,

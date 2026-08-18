@@ -11,18 +11,12 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from systems.body_registry import BodyRegistry, BodySlotMeta
-try:
-    from voidcube.systems.evolution_boundary import classify_agent_evolution_changes
-except ModuleNotFoundError:
-    from src.voidcube.systems.evolution_boundary import classify_agent_evolution_changes
-from systems.governor import GovernorDecisionEngine, GovernorRequest, GovernorResponse
-from systems.lifecycle import LifecycleExecutionReport
-try:
-    from voidcube.domain.tasks.runtime_profile import derive_runtime_task_profile
-except ModuleNotFoundError:
-    from src.voidcube.domain.tasks.runtime_profile import derive_runtime_task_profile
-from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write
+from ...systems.body_registry import BodyRegistry, BodySlotMeta
+from ...systems.evolution_boundary import classify_agent_evolution_changes
+from ...systems.governor import GovernorDecisionEngine, GovernorRequest, GovernorResponse
+from ...systems.lifecycle import LifecycleExecutionReport
+from ...domain.tasks.runtime_profile import derive_runtime_task_profile
+from ..persistence.file_store import atomic_json_write
 
 
 logger = logging.getLogger(__name__)
@@ -61,7 +55,7 @@ class MemGovernorBridge:
             self._engine = engine
         else:
             try:
-                from systems.governor import LLMGovernorReasoner
+                from ...systems.governor import LLMGovernorReasoner
                 reasoner = LLMGovernorReasoner()
             except Exception:
                 reasoner = None

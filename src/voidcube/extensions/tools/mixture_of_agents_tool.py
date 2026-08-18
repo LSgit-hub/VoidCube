@@ -51,14 +51,14 @@ import os
 import asyncio
 import datetime
 from typing import Dict, Any, List, Optional
-from tools.openrouter_client import get_async_client as _get_openrouter_client, check_api_key as check_openrouter_api_key
-from agent.auxiliary_client import extract_content_or_reasoning
+from ...infrastructure.providers.openrouter_client import get_async_client as _get_openrouter_client, check_api_key as check_openrouter_api_key
+from ...infrastructure.providers.auxiliary_client import extract_content_or_reasoning
 try:
     from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
 except (ModuleNotFoundError, ImportError):
     from src.voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
-from tools.debug_helpers import DebugSession
-from VoidCube_app.infrastructure.providers.endpoints import OPENROUTER_BASE_URL
+from .debug_helpers import DebugSession
+from ...infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -546,7 +546,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-from tools.registry import registry
+from .registry import registry
 
 MOA_SCHEMA = {
     "name": "mixture_of_agents",

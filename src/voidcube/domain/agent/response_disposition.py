@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
-from agent.api_response import (
+from ...infrastructure.llm.response import (
     extract_reasoning,
     has_visible_content,
     strip_thinking_blocks,
 )
-from agent.conversation_runtime import ConversationTurnRuntime
-from agent.conversation_turn import ConversationTurnState
+from .conversation_runtime import ConversationTurnRuntime
+from .conversation_turn import ConversationTurnState
 
 
 logger = logging.getLogger(__name__)

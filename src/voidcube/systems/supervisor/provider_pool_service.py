@@ -28,7 +28,7 @@ from ...infrastructure.providers.auth import (
     AuthError,
     normalize_openai_compatible_base_url,
 )
-from tools.toolsets import get_all_toolsets
+from ...extensions.tools.toolsets import get_all_toolsets
 
 
 _PROVIDER_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -636,5 +636,4 @@ __all__ = [
     "ProviderPoolProbeError",
     "ProviderPoolService",
 ]
-
 

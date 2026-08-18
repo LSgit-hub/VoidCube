@@ -11,11 +11,11 @@ import shlex
 import threading
 from pathlib import Path
 
-from tools.environments.base import (
+from .base import (
     BaseEnvironment,
     _ThreadedProcessHandle,
 )
-from tools.environments.file_sync import (
+from .file_sync import (
     FileSyncManager,
     iter_sync_files,
     quoted_mkdir_command,

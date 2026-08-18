@@ -10,7 +10,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from tools.registry import registry, tool_error
+from ..registry import registry, tool_error
 
 _RESIZE_TARGET_BYTES = 20 * 1024 * 1024
 _MAX_IMAGE_BYTES = 25 * 1024 * 1024
@@ -97,7 +97,7 @@ def _load_image_data(source: str) -> tuple[str, str]:
 
 def _vision_backends_available() -> bool:
     try:
-        from agent.auxiliary_client import get_available_vision_backends
+        from ....infrastructure.providers.auxiliary_client import get_available_vision_backends
 
         return bool(get_available_vision_backends())
     except Exception:
@@ -111,7 +111,7 @@ def _vision_backends_configured() -> bool:
     unreachable provider is reported at the point of use, not during startup.
     """
     try:
-        from agent.auxiliary_client import get_configured_vision_backends
+        from ....infrastructure.providers.auxiliary_client import get_configured_vision_backends
 
         return bool(get_configured_vision_backends())
     except Exception:
@@ -148,7 +148,7 @@ def vision_analyze_tool(
         for source in sources[:10]:
             data_url, _mime = _load_image_data(source)
             content.append({"type": "image_url", "image_url": {"url": data_url, "detail": detail}})
-        from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+        from ....infrastructure.providers.auxiliary_client import call_llm, extract_content_or_reasoning
         response = call_llm(
             task="vision",
             messages=[{"role": "user", "content": content}],
@@ -158,7 +158,7 @@ def vision_analyze_tool(
         )
         text = extract_content_or_reasoning(response).strip()
         try:
-            from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+            from ....infrastructure.persistence.redaction import redact_sensitive_text
             text = redact_sensitive_text(text)
         except Exception:
             pass

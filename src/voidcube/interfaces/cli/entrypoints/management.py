@@ -178,7 +178,17 @@ def cmd_sessions(args):
             # Fallback: re-invoke via python -m
             os.execvp(
                 sys.executable,
-                [sys.executable, "-m", "VoidCube_cli.main", "--resume", selected_id],
+                [
+                    sys.executable,
+                    "-m",
+                    (
+                        "src.voidcube.interfaces.cli.main"
+                        if __package__.startswith("src.")
+                        else "voidcube.interfaces.cli.main"
+                    ),
+                    "--resume",
+                    selected_id,
+                ],
             )
         return  # won't reach here after execvp
 

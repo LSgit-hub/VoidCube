@@ -1,13 +1,13 @@
 """Recoverable production cycles for autonomous evolution candidates."""
 
-from systems.evolution_candidate_generation.models import (
+from .models import (
     CandidateGenerationStatus,
     CandidateLearningReference,
     EvolutionCandidateGenerationRequest,
     EvolutionCandidateGenerationState,
     attempt_identity,
 )
-from systems.evolution_candidate_generation.repository import (
+from .repository import (
     EvolutionCandidateGenerationImmutableConflict,
     EvolutionCandidateGenerationRecordCorrupted,
     EvolutionCandidateGenerationRepository,

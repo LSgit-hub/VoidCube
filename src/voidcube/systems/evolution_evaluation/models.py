@@ -10,7 +10,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from systems.evolution_evaluation.selection import BenchmarkPlatformSelection
+from .selection import BenchmarkPlatformSelection
 
 
 SCHEMA_VERSION = 1

@@ -28,9 +28,13 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from agent.effect_outcomes import EffectOutcome, failed_effect, require_effect_outcome
-from agent.memory_provider import MemoryProvider
-from tools.registry import tool_error
+from ..domain.agent.effect_outcomes import (
+    EffectOutcome,
+    failed_effect,
+    require_effect_outcome,
+)
+from ..domain.contracts.memory import MemoryProvider
+from ..extensions.tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +386,7 @@ class MemoryManager:
         ``get_VoidCube_home()`` themselves.
         """
         if "VoidCube_home" not in kwargs:
-            from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+            from ...infrastructure.config.runtime_paths import get_VoidCube_home
             kwargs["VoidCube_home"] = str(get_VoidCube_home())
         for provider in self._providers:
             try:

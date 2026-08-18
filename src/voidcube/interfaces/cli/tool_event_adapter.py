@@ -84,7 +84,7 @@ def _project_terminal(
         host._last_scrollback_tool = event.name
         if host._should_emit_scrollback_output():
             try:
-                from agent.display import get_cute_tool_message
+                from .display import get_cute_tool_message
 
                 line = format_tool_completion(
                     event.name,
@@ -105,7 +105,7 @@ def _project_terminal(
         else:
             snapshot = snapshots.pop(event.call_id, None)
             try:
-                from agent.display import render_edit_diff_with_delta
+                from .display import render_edit_diff_with_delta
 
                 render_edit_diff_with_delta(
                     event.name,
@@ -143,7 +143,7 @@ def _project_started(
     arguments = dict(event.arguments)
     if getattr(host, "_inline_diffs_enabled", False):
         try:
-            from agent.display import capture_local_edit_snapshot
+            from .display import capture_local_edit_snapshot
 
             snapshot = capture_local_edit_snapshot(event.name, arguments)
             if snapshot is not None:
@@ -156,7 +156,7 @@ def _project_started(
             )
 
     if event.name and not event.name.startswith("_"):
-        from agent.display import get_tool_emoji, get_tool_preview_max_len
+        from .display import get_tool_emoji, get_tool_preview_max_len
 
         label = event.preview or event.name
         max_length = get_tool_preview_max_len()

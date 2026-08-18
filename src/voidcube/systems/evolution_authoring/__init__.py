@@ -1,12 +1,12 @@
 """Governed candidate authoring for autonomous evolution."""
 
-from systems.evolution_authoring.agent_adapter import (
+from .agent_adapter import (
     AUTHORING_TOOL_NAMES,
     AUTHORING_TOOLSETS,
     AIAgentAuthoringAdapter,
 )
 
-from systems.evolution_authoring.models import (
+from .models import (
     AuthoringAgentReport,
     AuthoringCommandEvidence,
     EvolutionAuthoringContext,
@@ -14,11 +14,11 @@ from systems.evolution_authoring.models import (
     EvolutionAuthoringSpec,
     candidate_ref_for_task,
 )
-from systems.evolution_authoring.executor import (
+from .executor import (
     AuthoringAgent,
     EvolutionAuthoringExecutor,
 )
-from systems.evolution_authoring.repository import (
+from .repository import (
     EvolutionAuthoringImmutableConflict,
     EvolutionAuthoringRecordCorrupted,
     EvolutionAuthoringRepository,

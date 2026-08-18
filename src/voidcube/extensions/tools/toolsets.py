@@ -242,7 +242,7 @@ def validate_toolset(name: str) -> str:
     if name in TOOLSETS:
         return name
     try:
-        from VoidCube_cli.plugins import discover_plugins, get_plugin_toolsets
+        from ...extensions.plugins.cli_adapter import discover_plugins, get_plugin_toolsets
         discover_plugins()
         plugin_keys = {ts_key for ts_key, _, _ in get_plugin_toolsets()}
         if name in plugin_keys:

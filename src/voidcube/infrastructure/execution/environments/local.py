@@ -12,8 +12,13 @@ import threading
 import time
 import uuid
 
-from tools.environments.base import BaseEnvironment, _get_activity_callback, _pipe_stdin
-from tools.interrupt import is_interrupted
+import sys
+
+from .base import BaseEnvironment, _get_activity_callback, _pipe_stdin
+from ..interrupt import is_interrupted
+
+# Preserve the legacy module identity for callers that inspect loaded backends.
+sys.modules.setdefault("tools.environments.local", sys.modules[__name__])
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -27,7 +32,7 @@ def _build_provider_env_blocklist() -> frozenset:
     blocked: set[str] = set()
 
     try:
-        from VoidCube_app.infrastructure.providers.registry import PROVIDER_REGISTRY
+        from ...providers.registry import PROVIDER_REGISTRY
         for pconfig in PROVIDER_REGISTRY.values():
             api_key_env_vars = pconfig.get("api_key_env_vars", [])
             blocked.update(api_key_env_vars)
@@ -38,7 +43,7 @@ def _build_provider_env_blocklist() -> frozenset:
         pass
 
     try:
-        from VoidCube_app.config import OPTIONAL_ENV_VARS
+        from ...config.configuration import OPTIONAL_ENV_VARS
         for name, metadata in OPTIONAL_ENV_VARS.items():
             category = metadata.get("category")
             if category in {"tool", "messaging"}:
@@ -175,7 +180,7 @@ _SANE_PATH = (
 def _make_run_env(env: dict) -> dict:
     """Build a run environment with a sane PATH and provider-var stripping."""
     try:
-        from tools.env_passthrough import is_env_passthrough as _is_passthrough
+        from ..env_passthrough import is_env_passthrough as _is_passthrough
     except Exception:
         _is_passthrough = lambda _: False  # noqa: E731
 
@@ -194,7 +199,7 @@ def _make_run_env(env: dict) -> dict:
     # Per-profile HOME isolation: redirect system tool configs (git, ssh, gh,
     # npm …) into {VOIDCUBE_HOME}/home/ when that directory exists.  Only the
     # subprocess sees the override — the Python process keeps the real HOME.
-    from VoidCube_app.infrastructure.config.runtime_paths import get_subprocess_home
+    from ...config.runtime_paths import get_subprocess_home
     _profile_home = get_subprocess_home()
     if _profile_home:
         run_env["HOME"] = _profile_home
@@ -590,7 +595,7 @@ class LocalEnvironment(BaseEnvironment):
 
         # Still strip the marker from output so it's not visible
         self._extract_cwd_from_output(result)
-        from tools.path_runtime import normalize_host_path
+        from ..path_runtime import normalize_host_path
 
         normalized_cwd = normalize_host_path(self.cwd)
         self.cwd = normalized_cwd if os.path.isdir(normalized_cwd) else previous_cwd

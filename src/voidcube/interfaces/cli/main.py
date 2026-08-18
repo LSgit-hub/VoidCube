@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from VoidCube_cli.entrypoints.dispatch import dispatch_cli
-from VoidCube_cli.entrypoints.parser import build_parser
+from .entrypoints.dispatch import dispatch_cli
+from .entrypoints.parser import build_parser
 
 
 def main() -> None:

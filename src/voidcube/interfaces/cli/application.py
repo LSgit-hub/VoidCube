@@ -377,7 +377,7 @@ _format_duration_compact = None
 def _lazy_import_usage_pricing():
     global _format_duration_compact
     if _format_duration_compact is None:
-        from agent.usage_pricing import format_duration_compact as _FDC
+        from ...infrastructure.providers.usage_pricing import format_duration_compact as _FDC
 
         _format_duration_compact = _FDC
 
@@ -569,7 +569,7 @@ def _init_cli_runtime():
         pass
     # Initialize tool preview length from config
     try:
-        from agent.display import set_tool_preview_max_len
+        from .display import set_tool_preview_max_len
         _tpl = cfg.get("display", {}).get("tool_preview_length", 0)
         set_tool_preview_max_len(int(_tpl) if _tpl else 0)
     except Exception:
@@ -593,7 +593,10 @@ def _ensure_async_httpx_neutered():
         return
     _neutered_async_httpx = True
     try:
-        from agent.auxiliary_client import neuter_async_httpx_del
+        try:
+            from voidcube.infrastructure.providers.auxiliary_client import neuter_async_httpx_del
+        except ModuleNotFoundError:
+            from src.voidcube.infrastructure.providers.auxiliary_client import neuter_async_httpx_del
         neuter_async_httpx_del()
     except Exception:
         pass
@@ -655,7 +658,7 @@ def _get_tool_definitions(*args, **kwargs):
     """Lazy-import get_tool_definitions (defers ~243ms of import chain)."""
     global _tool_defs_fn
     if _tool_defs_fn is None:
-        from tools.model_tools import get_tool_definitions as _fn
+        from ...extensions.tools.model_tools import get_tool_definitions as _fn
         _tool_defs_fn = _fn
     return _tool_defs_fn(*args, **kwargs)
 
@@ -663,7 +666,7 @@ def _get_tool_definitions(*args, **kwargs):
 def _get_validate_toolset(name: str) -> bool:
     global _validate_toolset_fn
     if _validate_toolset_fn is None:
-        from tools.toolsets import validate_toolset as _fn
+        from ...extensions.tools.toolsets import validate_toolset as _fn
         _validate_toolset_fn = _fn
     return _validate_toolset_fn(name)
 
@@ -671,7 +674,7 @@ def _get_validate_toolset(name: str) -> bool:
 def _get_cleanup_all_terminals():
     global _cleanup_all_terminals_fn
     if _cleanup_all_terminals_fn is None:
-        from tools.terminal_tool import cleanup_all_environments as _fn
+        from ...infrastructure.execution.terminal_tool import cleanup_all_environments as _fn
         _cleanup_all_terminals_fn = _fn
     return _cleanup_all_terminals_fn()
 
@@ -679,7 +682,10 @@ def _get_cleanup_all_terminals():
 def _get_cleanup_all_browsers():
     global _cleanup_all_browsers_fn
     if _cleanup_all_browsers_fn is None:
-        from tools.browser_tool import _emergency_cleanup_all_sessions as _fn
+        try:
+            from ...extensions.tools.browser.browser_tool import _emergency_cleanup_all_sessions as _fn
+        except ModuleNotFoundError:
+            from src.voidcube.extensions.tools.browser.browser_tool import _emergency_cleanup_all_sessions as _fn
         _cleanup_all_browsers_fn = _fn
     return _cleanup_all_browsers_fn()
 
@@ -687,7 +693,7 @@ def _get_cleanup_all_browsers():
 def _get_set_sudo_password_callback(cb):
     global _set_sudo_password_callback_fn
     if _set_sudo_password_callback_fn is None:
-        from tools.terminal_tool import set_sudo_password_callback as _fn
+        from ...infrastructure.execution.terminal_tool import set_sudo_password_callback as _fn
         _set_sudo_password_callback_fn = _fn
     return _set_sudo_password_callback_fn(cb)
 
@@ -695,7 +701,7 @@ def _get_set_sudo_password_callback(cb):
 def _get_set_approval_sink(sink):
     global _set_approval_sink_fn
     if _set_approval_sink_fn is None:
-        from tools.terminal_tool import set_approval_sink as _fn
+        from ...infrastructure.execution.terminal_tool import set_approval_sink as _fn
         _set_approval_sink_fn = _fn
     return _set_approval_sink_fn(sink)
 
@@ -703,7 +709,7 @@ def _get_set_approval_sink(sink):
 def _get_set_secret_capture_callback():
     global _set_secret_capture_callback_fn
     if _set_secret_capture_callback_fn is None:
-        from tools.skills_tool import set_secret_capture_callback as _fn
+        from ...extensions.skills.tool import set_secret_capture_callback as _fn
         _set_secret_capture_callback_fn = _fn
     return _set_secret_capture_callback_fn
 
@@ -736,7 +742,7 @@ def _run_cleanup():
     except Exception:
         pass
     try:
-        from tools.mcp_tool import shutdown_mcp_servers
+        from ...extensions.tools.mcp.mcp_tool import shutdown_mcp_servers
         shutdown_mcp_servers()
     except Exception:
         pass
@@ -744,7 +750,10 @@ def _run_cleanup():
     # AsyncHttpxClientWrapper.__del__ doesn't fire on a closed event loop
     # and trigger prompt_toolkit's "Press ENTER to continue..." handler.
     try:
-        from agent.auxiliary_client import shutdown_cached_clients
+        try:
+            from voidcube.infrastructure.providers.auxiliary_client import shutdown_cached_clients
+        except ModuleNotFoundError:
+            from src.voidcube.infrastructure.providers.auxiliary_client import shutdown_cached_clients
         shutdown_cached_clients()
     except Exception:
         pass
@@ -803,11 +812,18 @@ def _get_skill_commands():
     """Lazy-load and cache the skill commands dictionary."""
     global _skill_commands_cache, _skill_cmd_imports
     if _skill_commands_cache is None:
-        from agent.skill_commands import (
-            scan_skill_commands as _sc,
-            build_skill_invocation_message as _bi,
-            build_preloaded_skills_prompt as _bl,
-        )
+        try:
+            from voidcube.extensions.skills.commands import (
+                scan_skill_commands as _sc,
+                build_skill_invocation_message as _bi,
+                build_preloaded_skills_prompt as _bl,
+            )
+        except ModuleNotFoundError:
+            from src.voidcube.extensions.skills.commands import (
+                scan_skill_commands as _sc,
+                build_skill_invocation_message as _bi,
+                build_preloaded_skills_prompt as _bl,
+            )
         _skill_cmd_imports = (_bi, _bl)
         _skill_commands_cache = _sc()
     return _skill_commands_cache
@@ -2691,7 +2707,7 @@ class VoidcubeCLI:
         """
         import asyncio as _asyncio
         import json as _json
-        from tools.vision_tools import vision_analyze_tool
+        from ...extensions.tools.media.vision_tools import vision_analyze_tool
 
         analysis_prompt = (
             "Describe everything visible in this image in thorough detail. "
@@ -3436,7 +3452,7 @@ class VoidcubeCLI:
             self._stream_render_state.response_box_open = False
         self._close_reasoning_box()
 
-        from agent.display import get_tool_emoji
+        from .display import get_tool_emoji
         emoji = get_tool_emoji(tool_name, default="🔧")
         _cprint(f"  ┊ {emoji} preparing {tool_name}…")
 
@@ -3937,7 +3953,10 @@ class VoidcubeCLI:
 
             def cleanup_async_clients() -> None:
                 try:
-                    from agent.auxiliary_client import cleanup_stale_async_clients
+                    try:
+                        from voidcube.infrastructure.providers.auxiliary_client import cleanup_stale_async_clients
+                    except ModuleNotFoundError:
+                        from src.voidcube.infrastructure.providers.auxiliary_client import cleanup_stale_async_clients
 
                     cleanup_stale_async_clients()
                 except Exception:
@@ -4398,7 +4417,7 @@ class VoidcubeCLI:
 
         def skills_count() -> int:
             try:
-                from tools.skills_tool import _find_all_skills
+                from ...extensions.skills.tool import _find_all_skills
 
                 skills = _find_all_skills()
                 return len(skills) if skills else 0

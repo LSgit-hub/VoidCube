@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import Field, HttpUrl, ValidationError, field_validator
 from pydantic import BaseModel, ConfigDict
 
-from systems.research_knowledge.models import KnowledgeArtifact, KnowledgeClaim, KnowledgeSource
+from .models import KnowledgeArtifact, KnowledgeClaim, KnowledgeSource
 
 
 DEFAULT_KNOWLEDGE_NORMALIZER_VERSION = "knowledge-normalizer/1"

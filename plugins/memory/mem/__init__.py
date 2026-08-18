@@ -14,9 +14,18 @@ from typing import Any, Dict, List
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from agent.effect_outcomes import EffectOutcome, failed_effect
-from agent.memory_provider import MemoryProvider
-from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
+try:
+    from voidcube.domain.agent.effect_outcomes import EffectOutcome, failed_effect
+except ModuleNotFoundError:
+    from src.voidcube.domain.agent.effect_outcomes import EffectOutcome, failed_effect
+try:
+    from voidcube.domain.contracts.memory import MemoryProvider
+except ModuleNotFoundError:
+    from src.voidcube.domain.contracts.memory import MemoryProvider
+try:
+    from voidcube.infrastructure.persistence.redaction import redact_sensitive_text
+except ModuleNotFoundError:
+    from src.voidcube.infrastructure.persistence.redaction import redact_sensitive_text
 from plugins.memory.mem.outbox import MemoryWriteOutbox
 from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
 
@@ -90,7 +99,10 @@ class MemMemoryProvider(MemoryProvider):
         self._session_id = resolved_session_id
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        from plugins.memory.mem.host_integration import configure_voidcube_mem_host
+        try:
+            from voidcube.infrastructure.memory.host_integration import configure_voidcube_mem_host
+        except ModuleNotFoundError:
+            from src.voidcube.infrastructure.memory.host_integration import configure_voidcube_mem_host
 
         configure_voidcube_mem_host()
         self.bind_session(session_id)

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Literal, Optional
 
-from agent.model_metadata import fetch_endpoint_model_metadata, fetch_model_metadata
+from .model_metadata import fetch_endpoint_model_metadata, fetch_model_metadata
 
 DEFAULT_PRICING = {"input": 0.0, "output": 0.0}
 

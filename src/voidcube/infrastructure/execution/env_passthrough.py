@@ -66,7 +66,7 @@ def _load_config_passthrough() -> frozenset[str]:
 
     result: set[str] = set()
     try:
-        from VoidCube_app.config import read_raw_config
+        from ..config.configuration import read_raw_config
         cfg = read_raw_config()
         passthrough = cfg.get("terminal", {}).get("env_passthrough")
         if isinstance(passthrough, list):
@@ -99,5 +99,4 @@ def get_all_passthrough() -> frozenset[str]:
 def clear_env_passthrough() -> None:
     """Reset the skill-scoped allowlist (e.g. on session reset)."""
     _get_allowed().clear()
-
 

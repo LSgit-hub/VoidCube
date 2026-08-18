@@ -14,7 +14,7 @@ Trust levels:
   - community: Everything else. Any findings = blocked unless --force.
 
 Usage:
-    from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
+    from .guard import scan_skill, should_allow_install, format_scan_report
 
     result = scan_skill(Path("skills/.hub/quarantine/some-skill"), source="community")
     allowed, reason = should_allow_install(result)
@@ -932,7 +932,7 @@ def _parse_llm_response(text: str, skill_name: str) -> List[Finding]:
 def _get_configured_model() -> str:
     """Load the user's configured model from ~/.VoidCube/config.yaml."""
     try:
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
         config = load_config()
         return config.get("model", "")
     except Exception:

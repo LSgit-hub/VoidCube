@@ -11,11 +11,11 @@ from typing import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from systems.evolution_evaluation.environment import capture_host_environment_manifest
-from systems.evolution_evaluation.models import (
+from ...systems.evolution_evaluation.environment import capture_host_environment_manifest
+from ...systems.evolution_evaluation.models import (
     ExecutionEnvironmentManifest,
 )
-from tools.task_execution import (
+from .task_execution import (
     TaskExecutionBlocked,
     TaskExecutionContract,
     begin_task_execution,

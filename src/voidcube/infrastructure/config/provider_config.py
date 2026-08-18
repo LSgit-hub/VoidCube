@@ -270,7 +270,7 @@ def api_b_key_configured(memory_llm_cfg: dict[str, Any], providers: dict[str, An
 def get_provider_models_from_api(provider: str, *, api_key: str = "", base_url: str = "") -> list[tuple[str, str]]:
     try:
         auth = _provider_auth_module()
-        from VoidCube_app.models import fetch_api_models
+        from ..providers.model_catalog import fetch_api_models
         provider_cfg = auth.PROVIDER_REGISTRY.get(provider, {})
         resolved_base_url = base_url or str(
             provider_cfg.get("inference_base_url") or provider_cfg.get("base_url") or ""

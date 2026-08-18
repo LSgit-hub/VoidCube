@@ -191,7 +191,7 @@ def tail_log(
     # Resolve component to logger name prefixes
     component_prefixes = None
     if component:
-        from VoidCube_app.infrastructure.observability.logging import COMPONENT_PREFIXES
+        from ...infrastructure.observability.logging import COMPONENT_PREFIXES
         component_lower = component.lower()
         if component_lower not in COMPONENT_PREFIXES:
             available = ", ".join(sorted(COMPONENT_PREFIXES))

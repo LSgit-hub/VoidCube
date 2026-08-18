@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any, Sequence
 
-from VoidCube_app.interaction_contract import (
+from ...domain.contracts.interaction import (
     ClarificationRequest,
     ClarificationSink,
     ClarificationStatus,
     resolve_clarification,
 )
-from tools.registry import registry
+from .registry import registry
 
 
 CLARIFY_SCHEMA = {

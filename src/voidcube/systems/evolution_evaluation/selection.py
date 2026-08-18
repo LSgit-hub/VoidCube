@@ -9,7 +9,7 @@ from typing import Iterable, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from systems.evolution_boundary import normalize_repo_path
+from ..evolution_boundary import normalize_repo_path
 
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"

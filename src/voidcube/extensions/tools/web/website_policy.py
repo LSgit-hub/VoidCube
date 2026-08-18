@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ....infrastructure.config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 

@@ -9,10 +9,10 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from systems.body_registry import BodyImprovementReport
-from systems.evolution_candidate_generation import EvolutionCandidateGenerationRequest
+from ..body_registry import BodyImprovementReport
+from ..evolution_candidate_generation import EvolutionCandidateGenerationRequest
 from .autonomous_chain_store import StaleExecutionLeaseError
-from systems.governor import GovernorRequest
+from ..governor import GovernorRequest
 from .autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_CYCLE_ROUTE,
     AUTONOMOUS_CHAIN_TASKS_ROUTE,
@@ -49,7 +49,7 @@ from .ui_routes import (
     SupervisorUIRoutePorts,
     mount_supervisor_ui_routes,
 )
-from systems.voice import VoiceConfig, VoiceSessionManager
+from ..voice import VoiceConfig, VoiceSessionManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supervisor")
@@ -450,7 +450,7 @@ class Supervisor(
         }
 
     async def get_companion_reminder_policy(self) -> Dict[str, Any]:
-        from VoidCube_app.config import is_managed
+        from ...infrastructure.config.configuration import is_managed
 
         return {
             **self._companion_reminder_policy_payload(),
@@ -461,7 +461,7 @@ class Supervisor(
         self,
         request: CompanionReminderPolicyRequest,
     ) -> Dict[str, Any]:
-        from VoidCube_app.config import (
+        from ...infrastructure.config.configuration import (
             format_managed_message,
             is_managed,
             read_raw_config,
@@ -599,11 +599,11 @@ class Supervisor(
         *,
         strict: bool = False,
     ) -> Dict[str, str]:
-        from VoidCube_app.companion_workers import (
+        from ...application.companion_workers import (
             companion_worker_roles,
             resolve_companion_worker_role,
         )
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
 
         config = load_config()
         if strict and str(worker_role or "").strip().lower() not in companion_worker_roles(config):
@@ -858,7 +858,7 @@ class Supervisor(
 
     async def receive_improvement_report(self, report: dict) -> Dict[str, Any]:
         """Agent 提交替身改进报告 → 监督者审查评分"""
-        from systems.body_registry import BodyImprovementReport
+        from ..body_registry import BodyImprovementReport
         task_id = str(report.get("task_id") or "").strip()
         lease = report.get("execution_lease")
         lease = lease if isinstance(lease, dict) else {}

@@ -34,7 +34,7 @@ def memory_command(args) -> None:
 
 def cmd_redaction(args) -> None:
     """Show or persist the independent Memory redaction switch."""
-    from VoidCube_app.config import load_config
+    from ...infrastructure.config.configuration import load_config
 
     state = str(getattr(args, "state", "status") or "status").strip().lower()
     if state == "status":
@@ -56,7 +56,7 @@ def cmd_redaction(args) -> None:
 
 
 def _save_redaction_setting(enabled: bool) -> bool:
-    from VoidCube_app.config import (
+    from ...infrastructure.config.configuration import (
         is_managed,
         managed_error,
         read_raw_config,
@@ -85,7 +85,7 @@ def _save_redaction_setting(enabled: bool) -> bool:
 
 def _print_status() -> None:
     layout = get_runtime_layout()
-    from VoidCube_app.config import load_config
+    from ...infrastructure.config.configuration import load_config
 
     memory_config = load_config().get("memory", {}).get("mem", {})
     redaction = bool(memory_config.get("redact_before_store", False))

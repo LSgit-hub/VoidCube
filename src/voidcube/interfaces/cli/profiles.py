@@ -115,7 +115,7 @@ def create_profile(name: str) -> str:
     # Ensure the root VoidCube home is set up with secure permissions and
     # canonical subdirectories before creating the profile.
     try:
-        from VoidCube_app.config import ensure_VoidCube_home
+        from ...infrastructure.config.configuration import ensure_VoidCube_home
         ensure_VoidCube_home()
     except Exception:
         # ensure_VoidCube_home may fail due to permissions, managed-mode

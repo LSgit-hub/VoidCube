@@ -76,13 +76,13 @@ def parse_enabled_flag(value: Any, default: bool = True) -> bool:
 
 
 def _resolve_toolset(name: str) -> list[str]:
-    from tools.toolsets import resolve_toolset
+    from .toolsets import resolve_toolset
 
     return resolve_toolset(name)
 
 
 def _is_valid_toolset(name: str) -> bool:
-    from tools.toolsets import is_valid_toolset
+    from .toolsets import is_valid_toolset
 
     return is_valid_toolset(name)
 

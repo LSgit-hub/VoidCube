@@ -10,6 +10,14 @@ from .catalog import (
 from .sync import sync_skills
 from .models import SkillBundle, SkillMeta
 from .guard import Finding, ScanResult, scan_skill, should_allow_install
+from .commands import (
+    build_plan_path,
+    build_preloaded_skills_prompt,
+    build_skill_invocation_message,
+    get_skill_commands,
+    resolve_skill_command_key,
+    scan_skill_commands,
+)
 
 __all__ = [
     "get_all_skills_dirs",
@@ -24,4 +32,10 @@ __all__ = [
     "ScanResult",
     "scan_skill",
     "should_allow_install",
+    "build_plan_path",
+    "build_preloaded_skills_prompt",
+    "build_skill_invocation_message",
+    "get_skill_commands",
+    "resolve_skill_command_key",
+    "scan_skill_commands",
 ]

@@ -11,13 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from systems.self_cognition.models import (
+from .models import (
     HealthMetric,
     ModuleDependency,
     RuntimeCapability,
     SelfCognitionSnapshot,
 )
-from systems.self_cognition.repository import SelfCognitionRepository
+from .repository import SelfCognitionRepository
 
 
 DEFAULT_COLLECTOR_VERSION = "self-cognition-collector/1"

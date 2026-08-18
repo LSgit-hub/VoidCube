@@ -49,7 +49,7 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
         return None
 
     try:
-        from tools.skills_tool import SKILLS_DIR, skill_view
+        from .tool import SKILLS_DIR, skill_view
 
         identifier_path = Path(raw_identifier).expanduser()
         if identifier_path.is_absolute():
@@ -88,7 +88,7 @@ def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None
     without needing to read config.yaml itself.
     """
     try:
-        from agent.skill_utils import (
+        from .catalog import (
             extract_skill_config_vars,
             parse_frontmatter,
             resolve_skill_config_values,
@@ -126,7 +126,7 @@ def _build_skill_message(
     runtime_note: str = "",
 ) -> str:
     """Format a loaded skill into a user/system message payload."""
-    from tools.skills_tool import SKILLS_DIR
+    from .tool import SKILLS_DIR
 
     content = str(loaded_skill.get("content") or "")
 
@@ -206,8 +206,8 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
     global _skill_commands
     _skill_commands = {}
     try:
-        from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, _get_disabled_skill_names
-        from agent.skill_utils import get_external_skills_dirs
+        from .tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, _get_disabled_skill_names
+        from .catalog import get_external_skills_dirs
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
 

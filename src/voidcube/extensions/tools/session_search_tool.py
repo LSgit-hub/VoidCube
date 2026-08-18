@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from tools.registry import registry, tool_error
+from .registry import registry, tool_error
 
 SESSION_SEARCH_SCHEMA = {
     "name": "session_search",

@@ -10,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 
-from agent.session_persistence import SessionPersistence
+from ...infrastructure.persistence.session_runtime import SessionPersistence
 
 
 def _new_session_uuid() -> str:
@@ -20,7 +20,7 @@ def _new_session_uuid() -> str:
 
 
 def _build_checkpoint_manager(**kwargs: Any) -> Any:
-    from tools.checkpoint_manager import CheckpointManager
+    from ...infrastructure.persistence.checkpoint_manager import CheckpointManager
 
     return CheckpointManager(**kwargs)
 

@@ -528,7 +528,7 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_cli/command_handlers/tools.py" in expected
     assert "VoidCube_cli/command_handlers/voice.py" in expected
     assert "VoidCube_cli/command_handlers/preset.py" in expected
-    assert "tools/presets/docker-web.yaml" in expected
+    assert "voidcube/extensions/tools/presets/docker-web.yaml" in expected
     assert "VoidCube_cli/clear_command_adapter.py" in expected
     assert "VoidCube_cli/session_command_adapter.py" in expected
     assert "VoidCube_cli/tips.py" not in expected

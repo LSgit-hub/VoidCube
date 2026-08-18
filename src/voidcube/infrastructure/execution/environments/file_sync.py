@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from tools.environments.base import _file_mtime_key
+from .base import _file_mtime_key
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def iter_sync_files(container_base: str = "/root/.VoidCube") -> list[tuple[str, 
     """
     # Late import: credential_files imports agent modules that create
     # circular dependencies if loaded at file_sync module level.
-    from tools.credential_files import (
+    from ..credential_files import (
         get_credential_file_mounts,
         iter_cache_files,
         iter_skills_files,

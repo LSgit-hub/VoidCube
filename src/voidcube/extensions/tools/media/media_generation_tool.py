@@ -11,9 +11,12 @@ from typing import Any, Iterable
 
 import httpx
 
-from agent.tool_execution import ToolExecutionResult
-from VoidCube_app.contracts.artifacts import Artifact
-from VoidCube_app.media_generation_provider import (
+try:
+    from voidcube.runtime.agent.tool_execution import ToolExecutionResult
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.tool_execution import ToolExecutionResult
+from ....domain.contracts.artifacts import Artifact
+from ....infrastructure.providers.media_generation import (
     AGNES_IMAGE_MODEL,
     AGNES_VIDEO_MODEL,
     image_generation_configured,
@@ -300,7 +303,7 @@ def video_generate(
         return _error(str(exc))
 
 
-from tools.registry import registry
+from ..registry import registry
 
 
 IMAGE_GENERATE_SCHEMA = {

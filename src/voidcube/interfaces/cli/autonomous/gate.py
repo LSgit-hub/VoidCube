@@ -79,7 +79,7 @@ def _exit_autonomous_gate_locally(
 
 def _resolve_supervisor_url() -> str:
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
 
         cfg = load_config()
         sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}

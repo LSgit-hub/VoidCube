@@ -31,7 +31,7 @@ def collect_execution_context(
     worktree_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect the configured tool backend and active CLI workspace."""
-    from tools.terminal_tool import _get_env_config
+    from ...infrastructure.execution.terminal_tool import _get_env_config
 
     terminal = _get_env_config()
     backend = str(terminal.get("env_type") or "local").strip().lower()

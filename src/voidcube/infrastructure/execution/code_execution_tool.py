@@ -9,9 +9,9 @@ import logging
 import uuid
 from typing import Optional, Dict, Any, List
 
-from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
-from tools.ansi_strip import strip_ansi
-from tools.registry import registry, tool_error
+from ..persistence.redaction import redact_sensitive_text
+from .ansi_strip import strip_ansi
+from ...extensions.tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def _execute_code_impl(
     if not code:
         return {"success": False, "error": "No code provided"}
 
-    from tools.terminal_tool import _create_environment, _get_env_config
+    from .terminal_tool import _create_environment, _get_env_config
 
     config = _get_env_config()
     env_type = str(config.get("env_type") or "local").strip().lower()

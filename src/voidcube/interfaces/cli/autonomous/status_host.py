@@ -32,7 +32,7 @@ def get_supervisor_url(host: Any) -> str:
     if cached:
         return cached
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
 
         cfg = load_config()
         sc = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
@@ -193,7 +193,7 @@ def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
 
         cfg = load_config()
         sv_cfg = cfg.get("supervisor", {})

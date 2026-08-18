@@ -13,8 +13,8 @@ from typing import Callable
 
 
 def _python_import() -> dict[str, object]:
-    import systems.evolution_evaluation  # noqa: F401
-    import tools.terminal_tool  # noqa: F401
+    from . import environment  # noqa: F401
+    from ...infrastructure.execution import terminal_tool  # noqa: F401
 
     return {"probe": "python-import", "python": sys.version.split()[0]}
 

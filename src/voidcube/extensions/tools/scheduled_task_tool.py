@@ -6,8 +6,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict
 
-from VoidCube_cli.ops.executor import default_gateway_url
-from tools.registry import registry
+from ...infrastructure.gateway.executor import default_gateway_url
+from .registry import registry
 
 
 SCHEDULED_TASK_SCHEMA = {

@@ -13,8 +13,8 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from VoidCube_cli.autonomous_observation import supervisor_api_a_execution_hint
-from VoidCube_cli.ops.executor import default_gateway_url
+from ..autonomous.observation import supervisor_api_a_execution_hint
+from ....infrastructure.gateway.executor import default_gateway_url
 
 
 # ── Configuration ──────────────────────────────────────────────────────

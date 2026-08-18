@@ -14,14 +14,14 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
-from tools.environments.base import (
+from ...config.runtime_paths import get_VoidCube_home
+from .base import (
     BaseEnvironment,
     _ThreadedProcessHandle,
     _load_json_store,
     _save_json_store,
 )
-from tools.environments.file_sync import (
+from .file_sync import (
     FileSyncManager,
     iter_sync_files,
     quoted_mkdir_command,
@@ -187,7 +187,7 @@ class ModalEnvironment(BaseEnvironment):
 
         cred_mounts = []
         try:
-            from tools.credential_files import (
+            from ..credential_files import (
                 get_credential_file_mounts,
                 iter_skills_files,
                 iter_cache_files,

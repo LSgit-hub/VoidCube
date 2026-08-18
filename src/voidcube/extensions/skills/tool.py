@@ -54,7 +54,7 @@ Available tools:
 - skill_view: Load full skill content (progressive disclosure tier 2-3)
 
 Usage:
-    from tools.skills_tool import skills_list, skill_view, check_skills_requirements
+    from .tool import skills_list, skill_view, check_skills_requirements
 
     # List all skills (returns metadata only - token efficient)
     result = skills_list()
@@ -69,14 +69,14 @@ Usage:
 import json
 import logging
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 import os
 import re
 from enum import Enum
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
-from tools.registry import registry, tool_error
+from ..tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ _REMOTE_ENV_BACKENDS = frozenset({"docker", "singularity", "modal", "ssh", "dayt
 _secret_capture_callback = None
 
 
-from VoidCube_app.config import load_env
+from ...infrastructure.config.configuration import load_env, load_config
 
 
 class SkillReadinessStatus(str, Enum):
@@ -124,8 +124,8 @@ def skill_matches_platform(frontmatter: Dict[str, Any]) -> bool:
     Delegates to ``agent.skill_utils.skill_matches_platform`` — kept here
     as a public re-export so existing callers don't need updating.
     """
-    from agent.skill_utils import skill_matches_platform as _impl
-    return _impl(frontmatter)
+    from .catalog import skill_matches_platform
+    return skill_matches_platform(frontmatter)
 
 
 def _normalize_prerequisite_values(value: Any) -> List[str]:
@@ -338,7 +338,7 @@ def _is_gateway_surface() -> bool:
 
 
 def _get_terminal_backend_name() -> str:
-    from tools.tool_backend_helpers import get_terminal_backend
+    from ..tools.backend_helpers import get_terminal_backend
 
     return get_terminal_backend()
 
@@ -400,7 +400,7 @@ def _parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
     Delegates to ``agent.skill_utils.parse_frontmatter`` — kept here
     as a public re-export so existing callers don't need updating.
     """
-    from agent.skill_utils import parse_frontmatter
+    from .catalog import parse_frontmatter
     return parse_frontmatter(content)
 
 
@@ -415,12 +415,12 @@ def _get_category_from_path(skill_path: Path) -> Optional[str]:
     # then any other configured/runtime-visible skills directories.
     dirs_to_check = [SKILLS_DIR]
     try:
-        from agent.skill_utils import get_all_skills_dirs
+        from .catalog import get_all_skills_dirs
         for candidate in get_all_skills_dirs():
             if candidate not in dirs_to_check:
                 dirs_to_check.append(candidate)
     except ImportError:
-        logger.debug("agent.skill_utils module not available")
+        logger.debug("canonical skill catalog unavailable")
     except Exception as e:
         logger.debug("Error getting skills dirs: %s", e)
     for skills_dir in dirs_to_check:
@@ -435,7 +435,10 @@ def _get_category_from_path(skill_path: Path) -> Optional[str]:
 
 
 # Token estimation — use the shared implementation from model_metadata.
-from agent.model_metadata import estimate_tokens_rough as _estimate_tokens
+try:
+    from voidcube.infrastructure.providers.model_metadata import estimate_tokens_rough as _estimate_tokens
+except ModuleNotFoundError:
+    from src.voidcube.infrastructure.providers.model_metadata import estimate_tokens_rough as _estimate_tokens
 
 
 def _parse_tags(tags_value) -> List[str]:
@@ -475,7 +478,7 @@ def _get_disabled_skill_names() -> Set[str]:
     Delegates to ``agent.skill_utils.get_disabled_skill_names`` — kept here
     as a public re-export so existing callers don't need updating.
     """
-    from agent.skill_utils import get_disabled_skill_names
+    from .catalog import get_disabled_skill_names
     return get_disabled_skill_names()
 
 
@@ -483,7 +486,6 @@ def _is_skill_disabled(name: str, platform: str = None) -> bool:
     """Check if a skill is disabled in config."""
     import os
     try:
-        from VoidCube_app.config import load_config
         config = load_config()
         skills_cfg = config.get("skills", {})
         resolved_platform = platform or os.getenv("VOIDCUBE_PLATFORM")
@@ -507,7 +509,7 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
     Returns:
         List of skill metadata dicts (name, description, category).
     """
-    from agent.skill_utils import get_all_skills_dirs
+    from .catalog import get_all_skills_dirs
 
     skills = []
     seen_names: set = set()
@@ -637,10 +639,10 @@ def skills_categories(verbose: bool = False, task_id: str = None) -> str:
         # Use module-level SKILLS_DIR (respects monkeypatching) + external dirs
         all_dirs = [SKILLS_DIR] if SKILLS_DIR.exists() else []
         try:
-            from agent.skill_utils import get_external_skills_dirs
+            from .catalog import get_external_skills_dirs
             all_dirs.extend(d for d in get_external_skills_dirs() if d.exists())
         except ImportError:
-            logger.debug("agent.skill_utils module not available")
+            logger.debug("canonical skill catalog unavailable")
         except Exception as e:
             logger.debug("Error getting external skills dirs: %s", e)
         if not all_dirs:
@@ -715,7 +717,7 @@ def skills_list(category: str = None, task_id: str = None) -> str:
         JSON string with minimal skill info: name, description, category
     """
     try:
-        from agent.skill_utils import get_all_skills_dirs
+        from .catalog import get_all_skills_dirs
 
         all_dirs = get_all_skills_dirs()
         if not any(path.exists() for path in all_dirs):
@@ -784,7 +786,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
         JSON string with skill content or error message
     """
     try:
-        from agent.skill_utils import get_all_skills_dirs
+        from .catalog import get_all_skills_dirs
 
         # Build list of all skill directories to search
         all_dirs = []
@@ -935,7 +937,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
 
         # If a specific file path is requested, read that instead
         if file_path and skill_dir:
-            from tools.path_security import validate_within_dir, has_traversal_component
+            from ..tools.files.path_security import validate_within_dir, has_traversal_component
 
             # Security: Prevent path traversal attacks
             if has_traversal_component(file_path):
@@ -1147,7 +1149,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
         ]
         if available_env_names:
             try:
-                from tools.env_passthrough import register_env_passthrough
+                from ...infrastructure.execution.env_passthrough import register_env_passthrough
 
                 register_env_passthrough(available_env_names)
             except Exception:
@@ -1166,7 +1168,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
         missing_cred_files: list = []
         if required_cred_files_raw:
             try:
-                from tools.credential_files import register_credential_files
+                from ...infrastructure.execution.credential_files import register_credential_files
 
                 missing_cred_files = register_credential_files(required_cred_files_raw)
                 if missing_cred_files:

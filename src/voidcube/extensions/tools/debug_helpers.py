@@ -28,7 +28,7 @@ import os
 import uuid
 from typing import Any, Dict
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 

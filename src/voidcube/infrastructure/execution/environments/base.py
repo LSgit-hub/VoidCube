@@ -73,8 +73,8 @@ try:
 except Exception:
     pass  # Best effort
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
-from tools.interrupt import is_interrupted
+from ...config.runtime_paths import get_VoidCube_home
+from ..interrupt import is_interrupted
 
 logger = logging.getLogger(__name__)
 
@@ -669,6 +669,6 @@ class BaseEnvironment(ABC):
 
     def _prepare_command(self, command: str) -> tuple[str, str | None]:
         """Transform sudo commands if SUDO_PASSWORD is available."""
-        from tools.terminal_tool import _transform_sudo_command
+        from ..terminal_tool import _transform_sudo_command
 
         return _transform_sudo_command(command)

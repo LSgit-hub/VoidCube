@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from agent.error_classifier import ClassifiedError, FailoverReason
+from .error_classifier import ClassifiedError, FailoverReason
 
 # Monotonic counter for jitter seed uniqueness within the same process.
 # Protected by a lock to avoid race conditions in concurrent retry paths

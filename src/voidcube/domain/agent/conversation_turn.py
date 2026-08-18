@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent.iteration_control import IterationBudget
+from .iteration_control import IterationBudget
 
 
 @dataclass(slots=True)

@@ -1,6 +1,6 @@
 """Immutable research knowledge and its repository boundary."""
 
-from systems.research_knowledge.normalizer import (
+from .normalizer import (
     DEFAULT_FRESHNESS_TTL,
     DEFAULT_KNOWLEDGE_NORMALIZER_VERSION,
     KnowledgeNormalizationError,
@@ -12,13 +12,13 @@ from systems.research_knowledge.normalizer import (
     contains_prompt_injection,
     is_artifact_fresh,
 )
-from systems.research_knowledge.models import (
+from .models import (
     KnowledgeArtifact,
     KnowledgeClaim,
     KnowledgeRelation,
     KnowledgeSource,
 )
-from systems.research_knowledge.repository import (
+from .repository import (
     JsonKnowledgeRepository,
     KnowledgeImmutableConflict,
     KnowledgeRecordCorrupted,

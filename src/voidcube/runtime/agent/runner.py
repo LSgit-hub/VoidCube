@@ -36,14 +36,14 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from VoidCube_app.environment import load_VoidCube_dotenv
-from VoidCube_app.interaction_contract import ClarificationSink
-from VoidCube_app.contracts.execution import ExecutionState
-from VoidCube_app.tool_events import ToolEvent, ToolEventSink
+from ...infrastructure.config.environment import load_VoidCube_dotenv
+from ...domain.contracts.interaction import ClarificationSink
+from ...domain.contracts.execution import ExecutionState
+from ...domain.contracts.tool_events import ToolEvent, ToolEventSink
 from memai.domain.scope import CLI_WORKSPACE_ID
 
 _VoidCube_home = get_VoidCube_home()
@@ -62,34 +62,37 @@ else:
 
 # Load max workers from SOUL config or use default
 try:
-    from VoidCube_cli.soul_config import parse_soul_config
-    from agent.tool_scheduler import MAX_TOOL_WORKERS as SCHEDULER_MAX_TOOL_WORKERS
+    try:
+        from voidcube.infrastructure.config.soul_config import parse_soul_config
+    except ModuleNotFoundError:
+        from src.voidcube.infrastructure.config.soul_config import parse_soul_config
+    from ...domain.agent.tool_scheduler import MAX_TOOL_WORKERS as SCHEDULER_MAX_TOOL_WORKERS
     _soul_config = parse_soul_config()
     MAX_TOOL_WORKERS = int(_soul_config.get("agent", {}).get("max_tool_workers", SCHEDULER_MAX_TOOL_WORKERS))
 except Exception:
-    from agent.tool_scheduler import MAX_TOOL_WORKERS
+    from ...domain.agent.tool_scheduler import MAX_TOOL_WORKERS
 
 
 # Import our tool system
-from tools.model_tools import (
+from ...extensions.tools.model_tools import (
     get_tool_definitions,
     get_toolset_for_tool,
     handle_function_call,
 )
-from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_budget
-from tools.interrupt import set_interrupt as _set_interrupt
+from ...infrastructure.persistence.tool_result_storage import maybe_persist_tool_result, enforce_turn_budget
+from ...infrastructure.execution.interrupt import set_interrupt as _set_interrupt
 
 
 def get_active_env(task_id: str):
     """Return the task environment without loading terminal backends at import time."""
-    from tools.terminal_tool import get_active_env as _get_active_env
+    from ...infrastructure.execution.terminal_tool import get_active_env as _get_active_env
 
     return _get_active_env(task_id)
 
 # Agent internals extracted to agent/ package for modularity
-from agent.memory_manager import build_memory_context_block
-from agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
-from agent.retry_utils import (
+from ...application.memory_manager import build_memory_context_block
+from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
+from ...infrastructure.llm.retry_policy import (
     RetryKind,
     RetryRecoveryKind,
     decide_retry_directive,
@@ -97,7 +100,7 @@ from agent.retry_utils import (
     jittered_backoff,
     wait_for_retry,
 )
-from agent.error_classifier import (
+from ...infrastructure.llm.error_classifier import (
     FailoverReason,
     classify_api_error,
     clean_error_message,
@@ -105,61 +108,99 @@ from agent.error_classifier import (
     retry_after_seconds,
     summarize_api_error,
 )
-from agent.prompt_builder import (
-    DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
-    MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
-)
-from agent.model_metadata import (
-    fetch_model_metadata,
-    estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
-    save_context_length, is_local_endpoint,
-    query_ollama_num_ctx,
-)
-from agent.context_compressor import (
+try:
+    from voidcube.runtime.agent.prompt_builder import (
+        DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
+        MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.prompt_builder import (
+        DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
+        MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    )
+try:
+    from voidcube.infrastructure.providers.model_metadata import (
+        fetch_model_metadata,
+        estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
+        save_context_length, is_local_endpoint,
+        query_ollama_num_ctx,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.infrastructure.providers.model_metadata import (
+        fetch_model_metadata,
+        estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
+        save_context_length, is_local_endpoint,
+        query_ollama_num_ctx,
+    )
+from .context_compressor import (
     CompressionRecoveryResult,
     ContextCompressor,
     ContextRecoveryAction,
     ContextRecoveryKind,
     execute_context_recovery,
 )
-from agent.api_attempt import ApiAttemptState
-from agent.client_lifecycle import ChatClientLifecycle
-from agent.client_initialization import (
+from ...domain.agent.api_attempt import ApiAttemptState
+from .client_lifecycle import ChatClientLifecycle
+from .client_initialization import (
     AgentClientInitializationPorts,
     AgentClientInitializationRuntime,
     build_client_kwargs_for_credentials,
     build_qwen_portal_headers,
 )
-from agent.chat_transport import ChatTransport
-from agent.stream_response import StreamChunkUpdate
-from agent.tool_execution import (
-    PreparedToolCall,
-    ToolCallOutcome,
-    ToolExecutionCoordinator,
-    ToolExecutionResult,
-)
-from agent.tool_turn import (
+try:
+    from voidcube.infrastructure.llm.transport_runtime import ChatTransport
+except ModuleNotFoundError:
+    from src.voidcube.infrastructure.llm.transport_runtime import ChatTransport
+from ...infrastructure.llm.stream_response import StreamChunkUpdate
+try:
+    from voidcube.runtime.agent.tool_execution import (
+        PreparedToolCall,
+        ToolCallOutcome,
+        ToolExecutionCoordinator,
+        ToolExecutionResult,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.tool_execution import (
+        PreparedToolCall,
+        ToolCallOutcome,
+        ToolExecutionCoordinator,
+        ToolExecutionResult,
+    )
+from .tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
 )
-from agent.turn_finalization import (
+from .turn_finalization import (
     TurnFinalizationPorts,
     finalize_conversation_turn,
 )
-from agent.conversation_turn import ConversationTurnState
-from agent.conversation_runtime import (
+from ...domain.agent.conversation_turn import ConversationTurnState
+from ...domain.agent.conversation_runtime import (
     ConversationTurnPorts,
     ConversationTurnRuntime,
 )
-from agent.iteration_control import IterationBudget
-from agent.subdirectory_hints import SubdirectoryHintTracker
-from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
-from agent.api_request import (
+from ...domain.agent.iteration_control import IterationBudget
+from .subdirectory_hints import SubdirectoryHintTracker
+try:
+    from voidcube.runtime.agent.prompt_builder import (
+        build_skills_system_prompt, build_context_files_prompt, build_environment_hints,
+        ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md,
+        TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS,
+        GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.runtime.agent.prompt_builder import (
+        build_skills_system_prompt, build_context_files_prompt, build_environment_hints,
+        ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md,
+        TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS,
+        GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
+    )
+from ...infrastructure.llm.request import (
     ChatRequestConfig,
     build_chat_completion_kwargs,
     prepare_chat_messages,
 )
-from agent.api_response import (
+from ...infrastructure.llm.response import (
     TruncationAction,
     decide_truncation_recovery,
     inspect_chat_response,
@@ -167,7 +208,7 @@ from agent.api_response import (
     strip_thinking_blocks,
     strip_thinking_tags,
 )
-from agent.response_disposition import (
+from ...domain.agent.response_disposition import (
     ResponseLoopControl,
     apply_text_response_disposition,
     apply_tool_call_inspection,
@@ -175,36 +216,44 @@ from agent.response_disposition import (
     inspect_tool_calls,
     normalize_assistant_content,
 )
-from agent.usage_pricing import estimate_usage_cost, normalize_usage
-from agent.tool_scheduler import (
+from ...infrastructure.providers.usage_pricing import estimate_usage_cost, normalize_usage
+from ...domain.agent.tool_scheduler import (
     is_destructive_command, should_parallelize_tool_batch,
 )
-from agent.display import (
-    KawaiiSpinner, build_tool_preview as _build_tool_preview,
-    get_cute_tool_message as _get_cute_tool_message_impl,
-    _detect_tool_failure,
-    get_tool_emoji as _get_tool_emoji,
-)
-from agent.message_sanitizer import (
+try:
+    from voidcube.interfaces.cli.display import (
+        KawaiiSpinner, build_tool_preview as _build_tool_preview,
+        get_cute_tool_message as _get_cute_tool_message_impl,
+        _detect_tool_failure,
+        get_tool_emoji as _get_tool_emoji,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.interfaces.cli.display import (
+        KawaiiSpinner, build_tool_preview as _build_tool_preview,
+        get_cute_tool_message as _get_cute_tool_message_impl,
+        _detect_tool_failure,
+        get_tool_emoji as _get_tool_emoji,
+    )
+from ...domain.agent.message_sanitizer import (
     sanitize_messages_non_ascii,
     sanitize_messages_surrogates,
     sanitize_surrogates,
 )
-from agent.session_initialization import (
+from .session_initialization import (
     AgentSessionInitializationPorts,
     AgentSessionInitializationRuntime,
 )
-from agent.tool_schema import normalize_tool_definitions
-from VoidCube_app.infrastructure.shared.value_helpers import env_var_enabled
+from ...infrastructure.llm.tool_schema import normalize_tool_definitions
+from ...infrastructure.shared.value_helpers import env_var_enabled
 
 
 
-from agent.stream_handler import _SafeWriter
+from .stream_handler import _SafeWriter
 
 
 def _resolve_provider_client(*args: Any, **kwargs: Any) -> Any:
     """Load the auxiliary provider router only when an agent is constructed."""
-    from agent.auxiliary_client import resolve_provider_client
+    from ...infrastructure.providers.auxiliary_client import resolve_provider_client
 
     return resolve_provider_client(*args, **kwargs)
 
@@ -814,7 +863,10 @@ class AIAgent:
 
         # Reject models whose context window is below the minimum required
         # for reliable tool-calling workflows (64K tokens).
-        from agent.model_metadata import MINIMUM_CONTEXT_LENGTH
+        try:
+            from voidcube.infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
+        except ModuleNotFoundError:
+            from src.voidcube.infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
         _ctx = getattr(self.context_compressor, "context_length", 0)
         if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH:
             raise ValueError(
@@ -1057,7 +1109,10 @@ class AIAgent:
 
         # ── Update context compressor ──
         if hasattr(self, "context_compressor") and self.context_compressor:
-            from agent.model_metadata import get_model_context_length
+            try:
+                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
+            except ModuleNotFoundError:
+                from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
             new_context_length = get_model_context_length(
                 self.model,
                 base_url=self.base_url,
@@ -1242,7 +1297,10 @@ class AIAgent:
             return
         try:
             from agent.auxiliary_client import get_text_auxiliary_client
-            from agent.model_metadata import get_model_context_length
+            try:
+                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
+            except ModuleNotFoundError:
+                from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
 
             client, aux_model = get_text_auxiliary_client(
                 "compression",
@@ -2599,7 +2657,10 @@ class AIAgent:
             # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
             # causing oversized sessions to overflow the fallback.
             if hasattr(self, 'context_compressor') and self.context_compressor:
-                from agent.model_metadata import get_model_context_length
+                try:
+                    from voidcube.infrastructure.providers.model_metadata import get_model_context_length
+                except ModuleNotFoundError:
+                    from src.voidcube.infrastructure.providers.model_metadata import get_model_context_length
                 fb_context_length = get_model_context_length(
                     self.model, base_url=self.base_url,
                     api_key=self.api_key, provider=self.provider,
@@ -2905,7 +2966,10 @@ class AIAgent:
         # read content is summarised away — if the model re-reads the same
         # file it needs the full content, not a "file unchanged" stub.
         try:
-            from tools.file_tools import reset_file_dedup
+            try:
+                from voidcube.extensions.tools.files.file_tools import reset_file_dedup
+            except ModuleNotFoundError:
+                from src.voidcube.extensions.tools.files.file_tools import reset_file_dedup
             reset_file_dedup(task_id)
         except Exception:
             pass
@@ -3502,7 +3566,10 @@ class AIAgent:
         For CLI: prints a formatted line with a progress bar.
         For gateway: fires status_callback so the platform can send a chat message.
         """
-        from agent.display import format_context_pressure, format_context_pressure_gateway
+        try:
+            from voidcube.interfaces.cli.display import format_context_pressure, format_context_pressure_gateway
+        except ModuleNotFoundError:
+            from src.voidcube.interfaces.cli.display import format_context_pressure, format_context_pressure_gateway
 
         threshold_pct = compressor.threshold_tokens / compressor.context_length if compressor.context_length else 0.5
 

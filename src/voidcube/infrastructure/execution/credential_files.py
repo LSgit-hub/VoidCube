@@ -45,7 +45,7 @@ def _get_registered() -> Dict[str, str]:
 _config_files: List[Dict[str, str]] | None = None
 
 def _resolve_VoidCube_home() -> Path:
-    from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+    from ..config.runtime_paths import get_VoidCube_home
     return get_VoidCube_home()
 
 def register_credential_file(
@@ -76,7 +76,7 @@ def register_credential_file(
 
     # Resolve symlinks and normalise ``..`` before the containment check so
     # that traversal like ``../. ssh/id_rsa`` cannot escape VOIDCUBE_HOME.
-    from tools.path_security import validate_within_dir
+    from ...extensions.tools.files.path_security import validate_within_dir
 
     containment_error = validate_within_dir(host_path, VoidCube_home)
     if containment_error:
@@ -129,12 +129,12 @@ def _load_config_files() -> List[Dict[str, str]]:
 
     result: List[Dict[str, str]] = []
     try:
-        from VoidCube_app.config import read_raw_config
+        from ..config.configuration import read_raw_config
         VoidCube_home = _resolve_VoidCube_home()
         cfg = read_raw_config()
         cred_files = cfg.get("terminal", {}).get("credential_files")
         if isinstance(cred_files, list):
-            from tools.path_security import validate_within_dir
+            from ...extensions.tools.files.path_security import validate_within_dir
 
             for item in cred_files:
                 if isinstance(item, str) and item.strip():
@@ -221,7 +221,7 @@ def get_skills_directory_mount(
 
     # Mount external skill dirs
     try:
-        from agent.skill_utils import get_external_skills_dirs
+        from ...extensions.skills.catalog import get_external_skills_dirs
         for idx, ext_dir in enumerate(get_external_skills_dirs()):
             if ext_dir.is_dir():
                 host_path = _safe_skills_path(ext_dir)
@@ -305,7 +305,7 @@ def iter_skills_files(
 
     # Include external skill dirs
     try:
-        from agent.skill_utils import get_external_skills_dirs
+        from ...extensions.skills.catalog import get_external_skills_dirs
         for idx, ext_dir in enumerate(get_external_skills_dirs()):
             if not ext_dir.is_dir():
                 continue
@@ -339,7 +339,7 @@ def get_cache_directory_mounts(
     ``container_path`` keys. Paths always use the canonical
     ``cache/<name>`` layout.
     """
-    from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir
+    from ..config.runtime_paths import get_cache_dir
 
     mounts: List[Dict[str, str]] = []
     for name in _CACHE_DIR_NAMES:
@@ -360,7 +360,7 @@ def iter_cache_files(
     Used by Modal to upload files individually and resync before each command.
     Skips symlinks. The container paths use the canonical cache layout.
     """
-    from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir
+    from ..config.runtime_paths import get_cache_dir
 
     result: List[Dict[str, str]] = []
     for name in _CACHE_DIR_NAMES:

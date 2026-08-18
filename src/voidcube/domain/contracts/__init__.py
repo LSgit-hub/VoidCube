@@ -46,6 +46,7 @@ from .interaction import (
     resolve_approval,
     resolve_clarification,
 )
+from .memory import MemoryProvider
 from .ports import ApplicationClock, EventSink
 from .turn import Message, TurnInput, TurnOutcome, begin_turn, normalize_turn_outcome
 from .tool_events import ToolEventKind, ToolEventSink, TERMINAL_TOOL_EVENT_KINDS
@@ -89,6 +90,7 @@ __all__ = [
     "ClarificationSink",
     "ClarificationStatus",
     "resolve_approval",
+    "MemoryProvider",
     "resolve_clarification",
     "ApplicationClock",
     "EventSink",

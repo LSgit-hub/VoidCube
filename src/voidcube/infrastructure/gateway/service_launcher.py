@@ -329,7 +329,7 @@ _foreground_threads: list = []
 
 def _build_service_config(name: str, port: int, system_config: Any | None = None) -> Any:
     """Build the runtime config object used by a named service."""
-    from plugins.memory.mem.host_integration import configure_voidcube_mem_host
+    from ..memory.host_integration import configure_voidcube_mem_host
     try:
         from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig
     except ModuleNotFoundError:
@@ -390,7 +390,7 @@ def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
 
     from ..config.system import get_config
     from ...systems.mem_source_binding import sync_canonical_mem_binding
-    from VoidCube_app.infrastructure.runtime.layout import get_runtime_layout
+    from ..runtime.layout import get_runtime_layout
 
     config = get_config()
     source_root = Path(config.supervisor.execution.git_repo_path).resolve()
@@ -452,7 +452,11 @@ def _restart_foreground_with_service_python() -> None:
         [
             service_python,
             "-m",
-            "VoidCube_cli.main",
+            (
+                "src.voidcube.interfaces.cli.main"
+                if __package__.startswith("src.")
+                else "voidcube.interfaces.cli.main"
+            ),
             "serve",
             "start",
             "--foreground",
@@ -673,7 +677,7 @@ def print_status(full: bool = False) -> None:
     # If full dashboard requested, fetch supervisor/gateway data
     if full:
         try:
-            from VoidCube_cli.ops.dashboard import print_dashboard
+            from ...interfaces.cli.ops.dashboard import print_dashboard
             print_dashboard()
         except Exception as exc:
             _safe_print(f"  ⚠ Dashboard unavailable: {exc}")

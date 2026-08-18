@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from VoidCube_app.contracts.execution import ExecutionState
+from ...domain.contracts.execution import ExecutionState
 
 # ANSI color codes for terminal styling
 class Colors:

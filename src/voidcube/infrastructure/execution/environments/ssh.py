@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from tools.environments.base import BaseEnvironment, _popen_bash, _build_bash_command
-from tools.environments.file_sync import (
+from .base import BaseEnvironment, _popen_bash, _build_bash_command
+from .file_sync import (
     FileSyncManager,
     iter_sync_files,
     quoted_mkdir_command,

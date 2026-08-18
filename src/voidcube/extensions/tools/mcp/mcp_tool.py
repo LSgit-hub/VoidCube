@@ -608,7 +608,7 @@ class SamplingHandler:
         model = self._resolve_model(getattr(params, "modelPreferences", None))
 
         # Get auxiliary LLM client via centralized router
-        from agent.auxiliary_client import call_llm
+        from ....infrastructure.providers.auxiliary_client import call_llm
 
         # Model whitelist check (we need to resolve model before calling)
         resolved_model = model or self.model_override or ""
@@ -792,8 +792,8 @@ class MCPServerTask:
         After the initial ``await`` (list_tools), all mutations are synchronous
         — atomic from the event loop's perspective.
         """
-        from tools.registry import registry, tool_error
-        from tools.toolsets import TOOLSETS
+        from ..registry import registry, tool_error
+        from ..toolsets import TOOLSETS
 
         async with self._refresh_lock:
             # 1. Fetch current tool list from server
@@ -835,7 +835,7 @@ class MCPServerTask:
         command, safe_env = _resolve_stdio_command(command, safe_env)
 
         # Check package against OSV malware database before spawning
-        from tools.osv_check import check_package_for_malware
+        from ..osv_check import check_package_for_malware
         malware_error = check_package_for_malware(command, args)
         if malware_error:
             raise ValueError(
@@ -891,7 +891,7 @@ class MCPServerTask:
         _oauth_auth = None
         if self._auth_type == "oauth":
             try:
-                from tools.mcp_oauth import build_oauth_auth
+                from .oauth import build_oauth_auth
                 _oauth_auth = build_oauth_auth(
                     self.name, url, config.get("oauth")
                 )
@@ -1178,14 +1178,14 @@ def _load_mcp_config() -> Dict[str, dict]:
     ``os.environ`` (which includes ``~/.VoidCube/.env`` loaded at startup).
     """
     try:
-        from VoidCube_app.config import load_config
+        from ....infrastructure.config.configuration import load_config
         config = load_config()
         servers = config.get("mcp_servers")
         if not servers or not isinstance(servers, dict):
             return {}
         # Ensure .env vars are available for interpolation
         try:
-            from VoidCube_app.environment import load_VoidCube_dotenv
+            from ....infrastructure.config.environment import load_VoidCube_dotenv
             load_VoidCube_dotenv()
         except Exception:
             pass
@@ -1331,7 +1331,7 @@ def _make_read_resource_handler(server_name: str, tool_timeout: float):
     """Return a sync handler that reads a resource by URI from an MCP server."""
 
     def _handler(args: dict, **kwargs) -> str:
-        from tools.registry import tool_error
+        from ..registry import tool_error
 
         with _lock:
             server = _servers.get(server_name)
@@ -1422,7 +1422,7 @@ def _make_get_prompt_handler(server_name: str, tool_timeout: float):
     """Return a sync handler that gets a prompt by name from an MCP server."""
 
     def _handler(args: dict, **kwargs) -> str:
-        from tools.registry import tool_error
+        from ..registry import tool_error
 
         with _lock:
             server = _servers.get(server_name)
@@ -1543,7 +1543,7 @@ def _sync_mcp_toolsets(server_names: Optional[List[str]] = None) -> None:
 
     Skips server names that collide with built-in toolsets.
     """
-    from tools.toolsets import TOOLSETS
+    from ..toolsets import TOOLSETS
 
     if server_names is None:
         server_names = list(_load_mcp_config().keys())
@@ -1742,8 +1742,8 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
     Returns:
         List of registered prefixed tool names.
     """
-    from tools.registry import registry, tool_error
-    from tools.toolsets import create_custom_toolset, TOOLSETS
+    from ..registry import registry, tool_error
+    from ..toolsets import create_custom_toolset, TOOLSETS
 
     registered_names: List[str] = []
     toolset_name = f"mcp-{name}"

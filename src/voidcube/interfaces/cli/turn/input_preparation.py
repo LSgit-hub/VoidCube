@@ -118,7 +118,7 @@ class CliTurnInputPreparationRuntime:
 
     @staticmethod
     def _default_context_length(model: str, base_url: str, api_key: str) -> int:
-        from agent.model_metadata import get_model_context_length
+        from ....infrastructure.providers.model_metadata import get_model_context_length
 
         return get_model_context_length(
             model,
@@ -128,12 +128,12 @@ class CliTurnInputPreparationRuntime:
 
     @staticmethod
     def _default_expand_context(message: str, **kwargs: Any) -> Any:
-        from agent.context_references import preprocess_context_references
+        from ....domain.agent.context_references import preprocess_context_references
 
         return preprocess_context_references(message, **kwargs)
 
     @staticmethod
     def _default_sanitize(message: str) -> str:
-        from agent.message_sanitizer import sanitize_surrogates
+        from ....domain.agent.message_sanitizer import sanitize_surrogates
 
         return sanitize_surrogates(message)

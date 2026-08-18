@@ -96,7 +96,7 @@ Repository = "https://gitee.com/LSgit-hub/voidcub-CLI"
 py-modules = ["cli", "run_agent"]
 
 [tool.setuptools.dynamic]
-version = {attr = "voidcube.version.__version__"}
+version = {attr = "VoidCube_cli.__version__"}
 
 [tool.setuptools.packages.find]
 where = [".", "src", "Mem/src"]
@@ -107,7 +107,8 @@ memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]
 systems = ["supervisor/web/*.html"]
 "voidcube.systems.supervisor" = ["web/*.html"]
-tools = ["presets/*.yaml", "containerfiles/*.Containerfile"]
+tools = ["containerfiles/*.Containerfile"]
+"voidcube.extensions.tools" = ["presets/*.yaml", "dependency_manifest.yaml"]
 plugins = ["*/plugin.json"]
 
 [tool.ruff]

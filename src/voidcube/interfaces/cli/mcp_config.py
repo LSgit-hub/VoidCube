@@ -164,7 +164,7 @@ def probe_mcp_server(
     Returns list of ``(tool_name, description)`` tuples.
     Raises on connection failure.
     """
-    from tools.mcp_tool import (
+    from ...extensions.tools.mcp.mcp_tool import (
         _ensure_mcp_loop,
         _run_on_mcp_loop,
         _connect_server,
@@ -278,7 +278,7 @@ def cmd_mcp_add(args):
         _info(f"Starting OAuth flow for '{name}'...")
         oauth_ok = False
         try:
-            from tools.mcp_oauth import build_oauth_auth
+            from ...extensions.tools.mcp.oauth import build_oauth_auth
             oauth_auth = build_oauth_auth(name, url)
             if oauth_auth:
                 server_config["auth"] = "oauth"
@@ -429,7 +429,7 @@ def cmd_mcp_remove(args):
 
     # Clean up OAuth tokens if they exist
     try:
-        from tools.mcp_oauth import remove_oauth_tokens
+        from ...extensions.tools.mcp.oauth import remove_oauth_tokens
         remove_oauth_tokens(name)
         _success("Cleaned up OAuth tokens")
     except Exception:

@@ -37,8 +37,8 @@ class ToolTokenEstimator:
 
         try:
             if registry is None:
-                from tools import model_tools  # noqa: F401
-                from tools.registry import registry as tool_registry
+                from . import model_tools  # noqa: F401
+                from .registry import registry as tool_registry
 
                 registry = tool_registry
             names = registry.get_all_tool_names()

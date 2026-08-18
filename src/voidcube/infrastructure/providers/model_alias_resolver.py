@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from ..config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class ModelAliasResolver:
 
     def list_models_for_provider(self, provider_id: str) -> List[ModelResolution]:
         try:
-            from VoidCube_app.models import provider_model_ids
+            from .model_catalog import provider_model_ids
 
             available = self.check_availability(provider_id)
             return [
@@ -131,7 +131,7 @@ class ModelAliasResolver:
             return []
 
     def check_availability(self, provider_id: str) -> bool:
-        from VoidCube_cli.credential_manager import CredentialManager
+        from .credential_manager import CredentialManager
         cm = CredentialManager.get_instance()
         status = cm.get_provider_status(provider_id)
         return status == "authenticated"

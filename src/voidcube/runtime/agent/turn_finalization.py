@@ -7,8 +7,8 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from agent.conversation_turn import ConversationTurnState
-from agent.effect_outcomes import (
+from ...domain.agent.conversation_turn import ConversationTurnState
+from ...domain.agent.effect_outcomes import (
     EffectOutcome,
     failed_effect,
     finalization_status,
@@ -150,7 +150,7 @@ def last_assistant_reasoning(messages: list[dict[str, Any]]) -> str | None:
 
 
 def _default_hook_invoker(name: str, **kwargs: Any) -> Any:
-    from VoidCube_app.plugins import invoke_hook
+    from ...extensions.plugins import invoke_hook
 
     return invoke_hook(name, **kwargs)
 

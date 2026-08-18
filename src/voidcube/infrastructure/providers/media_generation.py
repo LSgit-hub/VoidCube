@@ -103,7 +103,7 @@ def default_video_generation_config() -> dict[str, Any]:
 
 def _section(config: Mapping[str, Any] | None, name: str, defaults: dict[str, Any]) -> dict[str, Any]:
     if config is None:
-        from VoidCube_app.config import load_config
+        from ..config.configuration import load_config
 
         config = load_config()
     values = dict(defaults)

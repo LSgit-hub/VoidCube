@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict
 from .evolution_evaluation_governance import (
     validate_body_improvement_authorization_binding,
 )
-from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
+from ..evolution_evaluation.models import ExecutionEnvironmentManifest
 
 
 logger = logging.getLogger("supervisor")
@@ -650,7 +650,7 @@ class BodyImprovementReviewService:
         *,
         active_health_score: float,
     ) -> Dict[str, Any]:
-        from systems.governor import GovernorRequest
+        from ..governor import GovernorRequest
 
         slot_meta = self._body_registry.load_slot_meta(slot_id)
         request = GovernorRequest(

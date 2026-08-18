@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Mapping
 
-from systems.evolution_evaluation.models import (
+from .models import (
     ExecutionEnvironmentManifest,
     RuntimeToolIdentity,
     WorkspacePathMapping,

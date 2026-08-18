@@ -3,6 +3,18 @@
 from .transport import completion_token_retry_kwargs, validate_llm_response
 from .request import ChatRequestConfig, build_chat_completion_kwargs
 from .error_classifier import ClassifiedError, FailoverReason, classify_api_error, is_stream_drop_error
+from .stream_response import StreamChunkUpdate, StreamingResponseAssembler
+from .transport_runtime import ChatTransport
+from .retry_policy import (
+    RetryDirective,
+    RetryKind,
+    RetryRecoveryKind,
+    RetryRecoveryResult,
+    decide_retry_directive,
+    execute_retry_recovery,
+    jittered_backoff,
+    wait_for_retry,
+)
 
 __all__ = [
     "ChatRequestConfig",
@@ -13,4 +25,15 @@ __all__ = [
     "FailoverReason",
     "classify_api_error",
     "is_stream_drop_error",
+    "StreamChunkUpdate",
+    "StreamingResponseAssembler",
+    "ChatTransport",
+    "RetryDirective",
+    "RetryKind",
+    "RetryRecoveryKind",
+    "RetryRecoveryResult",
+    "decide_retry_directive",
+    "execute_retry_recovery",
+    "jittered_backoff",
+    "wait_for_retry",
 ]

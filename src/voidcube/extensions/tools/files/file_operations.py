@@ -32,9 +32,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from pathlib import Path
-from tools.binary_extensions import BINARY_EXTENSIONS
-from tools.path_security import is_write_denied, get_safe_write_root
-from tools.path_runtime import resolve_runtime_path
+from .binary_extensions import BINARY_EXTENSIONS
+from .path_security import is_write_denied, get_safe_write_root
+from ....infrastructure.execution.path_runtime import resolve_runtime_path
 
 
 # =============================================================================
@@ -647,7 +647,7 @@ class ShellFileOperations(FileOperations):
         content = read_result.stdout
         
         # Import and use fuzzy matching
-        from tools.fuzzy_match import fuzzy_find_and_replace
+        from .fuzzy_match import fuzzy_find_and_replace
         
         new_content, match_count, _strategy, error = fuzzy_find_and_replace(
             content, old_string, new_string, replace_all
@@ -697,7 +697,7 @@ class ShellFileOperations(FileOperations):
             PatchResult with changes made
         """
         # Import patch parser
-        from tools.patch_parser import parse_v4a_patch, apply_v4a_operations
+        from .patch_parser import parse_v4a_patch, apply_v4a_operations
         
         operations, parse_error = parse_v4a_patch(patch_content)
         if parse_error:

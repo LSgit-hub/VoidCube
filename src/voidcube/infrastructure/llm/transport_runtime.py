@@ -10,8 +10,17 @@ from typing import Any, Callable
 
 import httpx
 
-from agent.model_metadata import is_local_endpoint
-from agent.stream_response import StreamChunkUpdate, StreamingResponseAssembler
+from ..providers.model_metadata import is_local_endpoint
+try:
+    from voidcube.infrastructure.llm.stream_response import (
+        StreamChunkUpdate,
+        StreamingResponseAssembler,
+    )
+except ModuleNotFoundError:
+    from src.voidcube.infrastructure.llm.stream_response import (
+        StreamChunkUpdate,
+        StreamingResponseAssembler,
+    )
 
 
 logger = logging.getLogger(__name__)

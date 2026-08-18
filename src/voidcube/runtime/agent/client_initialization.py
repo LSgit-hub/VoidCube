@@ -8,9 +8,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_app.infrastructure.providers.endpoints import OPENROUTER_BASE_URL
+from ...infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 
-from agent.client_lifecycle import ChatClientLifecycle
+from .client_lifecycle import ChatClientLifecycle
 
 
 _QWEN_CODE_VERSION = "0.14.1"
@@ -35,7 +35,7 @@ def build_client_kwargs_for_credentials(
     base_url: str,
 ) -> dict[str, Any]:
     """Build one canonical OpenAI-compatible client configuration."""
-    from agent.auxiliary_client import _OR_HEADERS
+    from ...infrastructure.providers.auxiliary_client import _OR_HEADERS
 
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,

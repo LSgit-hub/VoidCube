@@ -48,7 +48,7 @@ def get_terminal_backend() -> str:
     if "TERMINAL_ENV" in os.environ:
         return str(os.environ["TERMINAL_ENV"]).strip().lower() or "podman"
     try:
-        from VoidCube_app.config import load_config
+        from ...infrastructure.config.configuration import load_config
 
         terminal = load_config().get("terminal") or {}
         if isinstance(terminal, dict):

@@ -44,7 +44,7 @@ def format_tool_completion(
     policy independent from terminal presentation.
     """
     if get_message is None:
-        from agent.display import get_cute_tool_message
+        from .display import get_cute_tool_message
 
         get_message = get_cute_tool_message
     base = get_message(

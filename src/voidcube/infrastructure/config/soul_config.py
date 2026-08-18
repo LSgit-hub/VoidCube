@@ -8,7 +8,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from .runtime_paths import get_VoidCube_home
 
 
 # Default SOUL configuration values
@@ -110,7 +110,7 @@ def parse_soul_config(path: Optional[Path] = None) -> Dict[str, Any]:
     if not path.exists():
         # Create default SOUL.md if it doesn't exist
         try:
-            from VoidCube_app.default_identity import DEFAULT_SOUL_MD
+            from ...domain.identity.defaults import DEFAULT_SOUL_MD
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
         except Exception:
@@ -123,7 +123,7 @@ def parse_soul_config(path: Optional[Path] = None) -> Dict[str, Any]:
         # Check if configuration section exists
         if "## Configuration" not in content:
             # Append configuration section to existing content
-            from VoidCube_app.default_identity import DEFAULT_SOUL_MD
+            from ...domain.identity.defaults import DEFAULT_SOUL_MD
             # Extract just the configuration part from default
             config_start = DEFAULT_SOUL_MD.find("## Configuration")
             if config_start != -1:
@@ -175,7 +175,7 @@ def get_soul_personality(path: Optional[Path] = None) -> str:
         path = get_VoidCube_home() / "SOUL.md"
 
     if not path.exists():
-        from VoidCube_app.default_identity import DEFAULT_SOUL_MD
+        from ...domain.identity.defaults import DEFAULT_SOUL_MD
         # Extract just the personality part from default
         default_content = DEFAULT_SOUL_MD
         config_start = default_content.find("## Configuration")
@@ -190,7 +190,7 @@ def get_soul_personality(path: Optional[Path] = None) -> str:
             return content[:config_start].strip()
         return content.strip()
     except Exception:
-        from VoidCube_app.default_identity import DEFAULT_SOUL_MD
+        from ...domain.identity.defaults import DEFAULT_SOUL_MD
         config_start = DEFAULT_SOUL_MD.find("## Configuration")
         if config_start != -1:
             return DEFAULT_SOUL_MD[:config_start].strip()
