@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 
 CAMOFOX_STATE_DIR_NAME = "browser_auth"
 CAMOFOX_STATE_SUBDIR = "camofox"

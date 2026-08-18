@@ -69,7 +69,7 @@ Usage:
 import json
 import logging
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 import os
 import re
 from enum import Enum

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict
 
-from systems.supervisor.evolution_evaluation_governance import (
+from .evolution_evaluation_governance import (
     validate_body_improvement_authorization_binding,
 )
 from systems.evolution_evaluation.models import ExecutionEnvironmentManifest
@@ -180,7 +180,7 @@ class BodyImprovementReviewService:
             if changed.returncode != 0:
                 return {"ok": False, "reject_reason": "commit_diff_unavailable"}
 
-            from systems.evolution_boundary import normalize_repo_path
+            from ..evolution_boundary import normalize_repo_path
 
             changed_files = [
                 normalized
@@ -466,7 +466,7 @@ class BodyImprovementReviewService:
                 or "evaluation_authorization_invalid",
             }
 
-        from systems.evolution_boundary import (
+        from ..evolution_boundary import (
             classify_agent_evolution_changes,
             normalize_repo_path,
         )

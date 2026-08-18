@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from VoidCube_core.redaction import redact_sensitive_text
+from memai.redaction import redact_sensitive_text
 from memai.indexes.lexical_index import search_memory_fts
 from memai.domain.ranking_policy import (
     GRAPH_RECALL_SCORING_POLICY,

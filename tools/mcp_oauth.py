@@ -97,7 +97,7 @@ def _get_token_dir() -> Path:
     Layout: ``VOIDCUBE_HOME/mcp-tokens/``
     """
     try:
-        from VoidCube_core.constants import get_VoidCube_home
+        from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
         base = Path(get_VoidCube_home())
     except ImportError:
         base = Path(os.environ.get("VOIDCUBE_HOME", str(Path.home() / ".VoidCube")))

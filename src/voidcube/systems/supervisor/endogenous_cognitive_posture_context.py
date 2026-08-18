@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_agenda import build_agenda_graph
-from systems.supervisor.endogenous_cognitive_posture import (
+from .endogenous_agenda import build_agenda_graph
+from .endogenous_cognitive_posture import (
     resolve_cognitive_posture_from_policy,
 )
-from systems.supervisor.endogenous_evidence import build_evidence_channels
-from systems.supervisor.endogenous_meta_cognition import (
+from .endogenous_evidence import build_evidence_channels
+from .endogenous_meta_cognition import (
     build_recent_cognitive_alignment_summary,
 )
-from systems.supervisor.endogenous_self_model import (
+from .endogenous_self_model import (
     build_evidence_credibility_summary,
     build_self_model_snapshot,
 )

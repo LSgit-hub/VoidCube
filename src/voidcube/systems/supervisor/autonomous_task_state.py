@@ -11,7 +11,7 @@ from memai.governance import (
     GovernanceGitLineage,
 )
 
-from systems.supervisor.autonomous_chain_store import (
+from .autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainStore,
     AutonomousChainTask,

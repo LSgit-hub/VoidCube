@@ -1,46 +1,13 @@
-"""Lifecycle helper for the CLI scheduled-task polling thread."""
+"""Compatibility facade for canonical scheduled-task polling."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from threading import Thread
+import sys
 
+try:
+    from voidcube.application.scheduling import scheduled_task_polling as _implementation
+except ModuleNotFoundError:
+    from src.voidcube.application.scheduling import scheduled_task_polling as _implementation
 
-def run_scheduled_task_poll_loop(
-    *,
-    stop_requested: Callable[[], bool],
-    poll_workflow: Callable[[], None],
-    sleep: Callable[[float], None],
-    report_failure: Callable[[], None],
-    interval_seconds: float = 1.0,
-) -> None:
-    """Poll the existing scheduled-task executor until the CLI requests stop."""
-    while not stop_requested():
-        try:
-            poll_workflow()
-        except Exception:
-            report_failure()
-        sleep(interval_seconds)
-
-
-def start_scheduled_task_polling(
-    *,
-    stop_requested: Callable[[], bool],
-    poll_workflow: Callable[[], None],
-    sleep: Callable[[float], None],
-    report_failure: Callable[[], None],
-    thread_factory: Callable[..., Thread] = Thread,
-) -> Thread:
-    """Start the daemon that invokes the supplied scheduled-task operation."""
-    thread = thread_factory(
-        target=lambda: run_scheduled_task_poll_loop(
-            stop_requested=stop_requested,
-            poll_workflow=poll_workflow,
-            sleep=sleep,
-            report_failure=report_failure,
-        ),
-        daemon=True,
-        name="scheduled-task-executor",
-    )
-    thread.start()
-    return thread
+sys.modules[__name__] = _implementation
+setattr(sys.modules[__package__], "scheduled_task_polling", _implementation)

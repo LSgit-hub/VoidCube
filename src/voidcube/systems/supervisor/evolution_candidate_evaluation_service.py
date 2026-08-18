@@ -13,7 +13,7 @@ from systems.evolution_authoring import (
     EvolutionAuthoringResult,
     JsonEvolutionAuthoringRepository,
 )
-from systems.evolution_boundary import normalize_repo_path
+from ..evolution_boundary import normalize_repo_path
 from systems.evolution_evaluation import (
     AllowedRegression,
     BenchmarkPack,
@@ -35,7 +35,7 @@ from systems.self_cognition import (
     SelfCognitionRepository,
     SelfCognitionSnapshot,
 )
-from systems.supervisor.evolution_evaluation_governance import (
+from .evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,
 )
 

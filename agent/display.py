@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from difflib import unified_diff
 from pathlib import Path
 
-from VoidCube_core.utils import safe_json_loads
+from VoidCube_app.infrastructure.shared.value_helpers import safe_json_loads
 from VoidCube_app.contracts.execution import ExecutionState
 
 # ANSI escape codes for coloring tool failure indicators

@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from agent.effect_outcomes import EffectOutcome, failed_effect
-from VoidCube_core.state import SessionDB, SessionSequenceConflictError
-from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
+from VoidCube_app.infrastructure.persistence.session_db import (
+    SessionDB,
+    SessionSequenceConflictError,
+)
+from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
 
 
 logger = logging.getLogger(__name__)

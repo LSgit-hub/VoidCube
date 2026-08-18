@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_adaptive_policy import build_adaptive_policy
-from systems.supervisor.endogenous_drive_context import (
+from .endogenous_adaptive_policy import build_adaptive_policy
+from .endogenous_drive_context import (
     build_drive_context,
     get_shell_slot_meta,
 )
-from systems.supervisor.endogenous_drive_models import (
+from .endogenous_drive_models import (
     DriveAdaptivePolicy,
     DriveDeliberationReport,
     DriveIntent,
@@ -18,22 +18,22 @@ from systems.supervisor.endogenous_drive_models import (
     DriveSignal,
     DriveWorldModel,
 )
-from systems.supervisor.endogenous_drive_state import (
+from .endogenous_drive_state import (
     build_drive_perception_projection,
     build_drive_world_model_projection,
 )
-from systems.supervisor.endogenous_intent_signal import (
+from .endogenous_intent_signal import (
     emit_drive_signal_projections,
     synthesize_intent_projections,
 )
-from systems.supervisor.endogenous_materialization import (
+from .endogenous_materialization import (
     resolve_candidate_eligibility_plan,
 )
-from systems.supervisor.endogenous_needs import detect_needs
-from systems.supervisor.endogenous_policy import (
+from .endogenous_needs import detect_needs
+from .endogenous_policy import (
     HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
 )
-from systems.supervisor.endogenous_reflection import build_reflection_projection
+from .endogenous_reflection import build_reflection_projection
 
 
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"

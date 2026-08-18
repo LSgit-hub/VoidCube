@@ -70,6 +70,7 @@ def test_distribution_includes_runtime_subpackages_and_mem_resources():
         "memai.repository",
         "memai.transport",
         "VoidCube_app",
+        "voidcube",
     }
     for package in required_packages:
         assert any(fnmatchcase(package, pattern) for pattern in patterns), package
@@ -80,6 +81,7 @@ def test_distribution_includes_runtime_subpackages_and_mem_resources():
     assert "locales/*.json" in setuptools["package-data"]["VoidCube_cli"]
     assert "supervisor/web/*.html" in setuptools["package-data"]["systems"]
     assert "containerfiles/*.Containerfile" in setuptools["package-data"]["tools"]
+    assert "*/plugin.json" in setuptools["package-data"]["plugins"]
 
 
 @pytest.mark.unit
@@ -146,6 +148,16 @@ def test_distribution_version_comes_from_the_cli_package():
     assert dynamic["version"] == {"attr": "VoidCube_cli.__version__"}
     assert str(Version(__version__)) == __version__
     assert format_banner_version_label() == f"v{__version__}"
+
+
+@pytest.mark.unit
+def test_public_scripts_target_the_canonical_source_layout_launcher():
+    scripts = _project_config()["project"]["scripts"]
+
+    assert scripts == {
+        "voidcube": "voidcube.interfaces.cli:main",
+        "vc": "voidcube.interfaces.cli:main",
+    }
 
 
 @pytest.mark.unit
@@ -381,6 +393,11 @@ def test_wheel_contract_tracks_supervisor_ui_resource():
 
 
 @pytest.mark.unit
+def test_wheel_contract_tracks_plugin_manifests():
+    assert "plugins/memory/plugin.json" in expected_wheel_files(ROOT)
+
+
+@pytest.mark.unit
 def test_wheel_contract_tracks_podman_containerfile():
     expected = expected_wheel_files(ROOT)
 
@@ -402,8 +419,84 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_app/plugins.py" in expected
     assert "VoidCube_app/provider_auth.py" in expected
     assert "VoidCube_app/runtime_provider.py" in expected
+    assert "VoidCube_app/infrastructure/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/config/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/config/provider_selection.py" in expected
+    assert "VoidCube_app/infrastructure/persistence/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/persistence/file_store.py" in expected
+    assert "VoidCube_app/infrastructure/persistence/redaction.py" in expected
+    assert "VoidCube_app/infrastructure/persistence/session_db.py" in expected
+    assert "VoidCube_app/infrastructure/config/runtime_paths.py" in expected
+    assert "VoidCube_app/infrastructure/shared/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/shared/value_helpers.py" in expected
+    assert "VoidCube_app/infrastructure/shared/clock.py" in expected
+    assert "VoidCube_app/infrastructure/shared/reasoning.py" in expected
+    assert "VoidCube_app/infrastructure/runtime/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/runtime/environment.py" in expected
+    assert "VoidCube_app/infrastructure/runtime/layout.py" in expected
+    assert "voidcube/infrastructure/runtime/__init__.py" in expected
+    assert "voidcube/infrastructure/runtime/environment.py" in expected
+    assert "voidcube/infrastructure/runtime/layout.py" in expected
+    assert "VoidCube_app/infrastructure/observability/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/observability/logging.py" in expected
+    assert "VoidCube_app/infrastructure/providers/endpoints.py" in expected
+    assert "VoidCube_app/infrastructure/network.py" in expected
+    assert "VoidCube_app/infrastructure/providers/__init__.py" in expected
+    assert "VoidCube_app/infrastructure/providers/registry.py" in expected
+    assert "VoidCube_app/infrastructure/providers/auth.py" in expected
+    assert "VoidCube_app/infrastructure/providers/runtime.py" in expected
+    assert "voidcube/infrastructure/__init__.py" in expected
+    assert "voidcube/infrastructure/providers/__init__.py" in expected
+    assert "voidcube/infrastructure/providers/registry.py" in expected
+    assert "voidcube/infrastructure/providers/auth.py" in expected
+    assert "voidcube/infrastructure/providers/credentials.py" in expected
+    assert "voidcube/infrastructure/providers/runtime.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_policy.py" in expected
+    assert "voidcube/infrastructure/providers/client_factory.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_orchestration.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_execution.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_fallback.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_vision.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_client_cache.py" in expected
+    assert "voidcube/infrastructure/providers/auxiliary_vision_clients.py" in expected
+    assert "voidcube/infrastructure/providers/endpoints.py" in expected
+    assert "voidcube/infrastructure/config/__init__.py" in expected
+    assert "voidcube/infrastructure/config/provider_config.py" in expected
+    assert "voidcube/infrastructure/config/runtime_paths.py" in expected
+    assert "voidcube/infrastructure/config/provider_selection.py" in expected
+    assert "voidcube/infrastructure/persistence/__init__.py" in expected
+    assert "voidcube/infrastructure/persistence/file_store.py" in expected
+    assert "voidcube/infrastructure/persistence/session_db.py" in expected
+    assert "voidcube/infrastructure/shared/__init__.py" in expected
+    assert "voidcube/infrastructure/shared/value_helpers.py" in expected
+    assert "voidcube/infrastructure/shared/clock.py" in expected
+    assert "voidcube/infrastructure/shared/reasoning.py" in expected
+    assert "voidcube/infrastructure/observability/__init__.py" in expected
+    assert "voidcube/infrastructure/observability/logging.py" in expected
+    assert "voidcube/infrastructure/network.py" in expected
+    assert "voidcube/infrastructure/llm/__init__.py" in expected
+    assert "voidcube/infrastructure/llm/transport.py" in expected
+    assert "voidcube/infrastructure/llm/request.py" in expected
+    assert "voidcube/interfaces/cli/application.py" in expected
+    assert "voidcube/interfaces/cli/configuration.py" in expected
+    assert "voidcube/extensions/__init__.py" in expected
+    assert "voidcube/extensions/plugins/__init__.py" in expected
+    assert "voidcube/extensions/plugins/manager.py" in expected
+    assert "voidcube/extensions/plugins/manifest.py" in expected
+    assert "voidcube/extensions/tools/__init__.py" in expected
+    assert "voidcube/extensions/tools/configuration.py" in expected
+    assert "voidcube/extensions/tools/registry.py" in expected
+    assert "voidcube/extensions/tools/provider_configuration.py" in expected
+    assert "voidcube/extensions/tools/token_estimation.py" in expected
+    assert "voidcube/interfaces/cli/tools_mcp.py" in expected
+    assert "voidcube/extensions/skills/__init__.py" in expected
+    assert "voidcube/extensions/skills/catalog.py" in expected
+    assert "voidcube/extensions/skills/sync.py" in expected
+    assert "voidcube/extensions/skills/models.py" in expected
     assert "VoidCube_app/session_identity.py" in expected
     assert "VoidCube_app/session_lifecycle.py" in expected
+    assert "VoidCube_app/use_cases/__init__.py" in expected
+    assert "VoidCube_app/use_cases/sessions.py" in expected
     assert "VoidCube_app/turn_contract.py" in expected
     assert "VoidCube_app/interaction_contract.py" in expected
     assert "VoidCube_app/tool_events.py" in expected
@@ -414,6 +507,7 @@ def test_wheel_contract_tracks_shared_application_package():
     assert "VoidCube_cli/tui_application.py" in expected
     assert "VoidCube_cli/tui_keybindings.py" in expected
     assert "VoidCube_cli/tui_modal_navigation.py" in expected
+    assert "VoidCube_cli/cli_interactive_tui_assembly_runtime.py" in expected
     assert "VoidCube_cli/command_handlers/__init__.py" in expected
     assert "VoidCube_cli/command_handlers/attachments.py" in expected
     assert "VoidCube_cli/command_handlers/autonomous.py" in expected

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
-from systems.supervisor.activity_projection import (
+from .activity_projection import (
     idle_seconds_since,
     parse_activity_timestamp,
 )

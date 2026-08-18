@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Protocol
 
-from systems.supervisor.endogenous_candidate_pipeline import clamp01
-from systems.supervisor.endogenous_materialization import (
+from .endogenous_candidate_pipeline import clamp01
+from .endogenous_materialization import (
     has_governance_hygiene_review_signal,
 )
-from systems.supervisor.endogenous_policy import (
+from .endogenous_policy import (
     has_memory_backlog_recovery_window,
     has_truthfulness_review_signal,
 )

@@ -15,6 +15,7 @@ PRODUCTION_PACKAGE_DIRS = (
     "VoidCube_app",
     "VoidCube_cli",
     "VoidCube_core",
+    "src/voidcube",
 )
 TOP_LEVEL_MODULES = ("cli.py", "run_agent.py", "voidcube.py")
 SHARED_PACKAGE_NAMES = {"agent", "systems", "VoidCube_app", "VoidCube_core"}

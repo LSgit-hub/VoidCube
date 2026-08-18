@@ -15,7 +15,7 @@ from systems.evolution_evaluation import (
 )
 from systems.research_knowledge import JsonKnowledgeRepository, is_artifact_fresh
 from systems.self_cognition import JsonSelfCognitionRepository
-from systems.supervisor.evolution_evaluation_governance import (
+from .evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,
 )
 

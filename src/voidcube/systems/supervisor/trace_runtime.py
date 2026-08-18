@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from systems.runtime_task_profile import derive_runtime_task_profile
-from systems.supervisor.observation_status import trace_status_label
+from ...domain.tasks.runtime_profile import derive_runtime_task_profile
+from .observation_status import trace_status_label
 
 
 class TraceRuntimeMixin:

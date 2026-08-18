@@ -9,7 +9,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
+from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
 from systems.research_knowledge.models import KnowledgeArtifact
 
 

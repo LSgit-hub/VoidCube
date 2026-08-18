@@ -25,7 +25,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from tools.registry import registry as tool_registry
+from ...extensions.tools.registry import registry as tool_registry
 
 
 def normalize_tool_definitions(

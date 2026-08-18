@@ -22,7 +22,7 @@ from typing import Any
 import psutil
 
 from VoidCube_app.contracts.execution import ExecutionState, state_from_exit_code, utc_now
-from VoidCube_core.runtime_paths import get_runtime_layout
+from VoidCube_app.infrastructure.runtime.layout import get_runtime_layout
 
 
 _IS_WINDOWS = os.name == "nt"

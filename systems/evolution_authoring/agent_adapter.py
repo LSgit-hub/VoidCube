@@ -216,7 +216,7 @@ def _validate_task_scope(context: EvolutionAuthoringContext) -> None:
 
 
 def _default_runtime_provider_resolver(**kwargs: object) -> Mapping[str, Any]:
-    from VoidCube_app.runtime_provider import resolve_runtime_provider
+    from VoidCube_app.infrastructure.providers.runtime import resolve_runtime_provider
 
     return resolve_runtime_provider(**kwargs)
 

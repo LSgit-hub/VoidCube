@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from systems.supervisor.ui_projection import format_supervisor_ui_event
-from systems.supervisor.ui_media_state_adapters import VALID_PLAYBACK_TYPES
+from .ui_projection import format_supervisor_ui_event
+from .ui_media_state_adapters import VALID_PLAYBACK_TYPES
 
 
 SSE_HEADERS = {

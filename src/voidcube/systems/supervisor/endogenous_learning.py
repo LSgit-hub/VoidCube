@@ -7,7 +7,7 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional
 
-from systems.supervisor.endogenous_candidate_pipeline import (
+from .endogenous_candidate_pipeline import (
     AdaptivePolicyLike,
     EndogenousTaskCandidate,
     adaptive_factor_for_candidate,

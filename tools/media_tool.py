@@ -107,7 +107,10 @@ def account_status() -> str:
     如无登录态，可提示用户在账号中心添加 Cookie 以获得高清播放。
     """
     try:
-        from systems.supervisor.account_store import account_for_api, load_accounts
+        try:
+            from voidcube.systems.supervisor.account_store import account_for_api, load_accounts
+        except (ModuleNotFoundError, ImportError):
+            from src.voidcube.systems.supervisor.account_store import account_for_api, load_accounts
 
         accounts = load_accounts()
         if not accounts:

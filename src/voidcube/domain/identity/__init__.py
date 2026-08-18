@@ -1,0 +1,5 @@
+"""Persistent identity defaults and contracts."""
+
+from .defaults import DEFAULT_SOUL_MD, DEFAULT_IDENTITY_PROMPT, PERSISTENT_IDENTITY_GUIDANCE
+
+__all__ = ["DEFAULT_SOUL_MD", "DEFAULT_IDENTITY_PROMPT", "PERSISTENT_IDENTITY_GUIDANCE"]

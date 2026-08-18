@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from VoidCube_cli.attachments import _detect_file_drop
-from VoidCube_cli.cli_ui import _DIM, _RST, _accent_hex, _cprint
-from VoidCube_cli.command_router import looks_like_slash_command
-from VoidCube_cli.cli_idle_maintenance_runtime import drain_process_notifications
+from .attachments import _detect_file_drop
+from .cli_ui import _DIM, _RST, _accent_hex, _cprint
+from .commands.router import looks_like_slash_command
+from .lifecycle.idle_maintenance import drain_process_notifications
 
 
 logger = logging.getLogger(__name__)

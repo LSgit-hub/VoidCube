@@ -1,19 +1,10 @@
-"""UI-independent AgentExecutor contract used by the turn scheduler."""
+"""Compatibility alias for canonical domain contract executor."""
 
-from __future__ import annotations
+import sys
 
-from typing import Any, Protocol
+try:
+    from voidcube.domain.contracts import executor as _implementation
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.domain.contracts import executor as _implementation
 
-from VoidCube_app.contracts.scheduler import TurnRequest
-from VoidCube_app.turn_scheduler import CancellationToken
-
-
-class AgentExecutor(Protocol):
-    """Execute one admitted request without owning admission or presentation."""
-
-    def execute(self, request: TurnRequest, cancellation: CancellationToken) -> Any: ...
-
-    def cancel(self, request_id: str) -> None: ...
-
-
-__all__ = ["AgentExecutor"]
+sys.modules[__name__] = _implementation

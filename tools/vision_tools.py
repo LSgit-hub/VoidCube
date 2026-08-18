@@ -158,7 +158,7 @@ def vision_analyze_tool(
         )
         text = extract_content_or_reasoning(response).strip()
         try:
-            from VoidCube_core.redaction import redact_sensitive_text
+            from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
             text = redact_sensitive_text(text)
         except Exception:
             pass

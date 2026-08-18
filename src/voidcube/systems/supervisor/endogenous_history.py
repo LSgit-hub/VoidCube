@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List
 
-from systems.supervisor.endogenous_drive_context import parse_timestamp
+from .endogenous_drive_context import parse_timestamp
 
 
 _DRAG_STATUSES = {

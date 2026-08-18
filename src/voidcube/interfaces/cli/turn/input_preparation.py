@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from VoidCube_app.turn_contract import TurnInput, begin_turn
+from ....domain.contracts.turn import TurnInput, begin_turn
 
 
 _DIM = "\033[2m"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_proposals import task_type_for_candidate_kind
+from .endogenous_proposals import task_type_for_candidate_kind
 
 
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"

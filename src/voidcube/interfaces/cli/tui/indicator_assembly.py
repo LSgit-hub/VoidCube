@@ -7,11 +7,11 @@ from dataclasses import dataclass
 
 from prompt_toolkit.formatted_text import AnyFormattedText
 
-from VoidCube_cli.cli_tui_image_indicator_runtime import (
+from .image_indicator import (
     CliTuiImageIndicatorPorts,
     CliTuiImageIndicatorRuntime,
 )
-from VoidCube_cli.tui_dynamic_text_runtime import TuiDynamicTextRuntime
+from .dynamic_text_runtime import TuiDynamicTextRuntime
 
 
 @dataclass(frozen=True, slots=True)

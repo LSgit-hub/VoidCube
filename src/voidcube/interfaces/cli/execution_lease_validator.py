@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from VoidCube_cli.ops.executor import default_gateway_url
+from ...infrastructure.gateway.presence import default_gateway_url
 
 
 class StaleExecutionLeaseError(RuntimeError):

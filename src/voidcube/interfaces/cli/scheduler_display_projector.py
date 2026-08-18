@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from threading import RLock
 from typing import Any
 
-from VoidCube_app.contracts.scheduler import SchedulerEvent, SchedulerSnapshot
+from ...domain.contracts.scheduler import SchedulerEvent, SchedulerSnapshot
 
 
 class SchedulerDisplayProjector:

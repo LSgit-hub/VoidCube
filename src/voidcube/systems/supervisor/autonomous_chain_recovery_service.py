@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from .autonomous_chain_store import AutonomousChainStore
 
 
 LoadGovernanceEvents = Callable[[], list[Any]]

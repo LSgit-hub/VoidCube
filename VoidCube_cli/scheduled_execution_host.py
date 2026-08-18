@@ -1,82 +1,13 @@
-"""Narrow execution owner for scheduled and companion-delegated tasks."""
+"""Compatibility facade for canonical scheduled execution host."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+import sys
 
-from VoidCube_cli.background_task_runtime import (
-    BackgroundTaskRuntime,
-    BackgroundTaskSnapshot,
-    BackgroundTaskState,
-    BackgroundTaskPorts,
-)
+try:
+    from voidcube.application.scheduling import scheduled_execution_host as _implementation
+except ModuleNotFoundError:
+    from src.voidcube.application.scheduling import scheduled_execution_host as _implementation
 
-
-@dataclass(frozen=True, slots=True)
-class ScheduledExecutionSnapshot:
-    active_tasks: tuple[BackgroundTaskSnapshot, ...]
-
-
-class ScheduledExecutionHost:
-    """Own scheduled background workers without exposing CLI or TUI APIs."""
-
-    def __init__(
-        self,
-        *,
-        ensure_credentials: Callable[[], bool],
-        resolve_agent_route: Callable[[str, str], dict[str, Any]],
-        create_agent: Callable[[dict[str, Any], str, dict[str, Any], bool], Any],
-        completion_outcome: Callable[[dict[str, Any] | None], tuple[bool, str, str]],
-        announce_start: Callable[[int, str, str, str], None],
-        render_completion: Callable[[bool, str, str, int, str, str | None, str], None],
-        invalidate: Callable[[], None],
-    ) -> None:
-        self._state = BackgroundTaskState()
-        self._resolve_agent_route = resolve_agent_route
-        self._runtime = BackgroundTaskRuntime(
-            BackgroundTaskPorts(
-                state=self._state,
-                ensure_credentials=ensure_credentials,
-                resolve_agent_route=lambda prompt: resolve_agent_route(prompt, ""),
-                create_agent=create_agent,
-                announce_start=announce_start,
-                render_completion=render_completion,
-                set_thinking=lambda _text: None,
-                invalidate=invalidate,
-                bell_on_complete=lambda: None,
-                completion_outcome=completion_outcome,
-            )
-        )
-
-    def start(self, prompt: str, **kwargs: Any) -> bool:
-        worker_role = str(kwargs.pop("worker_role", "") or "").strip().lower()
-        execution_details = kwargs.pop("execution_details", None)
-        route = self._resolve_agent_route(prompt, worker_role)
-        if isinstance(execution_details, dict):
-            runtime = route.get("runtime")
-            runtime = runtime if isinstance(runtime, dict) else {}
-            execution_details.update(
-                {
-                    "provider": str(runtime.get("provider") or "").strip(),
-                    "model": str(route.get("model") or "").strip(),
-                }
-            )
-        worker_label = str(route.get("worker_label") or "").strip()
-        task_label = str(kwargs.get("task_label") or "")
-        if worker_label and task_label.startswith("自主指令 · "):
-            title = task_label.removeprefix("自主指令 · ")
-            kwargs["task_label"] = f"自主指令 · {worker_label} · {title}"
-        elif worker_label and task_label.startswith("自主媒体 · "):
-            title = task_label.removeprefix("自主媒体 · ")
-            kwargs["task_label"] = f"自主媒体 · {worker_label} · {title}"
-        return self._runtime.start(prompt, route_override=route, **kwargs)
-
-    def snapshot(self) -> ScheduledExecutionSnapshot:
-        return ScheduledExecutionSnapshot(
-            active_tasks=self._state.active_snapshots(),
-        )
-
-
-__all__ = ["ScheduledExecutionHost", "ScheduledExecutionSnapshot"]
+sys.modules[__name__] = _implementation
+setattr(sys.modules[__package__], "scheduled_execution_host", _implementation)

@@ -1,6 +1,8 @@
-"""Interruptible, privacy-preserving voice transport for Stellar companion mode."""
+"""Compatibility facade for the canonical voice system package."""
 
-from systems.voice.config import VoiceConfig
-from systems.voice.session import VoiceSessionManager
+try:
+    from voidcube.systems.voice import VoiceConfig, VoiceSessionManager
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.systems.voice import VoiceConfig, VoiceSessionManager
 
 __all__ = ["VoiceConfig", "VoiceSessionManager"]

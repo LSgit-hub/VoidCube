@@ -17,7 +17,7 @@ The active profile can also be set persistently via the
 from __future__ import annotations
 
 from pathlib import Path
-from VoidCube_core.constants import get_default_VoidCube_root
+from ...infrastructure.config.runtime_paths import get_default_VoidCube_root
 
 
 def resolve_profile_env(profile_name: str) -> str:

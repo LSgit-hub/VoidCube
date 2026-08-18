@@ -1,12 +1,10 @@
-"""CLI compatibility export for shared model identifier handling."""
+"""Compatibility module alias for canonical model normalization."""
 
-from __future__ import annotations
+import sys
 
-from VoidCube_app.model_normalization import (
-    AGGREGATOR_PROVIDERS,
-    normalize_model_for_provider,
-)
+try:
+    from voidcube.interfaces.cli import model_normalize as _implementation
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.interfaces.cli import model_normalize as _implementation
 
-_AGGREGATOR_PROVIDERS = AGGREGATOR_PROVIDERS
-
-__all__ = ["_AGGREGATOR_PROVIDERS", "normalize_model_for_provider"]
+sys.modules[__name__] = _implementation

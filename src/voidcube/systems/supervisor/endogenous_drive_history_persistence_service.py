@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
-from systems.supervisor.endogenous_strategy_memory import (
+from .endogenous_state_repository import EndogenousStateRepository
+from .endogenous_strategy_memory import (
     normalize_endogenous_strategy_memory,
 )
 

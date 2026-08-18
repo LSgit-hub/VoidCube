@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from systems.supervisor.ui_body_projection import project_body_slot_cards
+from .ui_body_projection import project_body_slot_cards
 
 
 JsonDict = Dict[str, Any]

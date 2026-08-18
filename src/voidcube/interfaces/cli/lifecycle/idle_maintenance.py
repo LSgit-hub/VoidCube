@@ -44,7 +44,7 @@ def drain_process_notifications(enqueue_pending_input: Callable[[str], None]) ->
     """Move completed terminal-process notifications into the CLI input queue."""
     try:
         from tools.process_registry import process_registry
-        from VoidCube_cli.cli_handlers import _format_process_notification
+        from ..runtime_handlers import _format_process_notification
 
         while not process_registry.completion_queue.empty():
             event = process_registry.completion_queue.get_nowait()

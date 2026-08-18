@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from systems.supervisor.endogenous_body_projection import (
+from .endogenous_body_projection import (
     build_body_improvement_projection,
 )
-from systems.supervisor.endogenous_candidate_factories import body_improvement_constraints
-from systems.supervisor.endogenous_candidate_pipeline import (
+from .endogenous_candidate_factories import body_improvement_constraints
+from .endogenous_candidate_pipeline import (
     AdaptivePolicyLike,
     EndogenousTaskCandidate,
     active_api_b_judgement_candidate_kinds,
@@ -17,9 +17,9 @@ from systems.supervisor.endogenous_candidate_pipeline import (
     build_scored_candidate,
     clamp01,
 )
-from systems.supervisor.endogenous_learning import stable_learning_topic_key
-from systems.supervisor.endogenous_pressure import backlog_pressure_penalty
-from systems.supervisor.endogenous_proposals import (
+from .endogenous_learning import stable_learning_topic_key
+from .endogenous_pressure import backlog_pressure_penalty
+from .endogenous_proposals import (
     NormalizedLmProposal,
     constraints_for_lm_candidate_kind,
     normalize_lm_proposal,
@@ -237,7 +237,7 @@ def materialize_lm_proposals_for_deliberation(
     evidence_packet: Dict[str, Any],
     cognitive_assessment: Any = None,
 ) -> List[EndogenousTaskCandidate]:
-    from systems.supervisor.endogenous_drive_judgement import (
+    from .endogenous_drive_judgement import (
         build_drive_judgement_metadata,
     )
 

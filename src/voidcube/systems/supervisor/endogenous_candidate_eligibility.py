@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
-from systems.supervisor.endogenous_candidate_pipeline import (
+from .endogenous_candidate_pipeline import (
     active_api_b_judgement_candidate_kinds,
 )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_evidence import (
+from .endogenous_evidence import (
     channel_confidence_from_body,
     channel_confidence_from_learning,
     channel_confidence_from_research,

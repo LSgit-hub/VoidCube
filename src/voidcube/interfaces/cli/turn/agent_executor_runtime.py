@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Callable
 
-from VoidCube_app.contracts.scheduler import TurnLane, TurnRequest
-from VoidCube_app.turn_scheduler import CancellationToken
+from ....domain.contracts.scheduler import TurnLane, TurnRequest
+from ....application.scheduling.turn_scheduler import CancellationToken
 
 
 @dataclass(frozen=True, slots=True)

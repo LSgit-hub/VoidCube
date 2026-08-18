@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from VoidCube_core.constants import get_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 
 
 def _tail_file(path: Path, n: int) -> list[str]:
@@ -56,7 +56,7 @@ def _collect_debug_report(lines: int = 200) -> str:
     parts.append(f"Platform: {sys.platform}")
     parts.append(f"Python:   {sys.version}")
     try:
-        from VoidCube_cli import __version__
+        from ...version import __version__
         parts.append(f"VoidCube: v{__version__}")
     except Exception:
         parts.append("VoidCube: (version unavailable)")

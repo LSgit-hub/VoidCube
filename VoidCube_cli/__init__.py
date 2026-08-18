@@ -10,4 +10,7 @@ Provides subcommands for:
 - VoidCube status        - Show status of all components
 """
 
-__version__ = "1.0.0"
+try:
+    from voidcube.version import __version__
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.version import __version__

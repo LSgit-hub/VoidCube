@@ -14,7 +14,7 @@ import uuid
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from systems.supervisor.ui_activity_adapters import (
+from .ui_activity_adapters import (
     SupervisorUIActivityContext,
     clear_supervisor_ui_activity,
     latest_drive_candidate_snapshot,
@@ -23,12 +23,12 @@ from systems.supervisor.ui_activity_adapters import (
     recent_supervisor_ui_activity,
     record_supervisor_ui_activity,
 )
-from systems.supervisor.ui_assets import load_supervisor_ui_html
-from systems.supervisor.ui_body_status_adapters import (
+from .ui_assets import load_supervisor_ui_html
+from .ui_body_status_adapters import (
     SupervisorUIBodyStatusContext,
     load_body_status,
 )
-from systems.supervisor.ui_identity_proxy_adapters import (
+from .ui_identity_proxy_adapters import (
     SupervisorUIIdentityProxyContext,
     consent_evolution_promotion_candidate,
     get_evolution_promotion_audit,
@@ -37,7 +37,7 @@ from systems.supervisor.ui_identity_proxy_adapters import (
     get_identity_turns,
     verify_identity_experience,
 )
-from systems.supervisor.ui_delivery_adapters import (
+from .ui_delivery_adapters import (
     control_delivery_request,
     delivery_events,
     push_delivery_request,
@@ -45,7 +45,7 @@ from systems.supervisor.ui_delivery_adapters import (
     serve_delivery_asset,
     upload_delivery_asset,
 )
-from systems.supervisor.ui_delivery_state_adapters import (
+from .ui_delivery_state_adapters import (
     SupervisorUIDeliveryStateContext,
     clear_delivery_state,
     load_delivery_state,
@@ -54,7 +54,7 @@ from systems.supervisor.ui_delivery_state_adapters import (
     select_delivery_state,
     selected_delivery,
 )
-from systems.supervisor.ui_media_state_adapters import (
+from .ui_media_state_adapters import (
     SupervisorUIMediaStateContext,
     control_media_state,
     enqueue_media_state,
@@ -62,33 +62,33 @@ from systems.supervisor.ui_media_state_adapters import (
     load_media_state,
     persist_media_state,
 )
-from systems.supervisor.ui_memory_status_adapters import (
+from .ui_memory_status_adapters import (
     SupervisorUIMemoryStatusContext,
     fetch_tier1_stats,
 )
-from systems.supervisor.ui_open_lifecycle_adapters import (
+from .ui_open_lifecycle_adapters import (
     SupervisorUIOpenLifecycleContext,
     maybe_open_supervisor_ui,
 )
-from systems.supervisor.ui_projection import default_observation_input_snapshot
-from systems.supervisor.ui_snapshot_adapters import (
+from .ui_projection import default_observation_input_snapshot
+from .ui_snapshot_adapters import (
     SupervisorUIMemorySnapshotContext,
     SupervisorUIObservationSnapshotContext,
     load_memory_stats,
     load_observation_input_snapshot,
 )
-from systems.supervisor.ui_state_orchestration import (
+from .ui_state_orchestration import (
     SupervisorUIStateContext,
     build_supervisor_ui_state,
 )
-from systems.supervisor.ui_stream_adapters import (
+from .ui_stream_adapters import (
     control_media_request,
     enqueue_media_request,
     media_events,
     supervisor_state_events,
     voice_level_events,
 )
-from systems.supervisor.ui_trace_adapters import (
+from .ui_trace_adapters import (
     SupervisorUITraceContext,
     attach_recent_trace_details_to_observation,
     collect_ui_trace_records,
@@ -436,7 +436,7 @@ class SupervisorUIRuntime:
         )
 
     async def enqueue_media_playlist_endpoint(self, request: Request) -> JsonDict:
-        from systems.supervisor.ui_stream_adapters import enqueue_media_playlist_request
+        from .ui_stream_adapters import enqueue_media_playlist_request
         return await enqueue_media_playlist_request(
             request,
             enqueue_playlist=self.enqueue_media_playlist,
@@ -462,7 +462,7 @@ class SupervisorUIRuntime:
         return self._accounts_revision
 
     async def list_accounts(self) -> JsonDict:
-        from systems.supervisor.account_store import (
+        from .account_store import (
             account_for_api,
             load_accounts,
             SUPPORTED_PLATFORMS,
@@ -475,7 +475,7 @@ class SupervisorUIRuntime:
         }
 
     async def add_account(self, request: Request) -> JsonDict:
-        from systems.supervisor.account_store import (
+        from .account_store import (
             PLATFORM_PRESETS,
             account_for_api,
             load_accounts,
@@ -541,7 +541,7 @@ class SupervisorUIRuntime:
         }
 
     async def delete_account_endpoint(self, request: Request) -> JsonDict:
-        from systems.supervisor.account_store import delete_account, load_accounts
+        from .account_store import delete_account, load_accounts
         account_id = request.path_params.get("account_id", "").strip()
         if not account_id:
             raise HTTPException(status_code=400, detail="缺少 account_id")
@@ -554,7 +554,7 @@ class SupervisorUIRuntime:
         }
 
     async def verify_account_endpoint(self, request: Request) -> JsonDict:
-        from systems.supervisor.account_store import (
+        from .account_store import (
             account_for_api,
             load_accounts,
             verify_account,
@@ -574,7 +574,7 @@ class SupervisorUIRuntime:
         # 只有平台明确确认有效或失效时才改变会话。反爬和网络错误不能
         # 把桌面端已经可用的登录状态覆盖掉。
         if result["status"] in {"active", "expired"}:
-            from systems.supervisor.account_store import save_account
+            from .account_store import save_account
             target.last_verified = datetime.now(timezone.utc).isoformat()
             target.status = result["status"]
             save_account(target)

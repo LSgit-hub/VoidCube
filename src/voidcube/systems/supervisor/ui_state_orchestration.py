@@ -7,17 +7,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List
 
-from systems.supervisor.ui_autonomous_projection import project_autonomous_observation
-from systems.supervisor.ui_cognition_projection import (
+from .ui_autonomous_projection import project_autonomous_observation
+from .ui_cognition_projection import (
     project_cognition_judgement,
     project_cognition_uncertainty,
 )
-from systems.supervisor.ui_projection import (
+from .ui_projection import (
     observation_count,
     project_observation_board,
     project_recent_autonomous_activity,
 )
-from systems.supervisor.ui_state_projection import (
+from .ui_state_projection import (
     project_supervisor_scene,
     project_ui_metrics,
 )

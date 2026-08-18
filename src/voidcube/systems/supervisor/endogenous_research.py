@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_evidence import (
+from .endogenous_evidence import (
     normalize_external_research_entries,
     normalize_external_research_file_payload,
 )

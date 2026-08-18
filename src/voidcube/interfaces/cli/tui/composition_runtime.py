@@ -12,8 +12,8 @@ from prompt_toolkit.layout.containers import Container
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.dimension import Dimension
 
-from VoidCube_cli.tui_application import create_tui_application
-from VoidCube_cli.tui_layout import build_tui_layout_children
+from .application import create_tui_application
+from .layout import build_tui_layout_children
 
 
 @dataclass(frozen=True, slots=True)

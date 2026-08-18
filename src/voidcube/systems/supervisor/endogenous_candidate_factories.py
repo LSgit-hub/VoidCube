@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_candidate_pipeline import (
+from .endogenous_candidate_pipeline import (
     AdaptivePolicyLike,
     EndogenousTaskCandidate,
     adaptive_factor_for_candidate,

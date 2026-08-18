@@ -10,7 +10,7 @@ import subprocess
 from typing import Any
 import uuid
 
-from VoidCube_core.runtime_paths import get_legacy_project_runtime_layout
+from ..infrastructure.runtime.layout import get_legacy_project_runtime_layout
 from systems.body_registry import BodyLaunchTarget, BodyRegistry, BodySlotMeta
 
 

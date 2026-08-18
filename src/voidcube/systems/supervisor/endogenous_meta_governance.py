@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from systems.supervisor.endogenous_state_projection import derive_corrective_mode
-from systems.supervisor.endogenous_strategy_memory import (
+from .endogenous_state_projection import derive_corrective_mode
+from .endogenous_strategy_memory import (
     normalize_endogenous_strategy_memory,
 )
 

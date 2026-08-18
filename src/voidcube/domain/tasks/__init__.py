@@ -1,0 +1,1 @@
+"""Task profile domain contracts."""

@@ -1,9 +1,10 @@
-"""UI-independent receipt returned when turn input is queued."""
+"""Compatibility alias for canonical turn input routing contracts."""
 
-from __future__ import annotations
+import sys
 
-from enum import Enum
+try:
+    from voidcube.domain.contracts import turn_queue as _implementation
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.domain.contracts import turn_queue as _implementation
 
-
-class TurnInputRoute(str, Enum):
-    NEXT_TURN = "next_turn"
+sys.modules[__name__] = _implementation

@@ -4,48 +4,48 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Set
 
-from systems.supervisor.endogenous_body_projection import (
+from .endogenous_body_projection import (
     build_body_improvement_projection,
 )
-from systems.supervisor.endogenous_candidate_eligibility import (
+from .endogenous_candidate_eligibility import (
     CandidateStreamEligibility,
     resolve_candidate_stream_eligibility,
 )
-from systems.supervisor.endogenous_candidate_factories import (
+from .endogenous_candidate_factories import (
     build_body_improvement_candidate,
     build_governance_hygiene_review_candidate,
     build_memory_maintenance_candidate,
     build_truthfulness_review_candidate,
 )
-from systems.supervisor.endogenous_candidate_pipeline import (
+from .endogenous_candidate_pipeline import (
     EndogenousTaskCandidate,
     apply_adaptive_candidate_budget,
     merge_lm_led_candidate_stream,
 )
-from systems.supervisor.endogenous_cognitive_memory import (
+from .endogenous_cognitive_memory import (
     build_cognitive_assessment_memory,
     build_self_iteration_trend_memory,
 )
-from systems.supervisor.endogenous_deliberation import build_deliberation_report
-from systems.supervisor.endogenous_drive_context import (
+from .endogenous_deliberation import build_deliberation_report
+from .endogenous_drive_context import (
     build_drive_context,
     get_shell_slot_meta,
 )
-from systems.supervisor.endogenous_drive_judgement import (
+from .endogenous_drive_judgement import (
     build_drive_judgement_metadata,
 )
-from systems.supervisor.endogenous_materialization import (
+from .endogenous_materialization import (
     has_governance_hygiene_review_signal,
     has_historical_governance_hygiene_review_signal,
     resolve_candidate_eligibility_plan,
 )
-from systems.supervisor.endogenous_pressure import (
+from .endogenous_pressure import (
     build_backlog_pressure_penalties,
     governance_hygiene_urgency,
     memory_maintenance_urgency,
 )
-from systems.supervisor.endogenous_policy import has_truthfulness_review_signal
-from systems.supervisor.endogenous_learning import (
+from .endogenous_policy import has_truthfulness_review_signal
+from .endogenous_learning import (
     build_cognitive_assessment_review_candidate,
     build_exploratory_learning_candidate,
     build_shell_baseline_learning_candidate,

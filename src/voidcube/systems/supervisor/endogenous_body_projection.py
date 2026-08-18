@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_body_eligibility import (
+from .endogenous_body_eligibility import (
     resolve_body_improvement_eligibility,
 )
-from systems.supervisor.endogenous_body_mapping import build_body_structure_mapping
+from .endogenous_body_mapping import build_body_structure_mapping
 
 
 def build_body_improvement_projection(

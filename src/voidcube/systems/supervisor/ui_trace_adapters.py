@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from systems.supervisor.ui_trace_projection import (
+from .ui_trace_projection import (
     attach_observation_trace_details,
     project_trace_detail,
     recent_observation_trace_ids,

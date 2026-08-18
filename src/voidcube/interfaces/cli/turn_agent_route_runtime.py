@@ -6,8 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from agent.smart_model_routing import resolve_turn_route
-from VoidCube_app.models import resolve_fast_mode_overrides
+from ...application.model_routing import resolve_turn_route
+from ...infrastructure.providers.model_catalog import resolve_fast_mode_overrides
 
 
 @dataclass(frozen=True, slots=True)

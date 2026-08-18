@@ -1,11 +1,10 @@
-"""Provider-neutral model identifier handling."""
+"""Compatibility module alias for canonical provider model normalization."""
 
-from __future__ import annotations
+import sys
 
+try:
+    from voidcube.infrastructure.providers import model_normalization as _implementation
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.infrastructure.providers import model_normalization as _implementation
 
-AGGREGATOR_PROVIDERS: frozenset[str] = frozenset({"openrouter", "nous"})
-
-
-def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
-    """Preserve provider-supplied model IDs apart from surrounding whitespace."""
-    return str(model_input or "").strip()
+sys.modules[__name__] = _implementation

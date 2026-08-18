@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from systems.supervisor.endogenous_needs import DriveNeed
+from .endogenous_needs import DriveNeed
 
 
 @dataclass(frozen=True, slots=True)

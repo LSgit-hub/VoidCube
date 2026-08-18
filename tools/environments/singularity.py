@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 from tools.environments.base import (
     BaseEnvironment,
     _load_json_store,

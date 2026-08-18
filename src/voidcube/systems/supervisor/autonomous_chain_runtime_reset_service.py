@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import AutonomousChainTask
 
 
 ListTasks = Callable[[], Iterable[AutonomousChainTask]]

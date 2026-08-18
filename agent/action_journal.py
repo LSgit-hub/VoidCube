@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 
 
 EffectClass = Literal["read_only", "idempotent_write", "non_idempotent_write"]

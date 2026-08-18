@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
-from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
+from .endogenous_state_repository import EndogenousStateRepository
 
 
 class EndogenousGovernanceStatePersistenceService:

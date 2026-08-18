@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_cli.terminal_text_layout import display_width, trim_to_width
+from .terminal_text_layout import display_width, trim_to_width
 
 
 StatusFragment = tuple[str, str]

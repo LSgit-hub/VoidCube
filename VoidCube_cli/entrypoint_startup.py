@@ -97,7 +97,7 @@ def _apply_profile_override() -> None:
     # 2. If no flag, check active_profile in the VoidCube root
     if profile_name is None:
         try:
-            from VoidCube_core.constants import get_default_VoidCube_root
+            from VoidCube_app.infrastructure.config.runtime_paths import get_default_VoidCube_root
             active_path = get_default_VoidCube_root() / "active_profile"
             if active_path.exists():
                 name = active_path.read_text().strip()
@@ -136,14 +136,14 @@ _apply_profile_override()
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 from VoidCube_app.environment import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env=PROJECT_ROOT / '.env')
 
 # Initialize centralized file logging early — all `VoidCube` subcommands
 # (chat, setup, gateway, config, etc.) write to agent.log + errors.log.
 try:
-    from VoidCube_core.logging import setup_logging as _setup_logging
+    from VoidCube_app.infrastructure.observability.logging import setup_logging as _setup_logging
     _setup_logging(mode="cli")
 except Exception:
     pass  # best-effort — don't crash the CLI if logging setup fails
@@ -151,7 +151,7 @@ except Exception:
 # Apply IPv4 preference early, before any HTTP clients are created.
 try:
     from VoidCube_app.config import load_config as _load_config_early
-    from VoidCube_core.constants import apply_ipv4_preference as _apply_ipv4
+    from VoidCube_app.infrastructure.network import apply_ipv4_preference as _apply_ipv4
     _early_cfg = _load_config_early()
     _net = _early_cfg.get("network", {})
     if isinstance(_net, dict) and _net.get("force_ipv4"):
@@ -165,7 +165,7 @@ import time as _time
 from datetime import datetime
 
 from VoidCube_cli import __version__
-from VoidCube_core.constants import OPENROUTER_BASE_URL
+from VoidCube_app.infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from VoidCube_core.utils import atomic_json_write, interprocess_file_lock
+from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write, interprocess_file_lock
 from systems.evolution_evaluation.models import (
     BenchmarkPack,
     ExperimentResult,

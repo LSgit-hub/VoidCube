@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from VoidCube_app.session_lifecycle import SessionLifecycleState
+from ...application.sessions import SessionLifecycleState
 
 
 @dataclass(frozen=True, slots=True)

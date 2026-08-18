@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from systems.supervisor.endogenous_drive_cycle import (
+from .endogenous_drive_cycle import (
     EndogenousDriveCycleContext,
     run_endogenous_drive_cycle,
 )

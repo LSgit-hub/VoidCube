@@ -1,19 +1,10 @@
-"""Primitive ports used by the shared application runtime."""
+"""Compatibility alias for canonical domain contract ports."""
 
-from __future__ import annotations
+import sys
 
-from datetime import datetime
-from typing import Protocol
+try:
+    from voidcube.domain.contracts import ports as _implementation
+except (ModuleNotFoundError, ImportError):
+    from src.voidcube.domain.contracts import ports as _implementation
 
-from VoidCube_app.contracts.events import ApplicationEvent
-
-
-class EventSink(Protocol):
-    def __call__(self, event: ApplicationEvent) -> None: ...
-
-
-class ApplicationClock(Protocol):
-    def now(self) -> datetime: ...
-
-
-__all__ = ["ApplicationClock", "EventSink"]
+sys.modules[__name__] = _implementation

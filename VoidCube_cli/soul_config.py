@@ -8,7 +8,7 @@ import re
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 
 
 # Default SOUL configuration values

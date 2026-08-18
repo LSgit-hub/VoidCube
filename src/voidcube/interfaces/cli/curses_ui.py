@@ -11,7 +11,7 @@ try:
 except ImportError:  # pragma: no cover - exercised on Windows without windows-curses
     curses = None  # type: ignore[assignment]
 
-from VoidCube_cli.terminal_text_layout import trim_to_width
+from .terminal_text_layout import trim_to_width
 
 
 def _init_colors():

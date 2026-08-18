@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from VoidCube_cli.path_utils import windows_path_to_wsl, wsl_path_to_windows
-from VoidCube_core.constants import is_wsl
+from VoidCube_app.infrastructure.runtime.environment import is_wsl
 
 _WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:[/\\]")
 _WSL_MNT_RE = re.compile(r"^/mnt/([A-Za-z])(?:/(.*))?$")

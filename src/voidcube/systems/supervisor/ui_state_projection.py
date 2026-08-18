@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from systems.supervisor.ui_observation_projection import is_api_a_lane_family_task
-from systems.supervisor.ui_projection import (
+from .ui_observation_projection import is_api_a_lane_family_task
+from .ui_projection import (
     observation_count,
     observation_group,
     observation_loop_stage,

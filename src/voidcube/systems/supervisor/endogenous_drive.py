@@ -2,41 +2,41 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from systems.supervisor.endogenous_candidate_pipeline import EndogenousTaskCandidate
-from systems.supervisor.endogenous_materialization import (
+from .endogenous_candidate_pipeline import EndogenousTaskCandidate
+from .endogenous_materialization import (
     materialize_lm_proposals_for_deliberation,
 )
-from systems.supervisor.endogenous_candidate_stream import (
+from .endogenous_candidate_stream import (
     assemble_prepared_candidate_stream,
     prepare_candidate_stream,
 )
-from systems.supervisor.endogenous_drive_models import DriveDeliberationReport
-from systems.supervisor.endogenous_drive_context import (
+from .endogenous_drive_models import DriveDeliberationReport
+from .endogenous_drive_context import (
     build_drive_context,
     get_shell_slot_meta,
     normalize_drive_input,
 )
-from systems.supervisor.endogenous_deliberation import (
+from .endogenous_deliberation import (
     build_deliberation_report as build_deliberation_report_projection,
 )
-from systems.supervisor.endogenous_lm_evidence import (
+from .endogenous_lm_evidence import (
     build_lm_evidence_packet_from_runtime_config,
 )
-from systems.supervisor.endogenous_cognitive_posture_context import (
+from .endogenous_cognitive_posture_context import (
     build_cognitive_posture_context,
 )
-from systems.supervisor.endogenous_meta_cognition import (
+from .endogenous_meta_cognition import (
     build_proposal_drift_memory,
 )
-from systems.supervisor.endogenous_self_model import build_recent_reference_alignment
-from systems.supervisor.endogenous_research import build_external_research_evidence
-from systems.supervisor.endogenous_shell_profile import build_shell_body_profile
-from systems.supervisor.endogenous_evidence import normalize_recent_learning_evidence
-from systems.supervisor.endogenous_proposals import (
+from .endogenous_self_model import build_recent_reference_alignment
+from .endogenous_research import build_external_research_evidence
+from .endogenous_shell_profile import build_shell_body_profile
+from .endogenous_evidence import normalize_recent_learning_evidence
+from .endogenous_proposals import (
     execute_lm_task_generation_from_runtime_config,
     is_lm_task_generation_enabled,
 )
-from systems.supervisor.endogenous_generation_state import LmGenerationStateOwner
+from .endogenous_generation_state import LmGenerationStateOwner
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
 
 

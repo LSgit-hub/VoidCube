@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_policy import (
+from .endogenous_policy import (
     HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
 )

@@ -7,23 +7,23 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import HTTPException
 
-from systems.supervisor.autonomous_chain_store import (
+from .autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainGitLineage,
     AutonomousChainStore,
     AutonomousChainTask,
     StaleExecutionLeaseError,
 )
-from systems.supervisor.autonomous_task_review import (
+from .autonomous_task_review import (
     is_agent_pull_task,
     normalize_autonomous_chain_decision,
 )
-from systems.supervisor.autonomous_learning_quality import (
+from .autonomous_learning_quality import (
     assess_autonomous_learning_quality,
 )
-from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
-from systems.supervisor.schedule_allocator import ScheduleAllocator
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from .autonomous_task_state import AutonomousTaskStateService
+from .schedule_allocator import ScheduleAllocator
+from .task_profile_policy import TaskProfilePolicy
 
 
 ResolveDriveInput = Callable[..., Awaitable[Dict[str, Any]]]

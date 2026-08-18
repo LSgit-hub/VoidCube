@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from VoidCube_core.constants import is_wsl as _is_wsl
+from ...infrastructure.runtime.environment import is_wsl as _is_wsl
 
 logger = logging.getLogger(__name__)
 

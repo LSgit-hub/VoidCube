@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Sequence
 
-from VoidCube_core.constants import get_VoidCube_home, display_VoidCube_home
+from ...infrastructure.config.runtime_paths import get_VoidCube_home, display_VoidCube_home
 
 # Known log files (name → filename)
 LOG_FILES = {
@@ -191,7 +191,7 @@ def tail_log(
     # Resolve component to logger name prefixes
     component_prefixes = None
     if component:
-        from VoidCube_core.logging import COMPONENT_PREFIXES
+        from VoidCube_app.infrastructure.observability.logging import COMPONENT_PREFIXES
         component_lower = component.lower()
         if component_lower not in COMPONENT_PREFIXES:
             available = ", ".join(sorted(COMPONENT_PREFIXES))

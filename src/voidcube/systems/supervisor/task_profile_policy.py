@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from systems.runtime_task_profile import (
+from ...domain.tasks.runtime_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_family,
     normalize_runtime_task_type,
     resolve_broad_task_type,
 )
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import AutonomousChainTask
 
 
 class TaskProfilePolicy:

@@ -36,7 +36,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
@@ -195,7 +195,7 @@ from agent.session_initialization import (
     AgentSessionInitializationRuntime,
 )
 from agent.tool_schema import normalize_tool_definitions
-from VoidCube_core.utils import env_var_enabled
+from VoidCube_app.infrastructure.shared.value_helpers import env_var_enabled
 
 
 
@@ -455,7 +455,7 @@ class AIAgent:
         # Centralized logging — agent.log (INFO+) and errors.log (WARNING+)
         # both live under ~/.VoidCube/logs/.  Idempotent, so gateway mode
         # (which creates a new AIAgent per message) won't duplicate handlers.
-        from VoidCube_core.logging import setup_logging, setup_verbose_logging
+        from VoidCube_app.infrastructure.observability.logging import setup_logging, setup_verbose_logging
         setup_logging(VoidCube_home=_VoidCube_home)
 
         if self.verbose_logging:
@@ -662,7 +662,7 @@ class AIAgent:
 
                 self._memory_manager = _MemoryManager()
                 self._memory_manager.add_provider(MemMemoryProvider())
-                from VoidCube_core.constants import get_VoidCube_home as _ghh
+                from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home as _ghh
                 _init_kwargs = {
                     "session_id": self.session_id,
                     "platform": platform or "cli",
@@ -2153,7 +2153,7 @@ class AIAgent:
             if context_files_prompt:
                 prompt_parts.append(context_files_prompt)
 
-        from VoidCube_core.time import now as _VoidCube_now
+        from VoidCube_app.infrastructure.shared.clock import now as _VoidCube_now
         now = _VoidCube_now()
         timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
         if self.pass_session_id and self.session_id:
@@ -3633,7 +3633,7 @@ class AIAgent:
 
         # Tag all log records on this thread with the session ID so
         # ``VoidCube logs --session <id>`` can filter a single conversation.
-        from VoidCube_core.logging import set_session_context
+        from VoidCube_app.infrastructure.observability.logging import set_session_context
         set_session_context(self.session_id)
 
         # If the previous turn activated fallback, restore the primary

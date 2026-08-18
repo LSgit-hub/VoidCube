@@ -1,8 +1,8 @@
-"""Low-level Voidcube infrastructure package.
+"""Retired compatibility namespace.
 
-Import public capabilities from their owning modules, for example
-``VoidCube_core.constants`` or ``VoidCube_core.utils``. The package root is
-intentionally side-effect free and does not maintain a second re-export API.
+New code imports paths from ``VoidCube_app.infrastructure.config`` and file
+storage from ``VoidCube_app.infrastructure.persistence``. The package root is
+intentionally side-effect free and exposes no second re-export API.
 """
 
 __all__: tuple[str, ...] = ()

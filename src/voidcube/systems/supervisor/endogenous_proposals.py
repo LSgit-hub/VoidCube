@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol
 
-from systems.supervisor.endogenous_cognition_charter import resolve_cognition_charter
-from systems.supervisor.endogenous_drive_prompts import (
+from .endogenous_cognition_charter import resolve_cognition_charter
+from .endogenous_drive_prompts import (
     build_endogenous_core_mission_prompt,
     build_endogenous_task_generation_payload,
 )
-from systems.supervisor.endogenous_generation_snapshot import (
+from .endogenous_generation_snapshot import (
     build_lm_task_generation_context_snapshot,
 )
 

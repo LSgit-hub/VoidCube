@@ -5,7 +5,7 @@ import yaml
 from pydantic import BaseModel, Field, TypeAdapter
 
 from memai.application.config import MemoryServiceConfig
-from systems.supervisor.config_models import SupervisorConfig
+from ...systems.supervisor.config_models import SupervisorConfig
 
 
 _EVOLUTION_CAPABILITY_POLICY_PROFILE = TypeAdapter(
@@ -92,7 +92,7 @@ def _apply_canonical_file_config(config: SystemConfig) -> None:
     existing precedence contract.
     """
     try:
-        from VoidCube_core.constants import get_config_path
+        from VoidCube_app.infrastructure.config.runtime_paths import get_config_path
 
         path = get_config_path()
         if not path.is_file():

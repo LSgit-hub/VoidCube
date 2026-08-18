@@ -382,7 +382,7 @@ class MemoryManager:
         ``get_VoidCube_home()`` themselves.
         """
         if "VoidCube_home" not in kwargs:
-            from VoidCube_core.constants import get_VoidCube_home
+            from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
             kwargs["VoidCube_home"] = str(get_VoidCube_home())
         for provider in self._providers:
             try:

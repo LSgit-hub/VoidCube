@@ -23,6 +23,10 @@ Memory Service 使用单一存储和统一备份，但所有读写都带有 `own
 
 ```text
 VoidCube/
+├─ src/voidcube/         规范包：interfaces、infrastructure、extensions（新代码主路径）
+│  ├─ interfaces/cli/    CLI launcher、application host 和配置交互边界
+│  ├─ infrastructure/    Provider、配置、持久化、网络和运行时适配器
+│  └─ extensions/        plugin、skill、tool manifest/registry
 ├─ agent/                 API-A Agent、上下文、工具回合和记忆接入
 ├─ tools/                 工具注册、安全、审批和执行后端
 ├─ systems/gateway/       服务发现、路由、活动与任务泳道
@@ -34,6 +38,8 @@ VoidCube/
 ├─ tests/                 本地测试（不随远程仓库分发）
 └─ docs/                  本地架构与开发文档（不随远程仓库分发）
 ```
+
+`VoidCube_app/`、`VoidCube_cli/` 和 `VoidCube_core/` 目前只承担迁移期兼容入口；新增实现应按职责进入 `src/voidcube/`，而不是继续扩大这些历史目录。
 
 目录职责、依赖方向和分阶段迁移方案见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 

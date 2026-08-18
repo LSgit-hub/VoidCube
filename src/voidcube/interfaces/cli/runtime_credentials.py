@@ -6,11 +6,11 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from VoidCube_app.model_normalization import (
+from ...infrastructure.providers.model_normalization import (
     AGGREGATOR_PROVIDERS,
     normalize_model_for_provider,
 )
-from VoidCube_app.runtime_provider import (
+from ...infrastructure.providers.runtime import (
     format_runtime_provider_error,
     resolve_runtime_provider,
 )

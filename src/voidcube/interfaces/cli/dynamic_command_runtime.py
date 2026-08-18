@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Set
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_cli.command_router import (
+from .commands.router import (
     ParsedCliCommand,
     resolve_dynamic_command,
 )

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Protocol
 
-from systems.supervisor.endogenous_policy import (
+from .endogenous_policy import (
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
     has_memory_backlog_recovery_window,
     has_truthfulness_review_signal,
 )
-from systems.supervisor.endogenous_drive_context import normalize_strategy_memory
-from systems.supervisor.endogenous_history import (
+from .endogenous_drive_context import normalize_strategy_memory
+from .endogenous_history import (
     normalize_historical_outcomes,
     summarize_historical_pressure,
 )

@@ -4,24 +4,24 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
 
-from systems.supervisor.endogenous_cognition_state import (
+from .endogenous_cognition_state import (
     build_cognition_state_projection,
     build_judgement_core_projection,
 )
-from systems.supervisor.endogenous_proposal_cognition import (
+from .endogenous_proposal_cognition import (
     compact_proposal_memory,
     build_proposal_cognition_projection,
 )
-from systems.supervisor.endogenous_strategy_projection import (
+from .endogenous_strategy_projection import (
     build_attention_agenda_projection,
 )
-from systems.supervisor.endogenous_uncertainty_projection import (
+from .endogenous_uncertainty_projection import (
     build_uncertainty_ledger_projection,
 )
-from systems.supervisor.endogenous_strategy_memory import (
+from .endogenous_strategy_memory import (
     normalize_endogenous_strategy_memory,
 )
-from systems.supervisor.endogenous_state_projection import derive_corrective_mode
+from .endogenous_state_projection import derive_corrective_mode
 
 
 class EndogenousCognitionStateAssemblyService:

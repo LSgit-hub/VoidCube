@@ -7,21 +7,21 @@ from dataclasses import dataclass
 
 from prompt_toolkit.key_binding import KeyBindings
 
-from VoidCube_cli.tui_composition_runtime import (
+from .composition_runtime import (
     TuiCompositionPorts,
     TuiCompositionRuntime,
     TuiCompositionWidgets,
 )
-from VoidCube_cli.tui_indicator_widgets import IndicatorWidgetPorts
-from VoidCube_cli.tui_input_widgets import InputWidgetPorts
-from VoidCube_cli.tui_keybinding_assembly import (
+from .indicator_widgets import IndicatorWidgetPorts
+from .input_widgets import InputWidgetPorts
+from .keybinding_assembly import (
     TuiKeybindingAssemblyPorts,
     TuiKeybindingAssemblyRuntime,
 )
-from VoidCube_cli.tui_modal_navigation import ModalNavigationPorts
-from VoidCube_cli.tui_modal_widgets import ModalWidgetPorts
-from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts, TuiPasteRuntime
-from VoidCube_cli.tui_widget_graph_runtime import (
+from .modal_navigation import ModalNavigationPorts
+from .modal_widgets import ModalWidgetPorts
+from .paste_runtime import PasteRuntimePorts, TuiPasteRuntime
+from .widget_graph_runtime import (
     TuiWidgetGraphPorts,
     TuiWidgetGraphRuntime,
 )

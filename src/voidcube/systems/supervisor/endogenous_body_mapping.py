@@ -7,14 +7,14 @@ import fnmatch
 import re
 from typing import Any, Dict, List, Optional
 
-from systems.evolution_boundary import (
+from ..evolution_boundary import (
     AGENT_EVOLUTION_ALLOWED_FILES,
     AGENT_EVOLUTION_ALLOWED_PATHS,
     classify_agent_evolution_changes,
     normalize_repo_path,
 )
-from systems.supervisor.endogenous_candidate_pipeline import clamp01
-from systems.supervisor.endogenous_learning import stable_learning_topic_key
+from .endogenous_candidate_pipeline import clamp01
+from .endogenous_learning import stable_learning_topic_key
 
 
 _BODY_STRUCTURE_PATH_RE = re.compile(

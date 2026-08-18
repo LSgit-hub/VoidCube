@@ -8,11 +8,11 @@ from typing import Any
 
 from prompt_toolkit.keys import Keys
 
-from VoidCube_cli.tui_keybindings import (
+from .keybindings import (
     install_history_navigation_keybindings,
     install_text_editing_keybindings,
 )
-from VoidCube_cli.tui_modal_navigation import (
+from .modal_navigation import (
     ModalNavigationPorts,
     install_modal_navigation_keybindings,
 )

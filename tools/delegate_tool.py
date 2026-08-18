@@ -467,7 +467,7 @@ def _build_child_agent(
         delegation_cfg = _load_config()
         delegation_effort = str(delegation_cfg.get("reasoning_effort") or "").strip()
         if delegation_effort:
-            from VoidCube_core.constants import parse_reasoning_effort
+            from VoidCube_app.infrastructure.shared.reasoning import parse_reasoning_effort
             parsed = parse_reasoning_effort(delegation_effort)
             if parsed is not None:
                 child_reasoning = parsed
@@ -1215,7 +1215,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
     # Provider is configured — resolve full credentials
     try:
-        from VoidCube_app.runtime_provider import resolve_runtime_provider
+        from VoidCube_app.infrastructure.providers.runtime import resolve_runtime_provider
         runtime = resolve_runtime_provider(requested=configured_provider)
     except Exception as exc:
         raise ValueError(

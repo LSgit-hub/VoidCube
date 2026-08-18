@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_proposals import normalize_lm_cognitive_assessment
+from .endogenous_proposals import normalize_lm_cognitive_assessment
 
 
 def build_cognitive_assessment_memory(drive_context: Dict[str, Any]) -> Dict[str, Any]:

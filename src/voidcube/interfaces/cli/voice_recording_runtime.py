@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from VoidCube_cli.voice_runtime_state import CliVoiceRuntimeState
-from VoidCube_app.voice_session_runtime import VoiceSessionRuntime
+from .voice_runtime_state import CliVoiceRuntimeState
+from ..voice.session_runtime import VoiceSessionRuntime
 
 
 @dataclass(frozen=True)

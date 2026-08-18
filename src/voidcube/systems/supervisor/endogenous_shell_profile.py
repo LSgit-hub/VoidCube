@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_evidence import item_evidence_quality
+from .endogenous_evidence import item_evidence_quality
 
 
 def build_shell_body_profile(shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:

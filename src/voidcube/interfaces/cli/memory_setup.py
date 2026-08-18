@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from VoidCube_core.runtime_paths import get_runtime_layout
+from ...infrastructure.runtime.layout import get_runtime_layout
 
 
 def cmd_setup_provider(provider_name: str) -> None:

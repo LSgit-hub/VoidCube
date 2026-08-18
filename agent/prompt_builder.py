@@ -12,7 +12,8 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-from VoidCube_core.constants import get_VoidCube_home, is_wsl
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
+from VoidCube_app.infrastructure.runtime.environment import is_wsl
 from VoidCube_app.default_identity import (
     DEFAULT_IDENTITY_PROMPT,
     PERSISTENT_IDENTITY_GUIDANCE,
@@ -29,7 +30,7 @@ from agent.skill_utils import (
     parse_frontmatter,
     skill_matches_platform,
 )
-from VoidCube_core.utils import atomic_json_write
+from VoidCube_app.infrastructure.persistence.file_store import atomic_json_write
 
 logger = logging.getLogger(__name__)
 

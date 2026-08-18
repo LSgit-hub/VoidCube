@@ -6,12 +6,12 @@ import asyncio
 import json
 from typing import Any, Dict
 
-from systems.supervisor.autonomous_chain_store import (
+from .autonomous_chain_store import (
     AutonomousChainStore,
     AutonomousChainTask,
 )
-from systems.supervisor.schedule_allocator import ScheduleAllocator
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from .schedule_allocator import ScheduleAllocator
+from .task_profile_policy import TaskProfilePolicy
 
 
 class AutonomousTaskGovernanceReviewService:

@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from systems.body_registry import BodyImprovementReport
 from systems.evolution_candidate_generation import EvolutionCandidateGenerationRequest
-from systems.supervisor.autonomous_chain_store import StaleExecutionLeaseError
+from .autonomous_chain_store import StaleExecutionLeaseError
 from systems.governor import GovernorRequest
-from systems.supervisor.autonomous_chain_contract import (
+from .autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_CYCLE_ROUTE,
     AUTONOMOUS_CHAIN_TASKS_ROUTE,
     AUTONOMOUS_CHAIN_TASK_CLEAR_ROUTE,
@@ -22,14 +22,14 @@ from systems.supervisor.autonomous_chain_contract import (
     autonomous_chain_task_lease_validation_route,
     autonomous_chain_task_route,
 )
-from systems.supervisor.config_models import (
+from .config_models import (
     SupervisorBodyRuntimeConfig,
     SupervisorConfig,
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
-from systems.supervisor.planning_runtime import PlanningRuntimeMixin
-from systems.supervisor.provider_pool_service import (
+from .planning_runtime import PlanningRuntimeMixin
+from .provider_pool_service import (
     CompanionWorkerAssignmentsRequest,
     ProviderPoolConflictError,
     ProviderPoolEntryRequest,
@@ -37,15 +37,15 @@ from systems.supervisor.provider_pool_service import (
     ProviderPoolProbeError,
     ProviderPoolService,
 )
-from systems.supervisor.runtime_assemblers import (
+from .runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
     assemble_supervisor_ui_runtime,
 )
-from systems.supervisor.scheduled_tasks import ScheduledTaskRuntimeMixin
-from systems.supervisor.service_runtime import ServiceRuntimeMixin
-from systems.supervisor.trace_runtime import TraceRuntimeMixin
-from systems.supervisor.ui_routes import (
+from .scheduled_tasks import ScheduledTaskRuntimeMixin
+from .service_runtime import ServiceRuntimeMixin
+from .trace_runtime import TraceRuntimeMixin
+from .ui_routes import (
     SupervisorUIRoutePorts,
     mount_supervisor_ui_routes,
 )

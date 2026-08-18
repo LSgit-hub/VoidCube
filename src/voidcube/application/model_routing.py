@@ -6,7 +6,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from VoidCube_core.utils import is_truthy_value
+from ..infrastructure.shared.value_helpers import is_truthy_value
 
 _COMPLEX_KEYWORDS = {
     "debug",
@@ -133,7 +133,7 @@ def resolve_turn_route(user_message: str, routing_config: Optional[Dict[str, Any
             ),
         }
 
-    from VoidCube_app.runtime_provider import resolve_runtime_provider
+    from ..infrastructure.providers.runtime import resolve_runtime_provider
 
     explicit_api_key = None
     api_key_env = str(route.get("api_key_env") or "").strip()

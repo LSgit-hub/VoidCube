@@ -203,7 +203,7 @@ def _handle_sudo_failure(output: str, env_type: str) -> str:
     
     for failure in sudo_failures:
         if failure in output:
-            from VoidCube_core.constants import display_VoidCube_home as _dhh
+            from VoidCube_app.infrastructure.config.runtime_paths import display_VoidCube_home as _dhh
             return output + f"\n\n💡 {_t('tips.sudo_password_hint', default='Tip: To enable sudo over messaging, add SUDO_PASSWORD to {path}/.env on the agent machine.', path=_dhh())}"
     
     return output
@@ -2289,7 +2289,7 @@ def terminal_tool(
             output = strip_ansi(output)
 
             # Redact secrets from command output (catches env/printenv leaking keys)
-            from VoidCube_core.redaction import redact_sensitive_text
+            from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
             output = redact_sensitive_text(output.strip()) if output else ""
 
             # Interpret non-zero exit codes that aren't real errors
@@ -2486,7 +2486,7 @@ if __name__ == "__main__":
     print(f"  TERMINAL_MODAL_IMAGE: {os.getenv('TERMINAL_MODAL_IMAGE', default_img)}")
     print(f"  TERMINAL_DAYTONA_IMAGE: {os.getenv('TERMINAL_DAYTONA_IMAGE', default_img)}")
     print(f"  TERMINAL_CWD: {os.getenv('TERMINAL_CWD', os.getcwd())}")
-    from VoidCube_core.constants import display_VoidCube_home as _dhh
+    from VoidCube_app.infrastructure.config.runtime_paths import display_VoidCube_home as _dhh
     print(f"  TERMINAL_SANDBOX_DIR: {os.getenv('TERMINAL_SANDBOX_DIR', f'{_dhh()}/sandboxes')}")
     print(f"  TERMINAL_TIMEOUT: {os.getenv('TERMINAL_TIMEOUT', '60')}")
     print(f"  TERMINAL_LIFETIME_SECONDS: {os.getenv('TERMINAL_LIFETIME_SECONDS', '300')}")

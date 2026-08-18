@@ -37,7 +37,7 @@ from systems.evolution_evaluation import (
     select_benchmark_platforms,
 )
 from systems.self_cognition import SelfCognitionCollector, SelfCognitionSnapshot
-from systems.supervisor.evolution_candidate_evaluation_service import (
+from .evolution_candidate_evaluation_service import (
     EvolutionCandidateEvaluationBlocked,
     EvolutionCandidateEvaluationOutcome,
     EvolutionCandidateEvaluationService,

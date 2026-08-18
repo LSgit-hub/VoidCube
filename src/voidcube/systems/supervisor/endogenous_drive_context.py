@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from systems.supervisor.endogenous_learning import topic_signature
+from .endogenous_learning import topic_signature
 
 
 _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}

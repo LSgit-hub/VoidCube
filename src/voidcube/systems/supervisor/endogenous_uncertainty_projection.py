@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_state_projection import derive_corrective_mode
+from .endogenous_state_projection import derive_corrective_mode
 
 
 def build_uncertainty_ledger_projection(

@@ -27,7 +27,7 @@ def _build_provider_env_blocklist() -> frozenset:
     blocked: set[str] = set()
 
     try:
-        from VoidCube_app.provider_auth import PROVIDER_REGISTRY
+        from VoidCube_app.infrastructure.providers.registry import PROVIDER_REGISTRY
         for pconfig in PROVIDER_REGISTRY.values():
             api_key_env_vars = pconfig.get("api_key_env_vars", [])
             blocked.update(api_key_env_vars)
@@ -194,7 +194,7 @@ def _make_run_env(env: dict) -> dict:
     # Per-profile HOME isolation: redirect system tool configs (git, ssh, gh,
     # npm …) into {VOIDCUBE_HOME}/home/ when that directory exists.  Only the
     # subprocess sees the override — the Python process keeps the real HOME.
-    from VoidCube_core.constants import get_subprocess_home
+    from VoidCube_app.infrastructure.config.runtime_paths import get_subprocess_home
     _profile_home = get_subprocess_home()
     if _profile_home:
         run_env["HOME"] = _profile_home

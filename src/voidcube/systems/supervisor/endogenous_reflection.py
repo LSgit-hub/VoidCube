@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Protocol
 
-from systems.supervisor.endogenous_body_eligibility import has_recent_body_improvement
-from systems.supervisor.endogenous_history import (
+from .endogenous_body_eligibility import has_recent_body_improvement
+from .endogenous_history import (
     normalize_historical_outcomes,
     summarize_historical_pressure,
 )

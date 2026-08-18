@@ -34,7 +34,7 @@ import threading
 import time
 import urllib.request
 
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 

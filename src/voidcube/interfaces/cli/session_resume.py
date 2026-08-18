@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from VoidCube_app.session_lifecycle import (
+from ...application.sessions import (
     SessionHydration,
     SessionHydrationStatus,
 )

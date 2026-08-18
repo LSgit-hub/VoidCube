@@ -4,36 +4,36 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_api_b_snapshot import (
+from .endogenous_api_b_snapshot import (
     build_api_b_judgement_snapshot,
 )
-from systems.supervisor.endogenous_cognitive_memory import (
+from .endogenous_cognitive_memory import (
     build_cognitive_assessment_memory,
     build_post_task_effect_memory,
     build_self_iteration_trend_memory,
     build_switch_self_regulation_memory,
 )
-from systems.supervisor.endogenous_cognitive_posture_context import (
+from .endogenous_cognitive_posture_context import (
     build_cognitive_posture_context,
 )
-from systems.supervisor.endogenous_context import (
+from .endogenous_context import (
     build_lm_context_layers,
     reference_alignment_gap_labels,
 )
-from systems.supervisor.endogenous_meta_cognition import (
+from .endogenous_meta_cognition import (
     build_meta_cognition_profile,
     build_proposal_drift_memory,
 )
-from systems.supervisor.endogenous_self_iteration import (
+from .endogenous_self_iteration import (
     build_self_iteration_hypotheses,
 )
-from systems.supervisor.endogenous_task_priors import build_task_type_priors
-from systems.supervisor.endogenous_evidence import normalize_recent_learning_evidence
-from systems.supervisor.endogenous_cognition_charter import resolve_cognition_charter
-from systems.supervisor.endogenous_drive_context import get_shell_slot_meta
-from systems.supervisor.endogenous_research import build_external_research_evidence
-from systems.supervisor.endogenous_self_model import build_recent_reference_alignment
-from systems.supervisor.endogenous_shell_profile import build_shell_body_profile
+from .endogenous_task_priors import build_task_type_priors
+from .endogenous_evidence import normalize_recent_learning_evidence
+from .endogenous_cognition_charter import resolve_cognition_charter
+from .endogenous_drive_context import get_shell_slot_meta
+from .endogenous_research import build_external_research_evidence
+from .endogenous_self_model import build_recent_reference_alignment
+from .endogenous_shell_profile import build_shell_body_profile
 
 
 def build_lm_evidence_packet_from_runtime_config(

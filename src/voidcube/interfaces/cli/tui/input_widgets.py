@@ -22,7 +22,7 @@ from prompt_toolkit.layout.processors import (
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
 
-from VoidCube_cli.commands import SlashCommandAutoSuggest, SlashCommandCompleter
+from ..commands.catalog import SlashCommandAutoSuggest, SlashCommandCompleter
 
 
 @dataclass(frozen=True, slots=True)

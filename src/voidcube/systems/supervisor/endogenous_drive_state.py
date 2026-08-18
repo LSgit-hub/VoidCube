@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Protocol
 
-from systems.supervisor.endogenous_body_eligibility import (
+from .endogenous_body_eligibility import (
     calculate_learning_quality_score,
 )
 

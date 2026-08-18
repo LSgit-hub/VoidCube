@@ -7,17 +7,17 @@ from dataclasses import dataclass
 
 from prompt_toolkit.widgets import TextArea
 
-from VoidCube_cli.tui_indicator_widgets import (
+from .indicator_widgets import (
     IndicatorWidgetPorts,
     IndicatorWidgets,
     build_indicator_widgets,
 )
-from VoidCube_cli.tui_input_widgets import (
+from .input_widgets import (
     InputWidgetPorts,
     build_input_area,
     install_placeholder_processor,
 )
-from VoidCube_cli.tui_modal_widgets import (
+from .modal_widgets import (
     ModalWidgetPorts,
     ModalWidgets,
     build_modal_widgets,

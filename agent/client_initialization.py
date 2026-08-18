@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_core.constants import OPENROUTER_BASE_URL
+from VoidCube_app.infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 
 from agent.client_lifecycle import ChatClientLifecycle
 

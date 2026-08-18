@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List
 
-from systems.supervisor.endogenous_policy import has_truthfulness_review_signal
+from .endogenous_policy import has_truthfulness_review_signal
 
 
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"

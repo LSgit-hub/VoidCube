@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from systems.supervisor.endogenous_proposals import is_lm_task_generation_enabled
+from .endogenous_proposals import is_lm_task_generation_enabled
 
 
 @dataclass(frozen=True, slots=True)

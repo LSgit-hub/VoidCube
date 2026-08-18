@@ -11,8 +11,8 @@ import logging
 from typing import Any, Dict, Optional
 import uuid
 
-from systems.supervisor.scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
-from VoidCube_app.companion_workers import (
+from .scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
+from ...application.companion_workers import (
     companion_worker_catalog,
     resolve_companion_worker_role,
 )

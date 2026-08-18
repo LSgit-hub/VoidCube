@@ -5,12 +5,12 @@ import logging
 import urllib.request
 from typing import Any, Tuple
 
-from VoidCube_cli.autonomous_events import (
+from .events import (
     AutonomousPanelEventPorts,
     append_autonomous_execution_event,
 )
-from VoidCube_cli.autonomous_presence import ensure_supervisor_task_session
-from VoidCube_cli.autonomous_status_host import (
+from .presence import ensure_supervisor_task_session
+from .status_host import (
     preview_supervisor_status_lines,
 )
 
@@ -138,7 +138,7 @@ def handle_auto_command(
 
     def _ensure_supervisor_runtime() -> bool:
         try:
-            from VoidCube_cli.ops.serve import ensure_running
+            from ....infrastructure.gateway.service_launcher import ensure_running
         except ImportError:
             return False
         try:

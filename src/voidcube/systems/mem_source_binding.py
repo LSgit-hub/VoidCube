@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from VoidCube_core.utils import atomic_json_write
+from ..infrastructure.persistence.file_store import atomic_json_write
 
 
 class CanonicalMemBindingError(RuntimeError):

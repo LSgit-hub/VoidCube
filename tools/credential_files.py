@@ -45,7 +45,7 @@ def _get_registered() -> Dict[str, str]:
 _config_files: List[Dict[str, str]] | None = None
 
 def _resolve_VoidCube_home() -> Path:
-    from VoidCube_core.constants import get_VoidCube_home
+    from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
     return get_VoidCube_home()
 
 def register_credential_file(
@@ -339,7 +339,7 @@ def get_cache_directory_mounts(
     ``container_path`` keys. Paths always use the canonical
     ``cache/<name>`` layout.
     """
-    from VoidCube_core.constants import get_cache_dir
+    from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir
 
     mounts: List[Dict[str, str]] = []
     for name in _CACHE_DIR_NAMES:
@@ -360,7 +360,7 @@ def iter_cache_files(
     Used by Modal to upload files individually and resync before each command.
     Skips symlinks. The container paths use the canonical cache layout.
     """
-    from VoidCube_core.constants import get_cache_dir
+    from VoidCube_app.infrastructure.config.runtime_paths import get_cache_dir
 
     result: List[Dict[str, str]] = []
     for name in _CACHE_DIR_NAMES:

@@ -11,8 +11,8 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
 
-from VoidCube_app.interaction_contract import ClarificationRequest
-from VoidCube_cli.terminal_text_layout import display_width, pad_to_width
+from ....domain.contracts.interaction import ClarificationRequest
+from ..terminal_text_layout import display_width, pad_to_width
 
 
 ModalState = Mapping[str, object]

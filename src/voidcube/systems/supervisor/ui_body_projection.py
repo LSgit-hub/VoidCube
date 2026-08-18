@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from systems.supervisor.observation_status import observation_status_label
-from systems.supervisor.ui_observation_projection import normalize_observation_status
+from .observation_status import observation_status_label
+from .ui_observation_projection import normalize_observation_status
 
 
 def body_slot_role_label(

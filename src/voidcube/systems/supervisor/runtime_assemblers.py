@@ -11,13 +11,13 @@ from systems.evolution_evaluation import EnvironmentCapabilityPolicy
 from systems.evolution_candidate_generation import (
     JsonEvolutionCandidateGenerationRepository,
 )
-from VoidCube_core.runtime_paths import (
+from ...infrastructure.runtime.layout import (
     get_legacy_project_runtime_layout,
     get_runtime_layout,
 )
 from plugins.memory.mem.governor_bridge import MemGovernorBridge
 from systems.body_registry import BodyRegistryManager
-from systems.body_runtime_migration import migrate_body_runtime
+from ..body_runtime_migration import migrate_body_runtime
 from systems.execution import (
     BodyLifecycleExecutionAdapter,
     BodyUpgradeExecutionAdapter,
@@ -30,85 +30,85 @@ from systems.execution import (
 from systems.execution.service import VoidCubeExecutionService
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.governor import GovernorDecisionEngine
-from systems.governance_runtime_migration import consolidate_governance_event_logs
+from ..governance_runtime_migration import consolidate_governance_event_logs
 from systems.probe import ProbeExecutor, ProbeRunner
-from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-from systems.supervisor.evolution_evaluation_governance import (
+from .endogenous_drive import EndogenousDriveEngine
+from .evolution_evaluation_governance import (
     EvolutionEvaluationGovernanceVerifier,
 )
-from systems.supervisor.evolution_candidate_generation_scheduler import (
+from .evolution_candidate_generation_scheduler import (
     EvolutionCandidateGenerationScheduler,
     TERMINAL_BODY_TASK_STATUSES,
 )
-from systems.supervisor.evolution_candidate_generation_service import (
+from .evolution_candidate_generation_service import (
     EvolutionCandidateGenerationService,
 )
-from systems.supervisor.endogenous_governance_event_consumer import (
+from .endogenous_governance_event_consumer import (
     EndogenousGovernanceEventConsumer,
 )
-from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
-from systems.supervisor.endogenous_drive_history_persistence_service import (
+from .endogenous_state_repository import EndogenousStateRepository
+from .endogenous_drive_history_persistence_service import (
     EndogenousDriveHistoryPersistenceService,
 )
-from systems.supervisor.autonomous_chain_execution_handoff_service import (
+from .autonomous_chain_execution_handoff_service import (
     AutonomousChainExecutionHandoffService,
 )
-from systems.supervisor.autonomous_chain_planning_service import (
+from .autonomous_chain_planning_service import (
     AutonomousChainPlanningService,
 )
-from systems.supervisor.autonomous_chain_recovery_service import (
+from .autonomous_chain_recovery_service import (
     AutonomousChainRecoveryService,
 )
-from systems.supervisor.autonomous_chain_runtime_reset_service import (
+from .autonomous_chain_runtime_reset_service import (
     AutonomousChainRuntimeResetService,
 )
-from systems.supervisor.autonomous_body_switch_consent_service import (
+from .autonomous_body_switch_consent_service import (
     AutonomousBodySwitchConsentService,
 )
-from systems.supervisor.autonomous_cycle_service import AutonomousCycleService
-from systems.supervisor.body_improvement_review_service import (
+from .autonomous_cycle_service import AutonomousCycleService
+from .body_improvement_review_service import (
     BodyImprovementReviewService,
 )
-from systems.supervisor.endogenous_cognitive_history_summary_service import (
+from .endogenous_cognitive_history_summary_service import (
     EndogenousCognitiveHistorySummaryService,
 )
-from systems.supervisor.endogenous_cognition_state_assembly_service import (
+from .endogenous_cognition_state_assembly_service import (
     EndogenousCognitionStateAssemblyService,
 )
-from systems.supervisor.endogenous_governance_state_persistence_service import (
+from .endogenous_governance_state_persistence_service import (
     EndogenousGovernanceStatePersistenceService,
 )
-from systems.supervisor.endogenous_strategy_memory_service import (
+from .endogenous_strategy_memory_service import (
     EndogenousStrategyMemoryService,
 )
-from systems.supervisor.endogenous_self_regulation_service import (
+from .endogenous_self_regulation_service import (
     EndogenousSelfRegulationService,
 )
-from systems.supervisor.endogenous_cognitive_posture_service import (
+from .endogenous_cognitive_posture_service import (
     EndogenousCognitivePostureService,
 )
-from systems.supervisor.autonomous_chain_store import AutonomousChainStore
-from systems.supervisor.autonomous_task_review import build_autonomous_chain_auto_decision
-from systems.supervisor.autonomous_task_review_cycle_service import (
+from .autonomous_chain_store import AutonomousChainStore
+from .autonomous_task_review import build_autonomous_chain_auto_decision
+from .autonomous_task_review_cycle_service import (
     AutonomousTaskReviewCycleService,
 )
-from systems.supervisor.autonomous_task_governance_review_service import (
+from .autonomous_task_governance_review_service import (
     AutonomousTaskGovernanceReviewService,
 )
-from systems.supervisor.autonomous_task_memory_promotion_service import (
+from .autonomous_task_memory_promotion_service import (
     AutonomousTaskMemoryPromotionService,
 )
-from systems.supervisor.autonomous_task_owner_session_service import (
+from .autonomous_task_owner_session_service import (
     AutonomousTaskOwnerSessionService,
 )
-from systems.supervisor.autonomous_task_review_service import AutonomousTaskReviewService
-from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
-from systems.supervisor.scheduled_tasks import ScheduledTaskStore
-from systems.supervisor.schedule_allocator import ScheduleAllocator
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
-from systems.supervisor.runtime_migration import migrate_supervisor_runtime
-from systems.supervisor.planning_runtime import SUPERVISOR_LEGAL_SCENES
-from systems.supervisor.ui_runtime import (
+from .autonomous_task_review_service import AutonomousTaskReviewService
+from .autonomous_task_state import AutonomousTaskStateService
+from .scheduled_tasks import ScheduledTaskStore
+from .schedule_allocator import ScheduleAllocator
+from .task_profile_policy import TaskProfilePolicy
+from .runtime_migration import migrate_supervisor_runtime
+from .planning_runtime import SUPERVISOR_LEGAL_SCENES
+from .ui_runtime import (
     SupervisorUIRuntime,
     SupervisorUIRuntimePorts,
 )

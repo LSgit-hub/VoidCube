@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+from .endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
 
 
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"

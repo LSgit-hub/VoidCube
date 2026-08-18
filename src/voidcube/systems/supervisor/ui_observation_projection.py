@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from systems.supervisor.observation_status import (
+from .observation_status import (
     normalize_autonomous_status,
     observation_status_label,
 )
-from systems.supervisor.ui_projection import runtime_activity_label
+from .ui_projection import runtime_activity_label
 
 
 def is_api_a_lane_family_task(task: Dict[str, Any]) -> bool:

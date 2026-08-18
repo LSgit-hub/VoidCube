@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from VoidCube_core.redaction import redact_sensitive_text
+from memai.redaction import redact_sensitive_text
 from memai.repository.backup import MemoryRestoreError
 from memai.application.config import MemoryServiceConfig
 from memai.domain.domain import (

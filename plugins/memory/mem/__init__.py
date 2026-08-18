@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 from agent.effect_outcomes import EffectOutcome, failed_effect
 from agent.memory_provider import MemoryProvider
-from VoidCube_core.redaction import redact_sensitive_text
+from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
 from plugins.memory.mem.outbox import MemoryWriteOutbox
 from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
 
@@ -107,7 +107,7 @@ class MemMemoryProvider(MemoryProvider):
             provider_config.get("gateway_address") or ""
         ).strip()
         if not configured_gateway:
-            from systems.config import load_config_from_env
+            from voidcube.infrastructure.config.system import load_config_from_env
 
             configured_gateway = load_config_from_env().agent.gateway_address
         self._gateway_url = configured_gateway.rstrip("/")

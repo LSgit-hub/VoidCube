@@ -9,7 +9,7 @@ import platform
 from pathlib import Path
 from typing import Optional, Union
 
-from VoidCube_core.constants import is_wsl
+from VoidCube_app.infrastructure.runtime.environment import is_wsl
 
 
 def is_windows() -> bool:

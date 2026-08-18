@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import AutonomousChainTask
 
 
 SCHEDULE_KEYS = (

@@ -41,7 +41,7 @@ from VoidCube_app.interaction_contract import (
     resolve_approval,
     resolve_clarification,
 )
-from VoidCube_app.session_lifecycle import (
+from VoidCube_app.use_cases.sessions import (
     BranchSessionResult,
     HistoryMutationResult,
     HistoryMutationStatus,

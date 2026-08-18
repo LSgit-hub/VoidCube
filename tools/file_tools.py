@@ -13,7 +13,7 @@ from tools.path_security import (
     validate_file_write_path,
     is_expected_write_exception
 )
-from VoidCube_core.redaction import redact_sensitive_text
+from VoidCube_app.infrastructure.persistence.redaction import redact_sensitive_text
 from tools.path_runtime import RuntimePath, resolve_runtime_path
 from tools.task_execution import TaskExecutionBlocked
 
@@ -367,7 +367,7 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
 
         # ── Voidcube internal path guard ────────────────────────────────
         # Prevent prompt injection via catalog or hub metadata files.
-        from VoidCube_core.constants import get_VoidCube_home as _get_hh
+        from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home as _get_hh
         _VoidCube_home = _get_hh().resolve()
         _blocked_dirs = [
             _VoidCube_home / "skills" / ".hub" / "index-cache",

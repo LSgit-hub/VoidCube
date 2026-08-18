@@ -13,7 +13,7 @@ DEFAULT_GATEWAY_URL = "http://127.0.0.1:6000"
 def default_gateway_url() -> str:
     """Resolve the canonical Gateway address used by the service launcher."""
     try:
-        from systems.config import get_config
+        from ..config.system import get_config
 
         gateway = get_config().gateway
         return f"http://{gateway.host}:{gateway.port}"

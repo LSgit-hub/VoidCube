@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from systems.supervisor.ui_projection import format_supervisor_ui_event
+from .ui_projection import format_supervisor_ui_event
 
 
 JsonDict = Dict[str, Any]

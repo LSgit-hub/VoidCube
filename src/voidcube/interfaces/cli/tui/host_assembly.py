@@ -8,17 +8,17 @@ from pathlib import Path
 
 from prompt_toolkit.formatted_text import AnyFormattedText
 
-from VoidCube_cli.cli_interactive_registration_runtime import (
+from ..lifecycle.registration import (
     CliInteractiveRegistrations,
 )
-from VoidCube_cli.cli_tui_indicator_assembly_runtime import CliTuiIndicatorPorts
-from VoidCube_cli.tui_composition_runtime import TuiCompositionPorts
-from VoidCube_cli.tui_indicator_widgets import IndicatorWidgetPorts
-from VoidCube_cli.tui_input_widgets import InputWidgetPorts
-from VoidCube_cli.tui_modal_navigation import ModalNavigationPorts
-from VoidCube_cli.tui_modal_widgets import ModalWidgetPorts
-from VoidCube_cli.tui_paste_runtime import PasteRuntimePorts
-from VoidCube_cli.tui_runtime_factory import (
+from .indicator_assembly import CliTuiIndicatorPorts
+from .composition_runtime import TuiCompositionPorts
+from .indicator_widgets import IndicatorWidgetPorts
+from .input_widgets import InputWidgetPorts
+from .modal_navigation import ModalNavigationPorts
+from .modal_widgets import ModalWidgetPorts
+from .paste_runtime import PasteRuntimePorts
+from .runtime_factory import (
     TuiRuntimeFactory,
     TuiRuntimeFactoryPorts,
 )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from systems.supervisor.endogenous_drive_models import (
+from .endogenous_drive_models import (
     DriveAdaptivePolicy,
     DriveDeliberationReport,
     DriveIntent,
@@ -12,7 +12,7 @@ from systems.supervisor.endogenous_drive_models import (
     DriveReflection,
     DriveWorldModel,
 )
-from systems.supervisor.endogenous_needs import DriveNeed
+from .endogenous_needs import DriveNeed
 
 
 def build_intent_metadata(

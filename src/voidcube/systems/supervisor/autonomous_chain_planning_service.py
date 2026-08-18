@@ -7,14 +7,14 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from fastapi import HTTPException
 
-from systems.supervisor.autonomous_chain_store import (
+from .autonomous_chain_store import (
     AutonomousChainStore,
     AutonomousChainTask,
 )
-from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
-from systems.supervisor.autonomous_task_review import normalize_autonomous_chain_decision
-from systems.supervisor.schedule_allocator import ScheduleAllocator
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from .autonomous_task_state import AutonomousTaskStateService
+from .autonomous_task_review import normalize_autonomous_chain_decision
+from .schedule_allocator import ScheduleAllocator
+from .task_profile_policy import TaskProfilePolicy
 
 
 BuildActivityMetadata = Callable[..., Dict[str, Any]]

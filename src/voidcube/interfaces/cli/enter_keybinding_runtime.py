@@ -6,8 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from VoidCube_app.turn_queue import TurnInputRoute
-from VoidCube_cli.command_router import looks_like_slash_command
+from ...domain.contracts.turn_queue import TurnInputRoute
+from .commands.router import looks_like_slash_command
 
 
 @dataclass(frozen=True, slots=True)

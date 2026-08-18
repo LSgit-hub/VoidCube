@@ -10,9 +10,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
-from systems.supervisor.evolution_evaluation_governance import (
+from .autonomous_chain_store import AutonomousChainTask
+from .task_profile_policy import TaskProfilePolicy
+from .evolution_evaluation_governance import (
     validate_body_improvement_authorization_binding,
 )
 

@@ -13,59 +13,59 @@ from fastapi import HTTPException
 import aiohttp
 
 from systems.evolution_evaluation import EnvironmentCapabilityPolicy
-from systems.supervisor.endogenous_candidate_pipeline import CORE_VALUES
-from systems.supervisor.endogenous_proposal_port import (
+from .endogenous_candidate_pipeline import CORE_VALUES
+from .endogenous_proposal_port import (
     LmGenerationApplicationState,
     project_lm_generation_application_state,
 )
-from systems.supervisor.endogenous_cognition_state import (
+from .endogenous_cognition_state import (
     build_cognition_state_projection,
     build_judgement_core_projection,
 )
-from systems.supervisor.endogenous_strategy_projection import (
+from .endogenous_strategy_projection import (
     build_attention_agenda_projection,
 )
-from systems.supervisor.endogenous_uncertainty_projection import (
+from .endogenous_uncertainty_projection import (
     build_uncertainty_ledger_projection,
 )
-from systems.supervisor.endogenous_observation_projection import (
+from .endogenous_observation_projection import (
     build_observation_program_entries,
     project_observation_program,
 )
-from systems.supervisor.endogenous_strategy_memory import (
+from .endogenous_strategy_memory import (
     normalize_endogenous_strategy_memory,
 )
-from systems.supervisor.endogenous_meta_governance import derive_meta_governance_mode
-from systems.supervisor.endogenous_proposal_cognition import (
+from .endogenous_meta_governance import derive_meta_governance_mode
+from .endogenous_proposal_cognition import (
     compact_proposal_memory,
     build_proposal_cognition_projection,
 )
-from systems.supervisor.endogenous_drive_orchestration import (
+from .endogenous_drive_orchestration import (
     EndogenousDriveEvaluationContext,
     evaluate_endogenous_drive as run_endogenous_drive_evaluation,
 )
-from systems.supervisor.endogenous_foundation_bridge import (
+from .endogenous_foundation_bridge import (
     EndogenousFoundationReadOnlyProjection,
 )
-from systems.supervisor.endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
-from systems.supervisor.endogenous_state_repository import EndogenousStateRepository
-from systems.supervisor.endogenous_state_projection import (
+from .endogenous_policy import TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+from .endogenous_state_repository import EndogenousStateRepository
+from .endogenous_state_projection import (
     derive_corrective_mode,
     project_governance_event_stream,
 )
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
-from systems.supervisor.activity_projection import (
+from .autonomous_chain_store import AutonomousChainTask
+from .activity_projection import (
     enforce_auto_drive_input_boundary,
     idle_seconds_since,
     parse_activity_timestamp,
     project_auto_activity_snapshot,
     project_runtime_observation_input,
 )
-from systems.supervisor.drive_input_evaluation import (
+from .drive_input_evaluation import (
     DriveInputEvaluationConfig,
     evaluate_drive_input_snapshot,
 )
-from systems.supervisor.autonomous_task_review import (
+from .autonomous_task_review import (
     is_agent_pull_task,
     normalize_autonomous_chain_decision,
 )

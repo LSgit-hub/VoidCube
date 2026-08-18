@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from systems.supervisor.ui_observation_projection import (
+from .ui_observation_projection import (
     build_observation_card,
     build_observation_group,
     chain_projection_order_key,
@@ -19,7 +19,7 @@ from systems.supervisor.ui_observation_projection import (
     project_observation_rail_entry,
     project_observation_stage_card,
 )
-from systems.supervisor.ui_trace_projection import project_chain_segment_activity
+from .ui_trace_projection import project_chain_segment_activity
 def project_autonomous_observation(
     all_tasks: List[Dict[str, Any]],
     *,

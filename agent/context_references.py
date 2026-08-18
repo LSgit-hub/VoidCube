@@ -340,7 +340,7 @@ def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -
 
 
 def _ensure_reference_path_allowed(path: Path) -> None:
-    from VoidCube_core.constants import get_VoidCube_home
+    from VoidCube_app.infrastructure.config.runtime_paths import get_VoidCube_home
     home = Path(os.path.expanduser("~")).resolve()
     VoidCube_home = get_VoidCube_home().resolve()
 

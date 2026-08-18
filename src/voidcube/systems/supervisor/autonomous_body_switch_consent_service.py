@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainStore
-from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
+from .autonomous_chain_store import AutonomousChainStore
+from .autonomous_task_state import AutonomousTaskStateService
 
 
 class AutonomousBodySwitchConsentService:

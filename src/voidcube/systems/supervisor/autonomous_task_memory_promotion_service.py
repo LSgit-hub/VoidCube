@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import AutonomousChainTask
 
 
 logger = logging.getLogger("supervisor")

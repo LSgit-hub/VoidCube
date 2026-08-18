@@ -6,8 +6,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from systems.supervisor.autonomous_chain_store import AutonomousChainTask
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from .autonomous_chain_store import AutonomousChainTask
+from .task_profile_policy import TaskProfilePolicy
 
 
 class AutonomousChainExecutionHandoffService:

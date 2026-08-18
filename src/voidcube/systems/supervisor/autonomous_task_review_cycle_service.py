@@ -7,13 +7,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
-from systems.supervisor.autonomous_chain_store import (
+from .autonomous_chain_store import (
     AutonomousChainTask,
     StaleExecutionLeaseError,
 )
-from systems.supervisor.autonomous_task_review import is_agent_pull_task
-from systems.supervisor.autonomous_task_state import AutonomousTaskStateService
-from systems.supervisor.task_profile_policy import TaskProfilePolicy
+from .autonomous_task_review import is_agent_pull_task
+from .autonomous_task_state import AutonomousTaskStateService
+from .task_profile_policy import TaskProfilePolicy
 
 
 logger = logging.getLogger("supervisor")

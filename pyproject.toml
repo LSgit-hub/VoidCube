@@ -84,8 +84,8 @@ all = [
 ]
 
 [project.scripts]
-voidcube = "voidcube:main"
-vc = "voidcube:main"
+voidcube = "voidcube.interfaces.cli:main"
+vc = "voidcube.interfaces.cli:main"
 
 [project.urls]
 Homepage = "https://gitee.com/LSgit-hub/voidcub-CLI"
@@ -93,20 +93,22 @@ Documentation = "https://gitee.com/LSgit-hub/voidcub-CLI#readme"
 Repository = "https://gitee.com/LSgit-hub/voidcub-CLI"
 
 [tool.setuptools]
-py-modules = ["voidcube", "cli", "run_agent"]
+py-modules = ["cli", "run_agent"]
 
 [tool.setuptools.dynamic]
-version = {attr = "VoidCube_cli.__version__"}
+version = {attr = "voidcube.version.__version__"}
 
 [tool.setuptools.packages.find]
-where = [".", "Mem/src"]
-include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*"]
+where = [".", "src", "Mem/src"]
+include = ["agent*", "tools*", "VoidCube_app*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*", "voidcube*"]
 
 [tool.setuptools.package-data]
 memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]
 systems = ["supervisor/web/*.html"]
+"voidcube.systems.supervisor" = ["web/*.html"]
 tools = ["presets/*.yaml", "containerfiles/*.Containerfile"]
+plugins = ["*/plugin.json"]
 
 [tool.ruff]
 target-version = "py314"

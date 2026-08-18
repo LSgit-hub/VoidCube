@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from systems.supervisor.ui_projection import observation_count
+from .ui_projection import observation_count
 
 def cognition_label(kind: str, value: Any) -> str:
     normalized = str(value or "").strip().lower()

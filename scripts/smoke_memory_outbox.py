@@ -17,6 +17,10 @@ from unittest.mock import AsyncMock
 import httpx
 import uvicorn
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from plugins.memory.mem import MemMemoryProvider
 from plugins.memory.mem.outbox import MemoryWriteOutbox
 from systems.gateway.internal_gateway import GatewayConfig, InternalGateway
