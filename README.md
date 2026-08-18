@@ -35,6 +35,8 @@ VoidCube/
 └─ docs/                  本地架构与开发文档（不随远程仓库分发）
 ```
 
+目录职责、依赖方向和分阶段迁移方案见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 ## 安装与验证
 
 项目需要 Python 3.14.x。开发安装：

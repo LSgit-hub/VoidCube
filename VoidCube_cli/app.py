@@ -111,6 +111,12 @@ from VoidCube_cli.background_task_runtime import (
     BackgroundTaskSnapshot,
     BackgroundTaskState,
 )
+from VoidCube_cli import daemon_runtime as _daemon_runtime
+from VoidCube_cli.daemon_runtime import (
+    auto_start_daemons as _auto_start_daemons,
+    handle_serve_command as _handle_serve_command,
+    maybe_stop_daemons_on_exit as _maybe_stop_daemons_on_exit,
+)
 from VoidCube_cli.cli_interactive_lifecycle_assembly_runtime import (
     CliInteractiveLifecycleAssemblyPorts,
     CliInteractiveLifecycleAssemblyRuntime,
@@ -2846,7 +2852,7 @@ class VoidcubeCLI:
                 return []
             return session_db.list_sessions_rich(**kwargs)
 
-        from VoidCube_cli.entrypoint_session import _relative_time
+        from VoidCube_cli.entrypoints.session import _relative_time
 
         runtime = CliSessionBrowserRuntime(
             CliSessionBrowserPorts(
@@ -4318,17 +4324,9 @@ class VoidcubeCLI:
                 event.app.invalidate()
 
         def stop_daemons(keep_daemons: bool) -> None:
-            global _daemons_auto_started
-
-            if not _daemons_auto_started or keep_daemons:
+            if keep_daemons or not _daemon_runtime.daemons_auto_started():
                 return
-            try:
-                from VoidCube_cli.ops.serve import stop_all
-
-                stop_all(force=True)
-                _daemons_auto_started = False
-            except Exception:
-                pass
+            _daemon_runtime.maybe_stop_daemons_on_exit(force=True)
 
         def exit_autonomous_gate_fast() -> None:
             exit_autonomous_gate_fast_for_host(
@@ -4852,86 +4850,6 @@ class VoidcubeCLI:
 # Main Entry Point
 # ============================================================================
 
-# Track whether daemons were auto-started (so we can offer to stop on exit)
-_daemons_auto_started = False
-
-
-def _handle_serve_command(action: str) -> None:
-    """Handle ``voidcube stop`` / ``voidcube status`` subcommands.
-
-    ``start`` and ``foreground`` are also available but are normally
-    handled automatically by the interactive entry path.
-    """
-    valid = {"start", "stop", "status", "foreground"}
-    action_lower = action.strip().lower() if action else "status"
-
-    if action_lower not in valid:
-        print(f"Invalid serve action: {action!r}")
-        print(f"Usage: voidcube <stop|status|start|foreground>")
-        return
-
-    try:
-        from VoidCube_cli.ops.serve import start_all, stop_all, print_status
-    except ImportError as exc:
-        print(f"Failed to import serve module: {exc}")
-        print("Ensure VoidCube is installed correctly (pip install -e .)")
-        return
-
-    if action_lower == "start":
-        start_all(foreground=False)
-    elif action_lower == "foreground":
-        start_all(foreground=True)
-    elif action_lower == "stop":
-        stop_all()
-    elif action_lower == "status":
-        print_status()
-
-
-def _auto_start_daemons() -> None:
-    """Start Gateway → Memory → Supervisor if not already running.
-
-    Called transparently when entering interactive mode (skipped for -q).
-    Sets the module-level ``_daemons_auto_started`` flag so the exit
-    handler can offer to stop them.
-    """
-    global _daemons_auto_started
-
-    try:
-        from VoidCube_cli.ops.serve import ensure_running, print_status
-    except ImportError:
-        return  # serve module not available — silently skip
-
-    print("\n  Auto-starting VoidCube daemons (Gateway -> Memory -> Supervisor)...\n")
-    result = ensure_running(silent=False)
-    print()
-
-    any_started = any(info.get("started") for info in result.values())
-    if any_started:
-        print_status()
-        _daemons_auto_started = True
-
-
-def _maybe_stop_daemons_on_exit(force: bool = False) -> None:
-    """Called at process exit: stop daemons that were auto-started.
-
-    When ``force=True`` (from /quit): stop immediately, no output.
-    When ``force=False`` (from EOF or normal exit): stop silently
-    without prompting — ``input()`` is unreliable inside atexit handlers
-    because stdin may already be closed after TUI teardown.
-    """
-    global _daemons_auto_started
-    if not _daemons_auto_started:
-        return
-
-    try:
-        from VoidCube_cli.ops.serve import stop_all
-    except ImportError:
-        return
-
-    stop_all(force=True)
-    _daemons_auto_started = False
-
-
 def main(
     query: Optional[str] = None,
     q: Optional[str] = None,
@@ -5067,8 +4985,7 @@ def main(
     if is_interactive and not desktop_manages_services:
         if daemons_already_started:
             # Daemons were started by voidcube.py — we still own cleanup
-            global _daemons_auto_started
-            _daemons_auto_started = True
+            _daemon_runtime.mark_daemons_auto_started()
             atexit.register(_maybe_stop_daemons_on_exit)
         else:
             _auto_start_daemons()
