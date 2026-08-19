@@ -217,6 +217,7 @@ test_env.env
 # 运行时产生的本地-only 状态或缓存
 .local_state/
 .cache/
+.python-venv-backup-*/
 
 # ==========================================
 # 📦 可选：忽略大型数据/模型目录（如果使用 Git LFS，移除此项并改用 `git lfs track`）
