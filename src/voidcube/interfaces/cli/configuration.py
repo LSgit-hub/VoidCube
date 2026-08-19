@@ -20,214 +20,6 @@ class ApiConfigRuntime:
     set_requested_provider: Callable[[str], None] | None = None
 
 
-def load_current_config() -> dict:
-    """加载当前配置"""
-    try:
-        from ...infrastructure.config.configuration import load_config
-        return load_config()
-    except Exception:
-        return {}
-
-def save_env_value(key: str, value: str) -> bool:
-    """保存环境变量到 .env 文件"""
-    try:
-        from ...infrastructure.config.configuration import save_env_value as _save_env
-        _save_env(key, value)
-        return True
-    except Exception:
-        return False
-
-
-def _provider_key_from_name(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-") or "provider"
-
-
-def save_provider_pool_entry(
-    provider_key: str,
-    *,
-    label: str,
-    model_catalog: list[str],
-    provider_type: str,
-    base_url: str = "",
-    api_key_env: str = "",
-    api_key: str = "",
-    auth_mode: str = "",
-) -> bool:
-    """Persist one shared Provider entry without changing any call site."""
-    try:
-        from ...infrastructure.config.configuration import load_config, save_config
-
-        cfg = persist_provider_pool_entry(
-            load_config(),
-            provider_key=provider_key,
-            label=label,
-            model_catalog=model_catalog,
-            provider_type=provider_type,
-            base_url=base_url,
-            api_key_env=api_key_env,
-            api_key=api_key,
-            auth_mode=auth_mode,
-        )
-        save_config(cfg)
-        return True
-    except Exception:
-        return False
-
-
-def persist_provider_pool_entry(
-    config: dict[str, Any],
-    *,
-    provider_key: str,
-    label: str,
-    model_catalog: list[str],
-    provider_type: str,
-    base_url: str = "",
-    api_key_env: str = "",
-    api_key: str = "",
-    auth_mode: str = "",
-) -> dict[str, Any]:
-    """Return config with one shared Provider credential/catalog entry updated."""
-    from datetime import datetime, timezone
-
-    from ...infrastructure.config.configuration import upsert_provider
-    from ...infrastructure.providers.auth import normalize_openai_compatible_base_url
-
-    models = list(
-        dict.fromkeys(
-            str(model_id or "").strip()
-            for model_id in model_catalog
-            if str(model_id or "").strip()
-        )
-    )
-    current_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    current = current_providers.get(provider_key) if isinstance(current_providers, dict) else {}
-    current_model = str(current.get("selected_model") or "").strip() if isinstance(current, dict) else ""
-    selected_model = current_model if current_model in models else (models[0] if models else "")
-    return upsert_provider(
-        dict(config or {}),
-        provider_key,
-        {
-            "label": label,
-            "type": provider_type,
-            "base_url": normalize_openai_compatible_base_url(base_url),
-            "selected_model": selected_model,
-            "api_key_env": api_key_env,
-            "api_key": api_key,
-            "auth_mode": auth_mode,
-            "model_catalog": {
-                "models": models,
-                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            },
-        },
-        make_active=False,
-    )
-
-
-def provider_model_catalog(provider_cfg: dict[str, Any]) -> list[str]:
-    """Return the de-duplicated cached model IDs for one Provider entry."""
-    catalog = provider_cfg.get("model_catalog")
-    raw_models = catalog.get("models") if isinstance(catalog, dict) else []
-    if not isinstance(raw_models, list):
-        return []
-    return list(
-        dict.fromkeys(
-            str(model_id or "").strip()
-            for model_id in raw_models
-            if str(model_id or "").strip()
-        )
-    )
-
-
-def provider_pool_api_key(provider_cfg: dict[str, Any]) -> str:
-    """Resolve the credential owned by one Provider pool entry."""
-    try:
-        from ...infrastructure.providers.auth import has_usable_secret
-
-        stored = str(provider_cfg.get("api_key") or "").strip()
-        if has_usable_secret(stored):
-            return stored
-        api_key_env = str(provider_cfg.get("api_key_env") or "").strip()
-        if api_key_env:
-            from ...infrastructure.config.configuration import get_env_value
-
-            resolved = str(get_env_value(api_key_env) or "").strip()
-            if has_usable_secret(resolved):
-                return resolved
-    except Exception:
-        pass
-    return ""
-
-
-def refresh_provider_pool_catalog(
-    config: dict[str, Any], provider_key: str
-) -> tuple[dict[str, Any], list[str]]:
-    """Fetch and persist one existing Provider's live model catalog."""
-    from datetime import datetime, timezone
-
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    provider_cfg = providers.get(provider_key)
-    if not isinstance(provider_cfg, dict):
-        return config, []
-    models = get_provider_models_from_api(
-        provider_key,
-        api_key=provider_pool_api_key(provider_cfg),
-        base_url=str(provider_cfg.get("base_url") or ""),
-    )
-    model_ids = [model_id for model_id, _ in models]
-    if not model_ids:
-        return config, []
-
-    cfg = dict(config)
-    updated_providers = dict(providers)
-    updated_entry = dict(provider_cfg)
-    updated_entry["model_catalog"] = {
-        "models": model_ids,
-        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    selected_model = str(updated_entry.get("selected_model") or "").strip()
-    if selected_model not in model_ids:
-        updated_entry["selected_model"] = model_ids[0]
-    updated_providers[provider_key] = updated_entry
-    cfg["providers"] = updated_providers
-    return cfg, model_ids
-
-
-def persist_api_a_selection(
-    config: dict[str, Any], *, provider: str, model: str
-) -> dict[str, Any]:
-    """Select an existing Provider/model for API-A without changing credentials."""
-    from ...infrastructure.config.configuration import set_active_provider, set_provider_model
-
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    if provider not in providers:
-        raise ValueError(f"Unknown Provider: {provider}")
-    cfg = set_provider_model(dict(config), provider, model, make_active=False)
-    return set_active_provider(cfg, provider)
-
-
-def persist_api_b_config(
-    config: dict[str, Any],
-    *,
-    provider: str,
-    model: str,
-) -> dict[str, Any]:
-    """Select an existing Provider/model for API-B without copying credentials."""
-    provider = str(provider or "").strip().lower()
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    if provider not in providers:
-        raise ValueError(f"Unknown Provider: {provider}")
-
-    cfg = dict(config or {})
-    memory = dict(cfg.get("memory") or {})
-    llm = dict(memory.get("llm") or {})
-    for stale_key in ("api_key_env", "base_url", "provider_profile"):
-        llm.pop(stale_key, None)
-    llm.update({"provider": provider, "model": str(model or "").strip()})
-    memory["llm"] = llm
-    cfg["memory"] = memory
-    return cfg
-
-
 def persist_image_generation_config(
     config: dict[str, Any],
     *,
@@ -345,6 +137,8 @@ def save_video_generation_config(
 def save_memory_llm_config(
     provider: str,
     model: str,
+    *,
+    native_audio: bool | None = None,
 ) -> bool:
     """Persist API-B's Provider/model reference without touching API-A."""
     try:
@@ -354,6 +148,7 @@ def save_memory_llm_config(
             load_config(),
             provider=provider,
             model=model,
+            native_audio=native_audio,
         )
         save_config(cfg)
         return True
@@ -744,29 +539,6 @@ def render_api_config_summary(config: dict[str, Any]) -> list[str]:
     ]
 
 
-def get_provider_models_from_api(
-    provider: str,
-    *,
-    api_key: str = "",
-    base_url: str = "",
-) -> list[tuple[str, str]]:
-    """从 Provider API 获取模型列表，不使用静态回退。"""
-    try:
-        from ...infrastructure.providers.auth import PROVIDER_REGISTRY
-        from ...infrastructure.providers.model_catalog import fetch_api_models
-
-        provider_config = PROVIDER_REGISTRY.get(provider)
-        endpoint = base_url.strip()
-        if not endpoint and provider_config is not None:
-            endpoint = str(provider_config.get("inference_base_url") or "").strip()
-        if not endpoint:
-            return []
-        model_ids = fetch_api_models(api_key.strip(), endpoint) or []
-        return [(model_id, "") for model_id in model_ids]
-    except Exception:
-        return []
-
-
 # The non-interactive Provider/configuration service lives in infrastructure;
 # this module only exposes the CLI wizard adapter.
 from voidcube.infrastructure.config import provider_config as _provider_config
@@ -775,7 +547,9 @@ load_current_config = _provider_config.load_current_config
 save_env_value = _provider_config.save_env_value
 _provider_key_from_name = _provider_config.provider_key_from_name
 save_provider_pool_entry = _provider_config.save_provider_pool_entry
+save_ollama_provider = _provider_config.save_ollama_provider
 persist_provider_pool_entry = _provider_config.persist_provider_pool_entry
+persist_ollama_provider = _provider_config.persist_ollama_provider
 provider_model_catalog = _provider_config.provider_model_catalog
 provider_pool_api_key = _provider_config.provider_pool_api_key
 persist_api_a_selection = _provider_config.persist_api_a_selection
@@ -787,6 +561,17 @@ provider_has_usable_credential = _provider_config.provider_has_usable_credential
 api_a_key_configured = _provider_config.api_a_key_configured
 api_b_key_configured = _provider_config.api_b_key_configured
 get_provider_models_from_api = _provider_config.get_provider_models_from_api
+
+
+def refresh_provider_pool_catalog(
+    config: dict[str, Any], provider_key: str
+) -> tuple[dict[str, Any], list[str]]:
+    """CLI adapter that keeps model discovery injectable for interactive tests."""
+    return _provider_config.refresh_provider_pool_catalog(
+        config,
+        provider_key,
+        model_fetcher=get_provider_models_from_api,
+    )
 
 
 # =========================================================================
@@ -1493,11 +1278,12 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     while True:
         p("\n请选择配置模式：")
         p("   [1] 添加 Provider")
-        p("   [2] Agent 模型配置（API-A）")
-        p("   [3] 记忆模型配置（API-B）")
-        p("   [4] 图像模型配置")
-        p("   [5] 视频模型配置")
-        p("   [6] 查看当前配置")
+        p("   [2] 本地模型（Ollama）")
+        p("   [3] Agent 模型配置（API-A）")
+        p("   [4] 记忆模型配置（API-B）")
+        p("   [5] 图像模型配置")
+        p("   [6] 视频模型配置")
+        p("   [7] 查看当前配置")
         p("   [0] 退出")
         
         choice = inp("\n请选择")
@@ -1551,7 +1337,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 if api_key_env and api_key and not save_env_value(api_key_env, api_key):
                     pe("API Key 保存失败")
                     continue
-                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env if auth_mode == "env" else "", auth_mode=auth_mode):
+                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env if auth_mode == "env" else "", auth_mode=auth_mode, selected_model=selected_model):
                     pe("Provider 配置保存失败")
                     continue
                 ps(f"Provider {provider_key} 与 {len(model_ids)} 个模型已保存")
@@ -1560,11 +1346,56 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 break
         
         elif choice == "2":
+            ph("本地模型（Ollama）")
+            existing = providers_config.get("ollama", {})
+            if not isinstance(existing, dict):
+                existing = {}
+            base_url = inp(
+                "Ollama Base URL",
+                str(existing.get("base_url") or "http://localhost:11434/v1"),
+            ).strip()
+            if not base_url:
+                pe("Ollama Base URL 不能为空")
+                continue
+            pi("正在从 Ollama /models 获取本地模型...")
+            models = get_provider_models_from_api(
+                "ollama", base_url=base_url
+            )
+            model_ids = [model_id for model_id, _ in models]
+            if not model_ids:
+                pe("无法连接 Ollama 或未发现模型；请确认 Ollama 已启动并已拉取模型")
+                continue
+            for i, model_id in enumerate(model_ids, 1):
+                p(f"   [{i}] {model_id}")
+            current_model = str(existing.get("selected_model") or "").strip()
+            default_index = (
+                str(model_ids.index(current_model) + 1)
+                if current_model in model_ids
+                else "1"
+            )
+            try:
+                selected_model = model_ids[int(inp("选择默认模型", default_index)) - 1]
+            except (ValueError, IndexError):
+                selected_model = model_ids[int(default_index) - 1]
+            if not save_ollama_provider(
+                base_url=base_url,
+                model_catalog=model_ids,
+                selected_model=selected_model,
+            ):
+                pe("Ollama 配置保存失败")
+                continue
+            current_config = load_current_config()
+            providers_config = current_config.get("providers", {})
+            ps(f"Ollama / {selected_model} 已加入统一 API 池")
+            pi("API-A、API-B 和员工代理现在都可以选择该 Provider")
+            continue
+
+        elif choice == "3":
             # API-A selection
             while True:
                 ph("Agent 模型配置（API-A）")
                 entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
-                if not entries: pe("请先使用 [1] 添加 Provider"); break
+                if not entries: pe("请先使用 [1] 添加 Provider 或 [2] 配置本地模型"); break
                 for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
@@ -1594,12 +1425,12 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 ps(f"API-A 已选择 {provider_key} / {selected_model}")
                 break
         
-        elif choice == "3":
+        elif choice == "4":
             # API-B selection
             while True:
                 ph("记忆模型配置（API-B）")
                 entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
-                if not entries: pe("请先使用 [1] 添加 Provider"); break
+                if not entries: pe("请先使用 [1] 添加 Provider 或 [2] 配置本地模型"); break
                 for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
@@ -1622,14 +1453,32 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 for i, model_id in enumerate(model_ids, 1): p(f"   [{i}] {model_id}")
                 try: memory_model = model_ids[int(inp("选择模型", "1")) - 1]
                 except (ValueError, IndexError): memory_model = model_ids[0]
-                if not save_memory_llm_config(provider_key, memory_model):
+                existing_capabilities = (
+                    (provider_cfg.get("model_capabilities") or {}).get(memory_model, {})
+                    if isinstance(provider_cfg.get("model_capabilities"), dict)
+                    else {}
+                )
+                default_native_audio = "y" if (
+                    isinstance(existing_capabilities, dict)
+                    and existing_capabilities.get("audio_input")
+                    and existing_capabilities.get("audio_output")
+                ) else "n"
+                native_audio = inp(
+                    "该模型支持 API-B 原生语音输入和输出？(y/n)",
+                    default_native_audio,
+                ).strip().lower() in {"y", "yes", "1", "true"}
+                if not save_memory_llm_config(
+                    provider_key,
+                    memory_model,
+                    native_audio=native_audio,
+                ):
                     pe("保存 API-B Provider/模型引用失败")
                     break
                 current_config = load_current_config()
                 ps(f"API-B 已选择 {provider_key} / {memory_model}")
                 break
         
-        elif choice == "4":
+        elif choice == "5":
             ph("Agnes-AI 图像模型配置")
             from ...infrastructure.providers.media_generation import (
                 default_image_generation_config,
@@ -1671,7 +1520,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             current_config = load_current_config()
             continue
 
-        elif choice == "5":
+        elif choice == "6":
             ph("Agnes-AI 视频模型配置")
             from ...infrastructure.providers.media_generation import (
                 default_video_generation_config,
@@ -1718,7 +1567,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             current_config = load_current_config()
             continue
 
-        elif choice == "6":
+        elif choice == "7":
             ph("当前配置")
 
             current_config = load_current_config()

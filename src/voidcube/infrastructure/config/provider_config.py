@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 
 def _config_module():
@@ -91,6 +91,8 @@ def persist_provider_pool_entry(
     api_key_env: str = "",
     api_key: str = "",
     auth_mode: str = "",
+    selected_model: str = "",
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return config with one shared provider credential/catalog entry updated."""
     auth = _provider_auth_module()
@@ -98,23 +100,48 @@ def persist_provider_pool_entry(
     current_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     current = current_providers.get(provider_key) if isinstance(current_providers, dict) else {}
     current_model = str(current.get("selected_model") or "").strip() if isinstance(current, dict) else ""
-    selected_model = current_model if current_model in models else (models[0] if models else "")
+    requested_model = str(selected_model or "").strip()
+    selected_model = (
+        requested_model
+        if requested_model in models
+        else current_model
+        if current_model in models
+        else models[0]
+        if models
+        else ""
+    )
+    normalized_capabilities = {
+        key: bool(value)
+        for key, value in (capabilities or {}).items()
+        if key in {"audio_input", "audio_output"}
+    }
+    entry = {
+        "label": label,
+        "type": provider_type,
+        "base_url": auth.normalize_openai_compatible_base_url(base_url),
+        "selected_model": selected_model,
+        "api_key_env": api_key_env,
+        "api_key": api_key,
+        "auth_mode": auth_mode,
+        "model_catalog": {
+            "models": models,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
+    }
+    current_model_capabilities = (
+        dict(current.get("model_capabilities") or {})
+        if isinstance(current, dict)
+        and isinstance(current.get("model_capabilities"), dict)
+        else {}
+    )
+    if normalized_capabilities and selected_model:
+        current_model_capabilities[selected_model] = normalized_capabilities
+    if current_model_capabilities:
+        entry["model_capabilities"] = current_model_capabilities
     return _config_module().upsert_provider(
         dict(config or {}),
         provider_key,
-        {
-            "label": label,
-            "type": provider_type,
-            "base_url": auth.normalize_openai_compatible_base_url(base_url),
-            "selected_model": selected_model,
-            "api_key_env": api_key_env,
-            "api_key": api_key,
-            "auth_mode": auth_mode,
-            "model_catalog": {
-                "models": models,
-                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            },
-        },
+        entry,
         make_active=False,
     )
 
@@ -127,12 +154,56 @@ def save_provider_pool_entry(provider_key: str, **kwargs: Any) -> bool:
         return False
 
 
-def refresh_provider_pool_catalog(config: dict[str, Any], provider_key: str) -> tuple[dict[str, Any], list[str]]:
+def persist_ollama_provider(
+    config: dict[str, Any],
+    *,
+    base_url: str = "http://localhost:11434/v1",
+    model_catalog: list[str],
+    selected_model: str = "",
+) -> dict[str, Any]:
+    """Add Ollama to the shared Provider pool without credential fields."""
+    return persist_provider_pool_entry(
+        config,
+        provider_key="ollama",
+        label="Ollama",
+        provider_type="ollama",
+        base_url=base_url,
+        model_catalog=model_catalog,
+        auth_mode="none",
+        selected_model=selected_model,
+    )
+
+
+def save_ollama_provider(
+    *,
+    base_url: str = "http://localhost:11434/v1",
+    model_catalog: list[str],
+    selected_model: str = "",
+) -> bool:
+    try:
+        config = persist_ollama_provider(
+            load_current_config(),
+            base_url=base_url,
+            model_catalog=model_catalog,
+            selected_model=selected_model,
+        )
+        return save_config(config)
+    except Exception:
+        return False
+
+
+def refresh_provider_pool_catalog(
+    config: dict[str, Any],
+    provider_key: str,
+    *,
+    model_fetcher: Callable[..., list[tuple[str, str]]] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     provider_cfg = providers.get(provider_key)
     if not isinstance(provider_cfg, dict):
         return config, []
-    models = get_provider_models_from_api(
+    fetch_models = model_fetcher or get_provider_models_from_api
+    models = fetch_models(
         provider_key,
         api_key=provider_pool_api_key(provider_cfg),
         base_url=str(provider_cfg.get("base_url") or ""),
@@ -160,12 +231,27 @@ def persist_api_a_selection(config: dict[str, Any], *, provider: str, model: str
     return _config_module().set_active_provider(config, provider)
 
 
-def persist_api_b_config(config: dict[str, Any], *, provider: str, model: str) -> dict[str, Any]:
+def persist_api_b_config(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    native_audio: bool | None = None,
+) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
     providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     if provider not in providers:
         raise ValueError(f"Unknown Provider: {provider}")
     result = dict(config or {})
+    if native_audio is not None:
+        provider_entry = dict(providers[provider])
+        model_capabilities = dict(provider_entry.get("model_capabilities") or {})
+        model_capabilities[str(model or "").strip()] = {
+            "audio_input": bool(native_audio),
+            "audio_output": bool(native_audio),
+        }
+        provider_entry["model_capabilities"] = model_capabilities
+        result["providers"] = {**providers, provider: provider_entry}
     memory = dict(result.get("memory") or {})
     llm = dict(memory.get("llm") or {})
     for stale_key in ("api_key_env", "base_url", "provider_profile"):
@@ -270,12 +356,14 @@ def api_b_key_configured(memory_llm_cfg: dict[str, Any], providers: dict[str, An
 def get_provider_models_from_api(provider: str, *, api_key: str = "", base_url: str = "") -> list[tuple[str, str]]:
     try:
         auth = _provider_auth_module()
-        from ..providers.model_catalog import fetch_api_models
+        from ..providers.model_catalog import fetch_api_models, fetch_ollama_models
         provider_cfg = auth.PROVIDER_REGISTRY.get(provider, {})
         resolved_base_url = base_url or str(
             provider_cfg.get("inference_base_url") or provider_cfg.get("base_url") or ""
         )
         model_ids = fetch_api_models(api_key.strip(), resolved_base_url) or []
+        if provider.strip().lower() == "ollama" and not model_ids:
+            model_ids = fetch_ollama_models(resolved_base_url)
         return [(model_id, "") for model_id in model_ids]
     except Exception:
         return []

@@ -15,6 +15,8 @@ API-A Agent 的唯一回合执行器是 `voidcube.runtime.agent.runner`，只服
 
 `memai` 是独立的记忆产品包，源码位于 `Mem/src/memai`；`plugins` 只包含插件清单和插件实现。Mem 插件通过 `voidcube.domain.contracts.memory` 与主应用交互，不反向导入旧包。
 
+API-A、API-B 与员工代理共享 `config.yaml` 的 `providers` 池。`/api` 的远程 Provider 和本地 Ollama 入口只负责向该池写入凭证、地址和模型目录；三类调用方都通过 `infrastructure.providers.runtime.resolve_runtime_provider` 解析运行时。Ollama 是明确启用的无鉴权本地 Provider，不经过 custom/OpenRouter 兼容回退。
+
 ### API-B 员工执行边界
 
 ```text

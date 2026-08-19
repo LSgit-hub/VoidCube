@@ -75,8 +75,8 @@ class ModelVendor(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Direct aliases — exact model+provider+base_url for endpoints that aren't
-# in the models.dev catalog (e.g. Ollama Cloud, local servers).
+# Direct aliases — exact model+provider+base_url for configured endpoints that
+# aren't in the models.dev catalog.
 # Checked BEFORE catalog resolution.  Format:
 #   alias -> (model_id, provider, base_url)
 # These can also be loaded from config.yaml ``model_aliases:`` section.

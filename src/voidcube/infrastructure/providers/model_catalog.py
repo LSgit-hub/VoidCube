@@ -13,6 +13,42 @@ from ...domain.contracts.integration_policy import contains_retired_integration
 
 _openrouter_catalog_cache: list[tuple[str, str]] | None = None
 
+
+def fetch_ollama_models(
+    base_url: str = "http://localhost:11434/v1",
+    *,
+    timeout: float = 5.0,
+) -> list[str]:
+    """Read Ollama's native model inventory from ``/api/tags``."""
+    normalized = str(base_url or "").strip().rstrip("/")
+    if normalized.lower().endswith("/v1"):
+        normalized = normalized[:-3].rstrip("/")
+    if not normalized:
+        return []
+    try:
+        request = urllib.request.Request(
+            f"{normalized}/api/tags",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+    raw_models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(raw_models, list):
+        return []
+    model_ids: list[str] = []
+    for item in raw_models:
+        if isinstance(item, str):
+            model_id = item.strip()
+        elif isinstance(item, dict):
+            model_id = str(item.get("name") or item.get("model") or "").strip()
+        else:
+            continue
+        if model_id and model_id not in model_ids:
+            model_ids.append(model_id)
+    return model_ids
+
 # ---------------------------------------------------------------------------
 # Nous Portal account tier detection
 # ---------------------------------------------------------------------------
@@ -153,6 +189,7 @@ def check_nous_free_tier() -> bool:
 
 
 _PROVIDER_LABELS = {
+    "ollama": "Ollama",
     "openrouter": "OpenRouter",
     "openai": "OpenAI",
     "copilot-acp": "GitHub Copilot ACP",
@@ -183,6 +220,7 @@ _PROVIDER_ALIASES = {
 }
 
 _PROVIDER_ORDER = (
+    "ollama",
     "openrouter",
     "nous",
     "openai",

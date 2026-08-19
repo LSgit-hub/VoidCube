@@ -4241,6 +4241,14 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <input id="providerConcurrency" name="provider_concurrency" type="number" min="1" max="16" step="1" value="2" required/>
                 </label>
                 <label class="provider-active-field">
+                  <input id="providerAudioInput" type="checkbox"/>
+                  <span>API-B 原生语音输入</span>
+                </label>
+                <label class="provider-active-field">
+                  <input id="providerAudioOutput" type="checkbox"/>
+                  <span>API-B 原生语音输出</span>
+                </label>
+                <label class="provider-active-field">
                   <input id="providerMakeActive" type="checkbox"/>
                   <span>设为 API-A 当前 Provider</span>
                 </label>
@@ -4500,6 +4508,8 @@ const els = {
   providerModelCatalogMeta: $('#providerModelCatalogMeta'),
   providerAuthMode: $('#providerAuthMode'),
   providerConcurrency: $('#providerConcurrency'),
+  providerAudioInput: $('#providerAudioInput'),
+  providerAudioOutput: $('#providerAudioOutput'),
   providerRuntimeMetrics: $('#providerRuntimeMetrics'),
   providerCooldownReset: $('#providerCooldownReset'),
   providerMakeActive: $('#providerMakeActive'),
@@ -7406,6 +7416,8 @@ function editProvider(providerKey) {
   els.providerModel.value = provider ? provider.selected_model : '';
   els.providerAuthMode.value = provider ? provider.auth_mode : 'env';
   els.providerConcurrency.value = String(provider ? provider.concurrency_limit || 2 : 2);
+  els.providerAudioInput.checked = Boolean(provider && provider.audio_input);
+  els.providerAudioOutput.checked = Boolean(provider && provider.audio_output);
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
@@ -7743,6 +7755,8 @@ async function saveProviderPoolEntry() {
         api_key_env: els.providerApiKeyEnv.value.trim(),
         api_key: els.providerApiKey.value,
         concurrency_limit: Number(els.providerConcurrency.value || 2),
+        audio_input: Boolean(els.providerAudioInput.checked),
+        audio_output: Boolean(els.providerAudioOutput.checked),
         make_active: Boolean(els.providerMakeActive.checked),
       }),
     });

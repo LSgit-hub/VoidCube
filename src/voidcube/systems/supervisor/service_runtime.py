@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional
 import uuid
 
@@ -797,6 +798,7 @@ class ServiceRuntimeMixin:
         system_prompt: str,
         payload: Dict[str, Any],
         task: str,
+        audio_path: str | Path | None = None,
     ) -> Dict[str, Any] | None:
         try:
             from memai.model_config import resolve_mem_llm_client
@@ -804,13 +806,26 @@ class ServiceRuntimeMixin:
             client, _ = resolve_mem_llm_client(role="governance_reasoner")
             if client is None:
                 return None
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
+            if audio_path is not None:
+                complete_with_audio = getattr(client, "complete_json_with_audio", None)
+                if not callable(complete_with_audio):
+                    return {"status": "needs_transcript"}
+                operation = asyncio.to_thread(
+                    complete_with_audio,
+                    system_prompt=system_prompt,
+                    user_payload=payload,
+                    audio_path=audio_path,
+                    task=task,
+                )
+            else:
+                operation = asyncio.to_thread(
                     client.complete_json,
                     system_prompt=system_prompt,
                     user_payload=payload,
                     task=task,
-                ),
+                )
+            result = await asyncio.wait_for(
+                operation,
                 timeout=max(
                     1.0,
                     float(
@@ -818,6 +833,14 @@ class ServiceRuntimeMixin:
                     ),
                 ),
             )
+            if audio_path is not None and isinstance(result, tuple) and len(result) == 2:
+                payload_result, native_audio = result
+                if not isinstance(payload_result, dict):
+                    return None
+                normalized = dict(payload_result)
+                if isinstance(native_audio, dict):
+                    normalized["_native_audio"] = native_audio
+                return normalized
             return dict(result) if isinstance(result, dict) else None
         except asyncio.CancelledError:
             raise
@@ -851,6 +874,30 @@ class ServiceRuntimeMixin:
                     return str(payload.get("context") or "")[:3500]
         except Exception:
             return ""
+
+    @staticmethod
+    def _companion_native_audio_enabled() -> bool:
+        try:
+            from ...infrastructure.config.configuration import load_config
+
+            config = load_config()
+            memory = config.get("memory") if isinstance(config, dict) else {}
+            llm = memory.get("llm") if isinstance(memory, dict) else {}
+            provider = str(llm.get("provider") or "").strip().lower() if isinstance(llm, dict) else ""
+            providers = config.get("providers") if isinstance(config, dict) else {}
+            entry = providers.get(provider) if isinstance(providers, dict) else None
+            model_capabilities = entry.get("model_capabilities") if isinstance(entry, dict) else None
+            selected_capabilities = (
+                model_capabilities.get(str(llm.get("model") or ""), {})
+                if isinstance(model_capabilities, dict) else {}
+            )
+            return bool(
+                isinstance(selected_capabilities, dict)
+                and selected_capabilities.get("audio_input")
+                and selected_capabilities.get("audio_output")
+            )
+        except Exception:
+            return False
 
     async def _persist_companion_turn_pair(
         self,
@@ -1203,8 +1250,9 @@ class ServiceRuntimeMixin:
     async def handle_companion_message(
         self,
         *,
-        text: str,
+        text: str = "",
         session_id: str = "",
+        audio_path: str | Path | None = None,
     ) -> Dict[str, Any]:
         if self._service_runtime.stellar_mode != StellarMode.DAILY_COMPANION:
             return {
@@ -1213,8 +1261,12 @@ class ServiceRuntimeMixin:
                 "stellar_mode": self._service_runtime.stellar_mode.value,
             }
         message = str(text or "").strip()
-        if not message:
+        native_audio_enabled = self._companion_native_audio_enabled()
+        if audio_path is not None and not native_audio_enabled:
+            return {"status": "needs_transcript", "session_id": session_id}
+        if not message and audio_path is None:
             return {"status": "invalid", "reason": "message_is_empty"}
+        model_message = message or "[语音输入]"
         dialogue_session_id = str(session_id or "").strip() or f"companion-{uuid.uuid4()}"
         memory_context = await self._recall_companion_context(message)
         schedule_context = self._companion_schedule_context()
@@ -1262,7 +1314,7 @@ class ServiceRuntimeMixin:
             ),
             payload={
                 "mode": StellarMode.DAILY_COMPANION.value,
-                "user_message": message,
+                "user_message": model_message,
                 "memory_context": memory_context,
                 "local_time": local_now.isoformat(),
                 "local_timezone": local_timezone,
@@ -1274,13 +1326,17 @@ class ServiceRuntimeMixin:
                 ),
             },
             task="companion.direct_dialogue",
+            audio_path=audio_path if native_audio_enabled else None,
         )
         normalized_result = dict(result or {})
         schedule_action = normalized_result.get("schedule_action")
-        schedule_action_result = self._apply_companion_schedule_action(schedule_action)
         media_action = normalized_result.get("media_action")
         inferred_media_query = self._infer_immediate_companion_media_query(message)
         inferred_media_control = self._infer_immediate_companion_media_control(message)
+        if inferred_media_query or inferred_media_control:
+            # Immediate playback must never be blocked by an API-B hallucinated
+            # recurring schedule or malformed time_of_day.
+            schedule_action = {"action": "none"}
         schedule_action_name = (
             str(schedule_action.get("action") or "none").strip().lower()
             if isinstance(schedule_action, dict)
@@ -1311,6 +1367,7 @@ class ServiceRuntimeMixin:
             if isinstance(media_action, dict)
             else "none"
         )
+        schedule_action_result = self._apply_companion_schedule_action(schedule_action)
         media_action_result = self._apply_companion_media_action(
             media_action
         )
@@ -1362,6 +1419,9 @@ class ServiceRuntimeMixin:
                 reply_text += f"。计划：{plan_summary}"
             reply_text += "。执行状态会显示在自主链路迷你 CLI。"
         if not reply_text:
+            if isinstance(normalized_result.get("_native_audio"), dict):
+                reply_text = "已通过模型原生语音回复。"
+        if not reply_text:
             return {
                 "status": "unavailable",
                 "reason": "api_b_dialogue_unavailable",
@@ -1401,6 +1461,9 @@ class ServiceRuntimeMixin:
             "memory_persisted": persisted,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
+        native_audio = normalized_result.get("_native_audio")
+        if isinstance(native_audio, dict):
+            snapshot["native_audio"] = native_audio
         self._service_runtime.latest_companion_dialogue = snapshot
         return snapshot
 

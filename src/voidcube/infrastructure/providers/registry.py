@@ -107,14 +107,16 @@ SPECIAL_RUNTIME_PROVIDER_IDS = frozenset({
     "copilot-acp",
     "custom",
 })
+LOCAL_RUNTIME_PROVIDER_IDS = frozenset({"ollama"})
 RUNTIME_PROVIDER_IDS = frozenset(
     provider
     for provider, config in PROVIDER_REGISTRY.items()
     if config.get("auth_type") == "api_key"
-) | SPECIAL_RUNTIME_PROVIDER_IDS
+) | SPECIAL_RUNTIME_PROVIDER_IDS | LOCAL_RUNTIME_PROVIDER_IDS
 
 __all__ = [
     "PROVIDER_REGISTRY",
+    "LOCAL_RUNTIME_PROVIDER_IDS",
     "RUNTIME_PROVIDER_IDS",
     "SPECIAL_RUNTIME_PROVIDER_IDS",
     "ProviderConfig",

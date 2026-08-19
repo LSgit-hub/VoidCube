@@ -9,6 +9,10 @@ VoidCube 是一个本地运行的 Python 智能体系统：API-A Agent 负责 CL
 
 星子不是第二个独立 Agent 进程。它由 Supervisor 的判断与治理、Memory/MemAI 的记忆、API-B 的后台推理共同组成；用户对话由 API-A Agent 完成，API-B 的后台副作用由隔离员工代理完成。
 
+## 模型 Provider 池
+
+`/api` 是统一模型配置入口：`[1] 添加 Provider` 配置远程 OpenAI-compatible Provider，`[2] 本地模型（Ollama）` 探测本机 Ollama 并把模型目录写入同一个 `providers` 池。保存后，API-A、API-B 和员工代理都从该池选择 Provider/模型；Ollama 使用 `auth_mode: none` 和默认地址 `http://localhost:11434/v1`，不建立 CLI 专用旁路。
+
 ## 记忆边界
 
 Memory Service 使用单一存储和统一备份，但所有读写都带有 `owner_id`、`workspace_id`、`memory_domain` 与服务端 actor 权限校验。当前域为：

@@ -23,7 +23,7 @@ PROVIDER_DEFAULTS = {
         "provider_profile": "openai",
     },
     "ollama": {
-        "api_key_env": "OLLAMA_API_KEY",
+        "api_key_env": "",
         "base_url": "http://localhost:11434/v1",
         "provider_profile": "openai",
     },
@@ -295,9 +295,9 @@ def resolve_mem_llm_client(role: str = "default"):
 
     All Mem-related LLM callers (memory service, supervisor endogenous
     drive, Tier 1→Tier 2 bridge, etc.) must go through this function.
-    That way the CLI ``/api [1][2][3]`` command — which writes to
-    ``memory.llm.*`` in voidcube config — is the *only* knob that needs
-    to be turned to retarget Mem's model, base URL, and key env.
+    That way the CLI ``/api -> 4`` command writes only the selected
+    Provider/model reference to ``memory.llm.*``; endpoint and credential
+    ownership remain in VoidCube's shared ``providers`` pool.
 
     Args:
         role: Which role-specific config to resolve (see

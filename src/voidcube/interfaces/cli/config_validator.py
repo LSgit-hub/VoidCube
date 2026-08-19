@@ -161,7 +161,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.provider",
                 message="API-B 未配置 Mem/Supervisor 模型 Provider",
-                suggestion="运行 /api -> 3 记忆系统模型配置，选择 API-B Provider",
+                suggestion="运行 /api -> 4 记忆系统模型配置，选择 API-B Provider",
             )
         )
         return issues
@@ -176,7 +176,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.provider",
                 message=f"API-B Provider '{provider}' 不在共享 Provider 池中",
-                suggestion="运行 /api -> 1 添加 Provider，再运行 /api -> 3 选择 API-B 模型",
+                suggestion="运行 /api -> 1 添加 Provider 或 /api -> 2 配置本地模型，再运行 /api -> 4 选择 API-B 模型",
             )
         )
         return issues
@@ -188,7 +188,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.model",
                 message=f"API-B Provider '{provider}' 未选择模型",
-                suggestion="运行 /api -> 3 记忆系统模型配置，为 API-B 选择模型",
+                suggestion="运行 /api -> 4 记忆系统模型配置，为 API-B 选择模型",
             )
         )
 
@@ -200,7 +200,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.base_url",
                 message=f"API-B Provider '{provider}' 缺少有效的 http(s) Base URL",
-                suggestion="运行 /api -> 3 记忆系统模型配置，填写 OpenAI 兼容 API 根地址",
+                suggestion="运行 /api -> 4 记忆系统模型配置，填写 OpenAI 兼容 API 根地址",
             )
         )
     elif _is_local_gateway_loop_base_url(base_url):
@@ -209,7 +209,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.base_url",
                 message="API-B base_url 指向本地 Gateway，会把 Mem/Supervisor 绕回 API-A",
-                suggestion="运行 /api -> 3 记忆系统模型配置，保存该 Provider 的直接模型 endpoint",
+                suggestion="运行 /api -> 4 记忆系统模型配置，保存该 Provider 的直接模型 endpoint",
             )
         )
 
@@ -223,7 +223,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                 severity=Severity.ERROR,
                 key_path="memory.llm.api_key_env",
                 message=f"API-B Provider '{provider}' 未配置专用 key 环境变量",
-                suggestion="运行 /api -> 3 记忆系统模型配置，让 API-B 写入 memory.llm.api_key_env",
+                suggestion="运行 /api -> 4 记忆系统模型配置，让 API-B 引用该 Provider 的凭证",
             )
         )
         return issues
@@ -254,7 +254,7 @@ def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
                     f"{api_key_env}；已检查 {checked_sources}"
                 ),
                 suggestion=(
-                    f"运行 /api -> 3 记忆系统模型配置，并把 API-B key 保存到 {api_key_env}；"
+                    f"运行 /api -> 4 记忆系统模型配置，并把 API-B key 保存到 {api_key_env}；"
                     "API-A 的 agnes-ai 凭证不会用于 Mem/Supervisor"
                 ),
             )

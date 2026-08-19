@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
 import json
 import os
 import threading
@@ -261,9 +262,21 @@ class LLMProviderCapabilities:
         self,
         *,
         system_prompt: str,
-        user_content: str,
-    ) -> list[dict[str, str]]:
+        user_content: Any,
+    ) -> list[dict[str, Any]]:
         if self.system_prompt_style == "inline_user":
+            if isinstance(user_content, list):
+                content = [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Follow these system instructions while answering.\n"
+                            f"{system_prompt}\n\nUser payload:\n"
+                        ),
+                    },
+                    *user_content,
+                ]
+                return [{"role": "user", "content": content}]
             return [
                 {
                     "role": "user",
@@ -552,6 +565,30 @@ def _extract_output_text(response: dict[str, Any]) -> str:
     raise ValueError("Model response does not contain output text")
 
 
+def _extract_response_audio(response: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a validated native audio block from an OpenAI-style response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return None
+    audio = message.get("audio")
+    if not isinstance(audio, dict):
+        return None
+    data = audio.get("data")
+    if not isinstance(data, str) or not data.strip():
+        return None
+    try:
+        base64.b64decode(data, validate=True)
+    except (ValueError, TypeError):
+        return None
+    audio_format = str(audio.get("format") or "wav").strip().lower()
+    if audio_format not in {"wav", "mp3", "flac", "ogg", "m4a"}:
+        audio_format = "wav"
+    return {"data": data, "format": audio_format}
+
+
 def _extract_message_content(
     response: dict[str, Any],
     provider_capabilities: LLMProviderCapabilities,
@@ -726,6 +763,56 @@ class OpenAICompatibleLLMClient:
         task: str | None = None,
         response_schema: str | None = None,
     ) -> dict[str, Any]:
+        result, _ = self._complete_json_request(
+            system_prompt=system_prompt,
+            prompt_key=prompt_key,
+            fallback_prompt=fallback_prompt,
+            user_payload=user_payload,
+            task=task,
+            response_schema=response_schema,
+        )
+        return result
+
+    def complete_json_with_audio(
+        self,
+        *,
+        system_prompt: str | None = None,
+        prompt_key: str | None = None,
+        fallback_prompt: str | None = None,
+        user_payload: dict[str, Any],
+        audio_path: str | Path,
+        task: str | None = None,
+        response_schema: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Complete a JSON turn with native audio input and optional audio output.
+
+        This uses the OpenAI-compatible ``input_audio`` message contract.  The
+        caller explicitly opts into this method only for models known to support
+        audio; text-only providers continue using ``complete_json``.
+        """
+        return self._complete_json_request(
+            system_prompt=system_prompt,
+            prompt_key=prompt_key,
+            fallback_prompt=fallback_prompt,
+            user_payload=user_payload,
+            audio_path=audio_path,
+            request_audio=True,
+            task=task,
+            response_schema=response_schema,
+        )
+
+    def _complete_json_request(
+        self,
+        *,
+        system_prompt: str | None,
+        prompt_key: str | None,
+        fallback_prompt: str | None,
+        user_payload: dict[str, Any],
+        task: str | None,
+        response_schema: str | None,
+        audio_path: str | Path | None = None,
+        request_audio: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         resolved_prompt = system_prompt
         if prompt_key is not None:
             resolved_prompt = self.prompt_registry.get(
@@ -742,10 +829,25 @@ class OpenAICompatibleLLMClient:
             ),
             ensure_ascii=False,
         )
-        messages = self.provider_capabilities.build_messages(
-            system_prompt=resolved_prompt,
-            user_content=user_content,
-        )
+        if audio_path is None:
+            messages = self.provider_capabilities.build_messages(
+                system_prompt=resolved_prompt,
+                user_content=user_content,
+            )
+        else:
+            encoded = base64.b64encode(Path(audio_path).read_bytes()).decode("ascii")
+            suffix = Path(audio_path).suffix.lower().lstrip(".")
+            audio_format = suffix if suffix in {"wav", "mp3", "flac", "ogg", "m4a"} else "wav"
+            messages = self.provider_capabilities.build_messages(
+                system_prompt=resolved_prompt,
+                user_content=[
+                    {"type": "text", "text": user_content},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": encoded, "format": audio_format},
+                    },
+                ],
+            )
         # ── Pre-flight context-window safety check ──
         # Estimate prompt tokens to avoid sending a request that will
         # fail with a context-overflow error.  Uses a conservative
@@ -783,6 +885,9 @@ class OpenAICompatibleLLMClient:
             "temperature": self.temperature,
             "messages": messages,
         }
+        if request_audio:
+            payload["modalities"] = ["text", "audio"]
+            payload["audio"] = {"voice": "alloy", "format": "wav"}
         self.provider_capabilities.apply_request_format(payload)
         response = self.transport(
             self.provider_capabilities.build_url(self.base_url),
@@ -793,7 +898,8 @@ class OpenAICompatibleLLMClient:
             payload,
         )
         content = _extract_message_content(response, self.provider_capabilities)
-        return unwrap_protocol_response(_extract_json_object(content), task=task)
+        audio = _extract_response_audio(response)
+        return unwrap_protocol_response(_extract_json_object(content), task=task), audio
 
     def safe_complete_json(
         self,

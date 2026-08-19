@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from . import auth as auth_mod
 from .credential_pool import CredentialPool, PooledCredential, get_custom_provider_pool_key, load_pool
 from .registry import (
+    LOCAL_RUNTIME_PROVIDER_IDS,
     PROVIDER_REGISTRY,
     RUNTIME_PROVIDER_IDS,
 )
@@ -349,14 +350,11 @@ def _resolve_openrouter_runtime(
             env_str("OPENAI_API_KEY"),
         ]
     else:
-        # Custom endpoint: use api_key from config when using config base_url (#1760).
-        # When the endpoint is Ollama Cloud, check OLLAMA_API_KEY — it's
-        # the canonical env var for ollama.com authentication.
-        _is_ollama_url = "ollama.com" in base_url.lower()
+        # Custom endpoint credentials must come from its configured Provider
+        # entry instead of an unrelated global Provider environment variable.
         api_key_candidates = [
             explicit_api_key,
             (cfg_api_key if use_config_base_url else ""),
-            (env_str("OLLAMA_API_KEY") if _is_ollama_url else ""),
             env_str("OPENAI_API_KEY"),
             env_str("OPENROUTER_API_KEY"),
         ]
@@ -438,14 +436,6 @@ def _resolve_explicit_runtime(
         }
 
     pconfig = PROVIDER_REGISTRY.get(provider)
-    if pconfig and pconfig.auth_type == "none" and explicit_base_url:
-        return {
-            "provider": provider,
-            "base_url": explicit_base_url.rstrip("/"),
-            "api_key": explicit_api_key or "no-key-required",
-            "source": "explicit",
-            "requested_provider": requested_provider,
-        }
     if pconfig and pconfig.auth_type == "api_key":
         env_url = ""
         if pconfig.base_url_env_var:
@@ -475,6 +465,41 @@ def _resolve_explicit_runtime(
         }
 
     return None
+
+
+def _resolve_local_runtime(
+    *,
+    provider: str,
+    requested_provider: str,
+    configured_base_url: str = "",
+    explicit_base_url: str = "",
+) -> Dict[str, Any]:
+    """Resolve one explicitly supported local OpenAI-compatible Provider."""
+    provider_config = PROVIDER_REGISTRY[provider]
+    env_base_url = ""
+    if provider_config.base_url_env_var:
+        env_base_url = os.getenv(provider_config.base_url_env_var, "").strip()
+    base_url = normalize_openai_compatible_base_url(
+        explicit_base_url
+        or configured_base_url
+        or env_base_url
+        or provider_config.inference_base_url
+    )
+    if explicit_base_url:
+        source = "explicit"
+    elif configured_base_url:
+        source = "provider_config"
+    elif env_base_url:
+        source = "env"
+    else:
+        source = "local"
+    return {
+        "provider": provider,
+        "base_url": base_url,
+        "api_key": "no-key-required",
+        "source": source,
+        "requested_provider": requested_provider,
+    }
 
 
 def resolve_runtime_provider(
@@ -512,6 +537,13 @@ def resolve_runtime_provider(
         raise AuthError(
             f"Provider '{requested_provider}' is not supported by the active runtime. "
             "Configure it as a custom OpenAI-compatible endpoint or choose a listed provider."
+        )
+    if provider in LOCAL_RUNTIME_PROVIDER_IDS:
+        return _resolve_local_runtime(
+            provider=provider,
+            requested_provider=requested_provider,
+            configured_base_url=configured_base_url,
+            explicit_base_url=(explicit_base_url or "").strip(),
         )
     model_cfg = _get_model_config()
     explicit_runtime = _resolve_explicit_runtime(

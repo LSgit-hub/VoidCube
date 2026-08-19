@@ -60,6 +60,8 @@ class ProviderPoolEntryRequest(BaseModel):
     api_key_env: str = Field(default="", max_length=120)
     api_key: str = Field(default="", max_length=8192)
     concurrency_limit: int = Field(default=2, ge=1, le=16)
+    audio_input: bool = False
+    audio_output: bool = False
     make_active: bool = False
 
     @field_validator("label", "type", "base_url", "selected_model", "api_key_env")
@@ -278,22 +280,30 @@ class ProviderPoolService:
                     and not is_placeholder_secret(value)
                 )
             )
-            public_providers.append(
-                {
-                    "key": key,
-                    "label": str(entry.get("label") or key),
-                    "type": provider_type,
-                    "base_url": str(entry.get("base_url") or ""),
-                    "selected_model": str(entry.get("selected_model") or ""),
-                    "concurrency_limit": _provider_concurrency(entry),
-                    "model_catalog": _stored_model_catalog(entry),
-                    "auth_mode": auth_mode,
-                    "api_key_env": api_key_env,
-                    "credential_configured": credential_configured,
-                    "active": key == active,
-                    "references": _provider_references(config, key),
-                }
+            public_provider = {
+                "key": key,
+                "label": str(entry.get("label") or key),
+                "type": provider_type,
+                "base_url": str(entry.get("base_url") or ""),
+                "selected_model": str(entry.get("selected_model") or ""),
+                "concurrency_limit": _provider_concurrency(entry),
+                "model_catalog": _stored_model_catalog(entry),
+                "auth_mode": auth_mode,
+                "api_key_env": api_key_env,
+                "credential_configured": credential_configured,
+                "active": key == active,
+                "references": _provider_references(config, key),
+            }
+            model_capabilities = entry.get("model_capabilities")
+            selected_capabilities = (
+                model_capabilities.get(str(entry.get("selected_model") or ""), {})
+                if isinstance(model_capabilities, Mapping)
+                else {}
             )
+            if isinstance(selected_capabilities, Mapping) and selected_capabilities:
+                public_provider["audio_input"] = bool(selected_capabilities.get("audio_input"))
+                public_provider["audio_output"] = bool(selected_capabilities.get("audio_output"))
+            public_providers.append(public_provider)
 
         public_roles = []
         for role, values in roles.items():
@@ -392,6 +402,13 @@ class ProviderPoolService:
                 "concurrency_limit": request.concurrency_limit,
             }
         )
+        model_capabilities = dict(current.get("model_capabilities") or {})
+        if request.audio_input or request.audio_output or request.selected_model in model_capabilities:
+            model_capabilities[request.selected_model] = {
+                "audio_input": bool(request.audio_input),
+                "audio_output": bool(request.audio_output),
+            }
+            current["model_capabilities"] = model_capabilities
         if catalog_invalidated:
             current.pop("model_catalog", None)
         current.pop("api_key", None)

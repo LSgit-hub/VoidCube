@@ -45,6 +45,11 @@ class VoidcubeOverlay:
 
 
 VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
+    "ollama": VoidcubeOverlay(
+        auth_type="none",
+        base_url_override="http://localhost:11434/v1",
+        base_url_env_var="OLLAMA_BASE_URL",
+    ),
     "openrouter": VoidcubeOverlay(
         is_aggregator=True,
         extra_env_vars=("OPENAI_API_KEY",),
@@ -128,11 +133,11 @@ ALIASES: Dict[str, str] = {
     # deepseek
     "deep-seek": "deepseek",
 
-    # Local server aliases → virtual "local" concept (resolved via user config)
+    # Local server aliases
     "lmstudio": "lmstudio",
     "lm-studio": "lmstudio",
     "lm_studio": "lmstudio",
-    "ollama": "ollama-cloud",
+    "ollama": "ollama",
     "vllm": "local",
     "llamacpp": "local",
     "llama.cpp": "local",

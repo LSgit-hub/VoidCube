@@ -823,6 +823,31 @@ def resolve_provider_client(
         return (_to_async_client(client, final_model) if async_mode
                 else (client, final_model))
 
+    if pconfig.auth_type == "none":
+        # Local OpenAI-compatible providers (currently Ollama) have no
+        # credential source. Resolve their configured endpoint through the
+        # shared runtime provider so auxiliary/API-B callers use the same
+        # providers pool as API-A and employee agents.
+        try:
+            from .runtime import resolve_runtime_provider
+
+            runtime = resolve_runtime_provider(requested=provider)
+        except Exception as exc:
+            logger.debug("resolve_provider_client: local provider %s unavailable: %s", provider, exc)
+            return None, None
+        base_url = _to_openai_base_url(str(runtime.get("base_url") or "").strip())
+        if not base_url:
+            return None, None
+        api_key = str(runtime.get("api_key") or "no-key-required").strip() or "no-key-required"
+        default_model = _first_live_model(api_key, base_url)
+        final_model = _normalize_resolved_model(model or default_model, provider)
+        if not final_model:
+            logger.warning("resolve_provider_client: local provider %s has no selected/live model", provider)
+            return None, None
+        client = _client_factory.create_openai_client(api_key, base_url)
+        return (_to_async_client(client, final_model) if async_mode
+                else (client, final_model))
+
     elif pconfig.auth_type in ("oauth_device_code", "oauth_external"):
         # OAuth providers — route through their specific try functions
         if provider == "nous":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -690,11 +691,24 @@ class VoiceSessionManager:
             )
             if stop_event.is_set():
                 return {"status": "interrupted", "reason": "recording_interrupted"}
-            result = await self._transcribe_audio_path(audio_path, stop_event=stop_event)
+            voice_match = await self._verify_utterance_speaker(audio_path)
+            if self.state.fingerprint_enabled and not voice_match.get("owner_voice_matched"):
+                self.state.last_status = "rejected"
+                return {"status": "rejected", "voice_match": voice_match}
+            native_result = await self._respond_to_captured_audio(
+                audio_path=audio_path,
+                session_id=self.state.session_id,
+                stop_event=stop_event,
+                voice_match=voice_match,
+            )
+            if native_result is not None:
+                return native_result
+            result = await self._transcribe_audio_path(
+                audio_path, stop_event=stop_event, voice_match=voice_match
+            )
             if result.get("status") != "complete":
                 return result
             transcript = str(result["transcript"])
-            voice_match = dict(result["voice_match"])
             query = transcript
             if strip_wake_word:
                 wake_query = _extract_wake_query(transcript, self.config.wake_word)
@@ -740,8 +754,9 @@ class VoiceSessionManager:
         audio_path: Path,
         *,
         stop_event: asyncio.Event,
+        voice_match: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        voice_match = await self._verify_utterance_speaker(audio_path)
+        voice_match = voice_match or await self._verify_utterance_speaker(audio_path)
         if self.state.fingerprint_enabled and not voice_match.get("owner_voice_matched"):
             self.state.last_status = "rejected"
             return {"status": "rejected", "voice_match": voice_match}
@@ -763,6 +778,70 @@ class VoiceSessionManager:
             "transcript": transcript,
             "voice_match": voice_match,
         }
+
+    async def _respond_to_captured_audio(
+        self,
+        *,
+        audio_path: Path,
+        session_id: str,
+        stop_event: asyncio.Event,
+        voice_match: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Try native API-B audio; return None when STT fallback is required."""
+        if self.companion_callback is None:
+            return None
+        self.state.last_status = "thinking"
+        try:
+            reply = await self.companion_callback(
+                text="",
+                audio_path=audio_path,
+                session_id=session_id,
+            )
+        except TypeError as exc:
+            if "audio_path" not in str(exc):
+                raise
+            return None
+        if str(reply.get("status") or "") == "needs_transcript":
+            return None
+        if str(reply.get("status") or "") != "ok":
+            # Native audio is an optimization, not a second failure mode:
+            # retry the established STT -> text -> TTS path when API-B is
+            # unavailable or rejects the audio request.
+            return None
+        native_audio = reply.get("native_audio")
+        reply_text = str(reply.get("reply_text") or "").strip()
+        if not reply_text and not isinstance(native_audio, dict):
+            return None
+        if isinstance(native_audio, dict):
+            data = str(native_audio.get("data") or "")
+            audio_format = str(native_audio.get("format") or "wav").lower()
+            try:
+                audio_bytes = base64.b64decode(data, validate=True)
+            except (ValueError, TypeError):
+                audio_bytes = b""
+            if audio_bytes:
+                self.state.last_reply = reply_text
+                self.state.last_status = "speaking"
+                speech_path = self._temporary_audio_path(
+                    "reply", suffix=f".{audio_format}"
+                )
+                try:
+                    speech_path.write_bytes(audio_bytes)
+                    await self.player.play(speech_path, stop_event=stop_event)
+                    if stop_event.is_set():
+                        self.state.last_status = "interrupted"
+                        return {"status": "interrupted", "reply_text": reply_text}
+                    self.state.last_status = "complete"
+                    return {
+                        "status": "complete",
+                        "session_id": session_id,
+                        "reply_text": reply_text,
+                        "native_audio": True,
+                        "voice_match": voice_match,
+                    }
+                finally:
+                    self._cleanup(speech_path)
+        return None
 
     async def _verify_utterance_speaker(self, audio_path: Path) -> dict[str, Any]:
         if not self.state.fingerprint_enabled:

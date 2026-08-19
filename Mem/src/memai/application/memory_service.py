@@ -928,10 +928,9 @@ class MemoryApplicationService:
         the target level (Scene→Arc: synthesize scene into arc narrative,
         Arc→Epoch: distill arc into epoch-level historical significance).
 
-        LLM credentials are resolved from ``memory.llm.*`` via
-        ``_resolve_mem_llm_client`` — the same key the CLI ``/api [3]``
-        command writes — so retargeting the Mem model is a single-step
-        operation in the CLI rather than scattered env-var management.
+        The selected model is resolved from ``memory.llm.*`` and its endpoint
+        and credentials come from the shared Provider pool. The CLI
+        ``/api -> 4`` command updates that reference without duplicating keys.
         """
         level_names = {0: "事件", 1: "场景", 2: "弧线", 3: "纪元", 4: "终章"}
         from_name = level_names.get(from_level, str(from_level))
