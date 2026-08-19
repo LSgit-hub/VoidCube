@@ -1,13 +1,13 @@
 # VoidCube
 
-VoidCube 是一个本地运行的 Python 智能体系统：API-A Agent 负责 CLI 对话、工具调用和任务执行；Supervisor、Memory/MemAI 与 API-B 共同承载“星子”这一监督与伴侣人格。
+VoidCube 是一个本地运行的 Python 智能体系统：API-A Agent 负责 CLI 对话；Supervisor、Memory/MemAI 与 API-B 共同承载“星子”这一监督与伴侣人格。API-B 获准的后台任务统一派给配置好的员工代理执行并回写结果，不再调用 API-A 自主认领通道。
 
 ## 当前运行模型
 
 - `daily_companion`：系统启动后的默认模式。星子常驻运行，只读取 VoidCube 内部事件，等待或响应用户语音；只有证据充分且确有帮助时才提醒。
 - `auto_evolution`：用户执行 `/auto` 后进入。暂停伴侣辅助和实时用户感知，执行记忆整理、自学习、自计划以及受治理的身体进化。`/auto-q` 收口任务并返回日常模式。
 
-星子不是第二个独立 Agent 进程。它由 Supervisor 的判断与治理、Memory/MemAI 的记忆、API-B 的后台推理共同组成；实际工具副作用仍由 API-A Agent 和 Execution 完成。
+星子不是第二个独立 Agent 进程。它由 Supervisor 的判断与治理、Memory/MemAI 的记忆、API-B 的后台推理共同组成；用户对话由 API-A Agent 完成，API-B 的后台副作用由隔离员工代理完成。
 
 ## 记忆边界
 
@@ -17,7 +17,7 @@ Memory Service 使用单一存储和统一备份，但所有读写都带有 `own
 - `companion`：日常星子语音语义、用户目标理解和伴侣偏好。
 - `evolution`：Auto 模式的计划、实验、治理和身体 lineage。
 
-日常星子可只读交互域；API-A 默认看不到伴侣域；Auto 只读写进化域。跨域信息必须通过可审计的提升引用传播，不能直接复制整段对话。
+日常星子可只读交互域；API-A 默认看不到伴侣域；Auto 只读写进化域。API-B 获准任务通过员工队列执行并以 `autonomous_task_id` 回写。跨域信息必须通过可审计的提升引用传播，不能直接复制整段对话。
 
 ## 主要目录
 
@@ -52,6 +52,15 @@ python -m pip install -e ".[all,dev]"
 python -m pytest -q
 python -m pytest Mem/tests -q
 ```
+
+Windows 桌面端还需在系统 `PATH` 中提供 Tirith 安全扫描器。当前验证版本来自官方 `sheeki03/tirith` npm 包：
+
+```powershell
+npm install -g tirith@0.3.3
+tirith check --json --non-interactive --shell posix -- "echo hello"
+```
+
+Linux 和 macOS 在未找到 Tirith 时会校验发布校验和并安装到 VoidCube 运行目录；也可以通过 `TIRITH_BIN` 显式指定已安装的可执行文件。
 
 根目录 `tests/` 仅保留在开发机用于本地验证，已加入 `.gitignore`，不会提交到远程仓库；`Mem/tests/` 仍是远程保留的记忆领域测试。
 

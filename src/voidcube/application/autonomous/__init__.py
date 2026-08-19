@@ -1,19 +1,3 @@
-"""Autonomous application-lane orchestration."""
+"""API-B planning and employee-dispatch application boundary."""
 
-from .execution_runtime import (
-    AutonomousExecutionLoopPorts,
-    AutonomousExecutionRuntime,
-    AutonomousExecutionRuntimePorts,
-    AutonomousExecutionStopPorts,
-    start_autonomous_execution_loop,
-    stop_autonomous_execution,
-)
-
-__all__ = [
-    "AutonomousExecutionLoopPorts",
-    "AutonomousExecutionRuntime",
-    "AutonomousExecutionRuntimePorts",
-    "AutonomousExecutionStopPorts",
-    "start_autonomous_execution_loop",
-    "stop_autonomous_execution",
-]
+__all__: list[str] = []

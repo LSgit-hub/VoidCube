@@ -12,12 +12,8 @@ from .autonomous_chain_store import (
     AutonomousChainGitLineage,
     AutonomousChainStore,
     AutonomousChainTask,
-    StaleExecutionLeaseError,
 )
-from .autonomous_task_review import (
-    is_agent_pull_task,
-    normalize_autonomous_chain_decision,
-)
+from .autonomous_task_review import normalize_autonomous_chain_decision
 from .autonomous_learning_quality import (
     assess_autonomous_learning_quality,
 )
@@ -57,7 +53,6 @@ class AutonomousTaskReviewService:
         record_activity: RecordActivity,
         touch_activity: TouchActivity,
         get_active_tasks: Callable[[], list[AutonomousChainTask]],
-        recovery_healthy: Callable[[], bool] = lambda: True,
         get_review_statuses: Callable[[], list[str]],
         review_adviser: ReviewAdviser,
         planning_activity_kind_for_task: Callable[[str], str],
@@ -76,7 +71,6 @@ class AutonomousTaskReviewService:
         self._record_activity = record_activity
         self._touch_activity = touch_activity
         self._get_active_tasks = get_active_tasks
-        self._recovery_healthy = recovery_healthy
         self._get_review_statuses = get_review_statuses
         self._review_adviser = review_adviser
         self._planning_activity_kind_for_task = planning_activity_kind_for_task
@@ -142,114 +136,6 @@ class AutonomousTaskReviewService:
             rollback_plan=rollback_plan,
         )
 
-    @staticmethod
-    def _request_agent_session_id(request: Dict[str, Any]) -> str:
-        session_id = str(request.get("session_id") or "").strip()
-        if session_id:
-            return session_id
-        context = request.get("context")
-        if isinstance(context, dict):
-            return str(context.get("session_id") or "").strip()
-        return ""
-
-    @staticmethod
-    def _lease_token(request: Dict[str, Any]) -> tuple[int, str]:
-        lease = request.get("execution_lease")
-        lease = lease if isinstance(lease, dict) else request
-        try:
-            generation = int(lease.get("generation") or 0)
-        except (TypeError, ValueError):
-            generation = 0
-        return generation, str(lease.get("attempt_id") or "").strip()
-
-    def _is_agent_pull_writer(
-        self,
-        *,
-        task: AutonomousChainTask,
-        request: Dict[str, Any],
-        decision: str,
-        actor: str,
-    ) -> bool:
-        if not is_agent_pull_task(task, task_profile_policy=self._task_profile_policy):
-            return False
-        if decision not in {"running", "completed", "failed"}:
-            return False
-        if str(actor or "").strip().lower() not in {"agent", "cli_agent", "gateway"}:
-            return False
-
-        session_id = self._request_agent_session_id(request)
-        if not session_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Agent-pull task decisions require a session_id in request or context.",
-            )
-
-        return True
-
-    def _mutate_agent_pull_execution(
-        self,
-        *,
-        task: AutonomousChainTask,
-        request: Dict[str, Any],
-        decision: str,
-        actor: str,
-        reason: str,
-        decision_context: Dict[str, Any],
-        decision_metadata: Dict[str, Any] | None,
-    ) -> AutonomousChainTask:
-        session_id = self._request_agent_session_id(request)
-        generation, attempt_id = self._lease_token(request)
-        try:
-            if not self._recovery_healthy():
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "code": "supervisor_recovery_not_healthy",
-                        "message": "Autonomous execution writes are disabled until recovery is healthy.",
-                    },
-                )
-            if decision == "running" and task.status in {"approved", "retry"}:
-                return self._task_state.claim_execution(
-                    task.task_id,
-                    owner_session_id=session_id,
-                    lease_seconds=float(request.get("lease_seconds") or 300),
-                    actor=actor,
-                    reason=reason,
-                    context=decision_context,
-                )
-            if decision == "running":
-                if task.execution_lease.owner_session_id != session_id:
-                    raise StaleExecutionLeaseError("stale_execution_lease: owner mismatch")
-                return self._task_state.renew_execution(
-                    task.task_id,
-                    generation=generation,
-                    attempt_id=attempt_id,
-                    lease_seconds=float(request.get("lease_seconds") or 300),
-                )
-            if task.execution_lease.owner_session_id != session_id:
-                raise StaleExecutionLeaseError("stale_execution_lease: owner mismatch")
-            return self._task_state.finalize_execution(
-                task.task_id,
-                generation=generation,
-                attempt_id=attempt_id,
-                status=decision,
-                actor=actor,
-                reason=reason,
-                context=decision_context,
-                metadata=decision_metadata,
-            )
-        except StaleExecutionLeaseError as exc:
-            self._store.record_stale_lease_rejection(
-                task.task_id,
-                generation=generation,
-                attempt_id=attempt_id,
-                operation=decision,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-
     async def decide(
         self,
         task_id: str,
@@ -284,7 +170,7 @@ class AutonomousTaskReviewService:
             if normalized in {"completed", "failed"}:
                 final_response = str(request.get("final_response") or "").strip()
                 if final_response:
-                    decision_context["autonomous_executor_final_response"] = final_response[:4000]
+                    decision_context["employee_final_response"] = final_response[:4000]
                 if (
                     normalized == "completed"
                     and self._task_profile_policy.runtime_family(task) == "self_learning"
@@ -305,12 +191,6 @@ class AutonomousTaskReviewService:
 
         actor = str(request.get("actor", "supervisor"))
         decision_id = str(request.get("decision_id") or uuid.uuid4())
-        agent_pull_writer = self._is_agent_pull_writer(
-            task=task,
-            request=request,
-            decision=normalized,
-            actor=actor,
-        )
         execution_request = None
         if normalized == "approved" and self._task_profile_policy.requires_execution_request(task):
             try:
@@ -332,34 +212,17 @@ class AutonomousTaskReviewService:
                 decision_context.get("learning_quality_assessment") or {}
             )
             decision_metadata = enriched_metadata
-        if agent_pull_writer:
-            updated_task = self._mutate_agent_pull_execution(
-                task=task,
-                request=request,
-                decision=normalized,
-                actor=actor,
-                reason=reason,
-                decision_context=decision_context,
-                decision_metadata=(
-                    decision_metadata if isinstance(decision_metadata, dict) else None
-                ),
-            )
-        else:
-            updated_task = self._task_state.update_status(
-                task_id,
-                status=normalized,
-                decision_id=decision_id,
-                actor=actor,
-                reason=reason,
-                context=decision_context,
-                execution_request=execution_request,
-                event_type="decision",
-            )
-        if (
-            not agent_pull_writer
-            and isinstance(decision_metadata, dict)
-            and decision_metadata
-        ):
+        updated_task = self._task_state.update_status(
+            task_id,
+            status=normalized,
+            decision_id=decision_id,
+            actor=actor,
+            reason=reason,
+            context=decision_context,
+            execution_request=execution_request,
+            event_type="decision",
+        )
+        if isinstance(decision_metadata, dict) and decision_metadata:
             updated_task = self._task_state.update_metadata(
                 task_id,
                 metadata=decision_metadata,
@@ -504,15 +367,7 @@ class AutonomousTaskReviewService:
                         self._task_profile_policy.execution_kind(task) == "body_improvement"
                         and target_status in {"cancelled", "deferred"}
                     )
-                    preserve_agent_pull_approval = (
-                        target_status == "approved"
-                        and suggested_status in {"deferred", "paused"}
-                        and is_agent_pull_task(
-                            task,
-                            task_profile_policy=self._task_profile_policy,
-                        )
-                    )
-                    if preserve_agent_pull_approval or keep_body_gate:
+                    if keep_body_gate:
                         decision_context["supervisor_followup_suggestion"] = {
                             "action": suggested_status,
                             "reason": str(review_action.get("reason") or "").strip(),

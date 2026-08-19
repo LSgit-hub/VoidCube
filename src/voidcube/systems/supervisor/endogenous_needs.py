@@ -40,8 +40,8 @@ class PerceptionNeedsInput(Protocol):
     body_improvement_backlog_count: int
     stale_backlog_count: int
     pending_review_count: int
-    api_a_handoff_count: int
-    api_a_running_count: int
+    employee_dispatch_count: int
+    employee_running_count: int
     checks: Dict[str, Any]
 
 
@@ -196,8 +196,8 @@ def detect_needs(
             learning_constraint_penalty += 0.14
         learning_constraint_penalty += min(
             0.22,
-            perception.api_a_handoff_count * 0.06
-            + perception.api_a_running_count * 0.14,
+            perception.employee_dispatch_count * 0.06
+            + perception.employee_running_count * 0.14,
         )
         needs.append(
             DriveNeed(
@@ -241,8 +241,8 @@ def detect_needs(
                     f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
                     f"learning_constraint_penalty={learning_constraint_penalty:.2f}",
                     f"historical_observation_carryover_released={historical_observation_carryover_released}",
-                    f"api_a_handoff_count={perception.api_a_handoff_count}",
-                    f"api_a_running_count={perception.api_a_running_count}",
+                    f"employee_dispatch_count={perception.employee_dispatch_count}",
+                    f"employee_running_count={perception.employee_running_count}",
                 ],
             )
         )
@@ -251,8 +251,8 @@ def detect_needs(
         and perception.shell_slot_present
         and perception.learning_quality >= 60.0
         and not reflection.body_growth_blocked
-        and perception.api_a_handoff_count <= 0
-        and perception.api_a_running_count <= 0
+        and perception.employee_dispatch_count <= 0
+        and perception.employee_running_count <= 0
     ):
         needs.append(
             DriveNeed(
@@ -282,8 +282,8 @@ def detect_needs(
                     f"body_improvement_backlog_count={perception.body_improvement_backlog_count}",
                     f"body_growth_blocked={reflection.body_growth_blocked}",
                     f"body_growth_bias={adaptive_policy.body_growth_bias:.2f}",
-                    f"api_a_handoff_count={perception.api_a_handoff_count}",
-                    f"api_a_running_count={perception.api_a_running_count}",
+                    f"employee_dispatch_count={perception.employee_dispatch_count}",
+                    f"employee_running_count={perception.employee_running_count}",
                 ],
             )
         )

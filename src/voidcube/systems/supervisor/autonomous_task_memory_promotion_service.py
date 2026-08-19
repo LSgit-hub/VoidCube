@@ -70,7 +70,7 @@ class AutonomousTaskMemoryPromotionService:
         for decision in reversed(task.decision_history):
             context = dict(decision.context or {})
             conclusion = str(
-                context.get("autonomous_executor_final_response") or ""
+                context.get("employee_final_response") or ""
             ).strip()
             if conclusion:
                 break

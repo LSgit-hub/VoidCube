@@ -12,9 +12,10 @@ Electron 不解析终端输出。主进程通过 `python -m voidcube.interfaces.
 
 ## 开发运行
 
-需要 Node.js 22+、npm，以及仓库根目录的 Python 3.14 虚拟环境：
+需要 Node.js 22+、npm，以及仓库根目录的 Python 3.14 虚拟环境。Windows 还需安装官方 Tirith 命令，供 CLI 和员工代理在执行前进行安全扫描：
 
 ```powershell
+npm install -g tirith@0.3.3
 cd desktop
 npm install
 npm run dev

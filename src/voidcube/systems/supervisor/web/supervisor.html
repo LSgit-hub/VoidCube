@@ -4598,7 +4598,7 @@ function typeLabel(t) {
   if (observationRole === 'mem_writeback') return 'Mem 写回';
   if (observationRole === 'api_b_reread') return '再次判断';
   if (observationRole === 'api_b_judgement') return 'API-B 判断';
-  if (observationRole === 'api_a_execution') return 'API-A 执行回报';
+  if (observationRole === 'employee_execution') return '员工执行回报';
   if (observationRole === 'candidate') return '候选形成';
   const identity = t.task_identity || {};
   const displayLabel = String(identity.display_label || '').trim();
@@ -5231,8 +5231,8 @@ function autonomousEventSourceLabel(value) {
     mem_governor_history: '判断记录',
     gateway_activity_log: '网关回报',
     supervisor: '监督者',
-    agent: 'API-A',
-    executor: 'API-A 子执行面',
+    agent: '员工代理',
+    executor: '员工代理执行面',
     gateway: '网关',
     governor: 'API-B 判断',
   };
@@ -5778,8 +5778,8 @@ function renderProvenanceDrawer(state) {
     '焦点 ' + esc(judgement.focus_label || '判断中') +
     ' · 主约束 ' + esc(judgement.dominant_constraint_label || '暂无主约束') +
     (judgement.observation_target_label ? '<br>先看 ' + esc(judgement.observation_target_label) : '') +
-    (judgement.api_a_lane_summary
-      ? '<br>' + esc(String(judgement.api_a_lane_summary).substring(0, 100))
+    (judgement.employee_lane_summary
+      ? '<br>' + esc(String(judgement.employee_lane_summary).substring(0, 100))
       : '') +
     '</div></div>';
   chain += '</div>';
@@ -6306,7 +6306,7 @@ function observationRoleStageLabel(task) {
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
-    api_a_execution: 'API-A 接手 / 执行观测阶段',
+    employee_execution: '员工代理派工 / 执行观测阶段',
     mem_writeback: 'Mem 写回阶段',
     api_b_reread: 'API-B 再读取阶段',
     candidate: '候选形成阶段',
@@ -6352,7 +6352,7 @@ function buildObservationCard(task, options) {
   const laneTag = document.createElement('span');
   if (lane === 'agent') {
     laneTag.className = 'game-card-tag creativity';
-    laneTag.textContent = 'API-A 回报';
+    laneTag.textContent = '员工回报';
   } else if (lane === 'mem') {
     laneTag.className = 'game-card-tag truthfulness';
     laneTag.textContent = 'Mem 写回';
@@ -6552,7 +6552,7 @@ function renderCognitionPanel(state) {
     '<span class="game-card-badge deferred">' + esc(judgement.dominant_constraint_label || '等待中') + '</span></div>' +
     '<div class="game-card-sub">' + esc(
       reasons[0]
-        || judgement.api_a_lane_summary
+        || judgement.employee_lane_summary
         || '当前没有明显卡点。'
     ).substring(0, 120) + '</div>' +
     '<div class="game-card-sub" style="margin-top:6px;color:var(--text-muted);">' +

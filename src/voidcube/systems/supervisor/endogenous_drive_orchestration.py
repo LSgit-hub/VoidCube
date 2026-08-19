@@ -31,7 +31,7 @@ class EndogenousDriveEvaluationContext:
     load_drive_history: Callable[[], JsonDict]
     normalize_strategy_memory: Callable[[Any], JsonDict]
     api_b_judgement_task_summaries: Callable[[int], List[JsonDict]]
-    api_a_execution_lane_task_summaries: Callable[[int], List[JsonDict]]
+    employee_execution_lane_task_summaries: Callable[[int], List[JsonDict]]
     build_deliberation_report: Callable[..., Any]
     generate_candidates: Callable[..., List[Candidate]]
     existing_drive_keys: Callable[[], set[str]]
@@ -147,12 +147,12 @@ async def evaluate_endogenous_drive(
     drive_input["evolution_foundation"] = evolution_foundation
     persisted_self_regulation = dict(context.load_self_regulation() or {})
     api_b_judgement_tasks = context.api_b_judgement_task_summaries(24)
-    api_a_execution_lane_tasks = context.api_a_execution_lane_task_summaries(24)
+    employee_execution_lane_tasks = context.employee_execution_lane_task_summaries(24)
     drive_input["api_b_judgement_tasks"] = api_b_judgement_tasks
-    drive_input["api_a_execution_lane_tasks"] = api_a_execution_lane_tasks
+    drive_input["employee_execution_lane_tasks"] = employee_execution_lane_tasks
     drive_input["autonomous_chain_live_tasks"] = [
         *api_b_judgement_tasks,
-        *api_a_execution_lane_tasks,
+        *employee_execution_lane_tasks,
     ]
     drive_input["endogenous_drive_policy"] = build_endogenous_drive_policy(
         context.runtime_config

@@ -47,7 +47,7 @@ class ScheduledTaskExecutorPorts:
 
 
 class ScheduledTaskExecutorRuntime:
-    """Main-CLI-only poller that hands due plans to an isolated API-A session."""
+    """Employee poller for due API-B assignments and user schedules."""
 
     def __init__(
         self,
@@ -226,7 +226,7 @@ class ScheduledTaskExecutorRuntime:
                     {
                         "owner_session_id": owner_session_id,
                         "lease_seconds": self.lease_seconds,
-                        "exclude_companion_work": self._autonomous_mode_is_active(),
+                        "exclude_companion_work": False,
                     },
                 )
             except (OSError, ValueError, ScheduledRequestRejected):
@@ -359,11 +359,11 @@ class ScheduledTaskExecutorRuntime:
                     execution_details=execution_details,
                 )
             except Exception as exc:
-                on_complete(False, "", f"API-A worker route unavailable: {exc}")
+                on_complete(False, "", f"employee worker route unavailable: {exc}")
                 started = False
             execution_started = bool(started)
             if not started and run_id in self._active_run_ids:
-                on_complete(False, "", "API-A scheduled execution could not start")
+                on_complete(False, "", "employee scheduled execution could not start")
         finally:
             if (
                 not execution_started

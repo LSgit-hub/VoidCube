@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ....application.session_title import maybe_auto_title
 from ....domain.contracts.turn import TurnOutcome
 
 
@@ -22,6 +23,7 @@ class TurnPostprocessingPorts:
     voice_continuous: Callable[[], bool]
     stop_voice_continuous: Callable[[], None]
     emit: Callable[[str], None]
+    title_generator: Callable[..., None] = maybe_auto_title
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +51,9 @@ class TurnPostprocessingRuntime:
 
         if outcome.usable:
             try:
-                from voidcube.application.session_title import maybe_auto_title
                 from voidcube.infrastructure.providers.auxiliary_client import call_llm
 
-                maybe_auto_title(
+                self.ports.title_generator(
                     self.ports.session_db(),
                     self.ports.session_id(),
                     message,

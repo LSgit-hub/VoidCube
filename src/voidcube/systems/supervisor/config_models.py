@@ -285,7 +285,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     companion_proactive_dnd_end: str = ""
     governor_llm_advisory_enabled: bool = True
     autonomous_chain_review_interval: int = 300
-    autonomous_chain_handoff_limit_per_cycle: int = 1
+    employee_dispatch_limit_per_cycle: int = 1
     evolution_capability_policy_profile: Literal[
         "development", "ci", "production"
     ] = "development"

@@ -253,8 +253,7 @@
       "missing_argument": "Missing argument: {arg}"
     },
     "chat_error": {
-      "error": "Error: {error}",
-      "autonomous_timeout": "Autonomous task timed out after 30 minutes."
+      "error": "Error: {error}"
     },
     "tui_dynamic": {
       "voice_recording": "recording... Ctrl+B to stop",

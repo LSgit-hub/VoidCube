@@ -65,10 +65,7 @@ from .drive_input_evaluation import (
     DriveInputEvaluationConfig,
     evaluate_drive_input_snapshot,
 )
-from .autonomous_task_review import (
-    is_agent_pull_task,
-    normalize_autonomous_chain_decision,
-)
+from .autonomous_task_review import normalize_autonomous_chain_decision
 
 logger = logging.getLogger("supervisor")
 
@@ -79,18 +76,18 @@ logger = logging.getLogger("supervisor")
 # The supervisor (API-B) is the governance identity of Mem.  It only
 # manages API-B judgement state and runs endogenous drive; it never executes
 # learning or body-upgrade code.  Therefore the supervisor's `scene`
-# field is restricted to the values below.  The Agent (API-A) is the
+# field is restricted to the values below.  The Agent (员工代理) is the
 # only component that may surface "learning" / "execution" scenes.
 #
 #   idle         - at rest
 #   planning     - judging / handing off / denying an API-B judgement item
 #   memory       - actively touching long-term memory (Mem internal)
 #   drive        - endogenous drive: cognitive evaluation / governance output
-#   handoff      - handing a ready execution request to API-A / executor
+#   handoff      - handing a ready execution request to 员工代理 / executor
 #   maintenance  - memory-maintenance sweep (long-term memory hygiene)
 #   body_switch  - judging a body switch request
 #
-# Forbidden scenes for the supervisor (API-A territory):
+# Forbidden scenes for the supervisor (员工代理 territory):
 #   "learning"   - the Agent is doing learning work
 #   "execution"  - the Agent or executor is doing work
 # ──────────────────────────────────────────────────────────────────────
@@ -785,10 +782,10 @@ class PlanningRuntimeMixin:
             "result_status": execution_result.get("status"),
         }
         final_response = str(
-            decision_context.get("autonomous_executor_final_response") or ""
+            decision_context.get("employee_final_response") or ""
         ).strip()
         if final_response:
-            outcome["autonomous_executor_final_response"] = final_response[:4000]
+            outcome["employee_final_response"] = final_response[:4000]
             outcome["outcome_summary"] = final_response[:800]
         reference_alignment = metadata.get("reference_alignment")
         if not isinstance(reference_alignment, dict):
@@ -978,12 +975,12 @@ class PlanningRuntimeMixin:
         }
 
     def _active_autonomous_chain_tasks(self) -> list[AutonomousChainTask]:
-        """Return active autonomous-chain rows across API-B and API-A lanes."""
+        """Return active autonomous-chain rows across API-B and employee lanes."""
         rows: list[AutonomousChainTask] = []
         seen: set[str] = set()
         for task in [
             *self._autonomous_chain_store.list_api_b_judgement_tasks(),
-            *self._autonomous_chain_store.list_api_a_execution_lane_tasks(),
+            *self._autonomous_chain_store.list_employee_execution_lane_tasks(),
         ]:
             if task.task_id in seen:
                 continue
@@ -1105,7 +1102,7 @@ class PlanningRuntimeMixin:
             if isinstance(completed_at, datetime):
                 completed_at = completed_at.isoformat()
             conclusion = str(
-                latest_context.get("autonomous_executor_final_response")
+                latest_context.get("employee_final_response")
                 or metadata.get("outcome_summary")
                 or dict(metadata.get("execution_result") or {}).get("summary")
                 or ""
@@ -1141,13 +1138,6 @@ class PlanningRuntimeMixin:
             )
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
-
-    def _is_api_a_execution_lane_task_record(self, task: AutonomousChainTask) -> bool:
-        status = str(task.status or "").strip().lower()
-        return is_agent_pull_task(
-            task,
-            task_profile_policy=self._task_profile_policy,
-        ) and status in {"approved", "running", "retry"}
 
     def _autonomous_chain_task_summary_payload(
         self,
@@ -1190,8 +1180,6 @@ class PlanningRuntimeMixin:
     def _api_b_judgement_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
         for task in self._autonomous_chain_store.list_api_b_judgement_tasks():
-            if self._is_api_a_execution_lane_task_record(task):
-                continue
             rows.append(
                 (
                     str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
@@ -1201,14 +1189,9 @@ class PlanningRuntimeMixin:
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
 
-    def _api_a_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
+    def _employee_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks():
-            if not is_agent_pull_task(
-                task,
-                task_profile_policy=self._task_profile_policy,
-            ):
-                continue
+        for task in self._autonomous_chain_store.list_employee_execution_lane_tasks():
             rows.append(
                 (
                     str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
@@ -1488,7 +1471,7 @@ class PlanningRuntimeMixin:
             load_drive_history=self._endogenous_drive_history_persistence_service.load,
             normalize_strategy_memory=normalize_endogenous_strategy_memory,
             api_b_judgement_task_summaries=self._api_b_judgement_task_summaries,
-            api_a_execution_lane_task_summaries=self._api_a_execution_lane_task_summaries,
+            employee_execution_lane_task_summaries=self._employee_execution_lane_task_summaries,
             build_deliberation_report=self._endogenous_drive_engine.build_deliberation_report,
             generate_candidates=self._endogenous_drive_engine.generate_candidates,
             existing_drive_keys=self._existing_endogenous_drive_keys,

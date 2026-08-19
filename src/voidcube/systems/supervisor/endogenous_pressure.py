@@ -67,7 +67,7 @@ def memory_maintenance_urgency(drive_input: Dict[str, Any]) -> float:
         _clamp01(float(value or 0) / 900.0)
         for value in (
             idle_seconds.get("user"),
-            idle_seconds.get("api_a_execution"),
+            idle_seconds.get("employee_execution"),
             idle_seconds.get("memory"),
         )
     ]

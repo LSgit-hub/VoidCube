@@ -33,10 +33,10 @@ class CliIdleMaintenanceRuntime:
 
         ports.check_config_changes()
         ports.refresh_observation_surfaces()
-        if ports.autonomous_gate_active():
-            ports.start_autonomous_execution()
-            if ports.application_ready():
-                ports.invalidate(0.5)
+        # Auto mode is an API-B planning switch. Approved work is consumed by
+        # the employee scheduler; the CLI never starts an API-A pull loop.
+        if ports.autonomous_gate_active() and ports.application_ready():
+            ports.invalidate(0.5)
         drain_process_notifications(ports.enqueue_pending_input)
 
 

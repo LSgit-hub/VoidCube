@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class CliChatErrorPorts:
     """Error state and terminal operations supplied by the CLI host."""
 
-    autonomous_timeout_reported: bool
-    autonomous_task_run_id: str
-    autonomous_timeout_writeback_succeeded: bool
-    current_autonomous_task: Callable[[], Any]
-    set_last_agent_turn_result: Callable[[Mapping[str, Any]], None]
     should_emit: Callable[[], bool]
     translate: Callable[..., str]
     emit: Callable[[str], None]
@@ -36,23 +30,6 @@ class CliChatErrorRuntime:
             "error": str(error),
             "response": "",
         }
-        if ports.autonomous_timeout_reported:
-            error_result.update(
-                {
-                    "interrupted": True,
-                    "error": ports.translate(
-                        "chat_error.autonomous_timeout",
-                    ),
-                }
-            )
-        if (
-            ports.autonomous_task_run_id
-            and not ports.autonomous_timeout_writeback_succeeded
-        ):
-            error_result["autonomous_task_run_id"] = ports.autonomous_task_run_id
-            ports.set_last_agent_turn_result(error_result)
-        elif ports.current_autonomous_task() is None:
-            ports.set_last_agent_turn_result(error_result)
         if ports.should_emit():
             ports.emit(
                 ports.translate(

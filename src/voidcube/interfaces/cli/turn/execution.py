@@ -12,8 +12,6 @@ from typing import Any
 class TurnExecutionPorts:
     """External operations required by the model-turn execution loop."""
 
-    interrupt_agent: Callable[[], None]
-    check_autonomous_timeout: Callable[[], tuple[bool, bool]]
     cleanup_async_clients: Callable[[], None]
     flush_stream: Callable[[], None]
     flush_output: Callable[[], None]
@@ -23,11 +21,9 @@ class TurnExecutionPorts:
 
 @dataclass(frozen=True, slots=True)
 class TurnExecutionResult:
-    """Result of the threaded model turn and autonomous timeout state."""
+    """Result of the threaded model turn."""
 
     result: Mapping[str, Any] | None
-    autonomous_timeout_reported: bool
-    autonomous_timeout_writeback_succeeded: bool
 
 
 class TurnExecutionRuntime:
@@ -39,8 +35,6 @@ class TurnExecutionRuntime:
     def execute(
         self,
         run_agent: Callable[[], Mapping[str, Any] | None],
-        *,
-        autonomous_task_run_id: str = "",
     ) -> TurnExecutionResult:
         result_holder: dict[str, Mapping[str, Any] | None] = {"result": None}
 
@@ -53,19 +47,7 @@ class TurnExecutionRuntime:
         )
         agent_thread.start()
 
-        autonomous_timeout_reported = False
-        autonomous_timeout_writeback_succeeded = False
         while agent_thread.is_alive():
-            if autonomous_task_run_id and not autonomous_timeout_reported:
-                autonomous_timeout_reported, autonomous_timeout_writeback_succeeded = (
-                    self.ports.check_autonomous_timeout()
-                )
-                if autonomous_timeout_reported:
-                    try:
-                        self.ports.interrupt_agent()
-                    except Exception:
-                        pass
-
             agent_thread.join(0.1)
 
         agent_thread.join()
@@ -73,8 +55,4 @@ class TurnExecutionRuntime:
         self.ports.flush_stream()
         self.ports.flush_output()
         self.ports.sleep(0.15)
-        return TurnExecutionResult(
-            result=result_holder["result"],
-            autonomous_timeout_reported=autonomous_timeout_reported,
-            autonomous_timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
-        )
+        return TurnExecutionResult(result=result_holder["result"])

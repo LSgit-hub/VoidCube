@@ -467,7 +467,7 @@ class ServiceRuntimeMixin:
             snapshot.update(
                 {
                     "intent_state": "understood",
-                    "reason": "awaiting_api_a_activity_evidence",
+                    "reason": "awaiting_employee_activity_evidence",
                 }
             )
         elif evidence["user_goal"] and evidence["agent_activity"]:
@@ -1611,7 +1611,7 @@ class ServiceRuntimeMixin:
         if candidate_scheduler is not None:
             await candidate_scheduler.cancel_active()
 
-        for task in self._autonomous_chain_store.list_api_a_running_tasks():
+        for task in self._autonomous_chain_store.list_employee_running_tasks():
             self._autonomous_task_state.update_status(
                 task.task_id,
                 status="failed",

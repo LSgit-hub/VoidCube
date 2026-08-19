@@ -583,7 +583,10 @@ def _diagnose_podman(cfg: dict) -> AgentCheck:
             severity=unavailable_severity,
             name="podman_runtime",
             message=f"Podman 沙箱镜像不存在: {image}",
-            suggestion=f"运行 `python -m tools.podman_sandbox build --image {image}` 构建正式沙箱镜像。",
+            suggestion=(
+                "运行 `python -m voidcube.infrastructure.execution.podman_sandbox "
+                f"build --image {image}` 构建正式沙箱镜像。"
+            ),
             details=image_detail,
             data={"podman_executable": podman_exe, "podman_image": image},
         )

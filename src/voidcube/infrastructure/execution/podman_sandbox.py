@@ -39,7 +39,9 @@ def build_image(
     context: str | Path | None = None,
 ) -> None:
     podman = executable or find_podman()
-    resource = files("tools").joinpath(CONTAINERFILE_RESOURCE)
+    resource = files("voidcube.infrastructure.execution").joinpath(
+        CONTAINERFILE_RESOURCE
+    )
     build_context = Path(context or Path.cwd()).expanduser().resolve()
     if not (build_context / "pyproject.toml").is_file():
         raise ValueError(f"Podman project build context must contain pyproject.toml: {build_context}")
@@ -78,7 +80,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Podman sandbox image ready: {args.image}")
             return 0
         print(f"Podman sandbox image missing: {args.image}")
-        print(f"Build it with: python -m tools.podman_sandbox build --image {args.image}")
+        print(
+            "Build it with: python -m voidcube.infrastructure.execution.podman_sandbox "
+            f"build --image {args.image}"
+        )
         return 1
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"Podman sandbox error: {exc}")

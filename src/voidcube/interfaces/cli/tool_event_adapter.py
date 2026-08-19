@@ -59,8 +59,7 @@ def _project_terminal(
     host._current_tool_name = ""
     host._spinner_text = ""
     if (
-        getattr(host, "_autonomous_gate_active", False)
-        and getattr(host, "_current_autonomous_task", None)
+        getattr(host, "_active_chat_agent_role", "") == "supervisor_task"
         and event.name
     ):
         suffix = f" ({event.duration:.1f}s)" if event.duration else ""
@@ -166,8 +165,7 @@ def _project_started(
         host._tool_start_time = time.monotonic()
         host._current_tool_name = event.name
         if (
-            getattr(host, "_autonomous_gate_active", False)
-            and getattr(host, "_current_autonomous_task", None)
+            getattr(host, "_active_chat_agent_role", "") == "supervisor_task"
         ):
             append_autonomous_event(
                 host,

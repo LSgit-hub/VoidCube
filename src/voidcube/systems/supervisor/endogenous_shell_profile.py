@@ -46,12 +46,8 @@ def build_shell_body_profile(shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:
             profile["origin_manifest_error"] = True
 
     editable_indicators = [
-        "agent",
+        "src",
         "skills",
-        "tools",
-        "prompts",
-        "systems",
-        "Mem",
         "tests",
     ]
     present_roots = [name for name in editable_indicators if (worktree / name).exists()]
@@ -68,7 +64,7 @@ def build_shell_body_profile(shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:
             "has_agent_runner": (
                 worktree / "src" / "voidcube" / "runtime" / "agent" / "runner.py"
             ).exists(),
-            "has_config": (worktree / "config.yaml").exists(),
+            "has_project_config": (worktree / "pyproject.toml").exists(),
         }
     )
     profile.update(

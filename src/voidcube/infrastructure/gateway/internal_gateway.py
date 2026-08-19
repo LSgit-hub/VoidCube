@@ -16,7 +16,6 @@ from ...domain.tasks.runtime_profile import derive_runtime_task_profile
 from ...systems.supervisor.autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_TASKS_ROUTE,
     autonomous_chain_task_decision_route,
-    autonomous_chain_task_lease_validation_route,
     autonomous_chain_task_route,
 )
 from ...domain.tasks.runtime_thresholds import (
@@ -434,14 +433,6 @@ class InternalGateway:
         self.app.add_api_route("/v1/sessions/register", self.register_session, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
-        self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
-        self.app.add_api_route("/v1/tasks/{task_id}/decision", self.decide_task, methods=["POST"])
-        self.app.add_api_route("/v1/tasks/{task_id}/complete", self.complete_task, methods=["POST"])
-        self.app.add_api_route(
-            "/v1/tasks/{task_id}/lease/validate",
-            self.validate_task_execution_lease,
-            methods=["POST"],
-        )
         self.app.add_api_route("/v1/body/improvement-report", self.forward_improvement_report, methods=["POST"])
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
@@ -1601,7 +1592,8 @@ class InternalGateway:
             "supervisor": scenes["supervisor"].get("scene") or "idle",
             # Keep `agent` as a compact user-chain alias so summary consumers
             # do not accidentally treat top-level agent aggregation as the
-            # canonical API-A autonomous-execution fact source.
+            # The user-chat lane is the only top-level agent summary; employee
+            # execution is reported separately through the supervisor lane.
             "agent": user_chat_scene,
             "agent_user_chat": user_chat_scene,
             "agent_supervisor_task": supervisor_task_scene,
@@ -2054,51 +2046,6 @@ class InternalGateway:
             default_reason="Task completed by agent",
             default_actor="agent",
         )
-
-    async def validate_task_execution_lease(self, task_id: str, request: Request):
-        supervisor_service = next(
-            (
-                service
-                for service in self._services.values()
-                if service.service_type == "supervisor" and service.healthy
-            ),
-            None,
-        )
-        if supervisor_service is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Supervisor unavailable for execution lease validation",
-            )
-        try:
-            body = await request.body()
-            payload = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Invalid JSON") from exc
-
-        url = (
-            f"{supervisor_service.address}"
-            f"{autonomous_chain_task_lease_validation_route(task_id)}"
-        )
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as response:
-                    result = await response.json()
-                    if response.status != 200:
-                        detail = result.get("detail", result) if isinstance(result, dict) else result
-                        raise HTTPException(status_code=response.status, detail=detail)
-                    return result
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.error("Failed to validate task execution lease: %s", exc)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Failed to validate task execution lease: {exc}",
-            ) from exc
 
     async def decide_task(self, task_id: str, request: Request):
         return await self._forward_task_decision(

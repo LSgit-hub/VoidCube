@@ -48,8 +48,6 @@ class CliAgentTurnExecutorPorts:
     """Host capabilities required to execute one turn without owning UI state."""
 
     ensure_credentials: Callable[[], bool]
-    current_autonomous_task: Callable[[], Mapping[str, Any] | None]
-    set_last_agent_turn_result: Callable[[Mapping[str, Any] | None], None]
     agent_exists: Callable[[], bool]
     clear_agent: Callable[[], None]
     active_route_signature: Callable[[], str | None]
@@ -70,12 +68,12 @@ class CliAgentTurnExecutorPorts:
         [Any, str, Sequence[Mapping[str, Any]]],
         CliAgentTurnCallPorts,
     ]
-    execution_ports: Callable[[str], TurnExecutionPorts]
+    execution_ports: Callable[[], TurnExecutionPorts]
     result_ports: Callable[[], TurnResultApplicationPorts]
     postprocessing_ports: Callable[[], TurnPostprocessingPorts]
     synchronize_session_identity: Callable[[], None]
     finish_turn: Callable[[AppliedTurnResult], None]
-    handle_error: Callable[[Exception, bool, str, bool], None]
+    handle_error: Callable[[Exception], None]
     finish_failed_turn: Callable[[Exception, bool], None] | None = None
 
 
@@ -95,13 +93,10 @@ class CliAgentTurnExecutorRuntime:
 
         message, images = self._payload(request.prompt)
         toolsets = self._toolsets(request.tool_policy)
-        run_id = str(request.tool_policy.get("autonomous_task_run_id") or "").strip()
         ports = self.ports
         ports.set_agent_running(True)
         clear_temporary_agent = toolsets is not None
         previous_role = ports.active_role()
-        autonomous_timeout_reported = False
-        autonomous_timeout_writeback_succeeded = False
         turn_started = False
         finalized = False
         failure_handled = False
@@ -110,11 +105,8 @@ class CliAgentTurnExecutorRuntime:
             if not ports.ensure_credentials() or cancellation.cancelled:
                 return None
 
-            current_task = ports.current_autonomous_task()
             if clear_temporary_agent and ports.agent_exists():
                 ports.clear_agent()
-            if run_id or current_task is None:
-                ports.set_last_agent_turn_result(None)
 
             route = ports.resolve_route(message)
             if route.get("signature") != ports.active_route_signature():
@@ -149,15 +141,8 @@ class CliAgentTurnExecutorRuntime:
                 ).run()
 
             execution = TurnExecutionRuntime(
-                ports.execution_ports(run_id)
-            ).execute(
-                run_agent,
-                autonomous_task_run_id=run_id,
-            )
-            autonomous_timeout_reported = execution.autonomous_timeout_reported
-            autonomous_timeout_writeback_succeeded = (
-                execution.autonomous_timeout_writeback_succeeded
-            )
+                ports.execution_ports()
+            ).execute(run_agent)
             ports.synchronize_session_identity()
             if cancellation.cancelled:
                 return None
@@ -174,13 +159,6 @@ class CliAgentTurnExecutorRuntime:
                         ports.result_ports()
                     ).apply(
                         value.result,
-                        autonomous_task_run_id=run_id,
-                        autonomous_timeout_reported=(
-                            value.autonomous_timeout_reported
-                        ),
-                        autonomous_timeout_writeback_succeeded=(
-                            value.autonomous_timeout_writeback_succeeded
-                        ),
                     ),
                     postprocess=lambda value: TurnPostprocessingRuntime(
                         ports.postprocessing_ports()
@@ -198,12 +176,7 @@ class CliAgentTurnExecutorRuntime:
         except Exception as error:
             try:
                 ports.synchronize_session_identity()
-                ports.handle_error(
-                    error,
-                    autonomous_timeout_reported,
-                    run_id,
-                    autonomous_timeout_writeback_succeeded,
-                )
+                ports.handle_error(error)
             finally:
                 if ports.finish_failed_turn is not None:
                     try:

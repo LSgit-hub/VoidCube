@@ -135,10 +135,12 @@ def build_drive_context(
     policy = dict(drive_input.get("endogenous_drive_policy") or {})
     drive_history = dict(drive_input.get("drive_history") or {})
     api_b_judgement_tasks = list(drive_input.get("api_b_judgement_tasks") or [])
-    api_a_execution_lane_tasks = list(drive_input.get("api_a_execution_lane_tasks") or [])
+    employee_execution_lane_tasks = list(
+        drive_input.get("employee_execution_lane_tasks") or []
+    )
     autonomous_chain_live_tasks = list(
         drive_input.get("autonomous_chain_live_tasks")
-        or [*api_b_judgement_tasks, *api_a_execution_lane_tasks]
+        or [*api_b_judgement_tasks, *employee_execution_lane_tasks]
     )
     completed_learning_tasks = list(drive_input.get("completed_learning_tasks") or [])
     recent_learning_titles = [
@@ -155,8 +157,8 @@ def build_drive_context(
     active_backlog_by_execution_kind: Dict[str, int] = {}
     stale_backlog_count = 0
     pending_review_count = 0
-    api_a_handoff_count = 0
-    api_a_running_count = 0
+    employee_dispatch_count = 0
+    employee_running_count = 0
     current_time = now or datetime.now(timezone.utc)
 
     for title in recent_learning_titles:
@@ -187,12 +189,12 @@ def build_drive_context(
             updated_at = parse_timestamp(task.get("updated_at") or task.get("created_at"))
             if updated_at is not None and current_time - updated_at >= timedelta(hours=24):
                 stale_backlog_count += 1
-    for task in api_a_execution_lane_tasks:
+    for task in employee_execution_lane_tasks:
         status = str(task.get("status") or "").strip().lower()
         if status in {"approved", "retry"}:
-            api_a_handoff_count += 1
+            employee_dispatch_count += 1
         elif status == "running":
-            api_a_running_count += 1
+            employee_running_count += 1
     return {
         "policy": policy,
         "evolution_foundation": dict(drive_input.get("evolution_foundation") or {}),
@@ -202,7 +204,7 @@ def build_drive_context(
             "strategy_memory": normalize_strategy_memory(drive_history.get("strategy_memory")),
         },
         "api_b_judgement_tasks": api_b_judgement_tasks,
-        "api_a_execution_lane_tasks": api_a_execution_lane_tasks,
+        "employee_execution_lane_tasks": employee_execution_lane_tasks,
         "autonomous_chain_live_tasks": autonomous_chain_live_tasks,
         "completed_learning_tasks": completed_learning_tasks,
         "recent_learning_titles": recent_learning_titles,
@@ -215,7 +217,6 @@ def build_drive_context(
         "active_backlog_by_execution_kind": active_backlog_by_execution_kind,
         "stale_backlog_count": stale_backlog_count,
         "pending_review_count": pending_review_count,
-        "api_a_handoff_count": api_a_handoff_count,
-        "api_a_ready_count": api_a_handoff_count,
-        "api_a_running_count": api_a_running_count,
+        "employee_dispatch_count": employee_dispatch_count,
+        "employee_running_count": employee_running_count,
     }

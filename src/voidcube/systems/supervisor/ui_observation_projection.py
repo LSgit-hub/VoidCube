@@ -11,7 +11,7 @@ from .observation_status import (
 from .ui_projection import runtime_activity_label
 
 
-def is_api_a_lane_family_task(task: Dict[str, Any]) -> bool:
+def is_employee_lane_family_task(task: Dict[str, Any]) -> bool:
     governance = str(task.get("governance_task_type") or "").strip().lower()
     execution_kind = str(task.get("execution_kind") or "").strip().lower()
     return governance == "self_learning" or execution_kind == "body_improvement"
@@ -22,8 +22,8 @@ def normalize_observation_status(status: Any) -> str:
 def observation_status_value(task: Dict[str, Any]) -> str:
     return normalize_observation_status(task.get("status"))
 
-def is_api_a_execution_lane_task(task: Dict[str, Any]) -> bool:
-    return is_api_a_lane_family_task(task) and observation_status_value(task) in {
+def is_employee_execution_lane_task(task: Dict[str, Any]) -> bool:
+    return is_employee_lane_family_task(task) and observation_status_value(task) in {
         "approved",
         "running",
         "retry",
@@ -100,7 +100,7 @@ def loop_stage_status_label(status: str) -> str:
     return mapping.get(str(status or "").strip().lower(), "等待中")
 
 def observation_role_tag(task: Dict[str, Any]) -> str:
-    return "agent" if is_api_a_lane_family_task(task) else "supervisor"
+    return "agent" if is_employee_lane_family_task(task) else "supervisor"
 
 def observation_task_type_label(task: Dict[str, Any]) -> str:
     observation_role = str(task.get("observation_role") or "").strip()
@@ -109,7 +109,7 @@ def observation_task_type_label(task: Dict[str, Any]) -> str:
         "memory_maintenance_receipt": "Memory 受理回执",
         "api_b_reread": "再次判断",
         "api_b_judgement": "API-B 判断",
-        "api_a_execution": "API-A 执行回报",
+        "employee_execution": "员工执行回报",
         "candidate": "候选形成",
     }
     if observation_role in mapping:

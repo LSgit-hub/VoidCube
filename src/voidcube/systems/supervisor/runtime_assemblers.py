@@ -50,9 +50,7 @@ from .endogenous_state_repository import EndogenousStateRepository
 from .endogenous_drive_history_persistence_service import (
     EndogenousDriveHistoryPersistenceService,
 )
-from .autonomous_chain_execution_handoff_service import (
-    AutonomousChainExecutionHandoffService,
-)
+from .autonomous_employee_dispatch_service import AutonomousEmployeeDispatchService
 from .autonomous_chain_planning_service import (
     AutonomousChainPlanningService,
 )
@@ -97,9 +95,6 @@ from .autonomous_task_governance_review_service import (
 )
 from .autonomous_task_memory_promotion_service import (
     AutonomousTaskMemoryPromotionService,
-)
-from .autonomous_task_owner_session_service import (
-    AutonomousTaskOwnerSessionService,
 )
 from .autonomous_task_review_service import AutonomousTaskReviewService
 from .autonomous_task_state import AutonomousTaskStateService
@@ -213,11 +208,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         governance_repository_path=mem_governance_repository_path,
         touch_activity=supervisor._touch_gateway_activity,
     )
-    supervisor._autonomous_task_owner_session_service = AutonomousTaskOwnerSessionService(
-        gateway_address=execution_config.gateway_address,
-    )
-
-    def record_autonomous_task_status_change(
+    def record_employee_task_status_change(
         task: Any,
         event_type: str,
     ) -> None:
@@ -226,7 +217,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._autonomous_task_state = AutonomousTaskStateService(
         store=supervisor._autonomous_chain_store,
         governance_repository=supervisor._governor.governance_repository,
-        on_status_change=record_autonomous_task_status_change,
+        on_status_change=record_employee_task_status_change,
     )
     supervisor._autonomous_body_switch_consent_service = AutonomousBodySwitchConsentService(
         store=supervisor._autonomous_chain_store,
@@ -252,6 +243,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             else None
         ),
     )
+
     supervisor._endogenous_state_repository = EndogenousStateRepository(runtime_root)
     supervisor._endogenous_drive_history_persistence_service = (
         EndogenousDriveHistoryPersistenceService(supervisor._endogenous_state_repository)
@@ -321,6 +313,24 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     )
     supervisor._endogenous_self_regulation_service = EndogenousSelfRegulationService()
     supervisor._task_profile_policy = TaskProfilePolicy()
+
+    def resolve_autonomous_worker_role(requested_role: str) -> str:
+        from ...application.companion_workers import resolve_companion_worker_role
+        from ...infrastructure.config.configuration import load_config
+
+        return resolve_companion_worker_role(load_config(), requested_role).role
+
+    supervisor._autonomous_employee_dispatch_service = (
+        AutonomousEmployeeDispatchService(
+            task_state=supervisor._autonomous_task_state,
+            task_store=supervisor._autonomous_chain_store,
+            scheduled_task_store=supervisor._scheduled_task_store,
+            task_profile_policy=supervisor._task_profile_policy,
+            resolve_worker_role=resolve_autonomous_worker_role,
+            touch_gateway_activity=supervisor._touch_gateway_activity,
+            record_ui_activity=record_ui_activity,
+        )
+    )
     supervisor._schedule_allocator = ScheduleAllocator(
         slot_interval_seconds=int(
             supervisor.config.service_runtime.autonomous_chain_review_interval or 300
@@ -459,27 +469,24 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         record_activity=record_ui_activity,
         touch_activity=supervisor._touch_gateway_activity,
         get_active_tasks=supervisor._active_autonomous_chain_tasks,
-        recovery_healthy=lambda: supervisor._service_runtime.recovery.healthy,
         get_review_statuses=lambda: ["planned", "deferred", "paused"],
         review_adviser=supervisor._autonomous_task_governance_review_service.review,
         planning_activity_kind_for_task=supervisor._planning_activity_kind_for_task,
     )
     supervisor._autonomous_task_review_cycle_service = AutonomousTaskReviewCycleService(
-        task_profile_policy=supervisor._task_profile_policy,
-        task_state=supervisor._autonomous_task_state,
         list_execution_lane_tasks=(
-            lambda status: supervisor._autonomous_chain_store.list_api_a_execution_lane_tasks(
+            lambda status: supervisor._autonomous_chain_store.list_employee_execution_lane_tasks(
                 status=status
             )
         ),
         get_task=supervisor._autonomous_chain_store.get_task,
-         fetch_cli_session=supervisor._autonomous_task_owner_session_service.fetch,
-         review_tasks=lambda request: supervisor._autonomous_task_review_service.review(request),
+        review_tasks=lambda request: supervisor._autonomous_task_review_service.review(request),
         consume_governance_events=lambda: supervisor._endogenous_governance_event_consumer.consume_governance_review_requests(),
         consume_alignment_events=lambda: supervisor._endogenous_governance_event_consumer.consume_alignment_requests(),
         consume_truthfulness_alerts=lambda: supervisor._endogenous_governance_event_consumer.consume_truthfulness_alerts(),
-        handoff_execution=lambda task: supervisor._autonomous_chain_execution_handoff_service.handoff(task),
-        handoff_limit=lambda: supervisor.config.service_runtime.autonomous_chain_handoff_limit_per_cycle,
+        dispatch_employee=supervisor._autonomous_employee_dispatch_service.dispatch,
+        reconcile_employees=supervisor._autonomous_employee_dispatch_service.reconcile,
+        dispatch_limit=lambda: supervisor.config.service_runtime.employee_dispatch_limit_per_cycle,
     )
 
     def update_drive_schedule(last_at: datetime, next_at: datetime) -> None:
@@ -632,21 +639,6 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         evaluation_governance_verifier=(
             supervisor._evolution_evaluation_governance_verifier
         ),
-    )
-    supervisor._autonomous_chain_execution_handoff_service = (
-        AutonomousChainExecutionHandoffService(
-            task_state=supervisor._autonomous_task_state,
-            task_store=supervisor._autonomous_chain_store,
-            task_profile_policy=supervisor._task_profile_policy,
-            execution_facade_provider=lambda: supervisor._execution_facade,
-            propose_memory_promotion=supervisor._autonomous_task_memory_promotion_service.propose,
-            task_activity_metadata=supervisor._task_activity_metadata,
-            touch_gateway_activity=supervisor._touch_gateway_activity,
-            record_ui_activity=lambda *args, **kwargs: supervisor._ui_runtime.record_activity(
-                *args,
-                **kwargs,
-            ),
-        )
     )
     supervisor._execution_service = VoidCubeExecutionService(
         supervisor._execution_facade,

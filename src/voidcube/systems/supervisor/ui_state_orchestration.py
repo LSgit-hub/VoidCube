@@ -91,8 +91,8 @@ def normalize_ui_cognition_snapshot(snapshot: JsonDict) -> JsonDict:
         "system_posture": perception.get("system_posture", "balanced"),
         "user_mode": perception.get("user_mode", "未识别"),
         "api_b_judgement_count": perception.get("api_b_judgement_count", 0),
-        "api_a_handoff_count": perception.get("api_a_handoff_count", 0),
-        "api_a_running_count": perception.get("api_a_running_count", 0),
+        "employee_dispatch_count": perception.get("employee_dispatch_count", 0),
+        "employee_running_count": perception.get("employee_running_count", 0),
         "active_sessions": perception.get("active_sessions", 0),
         "recent_errors": perception.get("recent_errors", 0),
         "learning_quality": perception.get("learning_quality", 0),
@@ -288,11 +288,11 @@ async def build_supervisor_ui_state(
         observation_input_snapshot.get("snapshot_source") or "default"
     )
     autonomous_counts = dict(autonomous_observation.get("counts") or {})
-    autonomous_runtime["api_a_handoff_count"] = observation_count(
-        autonomous_counts.get("api_a_handoff")
+    autonomous_runtime["employee_dispatch_count"] = observation_count(
+        autonomous_counts.get("employee_dispatch")
     )
-    autonomous_runtime["api_a_running_count"] = observation_count(
-        autonomous_counts.get("api_a_running")
+    autonomous_runtime["employee_running_count"] = observation_count(
+        autonomous_counts.get("employee_running")
     )
     autonomous_observation["runtime"] = autonomous_runtime
     autonomous_observation["board"] = project_observation_board(

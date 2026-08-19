@@ -380,8 +380,7 @@
       "missing_argument": "缺少参数: {arg}"
     },
     "chat_error": {
-      "error": "错误：{error}",
-      "autonomous_timeout": "自主任务运行超过 30 分钟，已超时。"
+      "error": "错误：{error}"
     },
     "tui_dynamic": {
       "voice_recording": "录音中……按 Ctrl+B 停止",

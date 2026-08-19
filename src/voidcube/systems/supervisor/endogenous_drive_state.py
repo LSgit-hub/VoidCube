@@ -30,13 +30,12 @@ def build_drive_perception_projection(
     stale_backlog_count = int(drive_context.get("stale_backlog_count") or 0)
     pending_review_count = int(drive_context.get("pending_review_count") or 0)
     api_b_judgement_count = int(drive_context.get("api_b_judgement_count") or 0)
-    api_a_handoff_count = int(
-        drive_context.get("api_a_handoff_count")
-        if drive_context.get("api_a_handoff_count") is not None
-        else drive_context.get("api_a_ready_count") or 0
+    employee_dispatch_count = int(
+        drive_context.get("employee_dispatch_count")
+        if drive_context.get("employee_dispatch_count") is not None
+        else 0
     )
-    api_a_ready_count = api_a_handoff_count
-    api_a_running_count = int(drive_context.get("api_a_running_count") or 0)
+    employee_running_count = int(drive_context.get("employee_running_count") or 0)
     learning_quality = calculate_learning_quality_score(
         list(drive_input.get("completed_learning_tasks") or [])
     )
@@ -81,9 +80,8 @@ def build_drive_perception_projection(
         "body_improvement_backlog_count": body_improvement_backlog_count,
         "stale_backlog_count": stale_backlog_count,
         "pending_review_count": pending_review_count,
-        "api_a_ready_count": api_a_ready_count,
-        "api_a_handoff_count": api_a_handoff_count,
-        "api_a_running_count": api_a_running_count,
+        "employee_dispatch_count": employee_dispatch_count,
+        "employee_running_count": employee_running_count,
         "checks": checks,
         "idle_seconds": idle_seconds,
     }

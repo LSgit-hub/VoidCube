@@ -69,13 +69,13 @@ def _timezone(name: Any):
 
 
 class ScheduledTaskStore:
-    """Transactional owner store for user-managed scheduled API-A work."""
+    """Transactional owner store for user schedules and API-B employee work."""
 
     _TASK_COLUMNS = (
         "schedule_id", "title", "instruction", "schedule_type", "timezone",
         "status", "created_by", "requested_via", "created_at", "updated_at",
         "next_run_at", "last_run_at", "last_run_status", "active_run_id",
-        "run_at", "time_of_day", "worker_role", "weekdays_json",
+        "run_at", "time_of_day", "worker_role", "autonomous_task_id", "weekdays_json",
     )
     _RUN_COLUMNS = (
         "run_id", "schedule_id", "due_at", "status", "owner_session_id",
@@ -148,6 +148,7 @@ class ScheduledTaskStore:
                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_run_at TEXT, "
                 "last_run_at TEXT, last_run_status TEXT, active_run_id TEXT, run_at TEXT, "
                 "time_of_day TEXT, worker_role TEXT NOT NULL DEFAULT '', "
+                "autonomous_task_id TEXT NOT NULL DEFAULT '', "
                 "weekdays_json TEXT NOT NULL DEFAULT '[]')"
             )
             task_columns = {
@@ -162,6 +163,11 @@ class ScheduledTaskStore:
                 connection.execute(
                     "UPDATE scheduled_tasks SET worker_role = 'general' "
                     "WHERE lower(created_by) = 'api_b'"
+                )
+            if "autonomous_task_id" not in task_columns:
+                connection.execute(
+                    "ALTER TABLE scheduled_tasks "
+                    "ADD COLUMN autonomous_task_id TEXT NOT NULL DEFAULT ''"
                 )
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS scheduled_task_runs ("
@@ -306,6 +312,7 @@ class ScheduledTaskStore:
 
         created_by = str(request.get("created_by") or "api_a")[:40]
         worker_role = str(request.get("worker_role") or "").strip().lower()[:40]
+        autonomous_task_id = str(request.get("autonomous_task_id") or "").strip()[:80]
         if not worker_role and created_by == "api_b":
             worker_role = "general"
         if worker_role and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", worker_role):
@@ -326,6 +333,7 @@ class ScheduledTaskStore:
             "last_run_status": None,
             "active_run_id": None,
             "worker_role": worker_role,
+            "autonomous_task_id": autonomous_task_id,
         }
         if schedule_type == "once":
             task["run_at"] = _iso_utc(_parse_datetime(request.get("run_at"), field="run_at"))
@@ -459,7 +467,7 @@ class ScheduledTaskStore:
         current = (now or _utc_now()).astimezone(timezone.utc)
         allowed = {
             "title", "instruction", "schedule_type", "run_at", "time_of_day",
-            "weekdays", "timezone", "worker_role",
+            "weekdays", "timezone", "worker_role", "autonomous_task_id",
         }
         with self._transaction() as connection:
             existing = self._task(connection, schedule_id)
@@ -474,6 +482,7 @@ class ScheduledTaskStore:
                     "created_by": existing.get("created_by"),
                     "requested_via": existing.get("requested_via"),
                     "worker_role": normalized.get("worker_role"),
+                    "autonomous_task_id": existing.get("autonomous_task_id", ""),
                     "updated_at": _iso_utc(current),
                     "status": (
                         "active"

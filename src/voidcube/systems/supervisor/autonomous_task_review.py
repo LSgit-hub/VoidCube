@@ -46,7 +46,7 @@ def normalize_autonomous_chain_decision(
     }.get(normalized)
 
 
-def is_agent_pull_task(
+def is_employee_task(
     task: AutonomousChainTask,
     *,
     task_profile_policy: TaskProfilePolicy,
@@ -180,7 +180,7 @@ def build_autonomous_chain_auto_decision(
         active_task_list if learning_history is None else learning_history
     )
 
-    if is_agent_pull_task(task, task_profile_policy=task_profile_policy):
+    if is_employee_task(task, task_profile_policy=task_profile_policy):
         execution_kind = task_profile_policy.execution_kind(task)
         if execution_kind == "body_improvement":
             if has_pending_self_learning_prerequisite(
@@ -220,11 +220,11 @@ def build_autonomous_chain_auto_decision(
                 )
             return (
                 "approved",
-                "Agent-pull body-improvement task transferred by API-B for API-A execution after authoritative ExperimentResult verification. The executed commit must remain identical to the evaluated candidate commit.",
+                "API-B approved body-improvement task for coding employee execution after authoritative ExperimentResult verification. The executed commit must remain identical to the evaluated candidate commit.",
             )
         return (
             "approved",
-            "Agent-pull self-learning task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
+            "API-B approved self-learning task for research employee execution; the employee result is written back to the autonomous task.",
         )
 
     # The autonomous-chain gate bypasses user-chain quiet signals only for
@@ -283,6 +283,6 @@ __all__ = [
     "build_autonomous_chain_auto_decision",
     "calculate_learning_quality_score",
     "has_pending_self_learning_prerequisite",
-    "is_agent_pull_task",
+    "is_employee_task",
     "normalize_autonomous_chain_decision",
 ]

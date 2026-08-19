@@ -22,7 +22,7 @@ logger = logging.getLogger("supervisor")
 
 
 class AutonomousCycleService:
-    """Coordinate drive, planning, review, and handoff through explicit ports."""
+    """Coordinate drive, planning, review, and employee dispatch."""
 
     def __init__(
         self,
@@ -147,10 +147,11 @@ class AutonomousCycleService:
             cycle_result = await self.run_review_cycle()
             phases["review"] = {
                 "reviewed": cycle_result.get("reviewed", 0),
-                "handed_off": [
+                "dispatched": [
                     dict(item) if isinstance(item, dict) else {"task_id": str(item)}
-                    for item in cycle_result.get("handed_off", [])
+                    for item in cycle_result.get("dispatched", [])
                 ],
+                "employee_updates": list(cycle_result.get("employee_updates", [])),
                 "governance_consumption": dict(
                     cycle_result.get("governance_consumption") or {}
                 ),
@@ -171,14 +172,14 @@ class AutonomousCycleService:
         except Exception as exc:
             phases["review"] = {"status": "error", "error": str(exc)}
 
-        total_handed_off = len(phases.get("review", {}).get("handed_off", []))
+        total_dispatched = len(phases.get("review", {}).get("dispatched", []))
         total_planned = phases.get("drive", {}).get("planned", 0)
         self._record_ui_activity(
             "autonomous_cycle_completed",
-            scene="handoff" if total_handed_off > 0 else "planning",
+            scene="handoff" if total_dispatched > 0 else "planning",
             summary=(
                 f"自主链路一轮完成：新增 {total_planned} 个候选，"
-                f"{total_handed_off} 个链路项已进入自主交接。"
+                f"{total_dispatched} 个链路项已派给员工代理。"
             ),
             metadata={
                 "phases": {
@@ -186,7 +187,7 @@ class AutonomousCycleService:
                     for key, phase in phases.items()
                 },
                 "total_planned": total_planned,
-                "total_handed_off": total_handed_off,
+                "total_dispatched": total_dispatched,
                 "focus": focus or None,
             },
         )
@@ -196,7 +197,7 @@ class AutonomousCycleService:
             "phases": phases,
             "summary": {
                 "planned": total_planned,
-                "handed_off": total_handed_off,
+                "dispatched": total_dispatched,
                 "governance_consumed": int(
                     phases.get("review", {})
                     .get("governance_consumption", {})

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ui_observation_projection import is_api_a_lane_family_task
+from .ui_observation_projection import is_employee_lane_family_task
 from .ui_projection import (
     observation_count,
     observation_group,
@@ -36,12 +36,12 @@ def project_ui_metrics(
     learning_completed = sum(
         1
         for task in chain_history_projection
-        if is_api_a_lane_family_task(task) and task.get("status") == "completed"
+        if is_employee_lane_family_task(task) and task.get("status") == "completed"
     )
     learning_failed = sum(
         1
         for task in chain_history_projection
-        if is_api_a_lane_family_task(task) and task.get("status") == "failed"
+        if is_employee_lane_family_task(task) and task.get("status") == "failed"
     )
     followup_signal_count = 0
     judgement_record_count = 0
@@ -58,8 +58,8 @@ def project_ui_metrics(
     return {
         "chain_projection": {
             "api_b_judgement": observation_count(counts.get("api_b_judgement")),
-            "api_a_running": observation_count(counts.get("api_a_running")),
-            "api_a_handoff": observation_count(counts.get("api_a_handoff")),
+            "employee_running": observation_count(counts.get("employee_running")),
+            "employee_dispatch": observation_count(counts.get("employee_dispatch")),
             "candidate_signals": observation_count(counts.get("candidates")),
             "writeback_history": observation_count(counts.get("writebacks")),
             "body_improvement": body_improvement_projection_total,
@@ -115,15 +115,15 @@ def project_supervisor_scene(
     candidate_focus = dict(candidate_group.get("focus_item") or {})
 
     api_b_stage = observation_loop_stage(autonomous_observation, "api_b_judgement")
-    api_a_stage = observation_loop_stage(autonomous_observation, "api_a_execution")
-    api_a_focus = dict(api_a_stage.get("focus_task") or {})
-    api_a_status = str(api_a_stage.get("status") or "").strip().lower()
+    employee_stage = observation_loop_stage(autonomous_observation, "employee_execution")
+    employee_focus = dict(employee_stage.get("focus_task") or {})
+    employee_status = str(employee_stage.get("status") or "").strip().lower()
 
-    if api_a_status == "active" and api_a_focus:
+    if employee_status == "active" and employee_focus:
         return (
             "handoff",
             f"自主交接中{error_note}",
-            f"「{api_a_focus.get('title', '自主链路项')}」已交给 API-A 自主执行面处理，结果将写回 Mem 供下一轮监督者判断。",
+            f"「{employee_focus.get('title', '自主链路项')}」已交给 员工代理执行面处理，结果将写回 Mem 供下一轮监督者判断。",
         )
 
     api_b_stage_status = str(api_b_stage.get("status") or "").strip().lower()
@@ -147,7 +147,7 @@ def project_supervisor_scene(
             f"「{api_b_focus_title}」正处在 API-B 判断过程中。",
         )
 
-    if memory_active and not api_a_focus:
+    if memory_active and not employee_focus:
         return (
             "memory",
             f"正在整理记忆{error_note}",

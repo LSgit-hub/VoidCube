@@ -113,9 +113,9 @@ def _has_supervisor_chain_activity(supervisor_state: Dict[str, Any]) -> bool:
         return True
     observation = dict(supervisor_state.get("autonomous_observation") or {})
     runtime = dict(observation.get("runtime") or {})
-    if int(runtime.get("api_a_handoff_count") or 0) or int(runtime.get("api_a_running_count") or 0):
+    if int(runtime.get("employee_dispatch_count") or 0) or int(runtime.get("employee_running_count") or 0):
         return True
-    for key in ("api_b_candidates", "api_b_judgement", "api_a_handoff"):
+    for key in ("api_b_candidates", "api_b_judgement", "employee_dispatch"):
         if observation_group_items(supervisor_state, key):
             return True
     loop = dict(observation.get("loop") or {})
@@ -165,8 +165,8 @@ def _build_header_rows(
         "local_claimed_active": "●",
         "local_claimed_waiting_writeback": "◉",
         "local_claimed_waiting_first_turn": "◇",
-        "waiting_api_a_claim": "○",
-        "running_on_other_api_a": "◌",
+        "waiting_employee_claim": "○",
+        "running_on_other_employee": "◌",
     }.get(focus_stage, "○")
     rows.append((
         "class:mc-body-text",
@@ -225,7 +225,7 @@ def _build_task_rows(
             "class:mc-status-active",
             "     ↩ 执行完成，等待结果写回",
         ))
-    elif focus_stage == "waiting_api_a_claim":
+    elif focus_stage == "waiting_employee_claim":
         rows.append((
             "class:mc-status-warn",
             trim(
@@ -233,7 +233,7 @@ def _build_task_rows(
                 inner_width,
             ),
         ))
-    elif focus_stage == "running_on_other_api_a":
+    elif focus_stage == "running_on_other_employee":
         rows.append((
             "class:mc-body-accent",
             trim(
@@ -279,15 +279,15 @@ def _build_flow_rows(
         activity = f"  {spinner_text}"
         rows.append(("class:mc-status-active", trim(activity, inner_width)))
     elif focus_stage == "local_claimed_active" or agent_running:
-        rows.append(("class:mc-status-active", "  API-A 自主执行面工作中"))
+        rows.append(("class:mc-status-active", "  员工代理执行面工作中"))
     elif focus_stage == "local_claimed_waiting_first_turn":
         rows.append(("class:mc-body-accent", "  已认领链路项，等待首个回合"))
     elif focus_stage == "local_claimed_waiting_writeback":
         rows.append(("class:mc-body-accent", "  本轮结束，写回链路状态中"))
-    elif focus_stage == "waiting_api_a_claim":
-        desc = supervisor_descriptor.get("activity_text", "API-A 认领后执行，结果写回 Mem")
+    elif focus_stage == "waiting_employee_claim":
+        desc = supervisor_descriptor.get("activity_text", "员工代理认领后执行，结果写回 Mem")
         rows.append(("class:mc-body-text", f"  {desc}"))
-    elif focus_stage == "running_on_other_api_a":
+    elif focus_stage == "running_on_other_employee":
         desc = supervisor_descriptor.get("activity_text", "链路项在其他执行面运行中")
         rows.append(("class:mc-body-accent", f"  {desc}"))
     else:
@@ -399,9 +399,9 @@ def build_autonomous_execution_panel_rows(
         status_label = "已认领 · 待起跑"
     elif not companion_context and state_ports.agent_running():
         status_label = "模型处理中"
-    elif not companion_context and focus_stage == "waiting_api_a_claim":
+    elif not companion_context and focus_stage == "waiting_employee_claim":
         status_label = str(supervisor_descriptor.get("status_label") or "API-B 已转交")
-    elif not companion_context and focus_stage == "running_on_other_api_a":
+    elif not companion_context and focus_stage == "running_on_other_employee":
         status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
     elif not companion_context:
         status_label = str(supervisor_descriptor.get("status_label") or "API-B 判断中")

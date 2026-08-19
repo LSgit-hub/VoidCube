@@ -139,7 +139,7 @@ def evaluate_drive_input_snapshot(
         memory_idle_seconds is None
         or memory_idle_seconds >= config.memory_idle_seconds
     )
-    has_api_a_execution_idle = (
+    has_employee_execution_idle = (
         active_cli_execution_is_stale
         and (
             autonomous_execution_idle_seconds is None
@@ -189,7 +189,7 @@ def evaluate_drive_input_snapshot(
         "self_learning": {
             "eligible_for_planning": True,
             "eligible_for_execution": (
-                has_api_a_execution_idle
+                has_employee_execution_idle
                 and has_memory_idle
                 and has_self_learning_idle
                 and has_autonomous_chain_plan_idle
@@ -202,7 +202,7 @@ def evaluate_drive_input_snapshot(
         "self_evolution": {
             "eligible_for_planning": has_autonomous_chain_plan_idle,
             "eligible_for_execution": (
-                has_api_a_execution_idle
+                has_employee_execution_idle
                 and has_memory_idle
                 and has_autonomous_chain_plan_idle
                 and has_autonomous_chain_execute_idle
@@ -246,7 +246,7 @@ def evaluate_drive_input_snapshot(
         },
         "idle_seconds": {
             "user": user_idle_seconds,
-            "api_a_execution": autonomous_execution_idle_seconds,
+            "employee_execution": autonomous_execution_idle_seconds,
             "memory": memory_idle_seconds,
             "self_learning": self_learning_idle_seconds,
             "autonomous_chain_plan": autonomous_chain_plan_idle_seconds,
@@ -264,7 +264,7 @@ def evaluate_drive_input_snapshot(
         "user_chain_signal": user_chain_signal,
         "checks": {
             "has_memory_idle": has_memory_idle,
-            "has_api_a_execution_idle": has_api_a_execution_idle,
+            "has_employee_execution_idle": has_employee_execution_idle,
             "has_self_learning_idle": has_self_learning_idle,
             "has_autonomous_chain_plan_idle": has_autonomous_chain_plan_idle,
             "has_autonomous_chain_execute_idle": has_autonomous_chain_execute_idle,

@@ -30,6 +30,9 @@ _CONFIG_FILES = (
 _SOURCE_ROOTS = (
     "src/voidcube",
 )
+_SOURCE_MODULE_PREFIXES = {
+    "src/voidcube": "voidcube",
+}
 _MEMORY_ROOTS = ("Mem", "memai")
 _SKIP_PARTS = {
     ".git",
@@ -139,7 +142,9 @@ class SelfCognitionCollector:
                 continue
             for path in sorted(self._python_files(source_root)):
                 relative = path.relative_to(source_root).with_suffix("")
-                module_name = ".".join((root_name, *relative.parts))
+                module_name = ".".join(
+                    (_SOURCE_MODULE_PREFIXES[root_name], *relative.parts)
+                )
                 if module_name.endswith(".__init__"):
                     module_name = module_name.removesuffix(".__init__")
                 dependencies, parse_error = self._imports_for(path)
@@ -190,7 +195,10 @@ class SelfCognitionCollector:
                 available=git_version is not None,
             )
         )
-        for root_name, capability_type in (("skills", "skill"), ("tools", "tool")):
+        for root_name, capability_name, capability_type in (
+            ("skills", "skills", "skill"),
+            ("src/voidcube/extensions/tools", "tools", "tool"),
+        ):
             path = self._path_for_root(root_name)
             if not path.is_dir():
                 continue
@@ -199,7 +207,7 @@ class SelfCognitionCollector:
                     continue
                 capabilities.append(
                     RuntimeCapability(
-                        name=f"{root_name}:{entry.name}",
+                        name=f"{capability_name}:{entry.name}",
                         capability_type=capability_type,
                         available=True,
                         evidence_refs=(str(entry.relative_to(self.root)),),

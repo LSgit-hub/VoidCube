@@ -155,25 +155,25 @@ def _is_creativity_observation_task(task: Dict[str, Any]) -> bool:
     )
 
 
-def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
+def supervisor_employee_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
     observation = dict(supervisor_state.get("autonomous_observation") or {})
     counts = dict(observation.get("counts") or {})
-    api_a_stage = observation_loop_stage(supervisor_state, "api_a_execution")
-    stage_label = str(api_a_stage.get("status_label") or "").strip()
-    stage_reason = str(api_a_stage.get("chain_reason") or "").strip()
-    stage_activity = str(api_a_stage.get("activity_text") or "").strip()
-    stage_style = str(api_a_stage.get("reason_style") or "").strip().lower()
-    api_a_handoff_items = observation_group_items(supervisor_state, "api_a_handoff")
+    employee_stage = observation_loop_stage(supervisor_state, "employee_execution")
+    stage_label = str(employee_stage.get("status_label") or "").strip()
+    stage_reason = str(employee_stage.get("chain_reason") or "").strip()
+    stage_activity = str(employee_stage.get("activity_text") or "").strip()
+    stage_style = str(employee_stage.get("reason_style") or "").strip().lower()
+    employee_dispatch_items = observation_group_items(supervisor_state, "employee_dispatch")
     api_b_judgement_items = observation_group_items(supervisor_state, "api_b_judgement")
     creativity_judgement = [
         task for task in api_b_judgement_items
         if _is_creativity_observation_task(task)
     ]
-    focus_task = dict(api_a_stage.get("focus_task") or {})
+    focus_task = dict(employee_stage.get("focus_task") or {})
     focus_status = str(focus_task.get("status") or "").strip().lower()
-    approved_api_a = [
+    approved_employee = [
         task
-        for task in api_a_handoff_items
+        for task in employee_dispatch_items
         if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
     ]
     deferred_judgement = [
@@ -195,32 +195,32 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         "focus_task": {},
         "status_label": "API-B 判断中",
         "chain_reason": "链路: 当前没有 API-B 已转交待接手链路项",
-        "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
+        "activity_text": "执行流: API-B 判断、重排或再读取后再交给 员工代理",
         "reason_style": "dim",
     }
     approved_focus = (
         dict(focus_task)
         if focus_status == "approved"
-        else (dict(approved_api_a[0]) if approved_api_a else {})
+        else (dict(approved_employee[0]) if approved_employee else {})
     )
     if focus_task.get("task_id") and focus_status == "running":
         hint = {
-            "stage": "running_on_other_api_a",
-            "cli_focus_stage": "running_on_other_api_a",
+            "stage": "running_on_other_employee",
+            "cli_focus_stage": "running_on_other_employee",
             "focus_task": dict(focus_task),
             "status_label": "他处执行中",
-            "chain_reason": "链路: 该链路项已被其他 API-A 自主执行面认领",
-            "activity_text": "执行流: 链路项正在其他 API-A 自主执行面中运行",
+            "chain_reason": "链路: 该链路项已被其他 员工代理执行面认领",
+            "activity_text": "执行流: 链路项正在其他 员工代理执行面中运行",
             "reason_style": "info",
         }
     elif approved_focus.get("task_id"):
         hint = {
-            "stage": "waiting_api_a_claim",
-            "cli_focus_stage": "waiting_api_a_claim",
+            "stage": "waiting_employee_claim",
+            "cli_focus_stage": "waiting_employee_claim",
             "focus_task": approved_focus,
             "status_label": "API-B 已转交",
-            "chain_reason": "链路: API-B 已转交，可由 API-A 自主执行面接手",
-            "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
+            "chain_reason": "链路: API-B 已转交，可由 员工代理执行面接手",
+            "activity_text": "执行流: 员工代理认领后执行，结果写回 Mem",
             "reason_style": "warn",
         }
     elif deferred_judgement:
@@ -230,7 +230,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "focus_task": {},
             "status_label": "API-B 判断中",
             "chain_reason": "链路: 当前学习链路项仍由 API-B 判断",
-            "activity_text": "执行流: API-B 补判断后再决定是否交给 API-A",
+            "activity_text": "执行流: API-B 补判断后再决定是否交给 员工代理",
             "reason_style": "warn",
         }
     elif creativity_judgement:
@@ -240,7 +240,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "focus_task": {},
             "status_label": "API-B 判断中",
             "chain_reason": "链路: 当前自主链路项仍由 API-B 判断",
-            "activity_text": "执行流: API-B 判断、转交或重排后再交给 API-A",
+            "activity_text": "执行流: API-B 判断、转交或重排后再交给 员工代理",
             "reason_style": "info",
         }
     elif chain_focus_cards:
@@ -249,8 +249,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "cli_focus_stage": "idle",
             "focus_task": {},
             "status_label": "API-B 判断中",
-            "chain_reason": "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
-            "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
+            "chain_reason": "链路: 当前没有新的 员工代理 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
+            "activity_text": "执行流: API-B 判断、重排或再读取后再交给 员工代理",
             "reason_style": "info",
         }
     if stage_label:
@@ -261,8 +261,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         hint["activity_text"] = stage_activity
     if stage_style:
         hint["reason_style"] = stage_style
-    if hint["focus_task"] and not hint["focus_task"].get("task_id") and counts.get("api_a_handoff"):
-        hint["focus_task"] = dict(api_a_handoff_items[0]) if api_a_handoff_items else {}
+    if hint["focus_task"] and not hint["focus_task"].get("task_id") and counts.get("employee_dispatch"):
+        hint["focus_task"] = dict(employee_dispatch_items[0]) if employee_dispatch_items else {}
     return hint
 
 
@@ -273,17 +273,17 @@ def resolve_autonomous_panel_focus_task(
     current = current_task or {}
     if current.get("task_id"):
         return current
-    api_a_execution = supervisor_api_a_execution_hint(supervisor_state)
-    hinted_focus = dict(api_a_execution.get("focus_task") or {})
+    employee_execution = supervisor_employee_execution_hint(supervisor_state)
+    hinted_focus = dict(employee_execution.get("focus_task") or {})
     hinted_stage = str(
-        api_a_execution.get("cli_focus_stage")
-        or api_a_execution.get("stage")
+        employee_execution.get("cli_focus_stage")
+        or employee_execution.get("stage")
         or ""
     ).strip()
     if hinted_focus.get("task_id"):
         hinted_focus["_supervisor_stage"] = hinted_stage
         return hinted_focus
-    for task in observation_group_items(supervisor_state, "api_a_handoff"):
+    for task in observation_group_items(supervisor_state, "employee_dispatch"):
         task_status = str(task.get("status") or "").strip().lower()
         if task_status in {"approved", "retry"} and task.get("task_id"):
             return task
@@ -307,15 +307,15 @@ def resolve_autonomous_panel_focus_stage(
             return "local_claimed_waiting_writeback"
         return "local_claimed_waiting_first_turn"
     hinted_stage = str(focus_task.get("_supervisor_stage") or "").strip()
-    if hinted_stage == "waiting_api_a_claim":
-        return "waiting_api_a_claim"
-    if hinted_stage == "running_on_other_api_a":
-        return "running_on_other_api_a"
+    if hinted_stage == "waiting_employee_claim":
+        return "waiting_employee_claim"
+    if hinted_stage == "running_on_other_employee":
+        return "running_on_other_employee"
     task_status = str(focus_task.get("status") or "").strip().lower()
     if task_status in {"approved", "retry"}:
-        return "waiting_api_a_claim"
+        return "waiting_employee_claim"
     if task_status == "running":
-        return "running_on_other_api_a"
+        return "running_on_other_employee"
     return "idle"
 
 
@@ -323,30 +323,30 @@ def resolve_supervisor_stage_descriptor(
     supervisor_state: Dict[str, Any],
     focus_stage: str,
 ) -> Dict[str, str]:
-    api_a_execution = supervisor_api_a_execution_hint(supervisor_state)
+    employee_execution = supervisor_employee_execution_hint(supervisor_state)
     hinted_stage = str(
-        api_a_execution.get("cli_focus_stage")
-        or api_a_execution.get("stage")
+        employee_execution.get("cli_focus_stage")
+        or employee_execution.get("stage")
         or ""
     ).strip()
     if not hinted_stage or hinted_stage != focus_stage:
         return {}
     return {
-        "status_label": str(api_a_execution.get("status_label") or "").strip(),
-        "chain_reason": str(api_a_execution.get("chain_reason") or "").strip(),
-        "activity_text": str(api_a_execution.get("activity_text") or "").strip(),
-        "reason_style": str(api_a_execution.get("reason_style") or "").strip().lower(),
+        "status_label": str(employee_execution.get("status_label") or "").strip(),
+        "chain_reason": str(employee_execution.get("chain_reason") or "").strip(),
+        "activity_text": str(employee_execution.get("activity_text") or "").strip(),
+        "reason_style": str(employee_execution.get("reason_style") or "").strip().lower(),
     }
 
 
 def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple[str, str]:
-    api_a_execution = supervisor_api_a_execution_hint(supervisor_state)
-    hinted_reason = str(api_a_execution.get("chain_reason") or "").strip()
-    hinted_style = str(api_a_execution.get("reason_style") or "").strip().lower()
-    if hinted_reason and str(api_a_execution.get("stage") or "").strip() not in {
+    employee_execution = supervisor_employee_execution_hint(supervisor_state)
+    hinted_reason = str(employee_execution.get("chain_reason") or "").strip()
+    hinted_style = str(employee_execution.get("reason_style") or "").strip().lower()
+    if hinted_reason and str(employee_execution.get("stage") or "").strip() not in {
         "",
-        "waiting_api_a_claim",
-        "running_on_other_api_a",
+        "waiting_employee_claim",
+        "running_on_other_employee",
     }:
         style = {
             "warn": "class:auto-panel-warn",
@@ -356,7 +356,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         }.get(hinted_style, "class:auto-panel-dim")
         return (style, hinted_reason)
 
-    handoff_items = observation_group_items(supervisor_state, "api_a_handoff")
+    handoff_items = observation_group_items(supervisor_state, "employee_dispatch")
     if handoff_items:
         approved = [
             task for task in handoff_items
@@ -365,7 +365,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         if approved:
             return (
                 "class:auto-panel-warn",
-                "链路: API-B 已转交链路项，可由 API-A 自主执行面接手",
+                "链路: API-B 已转交链路项，可由 员工代理执行面接手",
             )
 
     creativity_judgement = [
@@ -398,7 +398,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
     ):
         return (
             "class:auto-panel-info",
-            "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
+            "链路: 当前没有新的 员工代理 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
         )
 
     other_execution = observation_loop_stage_projection(
@@ -410,7 +410,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
     if other_execution:
         return (
             "class:auto-panel-info",
-            "链路: 当前没有新的 API-A 可执行链路项；闭环当前焦点仍在 API-B 或 Mem 侧",
+            "链路: 当前没有新的 员工代理 可执行链路项；闭环当前焦点仍在 API-B 或 Mem 侧",
         )
 
     return (
@@ -450,8 +450,8 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     lines.append(
         "闭环统计: "
         f"API-B 判断在途={chain_projection.get('api_b_judgement', 0)}, "
-        f"API-A 执行中={chain_projection.get('api_a_running', 0)}, "
-        f"API-B 已转交={chain_projection.get('api_a_handoff', 0)}, "
+        f"员工代理执行中={chain_projection.get('employee_running', 0)}, "
+        f"API-B 已转交={chain_projection.get('employee_dispatch', 0)}, "
         f"候选={chain_projection.get('candidate_signals', 0)}, "
         f"回流={chain_projection.get('writeback_history', 0)}"
     )
@@ -486,7 +486,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
 
     execution_card = observation_loop_stage_projection(
         state,
-        "api_a_execution",
+        "employee_execution",
         "mem_writeback",
     )
     if execution_card:

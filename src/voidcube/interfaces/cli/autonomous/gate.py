@@ -9,7 +9,6 @@ from .events import (
     AutonomousPanelEventPorts,
     append_autonomous_execution_event,
 )
-from .presence import ensure_supervisor_task_session
 from .status_host import (
     preview_supervisor_status_lines,
 )
@@ -25,9 +24,6 @@ def _enter_autonomous_gate_locally(
 ) -> None:
     host._autonomous_gate_active = True
     host._autonomous_activation_pending = False
-    scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
-    if scheduler_runtime is not None:
-        scheduler_runtime.enable_autonomous()
     append_autonomous_execution_event(
         event_ports=event_ports,
         message="自主链路已激活，迷你 CLI 等待 AUTO 任务",
@@ -49,7 +45,6 @@ def _exit_autonomous_gate_locally(
     event_message: str = "",
     event_tone: str = "warn",
 ) -> None:
-    execution_host = getattr(host, "_autonomous_execution_host", None) or host
     if interrupt_reason and interrupt_source:
         interrupt_current_task_callback(
             reason=interrupt_reason,
@@ -58,12 +53,9 @@ def _exit_autonomous_gate_locally(
         )
     host._autonomous_gate_active = False
     host._autonomous_activation_pending = False
-    scheduler_runtime = getattr(host, "_turn_scheduler_runtime", None)
-    if scheduler_runtime is not None:
-        scheduler_runtime.cancel_autonomous()
     push_cli_agent_scene_callback(
         "idle",
-        session_id=getattr(execution_host, "session_id", None),
+        session_id=getattr(host, "session_id", None),
         agent_role="supervisor_task",
     )
     if event_message:
@@ -91,17 +83,13 @@ def _resolve_supervisor_url() -> str:
 
 
 def activate_autonomous_execution(host: Any) -> Tuple[bool, str]:
-    """Activate the Auto-mode execution loop."""
-    starter = getattr(host, "_start_autonomous_execution", None)
-    if callable(starter):
-        try:
-            started = bool(starter())
-        except Exception as exc:
-            logger.warning("Failed to start autonomous execution loop: %s", exc)
-            return False, f"AUTO 模式执行链路启动失败: {exc}"
-        if not started:
-            return False, "AUTO 模式执行链路未启动。"
-    return True, "AUTO 模式执行链路已启动；任务会进入自主链路迷你 CLI。"
+    """Report the employee-dispatch runtime as ready.
+
+    Auto mode only enables API-B planning. Approved tasks are persisted as
+    employee assignments and consumed by the employee scheduler.
+    """
+    del host
+    return True, "API-B 规划/复核已启用；获准任务将直接派给员工代理。"
 
 
 def handle_auto_command(

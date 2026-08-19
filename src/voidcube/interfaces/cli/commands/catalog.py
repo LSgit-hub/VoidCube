@@ -138,7 +138,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True),
 
     # Auto - 自主规划
-    CommandDef("auto", "临时启用自主链路；API-A 执行组件会按需显示", "会话管理",
+    CommandDef("auto", "临时启用 API-B 规划并把获准任务派给员工代理", "会话管理",
                args_hint="[focus]"),
     CommandDef("auto-q", "临时停用自主链路，保留主 CLI 用户交互", "会话管理",
                cli_only=True),

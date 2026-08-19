@@ -11,9 +11,21 @@ voidcube -> voidcube.interfaces.cli:main
 vc       -> voidcube.interfaces.cli:main
 ```
 
-API-A Agent 的唯一回合执行器是 `voidcube.runtime.agent.runner`。Supervisor、Gateway 和 Memory 由规范包内的 infrastructure/system 组合点启动。根目录不存在 Python launcher；旧目录 `VoidCube_app`、`VoidCube_cli`、`VoidCube_core`、`agent`、`tools`、`systems` 已从生产源码删除，也不进入 wheel。
+API-A Agent 的唯一回合执行器是 `voidcube.runtime.agent.runner`，只服务用户 CLI 对话。Supervisor/API-B 的获准后台任务由 `voidcube.systems.supervisor.autonomous_employee_dispatch_service` 创建一次性员工任务，并由员工队列回写；Auto 不再启动 API-A 自主认领循环。Supervisor、Gateway 和 Memory 由规范包内的 infrastructure/system 组合点启动。根目录不存在 Python launcher；旧目录 `VoidCube_app`、`VoidCube_cli`、`VoidCube_core`、`agent`、`tools`、`systems` 已从生产源码删除，也不进入 wheel。
 
 `memai` 是独立的记忆产品包，源码位于 `Mem/src/memai`；`plugins` 只包含插件清单和插件实现。Mem 插件通过 `voidcube.domain.contracts.memory` 与主应用交互，不反向导入旧包。
+
+### API-B 员工执行边界
+
+```text
+API-B drive/review -> approved autonomous task
+    -> scheduled_tasks(autonomous_task_id, worker_role)
+    -> isolated employee agent
+    -> scheduled run result
+    -> Supervisor status/metadata + Mem governance writeback
+```
+
+`approved` 只表示 API-B 已授权派工；`running/completed/failed` 由员工任务运行结果驱动。API-A 不认领、不续租、不回写这些自治任务。
 
 ## 2. 目录职责
 
@@ -85,6 +97,7 @@ src/voidcube/
 - 顶层 `systems` 的 Supervisor、evolution、research、self-cognition 和 voice 实现已归入 `voidcube.systems`。
 - 插件 manifest、manager、CLI adapter 和 Mem host 集成均使用 canonical API。
 - 运行时动态工具发现只加载 `voidcube.*` 模块；没有 `src.*` 或旧包 fallback。
+- Auto CLI 只负责切换 API-B 规划门和展示员工状态；旧 autonomous pull loop、CLI 认领/续租回写桥及其生命周期线程已删除。
 - 配置默认 toolset、CLI locale、Supervisor Web 资源和 Podman Containerfile 均使用 canonical 路径。
 
 ## 5. 验收与持续检查

@@ -12,7 +12,3 @@ def autonomous_chain_task_route(task_id: str) -> str:
 
 def autonomous_chain_task_decision_route(task_id: str) -> str:
     return f"{autonomous_chain_task_route(task_id)}/decision"
-
-
-def autonomous_chain_task_lease_validation_route(task_id: str) -> str:
-    return f"{autonomous_chain_task_route(task_id)}/lease/validate"

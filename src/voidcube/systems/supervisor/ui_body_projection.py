@@ -38,7 +38,7 @@ def body_slot_state_label(value: Any) -> str:
 def body_upgrade_signal_source_label(status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized == "running":
-        return "API-A 正在改"
+        return "员工代理 正在改"
     if normalized in {"approved", "retry"}:
         return "API-B 已转交"
     return "API-B 正在安排"

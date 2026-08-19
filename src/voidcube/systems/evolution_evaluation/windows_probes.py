@@ -170,7 +170,10 @@ _PROBES: dict[str, Callable[[], dict[str, object]]] = {
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) != 1 or arguments[0] not in _PROBES:
-        print("usage: python -m systems.evolution_evaluation.windows_probes PROBE", file=sys.stderr)
+        print(
+            "usage: python -m voidcube.systems.evolution_evaluation.windows_probes PROBE",
+            file=sys.stderr,
+        )
         return 2
     if os.name != "nt" and arguments[0].startswith("windows-"):
         print("Windows probe requires a Windows host", file=sys.stderr)

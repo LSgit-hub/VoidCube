@@ -232,17 +232,17 @@ def project_cognition_judgement(
         if observation_target
         else ""
     )
-    api_a_handoff_count = observation_count(
-        perception.get("api_a_handoff_count")
+    employee_dispatch_count = observation_count(
+        perception.get("employee_dispatch_count")
     )
-    api_a_running_count = observation_count(
-        perception.get("api_a_running_count")
+    employee_running_count = observation_count(
+        perception.get("employee_running_count")
     )
-    api_a_lane_summary = ""
-    if api_a_running_count > 0:
-        api_a_lane_summary = f"API-A 执行中 {api_a_running_count} 个链路项。"
-    elif api_a_handoff_count > 0:
-        api_a_lane_summary = f"API-B 已转交 {api_a_handoff_count} 个链路项，等待 API-A 接手。"
+    employee_lane_summary = ""
+    if employee_running_count > 0:
+        employee_lane_summary = f"员工代理执行中 {employee_running_count} 个链路项。"
+    elif employee_dispatch_count > 0:
+        employee_lane_summary = f"API-B 已转交 {employee_dispatch_count} 个链路项，等待 员工代理接手。"
 
     reasons: List[str] = []
     explicit_reason = cognition_reason_label(
@@ -276,8 +276,8 @@ def project_cognition_judgement(
         }[focus]
         if focus_reason not in reasons:
             reasons.append(focus_reason)
-    if api_a_lane_summary and api_a_lane_summary not in reasons:
-        reasons.append(api_a_lane_summary)
+    if employee_lane_summary and employee_lane_summary not in reasons:
+        reasons.append(employee_lane_summary)
 
     summary_parts = []
     if focus_label and focus_label != "未命名":
@@ -286,10 +286,10 @@ def project_cognition_judgement(
         summary_parts.append(f"先响应{primary_need_label}")
     if constraint_label:
         summary_parts.append(f"主要约束是{constraint_label}")
-    if api_a_running_count > 0:
-        summary_parts.append(f"API-A 执行中 {api_a_running_count} 个链路项")
-    elif api_a_handoff_count > 0:
-        summary_parts.append(f"API-B 已转交 {api_a_handoff_count} 个链路项")
+    if employee_running_count > 0:
+        summary_parts.append(f"员工代理执行中 {employee_running_count} 个链路项")
+    elif employee_dispatch_count > 0:
+        summary_parts.append(f"API-B 已转交 {employee_dispatch_count} 个链路项")
     summary = "，".join(summary_parts) or "当前认知判断尚未稳定。"
 
     return {
@@ -306,9 +306,9 @@ def project_cognition_judgement(
         "observation_target": observation_target or None,
         "observation_target_label": observation_target_label or None,
         "self_iteration_hypothesis": hypothesis or None,
-        "api_a_handoff_count": api_a_handoff_count,
-        "api_a_running_count": api_a_running_count,
-        "api_a_lane_summary": api_a_lane_summary or None,
+        "employee_dispatch_count": employee_dispatch_count,
+        "employee_running_count": employee_running_count,
+        "employee_lane_summary": employee_lane_summary or None,
         "why_not_direct_improvement": reasons[:4],
     }
 

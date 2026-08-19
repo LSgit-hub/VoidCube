@@ -8,8 +8,8 @@ from .ui_observation_projection import (
     build_observation_card,
     build_observation_group,
     chain_projection_order_key,
-    is_api_a_execution_lane_task,
-    is_api_a_lane_family_task,
+    is_employee_execution_lane_task,
+    is_employee_lane_family_task,
     loop_stage_status_label,
     memory_maintenance_handoff_status,
     observation_display_status,
@@ -43,14 +43,14 @@ def project_autonomous_observation(
         "awaiting_review",
         "retry",
     }
-    api_a_lane_family_tasks = [
-        task for task in all_tasks if is_api_a_lane_family_task(task)
+    employee_lane_family_tasks = [
+        task for task in all_tasks if is_employee_lane_family_task(task)
     ]
     supervisor_tasks = [
-        task for task in all_tasks if not is_api_a_lane_family_task(task)
+        task for task in all_tasks if not is_employee_lane_family_task(task)
     ]
 
-    api_a_lane_family_sorted = sorted(api_a_lane_family_tasks, key=chain_projection_order_key)
+    employee_lane_family_sorted = sorted(employee_lane_family_tasks, key=chain_projection_order_key)
     supervisor_sorted = sorted(
         [
             task
@@ -59,21 +59,21 @@ def project_autonomous_observation(
         ],
         key=chain_projection_order_key,
     )
-    api_a_lane_source = [
-        task for task in api_a_lane_family_sorted if is_api_a_execution_lane_task(task)
+    employee_lane_source = [
+        task for task in employee_lane_family_sorted if is_employee_execution_lane_task(task)
     ]
-    api_a_running_source = [
+    employee_running_source = [
         task
-        for task in api_a_lane_source
+        for task in employee_lane_source
         if observation_status_value(task) == "running"
     ]
-    api_a_pre_handoff_source = [
+    employee_pre_dispatch_source = [
         task
-        for task in api_a_lane_family_sorted
+        for task in employee_lane_family_sorted
         if observation_status_value(task) in api_b_judgement_statuses
     ]
     api_b_judgement_source = sorted(
-        [*supervisor_sorted, *api_a_pre_handoff_source],
+        [*supervisor_sorted, *employee_pre_dispatch_source],
         key=chain_projection_order_key,
     )
 
@@ -93,7 +93,7 @@ def project_autonomous_observation(
         return None
 
     api_b_focus_task = pick_active(supervisor_sorted)
-    api_a_running_task = pick_active(api_a_running_source)
+    employee_running_task = pick_active(employee_running_source)
 
     api_b_judgement_cards = [
         build_observation_card(
@@ -106,24 +106,24 @@ def project_autonomous_observation(
     api_b_judgement_cards = [
         task for task in api_b_judgement_cards if isinstance(task, dict)
     ]
-    api_a_lane_items = [
+    employee_lane_items = [
         build_observation_card(
             task,
             lane="agent",
             observation_role="observed_task",
         )
-        for task in api_a_lane_source
+        for task in employee_lane_source
     ]
-    api_a_lane_items = [
-        task for task in api_a_lane_items if isinstance(task, dict)
+    employee_lane_items = [
+        task for task in employee_lane_items if isinstance(task, dict)
     ]
-    api_a_handoff_items = [
+    employee_dispatch_items = [
         task
-        for task in api_a_lane_items
+        for task in employee_lane_items
         if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
     ]
-    api_a_pre_handoff_cards = [
-        card for card in api_b_judgement_cards if is_api_a_lane_family_task(card)
+    employee_pre_dispatch_cards = [
+        card for card in api_b_judgement_cards if is_employee_lane_family_task(card)
     ]
     terminal_history_tasks = [
         task
@@ -134,12 +134,12 @@ def project_autonomous_observation(
 
     seen_keys = {
         str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
-        for task in [*api_b_judgement_cards, *api_a_lane_items, *terminal_history_tasks]
+        for task in [*api_b_judgement_cards, *employee_lane_items, *terminal_history_tasks]
         if isinstance(task, dict)
     }
     seen_titles = {
         str(task.get("title") or "").strip()
-        for task in [*api_b_judgement_cards, *api_a_lane_items]
+        for task in [*api_b_judgement_cards, *employee_lane_items]
         if isinstance(task, dict)
     }
     seen_task_ids = {
@@ -178,10 +178,10 @@ def project_autonomous_observation(
         if candidate_title:
             seen_titles.add(candidate_title)
 
-    api_a_handoff_focus = api_a_handoff_items[0] if api_a_handoff_items else None
-    deferred_api_a_pre_handoff = [
+    employee_dispatch_focus = employee_dispatch_items[0] if employee_dispatch_items else None
+    deferred_employee_pre_dispatch = [
         task
-        for task in api_a_pre_handoff_cards
+        for task in employee_pre_dispatch_cards
         if str(task.get("status") or "").strip().lower() == "deferred"
     ]
     completed_tasks = [
@@ -217,18 +217,18 @@ def project_autonomous_observation(
         api_b_summary = "当前没有新的 API-B 动作"
         api_b_status = "idle"
 
-    if api_a_running_task:
-        api_a_status = "active"
-        api_a_summary = f"{str(api_a_running_task.get('title') or '自主链路项').strip()} 正在 API-A 执行"
-    elif api_a_handoff_items:
-        api_a_status = "ready"
-        api_a_summary = f"API-B 已转交 {len(api_a_handoff_items)} 个链路项，等待 API-A 接手"
-    elif api_a_pre_handoff_cards:
-        api_a_status = "idle"
-        api_a_summary = f"{len(api_a_pre_handoff_cards)} 个链路项仍由 API-B 判断"
+    if employee_running_task:
+        employee_status = "active"
+        employee_summary = f"{str(employee_running_task.get('title') or '自主链路项').strip()} 正在 员工代理 执行"
+    elif employee_dispatch_items:
+        employee_status = "ready"
+        employee_summary = f"API-B 已转交 {len(employee_dispatch_items)} 个链路项，等待 员工代理接手"
+    elif employee_pre_dispatch_cards:
+        employee_status = "idle"
+        employee_summary = f"{len(employee_pre_dispatch_cards)} 个链路项仍由 API-B 判断"
     else:
-        api_a_status = "idle"
-        api_a_summary = "当前没有 API-A 自主执行项"
+        employee_status = "idle"
+        employee_summary = "当前没有 员工代理执行项"
 
     if recent_writebacks:
         writeback_status = "ready"
@@ -247,31 +247,31 @@ def project_autonomous_observation(
         reread_status = "idle"
         reread_summary = "暂无可再读回流"
 
-    api_a_stage_label = "未进入"
-    api_a_chain_reason = "链路: 当前没有 API-A 自主执行项"
-    api_a_activity_text = "执行流: 只观察 API-A 对 API-B 可见的状态"
-    api_a_reason_style = "dim"
-    if api_a_running_task:
-        api_a_stage_label = "执行中"
-        api_a_chain_reason = "链路: API-A 正在执行并回报进展"
-        api_a_activity_text = "执行流: 完成后写回 Mem"
-        api_a_reason_style = "info"
-    elif api_a_handoff_items:
-        api_a_stage_label = "待接手"
-        api_a_chain_reason = "链路: API-B 已转交，可由 API-A 接手"
-        api_a_activity_text = "执行流: API-A 接手后执行，结果写回 Mem"
-        api_a_reason_style = "warn"
-    elif deferred_api_a_pre_handoff:
-        api_a_chain_reason = "链路: 当前学习链路项仍由 API-B 判断"
-        api_a_activity_text = "执行流: API-B 先补判断，再决定是否交给 API-A"
-        api_a_reason_style = "warn"
-    elif api_a_pre_handoff_cards:
-        api_a_chain_reason = "链路: 当前自主链路项仍由 API-B 判断"
-        api_a_activity_text = "执行流: API-B 决定是否交给 API-A"
-        api_a_reason_style = "info"
+    employee_stage_label = "未进入"
+    employee_chain_reason = "链路: 当前没有 员工代理执行项"
+    employee_activity_text = "执行流: 只观察 员工代理对 API-B 可见的状态"
+    employee_reason_style = "dim"
+    if employee_running_task:
+        employee_stage_label = "执行中"
+        employee_chain_reason = "链路: 员工代理正在执行并回报进展"
+        employee_activity_text = "执行流: 完成后写回 Mem"
+        employee_reason_style = "info"
+    elif employee_dispatch_items:
+        employee_stage_label = "待接手"
+        employee_chain_reason = "链路: API-B 已转交，可由 员工代理接手"
+        employee_activity_text = "执行流: 员工代理接手后执行，结果写回 Mem"
+        employee_reason_style = "warn"
+    elif deferred_employee_pre_dispatch:
+        employee_chain_reason = "链路: 当前学习链路项仍由 API-B 判断"
+        employee_activity_text = "执行流: API-B 先补判断，再决定是否交给 员工代理"
+        employee_reason_style = "warn"
+    elif employee_pre_dispatch_cards:
+        employee_chain_reason = "链路: 当前自主链路项仍由 API-B 判断"
+        employee_activity_text = "执行流: API-B 决定是否交给 员工代理"
+        employee_reason_style = "info"
     elif recent_writebacks or candidates or api_b_judgement_cards:
-        api_a_chain_reason = "链路: API-B 正结合候选与回流推进下一轮"
-        api_a_reason_style = "info"
+        employee_chain_reason = "链路: API-B 正结合候选与回流推进下一轮"
+        employee_reason_style = "info"
 
     api_b_current = build_observation_card(
         api_b_focus_task
@@ -290,19 +290,19 @@ def project_autonomous_observation(
             or "API-B 判断"
         ),
     )
-    api_a_current = build_observation_card(
-        api_a_running_task
-        or api_a_handoff_focus
-        or {"title": "API-A 自主执行"},
+    employee_current = build_observation_card(
+        employee_running_task
+        or employee_dispatch_focus
+        or {"title": "员工代理执行"},
         lane="agent",
-        display_status=loop_stage_status_label(api_a_status),
-        status=api_a_status,
-        summary_override=api_a_summary,
-        observation_role="api_a_execution",
+        display_status=loop_stage_status_label(employee_status),
+        status=employee_status,
+        summary_override=employee_summary,
+        observation_role="employee_execution",
         title_override=(
-            str((api_a_running_task or {}).get("title") or "").strip()
-            or str((api_a_handoff_focus or {}).get("title") or "").strip()
-            or "API-A 自主执行"
+            str((employee_running_task or {}).get("title") or "").strip()
+            or str((employee_dispatch_focus or {}).get("title") or "").strip()
+            or "员工代理执行"
         ),
     )
     mem_current = build_observation_card(
@@ -335,13 +335,13 @@ def project_autonomous_observation(
         if api_b_focus_task
         else None
     )
-    api_a_active_task = (
+    employee_active_task = (
         build_observation_card(
-            api_a_running_task,
+            employee_running_task,
             lane="agent",
-            observation_role="api_a_active_task",
+            observation_role="employee_active_task",
         )
-        if api_a_running_task
+        if employee_running_task
         else None
     )
 
@@ -386,19 +386,19 @@ def project_autonomous_observation(
             footer_label="查看判断最近状态",
             drill_label="查看判断详情",
             read_rule="这里只看 API-B 正在判断的事。",
-            next_step="API-B 判断通过后交给 API-A。",
+            next_step="API-B 判断通过后交给 员工代理。",
         ),
         build_observation_group(
-            key="api_a_handoff",
+            key="employee_dispatch",
             label="API-B 已转交",
             empty_text="当前没有已转交待接手项",
-            items=api_a_handoff_items[:6],
+            items=employee_dispatch_items[:6],
             emphasis="agent",
-            source_label="API-A",
+            source_label="员工代理",
             stage_label="接手状态",
-            summary="API-B 已转交，等待 API-A 接手的自主链路项。",
+            summary="API-B 已转交，等待 员工代理接手的自主链路项。",
             order=2,
-            segment_kind="api_a_handoff",
+            segment_kind="employee_dispatch",
             decor_cls="agent",
             decor_icon="🤖",
             item_label="待接手项",
@@ -406,8 +406,8 @@ def project_autonomous_observation(
             trace_label="回合",
             footer_label="查看执行最近状态",
             drill_label="查看执行详情",
-            read_rule="这里只看 API-B 已转交、等待 API-A 接手的项；执行中看上方阶段。",
-            next_step="API-A 接手后执行，结果回流到 Mem。",
+            read_rule="这里只看 API-B 已转交、等待 员工代理接手的项；执行中看上方阶段。",
+            next_step="员工代理接手后执行，结果回流到 Mem。",
         ),
         build_observation_group(
             key="mem_recent",
@@ -444,9 +444,9 @@ def project_autonomous_observation(
                 for item in (api_b_current, api_b_active_task, *api_b_judgement_cards)
                 if isinstance(item, dict)
             ],
-            "api_a_handoff": [
+            "employee_dispatch": [
                 item
-                for item in (api_a_current, api_a_active_task, *api_a_handoff_items)
+                for item in (employee_current, employee_active_task, *employee_dispatch_items)
                 if isinstance(item, dict)
             ],
             "api_b_candidates": [
@@ -465,7 +465,7 @@ def project_autonomous_observation(
     focus_card = next(
         (
             card
-            for card in (api_b_current, api_a_current, mem_current, reread_card)
+            for card in (api_b_current, employee_current, mem_current, reread_card)
             if isinstance(card, dict)
             and str(card.get("status") or "").strip().lower() in {"active", "ready"}
         ),
@@ -475,7 +475,7 @@ def project_autonomous_observation(
     board = {
         "headline": "API-B 主视角自主闭环总览",
         "summary": (
-            "Web 小屋只看 API-B 判断、API-A 回报、Mem 回流与再读取；用户链路只作软感知。"
+            "Web 小屋只看 API-B 判断、员工回报、Mem 回流与再读取；用户链路只作软感知。"
         ),
         "primary_focus": {
             "title": str((focus_card or {}).get("title") or "自主闭环当前落点").strip(),
@@ -506,7 +506,7 @@ def project_autonomous_observation(
             "is_focus": focus_role == "api_b_judgement",
             "summary": api_b_summary,
             "read_rule": "这里看 API-B 这轮判断。",
-            "transition_hint": "判断通过后交给 API-A 接手。",
+            "transition_hint": "判断通过后交给 员工代理接手。",
             "focus_task": (
                 api_b_active_task
                 or (candidates[0] if candidates else None)
@@ -518,24 +518,24 @@ def project_autonomous_observation(
             ),
         },
         {
-            "key": "api_a_execution",
-            "label": "API-A 自主执行",
-            "observation_stage_label": "API-A 接手 / 执行观测阶段",
-            "source_label": "API-A",
+            "key": "employee_execution",
+            "label": "员工代理执行",
+            "observation_stage_label": "员工代理派工 / 执行观测阶段",
+            "source_label": "员工代理",
             "lane": "agent",
-            "observation_role": "api_a_execution",
-            "status": api_a_status,
-            "rail_state": api_a_stage_label,
-            "rail_note": api_a_chain_reason,
-            "is_focus": focus_role == "api_a_execution",
-            "summary": api_a_summary,
-            "status_label": api_a_stage_label,
-            "chain_reason": api_a_chain_reason,
-            "activity_text": api_a_activity_text,
-            "reason_style": api_a_reason_style,
-            "read_rule": "这里只看 API-A 对 API-B 可见的接手与执行状态。",
+            "observation_role": "employee_execution",
+            "status": employee_status,
+            "rail_state": employee_stage_label,
+            "rail_note": employee_chain_reason,
+            "is_focus": focus_role == "employee_execution",
+            "summary": employee_summary,
+            "status_label": employee_stage_label,
+            "chain_reason": employee_chain_reason,
+            "activity_text": employee_activity_text,
+            "reason_style": employee_reason_style,
+            "read_rule": "这里只看 员工代理 对 API-B 可见的接手与执行状态。",
             "transition_hint": "执行完成后会把结果写回 Mem，形成回流证据。",
-            "focus_task": api_a_active_task or api_a_handoff_focus,
+            "focus_task": employee_active_task or employee_dispatch_focus,
         },
         {
             "key": "mem_writeback",
@@ -595,7 +595,7 @@ def project_autonomous_observation(
         for stage in loop_stages
     ]
     boundary_note = (
-        "自主链路闭环只展示 API-B 判断、API-A 自主执行、Mem 写回回流和 API-B 再读取；"
+        "自主链路闭环只展示 API-B 判断、员工代理执行、Mem 写回回流和 API-B 再读取；"
         "用户链路只作让路软感知，不展示聊天内容。"
     )
 
@@ -609,7 +609,7 @@ def project_autonomous_observation(
         "runtime": {},
         "chain": {
             "headline": "自主闭环分段观察",
-            "summary": "这里按候选形成、API-B 判断在途、API-A 接手与执行、Mem 回流来看这一条自主链路。",
+            "summary": "这里按候选形成、API-B 判断在途、员工代理接手与执行、Mem 回流来看这一条自主链路。",
             "segments": chain_segments,
         },
         "board": board,
@@ -623,8 +623,8 @@ def project_autonomous_observation(
             "candidates": len(candidates),
             "writebacks": len(recent_writebacks),
             "api_b_judgement": len(api_b_judgement_cards),
-            "api_a_handoff": len(api_a_handoff_items),
-            "api_a_running": len(api_a_running_source),
+            "employee_dispatch": len(employee_dispatch_items),
+            "employee_running": len(employee_running_source),
         },
     }
 

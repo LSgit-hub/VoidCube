@@ -15,8 +15,6 @@ class TurnResultApplicationPorts:
 
     conversation_history: Callable[[], Sequence[dict[str, Any]]]
     set_conversation_history: Callable[[list[dict[str, Any]]], None]
-    record_autonomous_result: Callable[..., None]
-    record_autonomous_finished: Callable[..., None]
     publish_usage: Callable[[Mapping[str, Any]], None] | None = None
 
 
@@ -35,10 +33,6 @@ class TurnResultApplicationRuntime:
     def apply(
         self,
         result: Mapping[str, Any] | None,
-        *,
-        autonomous_task_run_id: str,
-        autonomous_timeout_reported: bool,
-        autonomous_timeout_writeback_succeeded: bool,
     ) -> AppliedTurnResult:
         prior_history = tuple(self.ports.conversation_history())
         outcome = normalize_turn_outcome(
@@ -51,14 +45,6 @@ class TurnResultApplicationRuntime:
         else:
             evidence_messages = outcome.conversation_history
         turn_result = outcome.observation(evidence_messages=evidence_messages)
-        if autonomous_timeout_reported:
-            turn_result.update(
-                {
-                    "failed": True,
-                    "interrupted": True,
-                    "error": "Autonomous task timed out after 30 minutes.",
-                }
-            )
         if self.ports.publish_usage is not None:
             raw_result = result if isinstance(result, Mapping) else {}
             usage = {
@@ -81,14 +67,4 @@ class TurnResultApplicationRuntime:
             }
             if usage:
                 self.ports.publish_usage(usage)
-        self.ports.record_autonomous_result(
-            turn_result,
-            autonomous_task_run_id=autonomous_task_run_id,
-            timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
-        )
-        self.ports.record_autonomous_finished(
-            turn_result,
-            autonomous_task_run_id=autonomous_task_run_id,
-            timeout_writeback_succeeded=autonomous_timeout_writeback_succeeded,
-        )
         return AppliedTurnResult(outcome=outcome, turn_result=turn_result)

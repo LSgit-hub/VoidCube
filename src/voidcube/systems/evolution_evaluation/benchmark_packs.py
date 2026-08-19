@@ -44,7 +44,7 @@ def create_native_first_benchmark_pack(*, created_at: datetime) -> BenchmarkPack
         BenchmarkCase(
             case_id="python-import",
             runner="python-import",
-            input_ref="systems/evolution_evaluation",
+            input_ref="src/voidcube/systems/evolution_evaluation",
             tags=("risk:python-runtime",),
         )
     ]
@@ -52,7 +52,7 @@ def create_native_first_benchmark_pack(*, created_at: datetime) -> BenchmarkPack
         BenchmarkCase(
             case_id=runner,
             runner=runner,
-            input_ref="systems/evolution_evaluation/windows_probes.py",
+            input_ref="src/voidcube/systems/evolution_evaluation/windows_probes.py",
             tags=("platform:windows", f"risk:{runner.removeprefix('windows-')}"),
         )
         for runner in _RUNNER_PROBES
@@ -110,7 +110,7 @@ def _evaluate_native_case(request, task_id, _environment) -> BenchmarkCaseEvalua
     probe = _RUNNER_PROBES.get(request.case.runner)
     if probe is None:
         raise ValueError(f"unsupported native benchmark runner: {request.case.runner}")
-    command = f"python -m systems.evolution_evaluation.windows_probes {probe}"
+    command = f"python -m voidcube.systems.evolution_evaluation.windows_probes {probe}"
     from ...infrastructure.execution.terminal_tool import terminal_tool
 
     payload = json.loads(

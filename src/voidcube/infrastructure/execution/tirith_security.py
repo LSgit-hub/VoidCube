@@ -10,8 +10,11 @@ JSON stdout enriches findings/summary but never overrides the verdict.
 Operational failures (spawn error, timeout, unknown exit code) respect
 the fail_open config setting. Programming errors propagate.
 
-Auto-install: if tirith is not found on PATH or at the configured path,
-it is automatically downloaded from GitHub releases to $VOIDCUBE_HOME/bin/tirith.
+Auto-install on Linux and macOS: if tirith is not found on PATH or at the
+configured path, it is downloaded from GitHub releases to
+$VOIDCUBE_HOME/bin/tirith. Windows resolves an existing PATH/TIRITH_BIN command;
+install the official npm package there because upstream release archives do not
+use the Unix tarball layout handled by this installer.
 The download always verifies SHA-256 checksums.  When cosign is available on
 PATH, provenance verification (GitHub Actions workflow signature) is also
 performed.  If cosign is not installed, the download proceeds with SHA-256
@@ -512,7 +515,7 @@ def _background_install(*, log_failures: bool = True):
 
 
 def ensure_installed(*, log_failures: bool = True):
-    """Ensure tirith is available, downloading in background if needed.
+    """Ensure tirith is available, downloading in background where supported.
 
     Quick PATH/local checks are synchronous; network download runs in a
     daemon thread so startup never blocks. Safe to call multiple times.

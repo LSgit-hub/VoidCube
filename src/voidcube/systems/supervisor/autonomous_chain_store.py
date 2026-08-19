@@ -17,8 +17,8 @@ from ...domain.tasks.runtime_profile import (
     normalize_runtime_task_type,
 )
 
-# `approved` is a persisted historical enum name. In current chain semantics it
-# means "API-B has handed this item off; API-A may claim it", not "executed".
+# `approved` means API-B has authorized employee dispatch, not that execution
+# has started or completed.
 AutonomousChainTaskStatus = Literal[
     "planned",
     "deferred",
@@ -270,7 +270,7 @@ class AutonomousChainStore:
             "awaiting_review",
         }
     )
-    _API_A_EXECUTION_LANE_STATUSES: frozenset[str] = frozenset(
+    _EMPLOYEE_EXECUTION_LANE_STATUSES: frozenset[str] = frozenset(
         {
             "approved",
             "running",
@@ -322,43 +322,38 @@ class AutonomousChainStore:
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return items still owned by API-B judgement, before API-A handoff."""
+        """Return items still owned by API-B judgement, before employee dispatch."""
         allowed = self._status_filter(
             status=status,
             default_statuses=self._API_B_JUDGEMENT_STATUSES,
         )
         return self._list_tasks_by_statuses(allowed)
 
-    def list_api_a_handoff_tasks(
+    def list_employee_dispatch_tasks(
         self,
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return items API-B has transferred and API-A may pick up.
-
-        The backing status is the persisted `approved` enum, but this read path
-        exposes the current API-A handoff meaning rather than an execution
-        result.
-        """
+        """Return items authorized for employee dispatch or retry."""
         allowed = self._status_filter(
             status=status,
             default_statuses=frozenset({"approved", "retry"}),
         )
         return self._list_tasks_by_statuses(allowed)
 
-    def list_api_a_running_tasks(self) -> List[AutonomousChainTask]:
-        """Return items currently reported as running on the API-A execution side."""
+    def list_employee_running_tasks(self) -> List[AutonomousChainTask]:
+        """Return items currently reported as running by employee agents."""
         return self._list_tasks_by_statuses(frozenset({"running"}))
 
-    def list_api_a_execution_lane_tasks(
+    def list_employee_execution_lane_tasks(
         self,
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return tasks in the API-A lane: handoff-ready, running, or retry."""
+        """Return tasks in the employee lane: dispatch-ready, running, or retry."""
         allowed = self._status_filter(
             status=status,
-            default_statuses=self._API_A_EXECUTION_LANE_STATUSES,
+            default_statuses=self._EMPLOYEE_EXECUTION_LANE_STATUSES,
         )
         return self._list_tasks_by_statuses(allowed)
 
@@ -385,8 +380,8 @@ class AutonomousChainStore:
         if normalized_status:
             if normalized_status in self._API_B_JUDGEMENT_STATUSES:
                 return self.list_api_b_judgement_tasks(status=status)
-            if normalized_status in self._API_A_EXECUTION_LANE_STATUSES:
-                return self.list_api_a_execution_lane_tasks(status=status)
+            if normalized_status in self._EMPLOYEE_EXECUTION_LANE_STATUSES:
+                return self.list_employee_execution_lane_tasks(status=status)
             if normalized_status in self._WRITEBACK_HISTORY_STATUSES:
                 return self.list_writeback_history(status=status)
             if include_cancelled and normalized_status == "cancelled":
@@ -394,7 +389,7 @@ class AutonomousChainStore:
             return []
 
         allowed_statuses = set(self._API_B_JUDGEMENT_STATUSES)
-        allowed_statuses.update(self._API_A_EXECUTION_LANE_STATUSES)
+        allowed_statuses.update(self._EMPLOYEE_EXECUTION_LANE_STATUSES)
         allowed_statuses.update(self._WRITEBACK_HISTORY_STATUSES)
         if include_cancelled:
             allowed_statuses.add("cancelled")
@@ -637,7 +632,7 @@ class AutonomousChainStore:
         owner_session_id: str,
         lease_seconds: float = 300,
         actor: str = "cli_agent",
-        reason: str = "API-A claimed autonomous task.",
+        reason: str = "员工代理 claimed autonomous task.",
         context: Optional[Dict[str, Any]] = None,
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
@@ -1127,10 +1122,10 @@ class AutonomousChainStore:
                 "previous_status": previous_status,
                 "removed_execution_request_id": request_id,
                 "missing_fields": missing_fields,
-                "review_required": previous_status in cls._API_A_EXECUTION_LANE_STATUSES,
+                "review_required": previous_status in cls._EMPLOYEE_EXECUTION_LANE_STATUSES,
             }
 
-            if previous_status in cls._API_A_EXECUTION_LANE_STATUSES:
+            if previous_status in cls._EMPLOYEE_EXECUTION_LANE_STATUSES:
                 reason = (
                     "Legacy execution authorization was withdrawn because its body "
                     "lineage is not auditable; the task requires a new review."

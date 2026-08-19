@@ -55,7 +55,7 @@ def fetch_supervisor_status(host: Any) -> Dict[str, Any]:
 
 
 def fetch_autonomous_gateway_status(host: Any) -> Dict[str, Any]:
-    """Return cached gateway body status for API-A autonomous execution visibility."""
+    """Return cached gateway body status for employee execution visibility."""
     return getattr(host, "_autonomous_gateway_status_cache", None) or {}
 
 

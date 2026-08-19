@@ -29,8 +29,8 @@ def activity_source_label(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     return {
         "supervisor": "API-B",
-        "agent": "API-A",
-        "executor": "API-A 子执行面",
+        "agent": "员工代理",
+        "executor": "员工代理执行面",
         "memory": "Mem",
         "gateway": "网关",
     }.get(normalized, str(value or "").strip() or "未知侧")
@@ -148,9 +148,9 @@ def project_recent_autonomous_activity(
     if kind == "autonomous_chain_execute":
         summary = f"{source_label} 已向 API-B 回报 {label or '自主链路项'} 的执行进展。"
     elif kind == "autonomous_chain_plan":
-        summary = f"API-B 已更新 {label or '自主链路项'} 的判断，并决定是否转交 API-A。"
+        summary = f"API-B 已更新 {label or '自主链路项'} 的判断，并决定是否转交 员工代理。"
     elif kind == "self_learning":
-        summary = f"API-A 子执行面正在围绕 {label or '自主学习'} 回传学习进展，供 API-B 后续吸收。"
+        summary = f"员工代理执行面正在围绕 {label or '自主学习'} 回传学习进展，供 API-B 后续吸收。"
     elif kind == "memory_write_failure":
         summary = "最近一次 Mem 写回回流出现异常，当前闭环需要补偿或重试。"
     else:
@@ -210,7 +210,7 @@ def project_observation_board(
 ) -> dict[str, Any]:
     counts = dict(observation.get("counts") or {})
     board = dict(observation.get("board") or {})
-    running_count = observation_count(counts.get("api_a_running"))
+    running_count = observation_count(counts.get("employee_running"))
     board["recent_activity"] = dict(recent_activity)
     board["hero_summary"] = str(
         board.get("hero_summary") or board.get("summary") or "只看当前落点和回流。"
@@ -219,9 +219,9 @@ def project_observation_board(
     if running_count:
         notes.append(
             {
-                "key": "api_a_flow_hold",
+                "key": "employee_flow_hold",
                 "tone": "info",
-                "title": "API-A 执行中",
+                "title": "员工代理执行中",
                 "text": f"还有 {running_count} 个执行中链路项，写回后会回到这里。",
             }
         )

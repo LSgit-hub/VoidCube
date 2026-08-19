@@ -26,16 +26,10 @@ class DrivePerceptionSnapshot:
     body_improvement_backlog_count: int
     stale_backlog_count: int
     pending_review_count: int
-    api_a_ready_count: int = 0
-    api_a_handoff_count: int = 0
-    api_a_running_count: int = 0
+    employee_dispatch_count: int = 0
+    employee_running_count: int = 0
     checks: Dict[str, Any] = field(default_factory=dict)
     idle_seconds: Dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.api_a_handoff_count <= 0 and self.api_a_ready_count > 0:
-            object.__setattr__(self, "api_a_handoff_count", self.api_a_ready_count)
-
 
 @dataclass(frozen=True, slots=True)
 class DriveWorldModel:
@@ -133,9 +127,8 @@ class DriveDeliberationReport:
                 "body_improvement_backlog_count": self.perception.body_improvement_backlog_count,
                 "stale_backlog_count": self.perception.stale_backlog_count,
                 "pending_review_count": self.perception.pending_review_count,
-                "api_a_handoff_count": self.perception.api_a_handoff_count,
-                "api_a_ready_count": self.perception.api_a_handoff_count,
-                "api_a_running_count": self.perception.api_a_running_count,
+                "employee_dispatch_count": self.perception.employee_dispatch_count,
+                "employee_running_count": self.perception.employee_running_count,
                 "checks": dict(self.perception.checks),
                 "idle_seconds": dict(self.perception.idle_seconds),
             },

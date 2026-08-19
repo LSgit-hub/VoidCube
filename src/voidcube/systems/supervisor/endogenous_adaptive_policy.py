@@ -26,8 +26,8 @@ class PerceptionPolicyInput(Protocol):
     pending_review_count: int
     stale_backlog_count: int
     api_b_judgement_count: int
-    api_a_handoff_count: int
-    api_a_running_count: int
+    employee_dispatch_count: int
+    employee_running_count: int
 
 
 class WorldModelPolicyInput(Protocol):
@@ -426,22 +426,22 @@ def build_adaptive_policy_projection(
     observation_bias = clamp01(
         observation_bias + float(policy.get("dynamic_observation_bias_boost") or 0.0)
     )
-    api_a_execution_flow_pressure = clamp01(
-        perception.api_a_handoff_count * 0.14
-        + perception.api_a_running_count * 0.24
+    employee_execution_flow_pressure = clamp01(
+        perception.employee_dispatch_count * 0.14
+        + perception.employee_running_count * 0.24
     )
-    if api_a_execution_flow_pressure > 0.0:
+    if employee_execution_flow_pressure > 0.0:
         learning_expansion_bias = clamp01(
-            learning_expansion_bias - api_a_execution_flow_pressure * 0.08
+            learning_expansion_bias - employee_execution_flow_pressure * 0.08
         )
         body_growth_bias = clamp01(
-            body_growth_bias - api_a_execution_flow_pressure * 0.22
+            body_growth_bias - employee_execution_flow_pressure * 0.22
         )
         observation_bias = clamp01(
-            observation_bias + api_a_execution_flow_pressure * 0.06
+            observation_bias + employee_execution_flow_pressure * 0.06
         )
         candidate_throttle = clamp01(
-            candidate_throttle + api_a_execution_flow_pressure * 0.18
+            candidate_throttle + employee_execution_flow_pressure * 0.18
         )
 
     focus_candidates = {
@@ -531,9 +531,9 @@ def build_adaptive_policy_projection(
         exploratory_learning_quota = 1
     else:
         exploratory_learning_quota = 2
-    if perception.api_a_running_count > 0:
+    if perception.employee_running_count > 0:
         exploratory_learning_quota = 0
-    elif perception.api_a_handoff_count > 0:
+    elif perception.employee_dispatch_count > 0:
         exploratory_learning_quota = min(exploratory_learning_quota, 1)
     body_growth_quota = (
         1
@@ -544,7 +544,7 @@ def build_adaptive_policy_projection(
         )
         else 0
     )
-    if perception.api_a_handoff_count > 0 or perception.api_a_running_count > 0:
+    if perception.employee_dispatch_count > 0 or perception.employee_running_count > 0:
         body_growth_quota = 0
 
     rationale_parts = [
@@ -562,8 +562,8 @@ def build_adaptive_policy_projection(
         rationale_parts.append(f"context posture memory is active for {context_key}")
     if observation_bias >= 0.6:
         rationale_parts.append("observation bias is elevated because autonomous output should slow down")
-    if api_a_execution_flow_pressure > 0.0:
-        rationale_parts.append("API-A 执行窗口仍在流动，因此先等待回流沉淀再扩大自主产出")
+    if employee_execution_flow_pressure > 0.0:
+        rationale_parts.append("员工代理执行窗口仍在流动，因此先等待回流沉淀再扩大自主产出")
 
     return {
         "learning_expansion_bias": learning_expansion_bias,
@@ -603,9 +603,9 @@ def build_adaptive_policy_projection(
             f"dynamic_observation_bias_boost={float(policy.get('dynamic_observation_bias_boost') or 0.0):.2f}",
             f"dynamic_truthfulness_bias_boost={float(policy.get('dynamic_truthfulness_bias_boost') or 0.0):.2f}",
             f"dynamic_learning_expansion_suppression={float(policy.get('dynamic_learning_expansion_suppression') or 0.0):.2f}",
-            f"api_a_execution_flow_pressure={api_a_execution_flow_pressure:.2f}",
-            f"api_a_handoff_count={perception.api_a_handoff_count}",
-            f"api_a_running_count={perception.api_a_running_count}",
+            f"employee_execution_flow_pressure={employee_execution_flow_pressure:.2f}",
+            f"employee_dispatch_count={perception.employee_dispatch_count}",
+            f"employee_running_count={perception.employee_running_count}",
             f"focus_effectiveness[{preferred_focus}]={focus_effectiveness_values.get(preferred_focus, 0.5):.2f}",
             f"candidate_budget={candidate_budget}",
             f"exploratory_learning_quota={exploratory_learning_quota}",
