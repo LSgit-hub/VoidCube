@@ -105,7 +105,6 @@ from memai.indexes.timeline import (
     supersede_empty_day_summary,
 )
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
 
 _CMEM_COLUMNS = (

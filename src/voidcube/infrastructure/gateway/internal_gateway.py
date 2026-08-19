@@ -23,7 +23,6 @@ from ...domain.tasks.runtime_thresholds import (
     DEFAULT_CLI_SESSION_TTL_SECONDS,
 )
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("internal_gateway")
 
 

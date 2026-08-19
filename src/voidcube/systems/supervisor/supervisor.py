@@ -50,7 +50,6 @@ from .ui_routes import (
 )
 from ..voice import VoiceConfig, VoiceSessionManager
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supervisor")
 
 
