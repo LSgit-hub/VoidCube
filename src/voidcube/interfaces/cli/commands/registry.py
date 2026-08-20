@@ -1067,7 +1067,7 @@ def _skills_command_ports(*, emit: Callable[[str], None]) -> SkillsCommandPorts:
         )
 
     def refresh_cache() -> None:
-        clear_skills_system_prompt_cache(clear_snapshot=True)
+        clear_skills_system_prompt_cache()
         from .. import application as cli_app
 
         cli_app._skill_commands_cache = None

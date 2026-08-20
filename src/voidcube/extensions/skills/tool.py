@@ -77,6 +77,7 @@ from typing import Dict, Any, List, Optional, Set, Tuple
 
 from ..tools.registry import registry, tool_error
 from .catalog import get_disabled_skill_names, parse_frontmatter, skill_matches_platform
+from . import registry as skills_registry
 
 logger = logging.getLogger(__name__)
 
@@ -381,8 +382,10 @@ def _get_category_from_path(skill_path: Path) -> Optional[str]:
         try:
             rel_path = skill_path.relative_to(skills_dir)
             parts = rel_path.parts
-            if len(parts) >= 3:
-                return parts[0]
+            # ``<category>/<skill>/SKILL.md`` maps to ``<category>``;
+            # preserve all nested category segments to match the registry.
+            if len(parts) > 2:
+                return "/".join(parts[:-2])
         except ValueError:
             continue
     return None
@@ -427,6 +430,28 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
         List of skill metadata dicts (name, description, category).
     """
     from .catalog import get_all_skills_dirs
+
+    dirs = get_all_skills_dirs()
+    try:
+        indexed = skills_registry.refresh_and_query(dirs)
+        disabled = set() if skip_disabled else get_disabled_skill_names()
+        skills: List[Dict[str, Any]] = []
+        seen_names: set[str] = set()
+        for record in indexed:
+            if not skill_matches_platform({"platforms": record.get("platforms") or []}):
+                continue
+            name = str(record.get("frontmatter_name") or record.get("directory_name") or "")[:MAX_NAME_LENGTH]
+            if not name or name in seen_names or name in disabled:
+                continue
+            seen_names.add(name)
+            skills.append({
+                "name": name,
+                "description": str(record.get("description") or "")[:MAX_DESCRIPTION_LENGTH],
+                "category": record.get("category"),
+            })
+        return skills
+    except Exception as exc:
+        logger.warning("Skill registry unavailable; using filesystem discovery: %s", exc)
 
     skills = []
     seen_names: set = set()

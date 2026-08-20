@@ -4,7 +4,6 @@ All functions are stateless. AIAgent._build_system_prompt() calls these to
 assemble pieces, then combines them with memory and ephemeral prompts.
 """
 
-import json
 import logging
 import os
 import re
@@ -21,7 +20,6 @@ from ...domain.identity.defaults import (
 from typing import Optional
 
 from ...extensions.skills.catalog import (
-    EXCLUDED_SKILL_DIRS,
     extract_skill_conditions,
     extract_skill_description,
     get_all_skills_dirs,
@@ -30,7 +28,7 @@ from ...extensions.skills.catalog import (
     parse_frontmatter,
     skill_matches_platform,
 )
-from ...infrastructure.persistence.file_store import atomic_json_write
+from ...extensions.skills import registry as skills_registry
 
 logger = logging.getLogger(__name__)
 
@@ -364,100 +362,28 @@ CONTEXT_TRUNCATE_TAIL_RATIO = 0.2
 _SKILLS_PROMPT_CACHE_MAX = 8
 _SKILLS_PROMPT_CACHE: OrderedDict[tuple, str] = OrderedDict()
 _SKILLS_PROMPT_CACHE_LOCK = threading.Lock()
-_SKILLS_SNAPSHOT_VERSION = 2
+def _skills_registry_path() -> Path:
+    return skills_registry.registry_path()
 
 
-def _skills_prompt_snapshot_path() -> Path:
-    return get_VoidCube_home() / ".skills_prompt_snapshot.json"
-
-
-def clear_skills_system_prompt_cache(*, clear_snapshot: bool = False) -> None:
-    """Drop the in-process skills prompt cache (and optionally the disk snapshot)."""
+def clear_skills_system_prompt_cache() -> None:
+    """Drop the in-process skills prompt cache."""
     with _SKILLS_PROMPT_CACHE_LOCK:
         _SKILLS_PROMPT_CACHE.clear()
-    if clear_snapshot:
-        try:
-            _skills_prompt_snapshot_path().unlink(missing_ok=True)
-        except OSError as e:
-            logger.debug("Could not remove skills prompt snapshot: %s", e)
-
-
-def _build_skills_manifest(
-    skills_dirs: list[Path],
-) -> dict[str, dict[str, list[int]]]:
-    """Build one mtime/size manifest covering every indexed skill root."""
-    manifest: dict[str, dict[str, list[int]]] = {}
-    indexed_names = {"SKILL.md", "DESCRIPTION.md"}
-    for skills_dir in skills_dirs:
-        root_manifest: dict[str, list[int]] = {}
-        manifest[str(skills_dir.resolve())] = root_manifest
-        if not skills_dir.is_dir():
-            continue
-        for root, dirs, files in os.walk(skills_dir):
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_SKILL_DIRS]
-            for filename in sorted(indexed_names.intersection(files)):
-                path = Path(root) / filename
-                try:
-                    st = path.stat()
-                except OSError:
-                    continue
-                root_manifest[str(path.relative_to(skills_dir))] = [
-                    st.st_mtime_ns,
-                    st.st_size,
-                ]
-    return manifest
-
-
-def _load_skills_snapshot(
-    manifest: dict[str, dict[str, list[int]]],
-) -> Optional[dict]:
-    """Load the disk snapshot if it exists and its manifest still matches."""
-    snapshot_path = _skills_prompt_snapshot_path()
-    if not snapshot_path.exists():
-        return None
-    try:
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(snapshot, dict):
-        return None
-    if snapshot.get("version") != _SKILLS_SNAPSHOT_VERSION:
-        return None
-    if snapshot.get("manifest") != manifest:
-        return None
-    return snapshot
-
-
-def _write_skills_snapshot(
-    manifest: dict[str, dict[str, list[int]]],
-    skill_entries: list[dict],
-    category_descriptions: dict[str, str],
-) -> None:
-    """Persist skill metadata to disk for fast cold-start reuse."""
-    payload = {
-        "version": _SKILLS_SNAPSHOT_VERSION,
-        "manifest": manifest,
-        "skills": skill_entries,
-        "category_descriptions": category_descriptions,
-    }
-    try:
-        atomic_json_write(_skills_prompt_snapshot_path(), payload)
-    except Exception as e:
-        logger.debug("Could not write skills prompt snapshot: %s", e)
-
-
-def _build_snapshot_entry(
+def _build_filesystem_entry(
     skill_file: Path,
     skills_dir: Path,
     frontmatter: dict,
     description: str,
 ) -> dict:
-    """Build a serialisable metadata dict for one skill."""
+    """Build fallback metadata when the SQLite index is unavailable."""
     rel_path = skill_file.relative_to(skills_dir)
     parts = rel_path.parts
     if len(parts) >= 2:
         skill_name = parts[-2]
-        category = "/".join(parts[:-2]) if len(parts) > 2 else parts[0]
+        # A root-level ``<skill>/SKILL.md`` has no category.  ``general`` is
+        # the prompt-only display label for that uncategorized skill.
+        category = "/".join(parts[:-2]) or "general"
     else:
         category = "general"
         skill_name = skill_file.parent.name
@@ -474,6 +400,71 @@ def _build_snapshot_entry(
         "platforms": [str(p).strip() for p in platforms if str(p).strip()],
         "conditions": extract_skill_conditions(frontmatter),
     }
+
+
+def _category_descriptions_from_files(skills_dirs: list[Path]) -> dict[str, str]:
+    """Read category descriptions without making them part of skill identity."""
+    descriptions: dict[str, str] = {}
+    for skills_dir in skills_dirs:
+        for desc_file in iter_skill_index_files(skills_dir, "DESCRIPTION.md"):
+            try:
+                content = desc_file.read_text(encoding="utf-8")
+                frontmatter, _ = parse_frontmatter(content)
+                description = frontmatter.get("description")
+                if not description:
+                    continue
+                relative = desc_file.relative_to(skills_dir)
+                category = (
+                    "/".join(relative.parts[:-1])
+                    if len(relative.parts) > 1
+                    else "general"
+                )
+                descriptions.setdefault(category, str(description).strip().strip("'\""))
+            except Exception as exc:
+                logger.debug("Could not read category description %s: %s", desc_file, exc)
+    return descriptions
+
+
+def _skills_from_registry(
+    skills_dirs: list[Path],
+    available_tools: "set[str] | None",
+    available_toolsets: "set[str] | None",
+    disabled: set[str],
+) -> tuple[dict[str, list[tuple[str, str]]], list[dict], dict[str, str]]:
+    """Build prompt entries from the refreshed index, preserving precedence."""
+    records = skills_registry.refresh_and_query(
+        skills_dirs,
+        path=_skills_registry_path(),
+    )
+    skills_by_category: dict[str, list[tuple[str, str]]] = {}
+    entries: list[dict] = []
+    seen_skill_names: set[str] = set()
+    for record in records:
+        skill_name = str(record.get("directory_name") or "")[:64]
+        if not skill_name:
+            continue
+        entry = {
+            "skill_name": skill_name,
+            "category": record.get("category") or "general",
+            "frontmatter_name": str(record.get("frontmatter_name") or skill_name),
+            "description": str(record.get("description") or ""),
+            "platforms": record.get("platforms") or [],
+            "conditions": record.get("conditions") or {},
+        }
+        entries.append(entry)
+        if skill_name in seen_skill_names:
+            continue
+        if not skill_matches_platform({"platforms": entry["platforms"]}):
+            continue
+        if entry["frontmatter_name"] in disabled or skill_name in disabled:
+            continue
+        if not _skill_should_show(entry["conditions"], available_tools, available_toolsets):
+            continue
+        seen_skill_names.add(skill_name)
+        skills_by_category.setdefault(entry["category"], []).append(
+            (skill_name, entry["description"])
+        )
+    return skills_by_category, entries, _category_descriptions_from_files(skills_dirs)
 
 
 # =========================================================================
@@ -536,12 +527,9 @@ def build_skills_system_prompt(
 ) -> str:
     """Build a compact skill index for the system prompt.
 
-    Two-layer cache:
-      1. In-process LRU dict keyed by (skills_dir, tools, toolsets)
-      2. Disk snapshot (``.skills_prompt_snapshot.json``) validated by
-         mtime/size manifest — survives process restarts
-
-    Falls back to a full filesystem scan when both layers miss.
+    The rebuildable SQLite index is the primary metadata source. The in-process
+    LRU remains the first-level prompt cache; registry failures fall back to a
+    direct filesystem scan.
 
     External skill directories (``skills.external_dirs`` in config.yaml) are
     scanned alongside the local ``~/.VoidCube/skills/`` directory.  External dirs
@@ -574,102 +562,37 @@ def build_skills_system_prompt(
 
     disabled = get_disabled_skill_names()
 
-    # ── Layer 2: disk snapshot ────────────────────────────────────────
-    manifest = _build_skills_manifest(skills_dirs)
-    snapshot = _load_skills_snapshot(manifest)
-
-    skills_by_category: dict[str, list[tuple[str, str]]] = {}
-    category_descriptions: dict[str, str] = {}
-
-    if snapshot is not None:
-        # Fast path: use pre-parsed metadata from disk
-        seen_skill_names: set[str] = set()
-        for entry in snapshot.get("skills", []):
-            if not isinstance(entry, dict):
-                continue
-            skill_name = entry.get("skill_name") or ""
-            category = entry.get("category") or "general"
-            frontmatter_name = entry.get("frontmatter_name") or skill_name
-            if skill_name in seen_skill_names:
-                continue
-            platforms = entry.get("platforms") or []
-            if not skill_matches_platform({"platforms": platforms}):
-                continue
-            if frontmatter_name in disabled or skill_name in disabled:
-                continue
-            if not _skill_should_show(
-                entry.get("conditions") or {},
-                available_tools,
-                available_toolsets,
-            ):
-                continue
-            skills_by_category.setdefault(category, []).append(
-                (skill_name, entry.get("description", ""))
-            )
-            seen_skill_names.add(skill_name)
-        category_descriptions = {
-            str(k): str(v)
-            for k, v in (snapshot.get("category_descriptions") or {}).items()
-        }
-    else:
-        # Cold path: full filesystem scan + write snapshot for next time
-        skill_entries: list[dict] = []
+    # ── Layer 2: rebuildable SQLite index ─────────────────────────────
+    try:
+        skills_by_category, skill_entries, category_descriptions = _skills_from_registry(
+            skills_dirs,
+            available_tools,
+            available_toolsets,
+            disabled,
+        )
+    except Exception as exc:
+        logger.warning("Skill registry unavailable; falling back to filesystem scan: %s", exc)
+        skills_by_category = {}
+        skill_entries = []
+        category_descriptions = {}
         seen_skill_names: set[str] = set()
         for skills_dir in skills_dirs:
             if not skills_dir.is_dir():
                 continue
             for skill_file in iter_skill_index_files(skills_dir, "SKILL.md"):
                 is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
-                entry = _build_snapshot_entry(
-                    skill_file, skills_dir, frontmatter, desc
-                )
+                entry = _build_filesystem_entry(skill_file, skills_dir, frontmatter, desc)
                 skill_entries.append(entry)
                 skill_name = entry["skill_name"]
                 if not is_compatible or skill_name in seen_skill_names:
                     continue
                 if entry["frontmatter_name"] in disabled or skill_name in disabled:
                     continue
-                if not _skill_should_show(
-                    extract_skill_conditions(frontmatter),
-                    available_tools,
-                    available_toolsets,
-                ):
+                if not _skill_should_show(extract_skill_conditions(frontmatter), available_tools, available_toolsets):
                     continue
                 seen_skill_names.add(skill_name)
-                skills_by_category.setdefault(entry["category"], []).append(
-                    (skill_name, entry["description"])
-                )
-
-            for desc_file in iter_skill_index_files(
-                skills_dir, "DESCRIPTION.md"
-            ):
-                try:
-                    content = desc_file.read_text(encoding="utf-8")
-                    fm, _ = parse_frontmatter(content)
-                    cat_desc = fm.get("description")
-                    if not cat_desc:
-                        continue
-                    rel = desc_file.relative_to(skills_dir)
-                    cat = (
-                        "/".join(rel.parts[:-1])
-                        if len(rel.parts) > 1
-                        else "general"
-                    )
-                    category_descriptions.setdefault(
-                        cat, str(cat_desc).strip().strip("'\"")
-                    )
-                except Exception as e:
-                    logger.debug(
-                        "Could not read skill description %s: %s",
-                        desc_file,
-                        e,
-                    )
-
-        _write_skills_snapshot(
-            manifest,
-            skill_entries,
-            category_descriptions,
-        )
+                skills_by_category.setdefault(entry["category"], []).append((skill_name, entry["description"]))
+        category_descriptions = _category_descriptions_from_files(skills_dirs)
 
     if not skills_by_category:
         result = ""

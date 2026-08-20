@@ -595,6 +595,9 @@ def skill_manage(
     old_string: str = None,
     new_string: str = None,
     replace_all: bool = False,
+    deprecated: bool = None,
+    supersedes: str = None,
+    clear_supersedes: bool = False,
 ) -> str:
     """
     Manage user-created skills. Dispatches to the appropriate action handler.
@@ -633,13 +636,64 @@ def skill_manage(
             return tool_error("file_path is required for 'remove_file'.", success=False)
         result = _remove_file(name, file_path)
 
+    elif action == "lifecycle":
+        existing = _find_skill(name)
+        if not existing:
+            result = {"success": False, "error": f"Skill '{name}' not found."}
+        elif supersedes == name:
+            result = {"success": False, "error": "A skill cannot supersede itself."}
+        elif supersedes is not None and (supersedes_error := _validate_name(supersedes)):
+            result = {"success": False, "error": supersedes_error}
+        elif deprecated is None and supersedes is None and not clear_supersedes:
+            result = {
+                "success": False,
+                "error": "Provide deprecated=true/false, supersedes, or clear_supersedes=true.",
+            }
+        else:
+            try:
+                from .registry import (
+                    REGISTRY_FILENAME,
+                    open_registry,
+                    refresh_catalog_index,
+                    set_lifecycle_metadata,
+                )
+
+                refresh_catalog_index(
+                    extra_paths=(SKILLS_DIR,),
+                    path=SKILLS_DIR.parent / REGISTRY_FILENAME,
+                )
+                connection = open_registry(SKILLS_DIR.parent / REGISTRY_FILENAME)
+                try:
+                    set_lifecycle_metadata(
+                        connection,
+                        existing["path"] / "SKILL.md",
+                        deprecated=deprecated,
+                        supersedes=supersedes,
+                        clear_supersedes=clear_supersedes,
+                    )
+                finally:
+                    connection.close()
+                result = {"success": True, "message": f"Lifecycle metadata updated for '{name}'."}
+            except Exception as exc:
+                logger.debug("Could not update lifecycle metadata for %s: %s", name, exc)
+                result = {"success": False, "error": f"Could not update lifecycle metadata: {exc}"}
+
     else:
-        result = {"success": False, "error": f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"}
+        result = {"success": False, "error": f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file, lifecycle"}
 
     if result.get("success"):
         try:
+            from .registry import REGISTRY_FILENAME, refresh_catalog_index
+
+            refresh_catalog_index(
+                extra_paths=(SKILLS_DIR,),
+                path=SKILLS_DIR.parent / REGISTRY_FILENAME,
+            )
+        except Exception as exc:
+            logger.debug("Could not refresh skill registry after manage action: %s", exc)
+        try:
             from voidcube.runtime.agent.prompt_builder import clear_skills_system_prompt_cache
-            clear_skills_system_prompt_cache(clear_snapshot=True)
+            clear_skills_system_prompt_cache()
         except Exception:
             pass
 
@@ -659,7 +713,7 @@ SKILL_MANAGE_SCHEMA = {
         "Actions: create (full SKILL.md + optional category), "
         "patch (old_string/new_string — preferred for fixes), "
         "edit (full SKILL.md rewrite — major overhauls only), "
-        "delete, write_file, remove_file.\n\n"
+        "delete, write_file, remove_file, lifecycle.\n\n"
         "Create when: complex task succeeded (5+ calls), errors overcome, "
         "user-corrected approach worked, non-trivial workflow discovered, "
         "or user asks you to remember a procedure.\n"
@@ -676,14 +730,14 @@ SKILL_MANAGE_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["create", "patch", "edit", "delete", "write_file", "remove_file"],
+                "enum": ["create", "patch", "edit", "delete", "write_file", "remove_file", "lifecycle"],
                 "description": "The action to perform."
             },
             "name": {
                 "type": "string",
                 "description": (
                     "Skill name (lowercase, hyphens/underscores, max 64 chars). "
-                    "Must match an existing skill for patch/edit/delete/write_file/remove_file."
+                    "Must match an existing skill for patch/edit/delete/write_file/remove_file/lifecycle."
                 )
             },
             "content": {
@@ -734,6 +788,18 @@ SKILL_MANAGE_SCHEMA = {
                 "type": "string",
                 "description": "Content for the file. Required for 'write_file'."
             },
+            "deprecated": {
+                "type": "boolean",
+                "description": "Lifecycle action: mark the skill deprecated (true) or restore it (false)."
+            },
+            "supersedes": {
+                "type": "string",
+                "description": "Lifecycle action: name of the skill that replaces this one."
+            },
+            "clear_supersedes": {
+                "type": "boolean",
+                "description": "Lifecycle action: clear the existing replacement relationship."
+            },
         },
         "required": ["action", "name"],
     },
@@ -756,6 +822,9 @@ registry.register(
         file_content=args.get("file_content"),
         old_string=args.get("old_string"),
         new_string=args.get("new_string"),
-        replace_all=args.get("replace_all", False)),
+        replace_all=args.get("replace_all", False),
+        deprecated=args.get("deprecated"),
+        supersedes=args.get("supersedes"),
+        clear_supersedes=args.get("clear_supersedes", False)),
     emoji="📝",
 )

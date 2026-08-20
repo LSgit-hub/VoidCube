@@ -24,6 +24,24 @@ def _paths() -> tuple[Path, Path]:
     return skills_dir, skills_dir / ".bundled_manifest"
 
 
+def _refresh_skill_registry(skills_dir: Path) -> None:
+    """Refresh the index after sync completes; never mask sync success."""
+    try:
+        from .registry import REGISTRY_FILENAME, refresh_catalog_index
+
+        refresh_catalog_index(
+            extra_paths=(skills_dir,),
+            path=skills_dir.parent / REGISTRY_FILENAME,
+        )
+    except Exception as exc:
+        # Sync is the file authority; an unavailable index is recoverable.
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "Could not refresh skill registry after bundled sync: %s", exc
+        )
+
+
 def _read_manifest(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -173,6 +191,7 @@ def sync_skills(*, quiet: bool = False) -> dict[str, Any]:
             except OSError:
                 pass
     _write_manifest(manifest_path, manifest)
+    _refresh_skill_registry(skills_dir)
     return {
         "copied": copied,
         "updated": updated,

@@ -56,6 +56,19 @@ INDEX_CACHE_DIR = HUB_DIR / "index-cache"
 INDEX_CACHE_TTL = 3600  # 1 hour
 
 
+def _refresh_skill_registry() -> None:
+    """Refresh metadata after a Hub filesystem mutation without masking success."""
+    try:
+        from .registry import REGISTRY_FILENAME, refresh_catalog_index
+
+        refresh_catalog_index(
+            extra_paths=(SKILLS_DIR,),
+            path=SKILLS_DIR.parent / REGISTRY_FILENAME,
+        )
+    except Exception as exc:
+        logger.debug("Could not refresh skill registry after Hub mutation: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -2495,6 +2508,8 @@ def install_from_quarantine(
         content_hash(install_dir),
     )
 
+    _refresh_skill_registry()
+
     return install_dir
 
 
@@ -2511,6 +2526,7 @@ def uninstall_skill(skill_name: str) -> Tuple[bool, str]:
 
     lock.record_uninstall(skill_name)
     append_audit_log("UNINSTALL", skill_name, entry["source"], entry["trust_level"], "n/a", "user_request")
+    _refresh_skill_registry()
 
     return True, f"Uninstalled '{skill_name}' from {entry['install_path']}"
 
