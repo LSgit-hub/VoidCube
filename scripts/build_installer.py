@@ -14,6 +14,7 @@ desktop UI and the ``voidcube`` terminal command come from one installer.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -80,9 +81,21 @@ def stage_executable(exe: Path) -> Path:
 
 def build_installer() -> None:
     """Generate icons, bundle the renderer, and produce the NSIS installer."""
-    for command in (["npm", "run", "icons"], ["npm", "run", "build"]):
+    # Use a domestic mirror for electron-builder binaries (winCodeSign, nsis,
+    # electron) so the build doesn't stall on GitHub connectivity issues.
+    os.environ.setdefault(
+        "ELECTRON_BUILDER_BINARIES_MIRROR",
+        "https://npmmirror.com/mirrors/electron-builder-binaries/",
+    )
+    os.environ.setdefault(
+        "ELECTRON_MIRROR",
+        "https://npmmirror.com/mirrors/electron/",
+    )
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    npx = "npx.cmd" if sys.platform == "win32" else "npx"
+    for command in ([npm, "run", "icons"], [npm, "run", "build"]):
         subprocess.run(command, cwd=DESKTOP, check=True)
-    subprocess.run(["npx", "electron-builder"], cwd=DESKTOP, check=True)
+    subprocess.run([npx, "electron-builder"], cwd=DESKTOP, check=True)
 
 
 def main() -> int:

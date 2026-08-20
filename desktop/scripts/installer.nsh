@@ -5,7 +5,15 @@
 
 !include "LogicLib.nsh"
 !include "StrFunc.nsh"
-${StrRep}
+!include "WinMessages.nsh"
+
+; The uninstaller StrRep function generates `Function un.StrRep`. Declare it
+; ONLY when building the uninstaller (electron-builder's BUILD_UNINSTALLER
+; pass); otherwise the main-installer pass would carry uninstaller code
+; without a WriteUninstaller call and makensis would fail with warning 6020.
+!ifdef BUILD_UNINSTALLER
+  ${UnStrRep}
+!endif
 
 !macro customInstall
   ReadRegStr $0 HKCU "Environment" "Path"
@@ -14,16 +22,16 @@ ${StrRep}
   ${Else}
     WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR\resources\voidcube"
   ${EndIf}
-  SendMessage ${HWND_BROADCAST} ${WM_WININCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 !macroend
 
 !macro customUnInstall
   ReadRegStr $0 HKCU "Environment" "Path"
   ${If} $0 != ""
-    ${StrRep} $1 $0 ";$INSTDIR\resources\voidcube" ""
-    ${StrRep} $2 $1 "$INSTDIR\resources\voidcube;" ""
-    ${StrRep} $3 $2 "$INSTDIR\resources\voidcube" ""
+    ${UnStrRep} $1 $0 ";$INSTDIR\resources\voidcube" ""
+    ${UnStrRep} $2 $1 "$INSTDIR\resources\voidcube;" ""
+    ${UnStrRep} $3 $2 "$INSTDIR\resources\voidcube" ""
     WriteRegExpandStr HKCU "Environment" "Path" "$3"
-    SendMessage ${HWND_BROADCAST} ${WM_WININCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   ${EndIf}
 !macroend
