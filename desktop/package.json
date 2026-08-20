@@ -49,6 +49,12 @@
     "asarUnpack": [
       "node_modules/node-pty/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "resources/voidcube",
+        "to": "voidcube"
+      }
+    ],
     "npmRebuild": false,
     "win": {
       "icon": "assets/icon.ico",
@@ -65,7 +71,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "include": "scripts/installer.nsh"
     },
     "mac": {
       "icon": "assets/icon.icns",

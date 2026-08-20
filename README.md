@@ -92,4 +92,4 @@ python -m pytest tests/test_integration_policy.py tests/test_packaging_contract.
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](LICENSE) —— 非商业用途免费使用；商业使用需另行获得授权。
+[Proprietary License](LICENSE) —— VoidCube 为专有闭源软件，保留所有权利，未经书面授权禁止复制、修改与再分发。

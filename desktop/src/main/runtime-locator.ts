@@ -8,6 +8,9 @@ export interface RuntimePaths {
   pythonPrefixArgs: string[]
   cliArgs: string[]
   workingDirectory: string
+  // Non-empty in the bundled (Nuitka single-file) distribution: the CLI is
+  // invoked directly as this executable instead of `python -m ...`.
+  cliExecutable?: string
 }
 
 type Platform = NodeJS.Platform
@@ -63,13 +66,18 @@ export function resolveRuntimePaths(options: {
   const pythonCommand = configuredPython || (existsSync(bundledPython) ? bundledPython : undefined) || localPython || pathPython || (platform === 'win32' ? 'python.exe' : 'python3')
   const workingDirectory = resolve(env.VOIDCUBE_DESKTOP_WORKSPACE?.trim() || projectRoot || homedir())
   const cliArgs = ['-m', 'voidcube.interfaces.cli.main']
+  const bundledCliExecutable = platform === 'win32'
+    ? join(options.resourcesPath, 'voidcube', 'voidcube.exe')
+    : join(options.resourcesPath, 'voidcube', 'voidcube')
+  const cliExecutable = existsSync(bundledCliExecutable) ? bundledCliExecutable : undefined
 
   return {
     projectRoot,
     pythonCommand,
     pythonPrefixArgs: [],
     cliArgs,
-    workingDirectory
+    workingDirectory,
+    cliExecutable
   }
 }
 

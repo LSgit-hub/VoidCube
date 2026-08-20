@@ -30,8 +30,11 @@ export class TerminalSession {
     this.publish({ phase: 'starting' })
 
     try {
-      const args = [...this.runtime.pythonPrefixArgs, ...this.runtime.cliArgs]
-      const child = pty.spawn(this.runtime.pythonCommand, args, {
+      const executable = this.runtime.cliExecutable ?? this.runtime.pythonCommand
+      const args = this.runtime.cliExecutable
+        ? []
+        : [...this.runtime.pythonPrefixArgs, ...this.runtime.cliArgs]
+      const child = pty.spawn(executable, args, {
         name: process.platform === 'win32' ? 'xterm-256color' : 'xterm-256color',
         cols: this.columns,
         rows: this.rows,

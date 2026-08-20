@@ -93,15 +93,18 @@ export class ServiceController {
 
   setTerminalBackend(backend: TerminalBackend): Promise<{ ok: boolean; error?: string }> {
     return new Promise((resolve) => {
-      const args = [
-        ...this.runtime.pythonPrefixArgs,
-        ...this.runtime.cliArgs,
-        'config',
-        'set',
-        'terminal.backend',
-        backend
-      ]
-      const child = spawn(this.runtime.pythonCommand, args, {
+      const executable = this.runtime.cliExecutable ?? this.runtime.pythonCommand
+      const args = this.runtime.cliExecutable
+        ? ['config', 'set', 'terminal.backend', backend]
+        : [
+            ...this.runtime.pythonPrefixArgs,
+            ...this.runtime.cliArgs,
+            'config',
+            'set',
+            'terminal.backend',
+            backend
+          ]
+      const child = spawn(executable, args, {
         cwd: this.runtime.workingDirectory,
         env: {
           ...process.env,
@@ -144,13 +147,16 @@ export class ServiceController {
 
   private invoke(action: ServiceControlAction): Promise<ServiceControlResult> {
     return new Promise((resolve) => {
-      const args = [
-        ...this.runtime.pythonPrefixArgs,
-        '-m',
-        'voidcube.interfaces.desktop.desktop_control',
-        action
-      ]
-      const child = spawn(this.runtime.pythonCommand, args, {
+      const executable = this.runtime.cliExecutable ?? this.runtime.pythonCommand
+      const args = this.runtime.cliExecutable
+        ? ['--desktop-control', action]
+        : [
+            ...this.runtime.pythonPrefixArgs,
+            '-m',
+            'voidcube.interfaces.desktop.desktop_control',
+            action
+          ]
+      const child = spawn(executable, args, {
         cwd: this.runtime.workingDirectory,
         env: {
           ...process.env,
