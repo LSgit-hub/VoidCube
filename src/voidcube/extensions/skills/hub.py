@@ -2053,7 +2053,7 @@ class OptionalSkillSource(SkillSource):
         from ...infrastructure.config.runtime_paths import get_optional_skills_dir
 
         self._optional_dir = get_optional_skills_dir(
-            Path(__file__).parent.parent / "optional-skills"
+            Path(__file__).resolve().parents[4] / "optional-skills"
         )
 
     def source_id(self) -> str:

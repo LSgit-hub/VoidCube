@@ -231,7 +231,11 @@ def get_repo_skills_dir() -> Path | None:
     itself. Surface that directory at runtime so local development sees the
     same skills without first copying them into ``~/.VoidCube/skills``.
     """
-    repo_root = Path(__file__).resolve().parent.parent
+    # 仓库根 = src/voidcube/extensions/skills/ 向上 4 级。
+    # 注意不要用 parent.parent —— 那只会到 src/voidcube/extensions，
+    # 导致把 skills 扩展自身的目录误当成仓库技能目录。
+    # 与 sync.py:_bundled_dir() 的 parents[4] 保持同一推导。
+    repo_root = Path(__file__).resolve().parents[4]
     repo_skills = repo_root / "skills"
     if not repo_skills.is_dir():
         return None

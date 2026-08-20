@@ -1054,7 +1054,8 @@ def _find_agent_browser() -> str:
             return which_result
 
     # Check local node_modules/.bin/ (npm install in repo root)
-    repo_root = Path(__file__).parent.parent
+    # browser_tool.py 位于 src/voidcube/extensions/tools/browser/，仓库根在其 parents[5]
+    repo_root = Path(__file__).resolve().parents[5]
     local_bin = repo_root / "node_modules" / ".bin" / "agent-browser"
     if local_bin.exists():
         _cached_agent_browser = str(local_bin)
