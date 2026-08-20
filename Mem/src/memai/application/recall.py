@@ -666,7 +666,15 @@ def format_recall_context(
     results: Sequence[dict[str, Any]],
     *,
     redact_sensitive: bool = False,
+    include_internal_metadata: bool = False,
 ) -> str:
+    """Format recalled facts for model context.
+
+    Model context is intentionally metadata-free by default.  Retrieval IDs,
+    ranking scores, matched terms, and evidence references remain available in
+    the structured ``results`` response for tools and audit consumers, but
+    must not become part of an ordinary user-facing answer.
+    """
     lines: list[str] = []
     for result in results:
         tier = str(result.get("tier") or "memory")
@@ -680,35 +688,44 @@ def format_recall_context(
             summary = redact_sensitive_text(summary, force=True)
         if len(summary) > _RECALL_SUMMARY_MAX_CHARS:
             summary = summary[:_RECALL_SUMMARY_MAX_CHARS].rstrip() + "... [truncated]"
-        memory_id = str(result.get("id") or "unknown")
-        score = float(result.get("score") or 0.0)
-        matched = ",".join(str(item) for item in result.get("matched_terms") or [])
-        evidence = result.get("evidence_refs") or result.get("source_turns") or []
-        evidence_text = ",".join(str(item) for item in list(evidence)[:3])
         label = ":".join(part for part in (tier, kind) if part)
         date_suffix = f" {timestamp}" if timestamp else ""
-        attributes = [f"id={memory_id}", f"score={score:.3f}"]
-        if matched:
-            attributes.append(f"matched={matched}")
-        if evidence_text:
-            attributes.append(f"evidence={evidence_text}")
-        promotion_ref = str(result.get("promotion_ref_id") or "").strip()
-        if promotion_ref:
-            attributes.append(f"promotion={promotion_ref}")
-            attributes.append(
-                "source="
-                + ":".join(
-                    part
-                    for part in (
-                        str(result.get("source_memory_domain") or ""),
-                        str(result.get("source_memory_id") or ""),
-                    )
-                    if part
-                )
+        attributes: list[str] = []
+        if include_internal_metadata:
+            memory_id = str(result.get("id") or "unknown")
+            score = float(result.get("score") or 0.0)
+            matched = ",".join(
+                str(item) for item in result.get("matched_terms") or []
             )
-        lines.append(
-            f"- [{label}{date_suffix} {' '.join(attributes)}] {title}: {summary}"
-        )
+            evidence = result.get("evidence_refs") or result.get("source_turns") or []
+            evidence_text = ",".join(str(item) for item in list(evidence)[:3])
+            attributes.extend([f"id={memory_id}", f"score={score:.3f}"])
+            if matched:
+                attributes.append(f"matched={matched}")
+            if evidence_text:
+                attributes.append(f"evidence={evidence_text}")
+            promotion_ref = str(result.get("promotion_ref_id") or "").strip()
+            if promotion_ref:
+                attributes.append(f"promotion={promotion_ref}")
+                attributes.append(
+                    "source="
+                    + ":".join(
+                        part
+                        for part in (
+                            str(result.get("source_memory_domain") or ""),
+                            str(result.get("source_memory_id") or ""),
+                        )
+                        if part
+                    )
+                )
+        if include_internal_metadata:
+            prefix = f"- [{label}{date_suffix}"
+            if attributes:
+                prefix += f" {' '.join(attributes)}"
+            lines.append(f"{prefix}] {title}: {summary}")
+        else:
+            fact_date = f"{timestamp} " if timestamp else ""
+            lines.append(f"- {fact_date}{title}: {summary}")
     if not lines:
         return ""
     return "Relevant recalled memory:\n" + "\n".join(lines)

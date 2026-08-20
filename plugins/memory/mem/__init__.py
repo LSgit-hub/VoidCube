@@ -181,9 +181,13 @@ class MemMemoryProvider(MemoryProvider):
             "Use mem_search when the user refers to prior decisions, preferences, "
             "people, projects, or events. It recalls a bounded mix of recent "
             "conversation turns and structured long-term memory. Use mem_timeline "
-            "for an exact dated chronology. Recalled items include stable IDs, "
-            "scores, matched concepts, and evidence references; use those fields "
-            "when explaining why a memory was recalled. Use mem_remember for an "
+            "for an exact dated chronology. Structured memory tool results may "
+            "include internal IDs, scores, matched concepts, and evidence "
+            "references for tool chaining and audit only. Use those fields "
+            "internally when needed, but never expose trace IDs, memory IDs, "
+            "scores, matched concepts, evidence references, source domains, or "
+            "retrieval status in an ordinary user-facing answer. Answer from the "
+            "recalled facts and summaries instead. Use mem_remember for an "
             "explicit durable fact, preference, decision, or verified outcome. "
             "When a verified conclusion replaces an earlier durable conclusion, "
             "search for the earlier IDs and pass them as supersedes_memory_ids. "
@@ -430,30 +434,26 @@ class MemMemoryProvider(MemoryProvider):
         except Exception as exc:
             logger.warning("Memory Service prefetch unavailable: %s", exc)
             return (
-                "Memory recall status: unavailable for this turn "
-                f"(error={type(exc).__name__}). Do not assume that prior "
-                "decisions, preferences, or events were recalled. "
+                "No recalled evidence is available for this turn. Do not assume "
+                "that prior decisions, preferences, or events were recalled. "
                 + _RECALL_UNCERTAINTY_GUIDANCE
             )
 
-        trace_id = str(result.get("trace_id") or "unknown")
-        status = str(result.get("recall_status") or "miss")
         context = str(result.get("context") or "").strip()
         query_plan = result.get("query_plan") or {}
         identity_recall = (
             isinstance(query_plan, dict)
             and str(query_plan.get("intent") or "") == "identity"
         )
-        status_line = f"Memory recall status: {status} (trace_id={trace_id})."
         if not context:
             parts = [
-                status_line + " No recalled evidence matched this turn.",
+                "No recalled evidence matched this turn.",
                 _RECALL_UNCERTAINTY_GUIDANCE,
             ]
             if identity_recall:
                 parts.append(_IDENTITY_RECALL_GUIDANCE)
             return "\n".join(parts)
-        parts = [status_line]
+        parts: list[str] = []
         if identity_recall:
             parts.append(_IDENTITY_RECALL_GUIDANCE)
         parts.append(context)
