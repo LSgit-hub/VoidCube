@@ -64,16 +64,8 @@ TUI_STYLE: Mapping[str, str] = {
     # │ content │ row is perfectly flush with no colour gaps.
     "mc-panel-bg": "bg:#0d1f2d",                  # deep teal-dark fill
     "mc-border": "bg:#0d1f2d #0ea5a9",            # teal border on panel bg
-    "mc-border-dim": "bg:#0d1f2d #0f766e",        # dimmer teal for separators
-    # Panel header
-    "mc-header-bg": "bg:#134e4a #ccfbf1",   # filled teal header bar
-    "mc-header-icon": "bg:#134e4a #2dd4bf bold",  # bright teal icon
-    "mc-header-text": "bg:#134e4a #ccfbf1 bold",  # header text
-    "mc-header-tag": "bg:#134e4a #5eead4",   # tag in header (session id etc.)
     # Panel body
     "mc-body-text": "bg:#0d1f2d #e2e8f0",   # main text on dark teal bg
-    "mc-body-dim": "bg:#0d1f2d #94a3b8",    # dim/auxiliary text
-    "mc-body-accent": "bg:#0d1f2d #2dd4bf bold",  # accent emphasis
     # Status indicators
     "mc-status-active": "bg:#0d1f2d #2dd4bf bold",    # active/running (bright teal)
     "mc-status-idle": "bg:#0d1f2d #94a3b8",           # idle (gray)
@@ -81,18 +73,6 @@ TUI_STYLE: Mapping[str, str] = {
     "mc-status-warn": "bg:#0d1f2d #f59e0b bold",      # warning (amber)
     "mc-status-error": "bg:#0d1f2d #ef4444 bold",      # error (red)
     "mc-status-info": "bg:#0d1f2d #22d3ee",            # info (cyan)
-    # Section labels & separators
-    "mc-section-label": "bg:#0d1f2d #5eead4 bold",     # "调度" "执行流" etc.
-    "mc-separator": "bg:#0d1f2d #0f766e",              # thin separator line
-    # Dot indicators
-    "mc-dot-active": "bg:#0d1f2d #2dd4bf bold",        # ● active dot
-    "mc-dot-idle": "bg:#0d1f2d #475569",               # ○ idle dot
-    "mc-dot-pulse": "bg:#0d1f2d #f59e0b bold",         # ◆ waiting dot
-    # Tag / badge
-    "mc-tag": "bg:#134e4a #5eead4",                    # small tag/badge
-    "mc-tag-dim": "bg:#0d1f2d #0f766e #94a3b8",       # dim tag
-    # Keybinding hint
-    "mc-key-hint": "bg:#0d1f2d #475569",               # key hint at bottom
 }
 
 
