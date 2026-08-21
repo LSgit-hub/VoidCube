@@ -446,6 +446,12 @@ body[data-exec-window="false"] .floor {
   width: 200px; height: 130px;
   z-index: 5;
 }
+.desk-monitor[data-drill] { cursor: pointer; }
+.desk-monitor[data-drill]:hover .monitor-body,
+.desk-monitor[data-drill]:focus-visible .monitor-body {
+  box-shadow: 0 8px 16px var(--shadow-deep), 0 0 0 2px rgba(126,224,192,.55), inset 0 0 0 2px #0a0e14;
+}
+.desk-monitor[data-drill]:focus-visible { outline: 2px solid var(--mint); outline-offset: 5px; }
 .monitor-body {
   position: absolute; inset: 0;
   background: linear-gradient(180deg, #2a2f38, #1a1f28);
@@ -3898,8 +3904,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 电脑桌 + 显示器 + 办公椅 -->
-    <div class="desk-main" aria-hidden="true">
-      <div class="desk-monitor">
+    <div class="desk-main">
+      <div class="desk-monitor" role="button" tabindex="0" data-drill="outboxes" aria-label="记忆传输队列健康" title="记忆传输队列健康">
         <div class="monitor-glow"></div>
         <div class="monitor-body">
           <div class="monitor-screen">
@@ -4878,6 +4884,7 @@ const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
   provenance: { icon: '🔎', title: '判断依据' },
   health:     { icon: '💗', title: '替身与记忆' },
+  outboxes:   { icon: '📬', title: '记忆传输队列' },
   body_tree:  { icon: '🌲', title: '替身结构图' },
   identity:   { icon: '📚', title: '身份档案' },
 };
@@ -4908,6 +4915,7 @@ function renderDrawer() {
   if (drawerOpen === 'autonomous') renderAutonomousDrawer(state);
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
+  else if (drawerOpen === 'outboxes') renderOutboxDrawer(state);
   else if (drawerOpen === 'body_tree') renderBodyTreeDrawer(state);
   else if (drawerOpen === 'identity') renderIdentityDrawer();
 }
@@ -5873,6 +5881,20 @@ function renderHealthDrawer(state) {
     ['记忆活跃', ts.memory_active ? '✅ 是' : '💤 否'],
     ['最近维护请求', esc(memoryMaintenanceStatusLabel(ts.maintenance_run))],
   ];
+  const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
+    ? ts.transport_outboxes : {};
+  const queueMap = transport.outboxes && typeof transport.outboxes === 'object'
+    ? transport.outboxes : {};
+  const queueNames = ['api_a', 'companion', 'gateway'];
+  const queueLabels = {api_a: 'API-A', companion: '陪伴', gateway: 'Gateway'};
+  const queueRows = queueNames.map(name => {
+    const item = queueMap[name] || {};
+    const status = String(item.status || (item.healthy === true ? 'healthy' : 'unreported'));
+    const statusText = status === 'healthy' ? '✅ 正常' : (status === 'degraded' ? '⚠️ 降级' : '— 未上报');
+    const issues = Array.isArray(item.issues) && item.issues.length ? ' · ' + item.issues.join(', ') : '';
+    return [queueLabels[name] + '队列', esc(statusText + issues + ' · 待处理 ' + (item.pending_count == null ? '—' : item.pending_count) + ' · 死信 ' + (item.dead_letter_count == null ? '—' : item.dead_letter_count))];
+  });
+  const transportSummary = transport.status === 'healthy' ? '✅ 三条队列正常' : (transport.status === 'degraded' ? '⚠️ 队列传输降级' : '— 等待队列上报');
 
   const violationHtml = violations.length
     ? '<div class="drawer-section"><div class="drawer-section-label">结构异常</div>' +
@@ -5887,7 +5909,41 @@ function renderHealthDrawer(state) {
     '<div class="drawer-sub">只看槽位和记忆。</div>' +
     rows('🔄 替身 / 身体', bodyRows) +
     violationHtml +
-    rows('💾 记忆 (API-B 侧)', memRows);
+    rows('💾 记忆 (API-B 侧)', memRows) +
+    rows('📬 记忆传输队列 · ' + transportSummary, queueRows);
+}
+
+function renderOutboxDrawer(state) {
+  const ts = state.tier1_stats || {};
+  const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
+    ? ts.transport_outboxes : {};
+  const queueMap = transport.outboxes && typeof transport.outboxes === 'object'
+    ? transport.outboxes : {};
+  const names = ['api_a', 'companion', 'gateway'];
+  const labels = {api_a: 'API-A', companion: '陪伴', gateway: 'Gateway'};
+  const overall = transport.status === 'healthy' ? '正常' : (transport.status === 'degraded' ? '降级' : '等待上报');
+  const queueHtml = names.map(name => {
+    const item = queueMap[name] || {};
+    const status = String(item.status || (item.healthy === true ? 'healthy' : 'unreported'));
+    const statusText = status === 'healthy' ? '正常' : (status === 'degraded' ? '降级' : '未上报');
+    const issues = Array.isArray(item.issues) ? item.issues : [];
+    return '<div class="drawer-section"><div class="drawer-section-label">' + labels[name] + '</div>' +
+      '<div class="health-row"><span>状态</span><span class="hr-val">' + esc(statusText) + '</span></div>' +
+      '<div class="health-row"><span>待处理 / 传输中</span><span class="hr-val">' + esc(item.pending_count == null ? '—' : item.pending_count) + ' / ' + esc(item.inflight_count == null ? '—' : item.inflight_count) + '</span></div>' +
+      '<div class="health-row"><span>死信</span><span class="hr-val">' + esc(item.dead_letter_count == null ? '—' : item.dead_letter_count) + '</span></div>' +
+      (issues.length ? '<div class="drawer-sub" style="margin-top:7px;">' + esc(issues.join(' · ')) + '</div>' : '') +
+      '</div>';
+  }).join('');
+
+  els.drawerBody.innerHTML =
+    '<div class="drawer-section"><div class="drawer-section-label">整体</div>' +
+    '<div class="health-row"><span>传输状态</span><span class="hr-val">' + esc(overall) + '</span></div>' +
+    '<div class="health-row"><span>上报队列</span><span class="hr-val">' + esc(transport.reporter_count == null ? '—' : transport.reporter_count) + ' / 3</span></div>' +
+    '<div class="health-row"><span>待处理 / 传输中 / 死信</span><span class="hr-val">' +
+      esc(transport.pending_count == null ? '—' : transport.pending_count) + ' / ' +
+      esc(transport.inflight_count == null ? '—' : transport.inflight_count) + ' / ' +
+      esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
+    queueHtml;
 }
 
 function renderIdentityDrawer() {

@@ -72,6 +72,7 @@ async def fetch_tier1_stats(
 
             stats_data: Dict[str, Any] = {}
             rules_data: Dict[str, Any] = {}
+            health_data: Dict[str, Any] = {}
             async with session.get(
                 f"{memory_url}/tier1/stats",
                 timeout=aiohttp.ClientTimeout(total=3),
@@ -84,6 +85,12 @@ async def fetch_tier1_stats(
             ) as response:
                 if response.status == 200:
                     rules_data = await response.json()
+            async with session.get(
+                f"{memory_url}/health",
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as response:
+                if response.status == 200:
+                    health_data = await response.json()
 
             result = dict(stats_data)
             result["rules"] = rules_data.get("rules", {})
@@ -97,6 +104,11 @@ async def fetch_tier1_stats(
             )
             result["memory_active"] = _memory_active(
                 rules_data.get("effective_activity_at")
+            )
+            result["transport_outboxes"] = dict(
+                health_data.get("transport_outboxes")
+                or health_data.get("agent_outbox")
+                or {}
             )
             return result
     except Exception as exc:
