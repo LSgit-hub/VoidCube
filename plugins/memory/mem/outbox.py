@@ -8,9 +8,100 @@ import sqlite3
 import time
 import uuid
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+
+
+_DEFAULT_QUEUE_PATHS = {
+    "api_a": "runtime/memory/write-outbox.sqlite3",
+    "companion": "runtime/memory/companion-write-outbox.sqlite3",
+    "gateway": "runtime/memory/gateway-write-outbox.sqlite3",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryOutboxRuntimeSettings:
+    queue_paths: Mapping[str, str]
+    max_attempts: int = 12
+    lease_seconds: float = 30.0
+    retry_base_seconds: float = 2.0
+    retry_max_seconds: float = 60.0
+    health_report_interval_seconds: float = 10.0
+    shutdown_drain_timeout_seconds: float = 5.0
+
+    def path_for(self, queue_name: str, *, home: str | Path) -> Path:
+        if queue_name not in _DEFAULT_QUEUE_PATHS:
+            raise ValueError(f"Unknown memory outbox queue: {queue_name}")
+        configured = Path(
+            str(self.queue_paths.get(queue_name) or _DEFAULT_QUEUE_PATHS[queue_name])
+        )
+        return configured if configured.is_absolute() else Path(home) / configured
+
+    def create(self, queue_name: str, *, home: str | Path) -> "MemoryWriteOutbox":
+        return MemoryWriteOutbox(
+            self.path_for(queue_name, home=home),
+            max_attempts=self.max_attempts,
+            lease_seconds=self.lease_seconds,
+            retry_base_seconds=self.retry_base_seconds,
+            retry_max_seconds=self.retry_max_seconds,
+        )
+
+
+def load_memory_outbox_settings(
+    config: Mapping[str, Any] | None = None,
+) -> MemoryOutboxRuntimeSettings:
+    """Load the one runtime contract shared by every Mem transport outbox."""
+    if config is None:
+        try:
+            from voidcube.infrastructure.config.configuration import load_config
+
+            config = load_config()
+        except Exception:
+            config = {}
+    memory = config.get("memory") if isinstance(config, Mapping) else {}
+    outbox = memory.get("outbox") if isinstance(memory, Mapping) else {}
+    outbox = outbox if isinstance(outbox, Mapping) else {}
+    paths = outbox.get("paths")
+    configured_paths = dict(paths) if isinstance(paths, Mapping) else {}
+    return MemoryOutboxRuntimeSettings(
+        queue_paths={**_DEFAULT_QUEUE_PATHS, **configured_paths},
+        max_attempts=max(1, min(1000, int(outbox.get("max_attempts", 12)))),
+        lease_seconds=max(1.0, float(outbox.get("lease_seconds", 30.0))),
+        retry_base_seconds=max(
+            0.001, float(outbox.get("retry_base_seconds", 2.0))
+        ),
+        retry_max_seconds=max(
+            0.001, float(outbox.get("retry_max_seconds", 60.0))
+        ),
+        health_report_interval_seconds=max(
+            1.0, float(outbox.get("health_report_interval_seconds", 10.0))
+        ),
+        shutdown_drain_timeout_seconds=max(
+            0.0,
+            min(60.0, float(outbox.get("shutdown_drain_timeout_seconds", 5.0))),
+        ),
+    )
+
+
+def build_outbox_health_report(
+    outbox: "MemoryWriteOutbox",
+    *,
+    queue_name: str,
+    session_id: str,
+    memory_actor: str,
+    memory_domain: str,
+) -> dict[str, Any]:
+    """Build the canonical health payload shared by all transport queues."""
+    return {
+        "session_id": str(session_id),
+        "outbox_id": outbox.outbox_id,
+        "queue_name": str(queue_name),
+        "memory_actor": str(memory_actor),
+        "memory_domain": str(memory_domain),
+        **outbox.health_snapshot(),
+    }
 
 
 def _ensure_column(

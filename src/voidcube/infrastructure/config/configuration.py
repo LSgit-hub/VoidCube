@@ -647,11 +647,22 @@ DEFAULT_CONFIG = {
             # Automatic recall is bounded before it is injected into a turn.
             "prefetch_limit": 5,
             "prefetch_max_context_chars": 3500,
-            "outbox_max_attempts": 12,
-            "outbox_health_report_interval_seconds": 10.0,
-            "outbox_shutdown_drain_timeout_seconds": 5.0,
             # Optional Memory-only redaction. Logs and tool output use a separate policy.
             "redact_before_store": False,
+        },
+        # One transport contract shared by API-A, companion, and Gateway queues.
+        "outbox": {
+            "paths": {
+                "api_a": "runtime/memory/write-outbox.sqlite3",
+                "companion": "runtime/memory/companion-write-outbox.sqlite3",
+                "gateway": "runtime/memory/gateway-write-outbox.sqlite3",
+            },
+            "max_attempts": 12,
+            "lease_seconds": 30.0,
+            "retry_base_seconds": 2.0,
+            "retry_max_seconds": 60.0,
+            "health_report_interval_seconds": 10.0,
+            "shutdown_drain_timeout_seconds": 5.0,
         },
         # Optional true semantic retrieval. This is deliberately independent
         # from memory.llm: a chat model is never treated as an embedding model.

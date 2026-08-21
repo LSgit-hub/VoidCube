@@ -231,10 +231,18 @@ memory:
     auto_sync: true
     prefetch_limit: 5
     prefetch_max_context_chars: 3500
-    outbox_max_attempts: 12
-    outbox_health_report_interval_seconds: 10.0
-    outbox_shutdown_drain_timeout_seconds: 5.0
     redact_before_store: false
+  outbox:
+    paths:
+      api_a: runtime/memory/write-outbox.sqlite3
+      companion: runtime/memory/companion-write-outbox.sqlite3
+      gateway: runtime/memory/gateway-write-outbox.sqlite3
+    max_attempts: 12
+    lease_seconds: 30.0
+    retry_base_seconds: 2.0
+    retry_max_seconds: 60.0
+    health_report_interval_seconds: 10.0
+    shutdown_drain_timeout_seconds: 5.0
   semantic_recall:
     enabled: true
     provider: ''

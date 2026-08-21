@@ -6,9 +6,11 @@ import logging
 import os
 import secrets
 import uuid
+from contextlib import asynccontextmanager
 from collections import deque
 from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional
+from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -22,6 +24,11 @@ from ...domain.tasks.runtime_thresholds import (
     DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS,
     DEFAULT_CLI_SESSION_TTL_SECONDS,
 )
+from plugins.memory.mem.outbox import (
+    build_outbox_health_report,
+    load_memory_outbox_settings,
+)
+from ..config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger("internal_gateway")
 
@@ -128,7 +135,11 @@ class InternalGateway:
 
     def __init__(self, config: GatewayConfig = None):
         self.config = config or GatewayConfig()
-        self.app = FastAPI(title="VoidCube Internal Gateway", version="1.0")
+        self.app = FastAPI(
+            title="VoidCube Internal Gateway",
+            version="1.0",
+            lifespan=self._app_lifespan,
+        )
         self._services: Dict[str, ServiceInfo] = {}
         self._service_credentials: Dict[str, str] = {}
         self._session_credentials: Dict[str, str] = {}
@@ -142,6 +153,12 @@ class InternalGateway:
         self._request_counter = 0
         # Tier 1 memory service URL (lazy-resolved from registered services)
         self._memory_service_url: str | None = None
+        self._outbox_settings = load_memory_outbox_settings()
+        self._memory_outbox = self._outbox_settings.create(
+            "gateway", home=get_VoidCube_home()
+        )
+        self._memory_outbox_task: asyncio.Task[Any] | None = None
+        self._last_memory_outbox_health_report_at = 0.0
         # NOTE(SB-03): Session cache is body-runtime state, not gateway operations
         # state.  Long-term session ownership should belong to the agent body
         # instances.  The gateway should only hold routing metadata.  TTL eviction
@@ -239,7 +256,6 @@ class InternalGateway:
         # Skip under pytest to avoid test-isolation issues from shared
         # persisted state across gateway test cases.
         if not self.config.activity_log_path and not os.environ.get("PYTEST_CURRENT_TEST"):
-            from ..config.runtime_paths import get_VoidCube_home
             run_dir = get_VoidCube_home() / "run"
             run_dir.mkdir(parents=True, exist_ok=True)
             self.config.activity_log_path = str(run_dir / "gateway-activity.json")
@@ -725,6 +741,7 @@ class InternalGateway:
             "recent_metadata": dict(self._activity_state["recent_metadata"]),
             "active_sessions": len(self._agent_session_cache),
             "active_cli_executor": self._build_active_cli_executor_snapshot(),
+            "memory_outbox": self._memory_outbox.health_snapshot(),
         }
 
     def _serialize_agent_session_metadata(self, session_id: str) -> Dict[str, Any]:
@@ -1832,6 +1849,136 @@ class InternalGateway:
 
     # ── Tier 1 Conversation Recording ──────────────────────────────
 
+    @asynccontextmanager
+    async def _app_lifespan(self, app: FastAPI):
+        del app
+        await self._start_memory_outbox()
+        try:
+            yield
+        finally:
+            await self._stop_memory_outbox()
+
+    async def _start_memory_outbox(self) -> None:
+        current = self._memory_outbox_task
+        if current is not None and not current.done():
+            return
+
+        async def drain_loop() -> None:
+            while True:
+                await self._report_memory_outbox_health_if_due()
+                item = self._memory_outbox.next_due()
+                if item is None:
+                    await asyncio.sleep(1.0)
+                    continue
+                write_id = str(item["write_id"])
+                try:
+                    await self._deliver_memory_outbox_item(item)
+                    self._memory_outbox.mark_delivered(write_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    attempts = int(item.get("_outbox_attempts") or 0) + 1
+                    self._memory_outbox.mark_failed(
+                        write_id,
+                        attempts=attempts,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    self._touch_activity(
+                        "memory_write_failure",
+                        source_service="gateway",
+                        session_id=str(item.get("session_id") or ""),
+                        metadata={
+                            "write_id": write_id,
+                            "attempts": attempts,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                    logger.warning(
+                        "Gateway memory outbox delivery failed (attempt %d): %s",
+                        attempts,
+                        exc,
+                    )
+
+        self._memory_outbox_task = asyncio.create_task(
+            drain_loop(),
+            name="voidcube-gateway-memory-outbox",
+        )
+
+    async def _report_memory_outbox_health_if_due(self, *, force: bool = False) -> None:
+        now = asyncio.get_running_loop().time()
+        if (
+            not force
+            and now - self._last_memory_outbox_health_report_at
+            < self._outbox_settings.health_report_interval_seconds
+        ):
+            return
+        self._last_memory_outbox_health_report_at = now
+        memory_url = self._resolve_memory_service_url()
+        if not memory_url:
+            return
+        payload = build_outbox_health_report(
+            self._memory_outbox,
+            queue_name="gateway",
+            session_id="gateway-autonomous-outbox",
+            memory_actor="api_a",
+            memory_domain="agent_interaction",
+        )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{memory_url}/outbox/health",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as response:
+                    if response.status != 200:
+                        logger.debug("Gateway outbox health report returned %d", response.status)
+        except Exception as exc:
+            logger.debug("Gateway outbox health report failed: %s", exc)
+
+    async def _deliver_memory_outbox_item(self, item: dict[str, Any]) -> None:
+        memory_url = self._resolve_memory_service_url()
+        if not memory_url:
+            raise RuntimeError("Memory Service is unavailable")
+        session_id = str(item.get("session_id") or "").strip()
+        if not session_id:
+            raise ValueError("Tier 1 memory write requires a session ID")
+        payload = {
+            key: value
+            for key, value in item.items()
+            if not key.startswith("_outbox_")
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{memory_url}/sessions/{quote(session_id, safe='')}/turns",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as response:
+                if response.status < 200 or response.status >= 300:
+                    detail = (await response.text())[:500]
+                    raise RuntimeError(
+                        f"Memory Service returned {response.status}: {detail}"
+                    )
+
+    async def _stop_memory_outbox(self) -> None:
+        task = self._memory_outbox_task
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("Gateway memory outbox stopped with error: %s", exc)
+        self._memory_outbox_task = None
+        pending = self._memory_outbox.pending_count()
+        if pending:
+            logger.info(
+                "Gateway memory outbox retained %d durable writes for next startup",
+                pending,
+            )
+
     def _resolve_memory_service_url(self) -> str | None:
         """Resolve the memory-service URL from registered services."""
         if self._memory_service_url:
@@ -1845,36 +1992,43 @@ class InternalGateway:
     async def _record_turn_to_tier1(
         self, session_id: str, speaker: str, text: str, metadata: Dict[str, Any] = None
     ) -> None:
-        """Non-blocking best-effort recording of a conversation turn to Tier 1."""
-        memory_url = self._resolve_memory_service_url()
-        if not memory_url:
+        """Durably queue an autonomous finding for Tier 1 delivery."""
+        resolved_session_id = str(session_id or "").strip()
+        if not resolved_session_id or not str(text or "").strip():
             return
+        write_id = f"gateway-tier1-{uuid.uuid4()}"
+        payload_metadata = {
+            **dict(metadata or {}),
+            "source": str((metadata or {}).get("source") or "gateway_tier1"),
+            "turn_dedup_key": write_id,
+        }
         try:
-            async with aiohttp.ClientSession() as s:
-                await s.post(
-                    f"{memory_url}/sessions/{session_id}/turns",
-                    json={
-                        "speaker": speaker,
-                        "text": text,
-                        "metadata": metadata or {},
-                    },
-                    timeout=aiohttp.ClientTimeout(total=2),
-                )
+            self._memory_outbox.enqueue(
+                {
+                    "session_id": resolved_session_id,
+                    "speaker": str(speaker),
+                    "text": str(text),
+                    "metadata": payload_metadata,
+                    "memory_actor": "api_a",
+                    "memory_domain": "agent_interaction",
+                    "write_id": write_id,
+                }
+            )
         except Exception as exc:
             logger.warning(
-                "Tier1 turn record failed for session %s speaker %s: %s",
-                session_id,
+                "Tier1 turn enqueue failed for session %s speaker %s: %s",
+                resolved_session_id,
                 speaker,
                 exc,
             )
             self._touch_activity(
                 "memory_write_failure",
                 source_service="gateway",
-                session_id=session_id,
+                session_id=resolved_session_id,
                 metadata={
                     "speaker": speaker,
                     "error": str(exc),
-                    **dict(metadata or {}),
+                    **payload_metadata,
                 },
             )
 

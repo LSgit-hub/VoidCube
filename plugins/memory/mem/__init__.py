@@ -17,7 +17,11 @@ from urllib.request import Request, urlopen
 from voidcube.domain.agent.effect_outcomes import EffectOutcome, failed_effect
 from voidcube.domain.contracts.memory import MemoryProvider
 from voidcube.infrastructure.persistence.redaction import redact_sensitive_text
-from plugins.memory.mem.outbox import MemoryWriteOutbox
+from plugins.memory.mem.outbox import (
+    MemoryWriteOutbox,
+    build_outbox_health_report,
+    load_memory_outbox_settings,
+)
 from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
 
 
@@ -27,8 +31,6 @@ logger = logging.getLogger(__name__)
 _GATEWAY_PROBE_TIMEOUT_SECONDS = 0.25
 _GATEWAY_REACHABLE_TTL_SECONDS = 30.0
 _GATEWAY_UNREACHABLE_TTL_SECONDS = 5.0
-_DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS = 10.0
-_DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 _IDENTITY_RECALL_GUIDANCE = (
@@ -59,12 +61,9 @@ class MemMemoryProvider(MemoryProvider):
         self._auto_sync = True
         self._prefetch_limit = 5
         self._prefetch_max_context_chars = 3500
-        self._outbox_max_attempts = 12
-        self._outbox_health_report_interval_seconds = (
-            _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS
-        )
+        self._outbox_settings = load_memory_outbox_settings({})
         self._outbox_shutdown_drain_timeout_seconds = (
-            _DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+            self._outbox_settings.shutdown_drain_timeout_seconds
         )
         self._last_outbox_health_report_at = 0.0
         self._owner_id = DEFAULT_OWNER_ID
@@ -97,10 +96,10 @@ class MemMemoryProvider(MemoryProvider):
         try:
             from voidcube.infrastructure.config.configuration import load_config
 
-            provider_config = dict(
-                load_config().get("memory", {}).get("mem", {}) or {}
-            )
+            full_config = load_config()
+            provider_config = dict(full_config.get("memory", {}).get("mem", {}) or {})
         except Exception:
+            full_config = {}
             provider_config = {}
 
         configured_gateway = str(
@@ -127,30 +126,9 @@ class MemMemoryProvider(MemoryProvider):
                 int(provider_config.get("prefetch_max_context_chars", 3500)),
             ),
         )
-        self._outbox_max_attempts = max(
-            1,
-            min(1000, int(provider_config.get("outbox_max_attempts", 12))),
-        )
-        self._outbox_health_report_interval_seconds = max(
-            1.0,
-            float(
-                provider_config.get(
-                    "outbox_health_report_interval_seconds",
-                    _DEFAULT_OUTBOX_HEALTH_REPORT_INTERVAL_SECONDS,
-                )
-            ),
-        )
-        self._outbox_shutdown_drain_timeout_seconds = max(
-            0.0,
-            min(
-                60.0,
-                float(
-                    provider_config.get(
-                        "outbox_shutdown_drain_timeout_seconds",
-                        _DEFAULT_OUTBOX_SHUTDOWN_DRAIN_TIMEOUT_SECONDS,
-                    )
-                ),
-            ),
+        self._outbox_settings = load_memory_outbox_settings(full_config)
+        self._outbox_shutdown_drain_timeout_seconds = (
+            self._outbox_settings.shutdown_drain_timeout_seconds
         )
         scope = MemoryScope.create(
             kwargs.get("user_id") or provider_config.get("owner_id"),
@@ -162,10 +140,7 @@ class MemMemoryProvider(MemoryProvider):
             provider_config.get("redact_before_store", False)
         )
         home = Path(str(kwargs.get("VoidCube_home") or "."))
-        self._outbox = MemoryWriteOutbox(
-            home / "runtime" / "memory" / "write-outbox.sqlite3",
-            max_attempts=self._outbox_max_attempts,
-        )
+        self._outbox = self._outbox_settings.create("api_a", home=home)
         self._initialized = True
         if self._auto_sync:
             self._sync_stop.clear()
@@ -584,7 +559,7 @@ class MemMemoryProvider(MemoryProvider):
                 "oldest_failure_at": None,
                 "last_success_at": None,
                 "last_error": None,
-                "max_attempts": self._outbox_max_attempts,
+                "max_attempts": self._outbox_settings.max_attempts,
             }
         return self._outbox.health_snapshot()
 
@@ -632,7 +607,7 @@ class MemMemoryProvider(MemoryProvider):
         if (
             not force
             and now - self._last_outbox_health_report_at
-            < self._outbox_health_report_interval_seconds
+            < self._outbox_settings.health_report_interval_seconds
         ):
             return
         self._last_outbox_health_report_at = now
@@ -642,8 +617,13 @@ class MemMemoryProvider(MemoryProvider):
                 "/outbox/health",
                 {
                     "session_id": self._session_id,
-                    "outbox_id": self._outbox.outbox_id,
-                    **self._outbox.health_snapshot(),
+                    **build_outbox_health_report(
+                        self._outbox,
+                        queue_name="api_a",
+                        session_id=self._session_id,
+                        memory_actor="api_a",
+                        memory_domain="agent_interaction",
+                    ),
                 },
             )
         except Exception as exc:

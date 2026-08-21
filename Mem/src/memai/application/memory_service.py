@@ -311,6 +311,8 @@ class RecallRequest(BaseModel):
 class AgentOutboxHealthReport(BaseModel):
     session_id: str = Field(min_length=1, max_length=300)
     outbox_id: str = Field(min_length=1, max_length=128)
+    queue_name: str = Field(default="api_a", min_length=1, max_length=64)
+    memory_domain: str = Field(default="agent_interaction", min_length=1, max_length=64)
     pending_count: int = Field(ge=0)
     inflight_count: int = Field(default=0, ge=0)
     dead_letter_count: int = Field(ge=0)
@@ -2416,6 +2418,7 @@ class MemoryApplicationService:
         )
         semantic = await asyncio.to_thread(self._semantic_health_snapshot)
         agent_outbox = self._agent_outbox_health_snapshot()
+        transport_outboxes = self._transport_outboxes_health_snapshot(agent_outbox)
         tier2_candidates = await asyncio.to_thread(
             self._tier2_candidate_health_snapshot
         )
@@ -2435,7 +2438,7 @@ class MemoryApplicationService:
         }
         service_healthy = bool(
             self._gateway_registration_healthy
-            and agent_outbox["healthy"]
+            and transport_outboxes["healthy"]
             and self._tier2_bridge_state != "degraded"
         )
         database_healthy = database["readable"] and database["integrity"] == "ok"
@@ -2473,6 +2476,7 @@ class MemoryApplicationService:
             "memory_references": reference_health,
             "semantic_index": semantic,
             "agent_outbox": agent_outbox,
+            "transport_outboxes": transport_outboxes,
             "maintenance": maintenance,
         }
 
@@ -2584,6 +2588,55 @@ class MemoryApplicationService:
                 self.config.agent_outbox_pending_stale_seconds
             ),
             "reporters": reports,
+        }
+
+    def _transport_outboxes_health_snapshot(
+        self, agent_outbox: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        queues: Dict[str, list[Dict[str, Any]]] = {}
+        for report in agent_outbox.get("reporters", []):
+            queue_name = str(report.get("queue_name") or "api_a")
+            queues.setdefault(queue_name, []).append(report)
+
+        outboxes: Dict[str, Dict[str, Any]] = {}
+        issues: list[str] = []
+        for queue_name, reports in sorted(queues.items()):
+            queue_issues: list[str] = []
+            for report in reports:
+                if int(report.get("dead_letter_count") or 0) > 0:
+                    queue_issues.append(f"{queue_name}:dead_letter")
+                if (
+                    int(report.get("pending_count") or 0) > 0
+                    and float(report.get("oldest_pending_age_seconds") or 0.0)
+                    > self.config.agent_outbox_pending_stale_seconds
+                ):
+                    queue_issues.append(f"{queue_name}:stuck_pending")
+                if report.get("stale") and (
+                    int(report.get("pending_count") or 0) > 0
+                    or int(report.get("dead_letter_count") or 0) > 0
+                ):
+                    queue_issues.append(f"{queue_name}:stale_report")
+            unique_queue_issues = sorted(set(queue_issues))
+            outboxes[queue_name] = {
+                "healthy": not unique_queue_issues,
+                "status": "degraded" if unique_queue_issues else "healthy",
+                "reporter_count": len(reports),
+                "pending_count": sum(int(r.get("pending_count") or 0) for r in reports),
+                "inflight_count": sum(int(r.get("inflight_count") or 0) for r in reports),
+                "dead_letter_count": sum(int(r.get("dead_letter_count") or 0) for r in reports),
+                "issues": unique_queue_issues,
+                "reporters": reports,
+            }
+            issues.extend(unique_queue_issues)
+        return {
+            "healthy": not issues,
+            "status": "degraded" if issues else ("healthy" if outboxes else "unreported"),
+            "reporter_count": agent_outbox.get("reporter_count", 0),
+            "pending_count": agent_outbox.get("pending_count", 0),
+            "inflight_count": agent_outbox.get("inflight_count", 0),
+            "dead_letter_count": agent_outbox.get("dead_letter_count", 0),
+            "issues": sorted(set(issues)),
+            "outboxes": outboxes,
         }
 
     @staticmethod

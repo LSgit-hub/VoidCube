@@ -1407,6 +1407,10 @@ class BodyRegistryManager:
         return self._git_head_for_path(path)
 
     def _git_branch_for_path(self, path: Path) -> Optional[str]:
+        # Git otherwise discovers a parent repository for arbitrary temporary
+        # directories; those paths must use directory-copy materialization.
+        if self._git_top_level_for_path(path) != path.resolve():
+            return None
         try:
             result = subprocess.run(
                 ["git", "branch", "--show-current"],
@@ -1426,6 +1430,8 @@ class BodyRegistryManager:
         return branch or None
 
     def _git_head_for_path(self, path: Path) -> Optional[str]:
+        if self._git_top_level_for_path(path) != path.resolve():
+            return None
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],

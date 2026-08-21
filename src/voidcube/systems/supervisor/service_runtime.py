@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import uuid
 
-from plugins.memory.mem.outbox import MemoryWriteOutbox
+from plugins.memory.mem.outbox import (
+    build_outbox_health_report,
+    load_memory_outbox_settings,
+)
 from ...infrastructure.config.runtime_paths import get_VoidCube_home
 from .scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
 from ...application.companion_workers import (
@@ -108,12 +111,14 @@ class ServiceRuntimeMixin:
 
     def _initialize_service_runtime(self) -> None:
         self._service_runtime = ServiceRuntimeState()
-        self._companion_memory_outbox = MemoryWriteOutbox(
-            get_VoidCube_home() / "runtime" / "memory" / "companion-write-outbox.sqlite3"
+        self._outbox_settings = load_memory_outbox_settings()
+        self._companion_memory_outbox = self._outbox_settings.create(
+            "companion", home=get_VoidCube_home()
         )
         self._gateway_service_id: Optional[str] = None
         self._gateway_executor_service_id: Optional[str] = None
         self._gateway_service_tokens: Dict[str, str] = {}
+        self._last_companion_outbox_health_report_at = 0.0
 
     @staticmethod
     def _gateway_registration_headers() -> Dict[str, str]:
@@ -436,6 +441,7 @@ class ServiceRuntimeMixin:
             while True:
                 try:
                     await self.run_health_checks()
+                    await self._report_companion_outbox_health_if_due()
                     missing_service_types = (
                         await self._missing_gateway_service_types()
                     )
@@ -455,6 +461,38 @@ class ServiceRuntimeMixin:
         self._ensure_watch_window_task()
         self._service_runtime_started = True
         await self._start_daily_companion_worker()
+
+    async def _report_companion_outbox_health_if_due(self, *, force: bool = False) -> None:
+        now = asyncio.get_running_loop().time()
+        if (
+            not force
+            and now - self._last_companion_outbox_health_report_at
+            < self._outbox_settings.health_report_interval_seconds
+        ):
+            return
+        self._last_companion_outbox_health_report_at = now
+        try:
+            import aiohttp
+
+            url = f"{self.config.execution.gateway_address}/api/mem/outbox/health"
+            payload = build_outbox_health_report(
+                self._companion_memory_outbox,
+                queue_name="companion",
+                session_id="supervisor-companion-outbox",
+                memory_actor="stellar_companion",
+                memory_domain="companion",
+            )
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers=self._gateway_memory_headers(),
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as response:
+                    if response.status != 200:
+                        logger.debug("Companion outbox health report returned %d", response.status)
+        except Exception as exc:
+            logger.debug("Companion outbox health report failed: %s", exc)
 
     async def _run_daily_companion_observation_cycle(self) -> Dict[str, Any]:
         """Judge changed internal API-A evidence while remaining silent by default."""
