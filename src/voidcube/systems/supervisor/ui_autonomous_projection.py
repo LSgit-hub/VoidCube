@@ -24,6 +24,7 @@ def project_autonomous_observation(
     all_tasks: List[Dict[str, Any]],
     *,
     drive_candidates: List[Dict[str, Any]],
+    active_cli_executor: Optional[Dict[str, Any]] = None,
     history_tasks: Optional[List[Dict[str, Any]]] = None,
     timeline: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
@@ -122,6 +123,17 @@ def project_autonomous_observation(
         for task in employee_lane_items
         if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
     ]
+    executor_snapshot = dict(active_cli_executor or {})
+    executor_lane = str(executor_snapshot.get("agent_lane") or "").strip().lower()
+    executor_lease_status = str(
+        executor_snapshot.get("lease_status") or ""
+    ).strip().lower()
+    employee_executor_stale = (
+        not executor_snapshot
+        or executor_lane != "supervisor_task"
+        or bool(executor_snapshot.get("is_stale"))
+        or executor_lease_status == "stale"
+    )
     employee_pre_dispatch_cards = [
         card for card in api_b_judgement_cards if is_employee_lane_family_task(card)
     ]
@@ -220,6 +232,12 @@ def project_autonomous_observation(
     if employee_running_task:
         employee_status = "active"
         employee_summary = f"{str(employee_running_task.get('title') or '自主链路项').strip()} 正在 员工代理 执行"
+    elif employee_dispatch_items and employee_executor_stale:
+        employee_status = "stale"
+        employee_summary = (
+            f"API-B 已转交 {len(employee_dispatch_items)} 个链路项，"
+            "但 CLI 员工执行器已失联"
+        )
     elif employee_dispatch_items:
         employee_status = "ready"
         employee_summary = f"API-B 已转交 {len(employee_dispatch_items)} 个链路项，等待 员工代理接手"
@@ -256,6 +274,15 @@ def project_autonomous_observation(
         employee_chain_reason = "链路: 员工代理正在执行并回报进展"
         employee_activity_text = "执行流: 完成后写回 Mem"
         employee_reason_style = "info"
+    elif employee_dispatch_items and employee_executor_stale:
+        employee_stage_label = "执行器失联"
+        employee_chain_reason = (
+            "链路: API-B 已转交，但 CLI 员工执行器没有有效心跳"
+        )
+        employee_activity_text = (
+            "执行流: 重启 CLI 员工执行器后才会认领，结果仍写回 Mem"
+        )
+        employee_reason_style = "error"
     elif employee_dispatch_items:
         employee_stage_label = "待接手"
         employee_chain_reason = "链路: API-B 已转交，可由 员工代理接手"

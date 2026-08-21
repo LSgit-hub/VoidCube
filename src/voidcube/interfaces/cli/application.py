@@ -1464,6 +1464,7 @@ class VoidcubeCLI:
                 rate_limit_metadata=scheduled_rate_limit_metadata,
                 writeback_outbox=outbox,
                 validate_execution_lease=validate_execution_lease,
+                recover_executor=self._recover_scheduled_executor,
             ),
             request_timeout_seconds=scheduled_timeout_seconds(
                 "VOIDCUBE_SCHEDULED_REQUEST_TIMEOUT_SECONDS", default=120.0
@@ -1472,6 +1473,18 @@ class VoidcubeCLI:
                 "VOIDCUBE_SCHEDULED_EXECUTION_TIMEOUT_SECONDS", default=600.0
             ),
         )
+
+    @staticmethod
+    def _recover_scheduled_executor() -> bool:
+        """Restart the local Gateway path when employee claim loses transport."""
+        try:
+            from ...infrastructure.gateway.service_launcher import ensure_running
+
+            result = ensure_running(silent=True)
+            gateway = dict(result.get("gateway") or {})
+            return bool(gateway.get("healthy"))
+        except Exception:
+            return False
 
     def _should_emit_scrollback_output(self) -> bool:
         """Return whether this host may write into the user's main CLI transcript."""

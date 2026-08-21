@@ -224,6 +224,7 @@ async def build_supervisor_ui_state(
     autonomous_observation = project_autonomous_observation(
         chain_projection,
         drive_candidates=drive_candidates,
+        active_cli_executor=dict(activity.get("active_cli_executor") or {}),
         history_tasks=chain_projection,
         timeline=observation_timeline,
     )

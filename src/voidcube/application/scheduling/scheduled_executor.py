@@ -45,6 +45,7 @@ class ScheduledTaskExecutorPorts:
     writeback_outbox: ScheduledWritebackOutbox
     cancel_background_task: Callable[[str, str], bool] | None = None
     validate_execution_lease: Callable[..., Any] | None = None
+    recover_executor: Callable[[], bool] | None = None
 
 
 class ScheduledTaskExecutorRuntime:
@@ -233,20 +234,35 @@ class ScheduledTaskExecutorRuntime:
             if not owner_session_id:
                 self._release_execution_slot()
                 return
+            autonomous_mode = self._autonomous_mode_is_active()
+            claim_payload = {
+                "owner_session_id": owner_session_id,
+                "lease_seconds": self.lease_seconds,
+                "exclude_companion_work": autonomous_mode,
+                "exclude_autonomous_work": not autonomous_mode,
+            }
             try:
-                autonomous_mode = self._autonomous_mode_is_active()
                 response = self.ports.post_supervisor(
-                    "/scheduled-tasks/claim",
-                    {
-                        "owner_session_id": owner_session_id,
-                        "lease_seconds": self.lease_seconds,
-                        "exclude_companion_work": autonomous_mode,
-                        "exclude_autonomous_work": not autonomous_mode,
-                    },
+                    "/scheduled-tasks/claim", claim_payload
                 )
-            except (OSError, ValueError, ScheduledRequestRejected):
+            except ScheduledRequestRejected:
                 self._release_execution_slot()
                 return
+            except (OSError, ValueError):
+                recover = self.ports.recover_executor
+                if recover is None:
+                    self._release_execution_slot()
+                    return
+                try:
+                    if not recover():
+                        self._release_execution_slot()
+                        return
+                    response = self.ports.post_supervisor(
+                        "/scheduled-tasks/claim", claim_payload
+                    )
+                except (OSError, ValueError, ScheduledRequestRejected):
+                    self._release_execution_slot()
+                    return
             claim = response.get("claim")
             if not isinstance(claim, dict):
                 self._release_execution_slot()

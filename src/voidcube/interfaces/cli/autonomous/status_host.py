@@ -9,7 +9,7 @@ from ....infrastructure.gateway.executor import default_gateway_url
 from typing import Any, Dict
 
 from .observation import format_supervisor_status_snapshot
-from .events import sync_autonomous_supervisor_event
+from .events import append_autonomous_execution_event, sync_autonomous_supervisor_event
 
 
 def initialize_autonomous_status_caches(host: Any) -> None:
@@ -97,6 +97,7 @@ def refresh_supervisor_status(host: Any) -> None:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 host._supervisor_state_cache = data
+                _sync_local_gate_with_supervisor(host, data)
                 sync_autonomous_supervisor_event(
                     data,
                     event_ports=host._autonomous_panel_event_ports(),
@@ -108,6 +109,36 @@ def refresh_supervisor_status(host: Any) -> None:
             host._supervisor_state_refreshing = False
 
     threading.Thread(target=_do_fetch, daemon=True, name="supervisor-status").start()
+
+
+def _sync_local_gate_with_supervisor(host: Any, state: Dict[str, Any]) -> None:
+    """Drop a stale local AUTO flag when Supervisor has restarted or stopped."""
+    if bool(getattr(host, "_autonomous_activation_pending", False)):
+        return
+    if not bool(getattr(host, "_autonomous_gate_active", False)):
+        return
+    stellar = dict(state.get("stellar_mode") or {})
+    if str(stellar.get("mode") or "").strip().lower() == "auto_evolution":
+        return
+
+    host._autonomous_gate_active = False
+    stopper = getattr(host, "_stop_autonomous_execution", None)
+    if callable(stopper):
+        try:
+            stopper(interrupt=False)
+        except Exception:
+            pass
+    event_ports_factory = getattr(host, "_autonomous_panel_event_ports", None)
+    if callable(event_ports_factory):
+        try:
+            append_autonomous_execution_event(
+                event_ports=event_ports_factory(),
+                message="Supervisor 自主门控已停止，已清除本地过期 AUTO 状态",
+                tone="warn",
+                stage="autonomous_gate",
+            )
+        except Exception:
+            pass
 
 
 def refresh_autonomous_gateway_status(host: Any) -> None:
