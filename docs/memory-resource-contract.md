@@ -8,7 +8,7 @@ one field to represent more than one axis.
 - Storage tier: active Turn, archived Turn, durable memory.
 - Durable type: Event, Scene, Arc, Epoch, Profile, or a time-summary index node.
 - Scope: `owner_id`, `workspace_id`, and `memory_domain`.
-- Identity layer: founding, experience, or self-narrative.
+- Identity layer: `founding`, `self_experience`, or `governance_history`.
 - Lifecycle state: Turn compression status or durable-memory revision status.
 
 ## Timeline and provenance

@@ -118,6 +118,33 @@ _CMEM_COLUMNS = (
     "lifecycle_last_error, identity_metadata"
 )
 
+_IDENTITY_VERIFICATION_METADATA_KEYS = frozenset(
+    {
+        "identity_experience",
+        "verified",
+        "self_authored_identity",
+        "verified_by",
+        "verified_at",
+        "self_claim",
+        "what_changed",
+        "continuity_impact",
+        "agency",
+        "identity_title",
+        "identity_summary",
+        "evidence_refs",
+    }
+)
+
+
+def _strip_identity_verification_metadata(value: Any) -> dict[str, Any]:
+    """Keep reserved identity-verification fields service-owned."""
+    metadata = dict(value) if isinstance(value, dict) else {}
+    return {
+        key: item
+        for key, item in metadata.items()
+        if key not in _IDENTITY_VERIFICATION_METADATA_KEYS
+    }
+
 
 def _prepare_memory_storage_value(value: Any, *, redact: bool) -> Any:
     """Prepare a nested value for Memory persistence under the active policy."""
@@ -3048,7 +3075,9 @@ class MemoryApplicationService:
                 if str(tag).strip()
             )
         )
-        stored_metadata = self._memory_storage_value(request.metadata)
+        stored_metadata = _strip_identity_verification_metadata(
+            self._memory_storage_value(request.metadata)
+        )
         now = datetime.now().astimezone().isoformat()
         # Ensure session exists in the same DB transaction as the turn write.
         ses = conn.execute(
@@ -3182,7 +3211,9 @@ class MemoryApplicationService:
                     json.dumps({"source": "agent_memory_provider"}),
                 ),
             )
-            stored_metadata = self._memory_storage_value(request.metadata)
+            stored_metadata = _strip_identity_verification_metadata(
+                self._memory_storage_value(request.metadata)
+            )
             stored_tags = list(
                 dict.fromkeys(
                     str(self._memory_storage_value(tag)).strip()

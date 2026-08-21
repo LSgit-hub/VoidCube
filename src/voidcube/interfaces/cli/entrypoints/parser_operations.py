@@ -102,7 +102,7 @@ def register_operations_commands(subparsers: argparse._SubParsersAction) -> None
             help="Show or initialize canonical Mem",
             description=(
                 "VoidCube uses one shared Mem service for recall, durable memory, "
-                "identity experiences, and self-narrative."
+                "first-person identity experiences, and governance history."
             ),
         )
         memory_sub = memory_parser.add_subparsers(dest="memory_command")

@@ -5904,8 +5904,8 @@ function renderIdentityDrawer() {
   const archive = identityArchive || {};
   const layers = archive.layers || {};
   const anchors = Array.isArray(layers.anchors) ? layers.anchors : [];
-  const narrative = Array.isArray(layers.self_narrative) ? layers.self_narrative : [];
-  const experiences = Array.isArray(layers.experiences) ? layers.experiences : [];
+  const experiences = Array.isArray(layers.self_experiences) ? layers.self_experiences : [];
+  const governanceHistory = Array.isArray(layers.governance_history) ? layers.governance_history : [];
   const revisions = Array.isArray(layers.revision_history) ? layers.revision_history : [];
   const recentTurns = Array.isArray(identityTurns) ? identityTurns : [];
 
@@ -5958,10 +5958,10 @@ function renderIdentityDrawer() {
       esc(archive.manifest_version || 'unknown') + ' · 起源锚点只读</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">起源锚点</div>' +
       memoryCards(anchors, '尚未恢复起源锚点。') + '</div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">演化自述</div>' +
-      memoryCards(narrative, '尚未形成新的演化自述。') + '</div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">近期经历</div>' +
-      memoryCards(experiences, '尚无可展示的长期经历。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">自身经历</div>' +
+      memoryCards(experiences, '尚无可展示的自身经历。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">治理历史</div>' +
+      memoryCards(governanceHistory, '尚无身份治理历史。') + '</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">最近对话</div>' +
       recentTurnRows + '</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">修订历史</div>' +

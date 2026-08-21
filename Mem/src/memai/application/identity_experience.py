@@ -95,10 +95,11 @@ def _ingest_verified_conversations(conn, now: datetime) -> int:
             metadata = json.loads(metadata_raw or "{}")
         except (TypeError, ValueError):
             continue
-        if not (
-            metadata.get("identity_experience") is True
-            and metadata.get("verified") is True
-            and metadata.get("self_authored_identity") is True
+        if not isinstance(metadata, dict):
+            continue
+        if not _is_verified_self_authored_identity(
+            speaker=speaker,
+            metadata=metadata,
         ):
             continue
         evidence = list(metadata.get("evidence_refs") or [])
@@ -111,8 +112,12 @@ def _ingest_verified_conversations(conn, now: datetime) -> int:
             title=str(metadata.get("identity_title") or f"关键对话 · {str(speaker)}"),
             summary=str(metadata.get("identity_summary") or text),
             occurred_at=str(timestamp or now.isoformat()),
-            topics=_unique_strings(["经历", "关键对话", *metadata.get("topics", [])]),
-            entities=_unique_strings(["星子", *metadata.get("entities", [])]),
+            topics=_unique_strings(
+                ["经历", "关键对话", *_metadata_string_list(metadata, "topics")]
+            ),
+            entities=_unique_strings(
+                ["星子", *_metadata_string_list(metadata, "entities")]
+            ),
             evidence_refs=_unique_strings([f"turn:{turn_id}", *evidence]),
             event_kind=str(metadata.get("event_kind") or "decision"),
             importance=float(metadata.get("importance") or 0.9),
@@ -131,6 +136,46 @@ def _ingest_verified_conversations(conn, now: datetime) -> int:
             },
         )
     return written
+
+
+def _is_verified_self_authored_identity(
+    *,
+    speaker: Any,
+    metadata: dict[str, Any],
+) -> bool:
+    """Validate the internal identity projection contract at its trust boundary.
+
+    Turn metadata is caller-controlled input.  Only an agent turn carrying the
+    complete first-person claim, verified by the companion authority, may be
+    projected into ``self_experience``.
+    """
+    if str(speaker or "").strip().lower() != "agent":
+        return False
+    if not (
+        metadata.get("identity_experience") is True
+        and metadata.get("verified") is True
+        and metadata.get("self_authored_identity") is True
+        and str(metadata.get("verified_by") or "").strip() == "stellar_companion"
+        and str(metadata.get("verified_at") or "").strip()
+    ):
+        return False
+    required_fields = ("self_claim", "what_changed", "continuity_impact")
+    if any(not str(metadata.get(field) or "").strip() for field in required_fields):
+        return False
+    if str(metadata.get("agency") or "").strip().lower() not in {
+        "chosen",
+        "accepted",
+        "observed",
+        "imposed",
+    }:
+        return False
+    evidence_refs = metadata.get("evidence_refs")
+    return isinstance(evidence_refs, list) and bool(_unique_strings(evidence_refs))
+
+
+def _metadata_string_list(metadata: dict[str, Any], key: str) -> list[Any]:
+    value = metadata.get(key)
+    return value if isinstance(value, list) else []
 
 
 def _upsert_identity_memory(

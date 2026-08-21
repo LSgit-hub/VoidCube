@@ -1878,22 +1878,6 @@ class InternalGateway:
                 },
             )
 
-    async def _record_agent_interaction_to_tier1(
-        self, session_id: str, messages: List[Dict[str, Any]], response_text: str
-    ) -> None:
-        """Record a full user+agent interaction to Tier 1."""
-        # Record the last user message
-        user_text = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                user_text = str(msg.get("content", ""))
-                break
-        if user_text:
-            await self._record_turn_to_tier1(session_id, "user", user_text)
-        # Record the agent response
-        if response_text:
-            await self._record_turn_to_tier1(session_id, "agent", response_text)
-
     @staticmethod
     def _extract_response_text(response_data: Any) -> str:
         """Extract text content from various LLM response formats."""
@@ -2286,12 +2270,6 @@ class InternalGateway:
             self._agent_session_cache[session_id]["last_used_at"] = datetime.now()
             self._agent_session_cache[session_id]["message_count"] += 1
 
-            # Fire-and-forget: record user turn to Tier 1
-            asyncio.create_task(
-                self._record_agent_interaction_to_tier1(
-                    session_id, data.get("messages", []), ""
-                )
-            )
             raise HTTPException(
                 status_code=410,
                 detail=(

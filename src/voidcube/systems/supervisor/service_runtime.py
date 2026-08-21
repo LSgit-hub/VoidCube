@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import uuid
 
+from plugins.memory.mem.outbox import MemoryWriteOutbox
+from ...infrastructure.config.runtime_paths import get_VoidCube_home
 from .scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
 from ...application.companion_workers import (
     companion_worker_catalog,
@@ -74,6 +76,7 @@ class RecoveryStatus:
 @dataclass(slots=True)
 class ServiceRuntimeState:
     health_check_task: Optional[asyncio.Task[Any]] = None
+    companion_memory_write_task: Optional[asyncio.Task[Any]] = None
     companion_observation_task: Optional[asyncio.Task[Any]] = None
     autonomous_chain_review_task: Optional[asyncio.Task[Any]] = None
     endogenous_drive_task: Optional[asyncio.Task[Any]] = None
@@ -105,6 +108,9 @@ class ServiceRuntimeMixin:
 
     def _initialize_service_runtime(self) -> None:
         self._service_runtime = ServiceRuntimeState()
+        self._companion_memory_outbox = MemoryWriteOutbox(
+            get_VoidCube_home() / "runtime" / "memory" / "companion-write-outbox.sqlite3"
+        )
         self._gateway_service_id: Optional[str] = None
         self._gateway_executor_service_id: Optional[str] = None
         self._gateway_service_tokens: Dict[str, str] = {}
@@ -187,6 +193,7 @@ class ServiceRuntimeMixin:
                 "healthy": body_integrity["healthy"],
                 "violations": body_integrity["violations"],
             },
+            "memory_outbox": self._companion_memory_outbox.health_snapshot(),
             "recovery": self._service_runtime.recovery.as_dict(),
         }
 
@@ -443,6 +450,7 @@ class ServiceRuntimeMixin:
                 await asyncio.sleep(runtime_config.health_check_interval)
 
         self._health_check_task = asyncio.create_task(health_check_loop())
+        await self._start_companion_memory_outbox()
 
         self._ensure_watch_window_task()
         self._service_runtime_started = True
@@ -907,26 +915,95 @@ class ServiceRuntimeMixin:
         assistant_text: str,
     ) -> bool:
         try:
-            import aiohttp
-
-            url = f"{self.config.execution.gateway_address}/api/mem/turn-pairs"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json={
-                        "session_id": session_id,
-                        "user_content": user_text,
-                        "assistant_content": assistant_text,
-                        "write_id": f"companion-{uuid.uuid4()}",
-                        "memory_domain": "companion",
-                        "metadata": {"source": "stellar_companion_dialogue"},
-                    },
-                    headers=self._gateway_memory_headers(),
-                    timeout=3,
-                ) as response:
-                    return response.status == 200
-        except Exception:
+            self._companion_memory_outbox.enqueue(
+                {
+                    "session_id": str(session_id).strip(),
+                    "user_content": str(user_text),
+                    "assistant_content": str(assistant_text),
+                    "write_id": f"companion-{uuid.uuid4()}",
+                    "memory_domain": "companion",
+                    "metadata": {"source": "stellar_companion_dialogue"},
+                }
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Companion memory outbox enqueue failed: %s", exc)
             return False
+
+    async def _start_companion_memory_outbox(self) -> None:
+        current = self._service_runtime.companion_memory_write_task
+        if current is not None and not current.done():
+            return
+
+        async def drain_loop() -> None:
+            while True:
+                item = self._companion_memory_outbox.next_due()
+                if item is None:
+                    await asyncio.sleep(1.0)
+                    continue
+                write_id = str(item["write_id"])
+                try:
+                    await self._deliver_companion_memory_write(item)
+                    self._companion_memory_outbox.mark_delivered(write_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    attempts = int(item.get("_outbox_attempts") or 0) + 1
+                    self._companion_memory_outbox.mark_failed(
+                        write_id,
+                        attempts=attempts,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    logger.warning(
+                        "Companion memory outbox delivery failed (attempt %d): %s",
+                        attempts,
+                        exc,
+                    )
+
+        self._service_runtime.companion_memory_write_task = asyncio.create_task(
+            drain_loop(),
+            name="voidcube-companion-memory-outbox",
+        )
+
+    async def _deliver_companion_memory_write(self, item: dict[str, Any]) -> None:
+        import aiohttp
+
+        payload = {
+            key: value
+            for key, value in item.items()
+            if not key.startswith("_outbox_")
+        }
+        url = f"{self.config.execution.gateway_address}/api/mem/turn-pairs"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                headers=self._gateway_memory_headers(),
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as response:
+                if response.status != 200:
+                    detail = (await response.text())[:500]
+                    raise RuntimeError(f"Memory Service returned {response.status}: {detail}")
+
+    async def _stop_companion_memory_outbox(self) -> None:
+        task = self._service_runtime.companion_memory_write_task
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("Companion memory outbox stopped with error: %s", exc)
+        self._service_runtime.companion_memory_write_task = None
+        pending = self._companion_memory_outbox.pending_count()
+        if pending:
+            logger.info(
+                "Companion memory outbox retained %d durable writes for next startup",
+                pending,
+            )
 
     def _companion_schedule_context(self) -> Dict[str, Any]:
         tasks = [
@@ -1428,7 +1505,7 @@ class ServiceRuntimeMixin:
                 "session_id": dialogue_session_id,
                 "stellar_mode": StellarMode.DAILY_COMPANION.value,
             }
-        persisted = await self._persist_companion_turn_pair(
+        queued = await self._persist_companion_turn_pair(
             session_id=dialogue_session_id,
             user_text=message,
             assistant_text=reply_text,
@@ -1458,7 +1535,8 @@ class ServiceRuntimeMixin:
             "schedule_action_result": schedule_action_result,
             "media_action_result": media_action_result,
             "execution_action_result": execution_action_result,
-            "memory_persisted": persisted,
+            "memory_persisted": False,
+            "memory_queued": queued,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         native_audio = normalized_result.get("_native_audio")
@@ -1759,6 +1837,7 @@ class ServiceRuntimeMixin:
                 logger.warning(f"Periodic runtime task exited with error during shutdown: {exc}")
 
         await self._stop_autonomous_chain_gate(restore_companion=False)
+        await self._stop_companion_memory_outbox()
 
         voice_manager = getattr(self, "_voice_manager", None)
         if voice_manager is not None:
