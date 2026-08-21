@@ -1088,9 +1088,29 @@ class ServiceRuntimeMixin:
             latest_runs.setdefault(str(run.get("schedule_id") or ""), run)
 
         visible = tasks[:12]
+        active_count = sum(1 for task in tasks if task.get("active_run_id"))
+        queued_count = sum(
+            1
+            for task in tasks
+            if not task.get("active_run_id") and task.get("status") == "active"
+        )
+        executor_status = (
+            "running"
+            if active_count
+            else "waiting_for_employee_executor"
+            if queued_count
+            else "idle"
+        )
         items = []
         for task in visible:
             schedule_id = str(task.get("schedule_id") or "")
+            autonomous_task_id = str(task.get("autonomous_task_id") or "")
+            chain_store = getattr(self, "_autonomous_chain_store", None)
+            canonical = (
+                chain_store.get_task(autonomous_task_id)
+                if autonomous_task_id and chain_store is not None
+                else None
+            )
             run = latest_runs.get(schedule_id, {})
             status = str(run.get("status") or "").strip().lower()
             if not status:
@@ -1103,6 +1123,8 @@ class ServiceRuntimeMixin:
             items.append(
                 {
                     "task_id": schedule_id,
+                    "autonomous_task_id": autonomous_task_id,
+                    "canonical_status": str(canonical.status) if canonical else "",
                     "title": str(task.get("title") or "")[:200],
                     "worker_role": str(task.get("worker_role") or ""),
                     "status": status,
@@ -1115,6 +1137,19 @@ class ServiceRuntimeMixin:
         return {
             "count": len(tasks),
             "omitted_count": max(0, len(tasks) - len(visible)),
+            "employee_executor": {
+                "status": executor_status,
+                "claim_capability": "scheduled_task_claim",
+                "active_count": active_count,
+                "queued_count": queued_count,
+                "message": (
+                    "已排队，等待 CLI 员工执行器认领。"
+                    if executor_status == "waiting_for_employee_executor"
+                    else "员工执行器正在运行。"
+                    if executor_status == "running"
+                    else "当前没有排队的员工任务。"
+                ),
+            },
             "items": items,
         }
 
@@ -1159,7 +1194,32 @@ class ServiceRuntimeMixin:
                 request["worker_role"] = self._resolve_companion_worker_role(
                     request.get("worker_role")
                 )
+                canonical_task = self._create_assist_canonical_task(
+                    title=title or instruction[:160],
+                    instruction=str(request.get("instruction") or ""),
+                    requested_via="companion_voice",
+                    worker_role=request["worker_role"],
+                    metadata={
+                        "schedule_type": request.get("schedule_type"),
+                        "run_at": request.get("run_at"),
+                        "time_of_day": request.get("time_of_day"),
+                        "weekdays": request.get("weekdays"),
+                        "timezone": request.get("timezone"),
+                    },
+                )
+                request["autonomous_task_id"] = canonical_task.task_id
                 task = self._scheduled_task_store.create(request)
+                self._autonomous_task_state.update_metadata(
+                    canonical_task.task_id,
+                    metadata={
+                        "employee_assignment": {
+                            "employee_task_id": str(task.get("schedule_id") or ""),
+                            "worker_role": str(task.get("worker_role") or ""),
+                            "dispatched_at": str(task.get("created_at") or ""),
+                        }
+                    },
+                )
+                task["autonomous_task_id"] = canonical_task.task_id
             else:
                 schedule_id = str(
                     action_payload.get("schedule_id")
@@ -1186,6 +1246,49 @@ class ServiceRuntimeMixin:
             return {"ok": True, "action": action, "task": task}
         except (KeyError, ValueError) as exc:
             return {"ok": False, "action": action, "error": str(exc)}
+
+    def _create_assist_canonical_task(
+        self,
+        *,
+        title: str,
+        instruction: str,
+        requested_via: str,
+        worker_role: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        plan_steps: Optional[list[str]] = None,
+        skills: Optional[list[str]] = None,
+        toolsets: Optional[list[str]] = None,
+    ) -> Any:
+        task = self._autonomous_task_state.create_task(
+            title=str(title or "API-B 委托任务").strip()[:200],
+            summary=str(instruction or "").strip()[:4000],
+            task_type="user",
+            source="companion",
+            priority="normal",
+            metadata={
+                "governance_task_type": "user",
+                "task_family": "user",
+                "assist_mode": True,
+                "requested_via": requested_via,
+                "plan_steps": list(plan_steps or []),
+                "skills": list(skills or []),
+                "toolsets": list(toolsets or []),
+                **dict(metadata or {}),
+            },
+            evidence={"source": "api_b", "mode": "daily_companion"},
+            constraints={"delegated_by": "api_b"},
+        )
+        return self._autonomous_task_state.update_status(
+            task.task_id,
+            status="approved",
+            actor="api_b",
+            reason="Assist 已完成用户语义判断并委派给员工执行。",
+            context={
+                "requested_via": requested_via,
+                "worker_role": str(worker_role or ""),
+            },
+            event_type="assist_employee_handoff",
+        )
 
     def _create_immediate_companion_execution(
         self,
@@ -1230,23 +1333,47 @@ class ServiceRuntimeMixin:
             instruction_sections.append(
                 "建议工具集：" + "、".join(normalized_toolsets)
             )
+        normalized_title = str(title or "API-B 委托任务").strip()[:200]
+        normalized_instruction = "\n\n".join(
+            section for section in instruction_sections if section
+        )
+        canonical_task = self._create_assist_canonical_task(
+            title=normalized_title,
+            instruction=normalized_instruction,
+            requested_via=requested_via,
+            worker_role=worker_role,
+            plan_steps=normalized_plan,
+            skills=normalized_skills,
+            toolsets=normalized_toolsets,
+        )
         task = self._scheduled_task_store.create(
             {
-                "title": str(title or "API-B 委托任务").strip()[:200],
-                "instruction": "\n\n".join(
-                    section for section in instruction_sections if section
-                ),
+                "title": normalized_title,
+                "instruction": normalized_instruction,
                 "schedule_type": "once",
                 "run_at": datetime.now(timezone.utc).isoformat(),
                 "created_by": "api_b",
                 "requested_via": requested_via,
                 "worker_role": self._resolve_companion_worker_role(worker_role),
+                "autonomous_task_id": canonical_task.task_id,
             }
+        )
+        self._autonomous_task_state.update_metadata(
+            canonical_task.task_id,
+            metadata={
+                "employee_assignment": {
+                    "employee_task_id": str(task.get("schedule_id") or ""),
+                    "worker_role": str(task.get("worker_role") or ""),
+                    "dispatched_at": str(task.get("created_at") or ""),
+                }
+            },
         )
         return {
             "ok": True,
             "action": "delegate",
             "task_id": task.get("schedule_id"),
+            "autonomous_task_id": canonical_task.task_id,
+            "canonical_status": canonical_task.status,
             "title": task.get("title"),
             "plan_steps": normalized_plan,
             "worker_role": task.get("worker_role"),
@@ -1573,6 +1700,7 @@ class ServiceRuntimeMixin:
             "schedule_action_result": schedule_action_result,
             "media_action_result": media_action_result,
             "execution_action_result": execution_action_result,
+            "worker_executions": self._companion_worker_execution_context(),
             "memory_persisted": False,
             "memory_queued": queued,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -1589,10 +1717,6 @@ class ServiceRuntimeMixin:
         if runtime.autonomous_chain_gate_active:
             return
         runtime.stellar_mode = StellarMode.DAILY_COMPANION
-        if not config.companion_observation_enabled:
-            runtime.companion_observation_task = None
-            runtime.next_companion_observation_at = None
-            return
         current = runtime.companion_observation_task
         if current is not None and not current.done():
             return
@@ -1605,7 +1729,11 @@ class ServiceRuntimeMixin:
                 )
                 await asyncio.sleep(delay)
                 try:
-                    await self._run_daily_companion_observation_cycle()
+                    # Reconcile Assist employee runs even when optional
+                    # observation/judgement is disabled.
+                    await self._autonomous_employee_dispatch_service.reconcile()
+                    if config.companion_observation_enabled:
+                        await self._run_daily_companion_observation_cycle()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1791,6 +1919,54 @@ class ServiceRuntimeMixin:
             await candidate_scheduler.cancel_active()
 
         for task in self._autonomous_chain_store.list_employee_running_tasks():
+            assignment = dict(task.metadata or {}).get("employee_assignment")
+            employee_task_id = str(
+                dict(assignment or {}).get("employee_task_id") or ""
+            ).strip()
+            try:
+                employee_schedule = (
+                    self._scheduled_task_store.get(employee_task_id)
+                    if employee_task_id
+                    else None
+                )
+            except Exception:
+                employee_schedule = None
+            if employee_schedule is None or str(
+                employee_schedule.get("requested_via") or ""
+            ).strip().lower() != "autonomous_worker":
+                # Auto gate shutdown must not cancel an Assist employee run.
+                continue
+            if employee_task_id:
+                try:
+                    self._scheduled_task_store.cancel(
+                        employee_task_id,
+                        reason="自主链路 gate 已关闭，员工执行被取消。",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to cancel employee schedule %s during gate stop: %s",
+                        employee_task_id,
+                        exc,
+                    )
+            lease = getattr(task, "execution_lease", None)
+            if lease is not None and lease.state == "active" and lease.attempt_id:
+                try:
+                    self._autonomous_task_state.finalize_execution(
+                        task.task_id,
+                        generation=lease.generation,
+                        attempt_id=str(lease.attempt_id),
+                        status="failed",
+                        actor="supervisor_gate",
+                        reason="Autonomous-chain execution was interrupted when the gate was deactivated.",
+                        context={"failure_kind": "interrupted_by_gate_deactivation"},
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to finalize autonomous task %s during gate stop: %s",
+                        task.task_id,
+                        exc,
+                    )
             self._autonomous_task_state.update_status(
                 task.task_id,
                 status="failed",

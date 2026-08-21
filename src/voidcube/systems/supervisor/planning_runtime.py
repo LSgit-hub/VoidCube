@@ -53,7 +53,7 @@ from .endogenous_state_projection import (
     derive_corrective_mode,
     project_governance_event_stream,
 )
-from .autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import AutonomousChainTask, StaleExecutionLeaseError
 from .activity_projection import (
     enforce_auto_drive_input_boundary,
     idle_seconds_since,
@@ -1706,6 +1706,67 @@ class PlanningRuntimeMixin:
 
     async def get_autonomous_chain_task(self, task_id: str):
         return await self._autonomous_chain_planning_service.get_task(task_id)
+
+    async def validate_autonomous_chain_task_lease(
+        self,
+        task_id: str,
+        request: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(request or {})
+        try:
+            task = self._autonomous_chain_store.validate_execution_lease(
+                task_id,
+                generation=int(payload.get("generation") or 0),
+                attempt_id=str(payload.get("attempt_id") or ""),
+                owner_session_id=str(payload.get("owner_session_id") or ""),
+            )
+        except (KeyError, TypeError, ValueError, StaleExecutionLeaseError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "stale_execution_lease", "message": str(exc)},
+            ) from exc
+        return {
+            "status": "valid",
+            "task_id": task.task_id,
+            "generation": task.execution_lease.generation,
+            "attempt_id": task.execution_lease.attempt_id,
+        }
+
+    async def renew_autonomous_chain_task_lease(
+        self,
+        task_id: str,
+        request: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(request or {})
+        try:
+            self._autonomous_chain_store.validate_execution_lease(
+                task_id,
+                generation=int(payload.get("generation") or 0),
+                attempt_id=str(payload.get("attempt_id") or ""),
+                owner_session_id=str(payload.get("owner_session_id") or ""),
+            )
+            task = self._autonomous_task_state.renew_execution(
+                task_id,
+                generation=int(payload.get("generation") or 0),
+                attempt_id=str(payload.get("attempt_id") or ""),
+                lease_seconds=float(payload.get("lease_seconds") or 300),
+            )
+        except (KeyError, TypeError, ValueError, StaleExecutionLeaseError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "stale_execution_lease", "message": str(exc)},
+            ) from exc
+        return {
+            "status": "renewed",
+            "task_id": task.task_id,
+            "generation": task.execution_lease.generation,
+            "attempt_id": task.execution_lease.attempt_id,
+            "expires_at": (
+                task.execution_lease.expires_at.isoformat()
+                if task.execution_lease.expires_at
+                else None
+            ),
+        }
 
     async def clear_autonomous_chain_runtime(self, request: dict | None = None):
         return await self._autonomous_chain_runtime_reset_service.clear(request)

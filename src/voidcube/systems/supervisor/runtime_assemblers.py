@@ -329,6 +329,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             resolve_worker_role=resolve_autonomous_worker_role,
             touch_gateway_activity=supervisor._touch_gateway_activity,
             record_ui_activity=record_ui_activity,
+            review_body_improvement=lambda report: supervisor._body_improvement_review_service.review(
+                report
+            ),
         )
     )
     supervisor._schedule_allocator = ScheduleAllocator(

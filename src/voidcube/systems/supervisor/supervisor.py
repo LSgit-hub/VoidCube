@@ -20,6 +20,8 @@ from .autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_TASK_REVIEW_ROUTE,
     autonomous_chain_task_decision_route,
     autonomous_chain_task_route,
+    autonomous_chain_task_lease_validation_route,
+    autonomous_chain_task_lease_renewal_route,
 )
 from .config_models import (
     SupervisorBodyRuntimeConfig,
@@ -281,6 +283,16 @@ class Supervisor(
             methods=["POST"],
         )
         self.app.add_api_route(autonomous_chain_task_route("{task_id}"), self.get_autonomous_chain_task, methods=["GET"])
+        self.app.add_api_route(
+            autonomous_chain_task_lease_validation_route("{task_id}"),
+            self.validate_autonomous_chain_task_lease,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            autonomous_chain_task_lease_renewal_route("{task_id}"),
+            self.renew_autonomous_chain_task_lease,
+            methods=["POST"],
+        )
         self.app.add_api_route(
             autonomous_chain_task_decision_route("{task_id}"),
             self.decide_autonomous_chain_task,

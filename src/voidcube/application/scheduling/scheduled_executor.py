@@ -44,6 +44,7 @@ class ScheduledTaskExecutorPorts:
     rate_limit_metadata: Callable[[str], Mapping[str, Any]]
     writeback_outbox: ScheduledWritebackOutbox
     cancel_background_task: Callable[[str, str], bool] | None = None
+    validate_execution_lease: Callable[..., Any] | None = None
 
 
 class ScheduledTaskExecutorRuntime:
@@ -162,6 +163,7 @@ class ScheduledTaskExecutorRuntime:
         owner_session_id: str,
         task_id: str,
         stop_event: threading.Event,
+        autonomous_task: Dict[str, Any] | None = None,
     ) -> None:
         def renew_loop() -> None:
             while not stop_event.wait(self.lease_renew_interval_seconds):
@@ -173,6 +175,17 @@ class ScheduledTaskExecutorRuntime:
                             "lease_seconds": self.lease_seconds,
                         },
                     )
+                    if autonomous_task:
+                        lease = dict(autonomous_task.get("execution_lease") or {})
+                        self.ports.post_supervisor(
+                            f"/autonomous-chain/tasks/{autonomous_task.get('task_id')}/lease/renew",
+                            {
+                                "generation": lease.get("generation"),
+                                "attempt_id": lease.get("attempt_id"),
+                                "owner_session_id": owner_session_id,
+                                "lease_seconds": self.lease_seconds,
+                            },
+                        )
                 except ScheduledRequestRejected as exc:
                     if exc.status_code in {400, 404, 409}:
                         cancel = self.ports.cancel_background_task
@@ -221,12 +234,14 @@ class ScheduledTaskExecutorRuntime:
                 self._release_execution_slot()
                 return
             try:
+                autonomous_mode = self._autonomous_mode_is_active()
                 response = self.ports.post_supervisor(
                     "/scheduled-tasks/claim",
                     {
                         "owner_session_id": owner_session_id,
                         "lease_seconds": self.lease_seconds,
-                        "exclude_companion_work": False,
+                        "exclude_companion_work": autonomous_mode,
+                        "exclude_autonomous_work": not autonomous_mode,
                     },
                 )
             except (OSError, ValueError, ScheduledRequestRejected):
@@ -238,6 +253,7 @@ class ScheduledTaskExecutorRuntime:
                 return
             task = dict(claim.get("task") or {})
             run = dict(claim.get("run") or {})
+            autonomous_task = dict(claim.get("autonomous_task") or {})
             run_id = str(run.get("run_id") or "").strip()
             if not run_id:
                 self._release_execution_slot()
@@ -253,6 +269,7 @@ class ScheduledTaskExecutorRuntime:
                 owner_session_id=owner_session_id,
                 task_id=task_id,
                 stop_event=heartbeat_stop,
+                autonomous_task=autonomous_task or None,
             )
             title = str(task.get("title") or "定时任务").strip()
             instruction = str(task.get("instruction") or "").strip()
@@ -357,6 +374,8 @@ class ScheduledTaskExecutorRuntime:
                     on_complete=on_complete,
                     worker_role=worker_role,
                     execution_details=execution_details,
+                    autonomous_task=autonomous_task or None,
+                    validate_execution_lease=self.ports.validate_execution_lease,
                 )
             except Exception as exc:
                 on_complete(False, "", f"employee worker route unavailable: {exc}")

@@ -131,6 +131,8 @@ class BackgroundTaskRuntime:
         persist_session: bool = True,
         on_complete: Callable[[bool, str, str], None] | None = None,
         route_override: dict[str, Any] | None = None,
+        autonomous_task: dict[str, Any] | None = None,
+        validate_execution_lease: Callable[..., Any] | None = None,
     ) -> bool:
         state = self.ports.state
         task_num = state.next_task_number()
@@ -183,11 +185,18 @@ class BackgroundTaskRuntime:
                 timeout_timer.daemon = True
                 timeout_timer.start()
             try:
+                agent_kwargs: dict[str, Any] = {}
+                if autonomous_task is not None or validate_execution_lease is not None:
+                    agent_kwargs = {
+                        "autonomous_task": autonomous_task,
+                        "validate_execution_lease": validate_execution_lease,
+                    }
                 bg_agent = self.ports.create_agent(
                     turn_route,
                     task_id,
                     request_overrides,
                     persist_session,
+                    **agent_kwargs,
                 )
                 active_agent["value"] = bg_agent
                 state.register_agent(task_id, bg_agent)

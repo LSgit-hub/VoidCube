@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
 from .autonomous_chain_store import AutonomousChainTask
+from .autonomous_chain_store import StaleExecutionLeaseError
 from .autonomous_learning_quality import assess_autonomous_learning_quality
 from .task_profile_policy import TaskProfilePolicy
 
@@ -24,6 +26,7 @@ class AutonomousEmployeeDispatchService:
         resolve_worker_role: Callable[[str], str],
         touch_gateway_activity: Callable[..., Any],
         record_ui_activity: Callable[..., Any],
+        review_body_improvement: Callable[[Dict[str, Any]], Any] | None = None,
     ) -> None:
         self._task_state = task_state
         self._task_store = task_store
@@ -32,6 +35,186 @@ class AutonomousEmployeeDispatchService:
         self._resolve_worker_role = resolve_worker_role
         self._touch_gateway_activity = touch_gateway_activity
         self._record_ui_activity = record_ui_activity
+        self._review_body_improvement = review_body_improvement
+
+    @staticmethod
+    def _parse_result_payload(result_summary: str) -> Dict[str, Any] | None:
+        text = str(result_summary or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            return None
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _validate_body_improvement_result(
+        self,
+        task: AutonomousChainTask,
+        result_summary: str,
+    ) -> Dict[str, Any]:
+        execution_kind = str(
+            self._task_profile_policy.execution_kind(task) or ""
+        ).strip().lower()
+        if execution_kind != "body_improvement":
+            return {"ok": True}
+
+        payload = self._parse_result_payload(result_summary)
+        if payload is None:
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_result_must_be_json",
+            }
+        report = payload.get("body_improvement_report")
+        report = dict(report) if isinstance(report, dict) else payload
+        task_id = str(report.get("task_id") or payload.get("task_id") or "").strip()
+        if task_id != task.task_id:
+            return {"ok": False, "reject_reason": "body_improvement_task_id_mismatch"}
+
+        lease = getattr(task, "execution_lease", None)
+        if lease is None:
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_lease_missing",
+            }
+        try:
+            generation = int(
+                report.get("lease_generation", payload.get("lease_generation"))
+            )
+        except (TypeError, ValueError):
+            generation = -1
+        attempt_id = str(
+            report.get("attempt_id") or payload.get("attempt_id") or ""
+        ).strip()
+        if generation != lease.generation or attempt_id != str(lease.attempt_id or ""):
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_lease_mismatch",
+                "expected_generation": lease.generation,
+                "expected_attempt_id": lease.attempt_id,
+            }
+
+        lineage = report.get("git_lineage") or report.get("commit_lineage")
+        lineage = dict(lineage) if isinstance(lineage, dict) else {}
+        baseline_commit = str(
+            report.get("baseline_commit") or lineage.get("source_commit") or ""
+        ).strip()
+        candidate_commit = str(
+            report.get("commit_hash")
+            or report.get("candidate_commit")
+            or lineage.get("candidate_commit")
+            or ""
+        ).strip()
+        changed_files = report.get("changed_files") or lineage.get("changed_files")
+        changed_files = [str(path).strip() for path in changed_files or [] if str(path).strip()]
+        if not baseline_commit or not candidate_commit or not changed_files:
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_commit_lineage_missing",
+            }
+        verification = report.get("verification") or report.get("validation")
+        verification = dict(verification) if isinstance(verification, dict) else {}
+        checks = verification.get("checks") or verification.get("evidence") or []
+        verified = verification.get("passed") is True or (
+            isinstance(checks, list) and bool(checks)
+        )
+        if not verified:
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_verification_missing",
+            }
+
+        expected_request = getattr(task, "execution_request", None)
+        expected_lineage = (
+            expected_request.git_lineage.model_dump(mode="json")
+            if expected_request is not None
+            else dict(task.evidence.get("git_lineage") or {})
+        )
+        expected_source = str(
+            expected_lineage.get("source_commit")
+            or task.evidence.get("evaluated_baseline_commit")
+            or ""
+        ).strip()
+        expected_candidate = str(
+            expected_lineage.get("candidate_commit")
+            or task.evidence.get("evaluated_candidate_commit")
+            or ""
+        ).strip()
+        if expected_source and baseline_commit != expected_source:
+            return {"ok": False, "reject_reason": "body_improvement_baseline_mismatch"}
+        if expected_candidate and candidate_commit != expected_candidate:
+            return {"ok": False, "reject_reason": "body_improvement_candidate_mismatch"}
+        expected_files = {
+            str(path).strip()
+            for path in (
+                expected_lineage.get("changed_files")
+                or task.evidence.get("changed_files")
+                or []
+            )
+            if str(path).strip()
+        }
+        if expected_files and expected_files != set(changed_files):
+            return {"ok": False, "reject_reason": "body_improvement_changed_files_mismatch"}
+
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "lease_generation": generation,
+            "attempt_id": attempt_id,
+            "git_lineage": {
+                "source_commit": baseline_commit,
+                "candidate_commit": candidate_commit,
+                "changed_files": list(dict.fromkeys(changed_files)),
+            },
+            "verification": verification,
+            "report": {
+                **report,
+                "task_id": task_id,
+                "baseline_commit": baseline_commit,
+                "commit_hash": candidate_commit,
+                "changed_files": list(dict.fromkeys(changed_files)),
+            },
+        }
+
+    async def _review_body_improvement_result(
+        self,
+        evidence_validation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run the governed git/worktree review before allowing completion."""
+        if self._review_body_improvement is None:
+            return {"ok": True, "skipped": "review_service_unconfigured"}
+        report = evidence_validation.get("report")
+        if not isinstance(report, dict):
+            return {"ok": False, "reject_reason": "body_improvement_report_missing"}
+        try:
+            result = self._review_body_improvement(report)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_review_failed",
+                "error": str(exc)[:500],
+            }
+        if not isinstance(result, dict):
+            return {
+                "ok": False,
+                "reject_reason": "body_improvement_review_invalid_result",
+            }
+        if result.get("reject_reason"):
+            return {
+                "ok": False,
+                "reject_reason": str(result["reject_reason"]),
+                "review": result,
+            }
+        return {"ok": True, "review": result}
 
     def dispatch(self, task: AutonomousChainTask) -> Dict[str, Any]:
         """Create one idempotent employee assignment for an approved task."""
@@ -110,6 +293,21 @@ class AutonomousEmployeeDispatchService:
             success = run_status == "completed"
             result_summary = str(run.get("result_summary") or "").strip()
             result_context = self._result_context(schedule, run)
+            evidence_validation = (
+                self._validate_body_improvement_result(task, result_summary)
+                if success
+                else {"ok": True, "skipped": "employee_run_failed"}
+            )
+            if success and evidence_validation.get("ok") and "report" in evidence_validation:
+                review_validation = await self._review_body_improvement_result(
+                    evidence_validation
+                )
+                evidence_validation["review_validation"] = review_validation
+                if not review_validation.get("ok"):
+                    success = False
+            result_context["evidence_validation"] = evidence_validation
+            if success and not evidence_validation.get("ok"):
+                success = False
             metadata: Dict[str, Any] = {
                 "employee_execution_result": result_context,
                 "completed_at": str(run.get("completed_at") or ""),
@@ -123,18 +321,62 @@ class AutonomousEmployeeDispatchService:
                 metadata["learning_quality_assessment"] = assessment
             self._task_state.update_metadata(task.task_id, metadata=metadata)
             final_status = "completed" if success else "failed"
-            updated = self._task_state.update_status(
-                task.task_id,
-                status=final_status,
-                actor="employee_agent",
-                reason=(
-                    "员工代理已完成 API-B 派发的任务。"
-                    if success
-                    else "员工代理未能完成 API-B 派发的任务。"
-                ),
-                context=result_context,
-                event_type=f"employee_execution_{final_status}",
+            reason = (
+                "员工代理已完成 API-B 派发的任务。"
+                if success
+                else "员工代理 body improvement 未通过受治理的 git/worktree 评审。"
+                if evidence_validation.get("review_validation", {}).get("reject_reason")
+                else "员工代理结果缺少可验证的 body improvement 证据。"
+                if evidence_validation.get("reject_reason")
+                else "员工代理未能完成 API-B 派发的任务。"
             )
+            lease = getattr(task, "execution_lease", None)
+            if lease is not None and lease.state == "active" and lease.attempt_id:
+                try:
+                    updated = self._task_state.finalize_execution(
+                        task.task_id,
+                        generation=lease.generation,
+                        attempt_id=str(lease.attempt_id),
+                        status=final_status,
+                        actor="employee_agent",
+                        reason=reason,
+                        context=result_context,
+                    )
+                except StaleExecutionLeaseError:
+                    # A gate stop or another fenced writer already closed this
+                    # generation. Its terminal state is authoritative.
+                    current = self._task_store.get_task(task.task_id)
+                    if current is None:
+                        continue
+                    current_lease = current.execution_lease
+                    if (
+                        current.status == "running"
+                        and current_lease.generation == lease.generation
+                        and current_lease.attempt_id == lease.attempt_id
+                    ):
+                        try:
+                            updated = self._task_state.expire_execution(
+                                task.task_id,
+                                expected_generation=lease.generation,
+                                expected_attempt_id=str(lease.attempt_id),
+                                expected_heartbeat_at=current_lease.heartbeat_at,
+                                reason="员工结果回写时 autonomous execution lease 已过期。",
+                            )
+                        except StaleExecutionLeaseError:
+                            updated = self._task_store.get_task(task.task_id) or current
+                    else:
+                        updated = current
+            else:
+                updated = self._task_state.update_status(
+                    task.task_id,
+                    status=final_status,
+                    actor="employee_agent",
+                    reason=reason,
+                    context=result_context,
+                    event_type=f"employee_execution_{final_status}",
+                )
+            if str(schedule.get("schedule_type") or "once").strip().lower() != "once":
+                self._prepare_recurring_successor(task, schedule)
             await self._touch_gateway_activity(
                 "autonomous_chain_execute",
                 metadata={
@@ -146,6 +388,51 @@ class AutonomousEmployeeDispatchService:
             )
             updates.append({"task_id": updated.task_id, "status": final_status})
         return updates
+
+    def _prepare_recurring_successor(
+        self,
+        task: AutonomousChainTask,
+        schedule: Dict[str, Any],
+    ) -> None:
+        """Keep recurring Assist schedules claimable with a fresh canonical generation."""
+        metadata = dict(task.metadata or {})
+        metadata.pop("employee_assignment", None)
+        metadata["recurring_parent_task_id"] = task.task_id
+        successor = self._task_state.create_task(
+            title=task.title,
+            summary=task.summary,
+            task_type=task.task_type,
+            source=task.source,
+            priority=task.priority,
+            metadata=metadata,
+            evidence=dict(task.evidence or {}),
+            constraints=dict(task.constraints or {}),
+        )
+        successor = self._task_state.update_status(
+            successor.task_id,
+            status="approved",
+            actor="employee_recurrence",
+            reason="Recurring employee schedule prepared its next canonical execution.",
+            context={
+                "parent_task_id": task.task_id,
+                "employee_task_id": schedule.get("schedule_id"),
+            },
+            event_type="employee_recurring_successor",
+        )
+        updated_schedule = self._scheduled_task_store.update(
+            str(schedule.get("schedule_id") or ""),
+            {"autonomous_task_id": successor.task_id},
+        )
+        self._task_state.update_metadata(
+            successor.task_id,
+            metadata={
+                "employee_assignment": {
+                    "employee_task_id": str(updated_schedule.get("schedule_id") or ""),
+                    "worker_role": str(updated_schedule.get("worker_role") or ""),
+                    "dispatched_at": str(updated_schedule.get("updated_at") or ""),
+                }
+            },
+        )
 
     def _find_schedule(self, task_id: str) -> Dict[str, Any] | None:
         matches = [
@@ -189,6 +476,7 @@ class AutonomousEmployeeDispatchService:
         return "general"
 
     def _instruction(self, task: AutonomousChainTask) -> str:
+        execution_lease = getattr(task, "execution_lease", None)
         payload = {
             "task_id": task.task_id,
             "summary": task.summary,
@@ -203,13 +491,28 @@ class AutonomousEmployeeDispatchService:
                 if task.execution_request is not None
                 else None
             ),
+            "execution_lease": (
+                execution_lease.model_dump(mode="json")
+                if execution_lease is not None and hasattr(execution_lease, "model_dump")
+                else vars(execution_lease)
+                if execution_lease is not None
+                else None
+            ),
         }
-        return (
+        instruction = (
             "完成以下由 API-B 审批并派发的任务。你是独立员工代理，不得再调用或转交给 API-A。"
             "严格遵守 constraints；需要修改代码时在隔离任务环境中完成并运行相关验证，"
-            "不得直接切换或覆盖当前活动身体。最终回复必须陈述实际完成内容、证据、验证结果和未完成项。\n\n"
-            + json.dumps(payload, ensure_ascii=False, indent=2, default=str)[:11500]
+            "不得直接切换或覆盖当前活动身体。最终回复必须陈述实际完成内容、证据、验证结果和未完成项。"
         )
+        if self._task_profile_policy.execution_kind(task) == "body_improvement":
+            instruction += (
+                " body improvement 任务完成时，最终回复必须是 JSON（可放在 markdown code fence 中），"
+                "包含 body_improvement_report.task_id、lease_generation、attempt_id、"
+                "baseline_commit、commit_hash、changed_files，以及 verification.passed=true 或 verification.checks。"
+            )
+        return instruction + "\n\n" + json.dumps(
+            payload, ensure_ascii=False, indent=2, default=str
+        )[:11500]
 
     @staticmethod
     def _assignment_payload(schedule: Dict[str, Any], *, created: bool) -> Dict[str, Any]:

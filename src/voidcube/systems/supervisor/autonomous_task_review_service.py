@@ -296,7 +296,12 @@ class AutonomousTaskReviewService:
         candidate_tasks = [
             task
             for task in self._store.list_api_b_judgement_tasks()
-            if task.status in normalized_statuses and task.status != "cancelled"
+            if task.status in normalized_statuses
+            and task.status != "cancelled"
+            # Assist has already received a user-facing API-B decision.  Its
+            # canonical row is reconciled by the employee lane, not rejudged
+            # by the endogenous Auto review loop.
+            and not bool(dict(task.metadata or {}).get("assist_mode"))
         ]
         candidate_tasks.sort(key=self._schedule_allocator.task_sort_key)
 

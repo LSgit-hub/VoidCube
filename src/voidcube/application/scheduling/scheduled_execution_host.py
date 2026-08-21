@@ -27,7 +27,7 @@ class ScheduledExecutionHost:
         *,
         ensure_credentials: Callable[[], bool],
         resolve_agent_route: Callable[[str, str], dict[str, Any]],
-        create_agent: Callable[[dict[str, Any], str, dict[str, Any], bool], Any],
+        create_agent: Callable[..., Any],
         completion_outcome: Callable[[dict[str, Any] | None], tuple[bool, str, str]],
         announce_start: Callable[[int, str, str, str], None],
         render_completion: Callable[[bool, str, str, int, str, str | None, str], None],

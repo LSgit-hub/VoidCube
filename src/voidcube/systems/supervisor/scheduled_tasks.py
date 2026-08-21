@@ -22,6 +22,12 @@ INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset(
 )
 
 
+class ScheduledRunLeaseExpiredError(ValueError):
+    """A scheduled run attempted to write back after its lease expired."""
+
+    code = "scheduled_run_lease_expired"
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -482,7 +488,9 @@ class ScheduledTaskStore:
                     "created_by": existing.get("created_by"),
                     "requested_via": existing.get("requested_via"),
                     "worker_role": normalized.get("worker_role"),
-                    "autonomous_task_id": existing.get("autonomous_task_id", ""),
+                    "autonomous_task_id": normalized.get(
+                        "autonomous_task_id", existing.get("autonomous_task_id", "")
+                    ),
                     "updated_at": _iso_utc(current),
                     "status": (
                         "active"
@@ -585,6 +593,7 @@ class ScheduledTaskStore:
         role_providers: Optional[Dict[str, str]] = None,
         provider_limits: Optional[Dict[str, int]] = None,
         exclude_companion_work: bool = False,
+        exclude_autonomous_work: bool = False,
     ) -> Optional[Dict[str, Any]]:
         owner = str(owner_session_id or "").strip()
         if not owner:
@@ -639,12 +648,18 @@ class ScheduledTaskStore:
                     "companion_media",
                 } or (
                     str(candidate["created_by"] or "").strip().lower() == "api_b"
-                    and requested_via != "provider_pool_test"
+                    and requested_via not in {"provider_pool_test", "autonomous_worker"}
                 )
+                # The canonical task id is shared by Assist and Auto.  The
+                # dispatch source, rather than the presence of that id, is
+                # the mode boundary used by the claim gate.
+                autonomous_work = requested_via == "autonomous_worker"
                 if (
                     exclude_companion_work
                     and companion_work
                 ):
+                    return False
+                if exclude_autonomous_work and autonomous_work:
                     return False
                 role = str(candidate["worker_role"] or "").strip().lower()
                 try:
@@ -917,11 +932,23 @@ class ScheduledTaskStore:
         current = (now or _utc_now()).astimezone(timezone.utc)
         owner = str(owner_session_id or "").strip()
         expected_status = "completed" if success else "failed"
+        # Commit lease recovery separately so rejecting a stale finish cannot
+        # roll the recovery mutation back with the caller's failed writeback.
+        with self._transaction() as recovery_connection:
+            self._recover_expired_claims(recovery_connection, now=current)
         with self._transaction() as connection:
             run = self._run(connection, run_id)
             if str(run.get("owner_session_id") or "") != owner:
                 raise ValueError("run belongs to another CLI session")
             if run.get("status") != "running":
+                if (
+                    run.get("status") == "failed"
+                    and str(run.get("error") or "")
+                    == "execution lease expired before writeback"
+                ):
+                    raise ScheduledRunLeaseExpiredError(
+                        "scheduled run lease expired before writeback"
+                    )
                 if run.get("status") == "cancelled":
                     task = self._task(connection, str(run.get("schedule_id") or ""))
                     return {"task": task, "run": run}
@@ -1054,6 +1081,8 @@ class ScheduledTaskRuntimeMixin:
             return getattr(self._scheduled_task_store, method)(*args, **kwargs)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="scheduled task not found") from exc
+        except ScheduledRunLeaseExpiredError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1083,12 +1112,39 @@ class ScheduledTaskRuntimeMixin:
             and task.get("next_run_at")
             and _parse_datetime(task["next_run_at"], field="next_run_at") <= now
         )
+        employee_tasks = [
+            task
+            for task in all_tasks
+            if str(task.get("created_by") or "").strip().lower() == "api_b"
+            and task.get("requested_via") != "provider_pool_test"
+        ]
+        employee_active_count = sum(
+            1 for task in employee_tasks if task.get("active_run_id")
+        )
+        employee_queued_count = sum(
+            1
+            for task in employee_tasks
+            if task.get("status") == "active" and not task.get("active_run_id")
+        )
+        employee_executor_status = (
+            "running"
+            if employee_active_count
+            else "waiting_for_employee_executor"
+            if employee_queued_count
+            else "idle"
+        )
         return {
             "status": "ok",
             "tasks": tasks,
             "count": len(tasks),
             "due_count": due_count,
             "recent_runs": recent_runs,
+            "employee_executor": {
+                "status": employee_executor_status,
+                "claim_capability": "scheduled_task_claim",
+                "active_count": employee_active_count,
+                "queued_count": employee_queued_count,
+            },
             "generated_at": _iso_utc(now),
         }
 
@@ -1133,13 +1189,50 @@ class ScheduledTaskRuntimeMixin:
 
     async def claim_scheduled_task(self, request: Dict[str, Any]) -> Dict[str, Any]:
         policy = self._provider_pool_service.dispatch_policy()
+        owner_session_id = str(request.get("owner_session_id") or "")
+        lease_seconds = int(request.get("lease_seconds") or 300)
+        auto_gate_active = bool(
+            getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False)
+        )
         claimed = self._scheduled_store_call(
             "claim_due",
-            owner_session_id=str(request.get("owner_session_id") or ""),
-            lease_seconds=int(request.get("lease_seconds") or 300),
-            exclude_companion_work=bool(request.get("exclude_companion_work", False)),
+            owner_session_id=owner_session_id,
+            lease_seconds=lease_seconds,
+            exclude_companion_work=auto_gate_active
+            or bool(request.get("exclude_companion_work", False)),
+            exclude_autonomous_work=(not auto_gate_active)
+            or bool(request.get("exclude_autonomous_work", False)),
             **policy,
         )
+        if claimed:
+            task = dict(claimed.get("task") or {})
+            autonomous_task_id = str(task.get("autonomous_task_id") or "").strip()
+            if autonomous_task_id:
+                try:
+                    autonomous_task = self._autonomous_task_state.claim_execution(
+                        autonomous_task_id,
+                        owner_session_id=owner_session_id,
+                        lease_seconds=lease_seconds,
+                        actor="employee_scheduler",
+                        reason="员工 scheduler 已认领 API-B 自主链路任务。",
+                        context={
+                            "employee_task_id": task.get("schedule_id"),
+                            "employee_run_id": (claimed.get("run") or {}).get("run_id"),
+                        },
+                    )
+                except Exception as exc:
+                    try:
+                        self._scheduled_task_store.cancel(
+                            str(task.get("schedule_id") or ""),
+                            reason="自主任务 execution lease 获取失败，已释放员工派工。",
+                        )
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"autonomous task claim failed: {exc}",
+                    ) from exc
+                claimed["autonomous_task"] = autonomous_task.model_dump(mode="json")
         return {"status": "claimed" if claimed else "idle", "claim": claimed}
 
     async def renew_scheduled_task_run(self, run_id: str, request: Dict[str, Any]) -> Dict[str, Any]:

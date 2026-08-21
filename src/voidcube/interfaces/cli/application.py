@@ -1424,6 +1424,23 @@ class VoidcubeCLI:
         outbox = SqliteScheduledWritebackOutbox(
             get_runtime_layout().runtime_root / "cli" / "scheduled_writebacks.db"
         )
+
+        def validate_execution_lease(
+            *,
+            task_id: str,
+            generation: int,
+            attempt_id: str,
+            owner_session_id: str,
+        ) -> None:
+            gateway_client.post(
+                f"/autonomous-chain/tasks/{task_id}/lease/validate",
+                {
+                    "generation": generation,
+                    "attempt_id": attempt_id,
+                    "owner_session_id": owner_session_id,
+                },
+            )
+
         return ScheduledTaskExecutorRuntime(
             ScheduledTaskExecutorPorts(
                 autonomous_mode_active=lambda: bool(
@@ -1446,6 +1463,7 @@ class VoidcubeCLI:
                 post_supervisor=gateway_client.post,
                 rate_limit_metadata=scheduled_rate_limit_metadata,
                 writeback_outbox=outbox,
+                validate_execution_lease=validate_execution_lease,
             ),
             request_timeout_seconds=scheduled_timeout_seconds(
                 "VOIDCUBE_SCHEDULED_REQUEST_TIMEOUT_SECONDS", default=120.0
@@ -1481,6 +1499,9 @@ class VoidcubeCLI:
         task_id: str,
         request_overrides: dict[str, Any],
         persist_session: bool,
+        *,
+        autonomous_task: dict[str, Any] | None = None,
+        validate_execution_lease: Any = None,
     ) -> Any:
         return self._create_background_agent(
             turn_route,
@@ -1488,6 +1509,8 @@ class VoidcubeCLI:
             request_overrides,
             persist_session,
             scheduled=True,
+            autonomous_task=autonomous_task,
+            validate_execution_lease=validate_execution_lease,
         )
 
     def _resolve_scheduled_worker_route(
@@ -2828,6 +2851,8 @@ class VoidcubeCLI:
         persist_session: bool,
         *,
         scheduled: bool | None = None,
+        autonomous_task: dict[str, Any] | None = None,
+        validate_execution_lease: Any = None,
     ) -> Any:
         runtime = turn_route["runtime"]
         minimal_scheduled_host = (
@@ -2880,6 +2905,12 @@ class VoidcubeCLI:
                 persist_session=persist_session,
                 skip_memory=True if minimal_scheduled_host else None,
                 skip_context_files=True if minimal_scheduled_host else None,
+                autonomous_task_provider=(
+                    (lambda task=dict(autonomous_task): dict(task))
+                    if autonomous_task
+                    else None
+                ),
+                validate_execution_lease=validate_execution_lease,
             )
         ).create()
 

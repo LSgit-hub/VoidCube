@@ -45,6 +45,8 @@ class CliAgentInitializationPorts:
     persist_session: Optional[bool] = None
     skip_memory: Optional[bool] = None
     skip_context_files: Optional[bool] = None
+    autonomous_task_provider: Any = None
+    validate_execution_lease: Any = None
 
 
 class CliAgentInitializationRuntime:
@@ -92,6 +94,8 @@ class CliAgentInitializationRuntime:
             "tool_event_sink": ports.tool_event_sink,
             "stream_delta_callback": ports.stream_delta_callback,
             "tool_gen_callback": ports.tool_gen_callback,
+            "autonomous_task_provider": ports.autonomous_task_provider,
+            "validate_execution_lease": ports.validate_execution_lease,
         }
         if ports.persist_session is not None:
             kwargs["persist_session"] = ports.persist_session
