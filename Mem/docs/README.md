@@ -42,6 +42,7 @@
 - `docs/10-governance-event-schema.md`：用于身体切换、自我进化决策、回滚和失败样本的治理事件模式。
 - `docs/11-time-summary-index-hierarchy.md`：永久会话、日、周、月摘要索引的目标架构，包括确定性聚合与反向展开。
 - `docs/12-memory-system-multi-round-audit.md`：记忆系统多轮、多角度审查总账、缺陷登记和工程化交付门槛。
+- `../../docs/mem-temporary-memory-contract.md`：Agent 当前上下文、Tier 1 临时记忆、长期记忆和身份记忆的接口边界。
 - `docs/MemAI v0.2 设计路线图.md`：记忆框架 v0.2 演进路线图。
 
 建议实现顺序：
