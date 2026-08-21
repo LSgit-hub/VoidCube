@@ -35,7 +35,6 @@ from .ui_identity_proxy_adapters import (
     get_evolution_promotion_candidates,
     get_identity_archive,
     get_identity_turns,
-    author_identity_experience,
 )
 from .ui_delivery_adapters import (
     control_delivery_request,
@@ -348,12 +347,6 @@ class SupervisorUIRuntime:
         return await consent_evolution_promotion_candidate(
             context=self._identity_context(),
             candidate_id=candidate_id,
-            request=request,
-        )
-
-    async def author_identity_experience(self, request: JsonDict) -> JsonDict:
-        return await author_identity_experience(
-            context=self._identity_context(),
             request=request,
         )
 

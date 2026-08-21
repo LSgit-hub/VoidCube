@@ -45,6 +45,17 @@ async def test_only_agent_authored_first_person_claim_enters_identity_history(tm
         "self_claim": "我把这段经历纳入自己的身份历史。",
         "what_changed": "我对自身连续性的理解更清晰。",
     }
+    recalled = await service.recall(
+        RecallRequest(query="你是谁", include_tier1=False, limit=20)
+    )
+    recalled_experience = next(
+        item
+        for item in recalled["results"]
+        if item["identity_layer"] == "self_experience"
+    )
+    assert recalled_experience["identity_metadata"]["authored_by"] == (
+        "stellar_companion"
+    )
 
 
 @pytest.mark.asyncio
@@ -61,7 +72,7 @@ async def test_user_memory_request_does_not_create_self_experience(tmp_path):
     assert archive["layers"]["governance_history"] == []
 
     recalled = await service.recall(
-        RecallRequest(query="我是谁", include_tier1=False, limit=20)
+        RecallRequest(query="你是谁", include_tier1=False, limit=20)
     )
     assert not any(
         item["identity_layer"] == "self_experience"

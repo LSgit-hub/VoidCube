@@ -58,7 +58,6 @@ async def get_identity_archive(
             detail=f"Memory identity archive unavailable: {type(exc).__name__}",
         ) from exc
 
-
 async def get_identity_turns(
     *,
     context: SupervisorUIIdentityProxyContext,
@@ -305,57 +304,4 @@ async def consent_evolution_promotion_candidate(
         raise HTTPException(
             status_code=503,
             detail=f"Memory promotion consent unavailable: {type(exc).__name__}",
-        ) from exc
-
-
-async def author_identity_experience(
-    *,
-    context: SupervisorUIIdentityProxyContext,
-    request: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Proxy 星子-authored identity history to canonical Mem."""
-
-    try:
-        import aiohttp
-
-        from memai.application.memory_service import SelfIdentityExperienceCreate
-
-        payload = SelfIdentityExperienceCreate.model_validate(
-            {
-                **request,
-                "owner_id": DEFAULT_OWNER_ID,
-                "workspace_id": CLI_WORKSPACE_ID,
-                "memory_actor": _IDENTITY_MEMORY_ACTOR,
-                "memory_domain": _IDENTITY_MEMORY_DOMAIN,
-            }
-        ).model_dump(mode="json")
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{context.gateway_url}/api/mem/identity/experiences/self-author",
-                json=payload,
-                headers=context.gateway_memory_headers(
-                    memory_actor=_IDENTITY_MEMORY_ACTOR
-                ),
-            ) as response:
-                response_payload = await response.json()
-                if response.status != 200:
-                    detail = (
-                        response_payload.get("detail")
-                        if isinstance(response_payload, dict)
-                        else None
-                    )
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=detail or "Identity experience authoring failed",
-                    )
-                return response_payload
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Identity experience authoring unavailable: {type(exc).__name__}",
         ) from exc

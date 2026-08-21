@@ -1,4 +1,4 @@
-"""Evidence-backed identity experience and self-narrative projection."""
+"""Evidence-backed first-person identity history projection."""
 
 from __future__ import annotations
 
@@ -30,10 +30,8 @@ def sync_identity_experiences(
     conversation_count = _ingest_verified_conversations(conn, reference_time)
     conn.commit()
     return {
-        "task_experiences": 0,
         "revision_experiences": revision_count,
-        "conversation_experiences": conversation_count,
-        "self_narratives": 0,
+        "self_experiences": conversation_count,
         "updated_count": revision_count + conversation_count,
     }
 

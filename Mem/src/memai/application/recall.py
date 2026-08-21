@@ -995,7 +995,7 @@ def _tier2_candidates(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
         "event_kind, access_count, citation_count, pinned, weight, "
-        "identity_layer, evidence_refs, memory_domain "
+        "identity_layer, evidence_refs, memory_domain, identity_metadata "
         "FROM compressed_memories WHERE "
         + " AND ".join(clauses)
         + " ORDER BY pinned DESC, weight DESC, importance DESC, "
@@ -1076,6 +1076,7 @@ def _tier2_candidates(
                 "identity_layer": row[16],
                 "evidence_refs": _json_list(row[17]),
                 "memory_domain": row[18],
+                "identity_metadata": _json_object(row[19]),
                 "raw_score": round(score, 6),
                 "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
@@ -2339,6 +2340,16 @@ def _json_list(value: object) -> list[str]:
     if not isinstance(parsed, list):
         return []
     return [str(item) for item in parsed if str(item).strip()]
+
+
+def _json_object(value: object) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 def _optional_text(value: object) -> str | None:
