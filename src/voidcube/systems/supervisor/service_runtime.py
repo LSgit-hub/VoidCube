@@ -1931,9 +1931,16 @@ class ServiceRuntimeMixin:
                 )
             except Exception:
                 employee_schedule = None
-            if employee_schedule is None or str(
-                employee_schedule.get("requested_via") or ""
-            ).strip().lower() != "autonomous_worker":
+            if employee_schedule is None:
+                # A directly claimed Auto task may not have an employee
+                # assignment yet; Assist canonical tasks are explicitly
+                # marked and must remain untouched by the Auto gate.
+                if bool(dict(task.metadata or {}).get("assist_mode")):
+                    continue
+            elif (
+                str(employee_schedule.get("requested_via") or "").strip().lower()
+                != "autonomous_worker"
+            ):
                 # Auto gate shutdown must not cancel an Assist employee run.
                 continue
             if employee_task_id:
