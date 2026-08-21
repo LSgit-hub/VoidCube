@@ -25,7 +25,7 @@ class SupervisorUIRoutePorts:
     get_evolution_audit: Callable[..., Any]
     get_evolution_candidates: Callable[..., Any]
     consent_evolution_candidate: Callable[..., Any]
-    verify_identity_experience: Callable[..., Any]
+    author_identity_experience: Callable[..., Any]
     control_media: Callable[..., Any] | None = None
     list_accounts: Callable[..., Any] | None = None
     add_account: Callable[..., Any] | None = None
@@ -94,8 +94,8 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
         methods=["POST"],
     )
     app.add_api_route(
-        "/ui/identity/experiences/verify",
-        ports.verify_identity_experience,
+        "/ui/identity/experiences/self-author",
+        ports.author_identity_experience,
         methods=["POST"],
     )
     if ports.list_accounts is not None:

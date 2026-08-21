@@ -384,7 +384,8 @@ class MemoryDatabaseBootstrap:
                 created_at TEXT,
                 lifecycle_retry_count INTEGER NOT NULL DEFAULT 0,
                 lifecycle_retry_after TEXT,
-                lifecycle_last_error TEXT
+                lifecycle_last_error TEXT,
+                identity_metadata TEXT
             )
             """
         )
@@ -766,6 +767,7 @@ class MemoryDatabaseBootstrap:
             ("lifecycle_retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("lifecycle_retry_after", "TEXT"),
             ("lifecycle_last_error", "TEXT"),
+            ("identity_metadata", "TEXT"),
             ("timeline_parent_id", "TEXT"),
             ("derived_from_id", "TEXT"),
         )

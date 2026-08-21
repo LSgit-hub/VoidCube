@@ -308,19 +308,19 @@ async def consent_evolution_promotion_candidate(
         ) from exc
 
 
-async def verify_identity_experience(
+async def author_identity_experience(
     *,
     context: SupervisorUIIdentityProxyContext,
     request: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Proxy an explicit identity-experience decision to canonical Mem."""
+    """Proxy 星子-authored identity history to canonical Mem."""
 
     try:
         import aiohttp
 
-        from memai.application.memory_service import IdentityExperienceVerification
+        from memai.application.memory_service import SelfIdentityExperienceCreate
 
-        payload = IdentityExperienceVerification.model_validate(
+        payload = SelfIdentityExperienceCreate.model_validate(
             {
                 **request,
                 "owner_id": DEFAULT_OWNER_ID,
@@ -332,7 +332,7 @@ async def verify_identity_experience(
         timeout = aiohttp.ClientTimeout(total=8)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                f"{context.gateway_url}/api/mem/identity/experiences/verify",
+                f"{context.gateway_url}/api/mem/identity/experiences/self-author",
                 json=payload,
                 headers=context.gateway_memory_headers(
                     memory_actor=_IDENTITY_MEMORY_ACTOR
@@ -347,7 +347,7 @@ async def verify_identity_experience(
                     )
                     raise HTTPException(
                         status_code=response.status,
-                        detail=detail or "Identity experience verification failed",
+                        detail=detail or "Identity experience authoring failed",
                     )
                 return response_payload
     except HTTPException:
@@ -357,5 +357,5 @@ async def verify_identity_experience(
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Identity experience verification unavailable: {type(exc).__name__}",
+            detail=f"Identity experience authoring unavailable: {type(exc).__name__}",
         ) from exc

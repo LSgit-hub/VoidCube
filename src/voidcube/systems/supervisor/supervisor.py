@@ -225,7 +225,7 @@ class Supervisor(
                 consent_evolution_candidate=(
                     self._ui_runtime.consent_evolution_promotion_candidate
                 ),
-                verify_identity_experience=self._ui_runtime.verify_identity_experience,
+                author_identity_experience=self._ui_runtime.author_identity_experience,
                 list_accounts=self._ui_runtime.list_accounts,
                 add_account=self._ui_runtime.add_account,
                 delete_account=self._ui_runtime.delete_account_endpoint,

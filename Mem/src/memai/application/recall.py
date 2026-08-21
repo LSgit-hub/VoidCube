@@ -958,12 +958,10 @@ def _tier2_candidates(
     ):
         return []
     if plan.intent == "identity":
-        clauses.extend(
-            (
-                "identity_layer = 'founding'",
-                "memory_id LIKE 'identity-founding-%'",
-                "pinned = 1",
-            )
+        clauses.append(
+            "((identity_layer = 'founding' AND "
+            "memory_id LIKE 'identity-founding-%' AND pinned = 1) OR "
+            "identity_layer = 'self_experience')"
         )
     else:
         clauses.append("COALESCE(identity_layer, '') != 'founding'")

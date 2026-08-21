@@ -57,13 +57,8 @@ MEMORY_HTTP_ROUTES = (
     MemoryHttpRoute("/identity/archive", "get_identity_archive", ("GET",)),
     MemoryHttpRoute("/identity/sync", "sync_identity_archive", ("POST",)),
     MemoryHttpRoute(
-        "/identity/experiences/verify",
-        "verify_identity_experience",
-        ("POST",),
-    ),
-    MemoryHttpRoute(
-        "/identity/experiences/settle-interaction",
-        "settle_interaction_experience",
+        "/identity/experiences/self-author",
+        "author_identity_experience",
         ("POST",),
     ),
     MemoryHttpRoute("/identity/revisions", "list_identity_revisions", ("GET",)),

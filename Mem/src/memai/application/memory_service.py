@@ -115,7 +115,7 @@ _CMEM_COLUMNS = (
     "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
     "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
     "memory_domain, created_at, lifecycle_retry_count, lifecycle_retry_after, "
-    "lifecycle_last_error"
+    "lifecycle_last_error, identity_metadata"
 )
 
 
@@ -312,35 +312,24 @@ class IdentityRevisionDecision(BaseModel):
     decided_by: str = Field(default="supervisor", min_length=1, max_length=100)
 
 
-class IdentityExperienceVerification(BaseModel):
-    """Explicit human verification of a conversation turn as identity history."""
+class SelfIdentityExperienceCreate(BaseModel):
+    """A first-person identity experience authored by 星子."""
 
     turn_id: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=300)
     summary: str = Field(min_length=1, max_length=4000)
     evidence_refs: List[str] = Field(min_length=1, max_length=50)
-    verified_by: str = Field(default="anchor", min_length=1, max_length=100)
+    self_claim: str = Field(min_length=1, max_length=4000)
+    what_changed: str = Field(min_length=1, max_length=2000)
+    continuity_impact: str = Field(min_length=1, max_length=2000)
+    agency: str = Field(pattern=r"^(chosen|accepted|observed|imposed)$")
     topics: List[str] = Field(default_factory=list, max_length=20)
     entities: List[str] = Field(default_factory=list, max_length=20)
     event_kind: str = Field(default="decision", min_length=1, max_length=50)
     importance: float = Field(default=0.9, ge=0.0, le=1.0)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
-    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
-    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
-
-
-class InteractionExperienceSettlement(BaseModel):
-    user_turn_id: str = Field(min_length=1, max_length=200)
-    agent_turn_id: Optional[str] = Field(default=None, max_length=200)
-    verified_by: str = Field(
-        default="user_explicit_signal",
-        min_length=1,
-        max_length=100,
-    )
-    owner_id: str = DEFAULT_OWNER_ID
-    workspace_id: str = DEFAULT_WORKSPACE_ID
-    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_actor: MemoryActor = MemoryActor.STELLAR_COMPANION
     memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
@@ -408,6 +397,7 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
             "memory_domain": 31, "created_at": 32,
             "lifecycle_retry_count": 33, "lifecycle_retry_after": 34,
             "lifecycle_last_error": 35,
+            "identity_metadata": 36,
         }
         position = index.get(name)
         return row[position] if position is not None and len(row) > position else default
@@ -451,6 +441,7 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "lifecycle_retry_count": value("lifecycle_retry_count", 0),
         "lifecycle_retry_after": value("lifecycle_retry_after"),
         "lifecycle_last_error": value("lifecycle_last_error"),
+        "identity_metadata": json_value("identity_metadata", {}),
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
@@ -1120,8 +1111,7 @@ class MemoryApplicationService:
             "remember": self.remember,
             "get_identity_archive": self.get_identity_archive,
             "sync_identity_archive": self.sync_identity_archive,
-            "verify_identity_experience": self.verify_identity_experience,
-            "settle_interaction_experience": self.settle_interaction_experience,
+            "author_identity_experience": self.author_identity_experience,
             "list_identity_revisions": self.list_identity_revisions,
             "propose_identity_revision": self.propose_identity_revision,
             "decide_identity_revision": self.decide_identity_revision,
@@ -1389,17 +1379,17 @@ class MemoryApplicationService:
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories "
                 "WHERE memory_id LIKE 'identity-founding-%' ORDER BY memory_id"
             ).fetchall()
-            evolving = conn.execute(
+            self_experiences = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
-                "AND identity_layer = 'self_narrative' "
+                "AND identity_layer = 'self_experience' "
                 "AND ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = '*' AND workspace_id = '*')) "
                 "ORDER BY timespan_end DESC LIMIT 12",
                 (scope.owner_id, scope.workspace_id),
             ).fetchall()
-            experiences = conn.execute(
+            governance_history = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
-                "AND identity_layer = 'experience' "
+                "AND identity_layer = 'governance_history' "
                 "AND ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = '*' AND workspace_id = '*')) "
                 "ORDER BY importance DESC, timespan_end DESC LIMIT 12",
@@ -1425,8 +1415,12 @@ class MemoryApplicationService:
             "story": load_founding_story(),
             "layers": {
                 "anchors": [_cmem_row_to_dict(row) for row in anchors],
-                "self_narrative": [_cmem_row_to_dict(row) for row in evolving],
-                "experiences": [_cmem_row_to_dict(row) for row in experiences],
+                "self_experiences": [
+                    _cmem_row_to_dict(row) for row in self_experiences
+                ],
+                "governance_history": [
+                    _cmem_row_to_dict(row) for row in governance_history
+                ],
                 "revision_history": [self._identity_revision_row(row) for row in revisions],
             },
             "governance": {
@@ -1447,8 +1441,13 @@ class MemoryApplicationService:
     async def sync_identity_archive(self):
         return await self._identity_experience_cycle()
 
-    async def verify_identity_experience(self, request: IdentityExperienceVerification):
-        """Mark one existing Tier 1 turn as a verified identity experience."""
+    async def author_identity_experience(self, request: SelfIdentityExperienceCreate):
+        """Persist 星子's evidence-backed, first-person identity experience."""
+        if request.memory_actor is not MemoryActor.STELLAR_COMPANION:
+            raise HTTPException(
+                status_code=403,
+                detail="Only stellar_companion may author first-person identity history",
+            )
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         authorized_domain = _authorized_identity_experience_domain(
             request.memory_actor, request.memory_domain
@@ -1465,7 +1464,7 @@ class MemoryApplicationService:
         conn = self._repository.connect()
         try:
             row = conn.execute(
-                "SELECT metadata FROM turns WHERE turn_id = ? AND owner_id = ? "
+                "SELECT speaker, metadata FROM turns WHERE turn_id = ? AND owner_id = ? "
                 "AND workspace_id = ? AND memory_domain = ?",
                 (
                     request.turn_id.strip(),
@@ -1493,18 +1492,28 @@ class MemoryApplicationService:
                 raise HTTPException(status_code=404, detail="Turn not found")
 
             try:
-                metadata = json.loads(row[0] or "{}")
+                metadata = json.loads(row[1] or "{}")
             except (TypeError, ValueError):
                 metadata = {}
+            if str(row[0]) != "agent":
+                raise HTTPException(
+                    status_code=409,
+                    detail="First-person identity history must be authored from an agent turn",
+                )
             verified_fields = {
                 "identity_experience": True,
                 "verified": True,
+                "self_authored_identity": True,
+                "self_claim": str(self._memory_storage_value(request.self_claim)).strip(),
+                "what_changed": str(self._memory_storage_value(request.what_changed)).strip(),
+                "continuity_impact": str(
+                    self._memory_storage_value(request.continuity_impact)
+                ).strip(),
+                "agency": str(self._memory_storage_value(request.agency)).strip(),
                 "identity_title": str(self._memory_storage_value(request.title)).strip(),
                 "identity_summary": str(self._memory_storage_value(request.summary)).strip(),
                 "evidence_refs": evidence_refs,
-                "verified_by": str(
-                    self._memory_storage_value(request.verified_by)
-                ).strip(),
+                "verified_by": "stellar_companion",
                 "topics": list(dict.fromkeys(self._memory_storage_value(request.topics))),
                 "entities": list(dict.fromkeys(self._memory_storage_value(request.entities))),
                 "event_kind": str(
@@ -1550,101 +1559,10 @@ class MemoryApplicationService:
             conn.close()
         experience = _cmem_row_to_dict(experience_row) if experience_row else None
         return {
-            "status": "verified",
+            "status": "authored",
             "turn_id": request.turn_id.strip(),
             "experience": experience,
             "sync": sync_result,
-        }
-
-    async def settle_interaction_experience(
-        self,
-        request: InteractionExperienceSettlement,
-    ):
-        """Settle a dialogue only when the user supplied an explicit signal."""
-        from memai.application.identity_experience import (
-            classify_explicit_conversation_experience,
-        )
-
-        scope = MemoryScope.create(request.owner_id, request.workspace_id)
-        authorized_domain = _authorized_write_domain(
-            request.memory_actor, request.memory_domain
-        )
-        conn = self._repository.connect()
-        try:
-            user_row = conn.execute(
-                "SELECT session_id, speaker, text FROM turns WHERE turn_id = ? "
-                "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                (
-                    request.user_turn_id.strip(),
-                    scope.owner_id,
-                    scope.workspace_id,
-                    authorized_domain,
-                ),
-            ).fetchone()
-            agent_row = None
-            if request.agent_turn_id:
-                agent_row = conn.execute(
-                    "SELECT session_id, speaker, text FROM turns WHERE turn_id = ? "
-                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (
-                        request.agent_turn_id.strip(),
-                        scope.owner_id,
-                        scope.workspace_id,
-                        authorized_domain,
-                    ),
-                ).fetchone()
-        finally:
-            conn.close()
-        if not user_row:
-            raise HTTPException(status_code=404, detail="User turn not found")
-        if str(user_row[1]) != "user":
-            raise HTTPException(status_code=409, detail="user_turn_id is not a user turn")
-        if agent_row and (
-            str(agent_row[0]) != str(user_row[0]) or str(agent_row[1]) != "agent"
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="agent_turn_id is not a paired agent turn",
-            )
-
-        classification = classify_explicit_conversation_experience(str(user_row[2]))
-        if classification is None:
-            return {
-                "status": "ignored",
-                "reason": "no_explicit_experience_signal",
-                "user_turn_id": request.user_turn_id.strip(),
-            }
-
-        user_text = str(user_row[2]).strip()
-        agent_text = str(agent_row[2]).strip() if agent_row else ""
-        title_excerpt = " ".join(user_text.split())[:120]
-        summary = f"用户确认：{user_text}"
-        if agent_text:
-            summary += f"\n处理结果：{agent_text}"
-        evidence_refs = [f"turn:{request.user_turn_id.strip()}"]
-        if request.agent_turn_id:
-            evidence_refs.append(f"turn:{request.agent_turn_id.strip()}")
-        result = await self.verify_identity_experience(
-            IdentityExperienceVerification(
-                turn_id=request.user_turn_id.strip(),
-                title=f"{classification['title_prefix']}：{title_excerpt}"[:300],
-                summary=summary[:4000],
-                evidence_refs=evidence_refs,
-                verified_by=request.verified_by.strip(),
-                topics=list(classification["topics"]),
-                entities=["锚点", "星子", "Mem"],
-                event_kind=str(classification["event_kind"]),
-                importance=float(classification["importance"]),
-                owner_id=scope.owner_id,
-                workspace_id=scope.workspace_id,
-                memory_actor=request.memory_actor,
-                memory_domain=authorized_domain,
-            )
-        )
-        return {
-            **result,
-            "status": "settled",
-            "classification": classification["kind"],
         }
 
     async def propose_identity_revision(self, proposal: IdentityRevisionProposal):
@@ -2150,16 +2068,10 @@ class MemoryApplicationService:
             return results
 
     async def _identity_experience_cycle(self) -> Dict[str, int]:
-        from memai.repository.governance import GovernanceEventRepository
         from memai.application.identity_experience import sync_identity_experiences
-        from memai.repository.paths import get_mem_runtime_layout
-
-        events = GovernanceEventRepository(
-            get_mem_runtime_layout().governance_log
-        ).list_events()
         conn = self._repository.connect()
         try:
-            return sync_identity_experiences(conn, governance_events=events)
+            return sync_identity_experiences(conn)
         except Exception:
             conn.rollback()
             raise
@@ -3355,24 +3267,12 @@ class MemoryApplicationService:
             conn.close()
 
         self._semantic_wake.set()
-        settlement = None
-        if turn_ids.get("user") and profile_settlement["action"] == "none":
-            settlement = await self.settle_interaction_experience(
-                InteractionExperienceSettlement(
-                    user_turn_id=turn_ids["user"],
-                    agent_turn_id=turn_ids.get("agent"),
-                    owner_id=scope.owner_id,
-                    workspace_id=scope.workspace_id,
-                    memory_actor=request.memory_actor,
-                    memory_domain=request.memory_domain,
-                )
-            )
         return {
             "status": "stored",
             "session_id": session_id,
             "write_id": request.write_id,
             "turn_ids": turn_ids,
-            "identity_settlement": settlement,
+            "identity_settlement": None,
             "profile_settlement": profile_settlement,
             "memory_domain": memory_domain,
             **scope.as_dict(),
