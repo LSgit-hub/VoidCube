@@ -5921,25 +5921,43 @@ function renderOutboxDrawer(state) {
     ? transport.outboxes : {};
   const names = ['api_a', 'companion', 'gateway'];
   const labels = {api_a: 'API-A', companion: '陪伴', gateway: 'Gateway'};
-  const overall = transport.status === 'healthy' ? '正常' : (transport.status === 'degraded' ? '降级' : '等待上报');
+  const descriptions = {
+    api_a: '普通对话产生的记忆',
+    companion: '星子陪伴过程产生的记忆',
+    gateway: 'Gateway 转发的自动记录',
+  };
+  const overall = transport.status === 'healthy' ? '正常' : (transport.status === 'degraded' ? '需要处理' : '等待数据');
+  const overallExplanation = transport.status === 'healthy'
+    ? '三条传输通道都已跟上。'
+    : transport.status === 'degraded'
+      ? '对话仍可继续，但有些记忆还没有写入 Mem。'
+      : '暂时还没有收到三条传输通道的状态。';
+  const issueLabel = issue => ({
+    dead_letter: '多次发送失败，暂未写入',
+    stuck_pending: '等待时间过长，形成积压',
+    stale_report: '状态报告已过期',
+  }[String(issue).split(':').pop()] || '需要检查');
   const queueHtml = names.map(name => {
     const item = queueMap[name] || {};
     const status = String(item.status || (item.healthy === true ? 'healthy' : 'unreported'));
-    const statusText = status === 'healthy' ? '正常' : (status === 'degraded' ? '降级' : '未上报');
+    const statusText = status === 'healthy' ? '正常' : (status === 'degraded' ? '需要处理' : '等待数据');
     const issues = Array.isArray(item.issues) ? item.issues : [];
+    const issueText = issues.map(issueLabel);
     return '<div class="drawer-section"><div class="drawer-section-label">' + labels[name] + '</div>' +
+      '<div class="drawer-sub" style="margin:0 0 6px;">' + descriptions[name] + '</div>' +
       '<div class="health-row"><span>状态</span><span class="hr-val">' + esc(statusText) + '</span></div>' +
-      '<div class="health-row"><span>待处理 / 传输中</span><span class="hr-val">' + esc(item.pending_count == null ? '—' : item.pending_count) + ' / ' + esc(item.inflight_count == null ? '—' : item.inflight_count) + '</span></div>' +
-      '<div class="health-row"><span>死信</span><span class="hr-val">' + esc(item.dead_letter_count == null ? '—' : item.dead_letter_count) + '</span></div>' +
-      (issues.length ? '<div class="drawer-sub" style="margin-top:7px;">' + esc(issues.join(' · ')) + '</div>' : '') +
+      '<div class="health-row"><span>等着写入 Mem / 正在写入</span><span class="hr-val">' + esc(item.pending_count == null ? '—' : item.pending_count) + ' / ' + esc(item.inflight_count == null ? '—' : item.inflight_count) + '</span></div>' +
+      '<div class="health-row"><span>多次失败、暂未写入</span><span class="hr-val">' + esc(item.dead_letter_count == null ? '—' : item.dead_letter_count) + '</span></div>' +
+      (issueText.length ? '<div class="drawer-sub" style="margin-top:7px;color:var(--coral);">' + esc(issueText.join(' · ')) + '</div>' : '') +
       '</div>';
   }).join('');
 
   els.drawerBody.innerHTML =
+    '<div class="drawer-sub">' + esc(overallExplanation) + '</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">整体</div>' +
     '<div class="health-row"><span>传输状态</span><span class="hr-val">' + esc(overall) + '</span></div>' +
-    '<div class="health-row"><span>上报队列</span><span class="hr-val">' + esc(transport.reporter_count == null ? '—' : transport.reporter_count) + ' / 3</span></div>' +
-    '<div class="health-row"><span>待处理 / 传输中 / 死信</span><span class="hr-val">' +
+    '<div class="health-row"><span>已连接传输通道</span><span class="hr-val">' + esc(transport.reporter_count == null ? '—' : transport.reporter_count) + ' / 3</span></div>' +
+    '<div class="health-row"><span>等着写入 / 正在写入 / 多次失败</span><span class="hr-val">' +
       esc(transport.pending_count == null ? '—' : transport.pending_count) + ' / ' +
       esc(transport.inflight_count == null ? '—' : transport.inflight_count) + ' / ' +
       esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +

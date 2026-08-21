@@ -294,7 +294,12 @@ class MemoryWriteOutbox:
                 )
 
     def has_blocking_writes_before(self, write_id: str) -> bool:
-        """Return whether an older write or dead letter must precede this item."""
+        """Return whether an older active write must precede this item.
+
+        A dead letter is terminal for automatic delivery.  Keeping it in the
+        ordering barrier would permanently strand every later write, so only
+        pending and inflight rows remain blockers.
+        """
         with closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT rowid FROM pending_writes WHERE write_id = ?",
@@ -304,7 +309,7 @@ class MemoryWriteOutbox:
                 return False
             blocker = conn.execute(
                 "SELECT 1 FROM pending_writes WHERE rowid < ? AND "
-                "status IN ('pending', 'inflight', 'dead_letter') LIMIT 1",
+                "status IN ('pending', 'inflight') LIMIT 1",
                 (int(row[0]),),
             ).fetchone()
             return blocker is not None
