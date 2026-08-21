@@ -121,6 +121,123 @@ async def test_reconcile_projects_employee_run_back_to_task():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_repairs_approved_task_without_employee_assignment():
+    task = _task(status="approved")
+    schedule = {
+        "schedule_id": "employee-repaired",
+        "worker_role": "research-employee",
+        "autonomous_task_id": "task-1",
+        "created_at": "2026-08-22T00:00:00+00:00",
+    }
+    state = SimpleNamespace(update_metadata=Mock())
+    store = SimpleNamespace(
+        list=Mock(return_value=[]),
+        create=Mock(return_value=schedule),
+        recent_runs=Mock(return_value=[]),
+    )
+    service = _service(store)
+    service._task_state = state
+    service._task_store = SimpleNamespace(
+        list_employee_execution_lane_tasks=Mock(return_value=[task])
+    )
+
+    updates = await service.reconcile()
+
+    assert updates == [
+        {
+            "task_id": "task-1",
+            "status": "approved",
+            "employee_task_id": "employee-repaired",
+        }
+    ]
+    store.create.assert_called_once()
+    state.update_metadata.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_migrates_reconciling_task_before_repairing_assignment():
+    task = _task(status="reconciling")
+    migrated = _task(status="approved")
+    schedule = {
+        "schedule_id": "employee-migrated",
+        "worker_role": "research-employee",
+        "autonomous_task_id": "task-1",
+        "created_at": "2026-08-22T00:00:00+00:00",
+    }
+    state = SimpleNamespace(
+        update_status=Mock(return_value=migrated),
+        update_metadata=Mock(),
+    )
+    store = SimpleNamespace(
+        list=Mock(return_value=[]),
+        create=Mock(return_value=schedule),
+        recent_runs=Mock(return_value=[]),
+    )
+    service = _service(store)
+    service._task_state = state
+    service._task_store = SimpleNamespace(
+        list_employee_execution_lane_tasks=Mock(return_value=[task])
+    )
+
+    updates = await service.reconcile()
+
+    assert updates[0]["employee_task_id"] == "employee-migrated"
+    state.update_status.assert_called_once_with(
+        "task-1",
+        status="approved",
+        actor="employee_dispatch_migration",
+        reason="历史执行租约状态已迁移为员工代理派工状态。",
+        context={"migration": "employee_reconciling_to_employee_dispatch"},
+        event_type="employee_dispatch_migration",
+    )
+    store.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_approved_task_with_terminal_legacy_run():
+    lease = SimpleNamespace(state="reconciling", generation=2, attempt_id="attempt-2")
+    task = _task(status="approved", execution_lease=lease)
+    running = _task(status="running", execution_lease=lease)
+    completed = _task(status="completed", execution_lease=lease)
+    state = SimpleNamespace(
+        update_status=Mock(side_effect=[running, completed]),
+        update_metadata=Mock(),
+    )
+    schedule = {
+        "schedule_id": "employee-legacy",
+        "autonomous_task_id": "task-1",
+        "worker_role": "research",
+        "created_at": "2026-08-22T00:00:00+00:00",
+    }
+    store = SimpleNamespace(
+        list=Mock(return_value=[schedule]),
+        recent_runs=Mock(
+            return_value=[
+                {
+                    "schedule_id": "employee-legacy",
+                    "run_id": "run-legacy",
+                    "status": "completed",
+                    "result_summary": "Recovered historical result.",
+                }
+            ]
+        ),
+    )
+    service = _service(store)
+    service._task_state = state
+    service._task_store = SimpleNamespace(
+        list_employee_execution_lane_tasks=Mock(return_value=[task])
+    )
+
+    updates = await service.reconcile()
+
+    assert updates == [{"task_id": "task-1", "status": "completed"}]
+    assert state.update_status.call_args_list[0].kwargs["actor"] == (
+        "employee_dispatch_recovery"
+    )
+    assert state.update_status.call_args_list[1].kwargs["actor"] == "employee_agent"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_does_not_run_body_review_for_learning_task():
     task = _task(status="running")
     state = SimpleNamespace(

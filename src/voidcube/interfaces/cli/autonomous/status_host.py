@@ -115,10 +115,22 @@ def _sync_local_gate_with_supervisor(host: Any, state: Dict[str, Any]) -> None:
     """Drop a stale local AUTO flag when Supervisor has restarted or stopped."""
     if bool(getattr(host, "_autonomous_activation_pending", False)):
         return
-    if not bool(getattr(host, "_autonomous_gate_active", False)):
-        return
     stellar = dict(state.get("stellar_mode") or {})
-    if str(stellar.get("mode") or "").strip().lower() == "auto_evolution":
+    supervisor_auto = (
+        str(stellar.get("mode") or "").strip().lower() == "auto_evolution"
+    )
+    if supervisor_auto:
+        if bool(getattr(host, "_autonomous_gate_active", False)):
+            return
+        host._autonomous_gate_active = True
+        starter = getattr(host, "_start_autonomous_execution", None)
+        if callable(starter):
+            try:
+                starter()
+            except Exception:
+                host._autonomous_gate_active = False
+        return
+    if not bool(getattr(host, "_autonomous_gate_active", False)):
         return
 
     host._autonomous_gate_active = False

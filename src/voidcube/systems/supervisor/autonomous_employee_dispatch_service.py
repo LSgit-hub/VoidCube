@@ -261,16 +261,25 @@ class AutonomousEmployeeDispatchService:
         runs_by_schedule = self._latest_runs_by_schedule()
         for task in self._task_store.list_employee_execution_lane_tasks():
             schedule = self._find_schedule(task.task_id)
-            if task.status == "reconciling" and schedule is None:
-                migrated = self._task_state.update_status(
-                    task.task_id,
-                    status="approved",
-                    actor="employee_dispatch_migration",
-                    reason="历史执行租约状态已迁移为员工代理派工状态。",
-                    context={"migration": "employee_reconciling_to_employee_dispatch"},
-                    event_type="employee_dispatch_migration",
+            if schedule is None and task.status in {"reconciling", "approved", "retry"}:
+                dispatch_task = task
+                if task.status == "reconciling":
+                    dispatch_task = self._task_state.update_status(
+                        task.task_id,
+                        status="approved",
+                        actor="employee_dispatch_migration",
+                        reason="历史执行租约状态已迁移为员工代理派工状态。",
+                        context={"migration": "employee_reconciling_to_employee_dispatch"},
+                        event_type="employee_dispatch_migration",
+                    )
+                assignment = self.dispatch(dispatch_task)
+                updates.append(
+                    {
+                        "task_id": dispatch_task.task_id,
+                        "status": str(dispatch_task.status),
+                        "employee_task_id": assignment.get("employee_task_id"),
+                    }
                 )
-                updates.append({"task_id": migrated.task_id, "status": "approved"})
                 continue
             if schedule is None:
                 continue
@@ -289,6 +298,26 @@ class AutonomousEmployeeDispatchService:
                 continue
             if run_status not in {"completed", "failed", "cancelled"}:
                 continue
+
+            # A legacy migration can leave a terminal scheduled run paired
+            # with an approved canonical task. Re-enter the legal execution
+            # path before projecting the terminal result so one stale item
+            # cannot abort reconciliation for the rest of the employee lane.
+            lease = getattr(task, "execution_lease", None)
+            if (
+                task.status in {"approved", "retry"}
+                and lease is not None
+                and str(getattr(lease, "state", "") or "").strip().lower()
+                == "reconciling"
+            ):
+                task = self._task_state.update_status(
+                    task.task_id,
+                    status="running",
+                    actor="employee_dispatch_recovery",
+                    reason="历史员工结果已存在，恢复合法执行状态后继续回写。",
+                    context=self._result_context(schedule, run),
+                    event_type="employee_execution_recovery",
+                )
 
             success = run_status == "completed"
             result_summary = str(run.get("result_summary") or "").strip()
