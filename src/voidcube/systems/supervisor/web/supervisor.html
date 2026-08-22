@@ -362,17 +362,40 @@ body[data-exec-window="false"] .floor {
   min-height: 20px;
 }
 .companion-widget[hidden], body[data-panel-open] .companion-widget { display: none; }
-.companion-launcher {
-  position: absolute;
-  right: 8px;
-  top: -18px;
-  z-index: 2;
-  width: 76px;
-  height: 36px;
-  border: 2px solid rgba(45,60,75,.24);
-  border-radius: 18px;
+.companion-widget-panel {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 2px solid rgba(45,60,75,.22);
+  border-radius: 8px;
   background: rgba(255,250,240,.97);
-  box-shadow: 0 7px 18px rgba(20,36,52,.24);
+  box-shadow: 0 8px 22px rgba(20,36,52,.22);
+  color: #2a1d18;
+}
+.companion-widget-panel::after {
+  content: "";
+  position: absolute;
+  right: 26px;
+  bottom: -9px;
+  width: 16px;
+  height: 16px;
+  background: rgba(255,250,240,.97);
+  border-right: 2px solid rgba(45,60,75,.22);
+  border-bottom: 2px solid rgba(45,60,75,.22);
+  transform: rotate(45deg);
+}
+.companion-launcher {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 30px;
+  border: 1px solid rgba(45,60,75,.22);
+  border-radius: 5px;
+  background: rgba(106,158,232,.12);
+  box-shadow: none;
   color: #5d4637;
   font: inherit;
   font-size: 11px;
@@ -381,35 +404,13 @@ body[data-exec-window="false"] .floor {
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  animation: companion-launcher-bob 2.8s ease-in-out infinite;
-}
-.companion-launcher::after {
-  content: "";
-  position: absolute;
-  left: 11px;
-  bottom: -7px;
-  width: 11px;
-  height: 11px;
-  background: rgba(255,250,240,.97);
-  border-right: 2px solid rgba(45,60,75,.24);
-  border-bottom: 2px solid rgba(45,60,75,.24);
-  transform: rotate(45deg);
 }
 .companion-launcher:hover { background: #fff; }
 .companion-launcher:focus-visible { outline: 3px solid rgba(226,176,74,.8); outline-offset: 3px; }
 .companion-launcher[aria-expanded="true"] { background: #fff; border-color: rgba(106,158,232,.5); }
-@keyframes companion-launcher-bob {
-  50% { transform: translateY(-4px); }
-}
-.companion-widget-panel {
-  position: relative;
-  left: auto;
-  top: auto;
-  width: 300px;
-  padding-top: 24px;
-}
-.companion-widget-panel:not(.chat-open) { display: none; }
-.companion-widget-panel::after { left: auto; right: 26px; top: -9px; bottom: auto; transform: rotate(225deg); }
+.companion-widget-panel.empty { display: grid; }
+.companion-widget-panel:not(.chat-open) .companion-chat-content { display: none; }
+.companion-widget-panel.chat-open .companion-chat-content { display: grid; gap: 6px; }
 .sofa-shadow {
   position: absolute; left: 8px; right: 8px; bottom: -8px; height: 16px;
   background: radial-gradient(ellipse, rgba(0,0,0,.35), transparent 70%);
@@ -1190,6 +1191,22 @@ body[data-exec-window="false"] .floor {
   background: rgba(255,250,240,.96);
   border-left: 2px solid rgba(45,60,75,.22);
   border-bottom: 2px solid rgba(45,60,75,.22);
+  transform: rotate(45deg);
+}
+.companion-chat.companion-widget-panel {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: 100%;
+  display: grid;
+  padding: 8px;
+}
+.companion-chat.companion-widget-panel.empty { display: grid; }
+.companion-chat.companion-widget-panel::after {
+  left: auto;
+  right: 26px;
+  top: auto;
+  bottom: -9px;
   transform: rotate(45deg);
 }
 .companion-chat.empty { display: none; }
@@ -3998,21 +4015,23 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 沙发 + 日常辅助聊天组件 -->
     <div class="companion-widget" data-companion-widget hidden>
-      <button type="button" class="companion-launcher" data-companion-launcher aria-expanded="false" aria-controls="companionChatPanel" aria-label="打开辅助聊天" title="打开辅助聊天">💬 聊天</button>
       <div class="companion-chat companion-widget-panel empty" id="companionChatPanel" data-companion-chat aria-live="polite">
-        <div class="companion-chat-line user" data-chat-user-line>
-          <span class="companion-chat-label">你</span>
-          <span class="companion-chat-text" data-chat-user></span>
+        <button type="button" class="companion-launcher" data-companion-launcher aria-expanded="false" aria-controls="companionChatContent" aria-label="打开辅助聊天" title="打开辅助聊天">💬 聊天</button>
+        <div class="companion-chat-content" id="companionChatContent">
+          <div class="companion-chat-line user" data-chat-user-line>
+            <span class="companion-chat-label">你</span>
+            <span class="companion-chat-text" data-chat-user></span>
+          </div>
+          <div class="companion-chat-line" data-chat-reply-line>
+            <span class="companion-chat-label" data-chat-agent>星子</span>
+            <span class="companion-chat-text" data-chat-reply></span>
+          </div>
+          <div class="companion-chat-status" data-chat-status></div>
+          <form class="companion-chat-form" data-companion-form>
+            <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="输入文字和星子聊天" aria-label="输入给星子的文字"></textarea>
+            <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
+          </form>
         </div>
-        <div class="companion-chat-line" data-chat-reply-line>
-          <span class="companion-chat-label" data-chat-agent>星子</span>
-          <span class="companion-chat-text" data-chat-reply></span>
-        </div>
-        <div class="companion-chat-status" data-chat-status></div>
-        <form class="companion-chat-form" data-companion-form>
-          <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="输入文字和星子聊天" aria-label="输入给星子的文字"></textarea>
-          <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
-        </form>
       </div>
     </div>
     <!-- 沙发 -->
