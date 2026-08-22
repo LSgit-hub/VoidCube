@@ -23,6 +23,7 @@ def test_scene_entry_labels_are_accessible_and_point_to_expected_drawers():
     assert "openDrawer('employee_runs')" in HTML
     assert "openDrawer('autonomous_tasks')" in HTML
     assert "openPanel('schedules')" in HTML
+    assert '<span class="pt-icon">◷</span>API-A 定时任务' in HTML
 
 
 def test_autonomous_task_drawer_explicitly_excludes_schedules():

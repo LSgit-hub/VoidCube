@@ -4355,11 +4355,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
       <div class="dock-panel" id="panelSchedules">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">◷</span>定时任务</div>
+          <div class="panel-title"><span class="pt-icon">◷</span>API-A 定时任务</div>
           <button class="panel-close" data-panel="schedules" title="关闭">×</button>
         </div>
         <div class="panel-body" id="panelSchedulesBody">
-          <div class="panel-empty"><div class="pe-text">正在读取任务列表...</div></div>
+          <div class="panel-empty"><div class="pe-text">正在读取 API-A 定时任务...</div></div>
         </div>
       </div>
 
@@ -4784,12 +4784,12 @@ function scheduledTaskTime(task) {
 function renderScheduledTasks() {
   if (!els.panelSchedulesBody) return;
   if (!scheduledTaskSnapshot) {
-    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-text">任务列表暂时不可用</div></div>';
+    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-text">API-A 定时任务暂时不可用</div></div>';
     return;
   }
   const tasks = Array.isArray(scheduledTaskSnapshot.tasks) ? scheduledTaskSnapshot.tasks : [];
   if (!tasks.length) {
-    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-icon">◷</div><div class="pe-text">还没有定时任务</div></div>';
+    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-icon">◷</div><div class="pe-text">还没有 API-A 定时任务</div></div>';
     return;
   }
   const statusLabels = {active:'已启用', paused:'已暂停', completed:'已完成', failed:'执行失败'};
