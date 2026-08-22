@@ -1495,6 +1495,7 @@ class ServiceRuntimeMixin:
         text: str = "",
         session_id: str = "",
         audio_path: str | Path | None = None,
+        speak_reply: bool = False,
     ) -> Dict[str, Any]:
         if self._service_runtime.stellar_mode != StellarMode.DAILY_COMPANION:
             return {
@@ -1708,6 +1709,23 @@ class ServiceRuntimeMixin:
         native_audio = normalized_result.get("_native_audio")
         if isinstance(native_audio, dict):
             snapshot["native_audio"] = native_audio
+        if speak_reply:
+            voice_manager = getattr(self, "_voice_manager", None)
+            voice_status = voice_manager.status() if voice_manager is not None else {}
+            if voice_manager is None or not voice_status.get("enabled"):
+                snapshot["voice_output"] = {
+                    "status": "skipped",
+                    "reason": "voice_output_disabled",
+                }
+            else:
+                voice_result = await voice_manager.speak_text(
+                    reply_text,
+                    reason="companion_text_reply",
+                )
+                snapshot["voice_output"] = {
+                    "status": str(voice_result.get("status") or "unknown"),
+                    "reason": str(voice_result.get("reason") or ""),
+                }
         self._service_runtime.latest_companion_dialogue = snapshot
         return snapshot
 

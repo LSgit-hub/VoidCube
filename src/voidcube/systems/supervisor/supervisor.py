@@ -146,7 +146,7 @@ class Supervisor(
         self._provider_pool_service = ProviderPoolService()
         self._voice_manager = VoiceSessionManager(
             VoiceConfig.from_env(),
-            companion_callback=self.handle_companion_message,
+            companion_callback=self._handle_voice_companion_message,
         )
         # Watch-window state is owned by executor adapter (§3.6 / S-02/03).
         # Supervisor holds a plain holder that gets proxied after assembly.
@@ -439,6 +439,22 @@ class Supervisor(
         return await self.handle_companion_message(
             text=request.text,
             session_id=request.session_id,
+            speak_reply=True,
+        )
+
+    async def _handle_voice_companion_message(
+        self,
+        *,
+        text: str = "",
+        session_id: str = "",
+        audio_path: Any = None,
+    ) -> Dict[str, Any]:
+        """Route voice input through companion logic without double-speaking."""
+        return await self.handle_companion_message(
+            text=text,
+            session_id=session_id,
+            audio_path=audio_path,
+            speak_reply=False,
         )
 
     def _companion_reminder_policy_payload(self) -> Dict[str, Any]:
