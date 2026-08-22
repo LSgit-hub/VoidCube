@@ -173,6 +173,7 @@ compile_commands.json
 !/tests/test_autonomous_employee_dispatch_service.py
 !/tests/test_ui_autonomous_projection.py
 !/tests/test_ui_delivery_adapters.py
+!/tests/test_supervisor_scene_entry_contract.py
 !/tests/test_memory_resource_contract.py
 !/tests/test_packaging_contract.py
 !/tests/test_skill_registry.py

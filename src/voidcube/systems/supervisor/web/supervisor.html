@@ -446,12 +446,12 @@ body[data-exec-window="false"] .floor {
   width: 200px; height: 130px;
   z-index: 5;
 }
-.desk-monitor[data-drill] { cursor: pointer; }
-.desk-monitor[data-drill]:hover .monitor-body,
-.desk-monitor[data-drill]:focus-visible .monitor-body {
+.desk-monitor[data-scene-entry] { cursor: pointer; }
+.desk-monitor[data-scene-entry]:hover .monitor-body,
+.desk-monitor[data-scene-entry]:focus-visible .monitor-body {
   box-shadow: 0 8px 16px var(--shadow-deep), 0 0 0 2px rgba(126,224,192,.55), inset 0 0 0 2px #0a0e14;
 }
-.desk-monitor[data-drill]:focus-visible { outline: 2px solid var(--mint); outline-offset: 5px; }
+.desk-monitor[data-scene-entry]:focus-visible { outline: 2px solid var(--mint); outline-offset: 5px; }
 .monitor-body {
   position: absolute; inset: 0;
   background: linear-gradient(180deg, #2a2f38, #1a1f28);
@@ -662,6 +662,12 @@ body[data-exec-window="false"] .floor {
   width: 320px; height: 150px;
   z-index: 3;
 }
+.desk-write[data-scene-entry] { cursor: pointer; }
+.desk-write[data-scene-entry]:hover .dw-paper,
+.desk-write[data-scene-entry]:focus-visible .dw-paper {
+  box-shadow: 0 3px 6px rgba(0,0,0,.2), 0 0 0 2px rgba(167,138,212,.65);
+}
+.desk-write[data-scene-entry]:focus-visible { outline: 2px solid var(--accent-purple); outline-offset: 5px; }
 .dw-top {
   position: absolute;
   left: -10px; right: -10px; top: 0;
@@ -802,6 +808,12 @@ body[data-exec-window="false"] .floor {
   left: 26%; bottom: 30%;
   width: 80px; height: 130px;
 }
+.plant-corner[data-scene-entry] { cursor: pointer; }
+.plant-corner[data-scene-entry]:hover .pot,
+.plant-corner[data-scene-entry]:focus-visible .pot {
+  box-shadow: inset -4px 0 rgba(0,0,0,.2), 0 4px 6px rgba(0,0,0,.3), 0 0 0 2px rgba(111,198,160,.7);
+}
+.plant-corner[data-scene-entry]:focus-visible { outline: 2px solid var(--mint); outline-offset: 5px; }
 .plant-corner .pot {
   position: absolute; left: 50%; bottom: 0;
   transform: translateX(-50%);
@@ -3811,7 +3823,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <div class="wall"></div>
     <div class="baseboard"></div>
 
-    <div class="wall-clock" id="scheduleClock" role="button" tabindex="0" title="查看定时任务" aria-label="查看定时任务">
+    <div class="wall-clock" id="scheduleClock" role="button" tabindex="0" data-scene-entry="api-a-schedules" title="查看 API-A 定时任务" aria-label="查看 API-A 定时任务">
       <div class="wc-body">
         <span class="wc-tick major" style="transform: rotate(0deg);"></span>
         <span class="wc-tick major" style="transform: rotate(90deg);"></span>
@@ -3905,7 +3917,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 电脑桌 + 显示器 + 办公椅 -->
     <div class="desk-main">
-      <div class="desk-monitor" role="button" tabindex="0" data-drill="outboxes" aria-label="记忆传输队列健康" title="记忆传输队列健康">
+      <div class="desk-monitor" role="button" tabindex="0" data-scene-entry="employee-runs" aria-label="员工代理执行详情" title="员工代理执行详情">
         <div class="monitor-glow"></div>
         <div class="monitor-body">
           <div class="monitor-screen">
@@ -3944,7 +3956,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 写字桌 + 台灯 + 书本 + 信纸 -->
-    <div class="desk-write" aria-hidden="true">
+    <div class="desk-write" role="button" tabindex="0" data-scene-entry="autonomous-tasks" aria-label="星子自主任务安排" title="星子自主任务安排">
       <div class="dw-lamp">
         <div class="dw-lamp-glow"></div>
         <div class="dw-lamp-head"></div>
@@ -3963,7 +3975,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 装饰: 盆栽 + 落地灯 -->
-    <div class="plant plant-corner" aria-hidden="true">
+    <div class="plant plant-corner" role="button" tabindex="0" data-scene-entry="memory-flow" aria-label="Mem 记忆传输与写回" title="Mem 记忆传输与写回">
       <div class="leaves">
         <div class="leaf"></div><div class="leaf"></div><div class="leaf"></div>
         <div class="leaf"></div><div class="leaf"></div>
@@ -4885,6 +4897,9 @@ const DRAWER_META = {
   provenance: { icon: '🔎', title: '判断依据' },
   health:     { icon: '💗', title: '替身与记忆' },
   outboxes:   { icon: '📬', title: '记忆传输队列' },
+  memory_flow: { icon: '🌿', title: 'Mem 传输与写回' },
+  employee_runs: { icon: '💻', title: '员工代理执行详情' },
+  autonomous_tasks: { icon: '📄', title: '星子自主任务安排' },
   body_tree:  { icon: '🌲', title: '替身结构图' },
   identity:   { icon: '📚', title: '身份档案' },
 };
@@ -4916,6 +4931,9 @@ function renderDrawer() {
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
   else if (drawerOpen === 'outboxes') renderOutboxDrawer(state);
+  else if (drawerOpen === 'memory_flow') renderMemoryFlowDrawer(state);
+  else if (drawerOpen === 'employee_runs') renderEmployeeRunsDrawer(state);
+  else if (drawerOpen === 'autonomous_tasks') renderAutonomousTasksDrawer(state);
   else if (drawerOpen === 'body_tree') renderBodyTreeDrawer(state);
   else if (drawerOpen === 'identity') renderIdentityDrawer();
 }
@@ -5018,8 +5036,29 @@ document.addEventListener('click', e => {
   }
   openDrawer(trigger.dataset.drill, context);
 });
+document.addEventListener('click', e => {
+  const trigger = e.target.closest('[data-scene-entry]');
+  if (!trigger) return;
+  e.stopPropagation();
+  const target = String(trigger.dataset.sceneEntry || '').trim();
+  if (target === 'api-a-schedules') {
+    openPanel('schedules');
+  } else if (target === 'memory-flow') {
+    openDrawer('memory_flow');
+  } else if (target === 'employee-runs') {
+    openDrawer('employee_runs');
+  } else if (target === 'autonomous-tasks') {
+    openDrawer('autonomous_tasks');
+  }
+});
 document.addEventListener('keydown', e => {
   const trigger = e.target.closest('[data-drill][role="button"]');
+  if (!trigger || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  trigger.click();
+});
+document.addEventListener('keydown', e => {
+  const trigger = e.target.closest('[data-scene-entry][role="button"]');
   if (!trigger || (e.key !== 'Enter' && e.key !== ' ')) return;
   e.preventDefault();
   trigger.click();
@@ -5962,6 +6001,74 @@ function renderOutboxDrawer(state) {
       esc(transport.inflight_count == null ? '—' : transport.inflight_count) + ' / ' +
       esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
     queueHtml;
+}
+
+function renderProjectionCard(item, emptyText) {
+  if (!item || typeof item !== 'object') return '<div class="drawer-sub">' + esc(emptyText) + '</div>';
+  const title = esc(item.title || '未命名链路项');
+  const status = esc(item.status_label || item.display_status || statusLabel(item.status));
+  const summary = esc(item.summary || item.observation_card_subtitle || '暂无摘要');
+  const taskId = String(item.task_id || '').trim();
+  return '<div class="drawer-section">' +
+    '<div class="health-row"><span>' + title + '</span><span class="hr-val">' + status + '</span></div>' +
+    '<div class="drawer-sub" style="margin:6px 0 0;">' + summary + '</div>' +
+    (taskId ? '<div class="drawer-sub" style="margin:5px 0 0;">任务 ID · ' + esc(taskId) + '</div>' : '') +
+    '</div>';
+}
+
+function renderMemoryFlowDrawer(state) {
+  const ts = state.tier1_stats || {};
+  const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
+    ? ts.transport_outboxes : {};
+  const board = (((state.autonomous_observation || {}).board) || {});
+  const writebacks = Array.isArray(board.mem_writeback) ? board.mem_writeback : [];
+  const status = transport.status === 'healthy' ? '正常' :
+    (transport.status === 'degraded' ? '需要处理' : '等待数据');
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">这里仅展示 Mem 传输、写回和回流，不展示员工执行日志。</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">传输总览</div>' +
+    '<div class="health-row"><span>传输状态</span><span class="hr-val">' + esc(status) + '</span></div>' +
+    '<div class="health-row"><span>等待写入 / 正在写入</span><span class="hr-val">' +
+      esc(transport.pending_count == null ? '—' : transport.pending_count) + ' / ' +
+      esc(transport.inflight_count == null ? '—' : transport.inflight_count) + '</span></div>' +
+    '<div class="health-row"><span>多次失败、暂未写入</span><span class="hr-val">' +
+      esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">最近 Mem 写回</div>' +
+    (writebacks.length ? writebacks.slice(0, 6).map(item => renderProjectionCard(item, '')).join('') :
+      '<div class="drawer-sub">尚未观察到新的 Mem 写回记录。</div>') + '</div>';
+}
+
+function renderEmployeeRunsDrawer(state) {
+  const observation = state.autonomous_observation || {};
+  const board = observation.board || {};
+  const runtime = observation.runtime || {};
+  const runs = Array.isArray(board.employee_runs) ? board.employee_runs : [];
+  const executor = (state.activity || {}).active_cli_executor || runtime.active_cli_executor || {};
+  const executorState = executor.is_stale || executor.lease_status === 'stale' ? '执行器失联' :
+    (executor.agent_lane ? '执行器在线' : '等待执行器');
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">这里展示 Auto 自主链路的员工派工、执行状态和结果；完成结果会回写 Mem。</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">执行器</div>' +
+    '<div class="health-row"><span>状态</span><span class="hr-val">' + esc(executorState) + '</span></div>' +
+    '<div class="health-row"><span>员工派工 / 执行中</span><span class="hr-val">' +
+      esc(((observation.counts || {}).employee_dispatch) || 0) + ' / ' +
+      esc(((observation.counts || {}).employee_running) || 0) + '</span></div></div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">任务运行</div>' +
+    (runs.length ? runs.slice(0, 8).map(item => renderProjectionCard(item, '')).join('') :
+      '<div class="drawer-sub">当前没有员工代理执行项。</div>') + '</div>';
+}
+
+function renderAutonomousTasksDrawer(state) {
+  const observation = state.autonomous_observation || {};
+  const board = observation.board || {};
+  const tasks = Array.isArray(board.autonomous_tasks) ? board.autonomous_tasks : [];
+  const mode = String(((state.stellar_mode || {}).mode) || '').trim().toLowerCase();
+  const modeLabel = mode === 'auto_evolution' ? 'Auto 自主链路' : '当前模式 · ' + (mode || '观测');
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">' + esc(modeLabel) + '。这里只展示星子安排的自主任务，不展示 API-A 定时任务。</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">自主任务安排</div>' +
+    (tasks.length ? tasks.slice(0, 10).map(item => renderProjectionCard(item, '')).join('') :
+      '<div class="drawer-sub">当前没有候选、判断中或待员工接手的自主任务。</div>') + '</div>';
 }
 
 function renderIdentityDrawer() {
