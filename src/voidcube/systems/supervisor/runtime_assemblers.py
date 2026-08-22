@@ -332,6 +332,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             review_body_improvement=lambda report: supervisor._body_improvement_review_service.review(
                 report
             ),
+            promote_memory=supervisor._autonomous_task_memory_promotion_service.propose,
         )
     )
     supervisor._schedule_allocator = ScheduleAllocator(

@@ -145,8 +145,12 @@ def media_display(
     auto_open: bool = True,
     mime_type: str = "",
     view_mode: str = "fit",
+    main_runtime: Dict[str, Any] | None = None,
 ) -> str:
-    """将 Agent 产物或远程内容推送到 VoidCube 交付面板。
+    """将 Assist 模式的产物或远程内容推送到 VoidCube 交付面板。
+
+    Auto 员工的研究、自学习和自改进结果必须回写 canonical task/Mem，
+    不得把内部结果投影到面向用户的交付面板。
 
     本地文件会先复制到 Supervisor 管理的只读产物仓库，不会向浏览器暴露
     原始文件路径。展示记录与播放器队列完全独立。
@@ -172,6 +176,28 @@ def media_display(
     Returns:
         JSON 字符串，包含 status、current 和交付历史
     """
+    autonomous_task = (
+        main_runtime.get("autonomous_task")
+        if isinstance(main_runtime, dict)
+        else None
+    )
+    autonomous_metadata = (
+        autonomous_task.get("metadata")
+        if isinstance(autonomous_task, dict)
+        else None
+    )
+    if isinstance(autonomous_task, dict) and not (
+        isinstance(autonomous_metadata, dict)
+        and autonomous_metadata.get("assist_mode") is True
+    ):
+        return json.dumps(
+            {
+                "status": "error",
+                "error": "autonomous_employee_delivery_forbidden",
+                "message": "Auto 员工结果必须回写 Mem，不得进入交付面板。",
+            },
+            ensure_ascii=False,
+        )
     if file_path and (url or content):
         return json.dumps(
             {"status": "error", "error": "file_path 不能与 url 或 content 同时使用"},
@@ -283,7 +309,8 @@ MEDIA_PLAY_SCHEMA = {
 MEDIA_DISPLAY_SCHEMA = {
     "name": "media_display",
     "description": (
-        "向 VoidCube Agent 产物与文件交付面板推送内容。"
+        "向日常 Assist 模式的用户交付面板推送内容。"
+        "Auto 员工的研究、自学习和自改进结果必须回写 Mem，不得调用本工具。"
         "本地产物优先传 file_path，工具会安全上传并自动识别类型；"
         "HTML 报告传 content+type='html'；远程网页或媒体传 url。"
         "交付历史独立于播放器队列。"
@@ -421,6 +448,7 @@ registry.register(
         auto_open=args.get("auto_open", True),
         mime_type=args.get("mime_type", ""),
         view_mode=args.get("view_mode", "fit"),
+        main_runtime=kw.get("main_runtime"),
     ),
     emoji="🖼",
 )

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import inspect
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict
 
@@ -11,6 +12,9 @@ from .autonomous_chain_store import AutonomousChainTask
 from .autonomous_chain_store import StaleExecutionLeaseError
 from .autonomous_learning_quality import assess_autonomous_learning_quality
 from .task_profile_policy import TaskProfilePolicy
+
+
+logger = logging.getLogger("supervisor")
 
 
 class AutonomousEmployeeDispatchService:
@@ -27,6 +31,7 @@ class AutonomousEmployeeDispatchService:
         touch_gateway_activity: Callable[..., Any],
         record_ui_activity: Callable[..., Any],
         review_body_improvement: Callable[[Dict[str, Any]], Any] | None = None,
+        promote_memory: Callable[[AutonomousChainTask], Any] | None = None,
     ) -> None:
         self._task_state = task_state
         self._task_store = task_store
@@ -36,6 +41,7 @@ class AutonomousEmployeeDispatchService:
         self._touch_gateway_activity = touch_gateway_activity
         self._record_ui_activity = record_ui_activity
         self._review_body_improvement = review_body_improvement
+        self._promote_memory = promote_memory
 
     @staticmethod
     def _parse_result_payload(result_summary: str) -> Dict[str, Any] | None:
@@ -335,6 +341,8 @@ class AutonomousEmployeeDispatchService:
                 if not review_validation.get("ok"):
                     success = False
             result_context["evidence_validation"] = evidence_validation
+            if success and result_summary:
+                result_context["employee_final_response"] = result_summary[:4000]
             if success and not evidence_validation.get("ok"):
                 success = False
             metadata: Dict[str, Any] = {
@@ -404,6 +412,25 @@ class AutonomousEmployeeDispatchService:
                     context=result_context,
                     event_type=f"employee_execution_{final_status}",
                 )
+            if final_status == "completed" and self._promote_memory is not None:
+                try:
+                    promotion = self._promote_memory(updated)
+                    if inspect.isawaitable(promotion):
+                        await promotion
+                    if isinstance(promotion, dict) and promotion.get("status") == "deferred":
+                        logger.warning(
+                            "Auto employee result reconciled but Mem promotion deferred for %s: %s",
+                            task.task_id,
+                            promotion.get("reason") or "unknown_reason",
+                        )
+                except Exception as exc:
+                    # Mem availability must not turn an already reconciled
+                    # employee result into a second execution attempt.
+                    logger.warning(
+                        "Auto employee result reconciled but Mem promotion failed for %s: %s",
+                        task.task_id,
+                        exc,
+                    )
             if str(schedule.get("schedule_type") or "once").strip().lower() != "once":
                 self._prepare_recurring_successor(task, schedule)
             await self._touch_gateway_activity(

@@ -31,7 +31,8 @@ class AutonomousTaskMemoryPromotionService:
         task: AutonomousChainTask,
     ) -> Optional[Dict[str, Any]]:
         metadata = dict(task.metadata or {})
-        if str(task.source or "").strip() != "self_learning":
+        source = str(task.source or "").strip().lower()
+        if source not in {"self_learning", "endogenous_drive"}:
             return None
         verified = bool(metadata.get("verified"))
         completed = str(task.status or "").strip().lower() == "completed"
@@ -85,6 +86,9 @@ class AutonomousTaskMemoryPromotionService:
             import aiohttp
 
             timeout = aiohttp.ClientTimeout(total=8)
+            topics = ["self_learning"]
+            if source == "endogenous_drive":
+                topics.append("endogenous_drive")
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     f"{self._gateway_address}/api/mem/remember",
@@ -92,7 +96,7 @@ class AutonomousTaskMemoryPromotionService:
                         "title": f"Auto 结论：{str(task.title)[:280]}",
                         "summary": conclusion,
                         "topics": [
-                            "self_learning",
+                            *topics,
                             *(["companion_candidate"] if verified else []),
                         ],
                         "evidence_refs": [governance_ref],

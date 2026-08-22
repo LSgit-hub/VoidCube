@@ -121,6 +121,64 @@ async def test_reconcile_projects_employee_run_back_to_task():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_promotes_auto_employee_result_to_memory_without_delivery_panel():
+    task = _task(status="approved")
+    state = SimpleNamespace(
+        update_status=Mock(return_value=SimpleNamespace(task_id="task-1", status="completed")),
+        update_metadata=Mock(),
+    )
+    store = SimpleNamespace(
+        list=Mock(
+            return_value=[
+                {
+                    "schedule_id": "employee-1",
+                    "autonomous_task_id": "task-1",
+                    "worker_role": "research-employee",
+                    "created_at": "2026-08-19T00:00:00+00:00",
+                }
+            ]
+        ),
+        recent_runs=Mock(
+            return_value=[
+                {
+                    "schedule_id": "employee-1",
+                    "run_id": "run-1",
+                    "status": "completed",
+                    "result_summary": "Primary-source conclusion.",
+                }
+            ]
+        ),
+    )
+    promote_memory = AsyncMock(return_value={"status": "recorded_only"})
+    service = AutonomousEmployeeDispatchService(
+        task_state=state,
+        task_store=SimpleNamespace(
+            list_employee_execution_lane_tasks=Mock(return_value=[task])
+        ),
+        scheduled_task_store=store,
+        task_profile_policy=SimpleNamespace(
+            governance_type=lambda current: current.governance_task_type,
+            execution_kind=lambda current: current.execution_kind,
+            runtime_family=lambda current: current.task_family,
+        ),
+        resolve_worker_role=lambda role: f"{role}-employee",
+        touch_gateway_activity=AsyncMock(),
+        record_ui_activity=Mock(),
+        promote_memory=promote_memory,
+    )
+
+    updates = await service.reconcile()
+
+    assert updates == [{"task_id": "task-1", "status": "completed"}]
+    promote_memory.assert_awaited_once()
+    promoted_task = promote_memory.await_args.args[0]
+    assert promoted_task.status == "completed"
+    assert state.update_status.call_args.kwargs["context"]["employee_final_response"] == (
+        "Primary-source conclusion."
+    )
+
+
+@pytest.mark.asyncio
 async def test_reconcile_repairs_approved_task_without_employee_assignment():
     task = _task(status="approved")
     schedule = {
