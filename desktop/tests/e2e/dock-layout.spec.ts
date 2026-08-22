@@ -115,6 +115,14 @@ test('all Dock panels stay contained across responsive viewports', async () => {
         await assertPanelContained(selector)
       }
     }
+    await page.setViewportSize({ width: 1440, height: 800 })
+    await page.locator('.dock-btn[data-panel="chain"]').dispatchEvent('click')
+    await expect(page.locator('#panelChain')).toHaveClass(/open/)
+    await expect(page.locator('.dock-btn[data-panel="lminput"]')).toBeHidden()
+    await expect(page.locator('#panelChain .observation-tab')).toHaveCount(4)
+    await page.locator('#panelChain .observation-tab[data-observation-tab="cognition"]').click()
+    await expect(page.locator('#panelCognition')).toHaveClass(/open/)
+    await expect(page.locator('.dock-btn[data-panel="chain"]')).toHaveClass(/active/)
     expect(pageErrors).toEqual([])
   } finally {
     await page.unrouteAll({ behavior: 'ignoreErrors' })

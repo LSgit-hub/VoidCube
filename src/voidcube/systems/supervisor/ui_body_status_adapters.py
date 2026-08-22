@@ -4,12 +4,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 from typing import Any, Callable, Dict, List
 
 from .ui_body_projection import project_body_slot_cards
 
 
 JsonDict = Dict[str, Any]
+
+
+def _load_worktree_root_nodes(worktree_path: str) -> List[str]:
+    path = Path(worktree_path)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "ls-tree", "--name-only", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        roots = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if roots:
+            return roots
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        return sorted(child.name for child in path.iterdir() if not child.name.startswith("."))
+    except OSError:
+        return []
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +74,7 @@ def load_body_status(
         if not worktree_path:
             continue
         try:
-            top_level_entries_by_slot[slot_id] = sorted(
-                child.name for child in Path(worktree_path).iterdir()
-            )[:24]
+            top_level_entries_by_slot[slot_id] = _load_worktree_root_nodes(worktree_path)
         except Exception:
             continue
 

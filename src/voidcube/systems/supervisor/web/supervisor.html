@@ -2133,6 +2133,9 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .dock-btn.media-dock-btn .db-icon { font-size: 22px; }
 .dock-btn.media-dock-btn .db-label { color: rgba(244,228,188,.72); font-size: 9px; }
 .dock-sep.media-sep { display: none; }
+/* Auto 观察细节统一收进“自主观察”面板，避免底栏重复表达同一条链路。 */
+.dock-detail-btn,
+.dock-detail-sep { display: none; }
 /* 分隔线 */
 .dock-sep {
   width: 1px; height: 22px;
@@ -2237,6 +2240,29 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .panel-body::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,.1);
   border-radius: 2px;
+}
+.observation-tabs {
+  display: flex;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.observation-tab {
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.observation-tab:hover { color: var(--text-primary); background: rgba(255,255,255,.05); }
+.observation-tab.active {
+  color: var(--mint);
+  border-color: rgba(111,198,160,.24);
+  background: rgba(111,198,160,.1);
 }
 
 /* ── Provider 池与员工配置 ── */
@@ -3018,56 +3044,30 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   margin-right: auto;
   min-width: 0;
 }
-.dock-char-strip .dcs-avatar {
-  position: relative; width: 26px; height: 32px; flex-shrink: 0;
-}
+.dock-char-strip .dcs-avatar { position: relative; width: 26px; height: 32px; flex-shrink: 0; }
 .dcs-avatar .dcs-head {
-  position: absolute; top: 0; left: 3px;
-  width: 20px; height: 18px;
-  background: linear-gradient(155deg, #ffe8d0, #f4d4b0);
-  border-radius: 50% 50% 46% 48%;
+  position: absolute; top: 0; left: 3px; width: 20px; height: 18px;
+  background: linear-gradient(155deg, #ffe8d0, #f4d4b0); border-radius: 50% 50% 46% 48%;
 }
 .dcs-avatar .dcs-hair {
-  position: absolute; top: -2px; left: 1px;
-  width: 24px; height: 10px;
-  background: linear-gradient(180deg, #3a4a5e, #1a2030);
-  border-radius: 12px 12px 2px 2px;
-  z-index: 2;
+  position: absolute; top: -2px; left: 1px; width: 24px; height: 10px;
+  background: linear-gradient(180deg, #3a4a5e, #1a2030); border-radius: 12px 12px 2px 2px; z-index: 2;
 }
 .dcs-avatar .dcs-body-mini {
-  position: absolute; bottom: 0; left: 5px;
-  width: 16px; height: 14px;
-  background: linear-gradient(140deg, #6fc6a0, #4a9070);
-  border-radius: 6px 6px 4px 4px;
-  transition: background .6s;
+  position: absolute; bottom: 0; left: 5px; width: 16px; height: 14px;
+  background: linear-gradient(140deg, #6fc6a0, #4a9070); border-radius: 6px 6px 4px 4px; transition: background .6s;
 }
 body[data-action="organize"] .dcs-body-mini { background: linear-gradient(140deg, #f4d4a8, #d4954a); }
 body[data-action="rest"]     .dcs-body-mini { background: linear-gradient(140deg, #6fc6a0, #4a9070); }
 body[data-action="work"]     .dcs-body-mini { background: linear-gradient(140deg, #6a7eb8, #4a6098); }
 body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg, #a78ad4, #7a5ab0); }
-.dcs-info {
-  display: flex; flex-direction: column; gap: 0;
-  min-width: 0; overflow: hidden;
-}
-.dcs-name {
-  font-size: 10.5px; font-weight: 700; color: var(--text-primary);
-  white-space: nowrap;
-}
-.dcs-status {
-  font-size: 9px; color: var(--text-muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.dcs-hp-bar {
-  height: 2px; border-radius: 1px;
-  background: rgba(255,255,255,.08);
-  width: 40px; overflow: hidden;
-}
-.dcs-hp-fill {
-  height: 100%; border-radius: 1px;
-  transition: width .5s, background .5s;
-}
-.dcs-hp-fill.good   { background: var(--mint); }
-.dcs-hp-fill.warn   { background: var(--gold); }
+.dcs-info { display: flex; flex-direction: column; gap: 0; min-width: 0; overflow: hidden; }
+.dcs-name { font-size: 10.5px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.dcs-status { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dcs-hp-bar { height: 2px; border-radius: 1px; background: rgba(255,255,255,.08); width: 40px; overflow: hidden; }
+.dcs-hp-fill { height: 100%; border-radius: 1px; transition: width .5s, background .5s; }
+.dcs-hp-fill.good { background: var(--mint); }
+.dcs-hp-fill.warn { background: var(--gold); }
 .dcs-hp-fill.danger { background: var(--coral); }
 
 /* ── 面板空状态 ── */
@@ -3488,7 +3488,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .dock-btn { width: 42px; height: 44px; flex-basis: 42px; }
   .dock-btn .db-icon { font-size: 15px; }
   .dock-btn .db-label { font-size: 7px; }
-  .dock-char-strip { padding: 0 6px; gap: 4px; }
   .dock-panel { max-height: 320px; border-radius: 10px 10px 0 0; }
   .dock-panels { padding: 0 8px 6px; }
   .reminder-policy-form { grid-template-columns: 1fr; }
@@ -3496,10 +3495,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .promotion-audit-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .promotion-audit-meta { grid-template-columns: 1fr; }
 }
-@media (max-width: 560px) {
-  .dock-char-strip { display: none; }
-}
-
 /* ── drill-down 详情抽屉 ── */
 .drawer-mask {
   position: fixed; inset: 0;
@@ -3768,6 +3763,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   line-height: 1.45;
   color: var(--text-secondary);
   margin-top: 6px;
+}
+.body-slot-roots {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 .body-slot-focus.upgrading {
   color: var(--text-primary);
@@ -4263,7 +4265,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- 🚦 自主闭环总览 -->
       <div class="dock-panel" id="panelChain">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">🚦</span>自主闭环总览</div>
+          <div class="panel-title"><span class="pt-icon">🚦</span>自主观察</div>
           <button class="panel-close" data-panel="chain">×</button>
         </div>
         <div class="panel-body" id="panelChainBody">
@@ -4273,7 +4275,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- 🧠 判断参考面板 -->
       <div class="dock-panel" id="panelLMInput">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">🧠</span>判断参考</div>
+          <div class="panel-title"><span class="pt-icon">🚦</span>自主观察</div>
           <button class="panel-close" data-panel="lminput">×</button>
         </div>
         <div class="panel-body" id="panelLMInputBody">
@@ -4283,7 +4285,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- 📊 当前判断 -->
       <div class="dock-panel" id="panelCognition">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">📊</span>当前判断</div>
+          <div class="panel-title"><span class="pt-icon">🚦</span>自主观察</div>
           <button class="panel-close" data-panel="cognition">×</button>
         </div>
         <div class="panel-body" id="panelCognitionBody">
@@ -4346,7 +4348,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- ⚙️ 观察面板 -->
       <div class="dock-panel" id="panelObservation">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">⚙️</span>观察</div>
+          <div class="panel-title"><span class="pt-icon">🚦</span>自主观察</div>
           <button class="panel-close" data-panel="observation">×</button>
         </div>
         <div class="panel-body" id="panelObservationBody">
@@ -4545,31 +4547,28 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 底部 Dock 栏 -->
     <nav class="bottom-dock" id="bottomDock">
-      <!-- 角色迷你状态 -->
-      <div class="dock-char-strip" id="dockCharStrip">
-        <div class="dcs-avatar">
-          <div class="dcs-hair"></div>
-          <div class="dcs-head"></div>
-          <div class="dcs-body-mini"></div>
+      <!-- 替身快速状态：健康度、当前角色与迭代等级 -->
+      <div class="dock-char-strip" id="dockCharStrip" aria-label="替身状态">
+        <div class="dcs-avatar" aria-hidden="true">
+          <div class="dcs-hair"></div><div class="dcs-head"></div><div class="dcs-body-mini"></div>
         </div>
         <div class="dcs-info">
           <div class="dcs-name" id="dcsName">西子</div>
           <div class="dcs-status" id="dcsStatus">就绪</div>
         </div>
-        <div class="dcs-hp-bar"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
+        <div class="dcs-hp-bar" title="替身健康度"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
       </div>
-
-      <button class="dock-btn" data-panel="chain" title="自主闭环总览">
+      <button class="dock-btn" data-panel="chain" title="自主链路与观察详情">
         <span class="db-icon">🚦</span>
-        <span class="db-label">自主闭环</span>
+        <span class="db-label">自主观察</span>
       </button>
-      <span class="dock-sep"></span>
-      <button class="dock-btn" data-panel="lminput" title="判断参考">
+      <span class="dock-sep dock-detail-sep"></span>
+      <button class="dock-btn dock-detail-btn" data-panel="lminput" title="判断参考">
         <span class="db-icon">🧠</span>
         <span class="db-label">判断依据</span>
       </button>
-      <span class="dock-sep"></span>
-      <button class="dock-btn" data-panel="cognition" title="认知状态">
+      <span class="dock-sep dock-detail-sep"></span>
+      <button class="dock-btn dock-detail-btn" data-panel="cognition" title="认知状态">
         <span class="db-icon">📊</span>
         <span class="db-label">认知状态</span>
       </button>
@@ -4579,7 +4578,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">交付</span>
       </button>
       <span class="dock-sep media-sep"></span>
-      <button class="dock-btn" data-panel="observation" title="观察">
+      <button class="dock-btn dock-detail-btn" data-panel="observation" title="观察记录">
         <span class="db-icon">⚙️</span>
         <span class="db-label">观察记录</span>
       </button>
@@ -4678,10 +4677,10 @@ const els = {
   companionInputs: $$('[data-companion-input]'),
   companionSends: $$('[data-companion-send]'),
   companionStatuses: $$('[data-chat-status]'),
-  /* dock char strip */
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
   dcsHpFill: $('#dcsHpFill'),
+  /* dock char strip */
   /* panel bodies */
   panelChainBody: $('#panelChainBody'),
   panelLMInputBody: $('#panelLMInputBody'),
@@ -4903,6 +4902,7 @@ function hpPercent(state) { return Math.max(0, 100 - (state.error_count || 0) * 
    ═══════════════════════════════════════════ */
 let dockVisible = false, dockHovered = false, panelOpen = null;
 let dockHideTimer = null;
+const OBSERVATION_PANELS = new Set(['chain', 'lminput', 'cognition', 'observation']);
 
 function showDock() {
   if (!dockVisible) { dockVisible = true; els.dock.classList.add('visible'); }
@@ -4942,8 +4942,9 @@ function openPanel(name) {
   panel.classList.add('open');
   panelOpen = name;
   els.body.dataset.panelOpen = name;
+  const dockPanelName = OBSERVATION_PANELS.has(name) ? 'chain' : name;
   $$('.dock-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.panel === name);
+    b.classList.toggle('active', b.dataset.panel === dockPanelName);
   });
   showDock();
   // 立即渲染该面板
@@ -5046,7 +5047,8 @@ function closePanel(name) {
     delete els.body.dataset.panelOpen;
   }
   $$('.dock-btn').forEach(b => {
-    if (b.dataset.panel === name) b.classList.remove('active');
+    const dockPanelName = OBSERVATION_PANELS.has(name) ? 'chain' : name;
+    if (b.dataset.panel === dockPanelName) b.classList.remove('active');
   });
 }
 
@@ -5078,7 +5080,9 @@ document.addEventListener('click', e => {
   const panel = dockPanelFor(panelOpen);
   if (!panel) return;
   const eventPath = typeof e.composedPath === 'function' ? e.composedPath() : [];
-  const insidePanel = eventPath.length ? eventPath.includes(panel) : panel.contains(e.target);
+  const insidePanel = eventPath.length
+    ? eventPath.some(node => node && node.classList && node.classList.contains('dock-panel'))
+    : Boolean(e.target.closest && e.target.closest('.dock-panel'));
   if (!insidePanel && !e.target.closest('.bottom-dock')) {
     closePanel(panelOpen);
   }
@@ -6477,10 +6481,34 @@ function renderBodyTreeDrawer(state) {
    ═══════════════════════════════════════════ */
 
 /* ── 🚦 自主闭环总览面板 ── */
+function appendObservationTabs(body, activeName) {
+  const tabs = document.createElement('div');
+  tabs.className = 'observation-tabs';
+  [
+    ['chain', '总览'],
+    ['lminput', '判断依据'],
+    ['cognition', '当前判断'],
+    ['observation', '观察记录'],
+  ].forEach(([name, label]) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'observation-tab' + (name === activeName ? ' active' : '');
+    tab.textContent = label;
+    tab.dataset.observationTab = name;
+    tab.setAttribute('aria-pressed', String(name === activeName));
+    tab.addEventListener('click', () => {
+      if (name !== activeName) openPanel(name);
+    });
+    tabs.append(tab);
+  });
+  body.append(tabs);
+}
+
 function renderChainPanel(state) {
   const body = els.panelChainBody;
   if (!body) return;
   body.replaceChildren();
+  appendObservationTabs(body, 'chain');
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -6893,6 +6921,7 @@ function renderLMInputPanel(state) {
   const body = els.panelLMInputBody;
   if (!body) return;
   body.replaceChildren();
+  appendObservationTabs(body, 'lminput');
 
   const lm = state.lm_input || {};
   const obs = state.autonomous_observation || {};
@@ -6932,8 +6961,9 @@ function renderLMInputPanel(state) {
   }
 
   // 空状态
-  if (body.childElementCount === 0) {
+  if (body.childElementCount === 1) {
     body.replaceChildren();
+    appendObservationTabs(body, 'lminput');
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
     empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">还没有输入快照</div><div style="font-size:10px;color:var(--text-muted);">启动后这里会出现用户信号</div>';
@@ -6946,6 +6976,7 @@ function renderCognitionPanel(state) {
   const body = els.panelCognitionBody;
   if (!body) return;
   body.replaceChildren();
+  appendObservationTabs(body, 'cognition');
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -6962,6 +6993,7 @@ function renderCognitionPanel(state) {
   const uncertainty = cog.uncertainty || {};
   if (!Object.keys(perception).length && !Object.keys(judgement).length && !needs.length) {
     body.replaceChildren();
+    appendObservationTabs(body, 'cognition');
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
     empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">还没有当前判断</div><div style="font-size:10px;color:var(--text-muted);">启动后这里会出现这轮状态</div>';
@@ -7038,6 +7070,7 @@ function renderObservationPanel(state) {
   const body = els.panelObservationBody;
   if (!body) return;
   body.replaceChildren();
+  appendObservationTabs(body, 'observation');
 
   const obs = state.autonomous_observation || {};
   const board = obs.board || {};
@@ -7131,7 +7164,11 @@ function renderStatsPanel(state) {
       esc(slotIntegrityFailed ? '结构异常' : (slot.body_state_label || '未知')) + '</span></div>' +
       '<div class="body-slot-role">版本 ' + esc(slot.body_version || 'bootstrap') +
       ' · 代次 ' + esc(slot.generation != null ? slot.generation : 0) + '</div>' +
-      '<div class="body-slot-summary">' + esc(slot.summary || '结构待观察') + '</div>' +
+      '<div class="body-slot-roots">根节点：' + esc(
+        (Array.isArray(slot.root_nodes) && slot.root_nodes.length)
+          ? slot.root_nodes.join(' / ')
+          : (slot.summary || '结构待观察')
+      ) + '</div>' +
       '<div class="body-slot-focus ' + (slot.upgrade_active ? 'upgrading' : '') + '">' +
       esc(slot.focus_summary || '现在没有升级动作') + '</div>';
     slotGrid.append(card);
@@ -7142,7 +7179,7 @@ function renderStatsPanel(state) {
   const bodyHint = document.createElement('div');
   bodyHint.className = 'drawer-sub';
   bodyHint.style.margin = '8px 0 0 0';
-  bodyHint.textContent = '点卡片看结构图，红点就是升级点。';
+  bodyHint.textContent = '根节点来自替身 Git 工作树；点卡片查看具体结构和升级点。';
   bodySec.append(bodyHint);
   body.append(bodySec);
 
@@ -7167,35 +7204,32 @@ function renderStatsPanel(state) {
   body.append(memSec);
 }
 
-/* ── Dock 角色迷你状态更新 ── */
+/* ── Dock 替身快速状态 ── */
 function updateDockCharStrip(state) {
-  const bs = state.body_status || {};
-  const last = bs.last_switch_result || {};
-  const switchCount = (typeof last.switch_count === 'number') ? last.switch_count : 0;
-  const lv = Math.max(1, switchCount + 1);
-  if (els.dcsName) {
-    const slot2 = (state.body_status || {}).active_slot || '';
-    const charName = String(slot2).toUpperCase().includes('A') ? '星子' : '西子';
-    els.dcsName.textContent = charName + ' Lv.' + lv;
-  }
+  const bodyStatus = state.body_status || {};
+  const switchCount = Number((bodyStatus.last_switch_result || {}).switch_count || 0);
+  const level = Math.max(1, switchCount + 1);
+  const activeSlot = String(bodyStatus.active_slot || '');
+  const charName = activeSlot.toUpperCase().includes('A') ? '星子' : '西子';
+  if (els.dcsName) els.dcsName.textContent = charName + ' Lv.' + level;
   const hp = hpPercent(state);
   if (els.dcsHpFill) {
     els.dcsHpFill.style.width = hp + '%';
     els.dcsHpFill.className = 'dcs-hp-fill ' + (hp < 30 ? 'danger' : hp < 60 ? 'warn' : 'good');
+    els.dcsHpFill.parentElement.title = '替身健康度 ' + hp + '%';
   }
   if (els.dcsStatus) {
     const stellar = state.stellar_mode || {};
     const mode = stellar.mode || 'daily_companion';
     const observation = stellar.latest_companion_observation || {};
     const pendingReminder = stellar.pending_proactive_reminder || {};
-    const reminderDelivery = observation.reminder_delivery || {};
-    let companionStatus = '日常 · 静默观察';
-    if (mode === 'auto_evolution') companionStatus = 'Auto · 自主进化中';
-    else if (Object.keys(pendingReminder).length) companionStatus = '日常 · 提醒待输出';
-    else if (reminderDelivery.status === 'delivered') companionStatus = '日常 · 提醒已播报';
-    else if (observation.disposition === 'remind') companionStatus = '日常 · 有提醒待输出';
-    else if (observation.intent_state === 'understood') companionStatus = '日常 · 已理解任务';
-    els.dcsStatus.textContent = companionStatus;
+    const delivery = observation.reminder_delivery || {};
+    let status = mode === 'auto_evolution' ? 'Auto · 自主进化中' : '日常 · 静默观察';
+    if (Object.keys(pendingReminder).length) status = '日常 · 提醒待输出';
+    else if (delivery.status === 'delivered') status = '日常 · 提醒已播报';
+    else if (observation.disposition === 'remind') status = '日常 · 有提醒待输出';
+    else if (observation.intent_state === 'understood') status = '日常 · 已理解任务';
+    els.dcsStatus.textContent = status;
   }
 }
 
@@ -7342,11 +7376,12 @@ function updateSceneMiniTitle(state) {
   const activeMode = ((state.stellar_mode || {}).mode || 'daily_companion');
   if (els.sceneMiniIcon) els.sceneMiniIcon.textContent = SCENE_ICONS[scene] || '🛋';
   if (els.sceneMiniText) {
-    const suffix = activeMode === 'auto_evolution' ? ' · Auto' : ' · 日常';
-    els.sceneMiniText.textContent = (state.title || '星子与西子的小屋') + suffix;
+    els.sceneMiniText.textContent = state.title || '星子与西子的小屋';
   }
   if (els.sceneMiniSummary) {
-    els.sceneMiniSummary.textContent = String(state.summary || '当前没有新的状态摘要。').trim();
+    const modeLabel = activeMode === 'auto_evolution' ? 'Auto 自主' : '日常辅助';
+    const summary = String(state.summary || '当前没有新的状态摘要。').trim();
+    els.sceneMiniSummary.textContent = modeLabel + ' · ' + summary;
     els.sceneMiniSummary.title = els.sceneMiniSummary.textContent;
   }
   renderConnectionStatus();
@@ -8761,8 +8796,8 @@ function applyState(state) {
   const action = SCENE_TO_ACTION[scene] || 'rest';
   setAction(action, true);
 
-  updateSceneMiniTitle(state);
   updateDockCharStrip(state);
+  updateSceneMiniTitle(state);
   renderCompanionChat(state);
 
   // 渲染已打开的面板

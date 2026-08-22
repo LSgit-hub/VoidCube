@@ -150,11 +150,6 @@ def project_body_slot_cards(
         for item in list(integrity.get("violations") or [])
         if isinstance(item, dict)
     ]
-    known_node_order = [
-        "src/voidcube/interfaces/cli", "config.yaml", "src/voidcube/runtime",
-        "src/voidcube/systems", "src/voidcube/extensions", "skills", "prompts",
-        "tests", "Mem",
-    ]
     cards: list[dict[str, Any]] = []
     for slot_id in ordered_slot_ids:
         meta = dict(slot_metas.get(slot_id) or {})
@@ -173,10 +168,13 @@ def project_body_slot_cards(
                 if normalized and normalized not in signal_node_keys:
                     signal_node_keys.append(normalized)
         visible_node_keys: list[str] = []
+        structure_entries = [
+            str(entry or "").strip().replace("\\", "/").strip("/")
+            for entry in list((top_level_entries_by_slot or {}).get(slot_id) or [])
+        ]
         for node_key in [
             *signal_node_keys,
-            *known_node_order,
-            *list((top_level_entries_by_slot or {}).get(slot_id) or []),
+            *structure_entries,
         ]:
             normalized = str(node_key or "").strip()
             if normalized and normalized not in visible_node_keys:
@@ -200,11 +198,8 @@ def project_body_slot_cards(
                     "upgrade_task_title": str(first_signal.get("title") or "").strip(),
                 }
             )
-        present_roots = [
-            node["label"] for node in tree_nodes
-            if node["key"] not in {"src/voidcube/interfaces/cli", "config.yaml"}
-        ]
-        summary = " / ".join(present_roots[:4]) if present_roots else "结构待观察"
+        structure_roots = [entry for entry in structure_entries if not entry.startswith(".")]
+        summary = " / ".join(structure_roots) if structure_roots else "结构待观察"
         if signals:
             focus_sources = "、".join(
                 sorted({str(signal.get("source_label") or "").strip() for signal in signals if str(signal.get("source_label") or "").strip()})
@@ -227,6 +222,7 @@ def project_body_slot_cards(
                 "generation": int(meta.get("generation") or 0),
                 "worktree_path": str(meta.get("worktree_path") or "").strip(),
                 "summary": summary,
+                "root_nodes": structure_roots,
                 "focus_summary": focus_summary,
                 "tree_nodes": tree_nodes,
                 "upgrade_signals": signals[:3],
