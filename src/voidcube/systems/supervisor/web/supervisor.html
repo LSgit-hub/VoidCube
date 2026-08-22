@@ -353,11 +353,20 @@ body[data-exec-window="false"] .floor {
   width: 380px; height: 160px;
   z-index: 4;
 }
+.companion-widget {
+  position: absolute;
+  left: calc(4% + 300px);
+  bottom: calc(6% + 200px);
+  z-index: 12;
+  width: 300px;
+  min-height: 20px;
+}
+.companion-widget[hidden], body[data-panel-open] .companion-widget { display: none; }
 .companion-launcher {
   position: absolute;
-  left: calc(4% + 320px);
-  bottom: calc(6% + 142px);
-  z-index: 12;
+  right: 8px;
+  top: -18px;
+  z-index: 2;
   width: 76px;
   height: 36px;
   border: 2px solid rgba(45,60,75,.24);
@@ -388,10 +397,19 @@ body[data-exec-window="false"] .floor {
 }
 .companion-launcher:hover { background: #fff; }
 .companion-launcher:focus-visible { outline: 3px solid rgba(226,176,74,.8); outline-offset: 3px; }
-.companion-launcher[hidden], body[data-panel-open] .companion-launcher { display: none; }
+.companion-launcher[aria-expanded="true"] { background: #fff; border-color: rgba(106,158,232,.5); }
 @keyframes companion-launcher-bob {
   50% { transform: translateY(-4px); }
 }
+.companion-widget-panel {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: 300px;
+  padding-top: 24px;
+}
+.companion-widget-panel:not(.chat-open) { display: none; }
+.companion-widget-panel::after { left: auto; right: 26px; top: -9px; bottom: auto; transform: rotate(225deg); }
 .sofa-shadow {
   position: absolute; left: 8px; right: 8px; bottom: -8px; height: 16px;
   background: radial-gradient(ellipse, rgba(0,0,0,.35), transparent 70%);
@@ -3408,7 +3426,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .scene-mini-title { left: 12px; top: 12px; max-width: 210px; }
   .stellar-mode-control { right: 12px; top: 12px; }
   .voice-controls { right: 12px; top: 50px; }
-  .companion-chat { left: 60px; top: -80px; width: min(280px, calc(100vw - 76px)); }
+  .companion-widget { left: 12px; bottom: calc(6% + 180px); width: min(300px, calc(100vw - 24px)); }
+  .companion-widget-panel { width: min(300px, calc(100vw - 24px)); }
   .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
   .dock-btn { width: 42px; height: 44px; flex-basis: 42px; }
   .dock-btn .db-icon { font-size: 15px; }
@@ -3977,8 +3996,26 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <div class="shelf-deco frame">🖼️</div>
     </section>
 
+    <!-- 沙发 + 日常辅助聊天组件 -->
+    <div class="companion-widget" data-companion-widget hidden>
+      <button type="button" class="companion-launcher" data-companion-launcher aria-expanded="false" aria-controls="companionChatPanel" aria-label="打开辅助聊天" title="打开辅助聊天">💬 聊天</button>
+      <div class="companion-chat companion-widget-panel empty" id="companionChatPanel" data-companion-chat aria-live="polite">
+        <div class="companion-chat-line user" data-chat-user-line>
+          <span class="companion-chat-label">你</span>
+          <span class="companion-chat-text" data-chat-user></span>
+        </div>
+        <div class="companion-chat-line" data-chat-reply-line>
+          <span class="companion-chat-label" data-chat-agent>星子</span>
+          <span class="companion-chat-text" data-chat-reply></span>
+        </div>
+        <div class="companion-chat-status" data-chat-status></div>
+        <form class="companion-chat-form" data-companion-form>
+          <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="输入文字和星子聊天" aria-label="输入给星子的文字"></textarea>
+          <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
+        </form>
+      </div>
+    </div>
     <!-- 沙发 -->
-    <button type="button" class="companion-launcher" data-companion-launcher aria-label="打开辅助聊天" title="打开辅助聊天" hidden>💬 聊天</button>
     <div class="sofa" aria-hidden="true">
       <div class="sofa-shadow"></div>
       <div class="sofa-back"></div>
@@ -4094,21 +4131,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="bubble b3"></span>
         <span class="glyph" id="glyph">·</span>
       </div>
-      <div class="companion-chat empty" data-companion-chat aria-live="polite">
-        <div class="companion-chat-line user" data-chat-user-line>
-          <span class="companion-chat-label">你</span>
-          <span class="companion-chat-text" data-chat-user></span>
-        </div>
-        <div class="companion-chat-line" data-chat-reply-line>
-          <span class="companion-chat-label">西子</span>
-          <span class="companion-chat-text" data-chat-reply></span>
-        </div>
-        <div class="companion-chat-status" data-chat-status></div>
-        <form class="companion-chat-form" data-companion-form>
-          <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="和西子说点什么…" aria-label="输入给西子的文字"></textarea>
-          <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
-        </form>
-      </div>
     </section>
 
     <!-- 角色: 星子(短发男) -->
@@ -4132,21 +4154,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="bubble b2"></span>
         <span class="bubble b3"></span>
         <span class="glyph" id="glyphXingzi">·</span>
-      </div>
-      <div class="companion-chat empty" data-companion-chat aria-live="polite">
-        <div class="companion-chat-line user" data-chat-user-line>
-          <span class="companion-chat-label">你</span>
-          <span class="companion-chat-text" data-chat-user></span>
-        </div>
-        <div class="companion-chat-line" data-chat-reply-line>
-          <span class="companion-chat-label">星子</span>
-          <span class="companion-chat-text" data-chat-reply></span>
-        </div>
-        <div class="companion-chat-status" data-chat-status></div>
-        <form class="companion-chat-form" data-companion-form>
-          <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="和星子说点什么…" aria-label="输入给星子的文字"></textarea>
-          <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
-        </form>
       </div>
     </section>
 
@@ -4593,6 +4600,7 @@ const els = {
   voiceTalk: $('#voiceTalk'),
   voiceMeter: $('#voiceMeter'),
   voiceStatusLabel: $('#voiceStatusLabel'),
+  companionWidget: $('[data-companion-widget]'),
   companionLauncher: $('[data-companion-launcher]'),
   companionChats: $$('[data-companion-chat]'),
   companionForms: $$('[data-companion-form]'),
@@ -4683,7 +4691,7 @@ if (els.voiceFingerprintToggle) {
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
-if (els.companionLauncher) els.companionLauncher.addEventListener('click', openCompanionChat);
+if (els.companionLauncher) els.companionLauncher.addEventListener('click', toggleCompanionChat);
 els.companionForms.forEach(form => form.addEventListener('submit', event => {
     event.preventDefault();
     sendCompanionText();
@@ -7290,7 +7298,20 @@ function renderCompanionChat(state) {
     }
   });
   const autoMode = !daily;
-  if (els.companionLauncher) els.companionLauncher.hidden = autoMode;
+  if (els.companionWidget) els.companionWidget.hidden = autoMode;
+  if (els.companionLauncher) {
+    els.companionLauncher.setAttribute('aria-expanded', String(companionChatOpen));
+    els.companionLauncher.textContent = companionChatOpen ? '💬 收起' : '💬 聊天';
+    els.companionLauncher.title = companionChatOpen ? '收起聊天' : '打开辅助聊天';
+  }
+  const activeCharacter = String(els.body.dataset.character || 'xizi') === 'xingzi' ? '星子' : '西子';
+  const agentLabel = $('[data-chat-agent]');
+  if (agentLabel) agentLabel.textContent = activeCharacter;
+  const activeInput = els.companionInputs[0];
+  if (activeInput) {
+    activeInput.placeholder = '输入文字和' + activeCharacter + '聊天';
+    activeInput.setAttribute('aria-label', '输入给' + activeCharacter + '的文字');
+  }
   els.companionInputs.forEach(input => { input.disabled = autoMode || companionChatBusy; });
   els.companionSends.forEach(button => { button.disabled = autoMode || companionChatBusy; });
   els.companionStatuses.forEach(status => {
@@ -7299,8 +7320,7 @@ function renderCompanionChat(state) {
 }
 
 function activeCompanionChat() {
-  const character = String(els.body.dataset.character || 'xizi');
-  return $(`.${character} [data-companion-chat]`) || els.companionChats[0];
+  return els.companionChats[0] || null;
 }
 
 function activeCompanionInput() {
@@ -7320,6 +7340,11 @@ function openCompanionChat() {
   if (!chat) return;
   companionChatOpen = true;
   chat.classList.add('chat-open');
+  if (els.companionLauncher) {
+    els.companionLauncher.setAttribute('aria-expanded', 'true');
+    els.companionLauncher.textContent = '💬 收起';
+    els.companionLauncher.title = '收起聊天';
+  }
   if (status && !companionChatBusy) {
     const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
     status.textContent = mode === 'auto_evolution'
@@ -7327,6 +7352,22 @@ function openCompanionChat() {
       : '文字消息会沿用日常陪伴与员工委派链路';
   }
   if (input) input.focus();
+}
+
+function toggleCompanionChat() {
+  const chat = activeCompanionChat();
+  if (!chat) return;
+  if (companionChatOpen) {
+    companionChatOpen = false;
+    chat.classList.remove('chat-open');
+    if (els.companionLauncher) {
+      els.companionLauncher.setAttribute('aria-expanded', 'false');
+      els.companionLauncher.textContent = '💬 聊天';
+      els.companionLauncher.title = '打开辅助聊天';
+    }
+    return;
+  }
+  openCompanionChat();
 }
 
 async function sendCompanionText() {
