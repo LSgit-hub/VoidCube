@@ -1123,15 +1123,21 @@ class ServiceRuntimeMixin:
             items.append(
                 {
                     "task_id": schedule_id,
+                    "employee_task_id": schedule_id,
                     "autonomous_task_id": autonomous_task_id,
                     "canonical_status": str(canonical.status) if canonical else "",
                     "title": str(task.get("title") or "")[:200],
                     "worker_role": str(task.get("worker_role") or ""),
                     "status": status,
+                    "execution_provider": str(run.get("execution_provider") or "")[:120],
+                    "execution_model": str(run.get("execution_model") or "")[:300],
+                    "claimed_at": str(run.get("claimed_at") or ""),
+                    "heartbeat_at": str(run.get("heartbeat_at") or ""),
                     "result_summary": str(run.get("result_summary") or "")[:2000],
                     "error": str(run.get("error") or "")[:500],
                     "created_at": str(task.get("created_at") or ""),
                     "completed_at": str(run.get("completed_at") or ""),
+                    "elapsed_ms": run.get("elapsed_ms"),
                 }
             )
         return {

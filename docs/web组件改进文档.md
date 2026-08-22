@@ -117,9 +117,25 @@
 {
   "autonomous_observation": {
     "board": {
-      "autonomous_tasks": [],
-      "employee_runs": [],
-      "mem_writeback": []
+      "autonomous_tasks": [
+        {"task_id": "canonical-task-id", "status": "approved"}
+      ],
+      "employee_runs": [
+        {
+          "task_id": "canonical-task-id",
+          "employee_task_id": "employee-task-id",
+          "status": "running",
+          "execution_provider": "provider-key",
+          "execution_model": "model-name",
+          "writeback_status": "pending"
+        }
+      ],
+      "mem_writeback": [
+        {
+          "source_task_id": "canonical-task-id",
+          "writeback_status": "completed"
+        }
+      ]
     },
     "runtime": {
       "mode": "auto",

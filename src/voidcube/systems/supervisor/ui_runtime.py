@@ -128,6 +128,7 @@ class SupervisorUIRuntimePorts:
     ui_auto_open: bool
     ui_url: str
     ui_auto_open_delay_seconds: float
+    load_employee_execution_context: Callable[[], JsonDict] = lambda: {}
 
 
 class SupervisorUIRuntime:
@@ -683,6 +684,7 @@ class SupervisorUIRuntime:
                 voice_status=self.ports.voice_status,
                 current_media=lambda: self.current_media,
                 media_queue_length=self.media_queue_length,
+                load_employee_execution_context=self.ports.load_employee_execution_context,
             )
         )
         state["accounts_revision"] = self.accounts_revision

@@ -44,6 +44,7 @@ class SupervisorUIStateContext:
     voice_status: Callable[[], JsonDict]
     current_media: Callable[[], Any]
     media_queue_length: Callable[[], int] = lambda: 0
+    load_employee_execution_context: Callable[[], JsonDict] = lambda: {}
 
 
 def load_ui_memory_token_usage() -> JsonDict:
@@ -300,6 +301,34 @@ async def build_supervisor_ui_state(
         autonomous_observation,
         recent_activity=recent_autonomous_activity,
     )
+    try:
+        employee_context = dict(context.load_employee_execution_context() or {})
+    except Exception:
+        employee_context = {}
+    employee_runs = [
+        item for item in list(employee_context.get("items") or [])
+        if isinstance(item, dict) and str(item.get("autonomous_task_id") or "").strip()
+    ]
+    if employee_runs:
+        run_by_task_id = {
+            str(item.get("autonomous_task_id") or "").strip(): item
+            for item in employee_runs
+        }
+        board = autonomous_observation["board"]
+        enriched_runs = []
+        for card in list(board.get("employee_runs") or []):
+            enriched = dict(card)
+            run = run_by_task_id.get(str(card.get("task_id") or "").strip())
+            if run:
+                enriched.update(
+                    {
+                        key: value
+                        for key, value in run.items()
+                        if key not in {"title", "summary"}
+                    }
+                )
+            enriched_runs.append(enriched)
+        board["employee_runs"] = enriched_runs
     autonomous_observation["metrics"] = metrics
     current_media = context.current_media()
     return {

@@ -527,7 +527,7 @@ body[data-exec-window="false"] .floor {
   width: 8px; height: 14px;
   background: #7ee0c0;
   transform: translateX(-50%);
-  animation: cursor-blink 1.1s steps(2) infinite;
+  animation: none;
   box-shadow: 0 0 6px rgba(126,224,192,.6);
 }
 @keyframes cursor-blink { 50% { opacity: 0; } }
@@ -711,6 +711,10 @@ body[data-exec-window="false"] .floor {
   width: 320px; height: 150px;
   z-index: 3;
 }
+body[data-action="work"] .monitor-cursor,
+body[data-scene="drive"] .monitor-cursor {
+  animation: cursor-blink 1.1s steps(2) infinite;
+}
 .desk-write[data-scene-entry] { cursor: pointer; }
 .desk-write[data-scene-entry]:hover .dw-paper,
 .desk-write[data-scene-entry]:focus-visible .dw-paper {
@@ -857,6 +861,13 @@ body[data-exec-window="false"] .floor {
   left: 26%; bottom: 30%;
   width: 80px; height: 130px;
 }
+body[data-scene="planning"] .dw-paper {
+  animation: paper-focus 2.4s ease-in-out infinite;
+}
+@keyframes paper-focus {
+  0%, 100% { transform: rotate(-2deg) translateY(0); }
+  50% { transform: rotate(-1deg) translateY(-2px); }
+}
 .plant-corner[data-scene-entry] { cursor: pointer; }
 .plant-corner[data-scene-entry]:hover .pot,
 .plant-corner[data-scene-entry]:focus-visible .pot {
@@ -892,8 +903,19 @@ body[data-exec-window="false"] .floor {
 .plant-corner .leaf:nth-child(4) { left: 36px; transform: rotate(22deg); height: 80px; }
 .plant-corner .leaf:nth-child(5) { left: 48px; transform: rotate(38deg); height: 65px; }
 .plant-corner .leaves {
-  animation: plant-sway 4s ease-in-out infinite;
+  animation: none;
   transform-origin: bottom center;
+}
+body[data-scene="memory"] .plant-corner .leaves,
+body[data-scene="maintenance"] .plant-corner .leaves {
+  animation: plant-sway 2.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  body[data-action="work"] .monitor-cursor,
+  body[data-scene="drive"] .monitor-cursor,
+  body[data-scene="planning"] .dw-paper,
+  body[data-scene="memory"] .plant-corner .leaves,
+  body[data-scene="maintenance"] .plant-corner .leaves { animation: none; }
 }
 @keyframes plant-sway {
   0%, 100% { transform: translateX(-50%) rotate(-2deg); }
@@ -3211,7 +3233,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   position: absolute;
   left: 18px; top: 18px;
   z-index: 20;
-  display: flex; align-items: center; gap: 6px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 6px;
   padding: 6px 12px;
   border-radius: 20px;
   background: rgba(20,14,10,.75);
@@ -3224,6 +3246,20 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   transition: opacity .8s;
 }
 .scene-mini-title span:first-child { font-size: 14px; }
+.scene-mini-copy { min-width: 0; display: grid; gap: 1px; }
+.scene-mini-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-mini-summary {
+  max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-secondary); font-size: 9px; font-weight: 500;
+}
+.scene-mini-sync {
+  grid-column: 2; color: var(--text-muted); font-size: 8px; font-weight: 500;
+  white-space: nowrap;
+}
+.scene-mini-sync[data-state="connected"] { color: var(--mint); }
+.scene-mini-sync[data-state="stale"],
+.scene-mini-sync[data-state="connecting"] { color: var(--gold); }
+.scene-mini-sync[data-state="offline"] { color: var(--coral); }
 .stellar-mode-control {
   position: absolute;
   right: 18px; top: 18px;
@@ -3780,6 +3816,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .drill-link {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 9.5px; font-weight: 700; cursor: pointer;
+  font-family: inherit; line-height: 1.2;
   color: var(--accent-yellow);
   padding: 4px 10px; border-radius: 999px;
   background: rgba(226,176,74,.12);
@@ -3787,6 +3824,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   transition: background .2s;
 }
 .drill-link:hover { background: rgba(226,176,74,.24); }
+.drill-link:focus-visible,
+.drawer-close:focus-visible,
+[data-scene-entry]:focus-visible {
+  outline: 2px solid var(--gold); outline-offset: 2px;
+}
 
 /* ── Agent 产物与文件交付面板 ── */
 .dock-btn.media-dock-btn::after {
@@ -4185,7 +4227,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <!-- 场景标题(轻量) -->
     <div class="scene-mini-title" id="sceneMiniTitle">
       <span id="sceneMiniIcon">🛋</span>
-      <span id="sceneMiniText">星子与西子的小屋</span>
+      <div class="scene-mini-copy">
+        <span class="scene-mini-text" id="sceneMiniText">星子与西子的小屋</span>
+        <span class="scene-mini-summary" id="sceneMiniSummary">正在等待第一份状态快照</span>
+        <span class="scene-mini-sync" id="sceneSyncStatus" data-state="connecting" aria-live="polite">连接中 · 尚未同步</span>
+      </div>
     </div>
     <div class="stellar-mode-control" id="stellarModeControl" role="group" aria-label="星子模式">
       <button type="button" data-mode="daily_companion" aria-pressed="true">日常</button>
@@ -4515,17 +4561,17 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
       <button class="dock-btn" data-panel="chain" title="自主闭环总览">
         <span class="db-icon">🚦</span>
-        <span class="db-label">链路</span>
+        <span class="db-label">自主闭环</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="lminput" title="判断参考">
         <span class="db-icon">🧠</span>
-        <span class="db-label">参考</span>
+        <span class="db-label">判断依据</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="cognition" title="认知状态">
         <span class="db-icon">📊</span>
-        <span class="db-label">判断</span>
+        <span class="db-label">认知状态</span>
       </button>
       <span class="dock-sep media-sep"></span>
       <button class="dock-btn media-dock-btn" id="mediaDockButton" data-panel="media" title="Agent 产物与文件交付面板">
@@ -4535,22 +4581,22 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <span class="dock-sep media-sep"></span>
       <button class="dock-btn" data-panel="observation" title="观察">
         <span class="db-icon">⚙️</span>
-        <span class="db-label">观察</span>
+        <span class="db-label">观察记录</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="stats" title="替身与统计">
         <span class="db-icon">📈</span>
-        <span class="db-label">替身</span>
+        <span class="db-label">替身健康</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="promotions" title="进化记忆提升审计">
         <span class="db-icon">◎</span>
-        <span class="db-label">提升</span>
+        <span class="db-label">进化审计</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="settings" title="Provider 与员工配置">
         <span class="db-icon">⚙</span>
-        <span class="db-label">配置</span>
+        <span class="db-label">运行配置</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="account" title="账号中心">
@@ -4562,10 +4608,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- drill-down 详情抽屉 -->
     <div class="drawer-mask" id="detailDrawer">
-      <div class="drawer" id="detailDrawerCard">
+      <div class="drawer" id="detailDrawerCard" role="dialog" aria-modal="true" aria-labelledby="detailDrawerTitle" tabindex="-1">
         <div class="drawer-head">
           <div class="drawer-title" id="detailDrawerTitle">详情</div>
-          <button class="drawer-close" id="detailDrawerClose">×</button>
+          <button class="drawer-close" id="detailDrawerClose" type="button" aria-label="关闭详情">×</button>
         </div>
         <div id="detailDrawerBody"></div>
       </div>
@@ -4613,6 +4659,8 @@ const els = {
   /* scene mini title */
   sceneMiniIcon: $('#sceneMiniIcon'),
   sceneMiniText: $('#sceneMiniText'),
+  sceneMiniSummary: $('#sceneMiniSummary'),
+  sceneSyncStatus: $('#sceneSyncStatus'),
   stellarModeControl: $('#stellarModeControl'),
   voiceControls: $('#voiceControls'),
   voiceOwnerTemplate: $('#voiceOwnerTemplate'),
@@ -4699,6 +4747,9 @@ const els = {
 let companionChatOpen = false;
 let companionChatBusy = false;
 let companionChatSessionId = '';
+let connectionState = 'connecting';
+let lastSyncAt = 0;
+let lastSyncTimer = null;
 if (els.stellarModeControl) {
   els.stellarModeControl.addEventListener('click', event => {
     const button = event.target.closest('button[data-mode]');
@@ -5038,6 +5089,7 @@ document.addEventListener('click', e => {
    ═══════════════════════════════════════════ */
 let drawerOpen = null;
 let drawerContext = {};
+let drawerReturnFocus = null;
 let identityArchive = null;
 let identityArchiveError = '';
 let identityTurns = null;
@@ -5055,7 +5107,6 @@ const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
   provenance: { icon: '🔎', title: '判断依据' },
   health:     { icon: '💗', title: '替身与记忆' },
-  outboxes:   { icon: '📬', title: '记忆传输队列' },
   memory_flow: { icon: '🌿', title: 'Mem 传输与写回' },
   employee_runs: { icon: '💻', title: '员工代理执行详情' },
   autonomous_tasks: { icon: '📄', title: '星子自主任务安排' },
@@ -5065,12 +5116,16 @@ const DRAWER_META = {
 
 function openDrawer(type, context) {
   if (!els.drawer || !DRAWER_META[type]) return;
+  drawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   drawerOpen = type;
   drawerContext = context || {};
   const meta = DRAWER_META[type];
   if (els.drawerTitle) els.drawerTitle.innerHTML = '<span>' + meta.icon + '</span>' + meta.title;
   renderDrawer();
   els.drawer.classList.add('open');
+  window.requestAnimationFrame(() => {
+    if (drawerOpen && els.drawerClose) els.drawerClose.focus();
+  });
   if (type === 'identity') {
     loadIdentityArchive();
     loadIdentityTurns();
@@ -5081,6 +5136,8 @@ function closeDrawer() {
   drawerOpen = null;
   drawerContext = {};
   if (els.drawer) els.drawer.classList.remove('open');
+  if (drawerReturnFocus && drawerReturnFocus.isConnected) drawerReturnFocus.focus();
+  drawerReturnFocus = null;
 }
 
 function renderDrawer() {
@@ -5089,7 +5146,6 @@ function renderDrawer() {
   if (drawerOpen === 'autonomous') renderAutonomousDrawer(state);
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
-  else if (drawerOpen === 'outboxes') renderOutboxDrawer(state);
   else if (drawerOpen === 'memory_flow') renderMemoryFlowDrawer(state);
   else if (drawerOpen === 'employee_runs') renderEmployeeRunsDrawer(state);
   else if (drawerOpen === 'autonomous_tasks') renderAutonomousTasksDrawer(state);
@@ -5168,10 +5224,43 @@ if (els.drawerCard) {
   els.drawerCard.addEventListener('click', e => e.stopPropagation());
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && drawerOpen) closeDrawer();
+  if (!drawerOpen) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeDrawer();
+    return;
+  }
+  if (e.key !== 'Tab' || !els.drawerCard) return;
+  const focusable = $$('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])', els.drawerCard)
+    .filter(node => !node.disabled && node.offsetParent !== null);
+  if (!focusable.length) {
+    e.preventDefault();
+    els.drawerCard.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 });
 // 入口点击(事件委托): 任意带 data-drill 的元素
 document.addEventListener('click', e => {
+  const more = e.target.closest('[data-drawer-more]');
+  if (more && drawerOpen) {
+    e.stopPropagation();
+    const key = String(more.dataset.drawerMore || '');
+    const limits = {memory_flow: 'memoryLimit', employee_runs: 'employeeLimit', autonomous_tasks: 'taskLimit'};
+    if (limits[key]) {
+      drawerContext[limits[key]] = (Number(drawerContext[limits[key]]) || (key === 'employee_runs' ? 8 : key === 'memory_flow' ? 6 : 10)) + 10;
+      renderDrawer();
+    }
+    return;
+  }
   const identityVerify = e.target.closest('[data-identity-verify-turn]');
   if (identityVerify) {
     e.stopPropagation();
@@ -5211,7 +5300,7 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('keydown', e => {
-  const trigger = e.target.closest('[data-drill][role="button"]');
+  const trigger = e.target.closest('[data-drill]');
   if (!trigger || (e.key !== 'Enter' && e.key !== ' ')) return;
   e.preventDefault();
   trigger.click();
@@ -5224,7 +5313,7 @@ document.addEventListener('keydown', e => {
 });
 
 function drillButton(type, label) {
-  return '<span class="drill-link" data-drill="' + type + '">🔬 ' + label + '</span>';
+  return '<button type="button" class="drill-link" data-drill="' + type + '">🔬 ' + label + '</button>';
 }
 
 function esc(s) {
@@ -5681,7 +5770,7 @@ function buildChainSectionBand(group, options) {
   const footer = document.createElement('div');
   footer.className = 'watch-band-footer';
   footer.innerHTML =
-    '<span class="drill-link" data-drill="autonomous" data-chain-group="' + esc(group.key || '') + '">' + esc(presentation.drillLabel) + '</span>';
+    '<button type="button" class="drill-link" data-drill="autonomous" data-chain-group="' + esc(group.key || '') + '">' + esc(presentation.drillLabel) + '</button>';
   band.append(footer);
   return band;
 }
@@ -5853,7 +5942,7 @@ function renderAutonomousDrawer(state) {
       (focusTraces.length
         ? '<div class="trace-chip-row">' +
           focusTraces.slice(0, 5).map(trace =>
-            '<span class="trace-chip" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+            '<span class="trace-chip" role="button" tabindex="0" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
             '" data-chain-trace="' + esc(trace.trace_id || '') + '">回合 ' +
             esc(String(trace.trace_id || '').substring(0, 10)) + ' · ' +
             esc(String(trace.last_event_label || autonomousEventTypeLabel(trace.last_event_type) || '事件').substring(0, 14)) + ' · ' +
@@ -5905,13 +5994,13 @@ function renderAutonomousDrawer(state) {
           (sourceKeys.length
             ? '<div class="trace-chip-row">' +
               '<span class="trace-chip ' + (!focusTraceSource ? 'active' : '') +
-              '" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+              '" role="button" tabindex="0" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
               '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
               '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'true' : 'false') +
               '" data-chain-trace-source="">全部</span>' +
               sourceKeys.map(source =>
                 '<span class="trace-chip ' + (focusTraceSource === source ? 'active' : '') +
-                '" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+                '" role="button" tabindex="0" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
                 '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
                 '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'true' : 'false') +
                 '" data-chain-trace-source="' + esc(source) + '">' +
@@ -5919,10 +6008,10 @@ function renderAutonomousDrawer(state) {
               ).join('') +
               '</div>'
             : '') +
-          '<div class="drawer-sub" style="margin-top:8px;"><span class="drill-link" data-drill="autonomous" data-chain-group="' +
+          '<div class="drawer-sub" style="margin-top:8px;"><button type="button" class="drill-link" data-drill="autonomous" data-chain-group="' +
           esc(focusGroup.key || '') + '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
           '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'false' : 'true') +
-          '" data-chain-trace-source="' + esc(focusTraceSource) + '">🔬 ' + esc(toggleLabel) + '</span></div>' +
+          '" data-chain-trace-source="' + esc(focusTraceSource) + '">🔬 ' + esc(toggleLabel) + '</button></div>' +
           (visibleEvents.length
             ? visibleEvents.map(event =>
                 '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
@@ -6111,57 +6200,6 @@ function renderHealthDrawer(state) {
     rows('📬 记忆传输队列 · ' + transportSummary, queueRows);
 }
 
-function renderOutboxDrawer(state) {
-  const ts = state.tier1_stats || {};
-  const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
-    ? ts.transport_outboxes : {};
-  const queueMap = transport.outboxes && typeof transport.outboxes === 'object'
-    ? transport.outboxes : {};
-  const names = ['api_a', 'companion', 'gateway'];
-  const labels = {api_a: 'API-A', companion: '陪伴', gateway: 'Gateway'};
-  const descriptions = {
-    api_a: '普通对话产生的记忆',
-    companion: '星子陪伴过程产生的记忆',
-    gateway: 'Gateway 转发的自动记录',
-  };
-  const overall = transport.status === 'healthy' ? '正常' : (transport.status === 'degraded' ? '需要处理' : '等待数据');
-  const overallExplanation = transport.status === 'healthy'
-    ? '三条传输通道都已跟上。'
-    : transport.status === 'degraded'
-      ? '对话仍可继续，但有些记忆还没有写入 Mem。'
-      : '暂时还没有收到三条传输通道的状态。';
-  const issueLabel = issue => ({
-    dead_letter: '多次发送失败，暂未写入',
-    stuck_pending: '等待时间过长，形成积压',
-    stale_report: '状态报告已过期',
-  }[String(issue).split(':').pop()] || '需要检查');
-  const queueHtml = names.map(name => {
-    const item = queueMap[name] || {};
-    const status = String(item.status || (item.healthy === true ? 'healthy' : 'unreported'));
-    const statusText = status === 'healthy' ? '正常' : (status === 'degraded' ? '需要处理' : '等待数据');
-    const issues = Array.isArray(item.issues) ? item.issues : [];
-    const issueText = issues.map(issueLabel);
-    return '<div class="drawer-section"><div class="drawer-section-label">' + labels[name] + '</div>' +
-      '<div class="drawer-sub" style="margin:0 0 6px;">' + descriptions[name] + '</div>' +
-      '<div class="health-row"><span>状态</span><span class="hr-val">' + esc(statusText) + '</span></div>' +
-      '<div class="health-row"><span>等着写入 Mem / 正在写入</span><span class="hr-val">' + esc(item.pending_count == null ? '—' : item.pending_count) + ' / ' + esc(item.inflight_count == null ? '—' : item.inflight_count) + '</span></div>' +
-      '<div class="health-row"><span>多次失败、暂未写入</span><span class="hr-val">' + esc(item.dead_letter_count == null ? '—' : item.dead_letter_count) + '</span></div>' +
-      (issueText.length ? '<div class="drawer-sub" style="margin-top:7px;color:var(--coral);">' + esc(issueText.join(' · ')) + '</div>' : '') +
-      '</div>';
-  }).join('');
-
-  els.drawerBody.innerHTML =
-    '<div class="drawer-sub">' + esc(overallExplanation) + '</div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">整体</div>' +
-    '<div class="health-row"><span>传输状态</span><span class="hr-val">' + esc(overall) + '</span></div>' +
-    '<div class="health-row"><span>已连接传输通道</span><span class="hr-val">' + esc(transport.reporter_count == null ? '—' : transport.reporter_count) + ' / 3</span></div>' +
-    '<div class="health-row"><span>等着写入 / 正在写入 / 多次失败</span><span class="hr-val">' +
-      esc(transport.pending_count == null ? '—' : transport.pending_count) + ' / ' +
-      esc(transport.inflight_count == null ? '—' : transport.inflight_count) + ' / ' +
-      esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
-    queueHtml;
-}
-
 function renderProjectionCard(item, emptyText) {
   if (!item || typeof item !== 'object') return '<div class="drawer-sub">' + esc(emptyText) + '</div>';
   const title = esc(item.title || '未命名链路项');
@@ -6175,12 +6213,59 @@ function renderProjectionCard(item, emptyText) {
     '</div>';
 }
 
+function formatDetailTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? raw : date.toLocaleString([], {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function renderEmployeeRunCard(item, memWritebacks) {
+  const row = item && typeof item === 'object' ? item : {};
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const taskId = String(row.task_id || '').trim();
+  const employeeTaskId = String(
+    row.employee_task_id || row.schedule_id || metadata.employee_task_id || ''
+  ).trim();
+  const provider = String(row.execution_provider || row.provider || metadata.execution_provider || '').trim();
+  const model = String(row.execution_model || row.model || metadata.execution_model || '').trim();
+  const started = formatDetailTime(row.started_at || row.claimed_at || metadata.started_at);
+  const finished = formatDetailTime(row.finished_at || row.completed_at || metadata.finished_at);
+  const heartbeat = formatDetailTime(row.heartbeat_at || metadata.heartbeat_at);
+  const result = String(row.result_summary || row.result || '').trim();
+  const error = String(row.error || '').trim();
+  const writebackStatus = String(row.writeback_status || '').trim().toLowerCase();
+  const writeback = writebackStatus === 'completed' || memWritebacks.some(writeback => {
+    const id = String(writeback.task_id || '').trim();
+    return id && (id === taskId || id === employeeTaskId);
+  });
+  const writebackFailed = writebackStatus === 'failed';
+  const details = [];
+  if (employeeTaskId) details.push('员工任务 ' + esc(employeeTaskId));
+  if (provider || model) details.push('模型 ' + esc([provider, model].filter(Boolean).join(' / ')));
+  if (started || finished) details.push('时间 ' + esc([started, finished].filter(Boolean).join(' → ')));
+  if (heartbeat) details.push('心跳 ' + esc(heartbeat));
+  return '<div class="drawer-section">' +
+    '<div class="health-row"><span>' + esc(row.title || '未命名任务') + '</span><span class="hr-val">' +
+      esc(row.status_label || row.display_status || statusLabel(row.status)) + '</span></div>' +
+    '<div class="drawer-sub" style="margin:6px 0 0;">' + esc(row.summary || '暂无执行摘要') + '</div>' +
+    (details.length ? '<div class="drawer-sub" style="margin:5px 0 0;">' + details.join(' · ') + '</div>' : '') +
+    '<div class="drawer-sub" style="margin:5px 0 0;color:' + (writebackFailed ? 'var(--coral)' : writeback ? 'var(--mint)' : 'var(--text-muted)') + ';">' +
+      (writebackFailed ? '⚠ Mem 写回失败或未完成' : writeback ? '✓ 已发现对应 Mem 写回' : '○ Mem 写回待确认') + '</div>' +
+    (result ? '<div class="drawer-sub" style="margin:5px 0 0;">结果 · ' + esc(result.substring(0, 240)) + '</div>' : '') +
+    (error ? '<div class="drawer-sub" style="margin:5px 0 0;color:var(--coral);">异常 · ' + esc(error.substring(0, 180)) + '</div>' : '') +
+    '</div>';
+}
+
 function renderMemoryFlowDrawer(state) {
   const ts = state.tier1_stats || {};
   const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
     ? ts.transport_outboxes : {};
   const board = (((state.autonomous_observation || {}).board) || {});
   const writebacks = Array.isArray(board.mem_writeback) ? board.mem_writeback : [];
+  const limit = Math.max(1, Number(drawerContext.memoryLimit) || 6);
   const status = transport.status === 'healthy' ? '正常' :
     (transport.status === 'degraded' ? '需要处理' : '等待数据');
   els.drawerBody.innerHTML =
@@ -6193,8 +6278,10 @@ function renderMemoryFlowDrawer(state) {
     '<div class="health-row"><span>多次失败、暂未写入</span><span class="hr-val">' +
       esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
     '<div class="drawer-section"><div class="drawer-section-label">最近 Mem 写回</div>' +
-    (writebacks.length ? writebacks.slice(0, 6).map(item => renderProjectionCard(item, '')).join('') :
-      '<div class="drawer-sub">尚未观察到新的 Mem 写回记录。</div>') + '</div>';
+    (writebacks.length ? writebacks.slice(0, limit).map(item => renderProjectionCard(item, '')).join('') :
+      '<div class="drawer-sub">尚未观察到新的 Mem 写回记录。</div>') +
+    (writebacks.length > limit ? '<button type="button" class="drill-link" data-drawer-more="memory_flow">显示更多写回</button>' : '') +
+    '</div>';
 }
 
 function renderEmployeeRunsDrawer(state) {
@@ -6202,6 +6289,8 @@ function renderEmployeeRunsDrawer(state) {
   const board = observation.board || {};
   const runtime = observation.runtime || {};
   const runs = Array.isArray(board.employee_runs) ? board.employee_runs : [];
+  const writebacks = Array.isArray(board.mem_writeback) ? board.mem_writeback : [];
+  const limit = Math.max(1, Number(drawerContext.employeeLimit) || 8);
   const executor = (state.activity || {}).active_cli_executor || runtime.active_cli_executor || {};
   const executorState = executor.is_stale || executor.lease_status === 'stale' ? '执行器失联' :
     (executor.agent_lane ? '执行器在线' : '等待执行器');
@@ -6213,21 +6302,26 @@ function renderEmployeeRunsDrawer(state) {
       esc(((observation.counts || {}).employee_dispatch) || 0) + ' / ' +
       esc(((observation.counts || {}).employee_running) || 0) + '</span></div></div>' +
     '<div class="drawer-section"><div class="drawer-section-label">任务运行</div>' +
-    (runs.length ? runs.slice(0, 8).map(item => renderProjectionCard(item, '')).join('') :
-      '<div class="drawer-sub">当前没有员工代理执行项。</div>') + '</div>';
+    (runs.length ? runs.slice(0, limit).map(item => renderEmployeeRunCard(item, writebacks)).join('') :
+      '<div class="drawer-sub">当前没有员工代理执行项。</div>') +
+    (runs.length > limit ? '<button type="button" class="drill-link" data-drawer-more="employee_runs">显示更多执行记录</button>' : '') +
+    '</div>';
 }
 
 function renderAutonomousTasksDrawer(state) {
   const observation = state.autonomous_observation || {};
   const board = observation.board || {};
   const tasks = Array.isArray(board.autonomous_tasks) ? board.autonomous_tasks : [];
+  const limit = Math.max(1, Number(drawerContext.taskLimit) || 10);
   const mode = String(((state.stellar_mode || {}).mode) || '').trim().toLowerCase();
   const modeLabel = mode === 'auto_evolution' ? 'Auto 自主链路' : '当前模式 · ' + (mode || '观测');
   els.drawerBody.innerHTML =
     '<div class="drawer-sub">' + esc(modeLabel) + '。这里只展示星子安排的自主任务，不展示 API-A 定时任务。</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">自主任务安排</div>' +
-    (tasks.length ? tasks.slice(0, 10).map(item => renderProjectionCard(item, '')).join('') :
-      '<div class="drawer-sub">当前没有候选、判断中或待员工接手的自主任务。</div>') + '</div>';
+    (tasks.length ? tasks.slice(0, limit).map(item => renderProjectionCard(item, '')).join('') :
+      '<div class="drawer-sub">当前没有候选、判断中或待员工接手的自主任务。</div>') +
+    (tasks.length > limit ? '<button type="button" class="drill-link" data-drawer-more="autonomous_tasks">显示更多任务</button>' : '') +
+    '</div>';
 }
 
 function renderIdentityDrawer() {
@@ -7251,6 +7345,11 @@ function updateSceneMiniTitle(state) {
     const suffix = activeMode === 'auto_evolution' ? ' · Auto' : ' · 日常';
     els.sceneMiniText.textContent = (state.title || '星子与西子的小屋') + suffix;
   }
+  if (els.sceneMiniSummary) {
+    els.sceneMiniSummary.textContent = String(state.summary || '当前没有新的状态摘要。').trim();
+    els.sceneMiniSummary.title = els.sceneMiniSummary.textContent;
+  }
+  renderConnectionStatus();
   if (els.stellarModeControl) {
     $$('button[data-mode]', els.stellarModeControl).forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.mode === activeMode));
@@ -7358,6 +7457,26 @@ function renderCompanionChat(state) {
   els.companionStatuses.forEach(status => {
     if (autoMode && !companionChatBusy) status.textContent = 'Auto 模式运行时暂不可聊天';
   });
+}
+
+function renderConnectionStatus() {
+  if (!els.sceneSyncStatus) return;
+  const age = lastSyncAt ? Math.max(0, Date.now() - lastSyncAt) : Infinity;
+  const stale = connectionState === 'connected' && age > 15000;
+  const state = stale ? 'stale' : connectionState;
+  let text = '连接中 · 尚未同步';
+  if (state === 'connected') text = '已连接 · 刚刚同步';
+  else if (state === 'stale') text = '数据可能过期 · 最近同步 ' + Math.round(age / 1000) + ' 秒前';
+  else if (state === 'offline') text = '连接失败 · 正在重试';
+  els.sceneSyncStatus.dataset.state = state;
+  els.sceneSyncStatus.textContent = text;
+  els.sceneSyncStatus.title = text;
+}
+
+function markConnection(state) {
+  connectionState = state;
+  if (state === 'connected') lastSyncAt = Date.now();
+  renderConnectionStatus();
 }
 
 function activeCompanionChat() {
@@ -8611,6 +8730,7 @@ let lastState = null;
 
 function applyState(state) {
   lastState = state;
+  markConnection('connected');
 
   // 账号变更 → 通知 Electron 刷新 cookie
   const newRevision = state.accounts_revision || 0;
@@ -8697,14 +8817,18 @@ particleTimer = setInterval(ambientParticles, 5000);
 async function refresh() {
   try {
     const r = await fetch('/ui/state', {cache: 'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     applyState(await r.json());
   } catch (e) {
+    markConnection('offline');
     els.body.dataset.scene = 'idle';
     if (els.sceneMiniText) els.sceneMiniText.textContent = '星子与西子的小屋 · 等待中';
     els.glyph.textContent = '·';
     if (els.glyphXingzi) els.glyphXingzi.textContent = '·';
   }
 }
+
+lastSyncTimer = setInterval(renderConnectionStatus, 1000);
 
 let fallbackTimer = null;
 function startFallback() {
@@ -8715,11 +8839,13 @@ function startFallback() {
 
 if ('EventSource' in window) {
   const es = new EventSource('/ui/events');
+  es.onopen = () => markConnection('connected');
   es.addEventListener('state', ev => {
     if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
-    applyState(JSON.parse(ev.data));
+    try { applyState(JSON.parse(ev.data)); }
+    catch (error) { markConnection('offline'); }
   });
-  es.onerror = () => startFallback();
+  es.onerror = () => { markConnection('offline'); startFallback(); };
   const voiceLevels = new EventSource('/ui/voice-levels');
   voiceLevels.addEventListener('level', ev => {
     applyVoiceRealtime(JSON.parse(ev.data));

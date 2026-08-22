@@ -128,9 +128,8 @@ def project_autonomous_observation(
     executor_lease_status = str(
         executor_snapshot.get("lease_status") or ""
     ).strip().lower()
-    employee_executor_stale = (
-        not executor_snapshot
-        or executor_lane != "supervisor_task"
+    employee_executor_stale = bool(executor_snapshot) and (
+        executor_lane != "supervisor_task"
         or bool(executor_snapshot.get("is_stale"))
         or executor_lease_status == "stale"
     )
@@ -656,6 +655,27 @@ def project_autonomous_observation(
     board["mem_writeback"] = unique_cards(
         [*recent_writeback_cards]
     )
+    writeback_by_task_id = {
+        str(item.get("task_id") or "").strip(): item
+        for item in board["mem_writeback"]
+        if str(item.get("task_id") or "").strip()
+    }
+    for item in board["mem_writeback"]:
+        item["source_task_id"] = str(
+            item.get("source_task_id") or item.get("task_id") or ""
+        ).strip()
+        item["writeback_status"] = (
+            "failed"
+            if str(item.get("status") or "").strip().lower() == "failed"
+            else "completed"
+        )
+    for item in board["employee_runs"]:
+        writeback = writeback_by_task_id.get(str(item.get("task_id") or "").strip())
+        item["writeback_status"] = (
+            str(writeback.get("writeback_status") or "completed")
+            if writeback
+            else "pending"
+        )
 
     return {
         "read_model_version": 14,
@@ -707,6 +727,7 @@ def build_autonomous_writeback_summary(
     )
     return {
         "task_id": task.get("task_id"),
+        "source_task_id": task.get("task_id"),
         "title": str(task.get("title") or "未命名"),
         "lane": observation_role_tag(task),
         "status": str(task.get("status") or "").strip().lower() or "completed",
@@ -714,4 +735,9 @@ def build_autonomous_writeback_summary(
         "display_status": display_status,
         "observation_role": observation_role,
         "summary": str(summary).strip()[:120],
+        "writeback_status": (
+            "failed"
+            if str(task.get("status") or "").strip().lower() == "failed"
+            else "completed"
+        ),
     }

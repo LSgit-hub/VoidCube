@@ -577,6 +577,7 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             ),
             stellar_mode_status=supervisor._stellar_mode_status,
             voice_status=supervisor._voice_manager.status,
+            load_employee_execution_context=supervisor._companion_worker_execution_context,
             ui_enabled=config.ui_enabled,
             ui_auto_open=config.ui_auto_open,
             ui_url=f"http://{config.host}:{config.port}{config.ui_path}",
