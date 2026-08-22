@@ -32,3 +32,12 @@ def test_autonomous_task_drawer_explicitly_excludes_schedules():
     drawer_source = HTML[start:end]
     assert "/scheduled-tasks" not in drawer_source
     assert "board.autonomous_tasks" in drawer_source
+
+
+def test_xingzi_direct_text_chat_uses_companion_boundary():
+    assert '<button type="button" class="xingzi-hit-area" data-companion-open aria-label="与星子聊天"' in HTML
+    assert '<section class="xingzi">' in HTML
+    assert HTML.count('<form class="companion-chat-form" data-companion-form>') == 1
+    assert 'data-companion-input' in HTML
+    assert "fetch('/companion/message'" in HTML
+    assert "stellar_auto_evolution_active" in HTML
