@@ -31,6 +31,8 @@ VALID_DELIVERY_TYPES = {
     "webpage",
 }
 VALID_VIEW_MODES = {"fit", "actual", "fill"}
+AUTONOMOUS_DELIVERY_MODES = {"auto", "auto_evolution", "autonomous"}
+AUTONOMOUS_DELIVERY_SOURCES = {"autonomous_worker", "autonomous_chain", "auto_evolution"}
 MAX_INLINE_CONTENT_BYTES = 2 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _ARTIFACT_ID_RE = re.compile(r"^[a-f0-9]{32}$")
@@ -97,6 +99,19 @@ def normalize_delivery_body(body: Any) -> JsonDict:
     mime_type = str(body.get("mime_type") or "").strip()
     filename = sanitize_artifact_filename(str(body.get("filename") or "")) if body.get("filename") else ""
     requested_type = str(body.get("type") or "auto").strip().lower()
+    mode = str(body.get("mode") or body.get("stellar_mode") or "").strip().lower()
+    requested_via = str(body.get("requested_via") or "").strip().lower()
+    source_kind = str(body.get("source_kind") or body.get("source_lane") or "").strip().lower()
+    if (
+        mode in AUTONOMOUS_DELIVERY_MODES
+        or requested_via in AUTONOMOUS_DELIVERY_SOURCES
+        or source_kind in AUTONOMOUS_DELIVERY_SOURCES
+        or str(body.get("autonomous_task_id") or "").strip()
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Auto 员工结果必须回写 Mem，不得进入交付面板",
+        )
     if requested_type not in VALID_DELIVERY_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的交付类型: {requested_type}")
     delivery_type = (
@@ -127,6 +142,16 @@ def normalize_delivery_body(body: Any) -> JsonDict:
         "auto_open": auto_open,
         "view_mode": view_mode,
     }
+    for key, value in (
+        ("mode", mode),
+        ("requested_via", requested_via),
+        ("source_kind", source_kind),
+    ):
+        if value:
+            normalized[key] = value
+    source_task_id = str(body.get("source_task_id") or "").strip()
+    if source_task_id:
+        normalized["source_task_id"] = source_task_id[:120]
     if content:
         normalized["content"] = content
     if mime_type:

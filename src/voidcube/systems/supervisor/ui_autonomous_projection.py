@@ -626,8 +626,39 @@ def project_autonomous_observation(
         "用户链路只作让路软感知，不展示聊天内容。"
     )
 
+    def unique_cards(items: List[Optional[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            identity = (
+                str(
+                    item.get("task_id")
+                    or item.get("title")
+                    or item.get("summary")
+                    or ""
+                ).strip(),
+                str(item.get("observation_role") or "").strip(),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            result.append(dict(item))
+        return result
+
+    board["autonomous_tasks"] = unique_cards(
+        [*candidates, *api_b_judgement_cards, *employee_lane_items]
+    )
+    board["employee_runs"] = unique_cards(
+        [*employee_lane_items]
+    )
+    board["mem_writeback"] = unique_cards(
+        [*recent_writeback_cards]
+    )
+
     return {
-        "read_model_version": 13,
+        "read_model_version": 14,
         "mode": {
             "label": "观测模式",
             "scope": "api_b_autonomous_chain_only",

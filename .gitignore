@@ -171,6 +171,8 @@ compile_commands.json
 # ==========================================
 /tests/*
 !/tests/test_autonomous_employee_dispatch_service.py
+!/tests/test_ui_autonomous_projection.py
+!/tests/test_ui_delivery_adapters.py
 !/tests/test_memory_resource_contract.py
 !/tests/test_packaging_contract.py
 !/tests/test_skill_registry.py
@@ -180,6 +182,7 @@ compile_commands.json
 !/tests/test_runtime_paths.py
 /docs/*
 !/docs/memory-resource-contract.md
+!/docs/web组件改进文档.md
 .arts/
 .mypy_cache/
 .pytest_tmp/
