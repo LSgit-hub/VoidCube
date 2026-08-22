@@ -1207,7 +1207,7 @@ body[data-panel-open] .companion-chat { display: none; }
   font-size: 10px;
   line-height: 1.35;
 }
-.xingzi-hit-area {
+.character-hit-area {
   position: absolute;
   left: 10px;
   top: 2px;
@@ -1220,7 +1220,7 @@ body[data-panel-open] .companion-chat { display: none; }
   background: transparent;
   cursor: pointer;
 }
-.xingzi-hit-area:focus-visible { outline: 3px solid rgba(226,176,74,.8); outline-offset: 4px; }
+.character-hit-area:focus-visible { outline: 3px solid rgba(226,176,74,.8); outline-offset: 4px; }
 
 /* ═══════════════════════════════════════
    4 个角色动作状态
@@ -4050,7 +4050,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 角色: 西子(长发女) -->
-    <section class="xizi" aria-hidden="true">
+    <section class="xizi">
+      <button type="button" class="character-hit-area" data-companion-open aria-label="与西子聊天" title="与西子聊天"></button>
       <div class="xz-hair-back"></div>
       <div class="xz-hair"></div>
       <div class="xz-bangs"></div>
@@ -4078,12 +4079,17 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           <span class="companion-chat-label">西子</span>
           <span class="companion-chat-text" data-chat-reply></span>
         </div>
+        <div class="companion-chat-status" data-chat-status></div>
+        <form class="companion-chat-form" data-companion-form>
+          <textarea class="companion-chat-input" data-companion-input rows="1" maxlength="2000" placeholder="和西子说点什么…" aria-label="输入给西子的文字"></textarea>
+          <button type="submit" class="companion-chat-send" data-companion-send title="发送文字消息">发送</button>
+        </form>
       </div>
     </section>
 
     <!-- 角色: 星子(短发男) -->
     <section class="xingzi">
-      <button type="button" class="xingzi-hit-area" data-companion-open aria-label="与星子聊天" title="与星子聊天"></button>
+      <button type="button" class="character-hit-area" data-companion-open aria-label="与星子聊天" title="与星子聊天"></button>
       <div class="xs-hair-back"></div>
       <div class="xs-hair"></div>
       <div class="xs-bangs"></div>
@@ -4564,12 +4570,12 @@ const els = {
   voiceTalk: $('#voiceTalk'),
   voiceMeter: $('#voiceMeter'),
   voiceStatusLabel: $('#voiceStatusLabel'),
-  xingziHitArea: $('[data-companion-open]'),
-  xingziChat: $('.xingzi [data-companion-chat]'),
-  xingziChatForm: $('.xingzi [data-companion-form]'),
-  xingziChatInput: $('.xingzi [data-companion-input]'),
-  xingziChatSend: $('.xingzi [data-companion-send]'),
-  xingziChatStatus: $('.xingzi [data-chat-status]'),
+  companionOpeners: $$('[data-companion-open]'),
+  companionChats: $$('[data-companion-chat]'),
+  companionForms: $$('[data-companion-form]'),
+  companionInputs: $$('[data-companion-input]'),
+  companionSends: $$('[data-companion-send]'),
+  companionStatuses: $$('[data-chat-status]'),
   /* dock char strip */
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
@@ -4654,23 +4660,17 @@ if (els.voiceFingerprintToggle) {
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
-if (els.xingziHitArea) {
-  els.xingziHitArea.addEventListener('click', openXingziChat);
-}
-if (els.xingziChatForm) {
-  els.xingziChatForm.addEventListener('submit', event => {
+els.companionOpeners.forEach(opener => opener.addEventListener('click', openXingziChat));
+els.companionForms.forEach(form => form.addEventListener('submit', event => {
     event.preventDefault();
     sendXingziText();
-  });
-}
-if (els.xingziChatInput) {
-  els.xingziChatInput.addEventListener('keydown', event => {
+  }));
+els.companionInputs.forEach(input => input.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       sendXingziText();
     }
-  });
-}
+  }));
 if (els.scheduleClock) {
   els.scheduleClock.addEventListener('click', event => {
     event.stopPropagation();
@@ -7242,13 +7242,14 @@ function renderCompanionChat(state) {
     ? String(dialogue.reply_text || reminder.reminder_text || voice.last_reply || '').trim()
     : '';
 
-  $$('[data-companion-chat]').forEach(chat => {
+  const activeChat = activeCompanionChat();
+  els.companionChats.forEach(chat => {
     const userLine = $('[data-chat-user-line]', chat);
     const replyLine = $('[data-chat-reply-line]', chat);
     const user = $('[data-chat-user]', chat);
     const reply = $('[data-chat-reply]', chat);
     const visible = Boolean(userText || replyText);
-    const keepOpen = chat === els.xingziChat && xingziChatOpen;
+    const keepOpen = chat === activeChat && xingziChatOpen;
     chat.classList.toggle('empty', !(visible || keepOpen));
     if (userLine) userLine.classList.toggle('hidden', !userText);
     if (replyLine) replyLine.classList.toggle('hidden', !replyText);
@@ -7262,44 +7263,64 @@ function renderCompanionChat(state) {
     }
   });
   const autoMode = !daily;
-  if (els.xingziChatInput) els.xingziChatInput.disabled = autoMode || xingziChatBusy;
-  if (els.xingziChatSend) els.xingziChatSend.disabled = autoMode || xingziChatBusy;
-  if (els.xingziChatStatus && autoMode && !xingziChatBusy) {
-    els.xingziChatStatus.textContent = 'Auto 模式运行时暂不可聊天';
-  }
+  els.companionInputs.forEach(input => { input.disabled = autoMode || xingziChatBusy; });
+  els.companionSends.forEach(button => { button.disabled = autoMode || xingziChatBusy; });
+  els.companionStatuses.forEach(status => {
+    if (autoMode && !xingziChatBusy) status.textContent = 'Auto 模式运行时暂不可聊天';
+  });
+}
+
+function activeCompanionChat() {
+  const character = String(els.body.dataset.character || 'xizi');
+  return $(`.${character} [data-companion-chat]`) || els.companionChats[0];
+}
+
+function activeCompanionInput() {
+  const chat = activeCompanionChat();
+  return chat ? $('[data-companion-input]', chat) : null;
+}
+
+function activeCompanionStatus() {
+  const chat = activeCompanionChat();
+  return chat ? $('[data-chat-status]', chat) : null;
 }
 
 function openXingziChat() {
-  if (!els.xingziChat) return;
+  const chat = activeCompanionChat();
+  const input = activeCompanionInput();
+  const status = activeCompanionStatus();
+  if (!chat) return;
   xingziChatOpen = true;
-  els.xingziChat.classList.add('chat-open');
-  if (els.xingziChatStatus && !xingziChatBusy) {
+  chat.classList.add('chat-open');
+  if (status && !xingziChatBusy) {
     const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
-    els.xingziChatStatus.textContent = mode === 'auto_evolution'
+    status.textContent = mode === 'auto_evolution'
       ? 'Auto 模式运行时暂不可聊天'
       : '文字消息会沿用日常陪伴与员工委派链路';
   }
-  if (els.xingziChatInput) els.xingziChatInput.focus();
+  if (input) input.focus();
 }
 
 async function sendXingziText() {
-  if (xingziChatBusy || !els.xingziChatInput) return;
-  const text = String(els.xingziChatInput.value || '').trim();
+  const input = activeCompanionInput();
+  const status = activeCompanionStatus();
+  if (xingziChatBusy || !input) return;
+  const text = String(input.value || '').trim();
   if (!text) {
     openXingziChat();
-    if (els.xingziChatStatus) els.xingziChatStatus.textContent = '请输入文字后再发送';
+    if (status) status.textContent = '请输入文字后再发送';
     return;
   }
   const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
   openXingziChat();
   if (mode === 'auto_evolution') {
-    if (els.xingziChatStatus) els.xingziChatStatus.textContent = 'Auto 模式运行时暂不可聊天';
+    if (status) status.textContent = 'Auto 模式运行时暂不可聊天';
     return;
   }
   xingziChatBusy = true;
-  els.xingziChatInput.disabled = true;
-  if (els.xingziChatSend) els.xingziChatSend.disabled = true;
-  if (els.xingziChatStatus) els.xingziChatStatus.textContent = '星子正在回复…';
+  els.companionInputs.forEach(item => { item.disabled = true; });
+  els.companionSends.forEach(button => { button.disabled = true; });
+  if (status) status.textContent = '正在回复…';
   try {
     const response = await fetch('/companion/message', {
       method: 'POST',
@@ -7310,20 +7331,20 @@ async function sendXingziText() {
     if (!response.ok) throw new Error(String(result.detail || 'companion_request_failed'));
     if (result.session_id) xingziChatSessionId = String(result.session_id);
     if (result.status === 'unavailable' && result.reason === 'stellar_auto_evolution_active') {
-      if (els.xingziChatStatus) els.xingziChatStatus.textContent = 'Auto 模式运行时暂不可聊天';
+      if (status) status.textContent = 'Auto 模式运行时暂不可聊天';
       return;
     }
     if (result.status !== 'ok') throw new Error(String(result.reason || result.status || 'reply_unavailable'));
-    els.xingziChatInput.value = '';
-    if (els.xingziChatStatus) els.xingziChatStatus.textContent = '已发送';
+    input.value = '';
+    if (status) status.textContent = '已发送';
     await refresh();
   } catch (error) {
-    if (els.xingziChatStatus) els.xingziChatStatus.textContent = '发送失败，请稍后重试';
+    if (status) status.textContent = '发送失败，请稍后重试';
   } finally {
     xingziChatBusy = false;
     const currentMode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
-    if (els.xingziChatInput) els.xingziChatInput.disabled = currentMode === 'auto_evolution';
-    if (els.xingziChatSend) els.xingziChatSend.disabled = currentMode === 'auto_evolution';
+    els.companionInputs.forEach(item => { item.disabled = currentMode === 'auto_evolution'; });
+    els.companionSends.forEach(button => { button.disabled = currentMode === 'auto_evolution'; });
   }
 }
 
