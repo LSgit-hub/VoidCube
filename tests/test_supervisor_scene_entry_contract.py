@@ -35,10 +35,11 @@ def test_autonomous_task_drawer_explicitly_excludes_schedules():
 
 
 def test_xingzi_direct_text_chat_uses_companion_boundary():
-    assert '<button type="button" class="character-hit-area" data-companion-open aria-label="与星子聊天"' in HTML
-    assert '<button type="button" class="character-hit-area" data-companion-open aria-label="与西子聊天"' in HTML
+    assert '<button type="button" class="companion-launcher" data-companion-launcher' in HTML
     assert '<section class="xingzi">' in HTML
     assert HTML.count('<form class="companion-chat-form" data-companion-form>') == 2
     assert 'data-companion-input' in HTML
     assert "fetch('/companion/message'" in HTML
     assert "stellar_auto_evolution_active" in HTML
+    assert 'els.companionLauncher.hidden = autoMode' in HTML
+    assert 'data-companion-open' not in HTML
