@@ -355,11 +355,12 @@ body[data-exec-window="false"] .floor {
 }
 .companion-widget {
   position: absolute;
-  left: calc(4% + 300px);
-  bottom: calc(6% + 200px);
+  left: 50%;
+  bottom: 9%;
   z-index: 12;
-  width: max-content;
+  width: min(360px, calc(100% - 32px));
   min-height: 0;
+  transform: translateX(-50%);
 }
 .companion-widget[hidden], body[data-panel-open] .companion-widget { display: none; }
 .companion-widget-panel {
@@ -375,43 +376,12 @@ body[data-exec-window="false"] .floor {
   color: #2a1d18;
 }
 .companion-widget-panel::after { display: none; }
-.companion-launcher {
-  position: relative;
-  z-index: 2;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 1px solid rgba(80,56,42,.3);
-  border-radius: 50%;
-  background: rgba(255,250,240,.96);
-  box-shadow: 0 4px 12px rgba(20,36,52,.2), inset 0 1px rgba(255,255,255,.8);
-  color: #5d4637;
-  font: inherit;
-  font-size: 0;
-  font-weight: 800;
-  letter-spacing: 0;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.companion-launcher::before { content: "💬"; font-size: 16px; }
-.companion-launcher:hover { background: #fff; transform: translateY(-1px); }
-.companion-launcher:focus-visible { outline: 2px solid rgba(226,176,74,.8); outline-offset: 3px; }
-.companion-launcher[aria-expanded="true"] {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
-  border-color: transparent;
-  background: rgba(106,158,232,.12);
-  box-shadow: none;
-}
-.companion-launcher[aria-expanded="true"]::before { content: "×"; font-size: 18px; font-weight: 500; }
+/* 辅助模式直接点击人物进入聊天，隐藏旧的可见角标入口。 */
+.companion-launcher { display: none; }
 .companion-widget-panel.empty { display: grid; }
 .companion-widget-panel:not(.chat-open) .companion-chat-content { display: none; }
 .companion-widget-panel.chat-open {
-  width: min(292px, calc(100vw - 24px));
+  width: 100%;
   padding: 10px;
   border: 1px solid rgba(80,56,42,.28);
   border-radius: 14px 14px 14px 5px;
@@ -1227,7 +1197,7 @@ body[data-exec-window="false"] .floor {
   display: none;
 }
 .companion-chat.companion-widget-panel.chat-open {
-  width: min(292px, calc(100vw - 24px));
+  width: 100%;
   padding: 10px;
 }
 .companion-chat.companion-widget-panel.chat-open::after {
@@ -1456,7 +1426,7 @@ body[data-action="write"] .action-glow { background: radial-gradient(circle, var
 
 
 /* ── 角色切换: data-character 控制显示哪个角色 ── */
-.xizi, .xingzi { display: none; }
+.xizi, .xingzi { display: none; cursor: pointer; }
 body[data-character="xizi"] .xizi { display: block; }
 body[data-character="xingzi"] .xingzi { display: block; }
 /* 默认显示西子(女) */
@@ -3477,7 +3447,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .scene-mini-title { left: 12px; top: 12px; max-width: 210px; }
   .stellar-mode-control { right: 12px; top: 12px; }
   .voice-controls { right: 12px; top: 50px; }
-  .companion-widget { left: 12px; bottom: calc(6% + 180px); }
+  .companion-widget { left: 50%; bottom: 8%; width: min(360px, calc(100% - 24px)); }
   .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
   .dock-btn { width: 42px; height: 44px; flex-basis: 42px; }
   .dock-btn .db-icon { font-size: 15px; }
@@ -4654,6 +4624,7 @@ const els = {
   voiceStatusLabel: $('#voiceStatusLabel'),
   companionWidget: $('[data-companion-widget]'),
   companionLauncher: $('[data-companion-launcher]'),
+  companionCharacters: $$('.xizi, .xingzi'),
   companionChats: $$('[data-companion-chat]'),
   companionForms: $$('[data-companion-form]'),
   companionInputs: $$('[data-companion-input]'),
@@ -4744,6 +4715,20 @@ if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggl
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
 if (els.companionLauncher) els.companionLauncher.addEventListener('click', toggleCompanionChat);
+els.companionCharacters.forEach(character => {
+  character.setAttribute('role', 'button');
+  character.setAttribute('tabindex', '0');
+  character.setAttribute('aria-label', '打开辅助聊天');
+  character.addEventListener('click', () => {
+    const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
+    if (mode === 'daily_companion') toggleCompanionChat();
+  });
+  character.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    character.click();
+  });
+});
 els.companionForms.forEach(form => form.addEventListener('submit', event => {
     event.preventDefault();
     sendCompanionText();
@@ -7356,6 +7341,10 @@ function renderCompanionChat(state) {
     els.companionLauncher.textContent = companionChatOpen ? '💬 收起' : '💬 聊天';
     els.companionLauncher.title = companionChatOpen ? '收起聊天' : '打开辅助聊天';
   }
+  els.companionCharacters.forEach(character => {
+    character.setAttribute('aria-expanded', String(companionChatOpen));
+    character.setAttribute('aria-label', companionChatOpen ? '关闭辅助聊天' : '打开辅助聊天');
+  });
   const activeCharacter = String(els.body.dataset.character || 'xizi') === 'xingzi' ? '星子' : '西子';
   const agentLabel = $('[data-chat-agent]');
   if (agentLabel) agentLabel.textContent = activeCharacter;
