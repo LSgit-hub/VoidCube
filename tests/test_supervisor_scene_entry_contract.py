@@ -47,6 +47,8 @@ def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert '<section class="xingzi" data-companion-launcher' in HTML
     assert 'body[data-stellar-mode="daily_companion"] .xizi:hover .xz-eye' in HTML
     assert 'body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-eye' in HTML
+    assert '.xizi:focus-visible, .xingzi:focus-visible { outline: none; }' in HTML
+    assert '@keyframes companion-blink' in HTML
     assert 'class="companion-launcher"' not in HTML
     assert 'data-scene-entry="mail" aria-label="邮件收发"' in HTML
     assert 'aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天"' in HTML

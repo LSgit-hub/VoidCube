@@ -1496,7 +1496,9 @@ body[data-action="write"] .action-glow { background: radial-gradient(circle, var
   cursor: pointer;
   transition: transform .18s ease, filter .18s ease;
   will-change: transform, filter;
+  --companion-eye-open: 14px;
   --character-hover-offset: 0px;
+  --character-head-tilt: 0deg;
   --eye-gaze-x: 0px;
   --eye-gaze-y: 0px;
 }
@@ -1505,23 +1507,32 @@ body[data-character="xingzi"] .xingzi { display: block; }
 /* 默认显示西子(女) */
 body:not([data-character]) .xizi,
 body[data-character=""] .xizi { display: block; }
-.xizi:hover, .xingzi:hover,
-.xizi:focus-visible, .xingzi:focus-visible {
-  outline: 2px solid var(--mint);
-  outline-offset: 5px;
-}
+.xizi:focus-visible, .xingzi:focus-visible { outline: none; }
 body[data-stellar-mode="daily_companion"] .xizi:hover,
-body[data-stellar-mode="daily_companion"] .xingzi:hover,
-body[data-stellar-mode="daily_companion"] .xizi:focus-visible,
-body[data-stellar-mode="daily_companion"] .xingzi:focus-visible {
+body[data-stellar-mode="daily_companion"] .xingzi:hover {
   --character-hover-offset: -6px;
+  --character-head-tilt: 1.2deg;
   filter: brightness(1.04) drop-shadow(0 10px 16px rgba(0,0,0,.18));
 }
+body[data-stellar-mode="daily_companion"] .xizi:hover .xz-head,
+body[data-stellar-mode="daily_companion"] .xizi:hover .xz-brow,
+body[data-stellar-mode="daily_companion"] .xizi:hover .xz-cheek,
+body[data-stellar-mode="daily_companion"] .xizi:hover .xz-mouth,
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-head,
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-brow,
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-cheek,
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-mouth {
+  transform: rotate(var(--character-head-tilt));
+  transform-origin: 50% 78%;
+}
 body[data-stellar-mode="daily_companion"] .xizi:hover .xz-eye,
-body[data-stellar-mode="daily_companion"] .xizi:focus-visible .xz-eye,
-body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-eye,
-body[data-stellar-mode="daily_companion"] .xingzi:focus-visible .xs-eye {
-  transform: translate(var(--eye-gaze-x, 0px), var(--eye-gaze-y, 0px));
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-eye {
+  transform: rotate(var(--character-head-tilt)) translate(var(--eye-gaze-x, 0px), var(--eye-gaze-y, 0px));
+  animation: companion-blink 3.6s ease-in-out infinite;
+}
+@keyframes companion-blink {
+  0%, 88%, 100% { height: var(--companion-eye-open, 14px); border-radius: 50%; }
+  91%, 94% { height: 3px; border-radius: 45%; }
 }
 
 /* ── 角色: 星子(短发男) ── */
@@ -1536,6 +1547,7 @@ body[data-stellar-mode="daily_companion"] .xingzi:focus-visible .xs-eye {
     bottom 1s var(--ease-out),
     transform 1s var(--ease-out);
   animation: xizi-breathe 3.2s ease-in-out infinite;
+  --companion-eye-open: 12px;
 }
 
 /* 星子 - 短发(后) */
