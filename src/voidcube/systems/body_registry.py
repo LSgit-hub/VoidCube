@@ -128,6 +128,10 @@ class BodyLaunchTarget(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class BodyWorkspaceRecoveryRequired(RuntimeError):
+    """Raised when startup cannot safely rebuild a non-empty body workspace."""
+
+
 class BodyImprovementReport(BaseModel):
     """Agent 提交的替身改进报告（API 契约）"""
     slot_id: str
@@ -208,10 +212,9 @@ class BodyRegistryManager:
         if registry.active_slot:
             active_meta = self.load_slot_meta(registry.active_slot)
             if not self._slot_workspace_is_materialized(active_meta):
-                active_meta = self.prepare_slot_workspace(
+                active_meta = self._prepare_slot_workspace_at_startup(
                     registry.active_slot,
                     source_path=self.source_root,
-                    clear_existing=True,
                 )
             active_meta.body_state = "active"
             active_meta.lease = "active"
@@ -230,9 +233,8 @@ class BodyRegistryManager:
                     f"{shell_meta.body_state!r} state."
                 )
             if not self._slot_workspace_is_materialized(shell_meta):
-                self.prepare_slot_workspace(
+                self._prepare_slot_workspace_at_startup(
                     registry.shell_slot,
-                    clear_existing=True,
                 )
         if registry.active_slot:
             self.write_active_body_pointer(registry.active_slot)
@@ -1042,6 +1044,70 @@ class BodyRegistryManager:
         if registry.active_slot == slot_id:
             self.write_active_body_pointer(slot_id)
         return meta
+
+    def _prepare_slot_workspace_at_startup(
+        self,
+        slot_id: str,
+        *,
+        source_slot_id: Optional[str] = None,
+        source_path: Optional[str | Path] = None,
+    ) -> BodySlotMeta:
+        """Repair missing startup materialization without discarding body work."""
+        meta = self.load_slot_meta(slot_id)
+        source_root, _ = self._resolve_materialization_source(
+            slot_id,
+            source_slot_id=source_slot_id,
+            source_path=source_path,
+        )
+        self._assert_startup_rebuild_is_safe(meta, source_root=source_root)
+        return self.prepare_slot_workspace(
+            slot_id,
+            source_slot_id=source_slot_id,
+            source_path=source_path,
+            clear_existing=True,
+        )
+
+    def _assert_startup_rebuild_is_safe(
+        self,
+        meta: BodySlotMeta,
+        *,
+        source_root: Path,
+    ) -> None:
+        """Reject implicit startup rebuilds that could erase body evolution."""
+        worktree_root = Path(meta.worktree_path).resolve()
+        if worktree_root.exists():
+            isolated_top = self._git_top_level_for_path(worktree_root)
+            if isolated_top == worktree_root:
+                status = self._run_git(
+                    worktree_root,
+                    ["status", "--porcelain", "--untracked-files=all"],
+                    timeout=15,
+                )
+                if status.returncode != 0:
+                    raise BodyWorkspaceRecoveryRequired(
+                        f"Body slot {meta.slot_id} worktree cannot be inspected safely "
+                        "during startup; automatic rebuild was refused."
+                    )
+                if status.stdout.strip():
+                    raise BodyWorkspaceRecoveryRequired(
+                        f"Body slot {meta.slot_id} has uncommitted or untracked changes "
+                        "and its materialization is invalid; automatic rebuild was refused "
+                        "to preserve the changes."
+                    )
+
+                current_head = self._git_head_for_isolated_worktree(worktree_root)
+                source_head = self._git_head_for_path(source_root)
+                if current_head and source_head and current_head.lower() != source_head.lower():
+                    raise BodyWorkspaceRecoveryRequired(
+                        f"Body slot {meta.slot_id} is at commit {current_head[:12]}, "
+                        f"not the startup baseline {source_head[:12]}; automatic rebuild "
+                        "was refused to preserve the evolved commit."
+                    )
+            elif any(worktree_root.iterdir()):
+                raise BodyWorkspaceRecoveryRequired(
+                    f"Body slot {meta.slot_id} has existing files but no valid isolated "
+                    "Git worktree; automatic rebuild was refused to preserve the body."
+                )
 
     @staticmethod
     def _reset_materialized_baseline(

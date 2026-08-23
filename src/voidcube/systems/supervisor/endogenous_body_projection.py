@@ -8,7 +8,6 @@ from .endogenous_body_eligibility import (
     resolve_body_improvement_eligibility,
 )
 from .endogenous_body_mapping import build_body_structure_mapping
-from .body_execution_readiness import inspect_body_execution_readiness
 
 
 def build_body_improvement_projection(
@@ -19,12 +18,9 @@ def build_body_improvement_projection(
     policy = dict(drive_context.get("policy") or {})
     shell_slot_id = str(shell_slot_meta.get("slot_id") or "").strip()
     shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
-    body_readiness = inspect_body_execution_readiness(
-        slot_id=shell_slot_id,
-        worktree_path=shell_worktree,
-        expected_body_state=shell_slot_meta.get("body_state"),
-        manifest_path=shell_slot_meta.get("worktree_manifest_path"),
-    )
+    body_readiness = shell_slot_meta.get("body_readiness")
+    if not isinstance(body_readiness, dict):
+        body_readiness = None
     eligibility = resolve_body_improvement_eligibility(
         completed_learning_tasks=list(
             drive_context.get("completed_learning_tasks") or []

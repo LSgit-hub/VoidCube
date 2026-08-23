@@ -189,6 +189,7 @@ compile_commands.json
 !/docs/memory-resource-contract.md
 !/docs/web组件改进文档.md
 .arts/
+.test-tmp/
 .mypy_cache/
 .pytest_tmp/
 .tmp-pytest*/

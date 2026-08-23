@@ -105,6 +105,10 @@ def test_endogenous_projection_blocks_empty_body_baseline(tmp_path):
             "slot_id": "slot-B",
             "body_state": "shell",
             "worktree_path": str(worktree),
+            "body_readiness": inspect_body_execution_readiness(
+                slot_id="slot-B",
+                worktree_path=str(worktree),
+            ),
         },
     )
 

@@ -1083,6 +1083,13 @@ class PlanningRuntimeMixin:
                 registry.save_slot_meta(shell_meta)
             except Exception:
                 pass
+        from .body_execution_readiness import inspect_body_execution_readiness
+
+        payload["body_readiness"] = inspect_body_execution_readiness(
+            slot_id=slot_id,
+            worktree_path=str(payload.get("worktree_path") or ""),
+            expected_body_state=payload.get("body_state"),
+        )
         return payload
 
     def _completed_learning_task_summaries(self, limit: int = 8) -> list[Dict[str, Any]]:
