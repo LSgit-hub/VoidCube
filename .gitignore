@@ -183,6 +183,8 @@ compile_commands.json
 !/tests/test_skills_sync_contract.py
 !/tests/test_prompt_builder_skills_cache.py
 !/tests/test_runtime_paths.py
+!/tests/test_body_execution_readiness.py
+!/tests/test_ui_body_status_adapters.py
 /docs/*
 !/docs/memory-resource-contract.md
 !/docs/web组件改进文档.md

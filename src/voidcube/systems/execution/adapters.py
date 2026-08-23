@@ -14,6 +14,7 @@ from ..governor import GovernorRequest
 from ..lifecycle import LifecycleActionResult
 from ..probe import ProbeReport
 from ...domain.tasks.runtime_profile import derive_runtime_task_profile
+from ..supervisor.body_execution_readiness import inspect_body_execution_readiness
 logger = logging.getLogger(__name__)
 
 
@@ -518,6 +519,40 @@ class BodyUpgradeExecutionAdapter:
                 detail="No shell slot is available for upgrade execution. Specify slot_id explicitly.",
             )
 
+        def require_ready() -> dict[str, Any]:
+            try:
+                slot_meta = self.body_registry.load_slot_meta(str(slot_id))
+                readiness = inspect_body_execution_readiness(
+                    slot_id=str(slot_id),
+                    worktree_path=slot_meta.worktree_path,
+                    expected_body_state=slot_meta.body_state,
+                    manifest_path=self.body_registry.slot_worktree_manifest_path(
+                        str(slot_id)
+                    ),
+                    require_agent_entrypoint=False,
+                )
+            except (FileNotFoundError, ValueError, OSError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Body slot metadata is not execution-ready.",
+                        "slot_id": str(slot_id),
+                        "reason": "slot_metadata_unavailable",
+                        "error": str(exc),
+                    },
+                ) from exc
+            if not readiness["ready"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Body slot is not execution-ready.",
+                        "slot_id": str(slot_id),
+                        "reason": readiness.get("reason"),
+                        "readiness": readiness,
+                    },
+                )
+            return readiness
+
         body_version = request.get("body_version")
         build_from_commit = request.get("build_from_commit")
         execution_request = dict(request.get("execution_request") or {})
@@ -582,6 +617,8 @@ class BodyUpgradeExecutionAdapter:
                     source_path=request.get("source_path"),
                     clear_existing=bool(request.get("clear_existing", True)),
                 )
+
+            require_ready()
 
             candidate_slot = self.body_registry.mark_candidate(
                 slot_id,

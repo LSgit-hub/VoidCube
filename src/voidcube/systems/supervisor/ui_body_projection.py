@@ -35,6 +35,49 @@ def body_slot_state_label(value: Any) -> str:
     }.get(normalized, str(value or "").strip() or "未知")
 
 
+def _health_label(healthy: Any, healthy_label: str, unhealthy_label: str, unknown_label: str = "未知") -> str:
+    if healthy is True:
+        return healthy_label
+    if healthy is False:
+        return unhealthy_label
+    return unknown_label
+
+
+def _runtime_health(meta: dict[str, Any], *, active_slot: str, slot_id: str) -> dict[str, Any]:
+    state = str(meta.get("body_state") or "").strip().lower()
+    if slot_id == active_slot or state == "active":
+        return {"status": "active", "label": "当前运行", "healthy": True}
+    if state in {"candidate", "probe", "awaiting_user_consent"}:
+        return {"status": state, "label": body_slot_state_label(state), "healthy": None}
+    if state == "shell":
+        return {"status": "shell", "label": "待培养", "healthy": None}
+    if state == "retired":
+        return {"status": "retired", "label": "已退役", "healthy": None}
+    return {"status": state or "unknown", "label": "未运行", "healthy": False}
+
+
+def _improvement_progress(
+    meta: dict[str, Any],
+    signals: list[dict[str, Any]],
+    *,
+    shell_slot: str,
+) -> dict[str, Any]:
+    state = str(meta.get("body_state") or "").strip().lower()
+    if signals:
+        signal = signals[0]
+        return {
+            "status": str(signal.get("status") or "planned"),
+            "label": str(signal.get("status_label") or "改进中"),
+            "active": True,
+            "signals_count": len(signals),
+        }
+    if state in {"candidate", "probe", "awaiting_user_consent"}:
+        return {"status": state, "label": body_slot_state_label(state), "active": True, "signals_count": 0}
+    if shell_slot and str(meta.get("slot_id") or "") == shell_slot:
+        return {"status": "waiting", "label": "等待培养", "active": False, "signals_count": 0}
+    return {"status": "stable", "label": "暂无改进", "active": False, "signals_count": 0}
+
+
 def body_upgrade_signal_source_label(status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized == "running":
@@ -161,6 +204,14 @@ def project_body_slot_cards(
             if str(item.get("slot_id") or "").strip() == slot_id
         ]
         signals = list(signal_map.get(slot_id) or [])
+        readiness = dict(meta.get("body_readiness") or {})
+        structure_healthy = slot_integrity.get("healthy")
+        if structure_healthy is None:
+            structure_healthy = bool(readiness.get("checks", {}).get("worktree_exists")) or None
+        runtime_health = _runtime_health(meta, active_slot=active_slot, slot_id=slot_id)
+        code_checks = dict(readiness.get("checks") or {})
+        code_healthy = readiness.get("ready")
+        improvement_progress = _improvement_progress(meta, signals, shell_slot=shell_slot)
         signal_node_keys: list[str] = []
         for signal in signals:
             for node_key in list(signal.get("node_keys") or []):
@@ -230,6 +281,24 @@ def project_body_slot_cards(
                 "integrity_healthy": bool(slot_integrity.get("healthy")) if slot_integrity else None,
                 "integrity_materialized": slot_integrity.get("materialized"),
                 "integrity_violations": slot_violations,
+                "readiness": readiness,
+                "structure_health": {
+                    "healthy": structure_healthy,
+                    "label": _health_label(structure_healthy, "结构正常", "结构异常"),
+                },
+                "runtime_health": runtime_health,
+                "code_health": {
+                    "healthy": code_healthy,
+                    "label": _health_label(code_healthy, "代码就绪", "代码未就绪"),
+                    "head_commit": readiness.get("head_commit"),
+                    "current_healthy_commit": meta.get("current_healthy_commit"),
+                    "candidate_commit": meta.get("candidate_commit"),
+                    "checks": code_checks,
+                },
+                "improvement_progress": improvement_progress,
+                "health_score": float(meta.get("health_score") or 0.0),
+                "current_healthy_commit": meta.get("current_healthy_commit"),
+                "candidate_commit": meta.get("candidate_commit"),
             }
         )
     return cards

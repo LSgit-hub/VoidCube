@@ -74,6 +74,7 @@ def resolve_body_improvement_eligibility(
     policy: Dict[str, Any],
     api_b_judgement_tasks: Iterable[Dict[str, Any]],
     now: Optional[datetime] = None,
+    body_readiness: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     learning_tasks = [
         dict(task) for task in completed_learning_tasks if isinstance(task, dict)
@@ -110,12 +111,20 @@ def resolve_body_improvement_eligibility(
             "reason": "body_improvement_cooldown",
             "learning_quality_score": round(learning_quality_score, 4),
         }
+    if body_readiness is not None and not body_readiness.get("ready"):
+        return {
+            "available": False,
+            "reason": "body_baseline_unavailable",
+            "body_readiness": dict(body_readiness),
+            "learning_quality_score": round(learning_quality_score, 4),
+        }
     return {
         "available": True,
         "learning_quality_score": round(learning_quality_score, 4),
         "completed_learning_tasks": learning_tasks,
         "shell_slot_id": slot_id,
         "shell_worktree": worktree,
+        **({"body_readiness": dict(body_readiness)} if body_readiness is not None else {}),
     }
 
 

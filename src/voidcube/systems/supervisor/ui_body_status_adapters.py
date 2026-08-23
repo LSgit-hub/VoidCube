@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Callable, Dict, List
 
+from .body_execution_readiness import inspect_body_execution_readiness
 from .ui_body_projection import project_body_slot_cards
 
 
@@ -71,6 +72,11 @@ def load_body_status(
             continue
         slot_metas[slot_id] = meta
         worktree_path = str(meta.get("worktree_path") or "").strip()
+        meta["body_readiness"] = inspect_body_execution_readiness(
+            slot_id=slot_id,
+            worktree_path=worktree_path,
+            expected_body_state=meta.get("body_state"),
+        )
         if not worktree_path:
             continue
         try:

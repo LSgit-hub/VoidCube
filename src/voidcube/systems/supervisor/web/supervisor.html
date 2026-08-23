@@ -5286,7 +5286,14 @@ function tagClass(tag) {
   return '';
 }
 function scoreClass(v) { return v >= 0.7 ? 'high' : v >= 0.4 ? 'mid' : 'low'; }
-function hpPercent(state) { return Math.max(0, 100 - (state.error_count || 0) * 10); }
+function hpPercent(state) {
+  const activeSlot = String(((state || {}).body_status || {}).active_slot || '').trim();
+  const active = bodySlotCardById(state, activeSlot);
+  const score = active && Number.isFinite(Number(active.health_score))
+    ? Number(active.health_score)
+    : null;
+  return score == null ? null : Math.max(0, Math.min(100, Math.round(score)));
+}
 
 /* ═══════════════════════════════════════════
    底部 Dock 交互逻辑
@@ -7580,6 +7587,10 @@ function renderStatsPanel(state) {
       esc(slotIntegrityFailed ? '结构异常' : (slot.body_state_label || '未知')) + '</span></div>' +
       '<div class="body-slot-role">版本 ' + esc(slot.body_version || 'bootstrap') +
       ' · 代次 ' + esc(slot.generation != null ? slot.generation : 0) + '</div>' +
+      '<div class="body-slot-role">结构：' + esc((slot.structure_health || {}).label || '未知') +
+      ' · 运行：' + esc((slot.runtime_health || {}).label || '未知') + '</div>' +
+      '<div class="body-slot-role">代码：' + esc((slot.code_health || {}).label || '未知') +
+      ' · 培养：' + esc((slot.improvement_progress || {}).label || '未知') + '</div>' +
       '<div class="body-slot-roots">根节点：' + esc(
         (Array.isArray(slot.root_nodes) && slot.root_nodes.length)
           ? slot.root_nodes.join(' / ')
@@ -7630,9 +7641,9 @@ function updateDockCharStrip(state) {
   if (els.dcsName) els.dcsName.textContent = charName + ' Lv.' + level;
   const hp = hpPercent(state);
   if (els.dcsHpFill) {
-    els.dcsHpFill.style.width = hp + '%';
-    els.dcsHpFill.className = 'dcs-hp-fill ' + (hp < 30 ? 'danger' : hp < 60 ? 'warn' : 'good');
-    els.dcsHpFill.parentElement.title = '替身健康度 ' + hp + '%';
+    els.dcsHpFill.style.width = (hp == null ? 0 : hp) + '%';
+    els.dcsHpFill.className = 'dcs-hp-fill ' + (hp == null ? 'warn' : hp < 30 ? 'danger' : hp < 60 ? 'warn' : 'good');
+    els.dcsHpFill.parentElement.title = hp == null ? '替身健康度：未知' : '替身代码健康度 ' + hp + '%';
   }
   if (els.dcsStatus) {
     const stellar = state.stellar_mode || {};
