@@ -8,8 +8,7 @@ dynamic = ["version"]
 description = "自进化双api智能体"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
-license = "LicenseRef-Proprietary"
-license-files = ["LICENSE"]
+license = "MIT"
 keywords = ["ai", "agent", "ops", "devops", "deploy", "cli", "assistant", "local", "shell"]
 classifiers = [
     "Development Status :: 4 - Beta",

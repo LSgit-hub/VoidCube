@@ -96,4 +96,4 @@ python -m pytest tests/test_integration_policy.py tests/test_packaging_contract.
 
 ## License
 
-[Proprietary License](LICENSE) —— VoidCube 为专有闭源软件，保留所有权利，未经书面授权禁止复制、修改与再分发。
+[MIT License](LICENSE) —— 本项目采用 MIT 许可证开源，允许自由使用、修改和分发。
