@@ -2,7 +2,9 @@
 # 🌐 浏览器引擎 (Browser Engine)
 # ==========================================
 chrome/
-runtime/
+# 仅忽略仓库根目录的运行时产物目录（voice 等），
+# 避免误伤 src/voidcube/infrastructure/runtime/ 与 src/voidcube/runtime/
+/runtime/
 
 # ==========================================
 # 🔐 密钥和凭证文件 (Security & Credentials)
