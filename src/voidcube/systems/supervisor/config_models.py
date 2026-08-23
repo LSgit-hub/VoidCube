@@ -269,6 +269,26 @@ class SupervisorExecutionConfig(BaseModel):
     probe_watch_window_seconds: int = 300
 
 
+class SupervisorMailConfig(BaseModel):
+    enabled: bool = False
+    display_name: str = "星子邮件"
+    address: str = ""
+    username: str = ""
+    password: str = ""
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_use_ssl: bool = True
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_use_ssl: bool = False
+    smtp_use_starttls: bool = True
+    inbox_folder: str = "INBOX"
+    sent_folder: str = "Sent"
+    fetch_limit: int = 20
+    poll_interval_seconds: int = 120
+    signature: str = ""
+
+
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
     companion_observation_enabled: bool = True
@@ -283,6 +303,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     companion_proactive_reminder_cooldown_seconds: int = 900
     companion_proactive_dnd_start: str = ""
     companion_proactive_dnd_end: str = ""
+    mail: SupervisorMailConfig = Field(default_factory=SupervisorMailConfig)
     governor_llm_advisory_enabled: bool = True
     autonomous_chain_review_interval: int = 300
     employee_dispatch_limit_per_cycle: int = 1

@@ -2,7 +2,6 @@ import logging
 import re
 import subprocess
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
@@ -27,7 +26,15 @@ from .config_models import (
     SupervisorBodyRuntimeConfig,
     SupervisorConfig,
     SupervisorExecutionConfig,
+    SupervisorMailConfig,
     SupervisorServiceRuntimeConfig,
+)
+from .mail_runtime import (
+    MailSettings,
+    build_mail_overview,
+    fetch_mail_messages,
+    send_mail_message,
+    test_mail_connectivity,
 )
 from .planning_runtime import PlanningRuntimeMixin
 from .provider_pool_service import (
@@ -124,6 +131,43 @@ class CompanionReminderPolicyRequest(BaseModel):
         if normalized and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", normalized):
             raise ValueError("must be empty or use HH:MM in 24-hour time")
         return normalized
+
+
+class SupervisorMailConfigRequest(BaseModel):
+    enabled: bool
+    display_name: str = ""
+    address: str = ""
+    username: str = ""
+    password: str = ""
+    imap_host: str = ""
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    imap_use_ssl: bool = True
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_use_ssl: bool = False
+    smtp_use_starttls: bool = True
+    inbox_folder: str = ""
+    sent_folder: str = ""
+    fetch_limit: int = Field(default=20, ge=1, le=100)
+    poll_interval_seconds: int = Field(default=120, ge=10, le=86400)
+    signature: str = ""
+
+    @field_validator("display_name", "address", "username", "password", "imap_host", "smtp_host", "inbox_folder", "sent_folder", "signature")
+    @classmethod
+    def normalize_text_fields(cls, value: str) -> str:
+        return str(value or "").strip()
+
+
+class SupervisorMailSendRequest(BaseModel):
+    to: str = Field(min_length=1)
+    subject: str = ""
+    body: str = ""
+    cc: str = ""
+
+    @field_validator("to", "subject", "body", "cc")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return str(value or "").strip()
 
 
 class Supervisor(
@@ -352,6 +396,11 @@ class Supervisor(
             self.set_companion_reminder_policy,
             methods=["POST"],
         )
+        self.app.add_api_route("/mail/config", self.get_mail_config, methods=["GET"])
+        self.app.add_api_route("/mail/config", self.set_mail_config, methods=["POST"])
+        self.app.add_api_route("/mail/test", self.test_mail_config, methods=["POST"])
+        self.app.add_api_route("/mail/messages", self.list_mail_messages, methods=["GET"])
+        self.app.add_api_route("/mail/send", self.send_mail_message, methods=["POST"])
         self.app.add_api_route("/provider-pool", self.get_provider_pool, methods=["GET"])
         self.app.add_api_route(
             "/provider-pool/providers/{provider_key}",
@@ -538,6 +587,136 @@ class Supervisor(
             "managed": False,
             "status": "saved",
         }
+
+    def _mail_settings(self) -> MailSettings:
+        runtime = getattr(self.config.service_runtime, "mail", None)
+        if isinstance(runtime, SupervisorMailConfig):
+            payload = runtime.model_dump(mode="python")
+        elif isinstance(runtime, dict):
+            payload = dict(runtime)
+        else:
+            payload = {}
+        return MailSettings.from_mapping(payload)
+
+    def _mail_config_payload(self) -> Dict[str, Any]:
+        from ...infrastructure.config.configuration import is_managed
+
+        return build_mail_overview(self._mail_settings(), managed=is_managed())
+
+    async def get_mail_config(self) -> Dict[str, Any]:
+        return self._mail_config_payload()
+
+    async def set_mail_config(self, request: SupervisorMailConfigRequest) -> Dict[str, Any]:
+        from ...infrastructure.config.configuration import (
+            format_managed_message,
+            is_managed,
+            read_raw_config,
+            save_config,
+        )
+
+        if is_managed():
+            raise HTTPException(
+                status_code=409,
+                detail=format_managed_message("change the mail configuration"),
+            )
+
+        raw_config = read_raw_config()
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+        supervisor_config = raw_config.get("supervisor")
+        if not isinstance(supervisor_config, dict):
+            supervisor_config = {}
+        else:
+            supervisor_config = dict(supervisor_config)
+        service_runtime = supervisor_config.get("service_runtime")
+        if not isinstance(service_runtime, dict):
+            service_runtime = {}
+        else:
+            service_runtime = dict(service_runtime)
+        existing_mail = service_runtime.get("mail")
+        existing_password = ""
+        if isinstance(existing_mail, dict):
+            existing_password = str(existing_mail.get("password") or "")
+
+        mail_payload = {
+            "enabled": request.enabled,
+            "display_name": request.display_name,
+            "address": request.address,
+            "username": request.username,
+            "password": request.password if request.password else existing_password,
+            "imap_host": request.imap_host,
+            "imap_port": request.imap_port,
+            "imap_use_ssl": request.imap_use_ssl,
+            "smtp_host": request.smtp_host,
+            "smtp_port": request.smtp_port,
+            "smtp_use_ssl": request.smtp_use_ssl,
+            "smtp_use_starttls": request.smtp_use_starttls,
+            "inbox_folder": request.inbox_folder or "INBOX",
+            "sent_folder": request.sent_folder or "Sent",
+            "fetch_limit": request.fetch_limit,
+            "poll_interval_seconds": request.poll_interval_seconds,
+            "signature": request.signature,
+        }
+        service_runtime["mail"] = mail_payload
+        supervisor_config["service_runtime"] = service_runtime
+        raw_config = dict(raw_config)
+        raw_config["supervisor"] = supervisor_config
+
+        try:
+            save_config(raw_config, preserve_structure=True)
+        except Exception as exc:
+            logger.exception("Failed to save mail configuration")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save mail configuration",
+            ) from exc
+
+        if isinstance(self.config.service_runtime, SupervisorServiceRuntimeConfig):
+            self.config.service_runtime.mail = SupervisorMailConfig.model_validate(mail_payload)
+
+        return {
+            **self._mail_config_payload(),
+            "status": "saved",
+        }
+
+    async def test_mail_config(self) -> Dict[str, Any]:
+        try:
+            return {
+                **self._mail_config_payload(),
+                **test_mail_connectivity(self._mail_settings()),
+                "status": "ready",
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def list_mail_messages(
+        self,
+        folder: str = "",
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        try:
+            return {
+                **self._mail_config_payload(),
+                **fetch_mail_messages(self._mail_settings(), folder=folder or None, limit=limit),
+                "status": "ok",
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def send_mail_message(self, request: SupervisorMailSendRequest) -> Dict[str, Any]:
+        try:
+            return {
+                **self._mail_config_payload(),
+                **send_mail_message(
+                    self._mail_settings(),
+                    to=request.to,
+                    subject=request.subject,
+                    body=request.body,
+                    cc=request.cc or None,
+                ),
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def get_provider_pool(self) -> Dict[str, Any]:
         return self._provider_pool_service.snapshot()

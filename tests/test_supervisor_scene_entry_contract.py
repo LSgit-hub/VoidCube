@@ -11,6 +11,7 @@ def test_scene_entries_have_explicit_domain_boundaries():
     assert 'data-scene-entry="employee-runs"' in HTML
     assert 'data-scene-entry="autonomous-tasks"' in HTML
     assert 'data-scene-entry="api-a-schedules"' in HTML
+    assert 'data-scene-entry="mail"' in HTML
     assert 'data-drill="outboxes"' not in HTML
 
 
@@ -19,11 +20,17 @@ def test_scene_entry_labels_are_accessible_and_point_to_expected_drawers():
     assert 'data-scene-entry="employee-runs" aria-label="员工代理执行详情"' in HTML
     assert 'data-scene-entry="autonomous-tasks" aria-label="星子自主任务安排"' in HTML
     assert 'data-scene-entry="api-a-schedules" title="查看 API-A 定时任务"' in HTML
+    assert 'data-scene-entry="mail" aria-label="邮件收发"' in HTML
     assert "target === 'memory-flow'" in HTML
     assert "openDrawer('employee_runs')" in HTML
     assert "openDrawer('autonomous_tasks')" in HTML
+    assert "openDrawer('mail')" in HTML
     assert "openPanel('schedules')" in HTML
+    assert "loadMailConfig()" in HTML
+    assert "loadMailMessages()" in HTML
     assert '<span class="pt-icon">◷</span>API-A 定时任务' in HTML
+    assert 'data-settings-view="mail"' in HTML
+    assert 'data-mail-compose' in HTML
 
 
 def test_autonomous_task_drawer_explicitly_excludes_schedules():
@@ -38,7 +45,10 @@ def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert 'class="companion-widget" data-companion-widget' in HTML
     assert '<button type="button" class="companion-launcher" data-companion-launcher' in HTML
     assert 'aria-expanded="false" aria-controls="companionChatContent"' in HTML
+    assert 'data-scene-entry="mail" aria-label="邮件收发"' in HTML
+    assert '<section class="xizi">' in HTML
     assert '<section class="xingzi">' in HTML
+    assert '打开辅助聊天' in HTML
     assert HTML.count('<form class="companion-chat-form" data-companion-form>') == 1
     assert 'class="companion-chat-content" id="companionChatContent"' in HTML
     assert 'data-companion-input' in HTML
@@ -47,3 +57,9 @@ def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert 'els.companionWidget.hidden = autoMode' in HTML
     assert "addEventListener('click', toggleCompanionChat)" in HTML
     assert 'data-companion-open' not in HTML
+
+
+def test_mail_entry_points_are_clickable_from_room_scene():
+    assert '<div class="window" role="button" tabindex="0" data-scene-entry="mail"' in HTML
+    assert '<section class="xizi" data-scene-entry="mail"' not in HTML
+    assert '<section class="xingzi" data-scene-entry="mail"' not in HTML

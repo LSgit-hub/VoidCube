@@ -183,6 +183,15 @@ html, body {
     inset 0 0 0 3px #d4a878;
   z-index: 2;
 }
+.window[data-scene-entry] { cursor: pointer; }
+.window[data-scene-entry]:hover .window-glass,
+.window[data-scene-entry]:focus-visible .window-glass {
+  filter: brightness(1.05) saturate(1.05);
+}
+.window[data-scene-entry]:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 5px;
+}
 .window-glass {
   position: absolute; inset: 8px;
   border-radius: 54px 54px 4px 4px;
@@ -3471,6 +3480,166 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   cursor: pointer;
 }
 .reminder-policy-form :disabled { cursor: not-allowed; opacity: .5; }
+.mail-settings-form {
+  display: grid;
+  gap: 12px;
+  padding: 4px 2px 0;
+}
+.mail-settings-summary,
+.mail-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 34px;
+}
+.mail-settings-status {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.mail-settings-status.error { color: var(--coral); }
+.mail-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.mail-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.mail-field > span {
+  font-weight: 700;
+}
+.mail-field.wide { grid-column: 1 / -1; }
+.mail-field input,
+.mail-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 5px;
+  background: rgba(10,8,7,.52);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10.5px;
+  color-scheme: dark;
+}
+.mail-field textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+.mail-field input:focus,
+.mail-field textarea:focus {
+  outline: 1px solid var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+.mail-toggle {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+.mail-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.mail-toggle span {
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.1);
+  cursor: pointer;
+  transition: background .2s ease;
+}
+.mail-toggle span::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform .2s ease, background .2s ease;
+}
+.mail-toggle input:checked + span {
+  background: rgba(111,198,160,.28);
+  border-color: rgba(111,198,160,.45);
+}
+.mail-toggle input:checked + span::after {
+  transform: translateX(16px);
+  background: var(--accent-green);
+}
+.mail-message {
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 8px;
+  background: rgba(0,0,0,.18);
+}
+.mail-message + .mail-message { margin-top: 8px; }
+.mail-message-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.mail-message-meta,
+.mail-message-preview {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.mail-compose-form {
+  display: grid;
+  gap: 10px;
+}
+.mail-compose-field {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.mail-compose-field > span { font-weight: 700; }
+.mail-compose-field.wide { grid-column: 1 / -1; }
+.mail-compose-field input,
+.mail-compose-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 5px;
+  background: rgba(10,8,7,.52);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10.5px;
+  color-scheme: dark;
+}
+.mail-compose-field textarea {
+  resize: vertical;
+  min-height: 120px;
+}
+.mail-compose-field input:focus,
+.mail-compose-field textarea:focus {
+  outline: 1px solid var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+.mail-compose-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
 
 /* ── Dock 响应式 ── */
 @media (max-width: 720px) {
@@ -4002,7 +4171,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       </div>
     </div>
 
-    <div class="window" aria-hidden="true">
+    <div class="window" role="button" tabindex="0" data-scene-entry="mail" aria-label="邮件收发" title="邮件收发">
       <div class="window-glass">
         <div class="window-sun"></div>
         <div class="window-moon"></div>
@@ -4383,6 +4552,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           <button class="settings-tab" type="button" data-settings-view="providers" role="tab" aria-selected="true">Provider 池</button>
           <button class="settings-tab" type="button" data-settings-view="workers" role="tab" aria-selected="false">员工角色</button>
           <button class="settings-tab" type="button" data-settings-view="reminders" role="tab" aria-selected="false">主动提醒</button>
+          <button class="settings-tab" type="button" data-settings-view="mail" role="tab" aria-selected="false">邮件</button>
         </div>
         <div class="settings-view" data-settings-panel="providers">
           <div class="provider-pool-layout">
@@ -4519,6 +4689,99 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
             <div class="reminder-policy-actions">
               <span class="reminder-policy-status" id="reminderPolicyStatus" aria-live="polite"></span>
               <button class="reminder-policy-save" id="reminderPolicySave" type="submit">保存</button>
+            </div>
+          </form>
+        </div>
+        <div class="settings-view panel-body" data-settings-panel="mail" hidden>
+          <form class="mail-settings-form" id="mailSettingsForm">
+            <div class="mail-settings-summary">
+              <span class="mail-settings-status" id="mailSettingsStatus" aria-live="polite"></span>
+              <button class="provider-action" id="mailSettingsTest" type="button">测试连接</button>
+            </div>
+            <div class="mail-settings-grid">
+              <label class="mail-field wide">
+                <span>启用邮件</span>
+                <span class="mail-toggle">
+                  <input type="checkbox" id="mailEnabled"/>
+                  <span></span>
+                </span>
+              </label>
+              <label class="mail-field wide">
+                <span>显示名</span>
+                <input id="mailDisplayName" maxlength="80" autocomplete="off" placeholder="星子邮件"/>
+              </label>
+              <label class="mail-field wide">
+                <span>邮箱地址</span>
+                <input id="mailAddress" maxlength="160" autocomplete="off" placeholder="xingzi@example.com"/>
+              </label>
+              <label class="mail-field wide">
+                <span>用户名</span>
+                <input id="mailUsername" maxlength="160" autocomplete="off"/>
+              </label>
+              <label class="mail-field wide">
+                <span>密码</span>
+                <input id="mailPassword" type="password" maxlength="512" autocomplete="new-password"/>
+              </label>
+              <label class="mail-field">
+                <span>IMAP 主机</span>
+                <input id="mailImapHost" maxlength="255" autocomplete="off"/>
+              </label>
+              <label class="mail-field">
+                <span>IMAP 端口</span>
+                <input id="mailImapPort" type="number" min="1" max="65535" step="1" value="993"/>
+              </label>
+              <label class="mail-field">
+                <span>IMAP SSL</span>
+                <span class="mail-toggle">
+                  <input type="checkbox" id="mailImapSsl" checked/>
+                  <span></span>
+                </span>
+              </label>
+              <label class="mail-field">
+                <span>SMTP 主机</span>
+                <input id="mailSmtpHost" maxlength="255" autocomplete="off"/>
+              </label>
+              <label class="mail-field">
+                <span>SMTP 端口</span>
+                <input id="mailSmtpPort" type="number" min="1" max="65535" step="1" value="587"/>
+              </label>
+              <label class="mail-field">
+                <span>SMTP SSL</span>
+                <span class="mail-toggle">
+                  <input type="checkbox" id="mailSmtpSsl"/>
+                  <span></span>
+                </span>
+              </label>
+              <label class="mail-field">
+                <span>SMTP STARTTLS</span>
+                <span class="mail-toggle">
+                  <input type="checkbox" id="mailSmtpStarttls" checked/>
+                  <span></span>
+                </span>
+              </label>
+              <label class="mail-field">
+                <span>收件箱文件夹</span>
+                <input id="mailInboxFolder" maxlength="120" autocomplete="off" value="INBOX"/>
+              </label>
+              <label class="mail-field">
+                <span>已发送文件夹</span>
+                <input id="mailSentFolder" maxlength="120" autocomplete="off" value="Sent"/>
+              </label>
+              <label class="mail-field">
+                <span>拉取上限</span>
+                <input id="mailFetchLimit" type="number" min="1" max="100" step="1" value="20"/>
+              </label>
+              <label class="mail-field">
+                <span>轮询间隔（秒）</span>
+                <input id="mailPollInterval" type="number" min="10" max="86400" step="1" value="120"/>
+              </label>
+              <label class="mail-field wide">
+                <span>签名</span>
+                <textarea id="mailSignature" rows="3" maxlength="2000" placeholder="-- 星子"></textarea>
+              </label>
+            </div>
+            <div class="mail-settings-actions">
+              <button class="provider-action primary" id="mailSettingsSave" type="submit">保存</button>
             </div>
           </form>
         </div>
@@ -4677,6 +4940,7 @@ const els = {
   companionInputs: $$('[data-companion-input]'),
   companionSends: $$('[data-companion-send]'),
   companionStatuses: $$('[data-chat-status]'),
+  windowMailEntry: $('[data-scene-entry="mail"].window'),
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
   dcsHpFill: $('#dcsHpFill'),
@@ -4717,6 +4981,26 @@ const els = {
   providerTest: $('#providerTest'),
   providerLoadModels: $('#providerLoadModels'),
   providerSave: $('#providerSave'),
+  mailSettingsForm: $('#mailSettingsForm'),
+  mailSettingsStatus: $('#mailSettingsStatus'),
+  mailSettingsTest: $('#mailSettingsTest'),
+  mailEnabled: $('#mailEnabled'),
+  mailDisplayName: $('#mailDisplayName'),
+  mailAddress: $('#mailAddress'),
+  mailUsername: $('#mailUsername'),
+  mailPassword: $('#mailPassword'),
+  mailImapHost: $('#mailImapHost'),
+  mailImapPort: $('#mailImapPort'),
+  mailImapSsl: $('#mailImapSsl'),
+  mailSmtpHost: $('#mailSmtpHost'),
+  mailSmtpPort: $('#mailSmtpPort'),
+  mailSmtpSsl: $('#mailSmtpSsl'),
+  mailSmtpStarttls: $('#mailSmtpStarttls'),
+  mailInboxFolder: $('#mailInboxFolder'),
+  mailSentFolder: $('#mailSentFolder'),
+  mailFetchLimit: $('#mailFetchLimit'),
+  mailPollInterval: $('#mailPollInterval'),
+  mailSignature: $('#mailSignature'),
   workerAssignmentForm: $('#workerAssignmentForm'),
   workerDefaultRole: $('#workerDefaultRole'),
   workerMaxConcurrent: $('#workerMaxConcurrent'),
@@ -4769,7 +5053,8 @@ els.companionCharacters.forEach(character => {
   character.setAttribute('role', 'button');
   character.setAttribute('tabindex', '0');
   character.setAttribute('aria-label', '打开辅助聊天');
-  character.addEventListener('click', () => {
+  character.addEventListener('click', event => {
+    event.stopPropagation();
     const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
     if (mode === 'daily_companion') toggleCompanionChat();
   });
@@ -5116,6 +5401,7 @@ const DRAWER_META = {
   autonomous_tasks: { icon: '📄', title: '星子自主任务安排' },
   body_tree:  { icon: '🌲', title: '替身结构图' },
   identity:   { icon: '📚', title: '身份档案' },
+  mail:       { icon: '✉️', title: '邮件收发' },
 };
 
 function openDrawer(type, context) {
@@ -5133,6 +5419,8 @@ function openDrawer(type, context) {
   if (type === 'identity') {
     loadIdentityArchive();
     loadIdentityTurns();
+  } else if (type === 'mail') {
+    void loadMailConfig().then(() => loadMailMessages());
   }
 }
 
@@ -5155,6 +5443,7 @@ function renderDrawer() {
   else if (drawerOpen === 'autonomous_tasks') renderAutonomousTasksDrawer(state);
   else if (drawerOpen === 'body_tree') renderBodyTreeDrawer(state);
   else if (drawerOpen === 'identity') renderIdentityDrawer();
+  else if (drawerOpen === 'mail') renderMailMessages();
 }
 
 async function loadIdentityArchive() {
@@ -5289,6 +5578,25 @@ document.addEventListener('click', e => {
   openDrawer(trigger.dataset.drill, context);
 });
 document.addEventListener('click', e => {
+  const mailRefresh = e.target.closest('[data-mail-refresh]');
+  if (mailRefresh && drawerOpen === 'mail') {
+    e.stopPropagation();
+    loadMailMessages();
+    return;
+  }
+  const mailSend = e.target.closest('[data-mail-send]');
+  if (mailSend && drawerOpen === 'mail') {
+    e.stopPropagation();
+    sendMailDraft();
+  }
+});
+document.addEventListener('submit', e => {
+  const compose = e.target.closest('[data-mail-compose]');
+  if (!compose || drawerOpen !== 'mail') return;
+  e.preventDefault();
+  sendMailDraft();
+});
+document.addEventListener('click', e => {
   const trigger = e.target.closest('[data-scene-entry]');
   if (!trigger) return;
   e.stopPropagation();
@@ -5301,6 +5609,8 @@ document.addEventListener('click', e => {
     openDrawer('employee_runs');
   } else if (target === 'autonomous-tasks') {
     openDrawer('autonomous_tasks');
+  } else if (target === 'mail') {
+    openDrawer('mail');
   }
 });
 document.addEventListener('keydown', e => {
@@ -7779,7 +8089,7 @@ let workerSchedulerSnapshot = {active_count: 0, queued_count: 0, roles: [], prov
 let workerSchedulerLoading = false;
 
 function setSettingsView(name) {
-  const normalized = ['providers', 'workers', 'reminders'].includes(name) ? name : 'providers';
+  const normalized = ['providers', 'workers', 'reminders', 'mail'].includes(name) ? name : 'providers';
   $$('[data-settings-view]', els.settingsTabs).forEach(button => {
     button.setAttribute('aria-selected', String(button.dataset.settingsView === normalized));
   });
@@ -7787,8 +8097,9 @@ function setSettingsView(name) {
     panel.hidden = panel.dataset.settingsPanel !== normalized;
   });
   if (normalized === 'reminders') loadReminderPolicy();
+  if (normalized === 'mail') loadMailConfig();
   if (normalized === 'workers' && providerPoolSnapshot) loadWorkerSchedulerState();
-  if (normalized !== 'reminders' && !providerPoolSnapshot) loadProviderPool();
+  if (normalized !== 'reminders' && normalized !== 'mail' && !providerPoolSnapshot) loadProviderPool();
 }
 
 function setProviderPoolStatus(message, error) {
@@ -8734,6 +9045,223 @@ async function loginAccountInDesktop() {
   }
 }
 
+let mailConfig = null;
+let mailConfigBusy = false;
+let mailConfigLoadingPromise = null;
+let mailMessages = {folder: '', messages: [], fetched_at: ''};
+let mailMessagesBusy = false;
+
+function setMailSettingsStatus(message, error) {
+  if (!els.mailSettingsStatus) return;
+  els.mailSettingsStatus.textContent = message || '';
+  els.mailSettingsStatus.classList.toggle('error', Boolean(error));
+}
+
+function setMailSettingsBusy(busy) {
+  mailConfigBusy = busy;
+  if (!els.mailSettingsForm) return;
+  const managed = Boolean(mailConfig && mailConfig.managed);
+  $$('input, textarea, button', els.mailSettingsForm).forEach(control => {
+    if (control === els.mailSettingsTest) return;
+    control.disabled = busy || managed;
+  });
+  if (els.mailSettingsTest) els.mailSettingsTest.disabled = busy || managed;
+}
+
+function renderMailConfig(config) {
+  mailConfig = config || {};
+  if (els.mailEnabled) els.mailEnabled.checked = Boolean(mailConfig.enabled);
+  if (els.mailDisplayName) els.mailDisplayName.value = mailConfig.display_name || '';
+  if (els.mailAddress) els.mailAddress.value = mailConfig.address || '';
+  if (els.mailUsername) els.mailUsername.value = mailConfig.username || '';
+  if (els.mailPassword) {
+    els.mailPassword.value = '';
+    els.mailPassword.placeholder = mailConfig.password_set ? '已配置，留空保持不变' : '';
+  }
+  if (els.mailImapHost) els.mailImapHost.value = mailConfig.imap_host || '';
+  if (els.mailImapPort) els.mailImapPort.value = String(mailConfig.imap_port || 993);
+  if (els.mailImapSsl) els.mailImapSsl.checked = Boolean(mailConfig.imap_use_ssl);
+  if (els.mailSmtpHost) els.mailSmtpHost.value = mailConfig.smtp_host || '';
+  if (els.mailSmtpPort) els.mailSmtpPort.value = String(mailConfig.smtp_port || 587);
+  if (els.mailSmtpSsl) els.mailSmtpSsl.checked = Boolean(mailConfig.smtp_use_ssl);
+  if (els.mailSmtpStarttls) els.mailSmtpStarttls.checked = Boolean(mailConfig.smtp_use_starttls);
+  if (els.mailInboxFolder) els.mailInboxFolder.value = mailConfig.inbox_folder || 'INBOX';
+  if (els.mailSentFolder) els.mailSentFolder.value = mailConfig.sent_folder || 'Sent';
+  if (els.mailFetchLimit) els.mailFetchLimit.value = String(mailConfig.fetch_limit || 20);
+  if (els.mailPollInterval) els.mailPollInterval.value = String(mailConfig.poll_interval_seconds || 120);
+  if (els.mailSignature) els.mailSignature.value = mailConfig.signature || '';
+  setMailSettingsBusy(false);
+  setMailSettingsStatus(
+    mailConfig.managed ? '托管配置，只读' : (mailConfig.configured ? '已配置' : '未配置邮件')
+  );
+}
+
+async function loadMailConfig() {
+  if (mailConfigLoadingPromise) return mailConfigLoadingPromise;
+  setMailSettingsBusy(true);
+  setMailSettingsStatus('读取中');
+  mailConfigLoadingPromise = (async () => {
+    try {
+      const response = await fetch('/mail/config', {cache: 'no-store'});
+      if (!response.ok) throw await responseError(response, '读取邮件配置失败');
+      renderMailConfig(await response.json());
+      return mailConfig;
+    } catch (error) {
+      setMailSettingsStatus(String(error.message || '读取失败'), true);
+      setMailSettingsBusy(false);
+      return null;
+    } finally {
+      mailConfigLoadingPromise = null;
+    }
+  })();
+  return mailConfigLoadingPromise;
+}
+
+async function saveMailConfig() {
+  if (!els.mailSettingsForm || mailConfigBusy || !els.mailSettingsForm.reportValidity()) return;
+  setMailSettingsBusy(true);
+  setMailSettingsStatus('保存中');
+  try {
+    const response = await fetch('/mail/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        enabled: Boolean(els.mailEnabled.checked),
+        display_name: els.mailDisplayName.value.trim(),
+        address: els.mailAddress.value.trim(),
+        username: els.mailUsername.value.trim(),
+        password: els.mailPassword.value.trim(),
+        imap_host: els.mailImapHost.value.trim(),
+        imap_port: Number(els.mailImapPort.value || 993),
+        imap_use_ssl: Boolean(els.mailImapSsl.checked),
+        smtp_host: els.mailSmtpHost.value.trim(),
+        smtp_port: Number(els.mailSmtpPort.value || 587),
+        smtp_use_ssl: Boolean(els.mailSmtpSsl.checked),
+        smtp_use_starttls: Boolean(els.mailSmtpStarttls.checked),
+        inbox_folder: els.mailInboxFolder.value.trim(),
+        sent_folder: els.mailSentFolder.value.trim(),
+        fetch_limit: Number(els.mailFetchLimit.value || 20),
+        poll_interval_seconds: Number(els.mailPollInterval.value || 120),
+        signature: els.mailSignature.value.trim(),
+      }),
+    });
+    if (!response.ok) throw await responseError(response, '保存邮件配置失败');
+    renderMailConfig(await response.json());
+    setMailSettingsStatus('已保存');
+  } catch (error) {
+    setMailSettingsStatus(String(error.message || '保存失败'), true);
+    setMailSettingsBusy(false);
+  }
+}
+
+async function testMailConfig() {
+  if (mailConfigBusy) return;
+  setMailSettingsBusy(true);
+  setMailSettingsStatus('测试中');
+  try {
+    const response = await fetch('/mail/test', {method: 'POST'});
+    if (!response.ok) throw await responseError(response, '测试失败');
+    const result = await response.json();
+    renderMailConfig(result);
+    setMailSettingsStatus(
+      '连接正常 · IMAP ' + (result.imap_ok ? 'OK' : 'FAIL') +
+      ' · SMTP ' + (result.smtp_ok ? 'OK' : 'FAIL')
+    );
+  } catch (error) {
+    setMailSettingsStatus(String(error.message || '测试失败'), true);
+    setMailSettingsBusy(false);
+  }
+}
+
+function renderMailMessages() {
+  if (!els.drawerBody || drawerOpen !== 'mail') return;
+  const config = mailConfig || {};
+  const messages = Array.isArray(mailMessages.messages) ? mailMessages.messages : [];
+  const configured = Boolean(config.configured);
+  const inboxHtml = messages.length ? messages.map(message => {
+    const preview = String(message.preview || '').substring(0, 160);
+    return '<div class="mail-message">' +
+      '<div class="mail-message-head"><strong>' + esc(message.subject || '(无主题)') + '</strong>' +
+      '<span>' + esc(message.date || '') + '</span></div>' +
+      '<div class="mail-message-meta">' + esc(message.from || '') + '</div>' +
+      '<div class="mail-message-preview">' + esc(preview || '无正文预览') + '</div>' +
+    '</div>';
+  }).join('') : '<div class="drawer-sub">当前没有邮件。</div>';
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">通过网关查看收件箱，并在这里直接写信发送。</div>' +
+    '<div class="drawer-section">' +
+      '<div class="drawer-section-label">邮件状态</div>' +
+      '<div class="drawer-sub" style="margin:0;">' +
+        esc(config.display_name || '星子邮件') + ' · ' +
+        esc(config.address || '未配置地址') + ' · ' +
+        esc(config.imap_host || 'IMAP 未配置') + ' / ' +
+        esc(config.smtp_host || 'SMTP 未配置') +
+      '</div>' +
+      (configured ? '<div class="drawer-sub" style="margin-top:6px;">收件箱 ' + esc(mailMessages.folder || config.inbox_folder || 'INBOX') + '</div>' : '') +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="drawer-section-label">收件箱</div>' +
+      (mailMessagesBusy ? '<div class="drawer-sub">正在读取邮件...</div>' : inboxHtml) +
+    '</div>' +
+    '<div class="drawer-section">' +
+      '<div class="drawer-section-label">写信</div>' +
+      '<form class="mail-compose-form" data-mail-compose>' +
+        '<label class="mail-compose-field"><span>收件人</span><input data-mail-to required maxlength="160" autocomplete="off"/></label>' +
+        '<label class="mail-compose-field"><span>主题</span><input data-mail-subject maxlength="200" autocomplete="off"/></label>' +
+        '<label class="mail-compose-field wide"><span>正文</span><textarea data-mail-body rows="6" required maxlength="4000"></textarea></label>' +
+        '<div class="mail-compose-actions">' +
+          '<span class="drawer-sub" style="margin:0;" data-mail-compose-status>' + (configured ? '准备发送' : '请先配置邮件服务器') + '</span>' +
+          '<button type="button" class="drill-link" data-mail-refresh>刷新收件箱</button>' +
+          '<button type="button" class="provider-action primary" data-mail-send' + (configured ? '' : ' disabled') + '>发送</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  if (config.managed) {
+    const form = $('[data-mail-compose]', els.drawerBody);
+    if (form) $$('input, textarea, button', form).forEach(control => { control.disabled = true; });
+  }
+}
+
+async function loadMailMessages() {
+  if (mailMessagesBusy) return;
+  mailMessagesBusy = true;
+  try {
+    const folder = String((mailConfig || {}).inbox_folder || 'INBOX').trim();
+    const limit = Number((mailConfig || {}).fetch_limit || 20);
+    const response = await fetch('/mail/messages?folder=' + encodeURIComponent(folder) + '&limit=' + encodeURIComponent(String(limit)), {cache: 'no-store'});
+    if (!response.ok) throw await responseError(response, '读取邮件失败');
+    mailMessages = await response.json();
+  } catch (_error) {
+    mailMessages = {folder: '', messages: [], fetched_at: ''};
+  } finally {
+    mailMessagesBusy = false;
+  }
+  renderMailMessages();
+}
+
+async function sendMailDraft() {
+  if (!els.drawerBody || drawerOpen !== 'mail' || mailMessagesBusy || mailConfigBusy) return;
+  const form = $('[data-mail-compose]', els.drawerBody);
+  if (!form || !form.reportValidity()) return;
+  const to = String($('[data-mail-to]', form)?.value || '').trim();
+  const subject = String($('[data-mail-subject]', form)?.value || '').trim();
+  const body = String($('[data-mail-body]', form)?.value || '').trim();
+  const status = $('[data-mail-compose-status]', form);
+  if (status) status.textContent = '发送中';
+  try {
+    const response = await fetch('/mail/send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({to, subject, body}),
+    });
+    if (!response.ok) throw await responseError(response, '发送失败');
+    if (status) status.textContent = '已发送';
+    await loadMailMessages();
+  } catch (error) {
+    if (status) status.textContent = String(error.message || '发送失败');
+  }
+}
+
 async function deleteAccount(id) {
   if (!confirm('确定删除此账号吗？删除后 B站播放将恢复未登录状态。')) return;
   try {
@@ -9112,6 +9640,13 @@ if (els.settingsTabs) {
     if (button) setSettingsView(button.dataset.settingsView);
   });
 }
+if (els.mailSettingsForm) {
+  els.mailSettingsForm.addEventListener('submit', event => {
+    event.preventDefault();
+    saveMailConfig();
+  });
+}
+if (els.mailSettingsTest) els.mailSettingsTest.addEventListener('click', testMailConfig);
 if (els.providerAdd) els.providerAdd.addEventListener('click', () => editProvider(''));
 if (els.providerType) els.providerType.addEventListener('change', applyProviderPreset);
 if (els.providerAuthMode) els.providerAuthMode.addEventListener('change', syncProviderAuthFields);
