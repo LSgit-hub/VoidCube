@@ -43,11 +43,13 @@ def test_autonomous_task_drawer_explicitly_excludes_schedules():
 
 def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert 'class="companion-widget" data-companion-widget' in HTML
-    assert '<button type="button" class="companion-launcher" data-companion-launcher' in HTML
-    assert 'aria-expanded="false" aria-controls="companionChatContent"' in HTML
+    assert '<section class="xizi" data-companion-launcher' in HTML
+    assert '<section class="xingzi" data-companion-launcher' in HTML
+    assert 'body[data-stellar-mode="daily_companion"] .xizi:hover .xz-eye' in HTML
+    assert 'body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-eye' in HTML
+    assert 'class="companion-launcher"' not in HTML
     assert 'data-scene-entry="mail" aria-label="邮件收发"' in HTML
-    assert '<section class="xizi">' in HTML
-    assert '<section class="xingzi">' in HTML
+    assert 'aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天"' in HTML
     assert '打开辅助聊天' in HTML
     assert HTML.count('<form class="companion-chat-form" data-companion-form>') == 1
     assert 'class="companion-chat-content" id="companionChatContent"' in HTML
@@ -55,7 +57,7 @@ def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert "fetch('/companion/message'" in HTML
     assert "stellar_auto_evolution_active" in HTML
     assert 'els.companionWidget.hidden = autoMode' in HTML
-    assert "addEventListener('click', toggleCompanionChat)" in HTML
+    assert "if (isDailyCompanionMode()) toggleCompanionChat();" in HTML
     assert 'data-companion-open' not in HTML
 
 

@@ -182,8 +182,15 @@ html, body {
     0 16px 30px var(--shadow-deep),
     inset 0 0 0 3px #d4a878;
   z-index: 2;
+  transform-origin: center bottom;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  will-change: transform, filter;
 }
 .window[data-scene-entry] { cursor: pointer; }
+.window[data-scene-entry]:hover,
+.window[data-scene-entry]:focus-visible {
+  transform: translateY(-4px) scale(1.01);
+}
 .window[data-scene-entry]:hover .window-glass,
 .window[data-scene-entry]:focus-visible .window-glass {
   filter: brightness(1.05) saturate(1.05);
@@ -269,8 +276,15 @@ body[data-exec-window="false"] .floor {
   left: 3%; top: 12%;
   width: 280px; height: 360px;
   z-index: 3;
+  transform-origin: center bottom;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  will-change: transform, filter;
 }
 .shelf[data-drill] { cursor: pointer; }
+.shelf[data-drill]:hover,
+.shelf[data-drill]:focus-visible {
+  transform: translateY(-4px) scale(1.01);
+}
 .shelf[data-drill]:hover .shelf-frame,
 .shelf[data-drill]:focus-visible .shelf-frame {
   border-color: #70452d;
@@ -385,8 +399,6 @@ body[data-exec-window="false"] .floor {
   color: #2a1d18;
 }
 .companion-widget-panel::after { display: none; }
-/* 辅助模式直接点击人物进入聊天，隐藏旧的可见角标入口。 */
-.companion-launcher { display: none; }
 .companion-widget-panel.empty { display: grid; }
 .companion-widget-panel:not(.chat-open) .companion-chat-content { display: none; }
 .companion-widget-panel.chat-open {
@@ -503,8 +515,15 @@ body[data-exec-window="false"] .floor {
   transform: translateX(-50%);
   width: 200px; height: 130px;
   z-index: 5;
+  transform-origin: center bottom;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  will-change: transform, filter;
 }
 .desk-monitor[data-scene-entry] { cursor: pointer; }
+.desk-monitor[data-scene-entry]:hover,
+.desk-monitor[data-scene-entry]:focus-visible {
+  transform: translateX(-50%) translateY(-4px) scale(1.01);
+}
 .desk-monitor[data-scene-entry]:hover .monitor-body,
 .desk-monitor[data-scene-entry]:focus-visible .monitor-body {
   box-shadow: 0 8px 16px var(--shadow-deep), 0 0 0 2px rgba(126,224,192,.55), inset 0 0 0 2px #0a0e14;
@@ -719,12 +738,19 @@ body[data-exec-window="false"] .floor {
   right: 4%; bottom: 6%;
   width: 320px; height: 150px;
   z-index: 3;
+  transform-origin: center bottom;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  will-change: transform, filter;
 }
 body[data-action="work"] .monitor-cursor,
 body[data-scene="drive"] .monitor-cursor {
   animation: cursor-blink 1.1s steps(2) infinite;
 }
 .desk-write[data-scene-entry] { cursor: pointer; }
+.desk-write[data-scene-entry]:hover,
+.desk-write[data-scene-entry]:focus-visible {
+  transform: translateY(-4px) scale(1.01);
+}
 .desk-write[data-scene-entry]:hover .dw-paper,
 .desk-write[data-scene-entry]:focus-visible .dw-paper {
   box-shadow: 0 3px 6px rgba(0,0,0,.2), 0 0 0 2px rgba(167,138,212,.65);
@@ -869,6 +895,9 @@ body[data-scene="drive"] .monitor-cursor {
 .plant-corner {
   left: 26%; bottom: 30%;
   width: 80px; height: 130px;
+  transform-origin: center bottom;
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  will-change: transform, filter;
 }
 body[data-scene="planning"] .dw-paper {
   animation: paper-focus 2.4s ease-in-out infinite;
@@ -878,6 +907,10 @@ body[data-scene="planning"] .dw-paper {
   50% { transform: rotate(-1deg) translateY(-2px); }
 }
 .plant-corner[data-scene-entry] { cursor: pointer; }
+.plant-corner[data-scene-entry]:hover,
+.plant-corner[data-scene-entry]:focus-visible {
+  transform: translateY(-3px) scale(1.01);
+}
 .plant-corner[data-scene-entry]:hover .pot,
 .plant-corner[data-scene-entry]:focus-visible .pot {
   box-shadow: inset -4px 0 rgba(0,0,0,.2), 0 4px 6px rgba(0,0,0,.3), 0 0 0 2px rgba(111,198,160,.7);
@@ -1062,6 +1095,7 @@ body[data-scene="maintenance"] .plant-corner .leaves {
   border-radius: 50%;
   background: #1a2530;
   z-index: 5;
+  transition: transform .08s ease, height .18s ease, border-radius .18s ease;
 }
 .xz-eye.l { left: 46px; }
 .xz-eye.r { left: 74px; }
@@ -1327,7 +1361,7 @@ body[data-panel-open] .companion-chat { display: none; }
 body[data-action="organize"] .xizi {
   left: 12%; margin-left: -65px;
   bottom: 30%;
-  transform: scale(1) translateY(0);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(1);
 }
 body[data-action="organize"] .xz-dress {
   background: linear-gradient(140deg, #f4d4a8 0%, #d4954a 100%);
@@ -1341,7 +1375,7 @@ body[data-action="organize"] .thoughts { opacity: 1; transform: translateX(20px)
 body[data-action="rest"] .xizi {
   left: 17%; margin-left: -40px;
   bottom: 10%;
-  transform: scale(.88);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.88);
 }
 body[data-action="rest"] .xz-dress {
   background: linear-gradient(140deg, #6fc6a0 0%, #4a9070 100%);
@@ -1364,7 +1398,7 @@ body[data-action="rest"] .xz-eye { height: 6px; border-radius: 50%; animation: r
 body[data-action="work"] .xizi {
   left: 50%; margin-left: -65px;
   bottom: 28%;
-  transform: scale(.92);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.92);
 }
 body[data-action="work"] .xz-dress {
   background: linear-gradient(140deg, #6a7eb8 0%, #4a6098 100%);
@@ -1379,7 +1413,7 @@ body[data-action="work"] .xz-eye { animation: work-blink 4s ease-in-out infinite
 body[data-action="write"] .xizi {
   left: 86%; margin-left: -65px;
   bottom: 20%;
-  transform: scale(.92);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.92);
   z-index: 2;
 }
 body[data-action="write"] .xz-dress {
@@ -1457,12 +1491,38 @@ body[data-action="write"] .action-glow { background: radial-gradient(circle, var
 
 
 /* ── 角色切换: data-character 控制显示哪个角色 ── */
-.xizi, .xingzi { display: none; cursor: pointer; }
+.xizi, .xingzi {
+  display: none;
+  cursor: pointer;
+  transition: transform .18s ease, filter .18s ease;
+  will-change: transform, filter;
+  --character-hover-offset: 0px;
+  --eye-gaze-x: 0px;
+  --eye-gaze-y: 0px;
+}
 body[data-character="xizi"] .xizi { display: block; }
 body[data-character="xingzi"] .xingzi { display: block; }
 /* 默认显示西子(女) */
 body:not([data-character]) .xizi,
 body[data-character=""] .xizi { display: block; }
+.xizi:hover, .xingzi:hover,
+.xizi:focus-visible, .xingzi:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 5px;
+}
+body[data-stellar-mode="daily_companion"] .xizi:hover,
+body[data-stellar-mode="daily_companion"] .xingzi:hover,
+body[data-stellar-mode="daily_companion"] .xizi:focus-visible,
+body[data-stellar-mode="daily_companion"] .xingzi:focus-visible {
+  --character-hover-offset: -6px;
+  filter: brightness(1.04) drop-shadow(0 10px 16px rgba(0,0,0,.18));
+}
+body[data-stellar-mode="daily_companion"] .xizi:hover .xz-eye,
+body[data-stellar-mode="daily_companion"] .xizi:focus-visible .xz-eye,
+body[data-stellar-mode="daily_companion"] .xingzi:hover .xs-eye,
+body[data-stellar-mode="daily_companion"] .xingzi:focus-visible .xs-eye {
+  transform: translate(var(--eye-gaze-x, 0px), var(--eye-gaze-y, 0px));
+}
 
 /* ── 角色: 星子(短发男) ── */
 .xingzi {
@@ -1528,6 +1588,7 @@ body[data-character=""] .xizi { display: block; }
   border-radius: 50%;
   background: #141e28;
   z-index: 5;
+  transition: transform .08s ease, height .18s ease, border-radius .18s ease;
 }
 .xs-eye.l { left: 44px; }
 .xs-eye.r { left: 74px; }
@@ -1662,7 +1723,7 @@ body[data-character=""] .xizi { display: block; }
 body[data-action="organize"] .xingzi {
   left: 12%; margin-left: -70px;
   bottom: 29%;
-  transform: scale(1) translateY(0);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(1);
 }
 body[data-action="organize"] .xs-shirt {
   background: linear-gradient(140deg, #f4d4a8 0%, #d4954a 100%);
@@ -1676,7 +1737,7 @@ body[data-action="organize"] .xingzi .thoughts { opacity: 1; transform: translat
 body[data-action="rest"] .xingzi {
   left: 17%; margin-left: -40px;
   bottom: 10%;
-  transform: scale(.88);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.88);
 }
 body[data-action="rest"] .xs-shirt {
   background: linear-gradient(140deg, #6fc6a0 0%, #4a9070 100%);
@@ -1695,7 +1756,7 @@ body[data-action="rest"] .xs-eye { height: 5px; border-radius: 50%; animation: r
 body[data-action="work"] .xingzi {
   left: 50%; margin-left: -70px;
   bottom: 27%;
-  transform: scale(.92);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.92);
 }
 body[data-action="work"] .xs-shirt {
   background: linear-gradient(140deg, #6a7eb8 0%, #4a6098 100%);
@@ -1709,7 +1770,7 @@ body[data-action="work"] .xs-eye { animation: work-blink 4s ease-in-out infinite
 body[data-action="write"] .xingzi {
   left: 86%; margin-left: -70px;
   bottom: 19%;
-  transform: scale(.92);
+  transform: translateY(var(--character-hover-offset, 0px)) scale(.92);
   z-index: 2;
 }
 body[data-action="write"] .xs-shirt {
@@ -4232,7 +4293,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <!-- 沙发 + 日常辅助聊天组件 -->
     <div class="companion-widget" data-companion-widget hidden>
       <div class="companion-chat companion-widget-panel empty" id="companionChatPanel" data-companion-chat aria-live="polite">
-        <button type="button" class="companion-launcher" data-companion-launcher aria-expanded="false" aria-controls="companionChatContent" aria-label="打开辅助聊天" title="打开辅助聊天">💬 聊天</button>
         <div class="companion-chat-content" id="companionChatContent">
           <div class="companion-chat-line user" data-chat-user-line>
             <span class="companion-chat-label">你</span>
@@ -4347,7 +4407,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 角色: 西子(长发女) -->
-    <section class="xizi">
+    <section class="xizi" data-companion-launcher aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天" title="打开辅助聊天">
       <div class="xz-hair-back"></div>
       <div class="xz-hair"></div>
       <div class="xz-bangs"></div>
@@ -4369,7 +4429,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </section>
 
     <!-- 角色: 星子(短发男) -->
-    <section class="xingzi">
+    <section class="xingzi" data-companion-launcher aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天" title="打开辅助聊天">
       <div class="xs-hair-back"></div>
       <div class="xs-hair"></div>
       <div class="xs-bangs"></div>
@@ -4933,8 +4993,7 @@ const els = {
   voiceMeter: $('#voiceMeter'),
   voiceStatusLabel: $('#voiceStatusLabel'),
   companionWidget: $('[data-companion-widget]'),
-  companionLauncher: $('[data-companion-launcher]'),
-  companionCharacters: $$('.xizi, .xingzi'),
+  companionCharacters: $$('[data-companion-launcher]'),
   companionChats: $$('[data-companion-chat]'),
   companionForms: $$('[data-companion-form]'),
   companionInputs: $$('[data-companion-input]'),
@@ -5033,6 +5092,42 @@ let companionChatSessionId = '';
 let connectionState = 'connecting';
 let lastSyncAt = 0;
 let lastSyncTimer = null;
+let lastState = null;
+function currentStellarMode() {
+  return String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
+}
+function isDailyCompanionMode() {
+  return currentStellarMode() === 'daily_companion';
+}
+function resetCompanionCharacterPose(character) {
+  if (!character) return;
+  character.style.setProperty('--eye-gaze-x', '0px');
+  character.style.setProperty('--eye-gaze-y', '0px');
+}
+function setCompanionCharacterPose(character, event) {
+  if (!character || !event) return;
+  if (!isDailyCompanionMode()) return;
+  const rect = character.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  const gazeX = Math.max(-1, Math.min(1, (event.clientX - centerX) / (rect.width / 2 || 1)));
+  const gazeY = Math.max(-1, Math.min(1, (event.clientY - centerY) / (rect.height / 2 || 1)));
+  character.style.setProperty('--eye-gaze-x', (gazeX * 4).toFixed(2) + 'px');
+  character.style.setProperty('--eye-gaze-y', (gazeY * 2.6).toFixed(2) + 'px');
+}
+function syncCompanionCharacterLaunchers(open) {
+  const daily = isDailyCompanionMode();
+  els.companionCharacters.forEach(character => {
+    character.setAttribute('role', 'button');
+    character.setAttribute('tabindex', '0');
+    character.setAttribute('aria-expanded', String(Boolean(open && daily)));
+    character.setAttribute('aria-disabled', String(!daily));
+    character.setAttribute('aria-label', daily ? (open ? '关闭辅助聊天' : '打开辅助聊天') : '辅助模式下可打开聊天');
+    character.setAttribute('title', daily ? (open ? '收起聊天' : '打开辅助聊天') : '辅助模式下可打开聊天');
+    if (!daily) resetCompanionCharacterPose(character);
+  });
+}
 if (els.stellarModeControl) {
   els.stellarModeControl.addEventListener('click', event => {
     const button = event.target.closest('button[data-mode]');
@@ -5048,22 +5143,21 @@ if (els.voiceFingerprintToggle) {
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
-if (els.companionLauncher) els.companionLauncher.addEventListener('click', toggleCompanionChat);
 els.companionCharacters.forEach(character => {
-  character.setAttribute('role', 'button');
-  character.setAttribute('tabindex', '0');
-  character.setAttribute('aria-label', '打开辅助聊天');
   character.addEventListener('click', event => {
     event.stopPropagation();
-    const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
-    if (mode === 'daily_companion') toggleCompanionChat();
+    if (isDailyCompanionMode()) toggleCompanionChat();
   });
   character.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    character.click();
+    if (isDailyCompanionMode()) character.click();
   });
+  character.addEventListener('pointerenter', event => setCompanionCharacterPose(character, event));
+  character.addEventListener('pointermove', event => setCompanionCharacterPose(character, event));
+  character.addEventListener('pointerleave', () => resetCompanionCharacterPose(character));
 });
+syncCompanionCharacterLaunchers(false);
 els.companionForms.forEach(form => form.addEventListener('submit', event => {
     event.preventDefault();
     sendCompanionText();
@@ -7684,6 +7778,7 @@ function showVoiceNotice(text, tone = '', durationMs = 4000) {
 function updateSceneMiniTitle(state) {
   const scene = state.scene || 'idle';
   const activeMode = ((state.stellar_mode || {}).mode || 'daily_companion');
+  if (els.body) els.body.dataset.stellarMode = activeMode;
   if (els.sceneMiniIcon) els.sceneMiniIcon.textContent = SCENE_ICONS[scene] || '🛋';
   if (els.sceneMiniText) {
     els.sceneMiniText.textContent = state.title || '星子与西子的小屋';
@@ -7747,6 +7842,7 @@ function renderCompanionChat(state) {
   const dialogue = stellar.latest_companion_dialogue || {};
   const reminder = stellar.latest_proactive_reminder || {};
   const daily = String(stellar.mode || 'daily_companion') === 'daily_companion';
+  if (els.body) els.body.dataset.stellarMode = String(stellar.mode || 'daily_companion');
   const userText = daily
     ? String(dialogue.user_text || voice.last_transcript || '').trim()
     : '';
@@ -7780,15 +7876,10 @@ function renderCompanionChat(state) {
   });
   const autoMode = !daily;
   if (els.companionWidget) els.companionWidget.hidden = autoMode;
-  if (els.companionLauncher) {
-    els.companionLauncher.setAttribute('aria-expanded', String(companionChatOpen));
-    els.companionLauncher.textContent = companionChatOpen ? '💬 收起' : '💬 聊天';
-    els.companionLauncher.title = companionChatOpen ? '收起聊天' : '打开辅助聊天';
+  syncCompanionCharacterLaunchers(companionChatOpen);
+  if (!daily) {
+    els.companionCharacters.forEach(character => resetCompanionCharacterPose(character));
   }
-  els.companionCharacters.forEach(character => {
-    character.setAttribute('aria-expanded', String(companionChatOpen));
-    character.setAttribute('aria-label', companionChatOpen ? '关闭辅助聊天' : '打开辅助聊天');
-  });
   const activeCharacter = String(els.body.dataset.character || 'xizi') === 'xingzi' ? '星子' : '西子';
   const agentLabel = $('[data-chat-agent]');
   if (agentLabel) agentLabel.textContent = activeCharacter;
@@ -7843,15 +7934,12 @@ function openCompanionChat() {
   const input = activeCompanionInput();
   const status = activeCompanionStatus();
   if (!chat) return;
+  if (!isDailyCompanionMode()) return;
   companionChatOpen = true;
   chat.classList.add('chat-open');
-  if (els.companionLauncher) {
-    els.companionLauncher.setAttribute('aria-expanded', 'true');
-    els.companionLauncher.textContent = '💬 收起';
-    els.companionLauncher.title = '收起聊天';
-  }
+  syncCompanionCharacterLaunchers(true);
   if (status && !companionChatBusy) {
-    const mode = String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
+    const mode = currentStellarMode();
     status.textContent = mode === 'auto_evolution'
       ? 'Auto 模式运行时暂不可聊天'
       : '文字消息会沿用日常陪伴与员工委派链路';
@@ -7862,14 +7950,11 @@ function openCompanionChat() {
 function toggleCompanionChat() {
   const chat = activeCompanionChat();
   if (!chat) return;
+  if (!isDailyCompanionMode()) return;
   if (companionChatOpen) {
     companionChatOpen = false;
     chat.classList.remove('chat-open');
-    if (els.companionLauncher) {
-      els.companionLauncher.setAttribute('aria-expanded', 'false');
-      els.companionLauncher.textContent = '💬 聊天';
-      els.companionLauncher.title = '打开辅助聊天';
-    }
+    syncCompanionCharacterLaunchers(false);
     return;
   }
   openCompanionChat();
@@ -9289,8 +9374,6 @@ async function verifyAccount(id) {
 }
 
 /* ── 应用状态(主入口) ── */
-let lastState = null;
-
 function applyState(state) {
   lastState = state;
   markConnection('connected');
