@@ -1,0 +1,4497 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, call, patch
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from voidcube.systems.execution import build_execution_route_hint
+from voidcube.systems.supervisor.supervisor import (
+    Supervisor,
+    SupervisorBodyRuntimeConfig,
+    SupervisorConfig,
+    SupervisorExecutionConfig,
+    SupervisorServiceRuntimeConfig,
+    VoiceCaptureRequest,
+)
+from voidcube.systems.supervisor.autonomous_chain_store import (
+    AutonomousChainExecutionRequest,
+    AutonomousChainStore,
+)
+from voidcube.systems.supervisor.autonomous_chain_recovery_service import (
+    AutonomousChainRecoveryService,
+)
+from voidcube.systems.supervisor.service_runtime import StellarMode
+from voidcube.systems.supervisor.ui_assets import load_supervisor_ui_html
+from voidcube.systems.supervisor.ui_autonomous_projection import project_autonomous_observation
+from voidcube.systems.supervisor.ui_body_projection import project_body_slot_cards
+from voidcube.systems.supervisor.ui_cognition_projection import (
+    project_cognition_judgement,
+    project_cognition_uncertainty,
+)
+from voidcube.systems.supervisor.ui_observation_projection import (
+    build_observation_card,
+    observation_display_status,
+    project_observation_stage_card,
+)
+from voidcube.systems.supervisor.ui_projection import (
+    default_observation_input_snapshot,
+    format_supervisor_ui_event,
+    observation_group,
+    observation_loop_stage,
+    project_observation_board,
+    project_recent_autonomous_activity,
+)
+from voidcube.systems.supervisor.ui_trace_projection import (
+    attach_observation_trace_details,
+    project_chain_segment_activity,
+    project_trace_detail,
+    recent_observation_trace_ids,
+)
+from voidcube.systems.supervisor.ui_state_projection import (
+    project_supervisor_scene,
+    project_ui_metrics,
+)
+UI_HTML = load_supervisor_ui_html()
+
+
+@pytest.mark.unit
+def test_supervisor_ui_template_is_loaded_from_a_packaged_resource():
+    runtime_source = Path("src/voidcube/systems/supervisor/ui_runtime.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "UI_HTML = r" not in runtime_source
+    assert "return HTMLResponse(load_supervisor_ui_html())" in runtime_source
+    assert UI_HTML.startswith("<!doctype html>")
+    assert UI_HTML.rstrip().endswith("</html>")
+    assert load_supervisor_ui_html() is UI_HTML
+
+
+@pytest.mark.unit
+def test_ui_projection_primitives_use_explicit_snapshots_only():
+    default_snapshot = default_observation_input_snapshot()
+    activity = project_recent_autonomous_activity(
+        {
+            "last_autonomous_chain_execute_at": "2026-07-29T10:00:00+00:00",
+            "recent_metadata": {
+                "autonomous_chain_execute": {
+                    "source_service": "executor",
+                    "task_identity": {"summary": "写回执行报告"},
+                    "execution_kind": "body_improvement",
+                }
+            },
+        }
+    )
+    observation = {
+        "counts": {"employee_running": "2"},
+        "chain": {"segments": [{"key": "api_b_judgement", "count": 1}]},
+        "loop": {
+            "stage_cards": [
+                {"stage_key": "employee_execution", "display_status": "执行中"}
+            ]
+        },
+    }
+
+    assert default_snapshot["snapshot_source"] == "default"
+    assert activity["title"] == "写回执行报告"
+    assert activity["source_label"] == "员工代理执行面"
+    assert project_observation_board(
+        observation, recent_activity=activity
+    )["observation_notes"][0]["text"] == "还有 2 个执行中链路项，写回后会回到这里。"
+    assert observation_group(observation, "api_b_judgement")["count"] == 1
+    assert observation_loop_stage(observation, "employee_execution")["status_label"] == "执行中"
+
+
+@pytest.mark.unit
+def test_ui_cognition_projections_use_explicit_snapshots_only():
+    snapshot = {
+        "governance": {"preferred_focus": "truthfulness"},
+        "judgement_core": {
+            "primary_need": {"need_type": "truthfulness_repair"},
+            "primary_intent": {"intent_type": "protect_truthfulness"},
+        },
+        "proposal_cognition": {
+            "assessment_trace": {
+                "dominant_constraint": "user_service_priority",
+                "why_not_improvement_now": (
+                    "prioritize truthfulness governance before direct body improvement."
+                ),
+            }
+        },
+        "perception": {"employee_dispatch_count": 1, "employee_running_count": 2},
+        "uncertainty_ledger": {
+            "active_count": 1,
+            "highest_risk_domain": "truthfulness",
+            "entries": [
+                {
+                    "domain": "truthfulness",
+                    "risk": 0.8,
+                    "confidence": 0.25,
+                    "recommended_probe": (
+                        "review recent uncertain answers and correction signals"
+                    ),
+                }
+            ],
+        },
+    }
+
+    judgement = project_cognition_judgement(snapshot)
+    uncertainty = project_cognition_uncertainty(snapshot)
+
+    assert judgement["focus_label"] == "真实性"
+    assert judgement["employee_running_count"] == 2
+    assert any(
+        "先处理真实性风险" in reason
+        for reason in judgement["why_not_direct_improvement"]
+    )
+    assert uncertainty["highest_risk_label"] == "真实性侧"
+    assert uncertainty["top_items"][0]["recommended_probe_label"] == (
+        "复核近期不确定回答与修正信号"
+    )
+
+
+@pytest.mark.unit
+def test_ui_observation_card_projections_use_explicit_snapshots_only():
+    card = build_observation_card(
+        {
+            "title": "候选任务",
+            "status": "approved",
+            "task_identity": {
+                "task_family": "self_learning",
+                "display_kind": "body_improvement",
+            },
+            "judgement_preview": {
+                "review_outcome": {"action": "approve", "reason": "证据充分"}
+            },
+        },
+        lane="agent",
+        observation_role="employee_execution",
+    )
+    stage = project_observation_stage_card(
+        {
+            "key": "employee_execution",
+            "label": "员工执行回报",
+            "status": "running",
+            "focus_task": {"title": "执行中任务", "status": "running"},
+        }
+    )
+
+    assert card is not None
+    assert card["display_status"] == "已转交"
+    assert card["observation_type_label"] == "员工执行回报"
+    assert "监督者已裁定: 转交" in card["judgement_hint"]
+    assert stage["display_status"] == "执行中"
+    assert stage["lane"] == "supervisor"
+
+
+@pytest.mark.unit
+def test_ui_trace_projections_use_explicit_records_only():
+    timeline = [
+        {
+            "recorded_at": "2026-07-29T10:02:00+00:00",
+            "source": "supervisor_activity",
+            "source_label": "监督者活动",
+            "event_type": "tasks_planned",
+            "event_label": "治理规划",
+            "summary": "已规划链路项。",
+            "task_id": "task-1",
+            "trace_id": "trace-1",
+            "decision_id": "decision-1",
+        }
+    ]
+    segments = project_chain_segment_activity(
+        chain_segments=[
+            {
+                "key": "api_b_judgement",
+                "items": [{"task_id": "task-1", "trace_id": "trace-1", "title": "治理任务", "status": "planned"}],
+                "item_label": "判断项",
+                "event_label": "动作",
+                "trace_label": "回合",
+                "source_label": "API-B",
+                "stage_label": "判断在途",
+                "summary": "正在观察。",
+            }
+        ],
+        timeline=timeline,
+    )
+    detail = project_trace_detail(
+        trace_id="trace-1",
+        summary={
+            "record_count": 1,
+            "sources": {"supervisor_activity": 1},
+            "source_labels": ["监督者活动"],
+            "task_ids": ["task-1"],
+            "decision_ids": ["decision-1"],
+        },
+        timeline=timeline,
+    )
+    observation = {"chain": {"segments": segments}}
+    enriched = attach_observation_trace_details(
+        observation,
+        details={"trace-1": detail},
+    )
+
+    assert segments[0]["recent_events"][0]["trace_id"] == "trace-1"
+    assert segments[0]["recent_traces"][0]["task_titles"] == ["治理任务"]
+    assert recent_observation_trace_ids(observation) == ["trace-1"]
+    assert enriched["chain"]["segments"][0]["latest_trace_detail"] == detail
+    assert "detail" not in observation["chain"]["segments"][0]["recent_traces"][0]
+
+
+@pytest.mark.unit
+def test_ui_state_projections_use_loaded_snapshots_only():
+    observation = {
+        "counts": {"api_b_judgement": 1, "employee_running": 1},
+        "board": {"primary_focus": {"title": "治理任务"}},
+        "chain": {"segments": [{"key": "api_b_judgement", "payload_count": 1}]},
+        "loop": {
+            "stage_cards": [
+                {
+                    "stage_key": "employee_execution",
+                    "status": "active",
+                    "focus_task": {"title": "执行任务"},
+                }
+            ]
+        },
+    }
+    metrics = project_ui_metrics(
+        [{"execution_kind": "body_improvement", "status": "completed", "governance_task_type": "self_learning"}],
+        autonomous_observation=observation,
+        body_status={"active_slot": "primary", "shell_slot": "candidate"},
+        error_count=2,
+    )
+
+    assert metrics["slot_overview"] == "primary / candidate"
+    assert metrics["learning_results"] == {"completed": 1, "failed": 0}
+    assert project_supervisor_scene(
+        autonomous_observation=observation,
+        observation_input_available=True,
+        error_count=2,
+    )[0] == "handoff"
+
+
+@pytest.mark.unit
+def test_autonomous_observation_projection_uses_explicit_task_snapshots_only():
+    observation = project_autonomous_observation(
+        [
+            {
+                "task_id": "supervisor-1",
+                "title": "治理判断",
+                "status": "planned",
+                "metadata": {},
+            },
+            {
+                "task_id": "agent-1",
+                "title": "待执行学习",
+                "governance_task_type": "self_learning",
+                "status": "approved",
+                "metadata": {},
+            },
+        ],
+        drive_candidates=[
+            {"title": "新候选", "stable_key": "candidate-1", "metadata": {}}
+        ],
+        history_tasks=[
+            {
+                "task_id": "completed-1",
+                "title": "已完成学习",
+                "governance_task_type": "self_learning",
+                "status": "completed",
+                "metadata": {"execution_result": {"summary": "已写回"}},
+            }
+        ],
+        timeline=[],
+    )
+
+    assert observation["counts"] == {
+        "candidates": 1,
+        "writebacks": 1,
+        "api_b_judgement": 1,
+        "employee_dispatch": 1,
+        "employee_running": 0,
+    }
+    assert _observation_section(observation, "api_b_candidates")["items"][0]["title"] == "新候选"
+    assert _observation_loop_stage(observation, "employee_execution")["status"] == "ready"
+    assert _observation_loop_stage(observation, "mem_writeback")["focus_task"]["title"] == "已完成学习"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("maintenance_status", "display_status"),
+    [("accepted", "已受理"), ("in_progress", "维护中")],
+)
+def test_memory_maintenance_writeback_distinguishes_handoff_from_completion(
+    maintenance_status,
+    display_status,
+):
+    task = {
+        "task_id": "memory-maintenance-1",
+        "title": "整理长期记忆",
+        "governance_task_type": "memory_maintenance",
+        "status": "completed",
+        "decision_reason": "Memory Service accepted the maintenance request.",
+        "metadata": {
+            "execution_result": {
+                "status": "autonomous_chain_execution_executed",
+                "result": {
+                    "status": maintenance_status,
+                    "memory_service_maintenance": {"status": maintenance_status},
+                },
+            }
+        },
+    }
+
+    observation = project_autonomous_observation(
+        [],
+        drive_candidates=[],
+        history_tasks=[task],
+        timeline=[],
+    )
+    writeback = _observation_section(observation, "mem_recent")["items"][0]
+
+    assert observation_display_status(task) == display_status
+    assert writeback["status"] == "completed"
+    assert writeback["display_status"] == display_status
+    assert writeback["observation_type_label"] == "Memory 受理回执"
+
+
+def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
+    return SupervisorConfig(
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
+        body_runtime=SupervisorBodyRuntimeConfig(
+            state_root=str(tmp_path / "body-state")
+        ),
+        service_runtime=SupervisorServiceRuntimeConfig(
+            governor_llm_advisory_enabled=False,
+            endogenous_drive_lm_task_generation_enabled=False,
+        ),
+    )
+
+
+def _make_supervisor(tmp_path: Path) -> Supervisor:
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    return supervisor
+
+
+@pytest.mark.unit
+def test_supervisor_runtime_uses_configured_evolution_capability_policy(tmp_path):
+    config = _make_supervisor_config(tmp_path)
+    config.service_runtime.evolution_capability_policy_profile = "production"
+
+    supervisor = Supervisor(config)
+
+    assert supervisor._evolution_capability_policy.profile == "production"
+    assert (
+        supervisor._evolution_evaluation_governance_verifier.capability_policy
+        == supervisor._evolution_capability_policy
+    )
+
+
+def _make_probe_ready_supervisor(tmp_path: Path) -> Supervisor:
+    cli_dir = tmp_path / "src" / "voidcube" / "interfaces" / "cli"
+    cli_dir.mkdir(parents=True, exist_ok=True)
+    (cli_dir / "root_launcher.py").write_text(
+        "print('agent entrypoint')\n", encoding="utf-8"
+    )
+    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    tools_dir = tmp_path / "src" / "voidcube" / "extensions" / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    return _make_supervisor(tmp_path)
+
+
+@pytest.mark.unit
+def test_supervisor_can_disable_governor_llm_advisory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    assert supervisor.config.service_runtime.governor_llm_advisory_enabled is False
+    assert supervisor._governor._engine._llm_reasoner is None
+
+
+def _runtime_drive_input_payload(*, active_sessions: int = 0, quiet_after_seconds: int = 600) -> dict:
+    is_quiet = active_sessions == 0
+    return {
+        "checks": {
+            "has_employee_execution_idle": True,
+            "has_memory_idle": True,
+        },
+        "idle_seconds": {
+            "user": 900,
+            "employee_execution": 900,
+            "memory": 900,
+        },
+        "user_chain_signal": {
+            "scope": "soft_signal_only",
+            "active_sessions": active_sessions,
+            "is_quiet": is_quiet,
+            "recent_user_idle_seconds": 900,
+            "quiet_after_seconds": quiet_after_seconds,
+        },
+        "activity": {
+            "active_sessions": active_sessions,
+            "counts": {},
+        },
+        "decisions": {
+            "eligible_for_planning": True,
+            "eligible_for_execution": is_quiet,
+        },
+        "task_family_decisions": {
+            "self_learning": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": is_quiet,
+            },
+            "general_self_evolution": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+        },
+        "governance_task_type_decisions": {
+            "self_learning": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": is_quiet,
+            },
+            "self_evolution": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+        },
+    }
+
+
+def _find_autonomous_observation_task(state: dict, *, title: str = "", task_id: str = "") -> dict:
+    observation = dict(state.get("autonomous_observation") or {})
+    candidates: list[dict] = []
+
+    def _append(item):
+        if isinstance(item, dict) and item:
+            candidates.append(item)
+
+    def _append_many(items):
+        for item in list(items or []):
+            _append(item)
+
+    loop = dict(observation.get("loop") or {})
+    for stage_card in list(loop.get("stage_cards") or []):
+        if isinstance(stage_card, dict):
+            _append(stage_card.get("focus_task"))
+    chain = dict(observation.get("chain") or {})
+    for section in list(chain.get("segments") or []):
+        if isinstance(section, dict):
+            _append_many(section.get("items"))
+
+    for item in candidates:
+        if title and str(item.get("title") or "") == title:
+            return item
+        if task_id and str(item.get("task_id") or "") == task_id:
+            return item
+    raise AssertionError(f"task not found in autonomous observation: title={title!r} task_id={task_id!r}")
+
+
+def _observation_section(observation: dict, key: str) -> dict:
+    chain = dict(observation.get("chain") or {})
+    for section in list(chain.get("segments") or []):
+        if isinstance(section, dict) and str(section.get("key") or "").strip() == key:
+            return section
+    raise AssertionError(f"section not found: {key!r}")
+
+
+def _observation_stage_card(observation: dict, key: str) -> dict:
+    loop = dict(observation.get("loop") or {})
+    for card in list(loop.get("stage_cards") or []):
+        if isinstance(card, dict) and str(card.get("stage_key") or "").strip() == key:
+            return card
+    raise AssertionError(f"stage card not found: {key!r}")
+
+
+def _observation_loop_stage(observation: dict, key: str) -> dict:
+    card = _observation_stage_card(observation, key)
+    projected = dict(card)
+    projected["key"] = key
+    if not str(projected.get("status_label") or "").strip():
+        projected["status_label"] = str(projected.get("display_status") or "").strip()
+    if "focus_task" not in projected:
+        projected["focus_task"] = dict(card.get("focus_task") or {})
+    return projected
+
+
+async def _trigger_memory_compression(supervisor: Supervisor, request: dict | None = None):
+    return await supervisor._execution_facade.trigger_memory_compression(request)
+
+
+async def _execute_body_upgrade(supervisor: Supervisor, request: dict | None = None):
+    return await supervisor._execution_facade.execute_body_upgrade(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtime_catalog(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    health = await supervisor.health_check()
+
+    assert health["status"] == "healthy"
+    assert health["service"] == "supervisor"
+    assert health["body_runtime"]["active_slot"] == "slot-A"
+    assert health["body_runtime"]["healthy"] is True
+    assert health["body_runtime"]["violations"] == []
+    assert "transitional_interfaces" not in health
+
+
+@pytest.mark.unit
+def test_supervisor_recovery_success_is_shared_by_health_and_readiness(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    health = client.get("/health")
+    ready = client.get("/ready")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+    assert health.json()["recovery"] == ready.json()["recovery"]
+    assert health.json()["recovery"]["state"] == "healthy"
+    assert health.json()["recovery"]["finished_at"]
+
+
+@pytest.mark.unit
+def test_supervisor_recovery_failure_degrades_health_and_readiness(tmp_path, monkeypatch):
+    def fail_recovery(self, *, replace=False):
+        raise RuntimeError("governance stream unavailable")
+
+    monkeypatch.setattr(AutonomousChainRecoveryService, "recover", fail_recovery)
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    client = TestClient(supervisor.app)
+
+    health = client.get("/health")
+    ready = client.get("/ready")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "degraded"
+    assert health.json()["recovery"]["state"] == "failed"
+    assert health.json()["recovery"]["error_code"] == "RuntimeError"
+    assert health.json()["recovery"]["error_summary"] == "governance stream unavailable"
+    assert ready.status_code == 503
+    assert ready.json()["detail"] == health.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_health_degrades_when_body_manifest_is_missing(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._body_registry.slot_worktree_manifest_path("slot-A").unlink()
+
+    health = await supervisor.health_check()
+    periodic = await supervisor.run_health_checks()
+    violation_codes = {
+        item["code"] for item in health["body_runtime"]["violations"]
+    }
+
+    assert health["status"] == "degraded"
+    assert health["body_runtime"]["healthy"] is False
+    assert "slot_not_materialized" in violation_codes
+    assert periodic["healthy"] is False
+    assert periodic["body_runtime"]["healthy"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_healthy_body_integrity(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    state = await supervisor._ui_runtime.get_state()
+
+    body_status = state["body_status"]
+    assert body_status["integrity"]["healthy"] is True
+    assert body_status["integrity"]["violations"] == []
+    assert body_status["active_slot"] == "slot-A"
+    assert body_status["shell_slot"] == "slot-B"
+    assert body_status["slot_cards"]
+    assert all(card["integrity_healthy"] is True for card in body_status["slot_cards"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_projects_body_manifest_violation_to_slot_card(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    manifest_path = supervisor._body_registry.slot_worktree_manifest_path("slot-A")
+    manifest_path.unlink()
+
+    state = await supervisor._ui_runtime.get_state()
+
+    body_status = state["body_status"]
+    violations = body_status["integrity"]["violations"]
+    active_card = next(
+        card for card in body_status["slot_cards"] if card["slot_id"] == "slot-A"
+    )
+    assert body_status["integrity"]["healthy"] is False
+    assert any(item["code"] == "slot_not_materialized" for item in violations)
+    assert active_card["integrity_healthy"] is False
+    assert active_card["integrity_materialized"] is False
+    assert active_card["integrity_violations"][0]["code"] == "slot_not_materialized"
+    assert manifest_path.exists() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_keeps_unreadable_registry_diagnostic_read_only(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._body_registry.registry_path.write_text("{", encoding="utf-8")
+
+    state = await supervisor._ui_runtime.get_state()
+    health = await supervisor.health_check()
+
+    body_status = state["body_status"]
+    assert state["status"] == "ok"
+    assert health["status"] == "degraded"
+    assert health["body_runtime"]["active_slot"] is None
+    assert health["body_runtime"]["violations"][0]["code"] == "registry_unreadable"
+    assert body_status["integrity"]["healthy"] is False
+    assert body_status["integrity"]["registry"] is None
+    assert body_status["integrity"]["violations"][0]["code"] == "registry_unreadable"
+    assert body_status["slot_cards"] == []
+    assert supervisor._body_registry.registry_path.read_text(encoding="utf-8") == "{"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_registers_embedded_executor_with_gateway(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    registrations = []
+
+    class _Response:
+        def __init__(self, service_type):
+            self.status = 201
+            self._service_type = service_type
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"service_id": f"{self._service_type}-service"}
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, timeout):
+            registrations.append((url, json, timeout))
+            return _Response(json["service_type"])
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    service_id = await supervisor.register_with_gateway()
+
+    assert service_id == "supervisor-service"
+    assert [payload["service_type"] for _, payload, _ in registrations] == [
+        "supervisor",
+        "executor",
+    ]
+    assert registrations[1][1]["health_endpoint"] == "/executor/health"
+    assert registrations[1][1]["metadata"]["embedded_in"] == "supervisor"
+    assert supervisor._gateway_service_id == "supervisor-service"
+    assert supervisor._gateway_executor_service_id == "executor-service"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_gateway_verification_isolates_single_request_failure(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-service"
+    supervisor._gateway_executor_service_id = "executor-service"
+    requested_ids = []
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, timeout):
+            service_id = url.rsplit("/", 1)[-1]
+            requested_ids.append((service_id, timeout))
+            if service_id == "executor-service":
+                raise OSError("transient executor verification failure")
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    missing_service_types = await supervisor._missing_gateway_service_types()
+    supervisor._register_gateway_service_type = AsyncMock(  # type: ignore[method-assign]
+        return_value="restored-executor-service"
+    )
+    await supervisor._restore_gateway_registrations(missing_service_types)
+
+    assert requested_ids == [
+        ("supervisor-service", 5),
+        ("executor-service", 5),
+    ]
+    assert missing_service_types == {"executor"}
+    supervisor._register_gateway_service_type.assert_awaited_once_with("executor")  # type: ignore[attr-defined]
+
+
+@pytest.mark.unit
+def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    assert supervisor._execution_facade.body_lifecycle is supervisor._body_lifecycle_executor
+    assert supervisor._execution_facade.body_upgrade is supervisor._body_upgrade_executor
+    assert supervisor._execution_facade.memory_maintenance is supervisor._memory_maintenance_executor
+    assert supervisor._execution_service.app is supervisor.app
+
+
+@pytest.mark.unit
+def test_supervisor_mounts_embedded_executor_surface(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    health = client.get("/executor/health")
+    registry = client.get("/executor/body/registry")
+
+    assert health.status_code == 200
+    assert health.json()["service"] == "executor"
+    assert health.json()["status"] == "healthy"
+    assert health.json()["body_runtime"]["healthy"] is True
+    assert registry.status_code == 200
+    assert registry.json()["registry"]["active_slot"] == "slot-A"
+    assert registry.json()["integrity"]["violations"] == []
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_chain_panel_contract():
+    assert 'id="panelChain"' in UI_HTML
+    assert 'id="panelChainBody"' in UI_HTML
+    assert 'data-panel="chain"' in UI_HTML
+    assert 'renderChainPanel' in UI_HTML
+    assert 'id="scheduleClock"' in UI_HTML
+    assert 'id="panelSchedules"' in UI_HTML
+    assert 'id="panelSchedulesBody"' in UI_HTML
+    assert "els.scheduleClock.addEventListener('click', event => {" in UI_HTML
+    assert "event.stopPropagation();\n    openPanel('schedules');" in UI_HTML
+    assert "width: 60px; height: 48px;" in UI_HTML
+    assert "flex: 0 0 60px;" in UI_HTML
+    assert ".dock-btn { width: 42px; height: 44px; flex-basis: 42px; }" in UI_HTML
+    assert ".bottom-trigger {\n  position: fixed; left: 0; right: 0; bottom: 0;\n  height: 36px;\n  z-index: 97;" in UI_HTML
+    assert "function dockPanelFor(name)" in UI_HTML
+    assert "const panel = dockPanelFor(name);" in UI_HTML
+    assert "const panel = dockPanelFor(panelOpen);" in UI_HTML
+    assert "name.charAt(0).toUpperCase()" not in UI_HTML
+    assert "failed:'执行失败'" in UI_HTML
+    assert UI_HTML.index('id="panelMedia"') < UI_HTML.index("<script>")
+    assert 'id="mediaQueueList"' in UI_HTML
+    assert 'data-panel="media"' in UI_HTML
+    assert '.dock-btn.media-dock-btn {' in UI_HTML
+    assert 'left: 50%;' in UI_HTML
+    assert 'position: absolute;' in UI_HTML
+    assert 'class="dock-sep media-sep"' in UI_HTML
+    assert 'data-panel="schedules"' in UI_HTML
+    assert "fetch('/scheduled-tasks?include_completed=true'" in UI_HTML
+    assert "openPanel('schedules')" in UI_HTML
+    assert 'chain-stage-rail' in UI_HTML
+    assert '判断参考' in UI_HTML
+    assert '当前判断' in UI_HTML
+    assert '替身与统计' in UI_HTML
+    assert 'data-chain-group="' in UI_HTML
+    assert 'data-chain-trace="' in UI_HTML
+    assert 'body-integrity-row' in UI_HTML
+    assert 'body-integrity-violation' in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_governed_evolution_promotion_consent():
+    assert 'id="panelPromotions"' in UI_HTML
+    assert 'id="panelPromotionsBody"' in UI_HTML
+    assert 'data-panel="promotions"' in UI_HTML
+    assert 'renderEvolutionPromotionAudit' in UI_HTML
+    assert "fetch('/ui/evolution-promotions?limit=100'" in UI_HTML
+    assert "fetch('/ui/evolution-promotion-candidates?limit=100'" in UI_HTML
+    assert "window.confirm('确认将这条 Auto 结论提升" in UI_HTML
+    assert "window.prompt('请填写拒绝原因'" in UI_HTML
+    assert '正式引用审计' in UI_HTML
+    assert 'data-promotion-revoke' not in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
+    assert 'data-companion-chat' in UI_HTML
+    assert 'data-chat-user' in UI_HTML
+    assert 'data-chat-reply' in UI_HTML
+    assert 'renderCompanionChat' in UI_HTML
+    assert "dialogue.user_text || voice.last_transcript" in UI_HTML
+    assert "dialogue.reply_text || reminder.reminder_text || voice.last_reply" in UI_HTML
+    assert "SCENE_TO_ACTION" in UI_HTML
+    assert "idle: 'rest'" in UI_HTML
+    assert "planning: 'write'" in UI_HTML
+    assert "drive: 'work'" in UI_HTML
+    assert "memory: 'organize'" in UI_HTML
+    assert "maintenance: 'organize'" in UI_HTML
+    assert "handoff: 'work'" in UI_HTML
+    assert "body_switch: 'work'" in UI_HTML
+    assert "planning: 'work'" not in UI_HTML
+    assert "drive: 'organize'" not in UI_HTML
+    assert "handoff: 'write'" not in UI_HTML
+    assert "sw <= 720 ? 1" in UI_HTML
+    assert "flex: 0 0 var(--room-w)" in UI_HTML
+    assert "body[data-panel-open] .companion-chat" in UI_HTML
+    assert "els.body.dataset.panelOpen = name" in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_layers_xingzi_arms_above_belt():
+    assert ".xs-belt {" in UI_HTML
+    assert ".xs-arm {" in UI_HTML
+    assert "z-index: 5;\n}\n.xs-belt::after" in UI_HTML
+    assert "z-index: 6;\n  transition: transform" in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_syncs_clock_hands_to_wall_time():
+    assert 'id="wcMinute"' in UI_HTML
+    assert 'id="wcSecond"' in UI_HTML
+    assert "seconds * 6" in UI_HTML
+    assert "minutes * 6 + seconds * .1" in UI_HTML
+    assert "setInterval(syncClock, 1000)" in UI_HTML
+    assert "animation: clock-tick" not in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_canonical_reminder_policy_contract():
+    assert 'id="panelSettings"' in UI_HTML
+    assert 'id="reminderPolicyForm"' in UI_HTML
+    assert 'id="reminderPolicyEnabled"' in UI_HTML
+    assert 'id="reminderPolicyTts"' in UI_HTML
+    assert 'id="reminderPolicyCooldown"' in UI_HTML
+    assert 'id="reminderPolicyDndStart"' in UI_HTML
+    assert 'id="reminderPolicyDndEnd"' in UI_HTML
+    assert "fetch('/companion/reminder-policy'" in UI_HTML
+    assert "localStorage" not in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_manages_provider_pool_and_worker_assignments():
+    assert 'data-settings-view="providers"' in UI_HTML
+    assert 'data-settings-view="workers"' in UI_HTML
+    assert 'id="providerPoolList"' in UI_HTML
+    assert 'id="providerForm"' in UI_HTML
+    assert 'id="providerTest"' in UI_HTML
+    assert 'id="providerLoadModels"' in UI_HTML
+    assert 'id="providerModelOptions"' in UI_HTML
+    assert 'id="providerModelCatalogMeta"' in UI_HTML
+    assert 'id="providerConcurrency"' in UI_HTML
+    assert 'id="providerRuntimeMetrics"' in UI_HTML
+    assert 'id="providerCooldownReset"' in UI_HTML
+    assert 'id="workerAssignmentForm"' in UI_HTML
+    assert 'id="workerMaxConcurrent"' in UI_HTML
+    assert 'data-worker-concurrency' in UI_HTML
+    assert "fetch('/provider-pool'" in UI_HTML
+    assert "fetch('/provider-pool/providers/'" in UI_HTML
+    assert "fetch('/provider-pool/worker-roles'" in UI_HTML
+    assert "fetch('/provider-pool/scheduler'" in UI_HTML
+    assert "'/cooldown/reset'" in UI_HTML
+    assert "encodeURIComponent(selectedProviderKey) + '/test'" in UI_HTML
+    assert "encodeURIComponent(selectedProviderKey) + '/models'" in UI_HTML
+    assert "provider.model_catalog" in UI_HTML
+    assert "autoRefreshProviderModelCatalog" in UI_HTML
+    assert "workerModelCatalogRefreshes" in UI_HTML
+    assert "workerModelCandidates[providerKey]" in UI_HTML
+    assert "'<span class=\"provider-list-name\">' + esc(provider.key)" in UI_HTML
+    assert "esc(item.key) + ((item.label && item.label !== item.key)" in UI_HTML
+    assert "label: els.providerLabel.value.trim() || key" in UI_HTML
+    assert "els.providerLabel.value.trim()) els.providerLabel.value = preset.label" not in UI_HTML
+    assert "api_key: els.providerApiKey.value" in UI_HTML
+    assert "provider.credential_configured" in UI_HTML
+
+
+@pytest.mark.unit
+def test_companion_reminder_policy_route_persists_only_its_canonical_subtree(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    original_provider = {
+        "base_url": "https://example.invalid/v1",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "selected_model": "deepseek-chat",
+    }
+    original_memory = {"db_path": "custom-memory.db", "recall_default_limit": 17}
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "providers": {"deepseek": original_provider},
+                "memory": original_memory,
+                "supervisor": {
+                    "ui_enabled": True,
+                    "service_runtime": {"health_check_interval": 45},
+                },
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    initial = client.get("/companion/reminder-policy")
+    response = client.post(
+        "/companion/reminder-policy",
+        json={
+            "enabled": False,
+            "tts_enabled": True,
+            "cooldown_seconds": 1800,
+            "dnd_start": "22:00",
+            "dnd_end": "08:00",
+        },
+    )
+
+    assert initial.status_code == 200
+    assert initial.json()["managed"] is False
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "tts_enabled": True,
+        "cooldown_seconds": 1800,
+        "dnd_start": "22:00",
+        "dnd_end": "08:00",
+        "managed": False,
+        "status": "saved",
+    }
+    assert supervisor.config.service_runtime.companion_proactive_reminder_enabled is False
+    assert supervisor.config.service_runtime.companion_proactive_dnd_start == "22:00"
+
+    saved = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert saved["providers"]["deepseek"] == original_provider
+    assert saved["memory"] == original_memory
+    assert saved["supervisor"]["ui_enabled"] is True
+    assert saved["supervisor"]["service_runtime"] == {
+        "health_check_interval": 45,
+        "companion_proactive_reminder_enabled": False,
+        "companion_proactive_reminder_tts_enabled": True,
+        "companion_proactive_reminder_cooldown_seconds": 1800,
+        "companion_proactive_dnd_start": "22:00",
+        "companion_proactive_dnd_end": "08:00",
+    }
+
+
+@pytest.mark.unit
+def test_companion_reminder_policy_route_rejects_invalid_values_and_managed_writes(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    base = {
+        "enabled": True,
+        "tts_enabled": True,
+        "cooldown_seconds": 900,
+        "dnd_start": "",
+        "dnd_end": "",
+    }
+
+    invalid_time = client.post(
+        "/companion/reminder-policy",
+        json={**base, "dnd_start": "25:00"},
+    )
+    invalid_cooldown = client.post(
+        "/companion/reminder-policy",
+        json={**base, "cooldown_seconds": 86401},
+    )
+    monkeypatch.setenv("VOIDCUBE_MANAGED", "true")
+    managed = client.post("/companion/reminder-policy", json=base)
+
+    assert invalid_time.status_code == 422
+    assert invalid_cooldown.status_code == 422
+    assert managed.status_code == 409
+    assert "managed by NixOS" in managed.json()["detail"]
+    assert "slot.integrity_healthy === false" in UI_HTML
+    assert 'data-chain-trace-expanded="' in UI_HTML
+    assert 'data-chain-trace-source="' in UI_HTML
+    assert "body_tree" in UI_HTML
+    assert "data-body-slot" in UI_HTML
+    assert "renderBodyTreeDrawer" in UI_HTML
+    assert "context.bodySlot = String(trigger.dataset.bodySlot)" in UI_HTML
+    assert "openDrawer(trigger.dataset.drill, context)" in UI_HTML
+    assert 'data-action-btn=' not in UI_HTML
+    assert "__manual__" not in UI_HTML
+    assert 'panelTasks' not in UI_HTML
+    assert 'renderTasksPanel' not in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_execution_wiring(tmp_path):
+    config = SupervisorConfig(
+        execution=SupervisorExecutionConfig(
+            git_repo_path=str(tmp_path),
+            gateway_address="http://gateway.segmented.local",
+            agent_base_port=9100,
+            probe_watch_window_seconds=180,
+        ),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
+        service_runtime=SupervisorServiceRuntimeConfig(
+            health_check_interval=45,
+            autonomous_chain_review_interval=900,
+            endogenous_drive_enabled=True,
+            endogenous_drive_interval=600,
+            endogenous_drive_max_candidates=2,
+        ),
+        body_runtime=SupervisorBodyRuntimeConfig(
+            state_root=str(tmp_path / "body-state"),
+            slot_a_name="slot-blue",
+            slot_b_name="slot-green",
+        ),
+    )
+    supervisor = Supervisor(config)
+
+    assert config.execution.gateway_address == "http://gateway.segmented.local"
+    assert config.execution.agent_base_port == 9100
+    assert config.execution.probe_watch_window_seconds == 180
+    assert config.service_runtime.health_check_interval == 45
+    assert config.service_runtime.governor_llm_advisory_enabled is True
+    assert config.service_runtime.autonomous_chain_review_interval == 900
+    assert config.service_runtime.endogenous_drive_enabled is True
+    assert config.service_runtime.endogenous_drive_interval == 600
+    assert config.service_runtime.endogenous_drive_max_candidates == 2
+    assert config.ui_enabled is True
+    assert config.ui_auto_open is True
+    assert config.ui_event_interval_seconds == 3.0
+    assert config.ui_activity_buffer_size == 100
+    assert config.body_runtime.state_root == str(tmp_path / "body-state")
+    assert config.body_runtime.slot_a_name == "slot-blue"
+    assert config.body_runtime.slot_b_name == "slot-green"
+    assert supervisor._body_upgrade_executor.config.probe_watch_window_seconds == 180
+    registry = supervisor._body_registry.load_registry()
+    assert registry.active_slot == "slot-blue"
+    assert registry.shell_slot == "slot-green"
+    active_worktree = Path(supervisor._body_registry.load_slot_meta("slot-blue").worktree_path)
+    assert not (active_worktree / ".slots-segmented").exists()
+    assert not (active_worktree / ".registry-segmented.json").exists()
+
+
+@pytest.mark.unit
+def test_supervisor_routes_no_longer_publish_deprecated_execution_surface(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    deprecated_routes = {
+        (route.path, tuple(sorted(route.methods or set())))
+        for route in supervisor.app.routes
+        if getattr(route, "deprecated", False)
+    }
+    route_paths = {route.path for route in supervisor.app.routes}
+
+    assert deprecated_routes == set()
+    assert "/upgrade/history" not in route_paths
+    assert "/upgrade/legacy" not in route_paths
+    assert "/autonomous-chain/cycle" in route_paths
+    assert "/autonomous-chain/tasks" in route_paths
+    assert "/autonomous-chain/tasks/{task_id}" in route_paths
+    assert "/autonomous-chain/tasks/{task_id}/decision" in route_paths
+    assert "/autonomous-chain/tasks/review" in route_paths
+    assert "/autonomous-chain/tasks/clear" in route_paths
+    retired_learning_submission = "/self-" + "learning/conclusions/submit"
+    assert retired_learning_submission not in route_paths
+    assert "/self-evolution/autonomous-cycle" not in route_paths
+    assert "/self-evolution/tasks" not in route_paths
+    assert "/self-evolution/tasks/{task_id}" not in route_paths
+    assert "/self-evolution/tasks/{task_id}/decision" not in route_paths
+    deprecated_autonomous_cycle_route = "/self-evolution/" + "auto" + "-cycle"
+    assert deprecated_autonomous_cycle_route not in route_paths
+    assert "/autonomous-chain-gate/activate" in route_paths
+    assert "/autonomous-chain-gate/deactivate" in route_paths
+    assert "/autonomous-chain-gate/status" in route_paths
+    deprecated_gate_prefix = "/" + "governor" + "-mode"
+    assert f"{deprecated_gate_prefix}/activate" not in route_paths
+    assert f"{deprecated_gate_prefix}/deactivate" not in route_paths
+    assert f"{deprecated_gate_prefix}/status" not in route_paths
+
+
+@pytest.mark.unit
+def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    route_paths = {route.path for route in supervisor.app.routes}
+
+    assert "/ui" in route_paths
+    assert "/ui/state" in route_paths
+    assert "/ui/events" in route_paths
+    assert "/ui/voice-levels" in route_paths
+    assert "/ui/identity/archive" in route_paths
+    assert "/ui/identity/turns" in route_paths
+    assert "/ui/evolution-promotions" in route_paths
+    assert "/ui/evolution-promotion-candidates" in route_paths
+    assert "/ui/evolution-promotion-candidates/{candidate_id}/consent" in route_paths
+    assert "/runtime/timeline" in route_paths
+    assert "/runtime/traces" in route_paths
+    assert "/runtime/traces/{trace_id}" in route_paths
+    assert "/runtime/observation-input" in route_paths
+    assert "/runtime/drive-input/evaluate" in route_paths
+    assert "/runtime/evolution-candidate-generation" in route_paths
+    assert "/runtime/evolution-candidate-generation/requests" in route_paths
+    assert "/runtime/evolution-candidate-generation/trigger" in route_paths
+    assert "/runtime/activity-guards/evaluate" not in route_paths
+    assert "/runtime/idle-window/evaluate" not in route_paths
+
+    with TestClient(supervisor.app) as client:
+        page = client.get("/ui")
+        state = client.get("/ui/state")
+
+    assert page.status_code == 200
+    assert "VoidCube Supervisor Room" in page.text
+    assert 'EventSource("/ui/events")' in page.text
+    assert 'data-drill="identity"' in page.text
+    assert "renderIdentityDrawer" in page.text
+    assert "identity-evidence" in page.text
+    assert "evidence.length" in page.text
+    assert "verifyIdentityTurn" in page.text
+    assert "data-identity-verify-turn" in page.text
+    assert state.status_code == 200
+    payload = state.json()
+    assert payload["status"] == "ok"
+    assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "handoff"}
+    assert "timeline" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_evolution_promotion_audit_is_fixed_read_only_projection(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-test"
+    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
+    requests = []
+    rows = [
+        {
+            "promotion_id": "promotion-active",
+            "source_type": "compressed",
+            "source_memory_id": "evolution-memory-1",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+            "reason": "Approved for companion explanations.",
+            "approved_by": "owner-consent",
+            "approval_ref": "decision:1",
+            "created_by": "governor",
+            "status": "active",
+            "created_at": "2026-07-27T08:00:00+00:00",
+            "expires_at": None,
+            "revoked_at": None,
+            "revoked_by": None,
+            "revoke_reason": None,
+            "owner_id": "local-user",
+            "workspace_id": "default",
+        },
+        {
+            "promotion_id": "promotion-other-source",
+            "source_type": "turn",
+            "source_memory_id": "agent-turn-1",
+            "source_domain": "agent_interaction",
+            "target_domain": "companion",
+            "reason": "Not part of this audit direction.",
+            "status": "active",
+        },
+        {
+            "promotion_id": "promotion-revoked",
+            "source_type": "profile",
+            "source_memory_id": "evolution-profile-2",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+            "reason": "Previously approved conclusion.",
+            "approved_by": "owner-consent",
+            "approval_ref": "decision:2",
+            "created_by": "governor",
+            "status": "revoked",
+            "created_at": "2026-07-26T08:00:00+00:00",
+            "expires_at": None,
+            "revoked_at": "2026-07-27T09:00:00+00:00",
+            "revoked_by": "governor",
+            "revoke_reason": "Superseded by stronger evidence.",
+        },
+    ]
+
+    class _Response:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+    class _Session:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, params=None, headers=None):
+            requests.append((url, params, headers))
+            return _Response(200, {"promotions": rows, "count": len(rows)})
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientTimeout=lambda **kwargs: kwargs,
+            ClientSession=_Session,
+        ),
+    )
+
+    audit = await supervisor._ui_runtime.get_evolution_promotion_audit(limit=25)
+
+    assert requests[0] == (
+        "http://127.0.0.1:6000/api/mem/promotions",
+        {
+            "limit": 500,
+            "target_domain": "companion",
+        },
+        {
+            "X-VoidCube-Service-Id": "supervisor-test",
+            "X-VoidCube-Service-Token": "supervisor-token",
+            "X-VoidCube-Memory-Actor": "stellar_companion",
+        },
+    )
+    assert audit["direction"] == {
+        "source_domain": "evolution",
+        "target_domain": "companion",
+    }
+    assert [item["promotion_id"] for item in audit["promotions"]] == [
+        "promotion-active",
+        "promotion-revoked",
+    ]
+    assert audit["status_counts"] == {"active": 1, "revoked": 1, "expired": 0}
+    assert "owner_id" not in audit["promotions"][0]
+    assert "workspace_id" not in audit["promotions"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_evolution_promotion_candidates_are_fixed_projection(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-test"
+    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
+    captured = {}
+    rows = [
+        {
+            "candidate_id": "candidate-1",
+            "source_type": "compressed",
+            "source_memory_id": "evolution-memory-1",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+            "reason": "Useful in companion mode.",
+            "proposed_by": "governor",
+            "governance_ref": "review:1",
+            "status": "awaiting_user_consent",
+            "requested_at": "2026-07-27T08:00:00+00:00",
+            "expires_at": None,
+            "owner_id": "must-not-leak",
+            "workspace_id": "must-not-leak",
+        },
+        {
+            "candidate_id": "candidate-wrong-direction",
+            "source_domain": "agent_interaction",
+            "target_domain": "companion",
+            "status": "awaiting_user_consent",
+        },
+    ]
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"candidates": rows, "count": len(rows)}
+
+    class _Session:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, params=None, headers=None):
+            captured.update(url=url, params=params, headers=headers)
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    )
+
+    result = await supervisor._ui_runtime.get_evolution_promotion_candidates(limit=20)
+
+    assert captured["url"] == "http://127.0.0.1:6000/api/mem/promotion-candidates"
+    assert captured["params"] == {
+        "limit": 20,
+        "status": "awaiting_user_consent",
+        "source_domain": "evolution",
+        "target_domain": "companion",
+    }
+    assert captured["headers"]["X-VoidCube-Memory-Actor"] == "governor"
+    assert [item["candidate_id"] for item in result["candidates"]] == ["candidate-1"]
+    assert "owner_id" not in result["candidates"][0]
+    assert "workspace_id" not in result["candidates"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_owner_consent_ignores_browser_scope_and_actor(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-test"
+    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "approved", "candidate": {}, "promotion": {}}
+
+    class _Session:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json=None, headers=None):
+            captured.update(url=url, json=json, headers=headers)
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    )
+
+    result = await supervisor._ui_runtime.consent_evolution_promotion_candidate(
+        "candidate-1",
+        {
+            "approved": True,
+            "reason": "I explicitly approve this conclusion.",
+            "consented_by": "remote-user",
+            "memory_actor": "api_a",
+            "owner_id": "remote-owner",
+            "workspace_id": "other-workspace",
+            "source_domain": "agent_interaction",
+        },
+    )
+
+    assert result["status"] == "approved"
+    assert captured["url"].endswith(
+        "/api/mem/promotion-candidates/candidate-1/consent"
+    )
+    assert captured["json"] == {
+        "approved": True,
+        "reason": "I explicitly approve this conclusion.",
+        "consented_by": "local-owner",
+        "owner_id": "local-user",
+        "workspace_id": "default",
+        "memory_actor": "governor",
+    }
+    assert captured["headers"]["X-VoidCube-Memory-Actor"] == "governor"
+
+
+@pytest.mark.unit
+def test_autonomous_chain_store_migrates_legacy_unauditable_execution_request(tmp_path):
+    storage_path = tmp_path / "autonomous-chain.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [
+                    {
+                        "task_id": "legacy-approved",
+                        "trace_id": "trace-approved",
+                        "title": "Legacy approved task",
+                        "status": "approved",
+                        "execution_request": {
+                            "request_id": "request-approved",
+                            "task_id": "legacy-approved",
+                            "trace_id": "trace-approved",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    },
+                    {
+                        "task_id": "legacy-completed",
+                        "trace_id": "trace-completed",
+                        "title": "Legacy completed task",
+                        "status": "completed",
+                        "execution_request": {
+                            "request_id": "request-completed",
+                            "task_id": "legacy-completed",
+                            "trace_id": "trace-completed",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = AutonomousChainStore(storage_path)
+    tasks = {task.task_id: task for task in store.list_tasks()}
+
+    approved = tasks["legacy-approved"]
+    assert approved.status == "awaiting_review"
+    assert approved.execution_request is None
+    assert approved.metadata["snapshot_migration"]["review_required"] is True
+    assert approved.metadata["snapshot_migration"]["missing_fields"] == [
+        "target_slot_id",
+        "git_lineage.source_commit",
+        "git_lineage.candidate_commit",
+        "git_lineage.rollback_commit",
+        "git_lineage.changed_files",
+    ]
+    assert approved.decision_history[-1].actor == "snapshot_migration"
+
+    completed = tasks["legacy-completed"]
+    assert completed.status == "completed"
+    assert completed.execution_request is None
+    assert completed.metadata["snapshot_migration"]["review_required"] is False
+
+    persisted = json.loads(storage_path.read_text(encoding="utf-8"))
+    assert all(task["execution_request"] is None for task in persisted["tasks"])
+    first_migration = approved.metadata["snapshot_migration"]
+    reloaded = {task.task_id: task for task in store.list_tasks()}
+    assert reloaded["legacy-approved"].metadata["snapshot_migration"] == first_migration
+    assert len(reloaded["legacy-approved"].decision_history) == 1
+
+
+@pytest.mark.unit
+def test_supervisor_ui_state_migrates_legacy_autonomous_chain_snapshot(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._autonomous_chain_store.storage_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [
+                    {
+                        "task_id": "legacy-ui-task",
+                        "trace_id": "legacy-ui-trace",
+                        "title": "Legacy UI task",
+                        "status": "failed",
+                        "execution_request": {
+                            "request_id": "legacy-ui-request",
+                            "task_id": "legacy-ui-task",
+                            "trace_id": "legacy-ui-trace",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(supervisor.app) as client:
+        response = client.get("/ui/state")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    migrated = supervisor._autonomous_chain_store.get_task("legacy-ui-task")
+    assert migrated is not None
+    assert migrated.status == "failed"
+    assert migrated.execution_request is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_observation_input_projects_soft_signal_snapshot(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "activity": {
+                "active_sessions": 2,
+                "counts": {"error_count": 1},
+                "recent_metadata": {"autonomous_chain_execute": {"task_id": "task-1"}},
+            },
+            "user_chain_signal": {
+                "is_quiet": False,
+                "quiet_after_seconds": 900,
+            },
+        }
+    )
+
+    result = await supervisor.get_runtime_observation_input()
+
+    supervisor.evaluate_drive_input.assert_awaited_once_with(  # type: ignore[union-attr]
+        {
+            "autonomous_chain_gate_active": False,
+            "perception_scope": "full",
+        }
+    )
+    assert result["status"] == "ok"
+    assert result["gateway_address"] == supervisor.config.execution.gateway_address
+    observation_input = result["observation_input"]
+    assert observation_input["snapshot_source"] == "live"
+    assert observation_input["activity"]["active_sessions"] == 2
+    assert observation_input["activity"]["counts"]["error_count"] == 1
+    assert observation_input["activity"]["recent_metadata"]["autonomous_chain_execute"]["task_id"] == "task-1"
+    assert observation_input["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert observation_input["user_chain_signal"]["active_sessions"] == 2
+    assert observation_input["user_chain_signal"]["is_quiet"] is False
+    assert observation_input["user_chain_signal"]["quiet_after_seconds"] == 900
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_governance_and_gateway(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "追踪自主学习证据链路",
+            "task_family": "self_learning",
+            "source": "self_learning",
+            "metadata": {
+                "trace_id": "trace-runtime-1",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    trace_id = planned["tasks"][0]["trace_id"]
+    decided = await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "approve",
+            "reason": "Trace test approval.",
+            "decision_id": "decision-runtime-1",
+        },
+    )
+    supervisor._ui_runtime.record_activity(
+        "trace_marker",
+        scene="learning",
+        summary="来自监督者活动的轨迹标记。",
+        metadata={
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "decision_id": "decision-runtime-1",
+        },
+    )
+
+    async def fake_gateway_activity_log(trace_id=None, limit=200):
+        assert trace_id == planned["tasks"][0]["trace_id"]
+        assert limit == 200
+        return {
+            "status": "ok",
+            "events": [
+                {
+                    "activity_id": "gateway-activity-1",
+                    "activity_kind": "self_learning",
+                    "recorded_at": "2026-05-25T12:05:00",
+                    "source_service": "self-learning",
+                    "session_id": None,
+                    "metadata": {
+                        "trace_id": trace_id,
+                        "task_id": task_id,
+                        "governance_task_type": "self_learning",
+                        "task_family": "self_learning",
+                        "decision_id": "decision-runtime-1",
+                        "task_identity": {
+                            "title": "追踪自主学习证据链路",
+                            "display_label": "自主学习",
+                            "summary": "追踪自主学习证据链路 (自主学习)",
+                        },
+                    },
+                }
+            ],
+        }
+
+    supervisor._fetch_gateway_activity_log = fake_gateway_activity_log  # type: ignore[method-assign]
+
+    result = await supervisor.get_runtime_trace(trace_id)
+
+    assert decided["status"] == "approved"
+    assert result["status"] == "ok"
+    assert result["found"] is True
+    assert result["summary"]["trace_id"] == trace_id
+    assert result["summary"]["task_ids"] == [task_id]
+    assert result["summary"]["decision_ids"] == ["decision-runtime-1"]
+    assert result["summary"]["governance_task_types"] == ["self_learning"]
+    assert "自主学习" in result["summary"]["governance_labels"]
+    assert "链路存储" in result["summary"]["source_labels"]
+    assert result["summary"]["task_families"] == ["self_learning"]
+    assert result["sources"]["autonomous_chain_store"] >= 2
+    assert result["sources"]["supervisor_activity"] >= 1
+    assert result["sources"]["mem_governor_history"] >= 1
+    assert result["sources"]["gateway_activity_log"] == 1
+    event_sources = {event["source"] for event in result["timeline"]}
+    assert {
+        "autonomous_chain_store",
+        "supervisor_activity",
+        "mem_governor_history",
+        "gateway_activity_log",
+    }.issubset(event_sources)
+    gateway_event = next(
+        event for event in result["timeline"]
+        if event.get("source") == "gateway_activity_log"
+    )
+    assert gateway_event["event_label"] == "自主学习回报"
+    assert gateway_event["summary"] == "网关记下了 「追踪自主学习证据链路 (自主学习)」 的自主学习回报。"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_trace_list_summarizes_known_traces_without_gateway_history(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    first = await supervisor._autonomous_chain_planning_service.plan({"title": "First trace"})
+    second = await supervisor._autonomous_chain_planning_service.plan({"title": "Second trace"})
+
+    async def unavailable_gateway_activity_log(trace_id=None, limit=200):
+        raise RuntimeError("gateway unavailable")
+
+    supervisor._fetch_gateway_activity_log = unavailable_gateway_activity_log  # type: ignore[method-assign]
+
+    result = await supervisor.list_runtime_traces(limit=10)
+    trace_ids = {trace["trace_id"] for trace in result["traces"]}
+
+    assert result["status"] == "ok"
+    assert first["tasks"][0]["trace_id"] in trace_ids
+    assert second["tasks"][0]["trace_id"] in trace_ids
+    assert result["sources"]["autonomous_chain_store"] >= 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_trace_includes_writeback_and_cancelled_chain_records(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def empty_gateway_activity_log(trace_id=None, limit=200):
+        return {"status": "ok", "events": []}
+
+    supervisor._fetch_gateway_activity_log = empty_gateway_activity_log  # type: ignore[method-assign]
+
+    completed = await supervisor._autonomous_chain_planning_service.plan(
+        {"title": "已完成轨迹记录", "trace_id": "trace-runtime-projection-1"}
+    )
+    cancelled = await supervisor._autonomous_chain_planning_service.plan(
+        {"title": "已取消轨迹记录", "trace_id": "trace-runtime-projection-2"}
+    )
+
+    completed_id = completed["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        completed_id,
+        status="approved",
+        actor="test",
+        reason="已批准进入自主交接",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        completed_id,
+        status="running",
+        actor="test",
+        reason="自主交接进行中",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        completed_id,
+        status="completed",
+        actor="test",
+        reason="writeback finished",
+    )
+    cancelled_id = cancelled["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        cancelled_id,
+        status="cancelled",
+        actor="test",
+        reason="cancelled during governance review",
+    )
+
+    completed_trace = await supervisor.get_runtime_trace(completed["tasks"][0]["trace_id"])
+    cancelled_trace = await supervisor.get_runtime_trace(cancelled["tasks"][0]["trace_id"])
+
+    assert completed_trace["found"] is True
+    assert cancelled_trace["found"] is True
+    assert completed_trace["summary"]["task_ids"] == [completed_id]
+    assert cancelled_trace["summary"]["task_ids"] == [cancelled_id]
+    assert completed_trace["sources"]["autonomous_chain_store"] >= 2
+    assert cancelled_trace["sources"]["autonomous_chain_store"] >= 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input_evidence(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def empty_gateway_activity_log(trace_id=None, limit=200):
+        return {"status": "ok", "events": []}
+
+    supervisor._fetch_gateway_activity_log = empty_gateway_activity_log  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "带旧证据字段的自主交接请求",
+            "trace_id": "trace-runtime-execution-request-1",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    trace_id = planned["tasks"][0]["trace_id"]
+    execution_request = AutonomousChainExecutionRequest.model_validate(
+        {
+            "task_id": task_id,
+            "trace_id": trace_id,
+            "task_type": "self_evolution",
+            "decision_id": "decision-trace-execution-1",
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["src/voidcube/runtime/agent/runtime.py"],
+            },
+            "drive_input_evidence": {
+                "user_chain_signal": {
+                    "scope": "soft_signal_only",
+                    "active_sessions": 5,
+                }
+            },
+        }
+    )
+
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        actor="test",
+        reason="seed execution request trace payload",
+        execution_request=execution_request,
+    )
+
+    result = await supervisor.get_runtime_trace(trace_id)
+
+    execution_event = next(
+        event for event in result["timeline"]
+        if event.get("event_type") == "execution_request"
+    )
+    payload = execution_event["payload"]
+    assert payload["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 5
+    assert "activity_guard_evidence" not in payload
+
+
+@pytest.mark.unit
+def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    registry = supervisor._body_registry.load_registry()
+    shell_slot = str(registry.shell_slot or "")
+    active_slot = str(registry.active_slot or "")
+    assert shell_slot
+    assert active_slot
+
+    shell_meta = supervisor._body_registry.load_slot_meta(shell_slot)
+    shell_worktree = Path(shell_meta.worktree_path)
+    (shell_worktree / "agent").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "systems").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "tools").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
+
+    slot_metas = {
+        slot_id: supervisor._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
+        for slot_id in registry.slot_ids
+    }
+    cards = project_body_slot_cards(
+        registry=registry.model_dump(mode="json"),
+        slot_metas=slot_metas,
+        chain_history_projection=[
+            {
+                "task_id": "body-1",
+                "title": "Refine shell structure",
+                "execution_kind": "body_improvement",
+                "status": "running",
+                "execution_request": {
+                    "target_slot_id": shell_slot,
+                    "editable_dirs": ["systems", "agent"],
+                },
+                "changed_files": ["src/voidcube/systems/supervisor/ui_runtime.py"],
+            }
+        ],
+        top_level_entries_by_slot={
+            shell_slot: sorted(child.name for child in shell_worktree.iterdir())
+        },
+    )
+
+    shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
+    active_card = next(card for card in cards if card["slot_id"] == active_slot)
+
+    assert shell_card["role_label"] == "培养替身"
+    assert set(["agent", "config.yaml", "run_agent.py", "systems", "tools"]).issubset(
+        shell_card["root_nodes"]
+    )
+    assert shell_card["upgrade_active"] is True
+    assert "员工代理 正在改" in shell_card["focus_summary"]
+    assert any(
+        node["key"] == "src/voidcube/systems"
+        and node["upgrade_active"]
+        for node in shell_card["tree_nodes"]
+    )
+    assert any(
+        node["key"] == "src/voidcube/systems"
+        and node["label"] == "systems"
+        and node["upgrade_dot"] is True
+        and node["upgrade_status"] == "running"
+        and node["upgrade_task_id"] == "body-1"
+        for node in shell_card["tree_nodes"]
+    )
+    assert any(node["key"] == "src" for node in shell_card["tree_nodes"])
+    assert shell_card["upgrade_signals"][0]["source_label"] == "员工代理 正在改"
+    assert active_card["upgrade_active"] is False
+
+
+@pytest.mark.unit
+def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    registry = supervisor._body_registry.load_registry()
+    shell_slot = str(registry.shell_slot or "")
+    assert shell_slot
+
+    shell_meta = supervisor._body_registry.load_slot_meta(shell_slot)
+    shell_worktree = Path(shell_meta.worktree_path)
+    (shell_worktree / "systems").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "prompts").mkdir(parents=True, exist_ok=True)
+
+    slot_metas = {
+        slot_id: supervisor._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
+        for slot_id in registry.slot_ids
+    }
+    cards = project_body_slot_cards(
+        registry=registry.model_dump(mode="json"),
+        slot_metas=slot_metas,
+        chain_history_projection=[
+            {
+                "task_id": "body-2",
+                "title": "Prepare shell prompt cleanup",
+                "execution_kind": "body_improvement",
+                "status": "approved",
+                "execution_request": {
+                    "target_slot_id": shell_slot,
+                    "editable_dirs": ["systems", "prompts"],
+                },
+                "metadata": {
+                    "changed_files": ["prompts/body_upgrade.md"],
+                },
+            }
+        ],
+        top_level_entries_by_slot={
+            shell_slot: sorted(child.name for child in shell_worktree.iterdir())
+        },
+    )
+
+    shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
+
+    assert shell_card["upgrade_active"] is True
+    assert "API-B 已转交" in shell_card["focus_summary"]
+    assert any(node["key"] == "systems" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(node["key"] == "prompts" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(
+        node["key"] == "prompts/body_upgrade.md"
+        and node["label"] == "body_upgrade.md"
+        and node["upgrade_dot"] is True
+        and node["upgrade_status"] == "approved"
+        and node["upgrade_task_id"] == "body-2"
+        for node in shell_card["tree_nodes"]
+    )
+    assert shell_card["upgrade_signals"][0]["source_label"] == "API-B 已转交"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "时间线驱动的界面观察",
+            "trace_id": "trace-timeline-1",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    trace_id = planned["tasks"][0]["trace_id"]
+
+    async def fake_gateway_activity_log(trace_id=None, limit=200):
+        assert trace_id is None
+        return {
+            "status": "ok",
+            "events": [
+                {
+                    "activity_id": "gateway-timeline-1",
+                    "activity_kind": "self_learning",
+                    "recorded_at": "2026-05-25T12:05:00",
+                    "metadata": {
+                        "trace_id": trace_id or "trace-timeline-1",
+                        "task_id": task_id,
+                        "governance_task_type": "self_learning",
+                        "task_family": "self_learning",
+                        "task_identity": {
+                            "title": "时间线驱动的界面观察",
+                            "display_label": "自主学习",
+                            "summary": "时间线驱动的界面观察 (自主学习)",
+                        },
+                    },
+                },
+                {
+                    "activity_id": "gateway-user-request-1",
+                    "activity_kind": "user_request",
+                    "recorded_at": "2026-05-25T12:06:00",
+                    "session_id": "user-chat-session",
+                    "metadata": {
+                        "trace_id": "trace-timeline-1",
+                        "request_id": "user-request-1",
+                        "prompt_preview": "USER_CHAT_SECRET_SHOULD_NOT_RENDER",
+                    },
+                },
+                {
+                    "activity_id": "gateway-user-chat-scene-1",
+                    "activity_kind": "agent_scene",
+                    "recorded_at": "2026-05-25T12:07:00",
+                    "session_id": "user-chat-session",
+                    "metadata": {
+                        "trace_id": "trace-timeline-1",
+                        "agent_role": "user_chat",
+                        "scene": "executing",
+                        "subagent_focus_preview": "USER_CHAT_SUBAGENT_SHOULD_NOT_RENDER",
+                    },
+                },
+            ],
+        }
+
+    supervisor._fetch_gateway_activity_log = fake_gateway_activity_log  # type: ignore[method-assign]
+
+    result = await supervisor.get_runtime_timeline(limit=10)
+
+    assert result["status"] == "ok"
+    assert result["count"] >= 3
+    sources = {event["source"] for event in result["timeline"]}
+    assert {
+        "autonomous_chain_store",
+        "supervisor_activity",
+        "mem_governor_history",
+        "gateway_activity_log",
+    }.issubset(sources)
+    assert {event["trace_id"] for event in result["timeline"]} == {trace_id}
+    assert {event["task_id"] for event in result["timeline"] if event.get("task_id")} == {task_id}
+    rendered = json.dumps(result["timeline"], ensure_ascii=False)
+    assert "USER_CHAT_SECRET_SHOULD_NOT_RENDER" not in rendered
+    assert "USER_CHAT_SUBAGENT_SHOULD_NOT_RENDER" not in rendered
+    gateway_events = [
+        event for event in result["timeline"]
+        if event.get("source") == "gateway_activity_log"
+    ]
+    assert [event["event_type"] for event in gateway_events] == ["self_learning"]
+    assert gateway_events[0]["source_label"] == "网关回报"
+    assert gateway_events[0]["summary"] == "网关记下了 「时间线驱动的界面观察 (自主学习)」 的自主学习回报。"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_runtime_trace_fallback_summaries_use_human_labels(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    assert supervisor._trace_human_summary_fallback(  # type: ignore[attr-defined]
+        event_type="tasks reviewed",
+        scope_label="监督者活动",
+    ) == "监督者活动：API-B 复核记录"
+    assert supervisor._trace_human_summary_fallback(  # type: ignore[attr-defined]
+        event_type="supervisor_activity",
+        scope_label="治理记录",
+    ) == "治理记录：监督者活动"
+
+
+@pytest.mark.unit
+def test_supervisor_can_disable_built_in_room_ui(tmp_path):
+    config = _make_supervisor_config(tmp_path).model_copy(update={"ui_enabled": False})
+    supervisor = Supervisor(config)
+    route_paths = {route.path for route in supervisor.app.routes}
+
+    assert "/ui" not in route_paths
+    assert "/ui/state" not in route_paths
+    assert "/ui/events" not in route_paths
+
+
+@pytest.mark.unit
+def test_supervisor_room_ui_event_frame_uses_sse_state_event(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    frame = format_supervisor_ui_event(
+        "state",
+        {
+            "status": "ok",
+            "scene": "planning",
+            "title": "西子正在思考",
+        }
+    )
+
+    assert frame.startswith("event: state\n")
+    assert '"status":"ok"' in frame
+    assert '"scene":"planning"' in frame
+    assert frame.endswith("\n\n")
+
+
+@pytest.mark.unit
+def test_supervisor_room_ui_records_bounded_activity_timeline(tmp_path):
+    config = _make_supervisor_config(tmp_path).model_copy(
+        update={"ui_activity_buffer_size": 2}
+    )
+    supervisor = Supervisor(config)
+
+    supervisor._ui_runtime.record_activity("first", summary="第一条事件")
+    supervisor._ui_runtime.record_activity("second", summary="第二条事件")
+    supervisor._ui_runtime.record_activity("third", summary="第三条事件")
+
+    timeline = supervisor._ui_runtime.recent_activity(limit=10)
+    assert [event["event_type"] for event in timeline] == ["third", "second"]
+    assert timeline[0]["summary"] == "第三条事件"
+    persisted = supervisor._ui_runtime.activity_path.read_text(encoding="utf-8")
+    assert "third" in persisted
+    assert "first" not in persisted
+
+
+@pytest.mark.unit
+def test_supervisor_room_ui_restores_activity_timeline_from_runtime_store(tmp_path):
+    config = _make_supervisor_config(tmp_path).model_copy(
+        update={"ui_activity_buffer_size": 3}
+    )
+    first = Supervisor(config)
+    first._ui_runtime.record_activity("remembered", summary="已持久化事件")
+
+    second = Supervisor(config)
+    timeline = second._ui_runtime.recent_activity(limit=10)
+
+    assert timeline[0]["event_type"] == "remembered"
+    assert timeline[0]["summary"] == "已持久化事件"
+    assert second._ui_runtime.activity_path == first._ui_runtime.activity_path
+
+
+@pytest.mark.unit
+def test_supervisor_room_ui_activity_is_mirrored_to_governance_history(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    event = supervisor._ui_runtime.record_activity(
+        "task_decided",
+        scene="execution",
+        summary="裁决已镜像到治理历史",
+        metadata={
+            "trace_id": "trace-ui-1",
+            "task_id": "task-ui-1",
+            "task_type": "self_learning_followup",
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "decision_id": "decision-ui-1",
+        },
+    )
+
+    history = supervisor._governor.list_history(limit=5)
+    record = history[-1]
+    assert record["kind"] == "supervisor_activity"
+    assert record["request"]["event_id"] == event["event_id"]
+    assert record["request"]["event_type"] == "task_decided"
+    assert record["request"]["trace_id"] == "trace-ui-1"
+    assert record["request"]["governance_task_type"] == "self_learning"
+    assert record["evolution_lineage"]["decision_id"] == "decision-ui-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_read_does_not_mirror_observation_to_governance_history(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+    before = len(supervisor._governor.list_history(limit=100))
+
+    state = await supervisor._ui_runtime.get_state()
+
+    after = supervisor._governor.list_history(limit=100)
+    assert state["status"] == "ok"
+    assert len(after) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+    await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Run memory continuity sweep",
+            "execution_kind": "memory_maintenance",
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["scene"] == "maintenance"
+    judgement = _observation_section(state["autonomous_observation"], "api_b_judgement")
+    assert judgement["items"][0]["title"] == "Run memory continuity sweep"
+    assert "tasks" not in state
+    assert "整理记忆" in state["title"]
+    assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
+    assert "supervisor_activity" in [event["source"] for event in state["timeline"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_timeline = AsyncMock(return_value={"timeline": []})  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 2, "counts": {}},
+            "thresholds": {"user_idle_seconds": 600},
+            "user_chain_signal": {
+                "scope": "soft_signal_only",
+                "active_sessions": 2,
+                "is_quiet": False,
+                "quiet_after_seconds": 600,
+            },
+            "decisions": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+    )  # type: ignore[method-assign]
+
+    state = await supervisor._ui_runtime.get_state()
+
+    candidate_section = _observation_section(state["autonomous_observation"], "api_b_candidates")
+    assert candidate_section["items"] == []
+    assert state["timeline"] == []
+    assert "in_execution_window" not in state
+    assert "active_executions" not in state
+    assert "drive_candidates" not in state
+    assert "drive_available" not in state
+    assert "autonomous_chain_gate" not in state
+    assert "active_sessions" not in state
+    assert "activity_guards" not in state
+    assert "metrics" not in state
+    runtime = state["autonomous_observation"]["runtime"]
+    assert runtime["user_chain_signal"]["active_sessions"] == 2
+    assert runtime["user_chain_signal"]["is_quiet"] is False
+    assert runtime["snapshot_source"] == "live"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_live_probes_fail(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_drive_input = AsyncMock(side_effect=RuntimeError("gateway down"))  # type: ignore[method-assign]
+    supervisor._ui_runtime._fetch_tier1_stats = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("memory down")
+    )
+    supervisor.get_runtime_timeline = AsyncMock(side_effect=RuntimeError("timeline down"))  # type: ignore[method-assign]
+
+    state = await supervisor._ui_runtime.get_state()
+
+    runtime = state["autonomous_observation"]["runtime"]
+    assert runtime["user_chain_signal"]["active_sessions"] == 0
+    assert runtime["snapshot_source"] == "default"
+    assert state["tier1_stats"]["memory_unavailable"] is True
+    assert state["tier1_stats"]["snapshot_source"] == "default"
+    assert state["timeline"] == []
+
+
+@pytest.mark.unit
+def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
+    ui_source = load_supervisor_ui_html()
+
+    assert "API-B 判断输入" in ui_source
+    assert "label:'活跃会话'" not in ui_source
+
+
+@pytest.mark.unit
+def test_continuous_voice_ui_treats_background_capture_as_listening():
+    ui_source = load_supervisor_ui_html()
+
+    assert "const continuousForeground = continuous && voice.active" in ui_source
+    assert "continuous && !continuousForeground" in ui_source
+    assert "text = '待唤醒'" in ui_source
+    assert "已检测到语音 · 等待说完" in ui_source
+    assert "finalizing_utterance: '用户输入完成'" in ui_source
+    assert "thinking: '待回复'" in ui_source
+    assert "const voiceLevels = new EventSource('/ui/voice-levels')" in ui_source
+    assert "applyVoiceRealtime(JSON.parse(ev.data))" in ui_source
+    assert 'id="voiceMeter"' in ui_source
+    assert "voice.meter_active && voice.wake_state === 'listening'" in ui_source
+    assert '#voiceListen[aria-pressed="true"]' in ui_source
+
+
+@pytest.mark.unit
+def test_single_voice_button_reuses_vad_pipeline_without_fixed_duration():
+    ui_source = load_supervisor_ui_html()
+
+    assert set(VoiceCaptureRequest.model_fields) == {"session_id"}
+    assert "'/voice/session/start',\n    {}," in ui_source
+    assert "{keepTalkEnabled: true}" in ui_source
+    assert "voice.active && voice.wake_state === 'listening'" in ui_source
+    assert "text = voice.speech_detected ? '已检测到语音 · 等待说完' : '正在聆听'" in ui_source
+    assert "duration_seconds: 8" not in ui_source
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "items": [
+                {"title": "Duplicate learning branch"},
+                {"title": "Canonical learning branch"},
+            ]
+        }
+    )
+    tasks_by_title = {task["title"]: task["task_id"] for task in planned["tasks"]}
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, drive_input):
+        assert drive_input["user_chain_signal"]["is_quiet"] is True
+        return {
+            tasks_by_title["Duplicate learning branch"]: {
+                "action": "merge",
+                "reason": "Duplicate branch should merge into the canonical one.",
+                "followup_suggestion": {
+                    "action": "merge",
+                    "reason": "Duplicate branch should merge into the canonical one.",
+                    "merge_into": tasks_by_title["Canonical learning branch"],
+                },
+            }
+        }
+
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
+
+    await supervisor.review_autonomous_chain_tasks(
+        {
+            "drive_input": _runtime_drive_input_payload(),
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    duplicate = _find_autonomous_observation_task(
+        state,
+        title="Duplicate learning branch",
+    )
+    assert "lm_review_shadow" not in duplicate["judgement_preview"]
+    assert all(
+        "lm_review_shadow" not in dict(entry.get("context") or {})
+        for entry in duplicate.get("decision_history", [])
+        if isinstance(entry, dict)
+    )
+    preview = duplicate["judgement_preview"]["followup_suggestion"]
+    assert preview["action"] == "merge"
+    assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
+    assert preview["merge_into_title"] == "Canonical learning branch"
+    assert "监督者保留建议" in preview["summary"]
+    assert "Canonical learning branch" in duplicate["judgement_preview"]["summary"]
+    assert "governance_preview" not in duplicate
+    assert state["autonomous_observation"]["metrics"]["observation"]["followup_signals"] >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Underweighted architecture follow-up",
+            "priority": "low",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, drive_input):
+        assert drive_input["user_chain_signal"]["is_quiet"] is True
+        return {
+            task_id: {
+                "action": "reprioritize",
+                "priority": "high",
+                "reason": "This follow-up now blocks higher-value evolution work.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor._autonomous_task_review_service, "_review_adviser", fake_lm_review)
+
+    await supervisor.review_autonomous_chain_tasks(
+        {
+            "drive_input": _runtime_drive_input_payload(),
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    task = _find_autonomous_observation_task(
+        state,
+        task_id=task_id,
+    )
+    assert task["priority"] == "high"
+    assert "lm_review_priority" not in task["judgement_preview"]
+    assert all(
+        "lm_review_priority" not in dict(entry.get("context") or {})
+        for entry in task.get("decision_history", [])
+        if isinstance(entry, dict)
+    )
+    assert task["judgement_preview"]["priority_adjustment"]["priority"] == "high"
+    assert task["judgement_preview"]["priority_adjustment"]["priority_label"] == "高"
+    assert "监督者已重排优先级" in task["judgement_preview"]["summary"]
+    assert "governance_preview" not in task
+    assert state["autonomous_observation"]["metrics"]["observation"]["priority_change_signals"] >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "根据学习结果改进 shell 替身",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+                "execution_request": {
+                    "kind": "body_improvement",
+                },
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    state = await supervisor._ui_runtime.get_state()
+    task = _find_autonomous_observation_task(
+        state,
+        task_id=task_id,
+    )
+
+    assert task["task_identity"]["task_family"] == "body_upgrade"
+    assert task["task_identity"]["execution_kind"] == "body_improvement"
+    assert task["task_identity"]["requested_kind"] == "body_improvement"
+    assert task["task_identity"]["display_kind"] == "body_improvement"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "body_upgrade": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+
+    supervisor_task_1 = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Supervisor first task",
+            "task_family": "memory_maintenance",
+            "metadata": {"task_family": "memory_maintenance"},
+        }
+    )
+    supervisor_task_2 = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Supervisor second task",
+            "task_family": "general_self_evolution",
+            "metadata": {"task_family": "general_self_evolution"},
+        }
+    )
+    agent_task_1 = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "第一个自主学习链路项",
+            "task_type": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    agent_task_2 = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Agent second creative task",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+
+    await supervisor.decide_autonomous_chain_task(
+        supervisor_task_1["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "first supervisor task"},
+    )
+    await supervisor.decide_autonomous_chain_task(
+        agent_task_1["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "first agent task"},
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    observation = state["autonomous_observation"]
+    loop_stage_keys = [item["stage_key"] for item in observation["loop"]["stage_cards"]]
+    group_keys = [group["key"] for group in observation["chain"]["segments"]]
+    api_b_judgement = _observation_section(observation, "api_b_judgement")
+    employee_dispatch = _observation_section(observation, "employee_dispatch")
+
+    assert "queue_layout" not in state
+    assert "panels" not in state
+    assert observation["read_model_version"] == 13
+    assert "observed_tasks" not in observation
+    assert "candidates" not in observation
+    assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
+    assert observation["loop"]["stage_cards"][0]["stage_key"] == "api_b_judgement"
+    assert observation["loop"]["stage_cards"][1]["stage_key"] == "employee_execution"
+    assert observation["loop"]["recent_writebacks"] == []
+    assert "stages" not in observation["loop"]
+    assert observation["board"]["headline"] == "API-B 主视角自主闭环总览"
+    assert "watch_groups" not in observation["board"]
+    assert "protocol_notes" not in observation["board"]
+    assert "boundary_note" not in observation["board"]
+    assert observation["loop"]["boundary"] == (
+        "自主链路闭环只展示 API-B 判断、员工代理执行、Mem 写回回流和 API-B 再读取；"
+        "用户链路只作让路软感知，不展示聊天内容。"
+    )
+    assert "metric_cards" not in observation["board"]
+    assert loop_stage_keys == [
+        "api_b_judgement",
+        "employee_execution",
+        "mem_writeback",
+        "api_b_reread",
+    ]
+    assert group_keys == ["api_b_candidates", "api_b_judgement", "employee_dispatch", "mem_recent"]
+    assert "queue" not in observation
+    assert observation["chain"]["headline"] == "自主闭环分段观察"
+    assert "presentation" not in observation
+    assert observation["board"]["primary_focus"]["title"] == "Supervisor first task"
+    assert observation["board"]["primary_focus"]["status"] == "当前在途"
+    assert observation["board"]["primary_focus"]["observation_role"] == "api_b_judgement"
+    assert observation["board"]["primary_focus"]["stage_key"] == "api_b_judgement"
+    assert observation["board"]["primary_focus"]["source_label"] == "API-B"
+    assert "stage_owner" not in observation["board"]["primary_focus"]
+    assert observation["board"]["hero_summary"] == observation["board"]["summary"]
+    assert "hero_pills" not in observation["board"]
+    assert not any(
+        note.get("key") == "governance_waiting"
+        for note in observation["board"]["observation_notes"]
+    )
+    assert not any("待认领" in str(note.get("title") or "") for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "api_b_scope" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "recent_activity" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "ready_boundary" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "user_chain_signal" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "protocol_contract" for note in observation["board"]["observation_notes"])
+    assert "current_cards" not in observation["board"]
+    assert _observation_loop_stage(observation, "employee_execution")["status"] == "ready"
+    assert _observation_loop_stage(observation, "employee_execution")["focus_task"]["title"] == "第一个自主学习链路项"
+    assert [group["key"] for group in observation["chain"]["segments"]] == group_keys
+    assert api_b_judgement["source_label"] == "API-B"
+    assert "owner" not in api_b_judgement
+    assert api_b_judgement["stage_label"] == "判断在途"
+    assert api_b_judgement["segment_kind"] == "api_b_judgement"
+    assert api_b_judgement["decor_class"] == "supervisor"
+    assert "display_decor" not in api_b_judgement
+    assert "display_copy" not in api_b_judgement
+    assert employee_dispatch["decor_class"] == "agent"
+    assert employee_dispatch["source_label"] == "员工代理"
+    assert api_b_judgement["item_label"] == "判断项"
+    assert employee_dispatch["item_label"] == "待接手项"
+    assert api_b_judgement["event_label"] == "动作"
+    assert employee_dispatch["trace_label"] == "回合"
+    assert api_b_judgement["projection_scope"] == "chain_segment_projection"
+    assert api_b_judgement["payload_count"] == 3
+    assert api_b_judgement["event_count"] >= 1
+    assert api_b_judgement["trace_count"] >= 1
+    assert api_b_judgement["segment_status"] in {"active", "ready"}
+    assert api_b_judgement["segment_status_label"] in {"当前有流动", "已有观测"}
+    assert api_b_judgement["focus_item"]["observation_role"] == "api_b_judgement"
+    assert api_b_judgement["latest_item"]["title"] == "Supervisor first task"
+    assert api_b_judgement["latest_summary"]
+    assert api_b_judgement["drawer_summary"].startswith("API-B")
+    assert "当前可见判断项" in api_b_judgement["drawer_counts_summary"]
+    assert "没有可见判断项" in api_b_judgement["drawer_empty_items_text"]
+    assert api_b_judgement["drawer_recent_events_label"] == "最近动作"
+    assert api_b_judgement["drawer_recent_traces_label"] == "最近回合"
+    assert "判断项" in api_b_judgement["footer_text"]
+    assert isinstance(api_b_judgement["recent_events"], list)
+    assert api_b_judgement["recent_event_count"] >= 1
+    assert isinstance(api_b_judgement["recent_traces"], list)
+    assert api_b_judgement["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert api_b_judgement["recent_traces"][0]["detail"]["record_count"] >= 1
+    assert isinstance(
+        api_b_judgement["recent_traces"][0]["detail"]["source_counts"],
+        dict,
+    )
+    assert isinstance(
+        api_b_judgement["recent_traces"][0]["detail"]["timeline_preview"],
+        list,
+    )
+    assert isinstance(
+        api_b_judgement["recent_traces"][0]["detail"]["timeline_events"],
+        list,
+    )
+    assert api_b_judgement["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert "api_b" not in observation
+    assert "api_a" not in observation
+    assert "mem" not in observation
+    assert "reread" not in observation
+    assert _observation_loop_stage(observation, "api_b_judgement")["status"] == "active"
+    assert _observation_loop_stage(observation, "employee_execution")["status"] == "ready"
+    assert _observation_loop_stage(observation, "mem_writeback")["status"] == "idle"
+    assert _observation_loop_stage(observation, "api_b_judgement")["observation_role"] == "api_b_judgement"
+    assert _observation_loop_stage(observation, "employee_execution")["lane"] == "agent"
+    assert [card["observation_role"] for card in observation["loop"]["stage_cards"]] == loop_stage_keys
+    assert [card["observation_stage_label"] for card in observation["loop"]["stage_cards"]] == [
+        "API-B 判断阶段",
+        "员工代理派工 / 执行观测阶段",
+        "Mem 写回阶段",
+        "API-B 再读取阶段",
+    ]
+    assert [entry["key"] for entry in observation["loop"]["rail_entries"]] == loop_stage_keys
+    assert observation["loop"]["rail_entries"][0]["source_label"] == "API-B"
+    assert [card["stage_key"] for card in observation["loop"]["stage_cards"]] == loop_stage_keys
+    assert observation["loop"]["stage_cards"][1]["source_label"] == "员工代理"
+    assert observation["loop"]["stage_cards"][0]["focus_task"]["title"] == "Supervisor first task"
+    assert observation["loop"]["stage_cards"][1]["focus_task"]["title"] == "第一个自主学习链路项"
+    assert observation["loop"]["stage_cards"][1]["chain_reason"]
+    assert observation["loop"]["stage_cards"][1]["activity_text"]
+    assert "owner" not in observation["loop"]["stage_cards"][0]
+    assert all("stage_owner" not in card for card in observation["loop"]["stage_cards"])
+    assert [card["lane"] for card in observation["loop"]["stage_cards"]] == [
+        "supervisor",
+        "agent",
+        "mem",
+        "supervisor",
+    ]
+    assert all("state" in entry and entry["state"] for entry in observation["loop"]["rail_entries"])
+    assert all("note" in entry for entry in observation["loop"]["rail_entries"])
+    assert all(isinstance(entry.get("focus"), bool) for entry in observation["loop"]["rail_entries"])
+    assert _observation_loop_stage(observation, "api_b_judgement")["transition_hint"] == "判断通过后交给 员工代理接手。"
+    assert _observation_loop_stage(observation, "api_b_judgement")["card_subtitle"].startswith("API-B 判断阶段")
+    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["title"] == "Supervisor first task"
+    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "已转交"
+    assert _observation_loop_stage(observation, "employee_execution")["focus_task"]["title"] == "第一个自主学习链路项"
+    assert _observation_loop_stage(observation, "employee_execution")["focus_task"]["display_status"] == "已转交"
+    assert [item["title"] for item in api_b_judgement["items"]] == [
+        "Supervisor first task",
+        "Supervisor second task",
+        "Agent second creative task",
+    ]
+    assert "第一个自主学习链路项" not in [
+        item["title"] for item in api_b_judgement["items"]
+    ]
+    assert [item["display_status"] for item in api_b_judgement["items"]] == ["已转交", "待判断", "待判断"]
+    assert [item["lane"] for item in api_b_judgement["items"]] == ["supervisor", "supervisor", "supervisor"]
+    assert api_b_judgement["items"][0]["observation_card_subtitle"]
+    assert api_b_judgement["items"][0]["identity_hint"]
+    assert "judgement_hint" in api_b_judgement["items"][0]
+    assert "governance_hint" not in api_b_judgement["items"][0]
+    assert employee_dispatch["items"][0]["observation_card_subtitle"]
+    assert [item["title"] for item in employee_dispatch["items"]] == ["第一个自主学习链路项"]
+    assert [item["display_status"] for item in employee_dispatch["items"]] == ["已转交"]
+    assert [item["lane"] for item in employee_dispatch["items"]] == ["agent"]
+    assert observation["metrics"]["slot_overview"] == "slot-A / slot-B"
+    assert observation["metrics"]["chain_projection"]["api_b_judgement"] == 3
+    assert observation["metrics"]["chain_projection"]["employee_running"] == 0
+    assert observation["metrics"]["chain_projection"]["employee_dispatch"] == 1
+    assert observation["metrics"]["chain_projection"]["writeback_history"] == 0
+    assert observation["runtime"]["snapshot_source"] == "live"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_keeps_running_employee_task_out_of_ready_segment(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "运行中的自主学习链路项",
+            "task_type": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="API-B dispatched task to an employee agent",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="employee agent started execution",
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    observation = state["autonomous_observation"]
+    employee_dispatch = _observation_section(observation, "employee_dispatch")
+    employee_execution = _observation_loop_stage(observation, "employee_execution")
+    notes = list(observation["board"].get("observation_notes") or [])
+
+    assert employee_dispatch["items"] == []
+    assert employee_dispatch["payload_count"] == 0
+    assert employee_execution["status"] == "active"
+    assert employee_execution["focus_task"]["title"] == "运行中的自主学习链路项"
+    assert observation["counts"]["employee_running"] == 1
+    assert observation["runtime"]["employee_running_count"] == 1
+    assert any(
+        note.get("title") == "员工代理执行中"
+        and "写回后会回到这里" in str(note.get("text") or "")
+        for note in notes
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_maps_running_employee_task_to_handoff_scene(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "正在执行的自主学习链路项",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="API-B dispatched task to an employee agent",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="employee agent started execution",
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["scene"] == "handoff"
+    assert "自主交接中" in state["title"]
+    assert "已交给 员工代理执行面处理" in state["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+    )
+    supervisor._ui_runtime.record_activity(
+        "endogenous_drive_evaluated",
+        scene="drive",
+        summary="已缓存内生驱动候选。",
+        metadata={
+            "candidates": [
+                {
+                    "title": "重复链路候选",
+                    "stable_key": "candidate-dup",
+                    "value_tags": ["continuity"],
+                    "utility": 0.91,
+                    "metadata": {
+                        "endogenous_drive_key": "candidate-dup",
+                        "scheduled_for": "2026-06-28T01:00:00",
+                    },
+                },
+                {
+                    "title": "唯一链路候选",
+                    "stable_key": "candidate-unique",
+                    "value_tags": ["creativity"],
+                    "utility": 0.88,
+                    "metadata": {
+                        "endogenous_drive_key": "candidate-unique",
+                        "scheduled_for": "2026-06-28T02:00:00",
+                    },
+                },
+            ]
+        },
+    )
+
+    await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "已被观察到的治理任务",
+            "metadata": {
+                "endogenous_drive_key": "candidate-dup",
+                "scheduled_for": "2026-06-28T01:00:00",
+            },
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    observation = state["autonomous_observation"]
+
+    judgement = _observation_section(observation, "api_b_judgement")
+    candidates = _observation_section(observation, "api_b_candidates")
+
+    assert judgement["items"][0]["title"] == "已被观察到的治理任务"
+    assert [item["title"] for item in candidates["items"]] == ["唯一链路候选"]
+    assert candidates["items"][0]["display_status"] == "候选形成"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_does_not_show_completed_drive_candidate_residue(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+    drive_key = "creativity:self_learning:cognitive_review:memory"
+    supervisor._ui_runtime.record_activity(
+        "endogenous_drive_evaluated",
+        scene="planning",
+        summary="旧候选快照。",
+        metadata={
+            "candidates": [
+                {
+                    "title": "已完成但仍在快照中的候选",
+                    "stable_key": drive_key,
+                    "metadata": {"endogenous_drive_key": drive_key},
+                }
+            ]
+        },
+    )
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "已完成但仍在快照中的候选",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "endogenous_drive_key": drive_key,
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="API-B handed off to API-A",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="claimed by API-A",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="completed",
+        reason="writeback completed",
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    observation = state["autonomous_observation"]
+
+    candidates = _observation_section(observation, "api_b_candidates")
+    writebacks = _observation_section(observation, "mem_recent")
+
+    assert candidates["items"] == []
+    assert writebacks["items"][0]["task_id"] == task_id
+    assert writebacks["items"][0]["status"] == "completed"
+
+
+def test_latest_drive_candidate_snapshot_stops_at_newer_idle_event(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._ui_runtime.record_activity(
+        "endogenous_drive_evaluated",
+        scene="planning",
+        summary="旧候选快照。",
+        metadata={"candidates": [{"title": "旧候选"}]},
+    )
+    supervisor._ui_runtime.record_activity(
+        "endogenous_drive_idle",
+        scene="idle",
+        summary="本轮没有候选。",
+    )
+
+    assert supervisor._ui_runtime.latest_drive_candidates() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous_loop(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "已完成的自主学习写回",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_result": {
+                    "summary": "Summarized learning result for Mem writeback.",
+                },
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="Approved autonomous learning writeback.",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="Autonomous learning writeback running.",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="completed",
+        reason="已完成的自主学习写回。",
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
+    mem_recent = state["autonomous_observation"]["chain"]["segments"][3]["items"][0]
+    mem_stage = _observation_loop_stage(state["autonomous_observation"], "mem_writeback")
+
+    assert writeback["title"] == "已完成的自主学习写回"
+    assert writeback["lane"] == "agent"
+    assert writeback["status"] == "completed"
+    assert mem_stage["focus_task"]["title"] == "已完成的自主学习写回"
+    assert mem_stage["status"] == "ready"
+    assert mem_recent["lane"] == "mem"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_for_web_room(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {},
+            "governance_task_type_decisions": {},
+        }
+    )
+    supervisor._endogenous_governance_state_persistence_service.persist_cognition_state(
+        {
+            "perception": {
+                "system_posture": "truth_guarded",
+                "user_mode": "quiet",
+                "api_b_judgement_count": 2,
+                "employee_dispatch_count": 1,
+                "employee_running_count": 0,
+                "active_sessions": 0,
+                "recent_errors": 1,
+                "learning_quality": 61,
+                "correction_signals": 2,
+                "idle_seconds": {"user": 120, "memory": 15},
+            },
+            "world_model": {
+                "governance_load_state": "strained",
+                "memory_pressure": 0.22,
+                "truthfulness_pressure": 0.71,
+                "learning_momentum": 0.33,
+                "self_confidence": 0.44,
+            },
+            "needs": [
+                {
+                    "need_type": "truthfulness_repair",
+                    "severity": 0.83,
+                    "urgency": 0.8,
+                    "confidence": 0.66,
+                    "rationale": "Recent corrections suggest unresolved truthfulness debt.",
+                }
+            ],
+            "intents": [
+                {
+                    "intent_type": "protect_truthfulness",
+                    "priority": 0.86,
+                    "output_channel": "governance_review",
+                    "target_horizon": "next_cycle",
+                    "rationale": "Protect truthfulness before expanding output.",
+                }
+            ],
+            "signals": [
+                {
+                    "signal_type": "truthfulness_alert",
+                    "priority": 0.72,
+                    "message": "Truthfulness alerts have been rising.",
+                }
+            ],
+            "adaptive_policy": {
+                "learning_expansion_bias": 0.12,
+                "truthfulness_bias": 0.77,
+                "memory_continuity_bias": 0.15,
+                "governance_hygiene_bias": 0.54,
+                "body_growth_bias": 0.08,
+                "observation_bias": 0.63,
+                "candidate_throttle": 0.4,
+                "candidate_budget": 2,
+                "exploratory_learning_quota": 0,
+                "body_growth_quota": 0,
+                "preferred_focus": "truthfulness",
+            },
+            "judgement_core": {
+                "primary_need": {"need_type": "truthfulness_repair"},
+                "primary_intent": {"intent_type": "protect_truthfulness"},
+            },
+            "governance": {
+                "preferred_focus": "truthfulness",
+                "dominant_constraint": "api_b_judgement_blockage",
+            },
+            "proposal_cognition": {
+                "assessment_trace": {
+                    "available": True,
+                    "dominant_constraint": "api_b_judgement_blockage",
+                    "current_judgement": "在 grounding 修复前，复核应保持主导",
+                    "why_not_improvement_now": "在直接进行身体改进前，应优先处理 truthfulness 治理。",
+                    "why_not_improvement_now_count": 1,
+                    "self_iteration_target": "truthfulness",
+                    "self_iteration_hypothesis": "先修补 truthfulness 信号，再推进身体工作。",
+                },
+                "meta_cognition_profile": {
+                    "current_judgement": "",
+                    "dominant_constraint": "",
+                    "self_iteration_focus": {
+                        "domain": "truthfulness",
+                        "hypothesis": "先修补 truthfulness 信号，再推进身体工作。",
+                    },
+                },
+            },
+            "uncertainty_ledger": {
+                "active_count": 1,
+                "highest_risk_domain": "truthfulness",
+                "entries": [
+                    {
+                        "domain": "truthfulness",
+                        "risk": 0.72,
+                        "confidence": 0.64,
+                        "why_uncertain": "Corrections are visible but still need targeted review.",
+                        "observation_target": "truthfulness",
+                        "recommended_probe": "review recent uncertain answers and correction signals",
+                    }
+                ],
+            },
+            "observation_program": {
+                "highest_priority_target": "truthfulness",
+                "entries": [
+                    {
+                        "target": "truthfulness",
+                        "recommended_probe": "review recent uncertain answers and correction signals",
+                        "recommended_next_step": "collect_observation",
+                        "persistence_state": "stalled",
+                    }
+                ],
+            },
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    cognition = state["cognition"]
+    judgement = cognition["judgement"]
+    uncertainty = cognition["uncertainty"]
+    top_item = uncertainty["top_items"][0]
+
+    assert judgement["focus_label"] == "真实性"
+    assert judgement["dominant_constraint_label"] == "API-B 判断阻塞"
+    assert judgement["primary_need_label"] == "修补真实性风险"
+    assert judgement["primary_intent_label"] == "保护真实性"
+    assert judgement["observation_target_label"] == "真实性侧"
+    assert judgement["why_not_direct_improvement"][0] == "先处理真实性风险，再考虑直接替身改进"
+    assert "真实性" in judgement["summary"]
+    assert judgement["employee_dispatch_count"] == 1
+    assert judgement["employee_running_count"] == 0
+    assert judgement["employee_lane_summary"] == "API-B 已转交 1 个链路项，等待 员工代理接手。"
+    assert cognition["perception"]["employee_dispatch_count"] == 1
+    assert cognition["perception"]["employee_running_count"] == 0
+    assert uncertainty["highest_risk_label"] == "真实性侧"
+    assert uncertainty["summary"] == "当前最需要补证据的是真实性侧。"
+    assert top_item["domain_label"] == "真实性侧"
+    assert top_item["risk_label"] == "72%"
+    assert top_item["confidence_label"] == "64%"
+    assert top_item["recommended_probe_label"] == "复核近期不确定回答与修正信号"
+    assert top_item["recommended_next_step_label"] == "补观察证据"
+    assert top_item["persistence_label"] == "长期未化解"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_room(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {},
+                "last_autonomous_chain_execute_at": "2026-07-06T10:05:00",
+                "recent_metadata": {
+                    "autonomous_chain_execute": {
+                        "source_service": "executor",
+                        "task_type": "self_evolution",
+                        "task_type_label": "自主改进",
+                        "task_family": "body_switch",
+                        "task_family_label": "身体切换",
+                        "execution_kind": "body_switch",
+                        "execution_kind_label": "身体切换",
+                        "task_identity": {
+                            "display_label": "身体切换",
+                            "summary": "替身切换验收 (身体切换)",
+                        },
+                    }
+                },
+            },
+            "task_family_decisions": {},
+            "governance_task_type_decisions": {},
+        }
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+    observation = state["autonomous_observation"]
+    recent = observation["board"]["recent_activity"]
+
+    assert recent["kind"] == "autonomous_chain_execute"
+    assert recent["phase_label"] == "执行回报"
+    assert recent["title"] == "替身切换验收 (身体切换)"
+    assert recent["summary"] == "员工代理执行面 已向 API-B 回报 身体切换 的执行进展。"
+    assert recent["source_label"] == "员工代理执行面"
+    assert recent["tone"] == "accent"
+    assert observation["board"]["hero_summary"] == observation["board"]["summary"]
+    assert "hero_pills" not in observation["board"]
+    assert not any(
+        note.get("key") == "recent_activity"
+        for note in observation["board"]["observation_notes"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_is_waiting(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Agent waiting creative task",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    await supervisor.decide_autonomous_chain_task(
+        planned["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "creative task ready"},
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["scene"] == "idle"
+    assert "api_b" not in state["autonomous_observation"]
+    assert _observation_loop_stage(state["autonomous_observation"], "api_b_judgement")["focus_task"] is None
+    assert _observation_loop_stage(state["autonomous_observation"], "employee_execution")["focus_task"]["title"] == "Agent waiting creative task"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    with patch(
+        "voidcube.systems.supervisor.ui_state_orchestration.project_supervisor_scene",
+        return_value=("planning", "Auto judgement", "Auto work is active."),
+    ):
+        daily = await supervisor._ui_runtime.get_state()
+
+        assert daily["stellar_mode"]["mode"] == "daily_companion"
+        assert daily["scene"] == "idle"
+        assert daily["title"] == "日常陪伴中"
+
+        supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+        auto = await supervisor._ui_runtime.get_state()
+
+        assert auto["stellar_mode"]["mode"] == "auto_evolution"
+        assert auto["scene"] == "planning"
+        assert auto["title"] == "Auto judgement"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    expected = {
+        "status": "compressed",
+        "execution_route_hint": build_execution_route_hint("memory.compress"),
+    }
+    supervisor._execution_facade.memory_maintenance.trigger_memory_compression = AsyncMock(return_value=expected)  # type: ignore[method-assign]
+
+    result = await _trigger_memory_compression(supervisor, {"namespace": "default"})
+
+    assert result == expected
+    assert result["execution_route_hint"]["preferred_entrypoint"]["gateway_path"] == "/api/executor/memory/compress"
+    supervisor._execution_facade.memory_maintenance.trigger_memory_compression.assert_awaited_once()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_periodic_compression_runtime_does_not_route_through_execution_facade_helper(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._health_check_task = None
+    supervisor._autonomous_chain_review_task = None
+    supervisor._endogenous_drive_task = None
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(  # type: ignore[method-assign]
+        side_effect=asyncio.CancelledError()
+    )
+    original_memory_maintenance = supervisor._execution_facade.memory_maintenance
+    facade_memory_maintenance = SimpleNamespace(
+        trigger_memory_compression=AsyncMock(
+            side_effect=AssertionError(
+                "periodic compression should use the canonical maintenance executor directly"
+            )
+        )
+    )
+    supervisor._execution_facade.memory_maintenance = facade_memory_maintenance
+
+    await supervisor._start_periodic_tasks()
+
+    # Compression is now owned by the Memory Service (architecture baseline §3.4).
+    # The supervisor no longer runs a compression loop — verify it's gone.
+    # Compression task was removed from supervisor (baseline §3.4)
+    assert not hasattr(supervisor, '_compression_task'), (
+        "Supervisor should not have a _compression_task attribute "
+        "(compression is now owned by Memory Service per baseline §3.4)"
+    )
+    supervisor._execution_facade.memory_maintenance = original_memory_maintenance
+
+    assert supervisor._service_runtime.autonomous_chain_gate_active is False
+    assert supervisor._autonomous_chain_review_task is None
+    assert supervisor._endogenous_drive_task is None
+    await supervisor._stop_periodic_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_periodic_runtime_does_not_start_autonomous_chain(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+    await supervisor._start_periodic_tasks()
+
+    assert supervisor._service_runtime.autonomous_chain_gate_active is False
+    assert supervisor._service_runtime.stellar_mode is StellarMode.DAILY_COMPANION
+    assert supervisor._companion_observation_task is not None
+    assert supervisor._autonomous_chain_review_task is None
+    assert supervisor._endogenous_drive_task is None
+    await supervisor._stop_periodic_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+
+    await supervisor._start_periodic_tasks()
+    companion_task = supervisor._companion_observation_task
+    await supervisor._start_autonomous_chain_gate()
+
+    assert companion_task is not None and companion_task.cancelled()
+    assert supervisor._service_runtime.stellar_mode is StellarMode.AUTO_EVOLUTION
+    assert supervisor._companion_observation_task is None
+    packet = supervisor._service_runtime.auto_evidence_packet
+    assert packet["mode"] == "auto_evolution"
+    assert packet["source_domains"] == ["evolution"]
+    assert packet["frozen"] is True
+    assert "live_user_activity" in packet["excluded_signals"]
+
+    stopped = await supervisor.deactivate_autonomous_chain_gate({})
+    assert stopped["autonomous_chain_gate_active"] is False
+    assert stopped["mode"] == "daily_companion"
+    assert stopped["companion_loop_running"] is True
+    assert "autonomous_chain_runtime_mode" not in stopped
+    assert supervisor._autonomous_chain_review_task is None
+    assert supervisor._endogenous_drive_task is None
+    assert supervisor._service_runtime.auto_evidence_packet == {}
+    await supervisor._stop_periodic_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_cycle_defaults_to_silence_without_intent(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_observation_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "ok",
+            "observation_input": {
+                "activity": {"active_sessions": 1},
+                "user_chain_signal": {"is_quiet": False},
+            },
+        }
+    )
+
+    snapshot = await supervisor._run_daily_companion_observation_cycle()
+
+    assert snapshot["mode"] == "daily_companion"
+    assert snapshot["source"] == "voidcube_internal_events"
+    assert snapshot["intent_state"] == "unknown"
+    assert snapshot["disposition"] == "silent"
+    assert snapshot["reason"] == "insufficient_user_intent_evidence"
+    assert supervisor._service_runtime.latest_companion_observation == snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_calls_api_b_only_for_changed_complete_evidence(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_observation_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "ok",
+            "observation_input": {
+                "activity": {
+                    "active_sessions": 1,
+                    "counts": {"error_count": 1},
+                    "recent_metadata": {
+                        "user_request": {
+                            "text": "修复记忆隔离问题",
+                            "request_id": "request-1",
+                        },
+                        "agent_work": {
+                            "summary": "正在修改无关的 UI 动画",
+                            "trace_id": "trace-1",
+                        },
+                    },
+                }
+            },
+        }
+    )
+    supervisor._recall_companion_context = AsyncMock(return_value="memory context")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "inferred_goal": "修复记忆隔离问题",
+            "goal_confidence": 0.95,
+            "deviation_summary": "API-A 当前工作偏离用户目标",
+            "deviation_confidence": 0.9,
+            "help_value": 0.85,
+            "interruption_cost": 0.2,
+            "disposition": "remind",
+            "reason": "目标与当前活动不一致",
+            "reminder_text": "当前工作似乎偏离了记忆隔离目标。",
+            "evidence_refs": ["gateway:user_request:request-1", "gateway:agent_work:trace-1"],
+        }
+    )
+
+    first = await supervisor._run_daily_companion_observation_cycle()
+    second = await supervisor._run_daily_companion_observation_cycle()
+
+    assert first["intent_state"] == "understood"
+    assert first["disposition"] == "remind"
+    assert first["judgement"]["reminder_text"]
+    assert second["disposition"] == "silent"
+    assert second["reason"] == "internal_activity_unchanged"
+    supervisor._call_companion_model.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_rejects_low_confidence_reminder(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    normalized = supervisor._normalize_companion_judgement(
+        {
+            "inferred_goal": "可能的目标",
+            "goal_confidence": 0.4,
+            "deviation_confidence": 0.9,
+            "help_value": 0.9,
+            "interruption_cost": 0.1,
+            "disposition": "remind",
+            "reminder_text": "不应发出的提醒",
+            "evidence_refs": ["gateway:user_request:request-1"],
+        },
+        {"evidence_refs": ["gateway:user_request:request-1"]},
+    )
+
+    assert normalized["intent_state"] == "uncertain"
+    assert normalized["disposition"] == "silent"
+    assert normalized["judgement"]["reminder_text"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_proactive_reminder_delivers_only_after_policy_gate_and_records_audit(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._voice_manager.status = Mock(return_value={"enabled": True})
+    supervisor._voice_manager.speak_text = AsyncMock(
+        return_value={"status": "complete", "reply_text": "请检查当前任务。"}
+    )
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    observation = {
+        "evidence_key": "evidence-reminder-1",
+        "reason": "goal_deviation_supported",
+        "evidence": {"evidence_refs": ["gateway:user_request:r1"]},
+        "judgement": {
+            "reminder_text": "请检查当前任务。",
+            "evidence_refs": ["gateway:agent_work:a1"],
+        },
+    }
+
+    supervisor._queue_proactive_reminder(observation, now=now)
+    delivered = await supervisor._deliver_pending_proactive_reminder(now=now)
+
+    assert delivered["status"] == "delivered"
+    supervisor._voice_manager.speak_text.assert_awaited_once_with(
+        "请检查当前任务。",
+        reason="proactive_companion_reminder",
+    )
+    assert supervisor._service_runtime.pending_proactive_reminder == {}
+    assert supervisor._service_runtime.last_proactive_reminder_evidence_key == "evidence-reminder-1"
+    supervisor._touch_gateway_activity.assert_awaited_once()
+    assert supervisor._touch_gateway_activity.await_args.args[0] == "companion_proactive_reminder"
+
+    supervisor._queue_proactive_reminder(observation, now=now + timedelta(minutes=1))
+    suppressed = await supervisor._deliver_pending_proactive_reminder(
+        now=now + timedelta(minutes=1)
+    )
+    assert suppressed["reason"] == "proactive_reminder_cooldown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_proactive_reminder_waits_for_voice_and_respects_do_not_disturb(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "companion_proactive_dnd_start": "22:00",
+                    "companion_proactive_dnd_end": "08:00",
+                }
+            )
+        }
+    )
+    supervisor._voice_manager.status = Mock(return_value={"enabled": False})
+    supervisor._voice_manager.speak_text = AsyncMock()
+    observation = {
+        "evidence_key": "evidence-reminder-2",
+        "evidence": {},
+        "judgement": {"reminder_text": "提醒内容", "evidence_refs": ["ref-2"]},
+    }
+    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    dnd_time = datetime(2026, 5, 25, 23, 0, tzinfo=local_tz)
+    supervisor._queue_proactive_reminder(observation, now=dnd_time)
+
+    suppressed = await supervisor._deliver_pending_proactive_reminder(now=dnd_time)
+    assert suppressed["reason"] == "do_not_disturb_window"
+    supervisor._voice_manager.status.return_value = {"enabled": False}
+    waiting = await supervisor._deliver_pending_proactive_reminder(
+        now=datetime(2026, 5, 26, 9, 0, tzinfo=local_tz)
+    )
+    assert waiting["reason"] == "voice_output_disabled"
+    supervisor._voice_manager.speak_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="API-A memory")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={"reply_text": "我看到了当前任务上下文。", "reason": "direct_user_request"}
+    )
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    result = await supervisor.handle_companion_message(
+        text="星子，我现在在做什么？",
+        session_id="voice-session-1",
+    )
+
+    assert result["status"] == "ok"
+    assert result["disposition"] == "respond_to_user"
+    assert result["memory_persisted"] is False
+    assert result["memory_queued"] is True
+    assert result["user_text"] == "星子，我现在在做什么？"
+    assert result["reply_text"] == "我看到了当前任务上下文。"
+    assert result["recorded_at"]
+    supervisor._persist_companion_turn_pair.assert_awaited_once_with(
+        session_id="voice-session-1",
+        user_text="星子，我现在在做什么？",
+        assistant_text="我看到了当前任务上下文。",
+    )
+
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    unavailable = await supervisor.handle_companion_message(text="还在吗？")
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["reason"] == "stellar_auto_evolution_active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_companion_text_entry_prefers_voice_without_double_speaking_voice_input(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={"reply_text": "这条回复优先播报。", "reason": "direct_user_request"}
+    )
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._voice_manager.status = Mock(return_value={"enabled": True})
+    supervisor._voice_manager.speak_text = AsyncMock(
+        return_value={
+            "status": "complete",
+            "reply_text": "这条回复优先播报。",
+            "reason": "companion_text_reply",
+        }
+    )
+
+    text_result = await supervisor.companion_message(
+        SimpleNamespace(text="文字输入", session_id="text-session")
+    )
+
+    assert text_result["status"] == "ok"
+    assert text_result["voice_output"] == {
+        "status": "complete",
+        "reason": "companion_text_reply",
+    }
+    supervisor._voice_manager.speak_text.assert_awaited_once_with(
+        "这条回复优先播报。",
+        reason="companion_text_reply",
+    )
+
+    supervisor._voice_manager.speak_text.reset_mock()
+    voice_result = await supervisor._handle_voice_companion_message(
+        text="语音输入",
+        session_id="voice-session",
+    )
+
+    assert voice_result["status"] == "ok"
+    assert "voice_output" not in voice_result
+    supervisor._voice_manager.speak_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_companion_text_reply_keeps_text_when_voice_output_is_disabled(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={"reply_text": "仍然返回文字。", "reason": "direct_user_request"}
+    )
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._voice_manager.status = Mock(return_value={"enabled": False})
+    supervisor._voice_manager.speak_text = AsyncMock()
+
+    result = await supervisor.companion_message(
+        SimpleNamespace(text="文字输入", session_id="text-disabled")
+    )
+
+    assert result["reply_text"] == "仍然返回文字。"
+    assert result["voice_output"] == {
+        "status": "skipped",
+        "reason": "voice_output_disabled",
+    }
+    supervisor._voice_manager.speak_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_immediate_media_request_ignores_hallucinated_invalid_schedule(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "正在处理。",
+            "schedule_action": {
+                "action": "create",
+                "task": {
+                    "title": "错误定时播放",
+                    "instruction": "播放歌曲",
+                    "schedule_type": "daily",
+                    "time_of_day": "现在",
+                    "worker_role": "media",
+                },
+            },
+            "media_action": {"action": "none"},
+        }
+    )
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    result = await supervisor.handle_companion_message(
+        text="帮我播放周杰伦的歌",
+        session_id="immediate-media",
+    )
+
+    assert result["status"] == "ok"
+    assert result["schedule_action_result"] is None
+    assert result["media_action_result"]["ok"] is True
+    assert result["media_action_result"]["action"] == "delegate"
+    assert result["reply_text"].startswith("我已交给媒体员工")
+
+
+@pytest.mark.unit
+def test_companion_model_timeout_allows_full_delegation_context() -> None:
+    assert SupervisorServiceRuntimeConfig().companion_model_timeout_seconds == 30.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_auto_mode_blocks_all_voice_capture_entrypoints(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    supervisor._voice_manager.set_enabled = Mock()  # type: ignore[method-assign]
+    supervisor._voice_manager.set_fingerprint_enabled = Mock()  # type: ignore[method-assign]
+    supervisor._voice_manager.record_owner_template = AsyncMock()  # type: ignore[method-assign]
+    supervisor._voice_manager.run_once = AsyncMock()  # type: ignore[method-assign]
+
+    microphone = await supervisor.set_voice_microphone(
+        SimpleNamespace(enabled=True)
+    )
+    fingerprint = await supervisor.set_voice_fingerprint(
+        SimpleNamespace(enabled=False)
+    )
+    template = await supervisor.record_owner_voice_template(
+        SimpleNamespace(duration_seconds=3.0, sample_count=3)
+    )
+    session = await supervisor.start_voice_session(
+        SimpleNamespace(session_id="")
+    )
+
+    for result in (microphone, fingerprint, template, session):
+        assert result == {
+            "status": "unavailable",
+            "reason": "stellar_auto_evolution_active",
+        }
+    supervisor._voice_manager.set_enabled.assert_not_called()
+    supervisor._voice_manager.set_fingerprint_enabled.assert_not_called()
+    supervisor._voice_manager.record_owner_template.assert_not_awaited()
+    supervisor._voice_manager.run_once.assert_not_awaited()
+
+
+@pytest.mark.unit
+def test_auto_mode_disables_voice_controls_in_supervisor_ui():
+    assert "const voiceUnavailable = activeMode === 'auto_evolution';" in UI_HTML
+    assert "button.disabled = voiceUnavailable;" in UI_HTML
+    assert "button.disabled = mode === 'auto_evolution';" in UI_HTML
+    assert 'id="voiceFingerprintToggle"' in UI_HTML
+    assert 'id="voiceStatusLabel"' in UI_HTML
+    assert "background: #188a52;" in UI_HTML
+    assert "声纹过滤已关闭，允许其他说话人使用" in UI_HTML
+    assert "applyVoiceRealtime(result);" in UI_HTML
+    assert "Auto 模式下不能开启麦克风" in UI_HTML
+    assert "麦克风状态更新失败" in UI_HTML
+    assert "语音服务请求失败" in UI_HTML
+    assert "transform: scale(var(--room-scale-inverse));" in UI_HTML
+    assert "setProperty('--room-scale-inverse', 1 / scale);" in UI_HTML
+    assert "scale(var(--room-scale-inverse)) scale(.98)" in UI_HTML
+    assert ".drawer-mask.open .drawer" in UI_HTML
+    assert "function resolveMediaType(media)" in UI_HTML
+    assert "const item = activePanelItem();" in UI_HTML
+
+
+@pytest.mark.unit
+def test_media_enqueue_replaces_current_item_and_revisions_repeat_url(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    supervisor._ui_runtime.enqueue_media(
+        {"url": "https://example.com/song.mp3", "title": "第一次"}
+    )
+    first_revision = supervisor._ui_runtime.current_media["_revision"]
+    supervisor._ui_runtime.enqueue_media(
+        {"url": "https://example.com/song.mp3", "title": "第二次"}
+    )
+
+    assert supervisor._ui_runtime.current_media["title"] == "第二次"
+    assert supervisor._ui_runtime.current_media["_revision"] == first_revision + 1
+    assert supervisor._ui_runtime.media_revision == first_revision + 1
+
+
+@pytest.mark.unit
+def test_media_html_uses_sandboxed_srcdoc_rendering() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert "iframe.sandbox = '';" in ui_source
+    assert "iframe.srcdoc = content;" in ui_source
+    assert "container.innerHTML = content;" not in ui_source
+
+
+@pytest.mark.unit
+def test_delivery_panel_uses_intrinsic_ratio_and_separate_history() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert 'id="deliveryHistoryList"' in ui_source
+    assert 'id="playbackQueueSection"' in ui_source
+    assert "function setIntrinsicMediaSize(width, height)" in ui_source
+    assert "img.naturalWidth, img.naturalHeight" in ui_source
+    assert "video.videoWidth, video.videoHeight" in ui_source
+    assert "function applyMediaViewportLayout()" in ui_source
+    assert "new EventSource('/ui/delivery-events')" in ui_source
+    assert "交付记录" in ui_source
+
+
+@pytest.mark.unit
+def test_delivery_http_api_uploads_displays_selects_and_persists(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    uploaded = client.post(
+        "/ui/delivery/assets",
+        content=b"%PDF-1.7\nVoidCube",
+        headers={
+            "Content-Type": "application/pdf",
+            "X-Artifact-Filename": "report.pdf",
+        },
+    )
+    assert uploaded.status_code == 200
+    uploaded_item = uploaded.json()
+    assert uploaded_item["type"] == "document"
+    assert uploaded_item["filename"] == "report.pdf"
+    assert uploaded_item["byte_size"] == len(b"%PDF-1.7\nVoidCube")
+
+    asset_path = uploaded_item["url"].split("http://testserver", 1)[-1]
+    downloaded = client.get(asset_path)
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"%PDF-1.7\nVoidCube"
+    assert downloaded.headers["content-type"].startswith("application/pdf")
+    assert downloaded.headers["content-disposition"].startswith("inline;")
+
+    uploaded_html = client.post(
+        "/ui/delivery/assets",
+        content=b"<!doctype html><script>top.document.body.remove()</script><h1>report</h1>",
+        headers={
+            "Content-Type": "text/html",
+            "X-Artifact-Filename": "report.html",
+        },
+    )
+    assert uploaded_html.status_code == 200
+    assert uploaded_html.json()["type"] == "html"
+    html_asset_path = uploaded_html.json()["url"].split("http://testserver", 1)[-1]
+    html_asset = client.get(html_asset_path)
+    assert html_asset.status_code == 200
+    assert html_asset.headers["content-security-policy"].startswith("sandbox;")
+
+    first = client.post(
+        "/ui/delivery/push",
+        json={
+            **uploaded_item,
+            "title": "PDF 交付",
+            "view_mode": "fit",
+            "width": 1600,
+            "height": 900,
+            "aspect_ratio": 16 / 9,
+        },
+    )
+    assert first.status_code == 200
+    first_item = first.json()["current"]
+    assert first_item["type"] == "document"
+    assert first_item["aspect_ratio"] == pytest.approx(16 / 9)
+
+    second = client.post(
+        "/ui/delivery/push",
+        json={
+            "content": "<!doctype html><h1>Agent 报告</h1>",
+            "title": "内联报告",
+            "type": "html",
+            "auto_open": True,
+        },
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["current"]["content"].endswith("</h1>")
+    assert len(second_payload["history"]) == 2
+    assert all("content" not in item for item in second_payload["history"])
+
+    selected = client.post(
+        "/ui/delivery/control",
+        json={"action": "select", "delivery_id": first_item["delivery_id"]},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["current"]["title"] == "PDF 交付"
+
+    restarted = _make_supervisor(tmp_path)
+    assert restarted._ui_runtime.current_delivery()["title"] == "PDF 交付"
+    assert len(restarted._ui_runtime.list_deliveries()) == 2
+
+    cleared = client.post("/ui/delivery/control", json={"action": "clear"})
+    assert cleared.status_code == 200
+    assert cleared.json()["current"] is None
+    assert cleared.json()["history"] == []
+    assert client.get(asset_path).status_code == 404
+
+
+@pytest.mark.unit
+def test_delivery_type_inference_distinguishes_previewable_and_downloadable_files():
+    from voidcube.systems.supervisor.ui_delivery_adapters import infer_delivery_type
+
+    assert infer_delivery_type(filename="portrait.webp", mime_type="image/webp") == "image"
+    assert infer_delivery_type(filename="report.pdf", mime_type="application/pdf") == "document"
+    assert infer_delivery_type(filename="notes.md", mime_type="text/markdown") == "text"
+    assert infer_delivery_type(filename="report.html", mime_type="text/html", url="http://local/report.html") == "html"
+    assert infer_delivery_type(url="https://example.com/report.html", mime_type="text/html") == "webpage"
+    assert infer_delivery_type(url="https://example.com/report.docx") == "file"
+
+
+@pytest.mark.unit
+def test_delivery_history_retains_latest_items_and_removes_evicted_assets(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    uploaded = client.post(
+        "/ui/delivery/assets",
+        content=b"old artifact",
+        headers={"X-Artifact-Filename": "old.bin"},
+    ).json()
+    first = client.post(
+        "/ui/delivery/push",
+        json={**uploaded, "title": "oldest", "type": "file"},
+    ).json()["current"]
+    asset_path = uploaded["url"].split("http://testserver", 1)[-1]
+
+    for index in range(50):
+        supervisor._ui_runtime.push_delivery(
+            {
+                "content": f"delivery {index}",
+                "title": f"delivery-{index}",
+                "type": "text",
+                "auto_open": False,
+                "view_mode": "fit",
+            }
+        )
+
+    items = supervisor._ui_runtime.list_deliveries()
+    assert len(items) == 50
+    assert items[0]["title"] == "delivery-49"
+    assert items[-1]["title"] == "delivery-0"
+    assert all(item["delivery_id"] != first["delivery_id"] for item in items)
+    assert client.get(asset_path).status_code == 404
+
+    restarted = _make_supervisor(tmp_path)
+    assert restarted._ui_runtime.current_delivery()["title"] == "delivery-49"
+    assert [item["title"] for item in restarted._ui_runtime.list_deliveries()] == [
+        f"delivery-{index}" for index in range(49, -1, -1)
+    ]
+
+
+@pytest.mark.unit
+def test_ui_text_has_scale_compensated_readability_baseline() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    assert "--ui-readable-font: calc(10pt * var(--room-scale-inverse));" in ui_source
+    assert ".dock-btn .db-label" in ui_source
+    assert ".companion-chat-line" in ui_source
+
+
+@pytest.mark.unit
+def test_account_panel_uses_existing_escape_helper() -> None:
+    ui_source = load_supervisor_ui_html()
+
+    account_source = ui_source.split("function renderAccountPanel(data)", 1)[1].split(
+        "async function loginAccountInDesktop()", 1
+    )[0]
+    assert "esc(account.platform_name || account.platform)" in account_source
+    assert "h(account.platform" not in account_source
+    assert "在桌面应用中登录" in account_source
+    assert "/ui/accounts/import" not in ui_source
+    assert "accountCookies" not in account_source
+    assert "pasteAccountCookies" not in ui_source
+    assert "cookieNames" not in account_source
+    assert "credentialCount" in account_source
+
+
+@pytest.mark.unit
+def test_account_api_rejects_cookie_string_without_login_cookie(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VOIDCUBE_HOME", str(tmp_path / "home"))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/ui/accounts",
+        json={
+            "platform": "bilibili",
+            "label": "test account",
+            "cookies_raw": "bili_jct=csrf-token; DedeUserID=12345",
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "SESSDATA" in detail
+    assert "在桌面应用中登录" in detail
+    assert not (tmp_path / "home" / "accounts.json").exists()
+
+
+@pytest.mark.unit
+def test_media_http_api_supports_queue_and_control_actions(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    first = client.post(
+        "/ui/media/enqueue",
+        json={
+            "url": "https://example.com/first.mp3",
+            "title": "第一首",
+            "type": "audio",
+        },
+    )
+    assert first.status_code == 200
+    first_media = first.json()["current"]
+    assert first_media["title"] == "第一首"
+
+    queued = client.post(
+        "/ui/media/enqueue",
+        json={
+            "url": "https://example.com/second.mp4",
+            "title": "第二项",
+            "type": "video",
+            "queue_mode": "enqueue",
+        },
+    )
+    assert queued.status_code == 200
+    assert queued.json()["queue_length"] == 1
+    assert queued.json()["queue"][0]["title"] == "第二项"
+    assert queued.json()["current"]["media_id"] == first_media["media_id"]
+
+    selected = client.post(
+        "/ui/media/control",
+        json={
+            "action": "select",
+            "media_id": queued.json()["queue"][0]["media_id"],
+        },
+    )
+    assert selected.status_code == 200
+    assert selected.json()["current"]["title"] == "第二项"
+    assert selected.json()["queue"] == []
+
+    first_media = selected.json()["current"]
+
+    paused = client.post(
+        "/ui/media/control",
+        json={"action": "pause", "media_id": first_media["media_id"]},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["current"]["playback"] == "paused"
+
+    advanced = client.post(
+        "/ui/media/control",
+        json={"action": "next", "media_id": first_media["media_id"]},
+    )
+    assert advanced.status_code == 200
+    assert advanced.json()["current"] is None
+
+    stopped = client.post("/ui/media/control", json={"action": "stop"})
+    assert stopped.status_code == 200
+    assert stopped.json()["current"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_mode_microphone_toggle_returns_confirmed_voice_state(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    enabled = await supervisor.set_voice_microphone(SimpleNamespace(enabled=True))
+    disabled = await supervisor.set_voice_microphone(SimpleNamespace(enabled=False))
+
+    assert enabled["enabled"] is True
+    assert disabled["enabled"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_mode_can_toggle_fingerprint_filter_without_deleting_template(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._voice_manager.set_fingerprint_enabled = Mock(  # type: ignore[method-assign]
+        return_value={"fingerprint_enabled": False, "fingerprint_status": "disabled"}
+    )
+
+    result = await supervisor.set_voice_fingerprint(SimpleNamespace(enabled=False))
+
+    assert result == {
+        "fingerprint_enabled": False,
+        "fingerprint_status": "disabled",
+    }
+    supervisor._voice_manager.set_fingerprint_enabled.assert_called_once_with(False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_stellar_mode_status_route_exposes_canonical_default(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    payload = await supervisor.get_stellar_mode_status()
+
+    assert payload["mode"] == "daily_companion"
+    assert payload["autonomous_chain_gate_active"] is False
+    await supervisor._stop_periodic_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_autonomous_chain_deactivate_closes_running_tasks(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "Execution interrupted by gate deactivation",
+            "task_type": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {"decision": "approved", "reason": "ready"},
+    )
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "session_id": "gate-stop-owner",
+            "reason": "claimed",
+        },
+    )
+
+    await supervisor.deactivate_autonomous_chain_gate({})
+
+    task = supervisor._autonomous_chain_store.get_task(task_id)
+    assert task.status == "failed"
+    assert task.decision_history[-1].context == {
+        "failure_kind": "interrupted_by_gate_deactivation"
+    }
+    recovered = AutonomousChainStore(tmp_path / "recovered-after-stop.json")
+    recovered.recover_from_governance_events(
+        supervisor._governor.governance_repository.list_events()
+    )
+    assert recovered.get_task(task_id).status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_periodic_autonomous_chain_review_runtime_invokes_cycle(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._health_check_task = None
+    supervisor._autonomous_chain_review_task = None
+    supervisor._endogenous_drive_task = None
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+
+    config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"autonomous_chain_review_interval": 0}
+            )
+        }
+    )
+    supervisor.config = config
+
+    await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
+
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._autonomous_chain_review_task
+
+    supervisor._autonomous_task_review_cycle_service.run.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._health_check_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._health_check_task
+    # Drive loop was also started by the autonomous-chain gate.
+    supervisor._endogenous_drive_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._endogenous_drive_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._health_check_task = None
+    supervisor._autonomous_chain_review_task = None
+    supervisor._endogenous_drive_task = None
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+
+    config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_interval": 0}
+            )
+        }
+    )
+    supervisor.config = config
+
+    await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
+
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._endogenous_drive_task
+
+    supervisor._autonomous_cycle_service.run_drive_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._health_check_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._health_check_task
+    # Review loop was also started by the autonomous-chain gate.
+    supervisor._autonomous_chain_review_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._autonomous_chain_review_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_active(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.autonomous_chain_gate_active = True
+    supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock()  # type: ignore[method-assign]
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock()  # type: ignore[method-assign]
+
+    await supervisor._start_autonomous_chain_gate()
+
+    supervisor._notify_gateway_autonomous_chain_gate.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
+    assert supervisor._autonomous_chain_review_task is None
+    assert supervisor._endogenous_drive_task is None
+
+
+@pytest.mark.unit
+def test_supervisor_fastapi_lifespan_starts_and_stops_periodic_runtime(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.register_with_gateway = AsyncMock(return_value="service-1")  # type: ignore[method-assign]
+    supervisor._start_periodic_tasks = AsyncMock()  # type: ignore[method-assign]
+    supervisor._stop_periodic_tasks = AsyncMock()  # type: ignore[method-assign]
+
+    with TestClient(supervisor.app) as client:
+        response = client.get("/")
+        assert response.status_code == 200
+
+    supervisor.register_with_gateway.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._start_periodic_tasks.assert_awaited_once_with()  # type: ignore[attr-defined]
+    supervisor._stop_periodic_tasks.assert_awaited_once_with()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_autonomous_chain_review_loop_survives_iteration_exception(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._health_check_task = None
+    supervisor._autonomous_chain_review_task = None
+    supervisor._endogenous_drive_task = None
+    supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
+    supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
+    supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
+    supervisor._autonomous_task_review_cycle_service.run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[RuntimeError("transient review failure"), asyncio.CancelledError()]
+    )
+    supervisor._autonomous_cycle_service.run_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
+
+    config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"autonomous_chain_review_interval": 0}
+            )
+        }
+    )
+    supervisor.config = config
+
+    await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
+
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._autonomous_chain_review_task
+
+    assert supervisor._autonomous_task_review_cycle_service.run.await_count == 2  # type: ignore[attr-defined]
+    supervisor._health_check_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._health_check_task
+    # Drive loop was also started by the autonomous-chain gate.
+    supervisor._endogenous_drive_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._endogenous_drive_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._autonomous_task_review_service._touch_activity = (  # type: ignore[method-assign]
+        supervisor._touch_gateway_activity
+    )
+
+    async def no_memory_promotion(task):
+        del task
+        return None
+
+    supervisor._autonomous_task_review_service._propose_memory_promotion = (  # type: ignore[method-assign]
+        no_memory_promotion
+    )
+    task = supervisor._autonomous_task_state.create_task(
+        title="Research a web-backed improvement",
+        summary="Collect primary-source evidence.",
+        task_type="self_learning",
+        source="self_learning",
+        metadata={
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "learning_branch": "exploratory",
+        },
+    )
+    supervisor._autonomous_task_state.update_status(
+        task.task_id,
+        status="approved",
+        reason="ready",
+    )
+    supervisor._autonomous_task_state.update_status(
+        task.task_id,
+        status="running",
+        reason="started",
+    )
+
+    result = await supervisor.decide_autonomous_chain_task(
+        task.task_id,
+        {
+            "decision": "completed",
+            "final_response": "Evidence and uncertainty are documented. " * 20,
+            "context": {
+                "tools_used": ["web_search", "web_extract"],
+                "source_urls": ["https://example.com/primary"],
+            },
+        },
+    )
+
+    assert result["status"] == "completed"
+    stored = supervisor._autonomous_chain_store.get_task(task.task_id)
+    assert stored is not None
+    assert stored.metadata["quality_score"] >= 0.6
+    assert "web_search_recorded" in stored.metadata["learning_quality_assessment"]["signals"]
+    summaries = supervisor._completed_learning_task_summaries()
+    assert summaries[0]["quality_score"] == stored.metadata["quality_score"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_governor_approved_verified_conclusion_creates_consent_candidate(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._gateway_service_id = "supervisor-test"
+    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
+    captured = []
+
+    class _Response:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+    class _Session:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json=None, headers=None):
+            captured.append((url, json, headers))
+            if url.endswith("/api/mem/remember"):
+                return _Response(
+                    200,
+                    {"memory": {"memory_id": "durable-evolution-conclusion"}},
+                )
+            return _Response(
+                200,
+                {
+                    "candidate": {
+                        "candidate_id": "promotion-candidate-conclusion"
+                    }
+                },
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    )
+    submitted = await supervisor._autonomous_chain_planning_service.plan(
+        {
+            "title": "采用已验证的解释策略",
+            "summary": "仅在治理批准后解释变更。",
+            "trace_id": "conclusion-verified",
+            "source": "self_learning",
+            "governance_task_type": "self_learning",
+            "task_family": "self_learning",
+            "metadata": {
+                "conclusion_id": "conclusion-verified",
+                "verified": True,
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+            "evidence": {
+                "summary": "日常陪伴应解释已经通过治理的变更。"
+            },
+        }
+    )
+    task_id = submitted["tasks"][0]["task_id"]
+
+    decided = await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "approved",
+            "actor": "supervisor",
+            "reason": "Governor confirmed the verified conclusion.",
+        },
+    )
+
+    assert decided["memory_promotion_candidate"] == {
+        "status": "awaiting_user_consent",
+        "candidate_id": "promotion-candidate-conclusion",
+        "source_memory_id": "durable-evolution-conclusion",
+    }
+    assert captured[0][0].endswith("/api/mem/remember")
+    assert captured[0][1]["memory_domain"] == "evolution"
+    assert captured[0][2]["X-VoidCube-Memory-Actor"] == "stellar_auto"
+    assert captured[1][0].endswith("/api/mem/promotion-candidates")
+    assert captured[1][1]["source_domain"] == "evolution"
+    assert captured[1][1]["target_domain"] == "companion"
+    assert captured[1][2]["X-VoidCube-Memory-Actor"] == "governor"
+    stored = supervisor._autonomous_chain_store.get_task(task_id)
+    assert stored is not None
+    assert (
+        stored.metadata["memory_promotion_candidate_id"]
+        == "promotion-candidate-conclusion"
+    )
+
+
+@pytest.mark.unit
+def test_supervisor_display_and_trace_labels_leave_unknown_status_unchanged(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    assert observation_display_status({"status": "orphaned"}) == "orphaned"
+    assert supervisor._trace_status_label("orphaned") == "orphaned"
+    card = build_observation_card(
+        {"title": "未知状态链路项", "status": "orphaned"},
+        lane="supervisor",
+    )
+    assert card is not None
+    assert card["status"] == "orphaned"
+    assert card["display_status"] == "orphaned"
+    assert observation_display_status({"status": "completed"}) == "已完成"
+    assert supervisor._trace_status_label("completed") == "已写回"
+
+
+
+
+
+

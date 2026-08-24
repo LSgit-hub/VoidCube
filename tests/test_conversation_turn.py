@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+import pytest
+
+from voidcube.domain.agent.conversation_turn import ConversationTurnState
+from voidcube.domain.agent.iteration_control import IterationBudget
+
+
+pytestmark = [pytest.mark.unit, pytest.mark.smoke]
+
+
+def test_turn_state_owns_iteration_and_completion_lifecycle():
+    budget = IterationBudget(2)
+    state = ConversationTurnState()
+
+    assert state.can_continue(max_iterations=2, iteration_budget=budget)
+    assert state.begin_iteration(budget)
+    assert state.api_call_count == 1
+    assert budget.remaining == 1
+
+    state.final_response = "done"
+
+    assert not state.can_continue(max_iterations=2, iteration_budget=budget)
+    assert state.completed()
+
+
+def test_turn_state_completes_on_last_allowed_successful_iteration():
+    budget = IterationBudget(1)
+    state = ConversationTurnState()
+
+    assert state.begin_iteration(budget)
+    state.final_response = "done"
+    state.exit_reason = "text_response(finish_reason=stop)"
+
+    assert state.completed()
+
+
+def test_turn_state_does_not_complete_iteration_limit_summary():
+    state = ConversationTurnState(
+        api_call_count=1,
+        final_response="partial summary",
+        exit_reason="max_iterations_reached(1/1)",
+    )
+
+    assert not state.completed()
+
+
+def test_turn_state_reports_budget_exhaustion_without_cross_turn_flags():
+    budget = IterationBudget(1)
+    state = ConversationTurnState()
+
+    assert state.begin_iteration(budget)
+
+    assert state.exhausted(max_iterations=3, iteration_budget=budget)
+    assert not state.can_continue(max_iterations=3, iteration_budget=budget)
+
+
+def test_empty_response_retry_must_return_state_to_non_terminal():
+    budget = IterationBudget(2)
+    state = ConversationTurnState(final_response="")
+
+    assert not state.can_continue(max_iterations=2, iteration_budget=budget)
+
+    state.final_response = None
+
+    assert state.can_continue(max_iterations=2, iteration_budget=budget)
+
+
+def test_turn_state_clears_text_continuation_as_one_operation():
+    state = ConversationTurnState(
+        length_continue_retries=2,
+        truncated_response_prefix="partial ",
+    )
+
+    state.clear_text_continuation()
+
+    assert state.length_continue_retries == 0
+    assert state.truncated_response_prefix == ""

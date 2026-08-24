@@ -333,6 +333,52 @@ class BodyRegistryManager:
                     f"Slot {slot_id} has role state {meta.body_state!r} but no registry role.",
                     slot_id=slot_id,
                 )
+            git_report: dict[str, Any] = {"mode": None}
+            if materialized:
+                manifest = self._read_worktree_manifest(slot_id)
+                materialization_mode = str(
+                    manifest.get("materialization_mode") or ""
+                ).strip()
+                git_report["mode"] = materialization_mode or None
+                if materialization_mode == "git_worktree":
+                    git_report["head"] = self._git_head_for_isolated_worktree(
+                        Path(meta.worktree_path).resolve()
+                    )
+                    try:
+                        status = self._run_git(
+                            Path(meta.worktree_path),
+                            ["status", "--porcelain", "--untracked-files=all"],
+                            timeout=15,
+                        )
+                    except ValueError as exc:
+                        status = None
+                        git_report["status_error"] = str(exc)
+                    if status is None:
+                        slot_healthy = False
+                        git_report["clean"] = False
+                        add_violation(
+                            "slot_git_status_unavailable",
+                            f"Git status for slot {slot_id} is unavailable.",
+                            slot_id=slot_id,
+                        )
+                    elif status.returncode != 0:
+                        slot_healthy = False
+                        git_report["clean"] = False
+                        git_report["status_error"] = status.stderr.strip()
+                        add_violation(
+                            "slot_git_status_unavailable",
+                            f"Git status for slot {slot_id} is unavailable.",
+                            slot_id=slot_id,
+                        )
+                    else:
+                        git_report["clean"] = not bool(status.stdout.strip())
+                        if not git_report["clean"]:
+                            slot_healthy = False
+                            add_violation(
+                                "slot_worktree_dirty",
+                                f"Slot {slot_id} has uncommitted or untracked Git changes.",
+                                slot_id=slot_id,
+                            )
             slot_reports[slot_id] = {
                 "role": role,
                 "body_state": meta.body_state,
@@ -343,6 +389,7 @@ class BodyRegistryManager:
                 "source_commit": meta.source_commit,
                 "active_commit": meta.active_commit,
                 "candidate_commit": meta.candidate_commit,
+                "git": git_report,
             }
 
         pointer_report: dict[str, Any] = {
@@ -1279,6 +1326,15 @@ class BodyRegistryManager:
         if mode == "git_worktree":
             return self._git_top_level_for_path(worktree_root) == worktree_root
         return mode == "directory_copy"
+
+    def _read_worktree_manifest(self, slot_id: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(
+                self.slot_worktree_manifest_path(slot_id).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def _sync_directory(
         self,
