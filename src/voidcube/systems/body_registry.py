@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Optional
@@ -12,6 +15,7 @@ from pydantic import BaseModel, Field
 from .evolution_evaluation.models import ExecutionEnvironmentManifest
 
 from ..infrastructure.persistence.file_store import atomic_json_write
+from ..infrastructure.persistence.file_store import interprocess_file_lock
 
 BodyState = Literal["shell", "candidate", "probe", "awaiting_user_consent", "active", "retired"]
 
@@ -132,6 +136,10 @@ class BodyWorkspaceRecoveryRequired(RuntimeError):
     """Raised when startup cannot safely rebuild a non-empty body workspace."""
 
 
+HEAD_CHANGE_AUDIT_EVENT_TYPE = "body_head_changed"
+HEAD_CHANGE_AUDIT_LIMIT = 50
+
+
 class BodyImprovementReport(BaseModel):
     """Agent 提交的替身改进报告（API 契约）"""
     slot_id: str
@@ -169,6 +177,7 @@ class BodyRegistryManager:
             raise ValueError("At least two body slots are required")
         self.slots_root = self.state_root / "slots"
         self.registry_path = self.state_root / "registry.json"
+        self.head_change_audit_path = self.state_root / "body-head-changes.jsonl"
 
     def initialize_layout(self) -> BodyRegistry:
         """Create independent child-agent slot directories and a default registry."""
@@ -262,6 +271,7 @@ class BodyRegistryManager:
                 "registry": None,
                 "slots": {},
                 "active_pointer": {"healthy": False, "present": False},
+                "head_change_audit": self._head_change_audit_report(),
                 "violations": violations,
             }
 
@@ -411,6 +421,10 @@ class BodyRegistryManager:
                 "source_commit": meta.source_commit,
                 "active_commit": meta.active_commit,
                 "candidate_commit": meta.candidate_commit,
+                "head_change_audit": self.list_head_change_events(
+                    slot_id=slot_id,
+                    limit=5,
+                ),
                 "git": git_report,
             }
 
@@ -460,8 +474,118 @@ class BodyRegistryManager:
             "registry": registry.model_dump(mode="json"),
             "slots": slot_reports,
             "active_pointer": pointer_report,
+            "head_change_audit": self._head_change_audit_report(),
             "violations": violations,
         }
+
+    def list_head_change_events(
+        self,
+        *,
+        slot_id: Optional[str] = None,
+        limit: int = HEAD_CHANGE_AUDIT_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """Read the append-only record of deliberate body HEAD changes."""
+        if slot_id is not None:
+            self._validate_slot_id(slot_id)
+        bounded_limit = max(1, min(int(limit), HEAD_CHANGE_AUDIT_LIMIT))
+        if not self.head_change_audit_path.is_file():
+            return []
+
+        events: list[dict[str, Any]] = []
+        try:
+            lines = self.head_change_audit_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        for line in reversed(lines):
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("event_type") != HEAD_CHANGE_AUDIT_EVENT_TYPE:
+                continue
+            if slot_id is not None and event.get("slot_id") != slot_id:
+                continue
+            events.append(event)
+            if len(events) >= bounded_limit:
+                break
+        return events
+
+    def _head_change_audit_report(self) -> dict[str, Any]:
+        return {
+            "path": str(self.head_change_audit_path.resolve()),
+            "events": self.list_head_change_events(limit=10),
+        }
+
+    def _head_change_event_exists(
+        self,
+        *,
+        slot_id: str,
+        before_commit: Optional[str],
+        after_commit: Optional[str],
+        operation: str,
+        request_id: Optional[str] = None,
+    ) -> bool:
+        """Check whether an append was visible before writing a compensation."""
+        before = str(before_commit or "").strip().lower() or None
+        after = str(after_commit or "").strip().lower() or None
+        expected_operation = str(operation or "").strip()
+        expected_request = str(request_id or "").strip() or None
+        for event in self.list_head_change_events(slot_id=slot_id):
+            if str(event.get("operation") or "").strip() != expected_operation:
+                continue
+            if str(event.get("before_commit") or "").strip().lower() != (before or ""):
+                continue
+            if str(event.get("after_commit") or "").strip().lower() != (after or ""):
+                continue
+            if expected_request is not None and event.get("request_id") != expected_request:
+                continue
+            return True
+        return False
+
+    def _record_head_change(
+        self,
+        *,
+        slot_id: str,
+        before_commit: Optional[str],
+        after_commit: Optional[str],
+        operation: str,
+        reason: str,
+        request_id: Optional[str] = None,
+        changed_files: Optional[Iterable[str]] = None,
+        source_label: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Persist one deliberate HEAD change, ignoring no-op observations."""
+        before = str(before_commit or "").strip() or None
+        after = str(after_commit or "").strip() or None
+        if before and after and before.lower() == after.lower():
+            return None
+        if not after:
+            raise ValueError(f"Cannot audit body {slot_id} HEAD without an after commit.")
+        self._validate_slot_id(slot_id)
+        event = {
+            "event_id": f"body-head-{uuid.uuid4().hex}",
+            "event_type": HEAD_CHANGE_AUDIT_EVENT_TYPE,
+            "slot_id": slot_id,
+            "before_commit": before,
+            "after_commit": after,
+            "operation": str(operation or "body_head_change").strip(),
+            "reason": str(reason or "").strip(),
+            "request_id": str(request_id or "").strip() or None,
+            "changed_files": self._normalize_changed_files(changed_files or []),
+            "source_label": str(source_label or "").strip() or None,
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "actor": "supervisor.body_registry",
+        }
+        self.head_change_audit_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.head_change_audit_path.with_suffix(".lock")
+        with interprocess_file_lock(lock_path):
+            with self.head_change_audit_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        return event
 
     def get_shell_slot(self) -> Optional[BodySlotMeta]:
         """获取 shell 槽位的元数据"""
@@ -721,6 +845,8 @@ class BodyRegistryManager:
             source_slot_id=source_slot_id,
             source_path=source_path,
             clear_existing=True,
+            operation="recycle_retired_slot",
+            reason="retired_slot_recycled_to_shell",
         )
         meta = self.transition_slot(slot_id, "shell")
         meta.last_retired_at = datetime.utcnow()
@@ -756,6 +882,8 @@ class BodyRegistryManager:
             source_slot_id=source_slot_id,
             source_path=source_path,
             clear_existing=True,
+            operation="abandon_candidate",
+            reason="candidate_abandoned_to_shell_baseline",
         )
         return self.transition_slot(slot_id, "shell")
 
@@ -895,7 +1023,8 @@ class BodyRegistryManager:
         restored_head = self._git_head_for_isolated_worktree(worktree)
         if not restored_head or restored_head.lower() != target_commit.lower():
             raise ValueError("Git rollback completed without restoring the expected commit.")
-
+        old_meta = meta.model_copy(deep=True)
+        old_registry = registry.model_copy(deep=True)
         now = datetime.now(timezone.utc).isoformat()
         meta.body_state = "probe"
         meta.lease = "rollback_probe"
@@ -913,11 +1042,83 @@ class BodyRegistryManager:
             "target_commit": target_commit,
             "started_at": now,
         }
-        self.save_slot_meta(meta)
-
-        if registry.shell_slot == slot_id:
+        registry_changed = registry.shell_slot == slot_id
+        if registry_changed:
             registry.shell_slot = None
-            self.save_registry(registry)
+
+        def restore_previous_state(error: BaseException, message: str) -> None:
+            rollback_errors: list[str] = []
+            rollback = self._run_git(
+                worktree,
+                ["reset", "--hard", current_head],
+                timeout=30,
+            )
+            if rollback.returncode != 0:
+                rollback_errors.append(
+                    "failed to restore the original HEAD: " + rollback.stderr.strip()
+                )
+            try:
+                self.save_slot_meta(old_meta)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore slot metadata: {exc}")
+            try:
+                self.save_registry(old_registry)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore registry metadata: {exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    message + " Rollback was incomplete: " + "; ".join(rollback_errors)
+                ) from error
+
+            # A filesystem error can happen after an append reached the audit
+            # file. Record the compensating HEAD move when possible so the
+            # append-only history still describes the final state.
+            if self._head_change_event_exists(
+                slot_id=slot_id,
+                before_commit=current_head,
+                after_commit=target_commit,
+                operation="restore_previous_healthy_commit",
+                request_id=request_id,
+            ):
+                try:
+                    self._record_head_change(
+                        slot_id=slot_id,
+                        before_commit=target_commit,
+                        after_commit=current_head,
+                        operation="restore_previous_healthy_commit_compensation",
+                        reason="failed_body_rollback_compensated",
+                        request_id=request_id,
+                        source_label="rollback_compensation",
+                    )
+                except Exception:
+                    pass
+            raise RuntimeError(message) from error
+
+        try:
+            self.save_slot_meta(meta)
+            if registry_changed:
+                self.save_registry(registry)
+        except Exception as metadata_error:
+            restore_previous_state(
+                metadata_error,
+                "Body rollback was reverted because its metadata could not be persisted.",
+            )
+
+        try:
+            self._record_head_change(
+                slot_id=slot_id,
+                before_commit=current_head,
+                after_commit=restored_head,
+                operation="restore_previous_healthy_commit",
+                reason=reason,
+                request_id=request_id,
+                source_label="previous_healthy_commit",
+            )
+        except Exception as audit_error:
+            restore_previous_state(
+                audit_error,
+                "Body rollback was reverted because its audit event could not be persisted.",
+            )
         return meta
 
     def finalize_previous_healthy_commit_restore(
@@ -994,6 +1195,189 @@ class BodyRegistryManager:
         source_slot_id: Optional[str] = None,
         source_path: Optional[str | Path] = None,
         clear_existing: bool = True,
+        operation: str = "prepare_slot_workspace",
+        reason: str = "explicit_workspace_materialization",
+        request_id: Optional[str] = None,
+    ) -> BodySlotMeta:
+        """Materialize a slot and restore its prior state if preparation fails."""
+        self._validate_slot_id(slot_id)
+        meta_before = self.load_slot_meta(slot_id).model_copy(deep=True)
+        manifest_path = self.slot_worktree_manifest_path(slot_id)
+        old_manifest = manifest_path.read_bytes() if manifest_path.is_file() else None
+        pointer_path = self.active_body_pointer_path()
+        old_pointer = pointer_path.read_bytes() if pointer_path.is_file() else None
+
+        worktree_root = Path(meta_before.worktree_path)
+        runtime_root = Path(meta_before.runtime_path)
+        logs_root = Path(meta_before.logs_path)
+        previous_head = self._git_head_for_isolated_worktree(worktree_root)
+        worktree_backup = None
+        runtime_backup = None
+        logs_backup = None
+        backup_root = Path(tempfile.mkdtemp(prefix="voidcube-body-prepare-"))
+        preparation_started = False
+        try:
+            if worktree_root.is_dir():
+                backup_path = backup_root / "worktree"
+                shutil.copytree(
+                    worktree_root,
+                    backup_path,
+                    ignore=shutil.ignore_patterns(".git"),
+                )
+                worktree_backup = backup_path
+            if runtime_root.is_dir():
+                backup_path = backup_root / "runtime"
+                shutil.copytree(runtime_root, backup_path)
+                runtime_backup = backup_path
+            if logs_root.is_dir():
+                backup_path = backup_root / "logs"
+                shutil.copytree(logs_root, backup_path)
+                logs_backup = backup_path
+
+            preparation_started = True
+            return self._prepare_slot_workspace(
+                slot_id,
+                source_slot_id=source_slot_id,
+                source_path=source_path,
+                clear_existing=clear_existing,
+                operation=operation,
+                reason=reason,
+                request_id=request_id,
+            )
+        except Exception as original_error:
+            if not preparation_started:
+                raise
+            failed_head = self._git_head_for_isolated_worktree(worktree_root)
+            rollback_errors: list[str] = []
+            try:
+                current_is_git_worktree = (
+                    self._git_top_level_for_path(worktree_root) == worktree_root
+                )
+                source_root = None
+                if current_is_git_worktree or previous_head:
+                    source_root, _ = self._resolve_materialization_source(
+                        slot_id,
+                        source_slot_id=source_slot_id,
+                        source_path=source_path,
+                    )
+                if previous_head and not current_is_git_worktree:
+                    self._materialize_git_worktree(
+                        source_root=source_root,
+                        target_root=worktree_root,
+                        source_commit=previous_head,
+                        clear_existing=True,
+                    )
+                elif previous_head:
+                    reset = self._run_git(
+                        worktree_root,
+                        ["reset", "--hard", previous_head],
+                        timeout=30,
+                    )
+                    if reset.returncode != 0:
+                        rollback_errors.append(
+                            "failed to restore the previous worktree HEAD: "
+                            + reset.stderr.strip()
+                        )
+                elif current_is_git_worktree:
+                    removed = self._run_git(
+                        source_root,
+                        ["worktree", "remove", "--force", str(worktree_root)],
+                        timeout=30,
+                    )
+                    if removed.returncode != 0:
+                        rollback_errors.append(
+                            "failed to remove the newly created worktree: "
+                            + removed.stderr.strip()
+                        )
+                if worktree_backup is not None:
+                    if worktree_root.exists():
+                        self._clear_worktree_contents(worktree_root)
+                    shutil.copytree(worktree_backup, worktree_root, dirs_exist_ok=True)
+                elif not previous_head and worktree_root.exists():
+                    if current_is_git_worktree:
+                        self._clear_directory(worktree_root)
+                    else:
+                        self._clear_worktree_contents(worktree_root)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore the worktree: {exc}")
+
+            for root, backup, label in (
+                (runtime_root, runtime_backup, "runtime"),
+                (logs_root, logs_backup, "logs"),
+            ):
+                try:
+                    if backup is not None:
+                        self._clear_directory(root)
+                        shutil.copytree(backup, root, dirs_exist_ok=True)
+                    elif preparation_started and root.exists():
+                        self._clear_directory(root)
+                except Exception as exc:
+                    rollback_errors.append(f"failed to restore {label}: {exc}")
+
+            try:
+                self.save_slot_meta(meta_before)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore slot metadata: {exc}")
+            try:
+                if old_manifest is None:
+                    manifest_path.unlink(missing_ok=True)
+                else:
+                    manifest_path.write_bytes(old_manifest)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore worktree manifest: {exc}")
+            try:
+                if old_pointer is None:
+                    pointer_path.unlink(missing_ok=True)
+                else:
+                    pointer_path.write_bytes(old_pointer)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore active pointer: {exc}")
+
+            if (
+                failed_head
+                and previous_head
+                and failed_head.lower() != previous_head.lower()
+                and not rollback_errors
+                and self._head_change_event_exists(
+                    slot_id=slot_id,
+                    before_commit=previous_head,
+                    after_commit=failed_head,
+                    operation=operation,
+                    request_id=request_id,
+                )
+            ):
+                try:
+                    self._record_head_change(
+                        slot_id=slot_id,
+                        before_commit=failed_head,
+                        after_commit=previous_head,
+                        operation=f"{operation}_compensation",
+                        reason="failed_workspace_preparation_compensated",
+                        request_id=request_id,
+                        source_label="workspace_prepare_compensation",
+                    )
+                except Exception:
+                    pass
+
+            if rollback_errors:
+                raise RuntimeError(
+                    "Slot workspace preparation failed and rollback was incomplete: "
+                    + "; ".join(rollback_errors)
+                ) from original_error
+            raise
+        finally:
+            shutil.rmtree(backup_root, ignore_errors=True)
+
+    def _prepare_slot_workspace(
+        self,
+        slot_id: str,
+        *,
+        source_slot_id: Optional[str] = None,
+        source_path: Optional[str | Path] = None,
+        clear_existing: bool = True,
+        operation: str = "prepare_slot_workspace",
+        reason: str = "explicit_workspace_materialization",
+        request_id: Optional[str] = None,
     ) -> BodySlotMeta:
         """Materialize a child-agent slot worktree/runtime from a deterministic source."""
         self._validate_slot_id(slot_id)
@@ -1014,6 +1398,8 @@ class BodyRegistryManager:
 
         source_commit = self._git_head_for_path(source_root)
         source_branch = self._git_branch_for_path(source_root)
+        previous_head = self._git_head_for_isolated_worktree(worktree_root)
+        pending_head_change: tuple[Optional[str], Optional[str]] | None = None
         if source_commit:
             self._materialize_git_worktree(
                 source_root=source_root,
@@ -1022,6 +1408,12 @@ class BodyRegistryManager:
                 clear_existing=clear_existing,
             )
             materialization_mode = "git_worktree"
+            materialized_head = self._git_head_for_isolated_worktree(worktree_root)
+            if materialized_head and (
+                not previous_head
+                or previous_head.lower() != materialized_head.lower()
+            ):
+                pending_head_change = (previous_head, materialized_head)
         else:
             self._sync_directory(
                 source_root,
@@ -1112,6 +1504,16 @@ class BodyRegistryManager:
         )
         if registry.active_slot == slot_id:
             self.write_active_body_pointer(slot_id)
+        if pending_head_change is not None:
+            self._record_head_change(
+                slot_id=slot_id,
+                before_commit=pending_head_change[0],
+                after_commit=pending_head_change[1],
+                operation=operation,
+                reason=reason,
+                request_id=request_id,
+                source_label=source_label,
+            )
         return meta
 
     def materialize_candidate_commit(
@@ -1263,8 +1665,18 @@ class BodyRegistryManager:
                     "Materialized shell worktree is not execution-ready: "
                     + str(readiness.get("reason") or "unknown")
                 )
+            self._record_head_change(
+                slot_id=slot_id,
+                before_commit=original_head,
+                after_commit=materialized_head,
+                operation="materialize_candidate_commit",
+                reason="evaluated_candidate_materialized",
+                source_label=source_label or f"evaluated-candidate:{candidate}",
+                changed_files=actual_changed_files,
+            )
             return meta
         except Exception:
+            failed_head = self._git_head_for_isolated_worktree(worktree)
             rollback_errors: list[str] = []
             if original_head.lower() != candidate.lower():
                 rollback = self._run_git(
@@ -1288,6 +1700,29 @@ class BodyRegistryManager:
                     manifest_path.write_bytes(old_manifest)
             except Exception as exc:
                 rollback_errors.append(f"failed to restore worktree manifest: {exc}")
+            if (
+                failed_head
+                and failed_head.lower() != original_head.lower()
+                and not rollback_errors
+                and self._head_change_event_exists(
+                    slot_id=slot_id,
+                    before_commit=original_head,
+                    after_commit=failed_head,
+                    operation="materialize_candidate_commit",
+                )
+            ):
+                try:
+                    self._record_head_change(
+                        slot_id=slot_id,
+                        before_commit=failed_head,
+                        after_commit=original_head,
+                        operation="materialize_candidate_commit_compensation",
+                        reason="failed_candidate_materialization_compensated",
+                        source_label="candidate_materialization_compensation",
+                        changed_files=actual_changed_files,
+                    )
+                except Exception:
+                    pass
             if rollback_errors:
                 raise RuntimeError("Candidate materialization failed and rollback was incomplete: " + "; ".join(rollback_errors)) from None
             raise
@@ -1312,6 +1747,8 @@ class BodyRegistryManager:
             source_slot_id=source_slot_id,
             source_path=source_path,
             clear_existing=True,
+            operation="startup_workspace_repair",
+            reason="startup_materialization_repair",
         )
 
     def _assert_startup_rebuild_is_safe(
@@ -1861,6 +2298,18 @@ class BodyRegistryManager:
         if not root.exists():
             return
         for child in root.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    def _clear_worktree_contents(self, root: Path) -> None:
+        """Clear a linked worktree checkout while retaining its .git file."""
+        if not root.exists():
+            return
+        for child in root.iterdir():
+            if child.name == ".git":
+                continue
             if child.is_dir():
                 shutil.rmtree(child)
             else:

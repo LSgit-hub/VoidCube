@@ -35,6 +35,41 @@ def body_slot_state_label(value: Any) -> str:
     }.get(normalized, str(value or "").strip() or "未知")
 
 
+def body_head_change_operation_label(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return {
+        "materialize_candidate_commit": "候选物化",
+        "restore_previous_healthy_commit": "恢复上一健康版本",
+        "recycle_retired_slot": "回收退役槽位",
+        "abandon_candidate": "放弃候选",
+        "startup_workspace_repair": "启动修复",
+        "prepare_slot_workspace": "槽位重建",
+    }.get(normalized, str(value or "").strip() or "HEAD 变更")
+
+
+def _head_change_projection(events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {
+            "status": "none",
+            "label": "尚无 HEAD 变更记录",
+            "event": None,
+        }
+    event = dict(events[0])
+    operation = body_head_change_operation_label(event.get("operation"))
+    return {
+        "status": "recorded",
+        "label": operation,
+        "operation": str(event.get("operation") or "").strip(),
+        "operation_label": operation,
+        "before_commit": event.get("before_commit"),
+        "after_commit": event.get("after_commit"),
+        "reason": str(event.get("reason") or "").strip(),
+        "request_id": event.get("request_id"),
+        "occurred_at": event.get("occurred_at"),
+        "event": event,
+    }
+
+
 def _health_label(healthy: Any, healthy_label: str, unhealthy_label: str, unknown_label: str = "未知") -> str:
     if healthy is True:
         return healthy_label
@@ -211,6 +246,12 @@ def project_body_slot_cards(
         runtime_health = _runtime_health(meta, active_slot=active_slot, slot_id=slot_id)
         code_checks = dict(readiness.get("checks") or {})
         code_healthy = readiness.get("ready")
+        head_change_events = [
+            dict(event)
+            for event in list(slot_integrity.get("head_change_audit") or [])
+            if isinstance(event, dict)
+        ]
+        head_change = _head_change_projection(head_change_events)
         improvement_progress = _improvement_progress(meta, signals, shell_slot=shell_slot)
         signal_node_keys: list[str] = []
         for signal in signals:
@@ -295,6 +336,8 @@ def project_body_slot_cards(
                     "candidate_commit": meta.get("candidate_commit"),
                     "checks": code_checks,
                 },
+                "head_change": head_change,
+                "head_change_events": head_change_events,
                 "improvement_progress": improvement_progress,
                 "health_score": float(meta.get("health_score") or 0.0),
                 "current_healthy_commit": meta.get("current_healthy_commit"),

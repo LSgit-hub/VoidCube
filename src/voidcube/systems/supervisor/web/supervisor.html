@@ -7591,6 +7591,10 @@ function renderStatsPanel(state) {
       ' · 运行：' + esc((slot.runtime_health || {}).label || '未知') + '</div>' +
       '<div class="body-slot-role">代码：' + esc((slot.code_health || {}).label || '未知') +
       ' · 培养：' + esc((slot.improvement_progress || {}).label || '未知') + '</div>' +
+      '<div class="body-slot-role">HEAD：' + esc((slot.head_change || {}).label || '尚无变更记录') +
+      ((slot.head_change || {}).after_commit
+        ? ' · ' + esc(String((slot.head_change || {}).after_commit).substring(0, 12))
+        : '') + '</div>' +
       '<div class="body-slot-roots">根节点：' + esc(
         (Array.isArray(slot.root_nodes) && slot.root_nodes.length)
           ? slot.root_nodes.join(' / ')

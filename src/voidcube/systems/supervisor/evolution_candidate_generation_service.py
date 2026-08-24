@@ -454,6 +454,7 @@ class EvolutionCandidateGenerationService:
                     source_label=(
                         f"evaluated:{result.experiment_result_id}"
                     ),
+                    request_id=request.request_id,
                 )
             except Exception as exc:
                 failed = self._mark_evaluation_failure(

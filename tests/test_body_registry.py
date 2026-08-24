@@ -65,6 +65,37 @@ def test_initialize_layout_bootstraps_dual_slots(tmp_path):
 
 
 @pytest.mark.unit
+def test_inspect_layout_reads_head_change_audit_without_writing_or_reverting(tmp_path):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    (source_root / "agent.py").write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=source_root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "stable"], cwd=source_root, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+    audit_before = manager.head_change_audit_path.read_bytes()
+    worktree = Path(manager.load_slot_meta("slot-B").worktree_path)
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    report = manager.inspect_layout()
+
+    assert report["head_change_audit"]["events"]
+    assert manager.head_change_audit_path.read_bytes() == audit_before
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip() == head_before
+
+
+@pytest.mark.unit
 def test_initialize_layout_repairs_unmaterialized_active_slot(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('active')\n", encoding="utf-8")
     manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
@@ -519,13 +550,21 @@ def test_candidate_slot_auto_records_changed_files_from_git_diff(tmp_path):
 
 @pytest.mark.unit
 def test_recycle_retired_slot_returns_it_to_shell(tmp_path):
+    (tmp_path / "run_agent.py").write_text("print('stable shell')\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "stable shell"], cwd=tmp_path, check=True, capture_output=True, text=True)
     manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
-    (tmp_path / "run_agent.py").write_text("print('stable shell')\n", encoding="utf-8")
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
     _await_user_consent(manager)
     manager.activate_slot("slot-B")
+    (tmp_path / "stable-shell-update.txt").write_text("new stable\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "new stable shell"], cwd=tmp_path, check=True, capture_output=True, text=True)
 
     registry = manager.recycle_retired_slot("slot-A", source_path=tmp_path)
     slot_a = manager.load_slot_meta("slot-A")
@@ -534,6 +573,10 @@ def test_recycle_retired_slot_returns_it_to_shell(tmp_path):
     assert slot_a.lease is None
     assert registry.shell_slot == "slot-A"
     assert registry.retired_slot is None
+    event = manager.list_head_change_events(slot_id="slot-A", limit=1)[0]
+    assert event["operation"] == "recycle_retired_slot"
+    assert event["before_commit"]
+    assert event["after_commit"]
 
 
 @pytest.mark.unit
@@ -677,14 +720,67 @@ def test_prepare_slot_workspace_resets_stale_non_active_baseline_metadata(tmp_pa
 
 
 @pytest.mark.unit
+def test_prepare_slot_workspace_restores_head_and_metadata_when_manifest_write_fails(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "agent.py"
+    source.write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "agent.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "stable"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
+    manager.initialize_layout()
+    before = manager.load_slot_meta("slot-B")
+    before_manifest = manager.slot_worktree_manifest_path("slot-B").read_bytes()
+    before_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=before.worktree_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source.write_text("VERSION = 'next'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "agent.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "next"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    monkeypatch.setattr(
+        manager,
+        "_write_worktree_manifest",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("manifest failure")),
+    )
+    with pytest.raises(OSError, match="manifest failure"):
+        manager.prepare_slot_workspace("slot-B", source_path=tmp_path)
+
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=before.worktree_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == before_head
+    assert manager.load_slot_meta("slot-B") == before
+    assert manager.slot_worktree_manifest_path("slot-B").read_bytes() == before_manifest
+
+
+@pytest.mark.unit
 def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "stable body"], cwd=tmp_path, check=True, capture_output=True, text=True)
     manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-B", source_path=tmp_path)
     worktree = Path(manager.load_slot_meta("slot-B").worktree_path)
     (worktree / "run_agent.py").write_text("raise RuntimeError('broken')\n", encoding="utf-8")
     (worktree / "failed-candidate.txt").write_text("discard me\n", encoding="utf-8")
+    subprocess.run(["git", "add", "run_agent.py"], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "broken candidate"], cwd=worktree, check=True, capture_output=True, text=True)
     manager.mark_candidate(
         "slot-B",
         body_version="broken-version",
@@ -710,6 +806,10 @@ def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
     assert (worktree / "run_agent.py").read_text(encoding="utf-8") == "print('stable')\n"
     assert not (worktree / "failed-candidate.txt").exists()
     assert manager.load_registry().shell_slot == "slot-B"
+    event = manager.list_head_change_events(slot_id="slot-B", limit=1)[0]
+    assert event["operation"] == "abandon_candidate"
+    assert event["before_commit"]
+    assert event["after_commit"]
 
 
 @pytest.mark.unit
@@ -774,6 +874,11 @@ def test_materialize_evaluated_candidate_commit_into_shell_worktree(tmp_path):
     assert prepared.candidate_commit == candidate
     assert prepared.current_healthy_commit == candidate
     assert prepared.changed_files == ["src/voidcube/runtime/agent/runner.py"]
+    event = manager.list_head_change_events(slot_id="slot-B", limit=1)[0]
+    assert event["operation"] == "materialize_candidate_commit"
+    assert event["before_commit"] == baseline
+    assert event["after_commit"] == candidate
+    assert event["changed_files"] == ["src/voidcube/runtime/agent/runner.py"]
     assert manager.inspect_layout()["healthy"] is True
 
 
@@ -974,6 +1079,10 @@ def test_restore_previous_healthy_commit_requires_clean_isolated_worktree(tmp_pa
     assert finalized.previous_healthy_commit is None
     assert finalized.health_score == pytest.approx(56.0)
     assert finalized.last_improvement_rollback["probe_passed"] is True
+    event = manager.list_head_change_events(slot_id="slot-B", limit=1)[0]
+    assert event["operation"] == "restore_previous_healthy_commit"
+    assert event["before_commit"] == broken_commit
+    assert event["after_commit"] == stable_commit
 
 
 @pytest.mark.unit

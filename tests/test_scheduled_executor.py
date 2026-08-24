@@ -119,6 +119,14 @@ def test_body_improvement_binding_uses_registry_worktree_and_expected_head(
             post_supervisor=Mock(),
             rate_limit_metadata=lambda _error: {},
             writeback_outbox=outbox,
+            inspect_body_execution_readiness=(
+                __import__(
+                    "voidcube.systems.supervisor.body_execution_readiness",
+                    fromlist=["inspect_body_execution_readiness"],
+                ).inspect_body_execution_readiness
+            ),
+            prepare_task_git_worktree=terminal_tool.prepare_task_git_worktree,
+            release_task_environment=terminal_tool.release_task_environment,
             get_supervisor=lambda path: (
                 {
                     "slot_id": "slot-B",
@@ -310,6 +318,11 @@ def test_body_employee_scheduler_uses_real_podman_manifest(tmp_path, monkeypatch
     monkeypatch.setenv("TERMINAL_ENV", "podman")
     monkeypatch.setenv("TERMINAL_PODMAN_IMAGE", image)
     monkeypatch.setenv("TERMINAL_FALLBACK_TO_LOCAL", "false")
+    from voidcube.infrastructure.execution import terminal_tool
+    from voidcube.systems.supervisor.body_execution_readiness import (
+        inspect_body_execution_readiness,
+    )
+
     runtime = ScheduledTaskExecutorRuntime(
         ScheduledTaskExecutorPorts(
             autonomous_mode_active=lambda: True,
@@ -322,6 +335,9 @@ def test_body_employee_scheduler_uses_real_podman_manifest(tmp_path, monkeypatch
             post_supervisor=post_supervisor,
             rate_limit_metadata=lambda _error: {},
             writeback_outbox=outbox,
+            inspect_body_execution_readiness=inspect_body_execution_readiness,
+            prepare_task_git_worktree=terminal_tool.prepare_task_git_worktree,
+            release_task_environment=terminal_tool.release_task_environment,
             get_supervisor=lambda path: (
                 {
                     "slot_id": "slot-B",

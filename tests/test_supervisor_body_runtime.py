@@ -132,10 +132,14 @@ def _create_running_body_improvement_task(
     *,
     target_paths: list[str],
     learning_refs: list[dict] | None = None,
+    baseline_commit: str | None = None,
+    candidate_commit: str | None = None,
 ):
     authorization = _seed_body_evaluation_authorization(
         supervisor,
         changed_files=tuple(target_paths),
+        baseline_commit=baseline_commit,
+        candidate_commit=candidate_commit,
     )
     authorization_fields = {
         key: authorization[key]
@@ -227,18 +231,22 @@ def _seed_body_evaluation_authorization(
     supervisor: Supervisor,
     *,
     changed_files: tuple[str, ...] = ("src/voidcube/runtime/agent/stream_handler.py",),
+    baseline_commit: str | None = None,
+    candidate_commit: str | None = None,
 ) -> dict:
     now = datetime(2026, 8, 14, 6, 0, tzinfo=timezone.utc)
+    baseline_commit = baseline_commit or "b" * 40
+    candidate_commit = candidate_commit or "a" * 40
     baseline = SelfCognitionSnapshot.create(
         body_id="body-baseline",
-        git_commit="b" * 40,
+        git_commit=baseline_commit,
         config_digest="1" * 64,
         collector_version="collector-1",
         collected_at=now,
     )
     candidate = SelfCognitionSnapshot.create(
         body_id="body-candidate",
-        git_commit="a" * 40,
+        git_commit=candidate_commit,
         config_digest="2" * 64,
         collector_version="collector-1",
         collected_at=now,
@@ -287,8 +295,8 @@ def _seed_body_evaluation_authorization(
     authoring = EvolutionAuthoringResult.create(
         task_id="body-runtime-test",
         status="candidate_created",
-        baseline_commit="b" * 40,
-        candidate_commit="a" * 40,
+        baseline_commit=baseline_commit,
+        candidate_commit=candidate_commit,
         candidate_ref="refs/voidcube/candidates/body-runtime-test",
         changed_files=changed_files,
         environment_manifest_id=_HOST_ENVIRONMENT.execution_environment_id,
@@ -317,7 +325,7 @@ def _seed_body_evaluation_authorization(
             created_at=now,
         ),
         baseline_snapshot_id=baseline.snapshot_id,
-        candidate_commit="a" * 40,
+        candidate_commit=candidate_commit,
         candidate_snapshot_id=candidate.snapshot_id,
         hypothesis="Candidate improves correctness.",
         knowledge_ids=(knowledge.knowledge_id,),
@@ -330,12 +338,12 @@ def _seed_body_evaluation_authorization(
     baseline_environment = ExecutionEnvironmentManifest.create(
         **{
             **_HOST_ENVIRONMENT.content_payload(),
-            "repository_head": "b" * 40,
+            "repository_head": baseline_commit,
         }
     )
     baseline_checkout = SubjectCheckoutEvidence.create(
         subject="baseline",
-        commit="b" * 40,
+        commit=baseline_commit,
         worktree_path=_HOST_ENVIRONMENT.execution_workspace_path,
         execution_environment_identity_id=(
             environment_identity.execution_environment_identity_id
@@ -344,12 +352,18 @@ def _seed_body_evaluation_authorization(
     )
     candidate_checkout = SubjectCheckoutEvidence.create(
         subject="candidate",
-        commit="a" * 40,
+        commit=candidate_commit,
         worktree_path=_HOST_ENVIRONMENT.execution_workspace_path,
         execution_environment_identity_id=(
             environment_identity.execution_environment_identity_id
         ),
         checked_out_at=now,
+    )
+    candidate_environment = ExecutionEnvironmentManifest.create(
+        **{
+            **_HOST_ENVIRONMENT.content_payload(),
+            "repository_head": candidate_commit,
+        }
     )
     result = ExperimentResult.create(
         experiment_spec_id=spec.experiment_spec_id,
@@ -362,14 +376,14 @@ def _seed_body_evaluation_authorization(
             HardGateResult(
                 gate=EXECUTION_ENVIRONMENT_GATE,
                 passed=True,
-                evidence_refs=(_HOST_ENVIRONMENT.execution_environment_id,),
+                evidence_refs=(candidate_environment.execution_environment_id,),
             ),
         ),
-        execution_environment=_HOST_ENVIRONMENT,
+        execution_environment=candidate_environment,
         verdict="promote",
         completed_at=now,
         execution_environment_identity=environment_identity,
-        execution_environments=(baseline_environment, _HOST_ENVIRONMENT),
+        execution_environments=(baseline_environment, candidate_environment),
         execution_environment_identities=(environment_identity,),
         subject_checkouts=(baseline_checkout, candidate_checkout),
         benchmark_case_evidence=(
@@ -405,7 +419,7 @@ def _seed_body_evaluation_authorization(
                         container_disk_quota_status="not_applicable",
                     ),
                 ),
-                execution_environment_id=_HOST_ENVIRONMENT.execution_environment_id,
+                execution_environment_id=candidate_environment.execution_environment_id,
                 execution_environment_identity_id=(
                     environment_identity.execution_environment_identity_id
                 ),
@@ -577,6 +591,103 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
     after_duplicate = supervisor._body_registry.load_slot_meta("slot-B")
     assert after_duplicate.health_score == updated.health_score
     assert after_duplicate.improvement_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_employee_dispatch_reconcile_runs_real_body_review_with_fixed_provider(tmp_path):
+    baseline_commit = _seed_probe_ready_git_repo(tmp_path)
+    runner = tmp_path / "src" / "voidcube" / "runtime" / "agent" / "stream_handler.py"
+    runner.write_text("VERSION = 'candidate'\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(runner.relative_to(tmp_path))], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "evaluated body candidate"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    candidate_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "reset", "--hard", baseline_commit],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    supervisor._body_registry.materialize_candidate_commit(
+        "slot-B",
+        baseline_commit=baseline_commit,
+        candidate_commit=candidate_commit,
+        changed_files=["src/voidcube/runtime/agent/stream_handler.py"],
+        source_label="evaluated:deterministic-employee-review",
+    )
+    task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=["src/voidcube/runtime/agent/stream_handler.py"],
+        baseline_commit=baseline_commit,
+        candidate_commit=candidate_commit,
+    )
+    supervisor._body_improvement_review_service._llm_review_diff = AsyncMock(
+        return_value=20.0
+    )
+
+    dispatch = supervisor._autonomous_employee_dispatch_service.dispatch(task)
+    schedule = supervisor._scheduled_task_store.get(dispatch["employee_task_id"])
+    claimed = supervisor._scheduled_task_store.claim_due(
+        owner_session_id="deterministic-employee",
+        role_limits={"coding": 1},
+    )
+    assert claimed is not None
+    lease = task.execution_lease
+    result_summary = json.dumps(
+        {
+            "body_improvement_report": {
+                "task_id": task.task_id,
+                "lease_generation": lease.generation,
+                "attempt_id": lease.attempt_id,
+                "slot_id": "slot-B",
+                "baseline_commit": baseline_commit,
+                "commit_hash": candidate_commit,
+                "changed_files": ["src/voidcube/runtime/agent/stream_handler.py"],
+                "execution_environment": _BODY_ENVIRONMENT.model_dump(mode="json"),
+                "verification": {"passed": True, "checks": ["deterministic pytest"]},
+                "learning_refs": [{
+                    "mem_id": "learning-1",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "relevance": 1.0,
+                }],
+                "improvement_description": "Apply the verified stream handling improvement.",
+            }
+        }
+    )
+    supervisor._scheduled_task_store.finish_run(
+        claimed["run"]["run_id"],
+        owner_session_id="deterministic-employee",
+        success=True,
+        result_summary=result_summary,
+    )
+
+    updates = await supervisor._autonomous_employee_dispatch_service.reconcile()
+
+    assert updates == [{"task_id": task.task_id, "status": "completed"}]
+    completed = supervisor._autonomous_chain_store.get_task(task.task_id)
+    assert completed is not None
+    assert completed.status == "completed"
+    updated_slot = supervisor._body_registry.load_slot_meta("slot-B")
+    assert updated_slot.improvement_count == 1
+    assert updated_slot.health_score > 0
+    assert updated_slot.health_history[-1]["reason"] == "body_improvement"
+    assert updated_slot.health_history[-1]["commit_hash"] == candidate_commit
+    supervisor._body_improvement_review_service._llm_review_diff.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,9 @@ class ScheduledTaskExecutorPorts:
     post_supervisor: Callable[[str, Dict[str, Any]], Dict[str, Any]]
     rate_limit_metadata: Callable[[str], Mapping[str, Any]]
     writeback_outbox: ScheduledWritebackOutbox
+    inspect_body_execution_readiness: Callable[..., Dict[str, Any]] | None = None
+    prepare_task_git_worktree: Callable[..., Dict[str, Any]] | None = None
+    release_task_environment: Callable[[str], None] | None = None
     get_supervisor: Callable[[str], Dict[str, Any]] | None = None
     cancel_background_task: Callable[[str, str], bool] | None = None
     validate_execution_lease: Callable[..., Any] | None = None
@@ -147,11 +150,12 @@ class ScheduledTaskExecutorRuntime:
         if not canonical_path.is_dir() or not expected_head:
             raise ValueError("body improvement worktree is not execution-ready")
 
-        from ...systems.supervisor.body_execution_readiness import (
-            inspect_body_execution_readiness,
-        )
+        inspect_readiness = self.ports.inspect_body_execution_readiness
+        prepare_environment = self.ports.prepare_task_git_worktree
+        if inspect_readiness is None or prepare_environment is None:
+            raise ValueError("body improvement execution ports are not configured")
 
-        readiness = inspect_body_execution_readiness(
+        readiness = inspect_readiness(
             slot_id=slot_id,
             worktree_path=str(canonical_path),
             expected_body_state="shell",
@@ -162,10 +166,7 @@ class ScheduledTaskExecutorRuntime:
                 + str(readiness.get("reason") or "unknown")
             )
 
-        from ...infrastructure.execution.terminal_tool import (
-            prepare_task_git_worktree,
-        )
-        environment_manifest = prepare_task_git_worktree(
+        environment_manifest = prepare_environment(
             task_id,
             str(canonical_path),
             expected_head=expected_head,
@@ -544,12 +545,11 @@ class ScheduledTaskExecutorRuntime:
                             body_environment_manifest,
                         )
                 try:
-                    if body_worktree_verifier is not None:
-                        from ...infrastructure.execution.terminal_tool import (
-                            release_task_environment,
-                        )
-
-                        release_task_environment(task_id)
+                    if (
+                        body_worktree_verifier is not None
+                        and self.ports.release_task_environment is not None
+                    ):
+                        self.ports.release_task_environment(task_id)
                 except Exception:
                     pass
                 limit_metadata = dict(self.ports.rate_limit_metadata(error)) if not success else {

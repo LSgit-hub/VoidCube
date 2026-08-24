@@ -1418,7 +1418,14 @@ class VoidcubeCLI:
         from ...infrastructure.persistence.scheduled_writeback import (
             SqliteScheduledWritebackOutbox,
         )
+        from ...infrastructure.execution.task_environment import (
+            prepare_task_git_worktree,
+            release_task_environment,
+        )
         from ...infrastructure.runtime.layout import get_runtime_layout
+        from ...systems.supervisor.body_execution_readiness import (
+            inspect_body_execution_readiness,
+        )
 
         gateway_client = SupervisorScheduledTaskClient()
         outbox = SqliteScheduledWritebackOutbox(
@@ -1464,6 +1471,9 @@ class VoidcubeCLI:
                 get_supervisor=gateway_client.get,
                 rate_limit_metadata=scheduled_rate_limit_metadata,
                 writeback_outbox=outbox,
+                inspect_body_execution_readiness=inspect_body_execution_readiness,
+                prepare_task_git_worktree=prepare_task_git_worktree,
+                release_task_environment=release_task_environment,
                 validate_execution_lease=validate_execution_lease,
                 recover_executor=self._recover_scheduled_executor,
             ),

@@ -87,7 +87,20 @@ def test_body_slot_projection_separates_structure_runtime_code_and_improvement()
         chain_history_projection=[],
         integrity_report={
             "slots": {
-                "slot-A": {"healthy": True, "materialized": True},
+                "slot-A": {
+                    "healthy": True,
+                    "materialized": True,
+                    "head_change_audit": [
+                        {
+                            "event_type": "body_head_changed",
+                            "operation": "materialize_candidate_commit",
+                            "before_commit": "a" * 40,
+                            "after_commit": "b" * 40,
+                            "reason": "evaluated_candidate_materialized",
+                            "occurred_at": "2026-08-24T00:00:00+00:00",
+                        }
+                    ],
+                },
                 "slot-B": {"healthy": False, "materialized": False},
             },
             "violations": [],
@@ -100,6 +113,9 @@ def test_body_slot_projection_separates_structure_runtime_code_and_improvement()
     assert active["code_health"]["label"] == "代码就绪"
     assert active["improvement_progress"]["label"] == "暂无改进"
     assert active["health_score"] == 82.0
+    assert active["head_change"]["label"] == "候选物化"
+    assert active["head_change"]["before_commit"] == "a" * 40
+    assert active["head_change"]["after_commit"] == "b" * 40
     assert shell["structure_health"]["label"] == "结构异常"
     assert shell["code_health"]["label"] == "代码未就绪"
     assert shell["improvement_progress"]["label"] == "等待培养"
