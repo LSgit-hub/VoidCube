@@ -39,4 +39,32 @@ def pad_to_width(text: str, width: int) -> str:
     return text + (" " * max(0, width - display_width(text)))
 
 
-__all__ = ["display_width", "pad_to_width", "trim_to_width"]
+def wrap_text(text: str, width: int, subsequent_indent: str = "") -> list[str]:
+    """Wrap text to a terminal-cell width, honoring wide and combining characters."""
+    width = max(8, width)
+    lines: list[str] = []
+    continuation_width = max(1, width - display_width(subsequent_indent))
+    for source_line in (text.splitlines() or [""]):
+        if not source_line:
+            lines.append("")
+            continue
+        chunks: list[str] = []
+        current: list[str] = []
+        current_width = 0
+        target = width
+        for char in source_line:
+            char_width = display_width(char)
+            if current and current_width + char_width > target:
+                chunks.append("".join(current))
+                current = []
+                current_width = 0
+                target = continuation_width
+            current.append(char)
+            current_width += char_width
+        if current:
+            chunks.append("".join(current))
+        lines.extend([chunks[0]] + [subsequent_indent + chunk for chunk in chunks[1:]])
+    return lines or [""]
+
+
+__all__ = ["display_width", "pad_to_width", "trim_to_width", "wrap_text"]

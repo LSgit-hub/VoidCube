@@ -42,7 +42,7 @@ class TuiPasteRuntime:
             return
         buffer = event.current_buffer
         line_count = pasted_text.count("\n")
-        if line_count >= 5 and not buffer.text.strip().startswith("/"):
+        if line_count >= 5 and not self._is_slash_command(pasted_text):
             placeholder = self._compact(pasted_text)
             prefix = ""
             if (
@@ -68,16 +68,25 @@ class TuiPasteRuntime:
         newlines_added = line_count - self._previous_newline_count
         self._previous_newline_count = line_count
         is_paste = chars_added > 1 or newlines_added >= 4
-        if line_count >= 5 and is_paste and not text.startswith("/"):
+        if line_count >= 5 and is_paste and not self._is_slash_command(text):
             self._paste_just_collapsed = True
             buffer.text = self._compact(text)
             buffer.cursor_position = len(buffer.text)
 
     def _compact(self, text: str) -> str:
         self._paste_counter += 1
-        path = self._write_paste_file(text)
+        try:
+            path = self._write_paste_file(text)
+        except (OSError, RuntimeError):
+            # Keep the pasted text intact instead of surfacing a filesystem
+            # error through the TUI key/change event handlers.
+            return text
         line_count = text.count("\n")
         return f"[Pasted text #{self._paste_counter}: {line_count + 1} lines \u2192 {path}]"
+
+    @staticmethod
+    def _is_slash_command(text: str) -> bool:
+        return text.strip().startswith("/")
 
     def _write_paste_file(self, text: str) -> Path:
         directory = self.ports.paste_directory

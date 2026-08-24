@@ -46,7 +46,10 @@ class TuiKeybindingAssemblyRuntime:
         def handle_enter(event: Any) -> None:
             ports.enter(event)
 
-        install_text_editing_keybindings(key_bindings)
+        install_text_editing_keybindings(
+            key_bindings,
+            normal_input_active=ports.normal_input_active,
+        )
         install_modal_navigation_keybindings(
             key_bindings,
             ports=ports.modal_navigation,

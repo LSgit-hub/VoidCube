@@ -72,10 +72,15 @@ def build_input_area(*, ports: InputWidgetPorts) -> TextArea:
                 terminal_size = shutil.get_terminal_size((80, 24))
                 terminal_columns = terminal_size.columns
                 terminal_rows = terminal_size.lines
-            available_width = max(1, terminal_columns - prompt_width)
             max_input_height = max(1, min(8, terminal_rows - 3))
             visual_lines = 0
-            for line in document.lines:
+            for index, line in enumerate(document.lines):
+                # The prompt only occupies the first line; continuation lines
+                # wrap against the full terminal width.
+                available_width = max(
+                    1,
+                    (terminal_columns - prompt_width) if index == 0 else terminal_columns,
+                )
                 line_width = get_cwidth(line)
                 visual_lines += 1 if line_width <= 0 else max(1, -(-line_width // available_width))
             return min(max(visual_lines, 1), max_input_height)

@@ -95,6 +95,21 @@ def test_status_bar_uses_fallback_when_a_port_fails():
     assert runtime.build() == [("class:status-bar", " fallback ")]
 
 
+def test_status_bar_fallback_is_trimmed_to_terminal_width():
+    from voidcube.interfaces.cli.terminal_text_layout import display_width
+
+    runtime = _runtime(fallback="a-very-long-fallback-text-that-overflows")
+    runtime.ports = replace(
+        runtime.ports,
+        terminal_width=lambda: 12,
+        snapshot=lambda: (_ for _ in ()).throw(RuntimeError("broken")),
+    )
+
+    fragments = runtime.build()
+
+    assert display_width("".join(text for _, text in fragments)) <= 12
+
+
 def test_status_bar_trims_wide_unicode_by_terminal_cells():
     fragments = _runtime(
         snapshot={"model_short": "模型模型模型", "context_percent": None},

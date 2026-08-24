@@ -1,0 +1,17 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+rootdir: F:\My_code\VScode_py\VoidCube
+configfile: pytest.ini
+plugins: anyio-4.14.2, asyncio-1.4.0, cov-7.1.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 47 items
+
+tests\test_tui_modal_widgets.py .........                                [ 19%]
+tests\test_tui_keybindings.py ......                                     [ 31%]
+tests\test_tui_paste_runtime.py .......                                  [ 46%]
+tests\test_tui_input_widgets.py ......                                   [ 59%]
+tests\test_tui_composition_runtime.py ...s                               [ 68%]
+tests\test_cli_interaction_adapter.py .......                            [ 82%]
+tests\test_cli_status_bar_runtime.py ........                            [100%]
+
+======================== 46 passed, 1 skipped in 0.98s ========================

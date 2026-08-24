@@ -193,7 +193,7 @@ def flush_stdin() -> None:
     """刷新标准输入缓冲区"""
     try:
         import termios
-        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
     except Exception:
         pass
 

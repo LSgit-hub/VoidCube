@@ -147,3 +147,72 @@ def test_approval_display_reads_structured_request() -> None:
     assert "rm -rf target" in rendered
     assert "Approve" in rendered
     assert "Deny" in rendered
+
+
+def test_approval_display_aligns_borders_with_wide_characters(monkeypatch) -> None:
+    from collections import namedtuple
+
+    from voidcube.interfaces.cli.terminal_text_layout import display_width
+
+    size = namedtuple("Size", "columns lines")
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.interaction_adapter.shutil.get_terminal_size",
+        lambda _fallback: size(100, 40),
+    )
+    host, _ = _host(
+        _approval_state={
+            "request": ApprovalRequest(
+                "删除 目标目录 🎯 --force",
+                "这是一段包含中文和 emoji 的描述文字，用于验证终端宽度对齐。",
+            ),
+            "choices": ["approved", "denied"],
+            "selected": 1,
+        }
+    )
+
+    fragments = adapter.approval_display_fragments(host)
+    visual_lines: list[str] = []
+    current = ""
+    for _style, text in fragments:
+        current += text
+        if "\n" in text:
+            parts = current.split("\n")
+            if parts[0]:
+                visual_lines.append(parts[0])
+            current = parts[-1]
+    if current:
+        visual_lines.append(current)
+
+    widths = {display_width(line) for line in visual_lines if line}
+    assert widths
+    assert len(widths) == 1
+
+
+def test_approval_command_truncation_respects_cell_width(monkeypatch) -> None:
+    from collections import namedtuple
+
+    from voidcube.interfaces.cli.terminal_text_layout import display_width
+
+    size = namedtuple("Size", "columns lines")
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.interaction_adapter.shutil.get_terminal_size",
+        lambda _fallback: size(100, 40),
+    )
+    long_command = "中" * 80
+    host, _ = _host(
+        _approval_state={
+            "request": ApprovalRequest(long_command, "destructive"),
+            "choices": ["approved", "denied", "view"],
+            "selected": 0,
+        }
+    )
+
+    rendered = "".join(text for _style, text in adapter.approval_display_fragments(host))
+
+    assert long_command not in rendered
+    assert "..." in rendered
+    # the preview still fits inside the panel width when full text is hidden
+    preview_fragment = next(
+        text for _style, text in adapter.approval_display_fragments(host) if "..." in text
+    )
+    assert display_width(preview_fragment) <= 74

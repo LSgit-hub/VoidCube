@@ -65,3 +65,62 @@ def test_paste_files_are_unique_across_runtime_instances(tmp_path):
     second.handle_text_changed(_Buffer(text, len(text)))
 
     assert len(list(tmp_path.glob("paste_1_000000_*.txt"))) == 2
+
+
+def test_paste_write_failure_keeps_pasted_text_intact(monkeypatch, tmp_path):
+    calls = []
+    runtime = _runtime(calls, tmp_path)
+    text = "a\nb\nc\nd\ne\nf"
+    monkeypatch.setattr(
+        runtime,
+        "_write_paste_file",
+        lambda _text: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    buffer = _Buffer(text, len(text))
+
+    runtime.handle_text_changed(buffer)
+
+    assert buffer.text == text
+    assert buffer.cursor_position == len(text)
+    assert not list(tmp_path.glob("paste_*.txt"))
+
+
+def test_bracketed_paste_write_failure_keeps_text_intact(monkeypatch, tmp_path):
+    calls = []
+    runtime = _runtime(calls, tmp_path)
+    monkeypatch.setattr(
+        runtime,
+        "_write_paste_file",
+        lambda _text: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    buffer = _Buffer()
+    event = SimpleNamespace(data="\rone\ntwo\nthree\nfour\nfive", current_buffer=buffer)
+
+    runtime.handle_bracketed_paste(event)
+
+    assert buffer.text == "\none\ntwo\nthree\nfour\nfive"
+    assert calls == []
+
+
+def test_paste_beginning_with_slash_command_is_not_compacted(tmp_path):
+    calls = []
+    text = "  /cmd\nx\ny\nz\nw\nv"
+    buffer = _Buffer(text, len(text))
+
+    _runtime(calls, tmp_path).handle_text_changed(buffer)
+
+    assert buffer.text == text
+    assert calls == []
+    assert not list(tmp_path.glob("paste_*.txt"))
+
+
+def test_bracketed_paste_beginning_with_slash_command_is_not_compacted(tmp_path):
+    calls = []
+    buffer = _Buffer()
+    event = SimpleNamespace(data="  /save\nx\ny\nz\nw\nv", current_buffer=buffer)
+
+    _runtime(calls, tmp_path).handle_bracketed_paste(event)
+
+    assert buffer.text == "  /save\nx\ny\nz\nw\nv"
+    assert calls == []
+    assert not list(tmp_path.glob("paste_*.txt"))

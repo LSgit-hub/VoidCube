@@ -25,18 +25,23 @@ def accept_completion_or_suggestion(buffer: Buffer) -> None:
         buffer.start_completion()
 
 
-def install_text_editing_keybindings(key_bindings: KeyBindings) -> None:
-    """Install multiline-entry and completion bindings without host access."""
+def install_text_editing_keybindings(
+    key_bindings: KeyBindings,
+    *,
+    normal_input_active: Callable[[], bool],
+) -> None:
+    """Install multiline-entry and completion bindings behind the modal-state filter."""
+    normal_input = Condition(normal_input_active)
 
-    @key_bindings.add("escape", "enter")
+    @key_bindings.add("escape", "enter", filter=normal_input)
     def insert_alt_enter_newline(event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
 
-    @key_bindings.add("c-j")
+    @key_bindings.add("c-j", filter=normal_input)
     def insert_ctrl_enter_newline(event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
 
-    @key_bindings.add("tab", eager=True)
+    @key_bindings.add("tab", eager=True, filter=normal_input)
     def handle_tab(event: KeyPressEvent) -> None:
         accept_completion_or_suggestion(event.current_buffer)
 

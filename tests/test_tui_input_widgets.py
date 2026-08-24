@@ -69,6 +69,25 @@ def test_input_area_height_preserves_space_in_a_short_terminal(
     assert area.window.height() == 3
 
 
+def test_input_area_continuation_lines_wrap_against_full_terminal_width(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.input_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=20, rows=24)
+            )
+        ),
+    )
+    area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
+    area.buffer.text = "a\n" + "x" * 40
+
+    # First line keeps 2 prompt cells; the continuation line wraps at 20.
+    assert area.window.height() == 1 + 2
+
+
 def test_placeholder_processor_only_appends_to_an_empty_first_line(tmp_path) -> None:
     area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
     install_placeholder_processor(area, placeholder_text=lambda: "ready")

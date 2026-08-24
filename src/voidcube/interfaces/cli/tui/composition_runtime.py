@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -14,6 +15,15 @@ from prompt_toolkit.layout.dimension import Dimension
 
 from .application import create_tui_application
 from .layout import build_tui_layout_children
+
+
+def _modal_stack_max_height() -> int:
+    """Cap the modal stack to the visible terminal area (max 20 rows)."""
+    try:
+        rows = shutil.get_terminal_size((100, 20)).lines
+    except Exception:
+        rows = 20
+    return max(6, min(20, rows - 4))
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +103,7 @@ class TuiCompositionRuntime:
                 )
                 if isinstance(widget, Container)
             ],
-            height=Dimension(max=20),
+            height=Dimension(max=_modal_stack_max_height()),
         )
         modal_overlay = ConditionalContainer(
             modal_stack,

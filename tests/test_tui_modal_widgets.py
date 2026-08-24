@@ -59,7 +59,19 @@ def test_secret_panel_keeps_prompt_help_and_body_separated() -> None:
     assert text.index("Stored locally") < text.index("Enter secret below")
 
 
-def test_model_picker_limits_the_visible_window_and_shows_position() -> None:
+def test_model_picker_limits_the_visible_window_and_shows_position(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=100, rows=40)
+            )
+        ),
+    )
     providers = [
         {"name": f"Provider {index}", "models": ["default"]}
         for index in range(15)
@@ -88,3 +100,135 @@ def test_panel_wrapping_uses_terminal_cell_width_for_wide_text() -> None:
 
     assert lines
     assert all(display_width(line) <= 12 for line in lines)
+
+
+def test_panel_box_width_never_exceeds_the_narrow_overlay(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from voidcube.interfaces.cli.tui.modal_widgets import _panel_box_width
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=20, rows=8)
+            )
+        ),
+    )
+
+    box = _panel_box_width("Voidcube needs your input", ["choice text"] * 12)
+
+    assert 8 <= box <= 20 - 4  # Float insets are left=2 and right=2
+
+
+def test_panel_box_width_expands_to_fit_wide_content(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from voidcube.interfaces.cli.tui.modal_widgets import _panel_box_width
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=100, rows=40)
+            )
+        ),
+    )
+
+    box = _panel_box_width("T", ["x" * 60])
+
+    assert box >= 62
+    assert box <= 78  # default max_width 76 -> inner 74 + borders
+
+
+def test_secret_panel_wraps_long_help_instead_of_truncating(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=100, rows=40)
+            )
+        ),
+    )
+    help_line = "This help text is deliberately long and should wrap across several panel rows. " * 6
+    widgets = build_modal_widgets(
+        ports=_ports(secret={"prompt": "API token", "metadata": {"help": help_line}})
+    )
+
+    text = _widget_text(widgets.secret)
+
+    assert "deliberately long" in text
+    assert not text.rstrip().endswith("...")
+
+
+def test_model_picker_panel_lines_share_one_width(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=100, rows=40)
+            )
+        ),
+    )
+    providers = [
+        {"name": f"Provider {index}", "models": ["default"]}
+        for index in range(15)
+    ]
+    widgets = build_modal_widgets(
+        ports=_ports(
+            picker={
+                "stage": "provider",
+                "providers": providers,
+                "selected": 8,
+                "current_model": "default",
+                "current_provider": "Provider 0",
+            }
+        )
+    )
+
+    text = _widget_text(widgets.model_picker)
+    widths = {
+        display_width(line)
+        for line in text.split("\n")
+        if line and not line.endswith("╮") and not line.endswith("╯")
+    }
+
+    assert len(widths) == 1
+
+
+def test_panel_lines_are_limited_with_a_visible_indicator(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from voidcube.interfaces.cli.tui.modal_widgets import _limit_panel_lines
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(
+                get_size=lambda: SimpleNamespace(columns=100, rows=10)
+            )
+        ),
+    )
+    lines = [
+        ("class:a", "one\n"),
+        ("class:a", "two\n"),
+        ("class:a", "three\n"),
+        ("class:a", "four\n"),
+        ("class:a", "close\n"),
+    ]
+
+    limited = _limit_panel_lines(
+        lines,
+        3,
+        border_style="class:a",
+        content_style="class:b",
+        box_width=30,
+    )
+
+    assert limited[-1] == ("class:a", "close\n")
+    assert any("3 more lines" in text for _style, text in limited)
+    assert display_width(limited[-3][1]) == 30

@@ -78,7 +78,12 @@ class CliStatusBarRuntime:
                 return self._layout_with_git(left, middle, git, width)
             return self._layout_without_git(left, middle, width)
         except Exception:
-            return [("class:status-bar", f" {ports.fallback_text()} ")]
+            fallback = f" {ports.fallback_text()} "
+            try:
+                fallback = trim_to_width(fallback, ports.terminal_width())
+            except Exception:
+                pass
+            return [("class:status-bar", fallback)]
 
     @classmethod
     def _model_fragments(

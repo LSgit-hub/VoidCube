@@ -6,9 +6,7 @@ from prompt_toolkit.key_binding import KeyBindings
 
 from voidcube.interfaces.cli.tui.keybindings import (
     accept_completion_or_suggestion,
-    copy_selection_to_clipboard,
     navigate_history,
-    paste_clipboard_text,
     install_history_navigation_keybindings,
     install_text_editing_keybindings,
 )
@@ -71,63 +69,19 @@ def test_completion_binding_accepts_completion_suggestion_or_starts_menu() -> No
 def test_text_editing_keybindings_register_without_cli_host() -> None:
     bindings = KeyBindings()
 
-    install_text_editing_keybindings(bindings)
+    install_text_editing_keybindings(bindings, normal_input_active=lambda: True)
 
-    assert len(bindings.bindings) == 5
-
-
-def test_paste_clipboard_text_inserts_available_text(monkeypatch) -> None:
-    buffer = _Buffer()
-    monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.keybindings.read_clipboard_text",
-        lambda: "pasted content",
-    )
-
-    paste_clipboard_text(buffer)  # type: ignore[arg-type]
-
-    assert buffer.inserted == ["pasted content"]
+    assert len(bindings.bindings) == 3
 
 
-def test_paste_clipboard_text_ignores_empty_clipboard(monkeypatch) -> None:
-    buffer = _Buffer()
-    monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.keybindings.read_clipboard_text",
-        lambda: None,
-    )
+def test_text_editing_keybindings_are_filtered_while_a_modal_is_active() -> None:
+    bindings = KeyBindings()
 
-    paste_clipboard_text(buffer)  # type: ignore[arg-type]
+    install_text_editing_keybindings(bindings, normal_input_active=lambda: False)
 
-    assert buffer.inserted == []
-
-
-def test_copy_selection_writes_nonempty_selection(monkeypatch) -> None:
-    written: list[str] = []
-    buffer = SimpleNamespace(
-        copy_selection=lambda: SimpleNamespace(text="selected text"),
-    )
-    monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.keybindings.write_clipboard_text",
-        lambda text: written.append(text) or True,
-    )
-
-    copy_selection_to_clipboard(buffer)  # type: ignore[arg-type]
-
-    assert written == ["selected text"]
-
-
-def test_copy_selection_ignores_empty_selection(monkeypatch) -> None:
-    written: list[str] = []
-    buffer = SimpleNamespace(
-        copy_selection=lambda: SimpleNamespace(text=""),
-    )
-    monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.keybindings.write_clipboard_text",
-        lambda text: written.append(text) or True,
-    )
-
-    copy_selection_to_clipboard(buffer)  # type: ignore[arg-type]
-
-    assert written == []
+    assert len(bindings.bindings) == 3
+    for binding in bindings.bindings:
+        assert binding.filter() is False
 
 
 def test_history_navigation_uses_buffer_navigation_without_host() -> None:

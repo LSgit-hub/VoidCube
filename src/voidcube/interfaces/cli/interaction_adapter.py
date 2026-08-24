@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import queue
 import shutil
-import textwrap
 import time
 from typing import Any, Callable
 
@@ -15,6 +14,12 @@ from ...domain.contracts.interaction import (
     ClarificationDecision,
     ClarificationRequest,
     ClarificationStatus,
+)
+from .terminal_text_layout import (
+    display_width,
+    pad_to_width,
+    trim_to_width,
+    wrap_text as _wrap_panel_text,
 )
 
 
@@ -147,6 +152,7 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
     state = host._approval_state
     if not state:
         return []
+    state = dict(state)
 
     request = state["request"]
     command = request.command
@@ -156,7 +162,9 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
     show_full = state.get("show_full", False)
     title = "⚠️  Dangerous Command"
     command_display = (
-        command if show_full or len(command) <= 70 else command[:70] + "..."
+        command
+        if show_full or display_width(command) <= 70
+        else trim_to_width(command, 70)
     )
     labels = {
         ApprovalStatus.APPROVED.value: "Approve",
@@ -179,11 +187,13 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
     box_width = _panel_box_width(title, preview_lines)
     text_width = max(8, box_width - 2)
     lines: list[tuple[str, str]] = [
-        ("class:approval-border", "╭" + ("─" * box_width) + "╮\n")
+        ("class:approval-border", "╭─ "),
+        ("class:approval-title", title),
+        (
+            "class:approval-border",
+            " " + ("─" * max(0, box_width - display_width(title) - 3)) + "╮\n",
+        ),
     ]
-    _append_panel_line(
-        lines, "class:approval-border", "class:approval-title", title, box_width
-    )
     _append_blank_panel_line(lines, "class:approval-border", box_width)
     for wrapped in _wrap_panel_text(description, text_width):
         _append_panel_line(
@@ -230,28 +240,25 @@ def _panel_box_width(
     min_width: int = 46,
     max_width: int = 76,
 ) -> int:
-    terminal_columns = shutil.get_terminal_size((100, 20)).columns
-    longest = max([len(title), min_width - 4, *(len(line) for line in content_lines)])
+    try:
+        from prompt_toolkit.application import get_app
+
+        terminal_columns = get_app().output.get_size().columns
+    except Exception:
+        terminal_columns = shutil.get_terminal_size((100, 20)).columns
+    # The modal overlay floats with left=2/right=2 insets and every panel line
+    # carries two border cells, so the box must fit into terminal_columns - 6.
+    available_inner = max(8, terminal_columns - 8)
+    longest = max(
+        [display_width(title)]
+        + [display_width(line) for line in content_lines]
+    )
     inner = min(
         max(longest + 4, min_width - 2),
         max_width - 2,
-        max(24, terminal_columns - 6),
+        available_inner,
     )
     return inner + 2
-
-
-def _wrap_panel_text(
-    text: str,
-    width: int,
-    subsequent_indent: str = "",
-) -> list[str]:
-    return textwrap.wrap(
-        text,
-        width=max(8, width),
-        replace_whitespace=False,
-        drop_whitespace=False,
-        subsequent_indent=subsequent_indent,
-    ) or [""]
 
 
 def _append_panel_line(
@@ -264,7 +271,7 @@ def _append_panel_line(
     lines.extend(
         [
             (border_style, "│ "),
-            (content_style, text.ljust(max(0, box_width - 2))),
+            (content_style, pad_to_width(text, max(0, box_width - 2))),
             (border_style, " │\n"),
         ]
     )

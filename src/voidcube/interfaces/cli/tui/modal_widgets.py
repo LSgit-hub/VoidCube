@@ -7,15 +7,25 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from prompt_toolkit.application import get_app
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
 
 from ....domain.contracts.interaction import ClarificationRequest
-from ..terminal_text_layout import display_width, pad_to_width
+from ..terminal_text_layout import display_width, pad_to_width, wrap_text as _wrap_panel_text
 
 
 ModalState = Mapping[str, object]
+
+
+def _modal_max_height() -> int:
+    """Cap the modal stack height to the visible terminal area."""
+    try:
+        rows = get_app().output.get_size().rows
+    except Exception:
+        rows = shutil.get_terminal_size((100, 20)).lines
+    return max(6, min(20, rows - 4))
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +57,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         state = ports.clarify_state()
         if not state:
             return []
+        state = dict(state)
 
         request = cast(ClarificationRequest, state["request"])
         question = request.question
@@ -103,7 +114,13 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
 
         _append_blank_panel_line(lines, "class:clarify-border", box_width)
         lines.append(("class:clarify-border", "╰" + ("─" * box_width) + "╯\n"))
-        return lines
+        return _limit_panel_lines(
+            lines,
+            _modal_max_height(),
+            border_style="class:clarify-border",
+            content_style="class:clarify-hint",
+            box_width=box_width,
+        )
 
     def sudo_display() -> list[tuple[str, str]]:
         if not ports.sudo_state():
@@ -117,6 +134,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         state = ports.secret_state()
         if not state:
             return []
+        state = dict(state)
         prompt = str(state.get("prompt") or f"Enter value for {state.get('var_name', 'secret')}")
         metadata = state.get("metadata")
         help_text = metadata.get("help") if isinstance(metadata, Mapping) else None
@@ -125,6 +143,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         if help_text:
             content_lines.insert(1, str(help_text))
         box_width = _panel_box_width("🔑 Skill Setup Required", content_lines)
+        inner_text_width = max(8, box_width - 2)
         lines: list[tuple[str, str]] = [
             ("class:sudo-border", "╭─ "),
             ("class:sudo-title", "🔑 Skill Setup Required"),
@@ -134,19 +153,29 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
             ),
         ]
         _append_blank_panel_line(lines, "class:sudo-border", box_width)
-        _append_panel_line(lines, "class:sudo-border", "class:sudo-text", prompt, box_width)
+        for wrapped in _wrap_panel_text(prompt, inner_text_width):
+            _append_panel_line(lines, "class:sudo-border", "class:sudo-text", wrapped, box_width)
         if help_text:
-            _append_panel_line(lines, "class:sudo-border", "class:sudo-text", str(help_text), box_width)
+            for wrapped in _wrap_panel_text(str(help_text), inner_text_width):
+                _append_panel_line(lines, "class:sudo-border", "class:sudo-text", wrapped, box_width)
         _append_blank_panel_line(lines, "class:sudo-border", box_width)
-        _append_panel_line(lines, "class:sudo-border", "class:sudo-text", body, box_width)
+        for wrapped in _wrap_panel_text(body, inner_text_width):
+            _append_panel_line(lines, "class:sudo-border", "class:sudo-text", wrapped, box_width)
         _append_blank_panel_line(lines, "class:sudo-border", box_width)
         lines.append(("class:sudo-border", "╰" + ("─" * box_width) + "╯\n"))
-        return lines
+        return _limit_panel_lines(
+            lines,
+            _modal_max_height(),
+            border_style="class:sudo-border",
+            content_style="class:sudo-text",
+            box_width=box_width,
+        )
 
     def model_picker_display() -> list[tuple[str, str]]:
         state = ports.model_picker_state()
         if not state:
             return []
+        state = dict(state)
         title, hint, choices = _model_picker_content(state)
         max_visible = 10
         box_width = _panel_box_width(title, [hint] + choices[:max_visible], min_width=46, max_width=84)
@@ -166,23 +195,31 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
             window_start = _visible_window_start(selected, total_choices, max_visible)
             window_end = min(window_start + max_visible, total_choices)
             if window_start > 0:
-                _append_scroll_indicator(lines)
+                _append_scroll_indicator(lines, box_width)
             for index in range(window_start, window_end):
                 _append_picker_choice(lines, choices[index], index == selected, inner_text_width, box_width)
             if window_end < total_choices:
-                _append_scroll_indicator(lines)
-            lines.extend([
-                ("class:clarify-border", "│"),
-                ("class:clarify-hint", f" {selected + 1}/{total_choices} ".center(inner_text_width + 4)),
-                ("class:clarify-border", "│\n"),
-            ])
+                _append_scroll_indicator(lines, box_width)
+            _append_panel_line(
+                lines,
+                "class:clarify-border",
+                "class:clarify-hint",
+                f" {selected + 1}/{total_choices} ".center(inner_text_width),
+                box_width,
+            )
         else:
             for index, choice in enumerate(choices):
                 _append_picker_choice(lines, choice, index == selected, inner_text_width, box_width)
 
         _append_blank_panel_line(lines, "class:clarify-border", box_width)
         lines.append(("class:clarify-border", "╰" + ("─" * box_width) + "╯\n"))
-        return lines
+        return _limit_panel_lines(
+            lines,
+            _modal_max_height(),
+            border_style="class:clarify-border",
+            content_style="class:clarify-hint",
+            box_width=box_width,
+        )
 
     return ModalWidgets(
         clarify=ConditionalContainer(Window(FormattedTextControl(clarify_display), wrap_lines=True), filter=Condition(lambda: ports.clarify_state() is not None)),
@@ -195,6 +232,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
 
 def _simple_panel(*, title: str, content: list[str]) -> list[tuple[str, str]]:
     box_width = _panel_box_width(title, content)
+    inner_text_width = max(8, box_width - 2)
     lines: list[tuple[str, str]] = [
         ("class:sudo-border", "╭─ "),
         ("class:sudo-title", title),
@@ -202,10 +240,17 @@ def _simple_panel(*, title: str, content: list[str]) -> list[tuple[str, str]]:
     ]
     _append_blank_panel_line(lines, "class:sudo-border", box_width)
     for text in content:
-        _append_panel_line(lines, "class:sudo-border", "class:sudo-text", text, box_width)
+        for wrapped in _wrap_panel_text(text, inner_text_width):
+            _append_panel_line(lines, "class:sudo-border", "class:sudo-text", wrapped, box_width)
     _append_blank_panel_line(lines, "class:sudo-border", box_width)
     lines.append(("class:sudo-border", "╰" + ("─" * box_width) + "╯\n"))
-    return lines
+    return _limit_panel_lines(
+        lines,
+        _modal_max_height(),
+        border_style="class:sudo-border",
+        content_style="class:sudo-text",
+        box_width=box_width,
+    )
 
 
 def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
@@ -236,48 +281,22 @@ def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
 
 def _panel_box_width(title: str, content_lines: list[str], min_width: int = 46, max_width: int = 76) -> int:
     try:
-        from prompt_toolkit.application import get_app
-
         term_cols = get_app().output.get_size().columns
     except Exception:
         term_cols = shutil.get_terminal_size((100, 20)).columns
+    # The modal overlay floats with left=2/right=2 insets and every panel line
+    # carries two border cells, so the box must fit into term_cols - 6 cells.
+    available_inner = max(8, term_cols - 8)
     longest = max(
         [display_width(title)]
         + [display_width(line) for line in content_lines]
-        + [min_width - 4]
     )
-    inner = min(max(longest + 4, min_width - 2), max_width - 2, max(24, term_cols - 6))
+    inner = min(
+        max(longest + 4, min_width - 2),
+        max_width - 2,
+        available_inner,
+    )
     return inner + 2
-
-
-def _wrap_panel_text(text: str, width: int, subsequent_indent: str = "") -> list[str]:
-    width = max(8, width)
-    lines: list[str] = []
-    continuation_width = max(1, width - display_width(subsequent_indent))
-    for source_line in (text.splitlines() or [""]):
-        if not source_line:
-            lines.append("")
-            continue
-        chunks: list[str] = []
-        current: list[str] = []
-        current_width = 0
-        target = width
-        for char in source_line:
-            char_width = display_width(char)
-            if current and current_width + char_width > target:
-                chunks.append("".join(current))
-                current = []
-                current_width = 0
-                target = continuation_width
-            current.append(char)
-            current_width += char_width
-        if current:
-            chunks.append("".join(current))
-        lines.extend(
-            [chunks[0]]
-            + [subsequent_indent + chunk for chunk in chunks[1:]]
-        )
-    return lines or [""]
 
 
 def _append_panel_line(lines: list[tuple[str, str]], border_style: str, content_style: str, text: str, box_width: int) -> None:
@@ -289,8 +308,73 @@ def _append_blank_panel_line(lines: list[tuple[str, str]], border_style: str, bo
     lines.append((border_style, "│" + (" " * box_width) + "│\n"))
 
 
-def _append_scroll_indicator(lines: list[tuple[str, str]]) -> None:
-    lines.extend([("class:clarify-border", "│"), ("class:clarify-choice", "  ..."), ("class:clarify-border", "│\n")])
+def _append_scroll_indicator(lines: list[tuple[str, str]], box_width: int) -> None:
+    lines.extend(
+        [
+            ("class:clarify-border", "│"),
+            ("class:clarify-choice", pad_to_width("  ...", max(0, box_width))),
+            ("class:clarify-border", "│\n"),
+        ]
+    )
+
+
+def _split_visual_lines(
+    fragments: list[tuple[str, str]],
+) -> list[list[tuple[str, str]]]:
+    """Group a flat fragment list into visual lines at newline boundaries."""
+    visual_lines: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    for style, text in fragments:
+        parts = text.split("\n")
+        for index, part in enumerate(parts):
+            if part:
+                current.append((style, part))
+            if index < len(parts) - 1:
+                visual_lines.append(current)
+                current = []
+    if current:
+        visual_lines.append(current)
+    return visual_lines
+
+
+def _flatten_visual_lines(
+    visual_lines: list[list[tuple[str, str]]],
+) -> list[tuple[str, str]]:
+    """Rebuild a flat fragment list, restoring one newline per visual line."""
+    flat: list[tuple[str, str]] = []
+    for visual_line in visual_lines:
+        for index, (style, text) in enumerate(visual_line):
+            if index == len(visual_line) - 1:
+                text = text + "\n"
+            flat.append((style, text))
+    return flat
+
+
+def _limit_panel_lines(
+    lines: list[tuple[str, str]],
+    max_lines: int,
+    *,
+    border_style: str,
+    content_style: str,
+    box_width: int,
+) -> list[tuple[str, str]]:
+    """Keep the closing border and indicate truncated content beyond the modal height."""
+    visual_lines = _split_visual_lines(lines)
+    if len(visual_lines) <= max_lines:
+        return lines
+    closing = visual_lines[-1]
+    visible = visual_lines[: max(1, max_lines - 2)]
+    remaining = len(visual_lines) - len(visible) - 1
+    indicator = f"  … {remaining} more line{'s' if remaining != 1 else ''}"
+    visible.append(
+        [
+            (border_style, "│"),
+            (content_style, pad_to_width(indicator, max(0, box_width))),
+            (border_style, "│\n"),
+        ]
+    )
+    visible.append(closing)
+    return _flatten_visual_lines(visible)
 
 
 def _append_picker_choice(lines: list[tuple[str, str]], choice: str, selected: bool, width: int, box_width: int) -> None:
