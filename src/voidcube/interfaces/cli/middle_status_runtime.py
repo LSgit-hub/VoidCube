@@ -199,7 +199,7 @@ class CliMiddleStatusRuntime:
         }
         labels = {
             "idle": "", "planning": "规划", "memory": "记忆", "drive": "驱动",
-            "handoff": "交接", "maintenance": "维护", "body_switch": "切换",
+            "handoff": "交接", "maintenance": "记忆", "body_switch": "切换",
         }
         color = colors.get(scene, "#9CA3AF")
         fragments: list[StatusFragment] = []

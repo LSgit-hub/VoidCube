@@ -33,6 +33,18 @@ def test_middle_status_renders_memory_scene_context_and_errors():
     assert "!2" in rendered
 
 
+def test_middle_status_renders_memory_label_for_memory_maintenance_scene():
+    rendered = "".join(
+        text
+        for _, text in _runtime(
+            supervisor={"scene": "maintenance", "is_active": True},
+        ).build()
+    )
+
+    assert "(M)记忆" in rendered
+    assert "维护" not in rendered
+
+
 def test_middle_status_renders_active_subagent_summary():
     fragments = _runtime(
         subagent={"active": True, "counts_label": "2+1", "compact_preview": "read_file"},

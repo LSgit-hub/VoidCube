@@ -101,3 +101,50 @@ def test_failed_supervisor_refresh_keeps_last_valid_snapshot(monkeypatch):
         "scene": "planning",
         "mem_usage": {"request_count": 1},
     }
+
+
+def test_supervisor_refresh_accepts_slow_authoritative_ui_snapshot(monkeypatch):
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"scene":"maintenance","mem_usage":{}}'
+
+    calls = []
+    monkeypatch.setattr(
+        status_host.urllib.request,
+        "urlopen",
+        lambda _request, *, timeout: calls.append(timeout) or _Response(),
+    )
+    host = SimpleNamespace(
+        _supervisor_state_cache={},
+        _supervisor_state_ts=0.0,
+        _supervisor_state_refreshing=False,
+        _supervisor_url="http://127.0.0.1:6002/ui/state",
+        _autonomous_activation_pending=False,
+        _autonomous_gate_active=False,
+        _autonomous_panel_event_ports=lambda: SimpleNamespace(),
+    )
+
+    thread = Mock()
+    thread.start.side_effect = lambda: thread._target()
+
+    def _thread_factory(*, target, **_kwargs):
+        thread._target = target
+        return thread
+
+    monkeypatch.setattr(status_host.threading, "Thread", _thread_factory)
+    monkeypatch.setattr(
+        status_host,
+        "sync_autonomous_supervisor_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    status_host.refresh_supervisor_status(host)
+
+    assert calls == [15]
+    assert status_host.fetch_supervisor_status(host)["scene"] == "maintenance"

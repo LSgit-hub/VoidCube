@@ -12,6 +12,12 @@ from .observation import format_supervisor_status_snapshot
 from .events import append_autonomous_execution_event, sync_autonomous_supervisor_event
 
 
+# The Web room's authoritative snapshot can be large while Mem attaches trace
+# details. The CLI observer must wait for that snapshot instead of repeatedly
+# falling back to a stale idle scene.
+_SUPERVISOR_STATUS_TIMEOUT_SECONDS = 15
+
+
 def initialize_autonomous_status_caches(host: Any) -> None:
     """Initialize autonomous observation caches on the CLI host."""
     host._supervisor_state_cache = {}
@@ -94,7 +100,10 @@ def refresh_supervisor_status(host: Any) -> None:
     def _do_fetch() -> None:
         try:
             req = urllib.request.Request(get_supervisor_url(host))
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(
+                req,
+                timeout=_SUPERVISOR_STATUS_TIMEOUT_SECONDS,
+            ) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 host._supervisor_state_cache = data
                 _sync_local_gate_with_supervisor(host, data)
