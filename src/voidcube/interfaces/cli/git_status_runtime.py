@@ -46,13 +46,6 @@ class CliGitStatusRuntime:
                 git_display = self.ports.git_display_factory()
                 status = git_display.runner.get_status()
                 fragments = self._render_status(status)
-                if fragments is not None:
-                    try:
-                        code, output, _ = git_display.runner._run(["remote"])
-                        if code == 0 and output.strip():
-                            fragments.extend(self._render_remotes(output))
-                    except Exception:
-                        pass
                 self._cache = fragments or []
             except Exception:
                 self._cache = []
@@ -72,35 +65,31 @@ class CliGitStatusRuntime:
         if not status.is_repo:
             return None
 
+        changed_files = cls._changed_file_count(status)
         fragments: list[StatusFragment] = [
             (f"{cls._BACKGROUND} #58A6FF", "Git "),
             (f"{cls._BACKGROUND} #9CA3AF", "<"),
             (f"{cls._BACKGROUND} #58A6FF bold", status.branch),
             (f"{cls._BACKGROUND} #9CA3AF", ">"),
+            (f"{cls._BACKGROUND} #9CA3AF", "  改动 "),
+            (f"{cls._BACKGROUND} #FFFFFF bold", str(changed_files)),
         ]
-        if status.staged:
-            fragments.extend(
-                [
-                    (f"{cls._BACKGROUND} #9CA3AF", "  暂存 "),
-                    (f"{cls._BACKGROUND} #FFFFFF bold", str(len(status.staged))),
-                ]
-            )
-
-        changes = len(status.modified) + len(status.deleted) + len(status.untracked)
-        if changes > 0:
-            fragments.extend(
-                [
-                    (f"{cls._BACKGROUND} #9CA3AF", "  更改 "),
-                    (f"{cls._BACKGROUND} #FFFFFF bold", str(changes)),
-                ]
-            )
         return fragments
 
     @classmethod
-    def _render_remotes(cls, output: str) -> list[StatusFragment]:
-        remote_names = ",".join(output.strip().splitlines())
-        return [
-            (f"{cls._BACKGROUND} #9CA3AF", "  <"),
-            (f"{cls._BACKGROUND} #8B949E", remote_names),
-            (f"{cls._BACKGROUND} #9CA3AF", ">"),
-        ]
+    def _changed_file_count(cls, status: Any) -> int:
+        """Count changed paths once, including staged and renamed entries."""
+        paths: set[str] = set()
+        for field in (
+            "staged",
+            "modified",
+            "deleted",
+            "untracked",
+            "renamed",
+            "conflicts",
+        ):
+            for path in getattr(status, field, ()) or ():
+                normalized = str(path).strip()
+                if normalized:
+                    paths.add(normalized)
+        return len(paths)

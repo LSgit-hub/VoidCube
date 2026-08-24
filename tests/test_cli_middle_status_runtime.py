@@ -147,7 +147,8 @@ def test_middle_status_uses_compact_unicode_user_and_model_status():
 
     rendered = "".join(text for _, text in runtime.build())
 
-    assert "● deepseek-v4-flash" in rendered
+    assert rendered.startswith("deepseek-v4-flash --")
+    assert "●" in rendered
     assert "B✓" not in rendered
     assert "用户" not in rendered
     assert "running" not in rendered

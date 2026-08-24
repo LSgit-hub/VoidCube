@@ -11,11 +11,10 @@ class _ImmediateThread:
         self.target()
 
 
-def _runtime(status, remotes="origin\nupstream\n"):
+def _runtime(status):
     display = SimpleNamespace(
         runner=SimpleNamespace(
             get_status=lambda: status,
-            _run=lambda _args: (0, remotes, ""),
         )
     )
     now = [100.0]
@@ -37,6 +36,8 @@ def test_git_status_runtime_refreshes_and_then_serves_cache():
             modified=["b"],
             deleted=["c"],
             untracked=["d"],
+            renamed=[],
+            conflicts=[],
         )
     )
 
@@ -46,9 +47,30 @@ def test_git_status_runtime_refreshes_and_then_serves_cache():
 
     assert first == second
     assert "Git <main>" in rendered
-    assert "暂存 1" in rendered
-    assert "更改 3" in rendered
-    assert "origin,upstream" in rendered
+    assert "改动 4" in rendered
+    assert "暂存" not in rendered
+    assert "origin,upstream" not in rendered
+
+
+def test_git_status_runtime_deduplicates_a_file_changed_in_index_and_worktree():
+    rendered = "".join(
+        text
+        for _, text in _runtime(
+            SimpleNamespace(
+                is_repo=True,
+                branch="master",
+                staged=["same.py", "staged.py"],
+                modified=["same.py", "working.py"],
+                deleted=[],
+                untracked=["new.py"],
+                renamed=["old.py -> new-name.py"],
+                conflicts=["same.py"],
+            )
+        ).build()
+    )
+
+    assert "Git <master>" in rendered
+    assert "改动 5" in rendered
 
 
 def test_git_status_runtime_hides_non_repo_and_isolates_reader_failure():

@@ -830,6 +830,23 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
 
 
 @pytest.mark.unit
+def test_supervisor_room_frontend_uses_compact_primary_dock_labels():
+    expected = {
+        "chain": ("观察", "观察"),
+        "stats": ("健康", "健康"),
+        "promotions": ("审计", "审计"),
+        "settings": ("配置", "配置"),
+        "account": ("账号", "账号"),
+    }
+    for panel, (title, label) in expected.items():
+        button_start = UI_HTML.index(f'data-panel="{panel}"', UI_HTML.index('id="bottomDock"'))
+        button_end = UI_HTML.index("</button>", button_start)
+        button = UI_HTML[button_start:button_end]
+        assert f'title="{title}"' in button
+        assert f'class="db-label">{label}<' in button
+
+
+@pytest.mark.unit
 def test_supervisor_room_frontend_uses_governed_evolution_promotion_consent():
     assert 'id="panelPromotions"' in UI_HTML
     assert 'id="panelPromotionsBody"' in UI_HTML

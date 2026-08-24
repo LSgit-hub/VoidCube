@@ -4369,6 +4369,7 @@ class VoidcubeCLI:
                 lifecycle_guards=lifecycle_guards,
                 agent_running=lambda: self._agent_running,
                 check_config_changes=self._check_config_mcp_changes,
+                refresh_status=lambda: _refresh_supervisor_status_view(self),
                 refresh_observation_surfaces=refresh_observation_surfaces,
                 refresh_gateway_presence=refresh_gateway_presence,
                 autonomous_gate_active=lambda: self._autonomous_gate_active,

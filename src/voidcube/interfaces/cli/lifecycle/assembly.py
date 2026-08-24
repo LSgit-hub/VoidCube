@@ -28,6 +28,7 @@ class CliInteractiveLifecycleAssemblyPorts:
     autonomous_gate_active: Callable[[], bool]
     start_autonomous_execution: Callable[[], None]
     application_ready: Callable[[], bool]
+    refresh_status: Callable[[], None]
     invalidate: Callable[[float], None]
     enqueue_pending_input: Callable[[str], None]
     stop_requested: Callable[[], bool]
@@ -75,6 +76,7 @@ class CliInteractiveLifecycleAssemblyRuntime:
                 idle_maintenance=idle_maintenance,
                 lifecycle_guards=ports.lifecycle_guards,
                 stop_requested=ports.stop_requested,
+                refresh_status=ports.refresh_status,
                 presence_refresh_needed=ports.presence_refresh_needed,
                 refresh_presence=lambda: ports.refresh_gateway_presence(True),
                 command_running=ports.command_running,

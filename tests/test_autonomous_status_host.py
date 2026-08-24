@@ -72,3 +72,32 @@ def test_refresh_supervisor_status_starts_background_fetch(monkeypatch):
 
     status_host.threading.Thread.assert_called_once()
     thread.start.assert_called_once_with()
+
+
+def test_failed_supervisor_refresh_keeps_last_valid_snapshot(monkeypatch):
+    class _FailedThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(status_host.threading, "Thread", _FailedThread)
+    monkeypatch.setattr(
+        status_host.urllib.request,
+        "urlopen",
+        Mock(side_effect=OSError("supervisor unavailable")),
+    )
+    host = SimpleNamespace(
+        _supervisor_state_cache={"scene": "planning", "mem_usage": {"request_count": 1}},
+        _supervisor_state_ts=0.0,
+        _supervisor_state_refreshing=False,
+        _supervisor_url="http://127.0.0.1:6002/ui/state",
+    )
+
+    status_host.refresh_supervisor_status(host)
+
+    assert status_host.fetch_supervisor_status(host) == {
+        "scene": "planning",
+        "mem_usage": {"request_count": 1},
+    }

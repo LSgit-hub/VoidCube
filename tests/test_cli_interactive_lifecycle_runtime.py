@@ -57,6 +57,7 @@ def test_lifecycle_runtime_connects_loop_and_application_owners(monkeypatch):
             idle_maintenance=idle,
             lifecycle_guards=guards,
             stop_requested=lambda: False,
+            refresh_status=lambda: None,
             presence_refresh_needed=lambda: False,
             refresh_presence=lambda: None,
             command_running=lambda: False,

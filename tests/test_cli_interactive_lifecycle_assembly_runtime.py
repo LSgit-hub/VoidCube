@@ -27,6 +27,7 @@ def test_lifecycle_assembly_maps_idle_and_forced_presence_refresh(monkeypatch):
             lifecycle_guards=lifecycle_guards,
             agent_running=lambda: False,
             check_config_changes=lambda: None,
+            refresh_status=lambda: calls.append("status"),
             refresh_observation_surfaces=lambda refresh: calls.append(
                 ("observe", refresh())
             ),
@@ -60,6 +61,14 @@ def test_lifecycle_assembly_maps_idle_and_forced_presence_refresh(monkeypatch):
     captured["ports"].refresh_presence()
     captured["ports"].idle_maintenance.refresh_observation_surfaces()
 
-    assert calls == ["run", ("presence", True), ("presence", False), ("observe", None)]
+    captured["ports"].refresh_status()
+
+    assert calls == [
+        "run",
+        ("presence", True),
+        ("presence", False),
+        ("observe", None),
+        "status",
+    ]
     assert captured["ports"].application == "application"
     assert captured["ports"].lifecycle_guards is lifecycle_guards

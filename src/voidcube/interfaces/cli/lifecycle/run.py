@@ -18,6 +18,7 @@ class CliRunRuntimePorts:
 
     stop_requested: Callable[[], bool]
     application_ready: Callable[[], bool]
+    refresh_status: Callable[[], None]
     presence_refresh_needed: Callable[[], bool]
     refresh_presence: Callable[[], None]
     command_running: Callable[[], bool]
@@ -44,6 +45,7 @@ class CliRunRuntime:
         start_tui_refresh_loop(
             stop_requested=ports.stop_requested,
             application_ready=ports.application_ready,
+            refresh_status=ports.refresh_status,
             presence_refresh_needed=ports.presence_refresh_needed,
             refresh_presence=ports.refresh_presence,
             command_running=ports.command_running,

@@ -28,6 +28,7 @@ class CliInteractiveLifecyclePorts:
     idle_maintenance: CliIdleMaintenancePorts
     lifecycle_guards: CliLifecycleGuardRuntime
     stop_requested: Callable[[], bool]
+    refresh_status: Callable[[], None]
     presence_refresh_needed: Callable[[], bool]
     refresh_presence: Callable[[], None]
     command_running: Callable[[], bool]
@@ -61,6 +62,7 @@ class CliInteractiveLifecycleRuntime:
             CliRunRuntimePorts(
                 stop_requested=ports.stop_requested,
                 application_ready=lambda: bool(ports.application),
+                refresh_status=ports.refresh_status,
                 presence_refresh_needed=ports.presence_refresh_needed,
                 refresh_presence=ports.refresh_presence,
                 command_running=ports.command_running,

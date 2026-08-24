@@ -141,10 +141,16 @@ class CliStatusBarRuntime:
             fragments.append(("class:status-bar", "  "))
             fragments.extend(git)
         else:
-            padding = width - left_width - git_width - 4
+            # Keep the API-B middle projection visible when Git consumes the
+            # remaining width. It is ordered first by CliMiddleStatusRuntime,
+            # so _fit preserves its model/state prefix before trimming details.
             fragments = left.copy()
-            fragments.append(("class:status-bar", " " * padding if padding > 0 else "  --  "))
-            fragments.extend(git)
+            if middle:
+                fragments.append(("class:status-bar", "  "))
+                fragments.extend(middle)
+            if git:
+                fragments.append(("class:status-bar", "  "))
+                fragments.extend(git)
 
         return cls._fit(fragments, width)
 

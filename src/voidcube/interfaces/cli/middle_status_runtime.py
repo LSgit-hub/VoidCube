@@ -46,47 +46,8 @@ class CliMiddleStatusRuntime:
         except Exception:
             pass
 
-        if ports.scheduler_snapshot is not None:
-            try:
-                snapshot = ports.scheduler_snapshot()
-                active = getattr(snapshot, "active", None)
-                queued = tuple(getattr(snapshot, "queued", ()) or ())
-                if active is not None or queued:
-                    if fragments:
-                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
-                    lane = getattr(getattr(active, "lane", None), "value", "queued")
-                    state = getattr(getattr(active, "state", None), "value", "排队")
-                    cancelling = state == "cancelling"
-                    # Mini‑CLI (supervisor_task) uses teal; main CLI uses blue
-                    is_mini = lane == "supervisor_task"
-                    if ascii_mode:
-                        indicator = "o" if cancelling else (">" if is_mini else "*")
-                    else:
-                        indicator = "○" if cancelling else ("◆" if is_mini else "●")
-                    color = "#FBBF24" if cancelling else ("#2dd4bf" if is_mini else "#60A5FA")
-                    fragments.append(
-                        (f"{self._BACKGROUND} {color} bold", indicator)
-                    )
-                    if queued:
-                        mini_queued = sum(
-                            1 for q in queued
-                            if getattr(getattr(q, "lane", None), "value", "") == "supervisor_task"
-                        )
-                        if mini_queued:
-                            fragments.append((f"{self._BACKGROUND} #2dd4bf", f" +{mini_queued}"))
-                        user_queued = len(queued) - mini_queued
-                        if user_queued:
-                            fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{user_queued}"))
-                blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
-                if blocked_reason and active is None:
-                    if fragments:
-                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
-                    fragments.append(
-                        (f"{self._BACKGROUND} #2dd4bf", f"等待:{blocked_reason}")
-                    )
-            except Exception:
-                pass
-
+        # API-B is the stable middle status. Keep its model and state at the
+        # front so narrow status bars do not trim the entire API-B projection.
         try:
             memory_config = ports.memory_llm()
             model = memory_config.get("model")
@@ -120,9 +81,50 @@ class CliMiddleStatusRuntime:
             else:
                 fragments.append((f"{self._BACKGROUND} #6B7280", " --"))
         except Exception:
-            pass
+            fragments.append((f"{self._BACKGROUND} #7CC9A0 bold", "Mem"))
 
         fragments.extend(self._scene_fragments(scene, ascii_mode, supervisor, bool(fragments)))
+
+        if ports.scheduler_snapshot is not None:
+            try:
+                snapshot = ports.scheduler_snapshot()
+                active = getattr(snapshot, "active", None)
+                queued = tuple(getattr(snapshot, "queued", ()) or ())
+                if active is not None or queued:
+                    if fragments:
+                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    lane = getattr(getattr(active, "lane", None), "value", "queued")
+                    state = getattr(getattr(active, "state", None), "value", "排队")
+                    cancelling = state == "cancelling"
+                    # Mini-CLI (supervisor_task) uses teal; main CLI uses blue.
+                    is_mini = lane == "supervisor_task"
+                    if ascii_mode:
+                        indicator = "o" if cancelling else (">" if is_mini else "*")
+                    else:
+                        indicator = "○" if cancelling else ("◆" if is_mini else "●")
+                    color = "#FBBF24" if cancelling else ("#2dd4bf" if is_mini else "#60A5FA")
+                    fragments.append(
+                        (f"{self._BACKGROUND} {color} bold", indicator)
+                    )
+                    if queued:
+                        mini_queued = sum(
+                            1 for q in queued
+                            if getattr(getattr(q, "lane", None), "value", "") == "supervisor_task"
+                        )
+                        if mini_queued:
+                            fragments.append((f"{self._BACKGROUND} #2dd4bf", f" +{mini_queued}"))
+                        user_queued = len(queued) - mini_queued
+                        if user_queued:
+                            fragments.append((f"{self._BACKGROUND} #9CA3AF", f" +{user_queued}"))
+                blocked_reason = str(getattr(snapshot, "blocked_reason", "") or "")
+                if blocked_reason and active is None:
+                    if fragments:
+                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    fragments.append(
+                        (f"{self._BACKGROUND} #2dd4bf", f"等待:{blocked_reason}")
+                    )
+            except Exception:
+                pass
 
         try:
             subagent = ports.subagent_snapshot()

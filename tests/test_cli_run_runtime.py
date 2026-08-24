@@ -27,6 +27,7 @@ def test_cli_run_runtime_starts_all_long_lived_loops(monkeypatch):
         CliRunRuntimePorts(
             stop_requested=lambda: False,
             application_ready=lambda: True,
+            refresh_status=lambda: None,
             presence_refresh_needed=lambda: False,
             refresh_presence=lambda: None,
             command_running=lambda: False,

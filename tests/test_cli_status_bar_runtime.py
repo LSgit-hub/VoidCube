@@ -71,6 +71,20 @@ def test_status_bar_places_git_at_the_right_and_fits_width():
     assert len("".join(text for _, text in narrow)) <= 24
 
 
+def test_status_bar_keeps_api_b_model_when_git_consumes_narrow_width():
+    fragments = _runtime(
+        snapshot={"model_short": "api-a", "context_percent": None},
+        width=42,
+        middle=(('middle', "deepseek-v4-flash -- (-)"),),
+        git=(('git', "Git <main>"),),
+    ).build()
+
+    rendered = "".join(text for _, text in fragments)
+
+    assert "deepseek-v4-flash" in rendered
+    assert "(-)" in rendered
+
+
 def test_status_bar_uses_fallback_when_a_port_fails():
     runtime = _runtime()
     runtime.ports = replace(

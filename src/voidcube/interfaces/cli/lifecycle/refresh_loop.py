@@ -14,6 +14,7 @@ def run_tui_refresh_loop(
     *,
     stop_requested: Callable[[], bool],
     application_ready: Callable[[], bool],
+    refresh_status: Callable[[], None],
     presence_refresh_needed: Callable[[], bool],
     refresh_presence: Callable[[], None],
     command_running: Callable[[], bool],
@@ -23,12 +24,19 @@ def run_tui_refresh_loop(
 ) -> None:
     """Refresh TUI surfaces and presence at the existing cadence."""
     last_idle_refresh = 0.0
+    last_status_refresh = 0.0
     last_presence_refresh = 0.0
     while not stop_requested():
         if not application_ready():
             sleep(0.1)
             continue
         now = monotonic_time()
+        if now - last_status_refresh >= 1.0:
+            last_status_refresh = now
+            try:
+                refresh_status()
+            except Exception:
+                logger.warning("TUI status refresh failed", exc_info=True)
         if now - last_presence_refresh >= 5.0 and presence_refresh_needed():
             try:
                 refresh_presence()
@@ -55,6 +63,7 @@ def start_tui_refresh_loop(
     *,
     stop_requested: Callable[[], bool],
     application_ready: Callable[[], bool],
+    refresh_status: Callable[[], None],
     presence_refresh_needed: Callable[[], bool],
     refresh_presence: Callable[[], None],
     command_running: Callable[[], bool],
@@ -68,6 +77,7 @@ def start_tui_refresh_loop(
         target=lambda: run_tui_refresh_loop(
             stop_requested=stop_requested,
             application_ready=application_ready,
+            refresh_status=refresh_status,
             presence_refresh_needed=presence_refresh_needed,
             refresh_presence=refresh_presence,
             command_running=command_running,

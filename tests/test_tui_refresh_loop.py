@@ -9,6 +9,7 @@ def test_refresh_loop_waits_for_application_before_doing_work() -> None:
     run_tui_refresh_loop(
         stop_requested=lambda: bool(sleeps),
         application_ready=lambda: False,
+        refresh_status=lambda: (_ for _ in ()).throw(AssertionError("must not refresh")),
         presence_refresh_needed=lambda: True,
         refresh_presence=lambda: (_ for _ in ()).throw(AssertionError("must not refresh")),
         command_running=lambda: False,
@@ -23,6 +24,7 @@ def test_refresh_loop_waits_for_application_before_doing_work() -> None:
 def test_refresh_loop_preserves_presence_command_and_idle_cadence() -> None:
     current_time = [5.0, 5.0, 5.2]
     sleeps: list[float] = []
+    statuses: list[None] = []
     presence: list[None] = []
     invalidations: list[float] = []
     commands = [True, False]
@@ -30,6 +32,7 @@ def test_refresh_loop_preserves_presence_command_and_idle_cadence() -> None:
     run_tui_refresh_loop(
         stop_requested=lambda: len(sleeps) >= 2,
         application_ready=lambda: True,
+        refresh_status=lambda: statuses.append(None),
         presence_refresh_needed=lambda: True,
         refresh_presence=lambda: presence.append(None),
         command_running=lambda: commands.pop(0),
@@ -39,6 +42,7 @@ def test_refresh_loop_preserves_presence_command_and_idle_cadence() -> None:
     )
 
     assert presence == [None]
+    assert statuses == [None]
     assert invalidations == [0.1, 1.0]
     assert sleeps == [0.1, 0.2]
 
@@ -57,6 +61,7 @@ def test_start_refresh_loop_creates_and_starts_a_daemon_thread() -> None:
     thread = start_tui_refresh_loop(
         stop_requested=lambda: True,
         application_ready=lambda: True,
+        refresh_status=lambda: None,
         presence_refresh_needed=lambda: False,
         refresh_presence=lambda: None,
         command_running=lambda: False,
@@ -76,6 +81,7 @@ def test_refresh_failures_do_not_terminate_the_loop() -> None:
     run_tui_refresh_loop(
         stop_requested=lambda: len(sleeps) >= 1,
         application_ready=lambda: True,
+        refresh_status=lambda: (_ for _ in ()).throw(RuntimeError("offline")),
         presence_refresh_needed=lambda: True,
         refresh_presence=lambda: (_ for _ in ()).throw(RuntimeError("offline")),
         command_running=lambda: False,
@@ -85,3 +91,22 @@ def test_refresh_failures_do_not_terminate_the_loop() -> None:
     )
 
     assert sleeps == [0.2]
+
+
+def test_refresh_loop_refreshes_status_while_command_is_running() -> None:
+    sleeps: list[float] = []
+    statuses: list[None] = []
+
+    run_tui_refresh_loop(
+        stop_requested=lambda: bool(sleeps),
+        application_ready=lambda: True,
+        refresh_status=lambda: statuses.append(None),
+        presence_refresh_needed=lambda: False,
+        refresh_presence=lambda: None,
+        command_running=lambda: True,
+        invalidate=lambda _interval: None,
+        monotonic_time=lambda: 5.0,
+        sleep=sleeps.append,
+    )
+
+    assert statuses == [None]
