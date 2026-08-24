@@ -25,6 +25,7 @@ class EndogenousDriveCycleContext:
     plan_autonomous_chain_task: Callable[..., Awaitable[JsonDict]]
     record_ui_activity: Callable[..., None]
     touch_gateway_activity: Callable[..., Awaitable[None]]
+    register_candidate_generation_request: Callable[[JsonDict], JsonDict] | None = None
 
 
 def gate_endogenous_candidates_by_posture(
@@ -112,6 +113,16 @@ async def run_endogenous_drive_cycle(
     evaluation = await context.evaluate_drive(
         {"record_activity": False, "persist_evaluation": False}
     )
+    candidate_generation_registration: JsonDict | None = None
+    if context.register_candidate_generation_request is not None:
+        projection = dict(
+            dict(evaluation.get("drive_input") or {}).get("candidate_generation")
+            or {}
+        )
+        if projection.get("candidate_generation_ready"):
+            candidate_generation_registration = (
+                context.register_candidate_generation_request(evaluation)
+            )
     drive_posture = dict(evaluation.get("drive_posture") or {})
     governance_channels = dict(evaluation.get("governance_channels") or {})
     governance_event_stream = dict(evaluation.get("governance_event_stream") or {})
@@ -147,6 +158,7 @@ async def run_endogenous_drive_cycle(
             "governance_channels": governance_channels,
             "governance_event_stream": governance_event_stream,
             "deferred_candidates": deferred_candidates,
+            "candidate_generation_registration": candidate_generation_registration,
         }
 
     evaluation_fields = context.drive_input_fields_from_evaluation(evaluation)
@@ -219,4 +231,5 @@ async def run_endogenous_drive_cycle(
         "governance_channels": governance_channels,
         "governance_event_stream": governance_event_stream,
         "deferred_candidates": deferred_candidates,
+        "candidate_generation_registration": candidate_generation_registration,
     }

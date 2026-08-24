@@ -250,6 +250,7 @@ async def test_recurring_assist_schedule_rotates_canonical_task(tmp_path):
         owner_session_id="assist-cli",
         success=True,
         result_summary="Recurring check complete.",
+        now=datetime(2026, 8, 22, 5, tzinfo=timezone.utc),
     )
     dispatch = AutonomousEmployeeDispatchService(
         task_state=task_state,

@@ -2571,7 +2571,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 13
+    assert observation["read_model_version"] == 14
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"

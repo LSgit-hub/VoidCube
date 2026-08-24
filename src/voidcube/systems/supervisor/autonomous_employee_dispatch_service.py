@@ -557,12 +557,14 @@ class AutonomousEmployeeDispatchService:
         }
         instruction = (
             "完成以下由 API-B 审批并派发的任务。你是独立员工代理，不得再调用或转交给 API-A。"
-            "严格遵守 constraints；需要修改代码时在隔离任务环境中完成并运行相关验证，"
+            "严格遵守 constraints；代码类任务必须使用系统绑定的 canonical worktree。"
             "不得直接切换或覆盖当前活动身体。最终回复必须陈述实际完成内容、证据、验证结果和未完成项。"
         )
         if self._task_profile_policy.execution_kind(task) == "body_improvement":
             instruction += (
-                " body improvement 任务完成时，最终回复必须是 JSON（可放在 markdown code fence 中），"
+                " body improvement 任务的 evaluated candidate 已由 Supervisor 物化到 shell；"
+                "本任务只允许检查该 commit、运行验证并提交证据，不得修改文件、创建新 commit 或 reset/切换 worktree。"
+                "任务完成时，最终回复必须是 JSON（可放在 markdown code fence 中），"
                 "包含 body_improvement_report.task_id、lease_generation、attempt_id、"
                 "baseline_commit、commit_hash、changed_files，以及 verification.passed=true 或 verification.checks。"
             )

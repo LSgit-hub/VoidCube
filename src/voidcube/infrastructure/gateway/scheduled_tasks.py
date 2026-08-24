@@ -34,5 +34,21 @@ class SupervisorScheduledTaskClient:
             ) from exc
         return dict(decoded) if isinstance(decoded, dict) else {}
 
+    def get(self, path: str) -> Dict[str, Any]:
+        request = urllib.request.Request(
+            f"{self.base_url}/api/supervisor{path}",
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout_seconds
+            ) as response:
+                decoded = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ScheduledRequestRejected(
+                exc.code, f"HTTP {exc.code}: {exc.reason}"
+            ) from exc
+        return dict(decoded) if isinstance(decoded, dict) else {}
+
 
 __all__ = ["SupervisorScheduledTaskClient"]

@@ -1,17 +1,20 @@
 ---
 name: obliteratus
-description: 使用OBLITERATUS从开放权重LLM中移除拒绝行为 — 机制可解释性技术（差分均值、SVD、白化SVD、LEACE、SAE分解等）在保留推理能力的同时切除防护栏。9种CLI方法、28个分析模块、116个模型预设跨5个计算层级、锦标赛评估和遥测驱动推荐。当用户想要解除审查、消融或从LLM中移除拒绝时使用。
+description: [实验性] 在获得明确授权的研究环境中分析 OBLITERATUS 的模型权重编辑流程。默认不作为普通技能推荐；涉及移除安全对齐、改变拒答行为或发布修改权重前必须确认风险、来源和许可证。
 version: 2.0.0
 author: Voidcube Agent
 license: MIT
+experimental: true
 dependencies: [obliteratus, torch, transformers, bitsandbytes, accelerate, safetensors]
 metadata:
   VoidCube:
     tags: [消融, 解除审查, 移除拒绝, LLM, 权重投影, SVD, 机制可解释性, HuggingFace, 模型手术]
-    related_skills: [vllm, gguf, huggingface-tokenizers]
+    related_skills: [serving-llms-vllm, gguf-quantization]
 ---
 
-# OBLITERATUS 技能
+# OBLITERATUS 技能（实验性，默认隔离）
+
+本技能不会自动安装依赖、下载模型、修改权重或执行消融。只有用户明确确认研究目的、模型授权、备份策略和许可证边界后，才能继续后续步骤。
 
 从开放权重LLM中移除拒绝行为（防护栏），无需重新训练或微调。使用机制可解释性技术 — 包括差分均值、SVD、白化SVD、LEACE概念擦除、SAE分解、贝叶斯核投影等 — 识别并手术式切除模型权重中的拒绝方向，同时保留推理能力。
 

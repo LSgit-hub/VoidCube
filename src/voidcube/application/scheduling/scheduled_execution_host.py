@@ -53,6 +53,7 @@ class ScheduledExecutionHost:
     def start(self, prompt: str, **kwargs: Any) -> bool:
         worker_role = str(kwargs.pop("worker_role", "") or "").strip().lower()
         execution_details = kwargs.pop("execution_details", None)
+        working_dir = kwargs.pop("working_dir", None)
         route = self._resolve_agent_route(prompt, worker_role)
         if isinstance(execution_details, dict):
             runtime = route.get("runtime")
@@ -71,7 +72,9 @@ class ScheduledExecutionHost:
         elif worker_label and task_label.startswith("自主媒体 · "):
             title = task_label.removeprefix("自主媒体 · ")
             kwargs["task_label"] = f"自主媒体 · {worker_label} · {title}"
-        return self._runtime.start(prompt, route_override=route, **kwargs)
+        return self._runtime.start(
+            prompt, route_override=route, working_dir=working_dir, **kwargs
+        )
 
     def snapshot(self) -> ScheduledExecutionSnapshot:
         return ScheduledExecutionSnapshot(

@@ -344,6 +344,28 @@ class BodyRegistryManager:
                     git_report["head"] = self._git_head_for_isolated_worktree(
                         Path(meta.worktree_path).resolve()
                     )
+                    expected_head = (
+                        meta.candidate_commit
+                        or meta.active_commit
+                        or meta.current_healthy_commit
+                    )
+                    git_report["expected_head"] = expected_head
+                    if not git_report["head"]:
+                        slot_healthy = False
+                        add_violation(
+                            "slot_git_head_unavailable",
+                            f"Git HEAD for slot {slot_id} is unavailable.",
+                            slot_id=slot_id,
+                        )
+                    elif expected_head and str(git_report["head"]).lower() != str(
+                        expected_head
+                    ).lower():
+                        slot_healthy = False
+                        add_violation(
+                            "slot_head_metadata_mismatch",
+                            f"Slot {slot_id} HEAD does not match its recorded commit metadata.",
+                            slot_id=slot_id,
+                        )
                     try:
                         status = self._run_git(
                             Path(meta.worktree_path),
@@ -1092,6 +1114,184 @@ class BodyRegistryManager:
             self.write_active_body_pointer(slot_id)
         return meta
 
+    def materialize_candidate_commit(
+        self,
+        slot_id: str,
+        *,
+        baseline_commit: str,
+        candidate_commit: str,
+        changed_files: Iterable[str],
+        source_label: Optional[str] = None,
+    ) -> BodySlotMeta:
+        """Install one already-evaluated commit into the canonical shell slot.
+
+        This is intentionally separate from startup layout repair.  It changes
+        a worktree only after proving that the registry target is the shell,
+        that the shell still points at the evaluated baseline, and that the
+        candidate diff matches the immutable evaluation evidence.
+        """
+        self._validate_slot_id(slot_id)
+        registry = self.load_registry()
+        meta = self.load_slot_meta(slot_id)
+        if registry.shell_slot != slot_id or meta.body_state != "shell":
+            raise ValueError(
+                f"Slot {slot_id} must be the registered shell slot before candidate materialization."
+            )
+        if registry.active_slot == slot_id:
+            raise ValueError("The active body slot cannot receive a candidate commit.")
+
+        worktree = Path(meta.worktree_path).resolve()
+        if self._git_top_level_for_path(worktree) != worktree:
+            raise ValueError("Candidate materialization requires an isolated Git worktree.")
+
+        baseline = self._resolve_commit_in_worktree(worktree, baseline_commit, "baseline")
+        candidate = self._resolve_commit_in_worktree(worktree, candidate_commit, "candidate")
+        if baseline.lower() == candidate.lower():
+            raise ValueError("Evaluated candidate commit must differ from its baseline.")
+
+        status = self._run_git(
+            worktree,
+            ["status", "--porcelain", "--untracked-files=all"],
+            timeout=15,
+        )
+        if status.returncode != 0:
+            raise ValueError("Unable to inspect the shell worktree before candidate materialization.")
+        if status.stdout.strip():
+            raise ValueError("Shell worktree must be clean before candidate materialization.")
+
+        current_head = self._git_head_for_isolated_worktree(worktree)
+        if not current_head:
+            raise ValueError("Unable to resolve the shell worktree HEAD before candidate materialization.")
+        if current_head.lower() not in {baseline.lower(), candidate.lower()}:
+            raise ValueError(
+                "Shell worktree HEAD does not match the evaluated candidate baseline."
+            )
+
+        if meta.candidate_commit and str(meta.candidate_commit).lower() not in {
+            baseline.lower(),
+            candidate.lower(),
+        }:
+            raise ValueError("Shell metadata points at a different candidate commit.")
+
+        ancestry = self._run_git(
+            worktree,
+            ["merge-base", "--is-ancestor", baseline, candidate],
+            timeout=15,
+        )
+        if ancestry.returncode != 0:
+            raise ValueError("Evaluated candidate commit is not based on the shell baseline.")
+
+        actual_changed_files = self._git_changed_files_between(
+            worktree,
+            baseline,
+            candidate,
+        )
+        declared_changed_files = self._normalize_changed_files(changed_files)
+        if actual_changed_files != declared_changed_files:
+            raise ValueError(
+                "Evaluated candidate changed files do not match the materialization evidence."
+            )
+
+        if current_head.lower() != candidate.lower():
+            reset = self._run_git(
+                worktree,
+                ["reset", "--hard", candidate],
+                timeout=30,
+            )
+            if reset.returncode != 0:
+                raise ValueError(
+                    "Git failed to materialize the evaluated candidate: "
+                    + reset.stderr.strip()
+                )
+
+        materialized_head = self._git_head_for_isolated_worktree(worktree)
+        if not materialized_head or materialized_head.lower() != candidate.lower():
+            raise ValueError("Candidate materialization ended at an unexpected Git HEAD.")
+        final_status = self._run_git(
+            worktree,
+            ["status", "--porcelain", "--untracked-files=all"],
+            timeout=15,
+        )
+        if final_status.returncode != 0 or final_status.stdout.strip():
+            raise ValueError("Candidate materialization left the shell worktree dirty.")
+
+        old_meta = meta.model_copy(deep=True)
+        manifest_path = self.slot_worktree_manifest_path(slot_id)
+        old_manifest = manifest_path.read_bytes() if manifest_path.is_file() else None
+        original_head = current_head
+        now = datetime.now(timezone.utc)
+        previous_healthy = meta.current_healthy_commit or meta.previous_healthy_commit or baseline
+        try:
+            meta.source_commit = baseline
+            meta.candidate_commit = candidate
+            meta.build_from_commit = candidate
+            meta.current_healthy_commit = candidate
+            meta.previous_healthy_commit = (
+                previous_healthy
+                if previous_healthy.lower() != candidate.lower()
+                else baseline
+            )
+            meta.rollback_commit = meta.previous_healthy_commit
+            meta.changed_files = list(actual_changed_files)
+            meta.diff_summary = self._git_diff_stat(worktree, baseline, candidate)
+            meta.materialized_from = source_label or f"evaluated-candidate:{candidate}"
+            meta.last_materialized_at = now
+            meta.runtime_bootstrapped_at = meta.runtime_bootstrapped_at or now
+            self.save_slot_meta(meta)
+            self._write_worktree_manifest(
+                slot_id,
+                worktree,
+                source_label=meta.materialized_from,
+                source_root=self.source_root,
+                source_branch=self._git_branch_for_path(worktree),
+                source_commit=baseline,
+                candidate_branch=self._git_branch_for_path(worktree),
+                candidate_commit=candidate,
+                materialized_at=now,
+                materialization_mode="git_worktree",
+            )
+
+            from .supervisor.body_execution_readiness import inspect_body_execution_readiness
+
+            readiness = inspect_body_execution_readiness(
+                slot_id=slot_id,
+                worktree_path=str(worktree),
+                expected_body_state="shell",
+            )
+            if not readiness.get("ready"):
+                raise ValueError(
+                    "Materialized shell worktree is not execution-ready: "
+                    + str(readiness.get("reason") or "unknown")
+                )
+            return meta
+        except Exception:
+            rollback_errors: list[str] = []
+            if original_head.lower() != candidate.lower():
+                rollback = self._run_git(
+                    worktree,
+                    ["reset", "--hard", original_head],
+                    timeout=30,
+                )
+                if rollback.returncode != 0:
+                    rollback_errors.append(
+                        "failed to restore the original shell HEAD: "
+                        + rollback.stderr.strip()
+                    )
+            try:
+                self.save_slot_meta(old_meta)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore slot metadata: {exc}")
+            try:
+                if old_manifest is None:
+                    manifest_path.unlink(missing_ok=True)
+                else:
+                    manifest_path.write_bytes(old_manifest)
+            except Exception as exc:
+                rollback_errors.append(f"failed to restore worktree manifest: {exc}")
+            if rollback_errors:
+                raise RuntimeError("Candidate materialization failed and rollback was incomplete: " + "; ".join(rollback_errors)) from None
+            raise
+
     def _prepare_slot_workspace_at_startup(
         self,
         slot_id: str,
@@ -1604,6 +1804,58 @@ class BodyRegistryManager:
             seen.add(file_path)
             changed_files.append(file_path)
         return changed_files
+
+    def _resolve_commit_in_worktree(
+        self,
+        worktree: Path,
+        commit: str,
+        label: str,
+    ) -> str:
+        value = str(commit or "").strip()
+        if not value:
+            raise ValueError(f"Evaluated {label} commit is required.")
+        result = self._run_git(
+            worktree,
+            ["rev-parse", "--verify", f"{value}^{{commit}}"],
+            timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise ValueError(f"Evaluated {label} commit is not available in Git.")
+        return result.stdout.strip()
+
+    def _git_changed_files_between(
+        self,
+        path: Path,
+        base_commit: str,
+        candidate_commit: str,
+    ) -> list[str]:
+        result = self._run_git(
+            path,
+            ["diff", "--name-only", base_commit, candidate_commit, "--"],
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise ValueError("Unable to inspect the evaluated candidate diff.")
+        return self._normalize_changed_files(result.stdout.splitlines())
+
+    @staticmethod
+    def _normalize_changed_files(paths: Iterable[str]) -> list[str]:
+        normalized = {
+            str(path).strip().replace("\\", "/")
+            for path in paths
+            if str(path).strip()
+        }
+        return sorted(normalized)
+
+    def _git_diff_stat(self, path: Path, base_commit: str, candidate_commit: str) -> str:
+        result = self._run_git(
+            path,
+            ["diff", "--stat", base_commit, candidate_commit, "--"],
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
 
     def _clear_directory(self, root: Path) -> None:
         if not root.exists():

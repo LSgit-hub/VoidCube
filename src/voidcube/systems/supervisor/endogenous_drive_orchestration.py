@@ -15,6 +15,8 @@ from .endogenous_state_projection import (
     project_drive_history,
     project_governance_event_stream,
 )
+from .endogenous_body_projection import build_body_improvement_projection
+from .endogenous_drive_context import build_drive_context, get_shell_slot_meta
 
 
 JsonDict = Dict[str, Any]
@@ -156,6 +158,10 @@ async def evaluate_endogenous_drive(
     ]
     drive_input["endogenous_drive_policy"] = build_endogenous_drive_policy(
         context.runtime_config
+    )
+    drive_input["candidate_generation"] = build_body_improvement_projection(
+        drive_context=build_drive_context(drive_input),
+        shell_slot_meta=get_shell_slot_meta(drive_input),
     )
     drive_input["drive_history"] = project_drive_history(
         context.load_drive_history(),

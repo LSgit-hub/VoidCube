@@ -1,6 +1,6 @@
 ---
 name: axolotl
-description: 使用Axolotl微调LLM的专家指导 - YAML配置、100+模型、LoRA/QLoRA、DPO/KTO/ORPO/GRPO、多模态支持
+description: 使用 Axolotl 进行 LLM 微调的参考流程，覆盖 YAML 配置、LoRA/QLoRA 和常见训练验证；具体参数必须以已安装版本的 Axolotl 文档和 CLI 校验结果为准。
 version: 1.0.0
 author: Orchestra Research
 license: MIT
@@ -13,7 +13,37 @@ metadata:
 
 # Axolotl 技能
 
-基于官方文档生成的axolotl开发综合辅助。
+本技能提供配置和验证参考，不保证跨版本参数兼容。执行训练前先锁定 Axolotl、Transformers、Torch 版本，并运行配置校验。
+
+## 最小流程
+
+1. 准备模型和数据集，确认许可证、显存和 tokenizer 来源。
+2. 从最小 YAML 开始，使用安装版本提供的示例目录。
+3. 先运行 `axolotl train config.yml --help`，确认当前版本的校验选项，再执行配置校验。
+4. 先运行短步数验证数据格式和保存路径，再开始完整训练。
+
+最小 LoRA 配置骨架：
+
+```yaml
+base_model: <model-id-or-local-path>
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+load_in_4bit: true
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+datasets:
+  - path: <jsonl-path-or-dataset-id>
+    type: completion
+    field: text
+sequence_len: 2048
+output_dir: ./outputs/axolotl-lora
+micro_batch_size: 1
+gradient_accumulation_steps: 8
+num_epochs: 1
+learning_rate: 0.0002
+```
 
 ## 何时使用此技能
 

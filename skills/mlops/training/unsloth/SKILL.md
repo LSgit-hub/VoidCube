@@ -1,6 +1,6 @@
 ---
 name: unsloth
-description: 使用Unsloth快速微调的专家指导——2-5倍更快训练、50-80%更少内存、LoRA/QLoRA优化
+description: [文档待补全] Unsloth 快速微调参考入口；当前仅提供官方文档索引，不应作为已验证训练流程使用。
 version: 1.0.0
 author: Orchestra Research
 license: MIT
@@ -13,7 +13,13 @@ metadata:
 
 # Unsloth技能
 
-基于官方文档生成的Unsloth开发综合辅助。
+当前文件是官方文档索引，不是经过本地验证的完整训练指南。不要根据本技能直接推断版本兼容性、显存收益或可运行参数。
+
+## 当前状态
+
+- 未提供经过验证的最小 SFT/LoRA 配置。
+- 未提供版本锁定、GPU/CUDA 矩阵或失败回退方案。
+- 需要执行训练时，优先使用 `fine-tuning-with-trl` 与 `peft`，并把 Unsloth 作为明确指定的优化后端。
 
 ## 何时使用此技能
 

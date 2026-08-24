@@ -43,6 +43,7 @@ class AutonomousCycleService:
         update_drive_schedule: UpdateSchedule,
         update_review_schedule: UpdateSchedule,
         schedule_candidate_generation: RunAsync | None = None,
+        register_candidate_generation_request: Callable[[JsonDict], JsonDict] | None = None,
         now: Optional[Now] = None,
     ) -> None:
         self._runtime_config = runtime_config
@@ -61,6 +62,7 @@ class AutonomousCycleService:
         self._update_drive_schedule = update_drive_schedule
         self._update_review_schedule = update_review_schedule
         self._schedule_candidate_generation = schedule_candidate_generation
+        self._register_candidate_generation_request = register_candidate_generation_request
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._drive_lock = asyncio.Lock()
 
@@ -107,6 +109,9 @@ class AutonomousCycleService:
             plan_autonomous_chain_task=self._plan_autonomous_chain_task,
             record_ui_activity=self._record_ui_activity,
             touch_gateway_activity=self._touch_gateway_activity,
+            register_candidate_generation_request=(
+                self._register_candidate_generation_request
+            ),
         )
         return await run_endogenous_drive_cycle(context=context)
 

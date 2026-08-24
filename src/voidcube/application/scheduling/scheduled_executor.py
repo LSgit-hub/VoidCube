@@ -43,6 +43,7 @@ class ScheduledTaskExecutorPorts:
     post_supervisor: Callable[[str, Dict[str, Any]], Dict[str, Any]]
     rate_limit_metadata: Callable[[str], Mapping[str, Any]]
     writeback_outbox: ScheduledWritebackOutbox
+    get_supervisor: Callable[[str], Dict[str, Any]] | None = None
     cancel_background_task: Callable[[str, str], bool] | None = None
     validate_execution_lease: Callable[..., Any] | None = None
     recover_executor: Callable[[], bool] | None = None
@@ -83,6 +84,154 @@ class ScheduledTaskExecutorRuntime:
         self._run_task_ids: dict[str, str] = {}
         self._execution_gate_acquired = False
         self._outbox = ports.writeback_outbox
+
+    def _bind_body_improvement_worktree(
+        self,
+        *,
+        autonomous_task: Dict[str, Any],
+        task_id: str,
+    ) -> tuple[str, Callable[[], tuple[bool, str]], Dict[str, Any]]:
+        """Bind one employee task to the registry-owned shell worktree.
+
+        The path is read from Supervisor metadata, never trusted from the task
+        prompt.  The terminal override is keyed by task id, so concurrent
+        employees cannot overwrite each other's cwd.
+        """
+        constraints = dict(autonomous_task.get("constraints") or {})
+        slot_id = str(
+            constraints.get("target_slot_id")
+            or autonomous_task.get("target_slot_id")
+            or ""
+        ).strip()
+        declared_path = str(constraints.get("worktree_path") or "").strip()
+        if not slot_id or self.ports.get_supervisor is None:
+            raise ValueError("body improvement requires Supervisor slot metadata")
+        payload = self.ports.get_supervisor(f"/body/slots/{slot_id}")
+        meta = dict(payload.get("slot") or payload)
+        if str(meta.get("body_state") or "").strip().lower() != "shell":
+            raise ValueError("body improvement target is no longer a shell slot")
+        registry_payload = self.ports.get_supervisor("/body/registry")
+        registry = dict(registry_payload.get("registry") or {})
+        if registry and str(registry.get("shell_slot") or "").strip() != slot_id:
+            raise ValueError("body improvement target is no longer the registered shell slot")
+        if registry and str(registry.get("active_slot") or "").strip() == slot_id:
+            raise ValueError("body improvement target cannot be the active slot")
+        canonical = str(meta.get("worktree_path") or "").strip()
+        if not canonical:
+            raise ValueError("Supervisor returned no canonical body worktree")
+        from pathlib import Path
+
+        canonical_path = Path(canonical).resolve()
+        if declared_path and Path(declared_path).resolve() != canonical_path:
+            raise ValueError("body improvement worktree path does not match registry")
+        lineage = dict(autonomous_task.get("git_lineage") or {})
+        execution_request = dict(autonomous_task.get("execution_request") or {})
+        request_lineage = dict(execution_request.get("git_lineage") or {})
+        evidence = dict(autonomous_task.get("evidence") or {})
+        governed_candidate = str(
+            constraints.get("evaluated_candidate_commit")
+            or lineage.get("candidate_commit")
+            or request_lineage.get("candidate_commit")
+            or evidence.get("evaluated_candidate_commit")
+            or ""
+        ).strip()
+        metadata_head = str(
+            meta.get("candidate_commit")
+            or meta.get("active_commit")
+            or meta.get("current_healthy_commit")
+            or ""
+        ).strip()
+        expected_head = governed_candidate or metadata_head
+        if governed_candidate and metadata_head.lower() != governed_candidate.lower():
+            raise ValueError("body worktree metadata does not match the evaluated candidate")
+        if not canonical_path.is_dir() or not expected_head:
+            raise ValueError("body improvement worktree is not execution-ready")
+
+        from ...systems.supervisor.body_execution_readiness import (
+            inspect_body_execution_readiness,
+        )
+
+        readiness = inspect_body_execution_readiness(
+            slot_id=slot_id,
+            worktree_path=str(canonical_path),
+            expected_body_state="shell",
+        )
+        if not readiness.get("ready"):
+            raise ValueError(
+                "body improvement worktree is not execution-ready: "
+                + str(readiness.get("reason") or "unknown")
+            )
+
+        from ...infrastructure.execution.terminal_tool import (
+            prepare_task_git_worktree,
+        )
+        environment_manifest = prepare_task_git_worktree(
+            task_id,
+            str(canonical_path),
+            expected_head=expected_head,
+        )
+
+        def verify() -> tuple[bool, str]:
+            import subprocess
+
+            try:
+                root = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                )
+                head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                )
+                status = subprocess.run(
+                    ["git", "status", "--porcelain", "--untracked-files=all"],
+                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return False, f"body worktree verification failed: {exc}"
+            if root.returncode != 0 or Path(root.stdout.strip()).resolve() != canonical_path:
+                return False, "body employee escaped the canonical worktree"
+            if head.returncode != 0 or head.stdout.strip().lower() != expected_head.lower():
+                return False, "body worktree HEAD changed during employee execution"
+            if status.returncode != 0 or status.stdout.strip():
+                return False, "body worktree is dirty after employee execution"
+            return True, ""
+
+        return str(canonical_path), verify, dict(environment_manifest)
+
+    @staticmethod
+    def _attach_body_execution_environment(
+        response_text: str,
+        environment_manifest: Dict[str, Any] | None,
+    ) -> str:
+        """Attach infrastructure-captured environment evidence to the report."""
+        if not environment_manifest:
+            return response_text
+        import json
+
+        text = str(response_text or "").strip()
+        fenced = text.startswith("```")
+        if fenced:
+            lines = text.splitlines()
+            if lines and lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            return response_text
+        if not isinstance(payload, dict):
+            return response_text
+        report = payload.get("body_improvement_report")
+        if isinstance(report, dict):
+            report["execution_environment"] = dict(environment_manifest)
+        elif payload.get("execution_kind") == "body_improvement":
+            payload["execution_environment"] = dict(environment_manifest)
+        else:
+            return response_text
+        return json.dumps(payload, ensure_ascii=True, sort_keys=True)
 
     def _autonomous_mode_is_active(self) -> bool:
         return bool(self.ports.autonomous_mode_active())
@@ -298,9 +447,41 @@ class ScheduledTaskExecutorRuntime:
                 or companion_delegate
             )
             worker_role = str(task.get("worker_role") or "").strip().lower()
+            body_worktree_verifier: Callable[[], tuple[bool, str]] | None = None
+            body_worktree: str | None = None
+            body_environment_manifest: Dict[str, Any] | None = None
+            body_binding_error = ""
+            execution_kind = str(
+                autonomous_task.get("execution_kind")
+                or autonomous_task.get("task_family")
+                or ""
+            ).strip().lower()
+            if execution_kind == "body_improvement":
+                try:
+                    body_worktree, body_worktree_verifier, body_environment_manifest = (
+                        self._bind_body_improvement_worktree(
+                            autonomous_task=autonomous_task,
+                            task_id=task_id,
+                        )
+                    )
+                    ready, readiness_error = body_worktree_verifier()
+                    if not ready:
+                        raise ValueError(readiness_error)
+                except Exception as exc:
+                    body_binding_error = f"body improvement worktree binding failed: {exc}"
             if api_b_origin and not provider_pool_test:
                 self._mark_companion_started(run_id)
-            if companion_delegate:
+            if execution_kind == "body_improvement":
+                prompt = (
+                    "这是已通过评测的替身候选提交的受治理验证任务。Supervisor 已将精确的 "
+                    "evaluated candidate commit 物化到 canonical shell worktree，并会在回执中注入真实的执行环境证明。"
+                    "你只允许检查该 worktree、运行验证并提交 JSON 证据；不得修改任何文件、创建新 commit、reset、"
+                    "checkout 或切换 worktree。若检查失败，返回失败原因，不要修复代码。\n\n"
+                    f"员工角色：{worker_role}\n任务：{title}\n验证说明：{instruction}"
+                )
+                task_label = f"替身验证 · {title}"
+                response_title = "> Voidcube（替身验证）"
+            elif companion_delegate:
                 prompt = (
                     "这是日常模式下 API-B 制定计划后转交的执行请求。你是自主链路中的隔离员工 Agent，"
                     "必须使用正常工具和技能完成请求并给出真实结果。API-B 只负责规划，尚未执行任何步骤。"
@@ -352,6 +533,25 @@ class ScheduledTaskExecutorRuntime:
                     if run_id not in self._active_run_ids:
                         return
                 heartbeat_stop.set()
+                if success and body_worktree_verifier is not None:
+                    success, verification_error = body_worktree_verifier()
+                    if not success:
+                        response_text = ""
+                        error = verification_error
+                    elif body_environment_manifest is not None:
+                        response_text = self._attach_body_execution_environment(
+                            response_text,
+                            body_environment_manifest,
+                        )
+                try:
+                    if body_worktree_verifier is not None:
+                        from ...infrastructure.execution.terminal_tool import (
+                            release_task_environment,
+                        )
+
+                        release_task_environment(task_id)
+                except Exception:
+                    pass
                 limit_metadata = dict(self.ports.rate_limit_metadata(error)) if not success else {
                     "rate_limited": False,
                     "retry_after_seconds": None,
@@ -379,26 +579,36 @@ class ScheduledTaskExecutorRuntime:
             try:
                 execution_details: Dict[str, Any] = {}
                 execution_started_at = time.monotonic()
-                started = self.ports.start_background_task(
-                    prompt,
-                    task_id=task_id,
-                    task_label=task_label,
-                    response_title=response_title,
-                    request_timeout_seconds=self.request_timeout_seconds,
-                    timeout_seconds=self.execution_timeout_seconds,
-                    persist_session=False,
-                    on_complete=on_complete,
-                    worker_role=worker_role,
-                    execution_details=execution_details,
-                    autonomous_task=autonomous_task or None,
-                    validate_execution_lease=self.ports.validate_execution_lease,
-                )
+                if body_binding_error:
+                    on_complete(False, "", body_binding_error)
+                    started = False
+                else:
+                    started = self.ports.start_background_task(
+                        prompt,
+                        task_id=task_id,
+                        task_label=task_label,
+                        response_title=response_title,
+                        request_timeout_seconds=self.request_timeout_seconds,
+                        timeout_seconds=self.execution_timeout_seconds,
+                        persist_session=False,
+                        on_complete=on_complete,
+                        worker_role=worker_role,
+                        execution_details=execution_details,
+                        autonomous_task=autonomous_task or None,
+                        validate_execution_lease=self.ports.validate_execution_lease,
+                        working_dir=body_worktree,
+                    )
             except Exception as exc:
                 on_complete(False, "", f"employee worker route unavailable: {exc}")
                 started = False
             execution_started = bool(started)
             if not started and run_id in self._active_run_ids:
-                on_complete(False, "", "employee scheduled execution could not start")
+                on_complete(
+                    False,
+                    "",
+                    body_binding_error
+                    or "employee scheduled execution could not start",
+                )
         finally:
             if (
                 not execution_started

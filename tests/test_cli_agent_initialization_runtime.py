@@ -51,6 +51,7 @@ def test_agent_initialization_runtime_forwards_runtime_and_host_ports():
             tool_event_sink="events",
             stream_delta_callback="stream",
             tool_gen_callback="tool-gen",
+            working_dir="C:/body/slot-B/worktree",
         )
     ).create()
 
@@ -61,3 +62,4 @@ def test_agent_initialization_runtime_forwards_runtime_and_host_ports():
     assert captured["request_overrides"] == {"temperature": 0}
     assert captured["session_id"] == "session"
     assert captured["tool_gen_callback"] == "tool-gen"
+    assert captured["working_dir"] == "C:/body/slot-B/worktree"

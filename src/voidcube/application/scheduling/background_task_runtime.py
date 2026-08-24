@@ -133,6 +133,7 @@ class BackgroundTaskRuntime:
         route_override: dict[str, Any] | None = None,
         autonomous_task: dict[str, Any] | None = None,
         validate_execution_lease: Callable[..., Any] | None = None,
+        working_dir: str | None = None,
     ) -> bool:
         state = self.ports.state
         task_num = state.next_task_number()
@@ -191,6 +192,8 @@ class BackgroundTaskRuntime:
                         "autonomous_task": autonomous_task,
                         "validate_execution_lease": validate_execution_lease,
                     }
+                if working_dir:
+                    agent_kwargs["working_dir"] = working_dir
                 bg_agent = self.ports.create_agent(
                     turn_route,
                     task_id,

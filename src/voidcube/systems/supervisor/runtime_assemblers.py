@@ -43,6 +43,9 @@ from .evolution_candidate_generation_scheduler import (
 from .evolution_candidate_generation_service import (
     EvolutionCandidateGenerationService,
 )
+from .evolution_candidate_generation_request_service import (
+    EvolutionCandidateGenerationRequestService,
+)
 from .endogenous_governance_event_consumer import (
     EndogenousGovernanceEventConsumer,
 )
@@ -381,6 +384,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             candidate_service = EvolutionCandidateGenerationService.from_root(
                 supervisor.config.execution.git_repo_path,
                 foundation_root,
+                body_registry=supervisor._body_registry,
                 capability_policy_profile=(
                     supervisor.config.service_runtime.evolution_capability_policy_profile
                 ),
@@ -408,6 +412,12 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             ),
             load_runtime_observation=supervisor.get_runtime_observation_input,
             has_active_body_task=has_active_body_task,
+        )
+    )
+    supervisor._evolution_candidate_generation_request_service = (
+        EvolutionCandidateGenerationRequestService(
+            body_registry=supervisor._body_registry,
+            scheduler=supervisor._evolution_candidate_generation_scheduler,
         )
     )
 
@@ -519,6 +529,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         update_review_schedule=update_review_schedule,
         schedule_candidate_generation=(
             supervisor._evolution_candidate_generation_scheduler.trigger
+        ),
+        register_candidate_generation_request=(
+            supervisor._evolution_candidate_generation_request_service.register_from_evaluation
         ),
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)

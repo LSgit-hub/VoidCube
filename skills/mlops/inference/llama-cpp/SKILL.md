@@ -1,19 +1,25 @@
 ---
 name: llama-cpp
-description: 在CPU、Apple Silicon和消费级GPU上运行LLM推理，无需NVIDIA硬件。用于边缘部署、M1/M2/M3 Mac、AMD/Intel GPU或CUDA不可用时。支持GGUF量化（1.5-8位）以减少内存，CPU上比PyTorch快4-10倍。
+description: 使用 llama.cpp/llama-cpp-python 加载、运行和服务已有 GGUF 模型，面向 CPU、Apple Silicon、AMD/Intel GPU 和边缘部署。模型转换与量化请使用 gguf-quantization。
 version: 1.0.0
 author: Orchestra Research
 license: MIT
 dependencies: [llama-cpp-python]
 metadata:
   VoidCube:
-    tags: [推理服务, Llama.cpp, CPU推理, Apple Silicon, 边缘部署, GGUF, 量化, 非NVIDIA, AMD GPU, Intel GPU, 嵌入式]
+    tags: [推理服务, Llama.cpp, CPU推理, Apple Silicon, 边缘部署, GGUF, 非NVIDIA, AMD GPU, Intel GPU, 嵌入式]
 
 ---
 
 # llama.cpp
 
 纯C/C++ LLM推理，依赖最小，针对CPU和非NVIDIA硬件优化。
+
+## 职责边界
+
+- 本技能负责已有 GGUF 文件的加载、推理、服务、上下文和硬件后端配置。
+- `gguf-quantization` 负责 Hugging Face 模型转换为 GGUF 以及 Q2/Q4/Q5/Q6/Q8 等量化流程。
+- 需要转换或量化时加载 `gguf-quantization`；已有 GGUF 文件直接使用本技能。
 
 ## 何时使用llama.cpp
 

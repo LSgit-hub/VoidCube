@@ -44,6 +44,9 @@ from .evolution_candidate_evaluation_service import (
 )
 
 
+CandidateMaterializer = Callable[..., Any]
+
+
 class CandidateEvaluationService(Protocol):
     evaluation_repository: EvaluationRepository
 
@@ -86,6 +89,7 @@ class EvolutionCandidateGenerationService:
         lease_duration: timedelta = timedelta(minutes=30),
         blocked_cooldown: timedelta = timedelta(minutes=15),
         failed_cooldown: timedelta = timedelta(hours=1),
+        materialize_candidate_commit: CandidateMaterializer | None = None,
     ) -> None:
         self.repository = Path(repository).expanduser().resolve()
         if not (self.repository / ".git").exists():
@@ -107,6 +111,7 @@ class EvolutionCandidateGenerationService:
         self.lease_duration = lease_duration
         self.blocked_cooldown = blocked_cooldown
         self.failed_cooldown = failed_cooldown
+        self._materialize_candidate_commit = materialize_candidate_commit
 
     @classmethod
     def from_root(
@@ -117,6 +122,7 @@ class EvolutionCandidateGenerationService:
         authoring_agent: AuthoringAgent | None = None,
         python_executable: str | Path | None = None,
         capability_policy_profile: str | None = None,
+        body_registry: Any | None = None,
     ) -> "EvolutionCandidateGenerationService":
         root = Path(foundation_root).expanduser().resolve()
         project_python = Path(python_executable or sys.executable).resolve()
@@ -146,6 +152,11 @@ class EvolutionCandidateGenerationService:
             authoring_agent=authoring_agent or AIAgentAuthoringAdapter(),
             evaluation_service=evaluation_service,
             snapshot_worktree_root=root / "worktrees" / "snapshots",
+            materialize_candidate_commit=(
+                body_registry.materialize_candidate_commit
+                if body_registry is not None
+                else None
+            ),
         )
 
     async def execute(
@@ -433,6 +444,33 @@ class EvolutionCandidateGenerationService:
                 authoring_result=authoring,
                 evaluation_outcome=outcome,
             )
+        if self._materialize_candidate_commit is not None:
+            try:
+                self._materialize_candidate_commit(
+                    request.target_body_slot_id,
+                    baseline_commit=request.baseline_commit,
+                    candidate_commit=str(authoring.candidate_commit),
+                    changed_files=tuple(authoring.changed_files),
+                    source_label=(
+                        f"evaluated:{result.experiment_result_id}"
+                    ),
+                )
+            except Exception as exc:
+                failed = self._mark_evaluation_failure(
+                    state,
+                    status="failed",
+                    error_code="candidate_materialization_failed",
+                    error_reason=(
+                        "Evaluation was authorized but the exact candidate could not "
+                        f"be materialized: {type(exc).__name__}: {exc}"
+                    ),
+                    experiment_result_id=result.experiment_result_id,
+                )
+                return EvolutionCandidateGenerationOutcome(
+                    state=failed,
+                    authoring_result=authoring,
+                    evaluation_outcome=outcome,
+                )
         authorized = self.candidate_repository.mark_authorized(
             state.request_id,
             attempt_id=str(state.attempt_id),
@@ -494,12 +532,13 @@ class EvolutionCandidateGenerationService:
 
     def _preflight_error(self, baseline_commit: str) -> tuple[str, str] | None:
         try:
-            head = self._git("rev-parse", "HEAD").lower()
-            if head != baseline_commit:
-                return (
-                    "baseline_head_mismatch",
-                    "Main repository HEAD does not match the candidate baseline.",
-                )
+            self._git("rev-parse", f"{baseline_commit}^{{commit}}")
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            return (
+                "baseline_unavailable",
+                f"Candidate baseline is not available in the repository: {type(exc).__name__}.",
+            )
+        try:
             status = self._git(
                 "status",
                 "--porcelain",

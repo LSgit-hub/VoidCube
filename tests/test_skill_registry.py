@@ -112,7 +112,7 @@ def test_refresh_removes_deleted_files_and_keeps_lifecycle_metadata(tmp_path):
     registry.refresh_registry([spec], path=db)
     connection = registry.open_registry(db)
     try:
-        row = registry.query_skills(connection)[0]
+        row = registry.query_skills(connection, include_deprecated=True)[0]
         assert row["deprecated"] == 1
         assert row["supersedes"] == "replacement"
     finally:
@@ -123,6 +123,22 @@ def test_refresh_removes_deleted_files_and_keeps_lifecycle_metadata(tmp_path):
     connection = registry.open_registry(db)
     try:
         assert registry.query_skills(connection) == []
+    finally:
+        connection.close()
+
+
+def test_query_hides_deprecated_skills_unless_requested(tmp_path):
+    root = tmp_path / "skills"
+    skill_file = _write_skill(root, "legacy", "Legacy skill")
+    db = tmp_path / "registry.sqlite3"
+    spec = registry.DiscoveryRoot(root, "home", 0)
+    registry.refresh_registry([spec], path=db)
+
+    connection = registry.open_registry(db)
+    try:
+        registry.set_lifecycle_metadata(connection, skill_file, deprecated=True, supersedes="replacement")
+        assert registry.query_skills(connection) == []
+        assert registry.query_skills(connection, include_deprecated=True)[0]["deprecated"] == 1
     finally:
         connection.close()
 
@@ -248,7 +264,9 @@ def test_skill_manage_updates_lifecycle_metadata(monkeypatch, tmp_path):
     assert payload["success"] is True
     connection = registry.open_registry(tmp_path / ".skills_registry.sqlite3")
     try:
-        row = registry.query_skills(connection, name="managed")[0]
+        row = registry.query_skills(
+            connection, name="managed", include_deprecated=True
+        )[0]
         assert row["deprecated"] == 1
         assert row["supersedes"] == "replacement"
     finally:

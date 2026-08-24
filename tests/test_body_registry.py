@@ -730,6 +730,151 @@ def test_prepare_slot_workspace_can_clone_from_active_slot_worktree(tmp_path):
 
 
 @pytest.mark.unit
+def test_materialize_evaluated_candidate_commit_into_shell_worktree(tmp_path):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    runner = source_root / "src" / "voidcube" / "runtime" / "agent" / "runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=source_root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "stable body"], cwd=source_root, check=True, capture_output=True, text=True)
+    baseline = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    runner.write_text("VERSION = 'candidate'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "evaluated candidate"], cwd=source_root, check=True, capture_output=True, text=True)
+    candidate = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "reset", "--hard", baseline], cwd=source_root, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+    prepared = manager.materialize_candidate_commit(
+        "slot-B",
+        baseline_commit=baseline,
+        candidate_commit=candidate,
+        changed_files=["src/voidcube/runtime/agent/runner.py"],
+        source_label="evaluated:experiment-1",
+    )
+
+    worktree = Path(prepared.worktree_path)
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip() == candidate
+    assert (worktree / "src/voidcube/runtime/agent/runner.py").read_text(encoding="utf-8") == "VERSION = 'candidate'\n"
+    assert prepared.candidate_commit == candidate
+    assert prepared.current_healthy_commit == candidate
+    assert prepared.changed_files == ["src/voidcube/runtime/agent/runner.py"]
+    assert manager.inspect_layout()["healthy"] is True
+
+
+@pytest.mark.unit
+def test_materialize_evaluated_candidate_rejects_dirty_or_wrong_baseline(tmp_path):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    runner = source_root / "src" / "voidcube" / "runtime" / "agent" / "runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=source_root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "stable body"], cwd=source_root, check=True, capture_output=True, text=True)
+    baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source_root, check=True, capture_output=True, text=True).stdout.strip()
+    runner.write_text("VERSION = 'candidate'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "candidate"], cwd=source_root, check=True, capture_output=True, text=True)
+    candidate = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source_root, check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "reset", "--hard", baseline], cwd=source_root, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+    worktree = Path(manager.load_slot_meta("slot-B").worktree_path)
+    (worktree / "untracked.txt").write_text("preserve\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be clean"):
+        manager.materialize_candidate_commit(
+            "slot-B",
+            baseline_commit=baseline,
+            candidate_commit=candidate,
+            changed_files=["src/voidcube/runtime/agent/runner.py"],
+        )
+    (worktree / "untracked.txt").unlink()
+    with pytest.raises(ValueError, match="not based on the shell baseline"):
+        manager.materialize_candidate_commit(
+            "slot-B",
+            baseline_commit=candidate,
+            candidate_commit=baseline,
+            changed_files=["src/voidcube/runtime/agent/runner.py"],
+        )
+
+
+@pytest.mark.unit
+def test_materialize_candidate_restores_head_and_metadata_when_manifest_write_fails(
+    tmp_path, monkeypatch
+):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    runner = source_root / "src" / "voidcube" / "runtime" / "agent" / "runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=source_root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "stable body"], cwd=source_root, check=True, capture_output=True, text=True)
+    baseline = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    runner.write_text("VERSION = 'candidate'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "candidate"], cwd=source_root, check=True, capture_output=True, text=True)
+    candidate = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "reset", "--hard", baseline], cwd=source_root, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+    before = manager.load_slot_meta("slot-B")
+    manifest_path = manager.slot_worktree_manifest_path("slot-B")
+    before_manifest = manifest_path.read_bytes()
+    monkeypatch.setattr(
+        manager,
+        "_write_worktree_manifest",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("manifest failure")),
+    )
+
+    with pytest.raises(OSError, match="manifest failure"):
+        manager.materialize_candidate_commit(
+            "slot-B",
+            baseline_commit=baseline,
+            candidate_commit=candidate,
+            changed_files=["src/voidcube/runtime/agent/runner.py"],
+        )
+
+    worktree = Path(before.worktree_path)
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip() == baseline
+    assert manager.load_slot_meta("slot-B") == before
+    assert manifest_path.read_bytes() == before_manifest
+
+
+@pytest.mark.unit
 def test_active_body_pointer_tracks_current_active_slot(tmp_path):
     manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()

@@ -438,6 +438,8 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
         skills: List[Dict[str, Any]] = []
         seen_names: set[str] = set()
         for record in indexed:
+            if record.get("deprecated"):
+                continue
             if not skill_matches_platform({"platforms": record.get("platforms") or []}):
                 continue
             name = str(record.get("frontmatter_name") or record.get("directory_name") or "")[:MAX_NAME_LENGTH]
@@ -479,6 +481,8 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
                 frontmatter, body = parse_frontmatter(content)
 
                 if not skill_matches_platform(frontmatter):
+                    continue
+                if frontmatter.get("deprecated"):
                     continue
 
                 name = frontmatter.get("name", skill_dir.name)[:MAX_NAME_LENGTH]

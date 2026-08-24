@@ -1461,6 +1461,7 @@ class VoidcubeCLI:
                 ),
                 start_background_task=self._start_scheduled_execution_task,
                 post_supervisor=gateway_client.post,
+                get_supervisor=gateway_client.get,
                 rate_limit_metadata=scheduled_rate_limit_metadata,
                 writeback_outbox=outbox,
                 validate_execution_lease=validate_execution_lease,
@@ -1515,6 +1516,7 @@ class VoidcubeCLI:
         *,
         autonomous_task: dict[str, Any] | None = None,
         validate_execution_lease: Any = None,
+        working_dir: str | None = None,
     ) -> Any:
         return self._create_background_agent(
             turn_route,
@@ -1524,6 +1526,7 @@ class VoidcubeCLI:
             scheduled=True,
             autonomous_task=autonomous_task,
             validate_execution_lease=validate_execution_lease,
+            working_dir=working_dir,
         )
 
     def _resolve_scheduled_worker_route(
@@ -2866,6 +2869,7 @@ class VoidcubeCLI:
         scheduled: bool | None = None,
         autonomous_task: dict[str, Any] | None = None,
         validate_execution_lease: Any = None,
+        working_dir: str | None = None,
     ) -> Any:
         runtime = turn_route["runtime"]
         minimal_scheduled_host = (
@@ -2924,6 +2928,7 @@ class VoidcubeCLI:
                     else None
                 ),
                 validate_execution_lease=validate_execution_lease,
+                working_dir=working_dir,
             )
         ).create()
 

@@ -307,6 +307,7 @@ class AIAgent:
         persist_session: bool = True,
         autonomous_task_provider=None,
         validate_execution_lease=None,
+        working_dir: str | None = None,
     ):
         """
         Initialize the AI Agent.
@@ -369,6 +370,7 @@ class AIAgent:
         self._credential_pool = credential_pool
         self.autonomous_task_provider = autonomous_task_provider
         self.validate_execution_lease = validate_execution_lease
+        self.working_dir = str(working_dir or os.getenv("TERMINAL_CWD") or "").strip() or None
         self.log_prefix_chars = log_prefix_chars
         self.log_prefix = f"{log_prefix} " if log_prefix else ""
         # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
@@ -852,7 +854,7 @@ class AIAgent:
                 logger.debug("Context engine on_session_start: %s", _ce_err)
 
         self._subdirectory_hints = SubdirectoryHintTracker(
-            working_dir=os.getenv("TERMINAL_CWD") or None,
+            working_dir=self.working_dir,
         )
         # Cumulative token usage for the session
         self.session_prompt_tokens = 0
@@ -2149,7 +2151,7 @@ class AIAgent:
             # mode).  The gateway process runs from the VoidCube-agent install
             # dir, so os.getcwd() would pick up the repo's AGENTS.md and
             # other dev files — inflating token usage by ~10k for no benefit.
-            _context_cwd = os.getenv("TERMINAL_CWD") or None
+            _context_cwd = self.working_dir
             context_files_prompt = build_context_files_prompt(
                 cwd=_context_cwd, skip_soul=_soul_loaded)
             if context_files_prompt:

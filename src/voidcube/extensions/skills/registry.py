@@ -132,17 +132,36 @@ def open_registry(path: str | Path | None = None) -> sqlite3.Connection:
     """Open and initialize a registry connection."""
     db_path = Path(path) if path is not None else registry_path()
     db_path = db_path.expanduser().resolve()
+    database_exists = db_path.is_file()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(db_path), timeout=30)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
+    # WAL is persistent in the SQLite header.  Re-negotiating it on every
+    # hot refresh can wait on another reader/writer on Windows, so configure
+    # it only while creating a new registry.
+    has_skills_table = None
+    if not database_exists:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.executescript(SCHEMA)
+        connection.execute(
+            "INSERT OR REPLACE INTO registry_meta(key, value) VALUES('schema_version', ?)",
+            (SCHEMA_VERSION,),
+        )
+    else:
+        # Existing registries already contain the schema and persistent WAL
+        # setting.  Avoid replaying CREATE/metadata statements on every query.
+        has_skills_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='skills'"
+        ).fetchone()
+        if has_skills_table is None:
+            connection.executescript(SCHEMA)
+            connection.execute(
+                "INSERT OR REPLACE INTO registry_meta(key, value) VALUES('schema_version', ?)",
+                (SCHEMA_VERSION,),
+            )
     connection.execute("PRAGMA foreign_keys=ON")
-    connection.executescript(SCHEMA)
-    connection.execute(
-        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES('schema_version', ?)",
-        (SCHEMA_VERSION,),
-    )
-    connection.commit()
+    if not database_exists or has_skills_table is None:
+        connection.commit()
     return connection
 
 
@@ -241,10 +260,13 @@ def query_skills(
     name: str | None = None,
     category: str | None = None,
     root_paths: Iterable[str | Path] | None = None,
+    include_deprecated: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return indexed records, ordered by discovery precedence and name."""
+    """Return indexed records, hiding deprecated entries by default."""
     clauses: list[str] = []
     params: list[str] = []
+    if not include_deprecated:
+        clauses.append("deprecated = 0")
     if name is not None:
         clauses.append("(directory_name = ? OR frontmatter_name = ?)")
         params.extend((name, name))

@@ -47,6 +47,7 @@ class CliAgentInitializationPorts:
     skip_context_files: Optional[bool] = None
     autonomous_task_provider: Any = None
     validate_execution_lease: Any = None
+    working_dir: str | None = None
 
 
 class CliAgentInitializationRuntime:
@@ -96,6 +97,7 @@ class CliAgentInitializationRuntime:
             "tool_gen_callback": ports.tool_gen_callback,
             "autonomous_task_provider": ports.autonomous_task_provider,
             "validate_execution_lease": ports.validate_execution_lease,
+            "working_dir": ports.working_dir,
         }
         if ports.persist_session is not None:
             kwargs["persist_session"] = ports.persist_session
