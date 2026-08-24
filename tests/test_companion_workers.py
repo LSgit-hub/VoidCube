@@ -39,7 +39,7 @@ def test_default_worker_catalog_exposes_secret_free_roles() -> None:
     assert {
         item["role"]: item["toolsets"] for item in catalog["roles"]
     } == {
-        "general": ["web", "file", "skills", "todo"],
+        "general": ["web", "file", "mail", "skills", "todo"],
         "research": ["learn"],
         "coding": ["file", "terminal", "code_execution", "skills", "todo"],
         "media": ["media", "web"],

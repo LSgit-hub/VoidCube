@@ -15,7 +15,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["web", "file", "skills", "todo"],
+        "toolsets": ["web", "file", "mail", "skills", "todo"],
         "concurrency_limit": 1,
     },
     "research": {

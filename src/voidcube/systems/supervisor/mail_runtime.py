@@ -8,6 +8,7 @@ from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
+from email.utils import getaddresses, parseaddr
 from imaplib import IMAP4, IMAP4_SSL
 from smtplib import SMTP, SMTP_SSL
 from typing import Any, Mapping
@@ -115,11 +116,72 @@ def _extract_text_preview(message: Any, *, limit: int = 220) -> str:
     return ""
 
 
-def _normalize_email_address(address: str) -> str:
-    text = str(address or "").strip()
-    if text and _EMAIL_RE.fullmatch(text):
-        return text
-    return text
+def _extract_text_body(message: Any, *, limit: int = 100_000) -> str:
+    """Return the readable text body while skipping attachments."""
+    if hasattr(message, "is_multipart") and message.is_multipart():
+        html_fallback = ""
+        for part in message.walk():
+            content_type = str(part.get_content_type() or "").lower()
+            disposition = str(part.get_content_disposition() or "").lower()
+            if disposition == "attachment":
+                continue
+            payload = part.get_content()
+            if not isinstance(payload, str) or not payload.strip():
+                continue
+            if content_type == "text/plain":
+                return payload.strip()[:limit]
+            if content_type == "text/html" and not html_fallback:
+                html_fallback = re.sub(r"\s+", " ", payload.strip())
+        return html_fallback[:limit]
+    payload = message.get_content() if hasattr(message, "get_content") else ""
+    return payload.strip()[:limit] if isinstance(payload, str) else ""
+
+
+def _message_record(
+    message: Any,
+    message_id: str,
+    *,
+    include_body: bool = False,
+    flags: str = "",
+) -> dict[str, Any]:
+    record = {
+        "message_id": str(message_id),
+        "uid": str(message_id),
+        "subject": _safe_decode_header(str(message.get("subject") or "")),
+        "from": _safe_decode_header(str(message.get("from") or "")),
+        "to": _safe_decode_header(str(message.get("to") or "")),
+        "cc": _safe_decode_header(str(message.get("cc") or "")),
+        "reply_to": _safe_decode_header(str(message.get("reply-to") or "")),
+        "date": str(message.get("date") or ""),
+        "message_id_header": str(message.get("message-id") or ""),
+        "references": str(message.get("references") or ""),
+        "preview": _extract_text_preview(message),
+        "content_type": str(message.get_content_type() or ""),
+        "flags": str(flags or ""),
+    }
+    if include_body:
+        record["body"] = _extract_text_body(message)
+    return record
+
+
+def _raw_message_from_fetch(parts: Any) -> bytes | None:
+    if not parts:
+        return None
+    for item in parts:
+        if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], bytes):
+            return item[1]
+    return None
+
+
+def _normalize_email_addresses(addresses: str) -> list[str]:
+    values = [item.strip() for item in str(addresses or "").split(",") if item.strip()]
+    normalized: list[str] = []
+    for value in values:
+        parsed = parseaddr(value)[1] or value
+        if not _EMAIL_RE.fullmatch(parsed):
+            raise ValueError(f"invalid email address: {value}")
+        normalized.append(parsed)
+    return normalized
 
 
 def build_mail_overview(settings: MailSettings, *, managed: bool = False) -> dict[str, Any]:
@@ -143,6 +205,7 @@ def fetch_mail_messages(
     *,
     folder: str | None = None,
     limit: int | None = None,
+    unread_only: bool = False,
     timeout_seconds: float = 12.0,
 ) -> dict[str, Any]:
     if not settings.is_configured():
@@ -153,7 +216,7 @@ def fetch_mail_messages(
     with _connect_imap(settings, timeout_seconds=timeout_seconds) as client:
         client.login(settings.username or settings.address, settings.password)
         client.select(folder_name)
-        status, data = client.search(None, "ALL")
+        status, data = client.search(None, "UNSEEN" if unread_only else "ALL")
         if status != "OK":
             raise RuntimeError(f"imap search failed: {status}")
         ids = [item for item in (data[0].split() if data and data[0] else []) if item]
@@ -161,25 +224,117 @@ def fetch_mail_messages(
             fetch_status, parts = client.fetch(message_id, "(RFC822)")
             if fetch_status != "OK" or not parts:
                 continue
-            raw = parts[0][1]
+            raw = _raw_message_from_fetch(parts)
             if not raw:
                 continue
             parsed = BytesParser(policy=policy.default).parsebytes(raw)
-            messages.append({
-                "message_id": message_id.decode("ascii", "ignore") if isinstance(message_id, bytes) else str(message_id),
-                "uid": message_id.decode("ascii", "ignore") if isinstance(message_id, bytes) else str(message_id),
-                "subject": _safe_decode_header(str(parsed.get("subject") or "")),
-                "from": _safe_decode_header(str(parsed.get("from") or "")),
-                "to": _safe_decode_header(str(parsed.get("to") or "")),
-                "date": str(parsed.get("date") or ""),
-                "preview": _extract_text_preview(parsed),
-                "content_type": str(parsed.get_content_type() or ""),
-            })
+            normalized_id = message_id.decode("ascii", "ignore") if isinstance(message_id, bytes) else str(message_id)
+            messages.append(_message_record(parsed, normalized_id))
     return {
         "folder": folder_name,
+        "unread_only": bool(unread_only),
         "messages": messages,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def search_mail_messages(
+    settings: MailSettings,
+    *,
+    query: str,
+    folder: str | None = None,
+    limit: int | None = None,
+    timeout_seconds: float = 12.0,
+) -> dict[str, Any]:
+    """Search IMAP message text and return matching message overviews."""
+    if not settings.is_configured():
+        raise RuntimeError("mail is not configured")
+    search_text = str(query or "").strip()
+    if not search_text:
+        raise ValueError("query is required")
+    max_items = max(1, min(100, int(limit or settings.fetch_limit)))
+    folder_name = str(folder or settings.inbox_folder or "INBOX")
+    messages: list[dict[str, Any]] = []
+    with _connect_imap(settings, timeout_seconds=timeout_seconds) as client:
+        client.login(settings.username or settings.address, settings.password)
+        client.select(folder_name)
+        status, data = client.search(None, "TEXT", search_text)
+        if status != "OK":
+            raise RuntimeError(f"imap search failed: {status}")
+        ids = [item for item in (data[0].split() if data and data[0] else []) if item]
+        for message_id in reversed(ids[-max_items:]):
+            fetch_status, parts = client.fetch(message_id, "(RFC822)")
+            if fetch_status != "OK":
+                continue
+            raw = _raw_message_from_fetch(parts)
+            if not raw:
+                continue
+            parsed = BytesParser(policy=policy.default).parsebytes(raw)
+            normalized_id = message_id.decode("ascii", "ignore") if isinstance(message_id, bytes) else str(message_id)
+            messages.append(_message_record(parsed, normalized_id))
+    return {
+        "folder": folder_name,
+        "query": search_text,
+        "messages": messages,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def fetch_mail_message(
+    settings: MailSettings,
+    *,
+    message_id: str,
+    folder: str | None = None,
+    timeout_seconds: float = 12.0,
+) -> dict[str, Any]:
+    """Fetch one message, including its readable body and reply headers."""
+    if not settings.is_configured():
+        raise RuntimeError("mail is not configured")
+    normalized_id = str(message_id or "").strip()
+    if not normalized_id:
+        raise ValueError("message_id is required")
+    folder_name = str(folder or settings.inbox_folder or "INBOX")
+    with _connect_imap(settings, timeout_seconds=timeout_seconds) as client:
+        client.login(settings.username or settings.address, settings.password)
+        client.select(folder_name)
+        fetch_status, parts = client.fetch(normalized_id, "(RFC822 FLAGS)")
+        if fetch_status != "OK":
+            raise RuntimeError(f"imap fetch failed: {fetch_status}")
+        raw = _raw_message_from_fetch(parts)
+        if not raw:
+            raise RuntimeError("mail message body was empty")
+        parsed = BytesParser(policy=policy.default).parsebytes(raw)
+        flags = ""
+        for item in parts or []:
+            if isinstance(item, tuple) and item and isinstance(item[0], bytes):
+                flags = item[0].decode("ascii", "ignore")
+                break
+    return {
+        "folder": folder_name,
+        "message": _message_record(parsed, normalized_id, include_body=True, flags=flags),
+    }
+
+
+def mark_mail_message_read(
+    settings: MailSettings,
+    *,
+    message_id: str,
+    folder: str | None = None,
+    timeout_seconds: float = 12.0,
+) -> dict[str, Any]:
+    if not settings.is_configured():
+        raise RuntimeError("mail is not configured")
+    normalized_id = str(message_id or "").strip()
+    if not normalized_id:
+        raise ValueError("message_id is required")
+    folder_name = str(folder or settings.inbox_folder or "INBOX")
+    with _connect_imap(settings, timeout_seconds=timeout_seconds) as client:
+        client.login(settings.username or settings.address, settings.password)
+        client.select(folder_name)
+        status, _ = client.store(normalized_id, "+FLAGS", "\\Seen")
+        if status != "OK":
+            raise RuntimeError(f"imap mark read failed: {status}")
+    return {"status": "marked_read", "folder": folder_name, "message_id": normalized_id}
 
 
 def send_mail_message(
@@ -189,19 +344,30 @@ def send_mail_message(
     subject: str,
     body: str,
     cc: str | None = None,
+    bcc: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
     timeout_seconds: float = 12.0,
 ) -> dict[str, Any]:
     if not settings.is_configured():
         raise RuntimeError("mail is not configured")
-    recipient = _normalize_email_address(to)
-    if not recipient:
+    recipients = _normalize_email_addresses(to)
+    if not recipients:
         raise ValueError("to is required")
     message = EmailMessage()
     message["Subject"] = str(subject or "").strip() or "(no subject)"
     message["From"] = settings.address or settings.username or settings.display_name
-    message["To"] = recipient
-    if cc and str(cc).strip():
-        message["Cc"] = str(cc).strip()
+    message["To"] = ", ".join(recipients)
+    cc_recipients = _normalize_email_addresses(cc) if cc and str(cc).strip() else []
+    bcc_recipients = _normalize_email_addresses(bcc) if bcc and str(bcc).strip() else []
+    if cc_recipients:
+        message["Cc"] = ", ".join(cc_recipients)
+    if bcc_recipients:
+        message["Bcc"] = ", ".join(bcc_recipients)
+    if in_reply_to and str(in_reply_to).strip():
+        message["In-Reply-To"] = str(in_reply_to).strip()
+    if references and str(references).strip():
+        message["References"] = str(references).strip()
     message.set_content(
         (body or "").rstrip() + ("\n\n" + settings.signature.strip() if settings.signature.strip() else "")
     )
@@ -217,9 +383,48 @@ def send_mail_message(
     return {
         "status": "sent",
         "sent_at": datetime.now(timezone.utc).isoformat(),
-        "to": recipient,
+        "to": recipients,
         "subject": str(message["Subject"] or ""),
     }
+
+
+def reply_mail_message(
+    settings: MailSettings,
+    *,
+    message_id: str,
+    body: str,
+    folder: str | None = None,
+    cc: str | None = None,
+    timeout_seconds: float = 12.0,
+) -> dict[str, Any]:
+    original = fetch_mail_message(
+        settings, message_id=message_id, folder=folder, timeout_seconds=timeout_seconds
+    )["message"]
+    reply_to = str(original.get("reply_to") or original.get("from") or "").strip()
+    addresses = [address for _, address in getaddresses([reply_to]) if address]
+    recipient = addresses[0] if addresses else parseaddr(reply_to)[1]
+    if not recipient:
+        raise ValueError("original message has no reply address")
+    subject = str(original.get("subject") or "").strip()
+    if not subject.lower().startswith("re:"):
+        subject = "Re: " + subject
+    message_id_header = str(original.get("message_id_header") or "").strip()
+    references = " ".join(
+        item for item in [str(original.get("references") or "").strip(), message_id_header]
+        if item
+    )
+    result = send_mail_message(
+        settings,
+        to=recipient,
+        subject=subject,
+        body=body,
+        cc=cc,
+        in_reply_to=message_id_header,
+        references=references,
+        timeout_seconds=timeout_seconds,
+    )
+    result.update({"status": "replied", "in_reply_to": message_id_header, "folder": folder or settings.inbox_folder})
+    return result
 
 
 def test_mail_connectivity(

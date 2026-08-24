@@ -148,6 +148,7 @@ def _discover_tools():
         "voidcube.extensions.tools.browser.browser_tool",
         "voidcube.extensions.tools.media.media_tool",
         "voidcube.extensions.tools.todo_tool",
+        "voidcube.extensions.tools.mail_tools",
         "voidcube.extensions.tools.session_search_tool",
         "voidcube.extensions.tools.mixture_of_agents_tool",
         "voidcube.extensions.tools.clarify_tool",

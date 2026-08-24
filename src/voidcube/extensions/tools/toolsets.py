@@ -78,6 +78,15 @@ TOOLSETS = {
         "tools": ["scheduled_task"],
         "includes": [],
     },
+
+    "mail": {
+        "description": "Read, search, reply to, send, and organize the configured mailbox",
+        "tools": [
+            "mail_list_messages", "mail_search", "mail_read_message",
+            "mail_send", "mail_reply", "mail_mark_read",
+        ],
+        "includes": [],
+    },
     
     "code_execution": {
         "description": "Execute Python code in a sandboxed environment",
@@ -124,7 +133,7 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
+        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "mail", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
     },
 
     "mini": {

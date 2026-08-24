@@ -21,6 +21,7 @@ CONFIGURABLE_TOOLSETS: tuple[tuple[str, str, str], ...] = (
     ("playback", "▶ 媒体播放", "在 VoidCube Web UI 播放 B 站和直链音视频"),
     ("browser", "🌐 浏览器自动化", "网页导航、截图、点击、输入"),
     ("code_execution", "🔧 代码执行", "Python/Shell代码执行"),
+    ("mail", "✉️ 邮件管理", "读取、搜索、回复、发送和整理已配置邮箱"),
 )
 
 # This registry is intentionally data-only.  Message platforms were retired;
