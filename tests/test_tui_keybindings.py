@@ -119,8 +119,82 @@ def test_modal_navigation_registers_with_explicit_modal_state_ports() -> None:
             clarify_freetext_active=lambda: False,
             approval_state=lambda: approval,
             model_picker_state=lambda: picker,
+            update_selection=lambda mutate: mutate(),
             invalidate=lambda: invalidations.append(None),
         ),
     )
 
     assert len(bindings.bindings) == 6
+
+
+def _binding_handler(bindings: KeyBindings, key: str, occurrence: int = 0) -> object:
+    """Find the handler of the ``occurrence``-th (0-based) binding on ``key``.
+
+    Registration order is clarify up/down, approval up/down, model-picker
+    up/down, so ``("down", 0)`` is clarify_down and ``("down", 2)`` is
+    model_picker_down.
+    """
+    matches = [b for b in bindings.bindings if key in b.keys]
+    if occurrence >= len(matches):
+        raise AssertionError(f"only {len(matches)} bindings for {key!r}")
+    return matches[occurrence].handler
+
+
+def test_modal_navigation_updates_run_through_update_selection_port() -> None:
+    """Arrow-key handlers must mutate ``selected`` via the lock-safe port."""
+    bindings = KeyBindings()
+    mutator_calls: list[object] = []
+    clarify = {"selected": 0, "choices": ["first", "second"]}
+
+    install_modal_navigation_keybindings(
+        bindings,
+        ports=ModalNavigationPorts(
+            clarify_state=lambda: clarify,
+            clarify_freetext_active=lambda: False,
+            approval_state=lambda: None,
+            model_picker_state=lambda: None,
+            update_selection=lambda mutate: mutator_calls.append(mutate),
+            invalidate=lambda: None,
+        ),
+    )
+
+    _binding_handler(bindings, "down")(object())  # type: ignore[call-arg]
+    assert len(mutator_calls) == 1
+
+    # The port receives a deferred closure, not an immediate mutation —
+    # the host decides when (under its lock) to run it.
+    assert clarify["selected"] == 0
+    mutator_calls[0]()  # type: ignore[misc]
+    assert clarify["selected"] == 1
+
+
+def test_modal_navigation_selection_clamps_at_boundaries() -> None:
+    bindings = KeyBindings()
+    clarify = {"selected": 1, "choices": ["first", "second"]}
+    approval = {"selected": 0, "choices": ["yes", "no"]}
+    picker = {"selected": 2, "stage": "model", "model_list": ["a", "b"]}
+
+    install_modal_navigation_keybindings(
+        bindings,
+        ports=ModalNavigationPorts(
+            clarify_state=lambda: clarify,
+            clarify_freetext_active=lambda: False,
+            approval_state=lambda: approval,
+            model_picker_state=lambda: picker,
+            update_selection=lambda mutate: mutate(),
+            invalidate=lambda: None,
+        ),
+    )
+
+    # Down on the last clarify choice advances to the free-text slot
+    # (selected == len(choices) is the trailing "type your own" entry).
+    _binding_handler(bindings, "down", occurrence=0)(object())  # type: ignore[call-arg]
+    assert clarify["selected"] == 2
+
+    # Up on the first approval choice stays clamped at 0.
+    _binding_handler(bindings, "up", occurrence=1)(object())  # type: ignore[call-arg]
+    assert approval["selected"] == 0
+
+    # Model picker in "model" stage clamps at len(model_list)+1.
+    _binding_handler(bindings, "down", occurrence=2)(object())  # type: ignore[call-arg]
+    assert picker["selected"] == 3

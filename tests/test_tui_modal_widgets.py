@@ -65,7 +65,7 @@ def test_model_picker_limits_the_visible_window_and_shows_position(
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=100, rows=40)
@@ -108,7 +108,7 @@ def test_panel_box_width_never_exceeds_the_narrow_overlay(monkeypatch) -> None:
     from voidcube.interfaces.cli.tui.modal_widgets import _panel_box_width
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=20, rows=8)
@@ -127,7 +127,7 @@ def test_panel_box_width_expands_to_fit_wide_content(monkeypatch) -> None:
     from voidcube.interfaces.cli.tui.modal_widgets import _panel_box_width
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=100, rows=40)
@@ -145,7 +145,7 @@ def test_secret_panel_wraps_long_help_instead_of_truncating(monkeypatch) -> None
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=100, rows=40)
@@ -167,7 +167,7 @@ def test_model_picker_panel_lines_share_one_width(monkeypatch) -> None:
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=100, rows=40)
@@ -206,7 +206,7 @@ def test_panel_lines_are_limited_with_a_visible_indicator(monkeypatch) -> None:
     from voidcube.interfaces.cli.tui.modal_widgets import _limit_panel_lines
 
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.tui.modal_widgets.get_app",
+        "prompt_toolkit.application.get_app",
         lambda: SimpleNamespace(
             output=SimpleNamespace(
                 get_size=lambda: SimpleNamespace(columns=100, rows=10)
@@ -232,3 +232,31 @@ def test_panel_lines_are_limited_with_a_visible_indicator(monkeypatch) -> None:
     assert limited[-1] == ("class:a", "close\n")
     assert any("3 more lines" in text for _style, text in limited)
     assert display_width(limited[-3][1]) == 30
+
+
+def test_scroll_indicator_uses_callers_style_classes() -> None:
+    from voidcube.interfaces.cli.tui.modal_widgets import _append_scroll_indicator
+
+    lines: list[tuple[str, str]] = []
+    _append_scroll_indicator(
+        lines,
+        box_width=12,
+        border_style="class:sudo-border",
+        content_style="class:sudo-text",
+    )
+
+    assert lines[0] == ("class:sudo-border", "│")
+    assert lines[1][0] == "class:sudo-text"
+    assert "..." in lines[1][1]
+    assert display_width(lines[1][1]) == 12
+    assert lines[2] == ("class:sudo-border", "│\n")
+
+
+def test_scroll_indicator_defaults_to_clarify_styles_for_backward_compat() -> None:
+    from voidcube.interfaces.cli.tui.modal_widgets import _append_scroll_indicator
+
+    lines: list[tuple[str, str]] = []
+    _append_scroll_indicator(lines, box_width=10)
+
+    assert lines[0][0] == "class:clarify-border"
+    assert lines[1][0] == "class:clarify-choice"

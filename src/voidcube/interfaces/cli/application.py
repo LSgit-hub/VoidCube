@@ -1256,7 +1256,9 @@ class VoidcubeCLI:
         self._modal_input_snapshot = None
         self._approval_state = None
         self._approval_deadline = 0
-        self._approval_lock = threading.Lock()
+        # Guards all modal interaction state (clarify, approval, sudo, picker)
+        # shared between request-thread sinks and the UI thread.
+        self._modal_lock = threading.Lock()
         self._model_picker_state = None
         self._secret_state = None
         self._secret_deadline = 0
@@ -3463,18 +3465,20 @@ class VoidcubeCLI:
         response_queue: queue.Queue = queue.Queue()
 
         self._capture_modal_input_snapshot()
-        self._sudo_state = {
-            "response_queue": response_queue,
-        }
-        self._sudo_deadline = _time.monotonic() + timeout
+        with self._modal_lock:
+            self._sudo_state = {
+                "response_queue": response_queue,
+            }
+            self._sudo_deadline = _time.monotonic() + timeout
 
         self._invalidate()
 
         while True:
             try:
                 result = response_queue.get(timeout=1)
-                self._sudo_state = None
-                self._sudo_deadline = 0
+                with self._modal_lock:
+                    self._sudo_state = None
+                    self._sudo_deadline = 0
                 self._restore_modal_input_snapshot()
                 self._invalidate()
                 if result:
@@ -3488,12 +3492,23 @@ class VoidcubeCLI:
                     break
                 self._invalidate()
 
-        self._sudo_state = None
-        self._sudo_deadline = 0
+        with self._modal_lock:
+            self._sudo_state = None
+            self._sudo_deadline = 0
         self._restore_modal_input_snapshot()
         self._invalidate()
         _cprint(f"\n{_DIM}  ⏱ Timeout — continuing without sudo{_RST}")
         return ""
+
+    def _mutate_modal_state(self, mutate: Callable[[], None]) -> None:
+        """Run a modal-state mutation atomically against request-thread sinks.
+
+        Arrow-key navigation in the TUI reads and rewrites ``selected`` on a
+        shared modal-state dict; running that read-modify-write under the
+        modal lock keeps it atomic against sink timeouts and resets.
+        """
+        with self._modal_lock:
+            mutate()
 
     def _approval_sink(self, request: ApprovalRequest) -> ApprovalDecision:
         return self._ensure_application_runtime().resolve_approval(
@@ -3550,9 +3565,12 @@ class VoidcubeCLI:
     def _submit_secret_response(self, value: str) -> None:
         if not self._secret_state:
             return
-        self._secret_state["response_queue"].put(value)
-        self._secret_state = None
-        self._secret_deadline = 0
+        with self._modal_lock:
+            if not self._secret_state:
+                return
+            self._secret_state["response_queue"].put(value)
+            self._secret_state = None
+            self._secret_deadline = 0
         self._invalidate()
 
     def _cancel_secret_capture(self) -> None:
@@ -3906,12 +3924,13 @@ class VoidcubeCLI:
                 event.app.exit()
 
         def clear_modal_states() -> None:
-            self._model_picker_state = None
-            self._clarify_state = None
-            self._clarify_freetext = False
-            self._approval_state = None
-            self._sudo_state = None
-            self._secret_state = None
+            with self._modal_lock:
+                self._model_picker_state = None
+                self._clarify_state = None
+                self._clarify_freetext = False
+                self._approval_state = None
+                self._sudo_state = None
+                self._secret_state = None
 
         def run_api_command(event: Any) -> None:
             from prompt_toolkit.application import run_in_terminal
@@ -3948,8 +3967,16 @@ class VoidcubeCLI:
                 reset_buffer=reset_buffer,
                 invalidate=invalidate,
                 sudo_state=lambda: self._sudo_state,
-                set_sudo_state=lambda state: setattr(self, "_sudo_state", state),
-                submit_sudo=lambda text: self._sudo_state["response_queue"].put(text),
+                set_sudo_state=lambda state: self._mutate_modal_state(
+                    lambda: setattr(self, "_sudo_state", state)
+                ),
+                submit_sudo=lambda text: self._mutate_modal_state(
+                    lambda: (
+                        self._sudo_state["response_queue"].put(text)
+                        if self._sudo_state is not None
+                        else None
+                    )
+                ),
                 secret_state=lambda: self._secret_state,
                 submit_secret=self._submit_secret_response,
                 clear_secret_input=lambda event: event.app.current_buffer.reset(),
@@ -3958,13 +3985,19 @@ class VoidcubeCLI:
                 model_picker_state=lambda: self._model_picker_state,
                 submit_model_picker=self._handle_model_picker_selection,
                 clarify_state=lambda: self._clarify_state,
-                set_clarify_state=lambda state: setattr(self, "_clarify_state", state),
-                clarify_freetext=lambda: bool(self._clarify_freetext),
-                set_clarify_freetext=lambda value: setattr(
-                    self, "_clarify_freetext", bool(value)
+                set_clarify_state=lambda state: self._mutate_modal_state(
+                    lambda: setattr(self, "_clarify_state", state)
                 ),
-                submit_clarification=lambda value: self._clarify_state["response_queue"].put(
-                    value
+                clarify_freetext=lambda: bool(self._clarify_freetext),
+                set_clarify_freetext=lambda value: self._mutate_modal_state(
+                    lambda: setattr(self, "_clarify_freetext", bool(value))
+                ),
+                submit_clarification=lambda value: self._mutate_modal_state(
+                    lambda: (
+                        self._clarify_state["response_queue"].put(value)
+                        if self._clarify_state is not None
+                        else None
+                    )
                 ),
                 restore_modal_input=self._restore_modal_input_snapshot,
                 clear_modal_states=clear_modal_states,
@@ -4297,6 +4330,7 @@ class VoidcubeCLI:
                     secret_state=lambda: self._secret_state,
                     approval_state=lambda: self._approval_state,
                     model_picker_state=lambda: self._model_picker_state,
+                    update_selection=self._mutate_modal_state,
                 ),
                 attached_images=lambda: list(self._attached_images),
                 image_counter=lambda: self._image_counter,

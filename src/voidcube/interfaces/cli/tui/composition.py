@@ -39,6 +39,8 @@ class CliInteractiveTuiStatePorts:
     secret_state: Callable[[], object | None]
     approval_state: Callable[[], object | None]
     model_picker_state: Callable[[], object | None]
+    # Run a modal-state mutation under the host's modal-state lock.
+    update_selection: Callable[[Callable[[], None]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +94,7 @@ class CliInteractiveTuiAssemblyRuntime:
                 secret_state=state.secret_state,
                 approval_state=state.approval_state,
                 model_picker_state=state.model_picker_state,
+                update_selection=state.update_selection,
             )
         )
         indicator_ports = CliTuiIndicatorAssemblyRuntime(

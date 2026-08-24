@@ -29,6 +29,7 @@ def test_keybinding_assembly_registers_existing_adapters_and_routes_events() -> 
                 clarify_freetext_active=lambda: False,
                 approval_state=lambda: None,
                 model_picker_state=lambda: None,
+                update_selection=lambda mutate: mutate(),
                 invalidate=lambda: calls.append("invalidate"),
             ),
             normal_input_active=lambda: True,

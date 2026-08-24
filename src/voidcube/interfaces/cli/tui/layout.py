@@ -9,11 +9,6 @@ from prompt_toolkit.layout import Window
 
 def build_tui_layout_children(
     *,
-    sudo_widget: object,
-    secret_widget: object,
-    approval_widget: object,
-    clarify_widget: object,
-    model_picker_widget: object | None,
     spinner_widget: object | None,
     spacer: object,
     extra_widgets: Callable[[], Sequence[object]],
@@ -25,26 +20,18 @@ def build_tui_layout_children(
     input_rule_bot: object,
     voice_status_bar: object,
     completions_menu: object,
-    include_modals: bool = True,
 ) -> list[object]:
     """Return the fixed root-widget order for the terminal application.
 
     This adapter owns presentation order only. The caller owns every widget's
     state and visibility condition, while wrappers may insert display-only
-    widgets through ``extra_widgets``.
+    widgets through ``extra_widgets``. Modal overlays live in a separate stack
+    managed by the caller, so they are intentionally not repeated here.
     """
-    modal_widgets = (
-        sudo_widget,
-        secret_widget,
-        approval_widget,
-        clarify_widget,
-        model_picker_widget,
-    ) if include_modals else ()
     return [
         widget
         for widget in (
             Window(height=0),
-            *modal_widgets,
             spinner_widget,
             spacer,
             *extra_widgets(),

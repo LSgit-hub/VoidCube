@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any, Optional
+
+from .terminal_text_layout import display_width, terminal_columns, trim_to_width
 
 
 _IMAGE_EXTENSIONS = frozenset(
@@ -139,10 +140,14 @@ def _format_image_attachment_badges(
     """Format the attached-image badge row for the interactive CLI."""
     if not attached_images:
         return ""
-    terminal_width = width or shutil.get_terminal_size((80, 24)).columns
+    terminal_width = width or terminal_columns((80, 24))
 
     def truncate(name: str, limit: int) -> str:
-        return name if len(name) <= limit else name[: max(1, limit - 3)] + "..."
+        # Truncate by terminal-cell width, not codepoint count, so CJK
+        # filenames (wide characters) cannot overrun the badge box.
+        if display_width(name) <= limit:
+            return name
+        return trim_to_width(name, limit)
 
     if terminal_width < 52:
         if len(attached_images) == 1:

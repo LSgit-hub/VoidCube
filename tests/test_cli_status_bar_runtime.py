@@ -121,6 +121,40 @@ def test_status_bar_trims_wide_unicode_by_terminal_cells():
     assert display_width("".join(text for _, text in fragments)) <= 10
 
 
+def test_status_bar_fit_keeps_fragment_styles_when_folding():
+    # Folding must keep each kept fragment's style (model highlight and
+    # context color), not flatten everything into `class:status-bar`.
+    fragments = _runtime(
+        snapshot={"model_short": "api-a", "context_percent": 85},
+        width=8,
+    ).build()
+
+    from voidcube.interfaces.cli.terminal_text_layout import display_width
+
+    styles = {style for style, _ in fragments}
+    assert len(fragments) > 1
+    assert any("#1E40AF" in style for style in styles)
+    assert any("#FF6B6B" in style for style in styles)
+    assert display_width("".join(text for _, text in fragments)) <= 8
+
+
+def test_status_bar_fit_keeps_middle_fragment_style_in_narrow_git_layout():
+    # When Git consumes the width, the API-B middle projection is ordered
+    # first and must survive folding with its own style intact.
+    fragments = _runtime(
+        snapshot={"model_short": "api-a", "context_percent": None},
+        width=42,
+        middle=(("middle-bold", "deepseek-v4-flash -- (-)"),),
+        git=(("git", "Git <main>"),),
+    ).build()
+
+    rendered = "".join(text for _, text in fragments)
+
+    assert "deepseek-v4-flash" in rendered
+    assert "(-)" in rendered
+    assert any("middle-bold" in style for style, _ in fragments)
+
+
 def test_status_bar_projects_explicit_exit_state():
     runtime = _runtime(width=20)
     runtime.ports = replace(runtime.ports, closing=lambda: True)

@@ -31,6 +31,22 @@ class CliTuiPromptRuntime:
 
     def __init__(self, ports: CliTuiPromptPorts) -> None:
         self.ports = ports
+        # The sticky profile name never changes mid-session; cache it so the
+        # per-frame prompt path does not stat ~/.VoidCube/active_profile on
+        # every repaint.
+        self._profile_name: str | None = None
+        self._profile_loaded = False
+
+    def _active_profile_name(self) -> str | None:
+        if not self._profile_loaded:
+            self._profile_loaded = True
+            try:
+                from ....infrastructure.config.profiles import get_active_profile_name
+
+                self._profile_name = get_active_profile_name()
+            except Exception:
+                self._profile_name = None
+        return self._profile_name
 
     def fragments(self) -> list[tuple[str, str]]:
         symbol, state_suffix = self.prompt_symbols()
@@ -74,15 +90,9 @@ class CliTuiPromptRuntime:
 
     def prompt_symbols(self) -> tuple[str, str]:
         symbol = "❯ "
-        symbol = (symbol or "❯ ").rstrip() + " "
-        try:
-            from ....infrastructure.config.profiles import get_active_profile_name
-
-            profile = get_active_profile_name()
-            if profile and profile not in ("default", "custom"):
-                symbol = f"{profile} {symbol}"
-        except Exception:
-            pass
+        profile = self._active_profile_name()
+        if profile and profile not in ("default", "custom"):
+            symbol = f"{profile} {symbol}"
 
         stripped = symbol.rstrip()
         if not stripped:

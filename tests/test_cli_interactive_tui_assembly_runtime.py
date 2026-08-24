@@ -38,6 +38,7 @@ def _ports() -> CliInteractiveTuiPorts:
         secret_state=lambda: None,
         approval_state=lambda: None,
         model_picker_state=lambda: None,
+        update_selection=lambda mutate: mutate(),
     )
     return CliInteractiveTuiPorts(
         registrations=registrations,
@@ -114,6 +115,7 @@ def test_tui_assembly_projects_modal_input_policy():
             secret_state=base.state.secret_state,
             approval_state=base.state.approval_state,
             model_picker_state=lambda: {"stage": "provider"},
+            update_selection=lambda mutate: mutate(),
         ),
     )
     captured: dict[str, object] = {}

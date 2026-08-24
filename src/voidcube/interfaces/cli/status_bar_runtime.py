@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -94,8 +95,6 @@ class CliStatusBarRuntime:
         active: bool,
     ) -> list[StatusFragment]:
         if active and model_name:
-            import time
-
             position = int(time.time() * 9) % (len(model_name) + 4)
             fragments: list[StatusFragment] = []
             for index, char in enumerate(model_name):
@@ -148,7 +147,8 @@ class CliStatusBarRuntime:
         else:
             # Keep the API-B middle projection visible when Git consumes the
             # remaining width. It is ordered first by CliMiddleStatusRuntime,
-            # so _fit preserves its model/state prefix before trimming details.
+            # so _fit preserves its model/state prefix (and styles) before
+            # trimming later details.
             fragments = left.copy()
             if middle:
                 fragments.append(("class:status-bar", "  "))
@@ -186,9 +186,29 @@ class CliStatusBarRuntime:
 
     @classmethod
     def _fit(cls, fragments: list[StatusFragment], width: int) -> list[StatusFragment]:
+        """Trim a too-wide status bar without flattening its fragment styles.
+
+        The previous implementation joined every fragment into one string and
+        returned it as a single ``class:status-bar`` fragment, which dropped
+        the model highlight and context-color styles whenever the bar folded.
+        Instead, keep each fragment (and its style) while walking in order,
+        and trim only the fragment that would overflow.
+        """
         if cls._fragment_width(fragments) <= width:
             return fragments
-        return [("class:status-bar", cls._trim("".join(text for _, text in fragments), width))]
+        fitted: list[StatusFragment] = []
+        remaining = width
+        for style, text in fragments:
+            fragment_width = cls._display_width(text)
+            if fragment_width <= remaining:
+                fitted.append((style, text))
+                remaining -= fragment_width
+            elif remaining > 0:
+                fitted.append((style, cls._trim(text, remaining)))
+                break
+            else:
+                break
+        return fitted
 
     @staticmethod
     def _display_width(text: str) -> int:

@@ -40,23 +40,29 @@ class CliProviderRuntime:
             (index for index, provider in enumerate(providers) if provider.get("is_current")),
             0,
         )
-        host._model_picker_state = {
-            "stage": "provider",
-            "providers": providers,
-            "selected": default_idx,
-            "current_model": current_model,
-            "current_provider": current_provider,
-            "user_provs": user_providers,
-        }
+        with host._modal_lock:
+            host._model_picker_state = {
+                "stage": "provider",
+                "providers": providers,
+                "selected": default_idx,
+                "current_model": current_model,
+                "current_provider": current_provider,
+                "user_provs": user_providers,
+            }
         host._invalidate(min_interval=0.0)
 
     def close_picker(self) -> None:
-        self.host._model_picker_state = None
+        with self.host._modal_lock:
+            self.host._model_picker_state = None
         self.host._restore_modal_input_snapshot()
         self.host._invalidate(min_interval=0.0)
 
     def submit_picker(self, persist_global: bool = True) -> None:
         host = self.host
+
+        def set_picker_state(value: Any) -> None:
+            with host._modal_lock:
+                host._model_picker_state = value
 
         def switch_model(**kwargs: Any) -> Any:
             from .model_switch import switch_model
@@ -66,7 +72,7 @@ class CliProviderRuntime:
         CliModelPickerRuntime(
             CliModelPickerPorts(
                 state=lambda: host._model_picker_state,
-                set_state=lambda value: setattr(host, "_model_picker_state", value),
+                set_state=set_picker_state,
                 close_picker=self.close_picker,
                 invalidate=lambda: host._invalidate(min_interval=0.0),
                 switch_model=switch_model,

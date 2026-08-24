@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from ..terminal_text_layout import terminal_columns, terminal_rows
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,21 +29,11 @@ class CliTuiLayoutMetricsRuntime:
 
     @staticmethod
     def terminal_width(default: tuple[int, int] = (80, 24)) -> int:
-        try:
-            from prompt_toolkit.application import get_app
-
-            return get_app().output.get_size().columns
-        except Exception:
-            return shutil.get_terminal_size(default).columns
+        return terminal_columns(default)
 
     @staticmethod
     def terminal_height(default: tuple[int, int] = (80, 24)) -> int:
-        try:
-            from prompt_toolkit.application import get_app
-
-            return get_app().output.get_size().rows
-        except Exception:
-            return shutil.get_terminal_size(default).lines
+        return terminal_rows(default)
 
     def minimal_chrome(
         self,

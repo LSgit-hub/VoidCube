@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import queue
-import shutil
 import time
 from typing import Any, Callable
 
@@ -16,8 +15,10 @@ from ...domain.contracts.interaction import (
     ClarificationStatus,
 )
 from .terminal_text_layout import (
+    append_blank_panel_line as _append_blank_panel_line,
+    append_panel_line as _append_panel_line,
     display_width,
-    pad_to_width,
+    panel_box_width as _panel_box_width,
     trim_to_width,
     wrap_text as _wrap_panel_text,
 )
@@ -30,23 +31,31 @@ def clarification_sink(
     timeout: float,
     notify_timeout: Callable[[float], None],
 ) -> ClarificationDecision:
-    """Present a clarification request and wait for the CLI response."""
+    """Present a clarification request and wait for the CLI response.
+
+    The lock guards state mutation only — the blocking ``response_queue.get``
+    loop runs lock-free so the UI thread's arrow-key navigation and submit
+    callbacks can acquire the lock to update ``selected`` or deliver a value
+    without deadlocking.
+    """
     response_queue: queue.Queue = queue.Queue()
-    host._clarify_state = {
-        "request": request,
-        "choices": list(request.options),
-        "selected": 0,
-        "response_queue": response_queue,
-    }
-    host._clarify_deadline = time.monotonic() + timeout
-    host._clarify_freetext = not request.options
+    with host._modal_lock:
+        host._clarify_state = {
+            "request": request,
+            "choices": list(request.options),
+            "selected": 0,
+            "response_queue": response_queue,
+        }
+        host._clarify_deadline = time.monotonic() + timeout
+        host._clarify_freetext = not request.options
     host._invalidate()
 
     last_refresh = time.monotonic()
     while True:
         try:
             result = response_queue.get(timeout=1)
-            host._clarify_deadline = 0
+            with host._modal_lock:
+                host._clarify_deadline = 0
             if isinstance(result, ClarificationDecision):
                 return result
             return ClarificationDecision(
@@ -61,9 +70,10 @@ def clarification_sink(
                 last_refresh = now
                 host._invalidate()
 
-    host._clarify_state = None
-    host._clarify_freetext = False
-    host._clarify_deadline = 0
+    with host._modal_lock:
+        host._clarify_state = None
+        host._clarify_freetext = False
+        host._clarify_deadline = 0
     host._invalidate()
     notify_timeout(timeout)
     return ClarificationDecision(
@@ -79,8 +89,13 @@ def approval_sink(
     timeout: float,
     notify_timeout: Callable[[], None],
 ) -> ApprovalDecision:
-    """Present a dangerous-command request and fail closed on timeout."""
-    with host._approval_lock:
+    """Present a dangerous-command request and fail closed on timeout.
+
+    The lock guards state mutation only — the blocking ``response_queue.get``
+    loop runs lock-free so the UI thread's ``handle_approval_selection`` can
+    acquire the lock to deliver a decision without deadlocking.
+    """
+    with host._modal_lock:
         response_queue: queue.Queue = queue.Queue()
         host._approval_state = {
             "request": request,
@@ -89,61 +104,66 @@ def approval_sink(
             "response_queue": response_queue,
         }
         host._approval_deadline = time.monotonic() + timeout
-        host._invalidate()
+    host._invalidate()
 
-        last_refresh = time.monotonic()
-        while True:
-            try:
-                result = response_queue.get(timeout=1)
+    last_refresh = time.monotonic()
+    while True:
+        try:
+            result = response_queue.get(timeout=1)
+            with host._modal_lock:
                 host._approval_state = None
                 host._approval_deadline = 0
+            host._invalidate()
+            return ApprovalDecision(ApprovalStatus(result))
+        except queue.Empty:
+            now = time.monotonic()
+            if host._approval_deadline - now <= 0:
+                break
+            if now - last_refresh >= 5:
+                last_refresh = now
                 host._invalidate()
-                return ApprovalDecision(ApprovalStatus(result))
-            except queue.Empty:
-                now = time.monotonic()
-                if host._approval_deadline - now <= 0:
-                    break
-                if now - last_refresh >= 5:
-                    last_refresh = now
-                    host._invalidate()
 
+    with host._modal_lock:
         host._approval_state = None
         host._approval_deadline = 0
-        host._invalidate()
-        notify_timeout()
-        return ApprovalDecision(
-            ApprovalStatus.DENIED,
-            reason="Approval timed out",
-        )
+    host._invalidate()
+    notify_timeout()
+    return ApprovalDecision(
+        ApprovalStatus.DENIED,
+        reason="Approval timed out",
+    )
 
 
 def approval_choices(command: str) -> list[str]:
     choices = [ApprovalStatus.APPROVED.value, ApprovalStatus.DENIED.value]
-    if len(command) > 70:
+    # Measure rendered cell width, not raw codepoints — wide CJK commands
+    # would otherwise exceed the 70-cell preview threshold undetected.
+    if display_width(command) > 70:
         choices.append("view")
     return choices
 
 
 def handle_approval_selection(host: Any) -> None:
-    state = host._approval_state
-    if not state:
-        return
-    selected = state.get("selected", 0)
-    choices = state.get("choices") or []
-    if not 0 <= selected < len(choices):
-        return
+    with host._modal_lock:
+        state = host._approval_state
+        if not state:
+            return
+        selected = state.get("selected", 0)
+        choices = state.get("choices") or []
+        if not 0 <= selected < len(choices):
+            return
 
-    chosen = choices[selected]
-    if chosen == "view":
-        state["show_full"] = True
-        state["choices"] = [choice for choice in choices if choice != "view"]
-        if state["selected"] >= len(state["choices"]):
-            state["selected"] = max(0, len(state["choices"]) - 1)
-        host._invalidate()
-        return
+        chosen = choices[selected]
+        if chosen == "view":
+            state["show_full"] = True
+            state["choices"] = [choice for choice in choices if choice != "view"]
+            if state["selected"] >= len(state["choices"]):
+                state["selected"] = max(0, len(state["choices"]) - 1)
+            host._invalidate()
+            return
 
-    state["response_queue"].put(chosen)
-    host._approval_state = None
+        state["response_queue"].put(chosen)
+        host._approval_state = None
     host._invalidate()
 
 
@@ -232,54 +252,3 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
         ("class:approval-border", "╰" + ("─" * box_width) + "╯\n")
     )
     return lines
-
-
-def _panel_box_width(
-    title: str,
-    content_lines: list[str],
-    min_width: int = 46,
-    max_width: int = 76,
-) -> int:
-    try:
-        from prompt_toolkit.application import get_app
-
-        terminal_columns = get_app().output.get_size().columns
-    except Exception:
-        terminal_columns = shutil.get_terminal_size((100, 20)).columns
-    # The modal overlay floats with left=2/right=2 insets and every panel line
-    # carries two border cells, so the box must fit into terminal_columns - 6.
-    available_inner = max(8, terminal_columns - 8)
-    longest = max(
-        [display_width(title)]
-        + [display_width(line) for line in content_lines]
-    )
-    inner = min(
-        max(longest + 4, min_width - 2),
-        max_width - 2,
-        available_inner,
-    )
-    return inner + 2
-
-
-def _append_panel_line(
-    lines: list[tuple[str, str]],
-    border_style: str,
-    content_style: str,
-    text: str,
-    box_width: int,
-) -> None:
-    lines.extend(
-        [
-            (border_style, "│ "),
-            (content_style, pad_to_width(text, max(0, box_width - 2))),
-            (border_style, " │\n"),
-        ]
-    )
-
-
-def _append_blank_panel_line(
-    lines: list[tuple[str, str]],
-    border_style: str,
-    box_width: int,
-) -> None:
-    lines.append((border_style, "│" + (" " * box_width) + "│\n"))

@@ -39,7 +39,7 @@ def _host(**values):
         "_clarify_deadline": 0,
         "_approval_state": None,
         "_approval_deadline": 0,
-        "_approval_lock": threading.Lock(),
+        "_modal_lock": threading.Lock(),
         "_invalidate": lambda: invalidations.append(True),
     }
     defaults.update(values)
@@ -156,7 +156,7 @@ def test_approval_display_aligns_borders_with_wide_characters(monkeypatch) -> No
 
     size = namedtuple("Size", "columns lines")
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.interaction_adapter.shutil.get_terminal_size",
+        "shutil.get_terminal_size",
         lambda _fallback: size(100, 40),
     )
     host, _ = _host(
@@ -195,7 +195,7 @@ def test_approval_command_truncation_respects_cell_width(monkeypatch) -> None:
 
     size = namedtuple("Size", "columns lines")
     monkeypatch.setattr(
-        "voidcube.interfaces.cli.interaction_adapter.shutil.get_terminal_size",
+        "shutil.get_terminal_size",
         lambda _fallback: size(100, 40),
     )
     long_command = "中" * 80
@@ -216,3 +216,60 @@ def test_approval_command_truncation_respects_cell_width(monkeypatch) -> None:
         text for _style, text in adapter.approval_display_fragments(host) if "..." in text
     )
     assert display_width(preview_fragment) <= 74
+
+
+def test_approval_choices_triggers_view_for_wide_commands() -> None:
+    # 40 CJK codepoints render as 80 cells — must exceed the 70-cell preview
+    # threshold even though len() would only count 40.
+    assert "view" in adapter.approval_choices("中" * 40)
+    # Exactly 70 cells stays under the strict > 70 threshold.
+    assert "view" not in adapter.approval_choices("中" * 35)
+    assert "view" not in adapter.approval_choices("a" * 70)
+    assert "view" in adapter.approval_choices("a" * 71)
+
+
+def test_approval_sink_releases_lock_while_waiting_for_decision() -> None:
+    host, invalidations = _host()
+    request = ApprovalRequest("rm -rf target", "destructive")
+    decisions = []
+    errors = []
+
+    def _run_sink():
+        try:
+            decisions.append(
+                adapter.approval_sink(
+                    host,
+                    request,
+                    timeout=60,
+                    notify_timeout=lambda: pytest.fail("unexpected timeout"),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - failure reporting
+            errors.append(exc)
+
+    worker = threading.Thread(target=_run_sink, daemon=True)
+    worker.start()
+
+    # Wait until the sink is blocked inside response_queue.get().
+    deadline = threading.Event()
+    while host._approval_state is None and not deadline.wait(0.01):
+        pass
+    assert host._approval_state is not None
+
+    # The lock must be free while the sink waits — otherwise the UI thread
+    # delivering the decision would deadlock.
+    lock_acquired = host._modal_lock.acquire(timeout=2)
+    assert lock_acquired, "approval_sink held the lock while blocking on response_queue"
+    host._modal_lock.release()
+
+    # Deliver the decision exactly like handle_approval_selection does.
+    with host._modal_lock:
+        host._approval_state["response_queue"].put(ApprovalStatus.APPROVED.value)
+        host._approval_state = None
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert not errors
+    assert decisions and decisions[0].status is ApprovalStatus.APPROVED
+    assert invalidations  # sink invalidated on completion
+

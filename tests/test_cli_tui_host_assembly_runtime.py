@@ -54,6 +54,7 @@ def test_host_assembly_maps_cli_registrations_and_widget_ports(monkeypatch):
                 clarify_freetext_active=lambda: False,
                 approval_state=callback,
                 model_picker_state=callback,
+                update_selection=lambda mutate: mutate(),
                 invalidate=callback,
             ),
             normal_input_active=lambda: True,
@@ -129,6 +130,7 @@ def test_modal_state_runtime_builds_policy_and_widget_ports():
             secret_state=lambda: state["secret"],
             approval_state=lambda: state["approval"],
             model_picker_state=lambda: state["picker"],
+            update_selection=lambda mutate: mutate(),
         )
     )
 
@@ -144,3 +146,34 @@ def test_modal_state_runtime_builds_policy_and_widget_ports():
     state["secret"] = None
     state["approval"] = {"active": True}
     assert runtime.input_locked() is True
+
+
+def test_normal_input_active_keeps_editing_in_clarify_freetext():
+    state = {
+        "clarify": {"request": "answer"},
+        "clarify_freetext": False,
+        "sudo": None,
+        "secret": None,
+        "approval": None,
+        "picker": None,
+    }
+    runtime = CliTuiModalStateRuntime(
+        CliTuiModalStatePorts(
+            clarify_state=lambda: state["clarify"],
+            clarify_freetext_active=lambda: state["clarify_freetext"],
+            sudo_state=lambda: state["sudo"],
+            secret_state=lambda: state["secret"],
+            approval_state=lambda: state["approval"],
+            model_picker_state=lambda: state["picker"],
+            update_selection=lambda mutate: mutate(),
+        )
+    )
+
+    # Free-text clarify keeps editing keys (history / tab) available.
+    state["clarify_freetext"] = True
+    assert runtime.normal_input_active() is True
+    assert runtime.input_locked() is False
+
+    # Choice clarify (not free-text) keeps editing disabled as before.
+    state["clarify_freetext"] = False
+    assert runtime.normal_input_active() is False

@@ -39,6 +39,8 @@ class CliTuiModalNavigationPorts:
     clarify_freetext_active: Callable[[], bool]
     approval_state: Callable[[], object | None]
     model_picker_state: Callable[[], object | None]
+    # Run a modal-state mutation under the host's modal-state lock.
+    update_selection: Callable[[Callable[[], None]], None]
     invalidate: Callable[[], None]
 
 
@@ -74,6 +76,8 @@ class CliTuiModalStatePorts:
     secret_state: Callable[[], object | None]
     approval_state: Callable[[], object | None]
     model_picker_state: Callable[[], object | None]
+    # Run a modal-state mutation under the host's modal-state lock.
+    update_selection: Callable[[Callable[[], None]], None]
 
 
 class CliTuiModalStateRuntime:
@@ -93,6 +97,7 @@ class CliTuiModalStateRuntime:
             clarify_freetext_active=ports.clarify_freetext_active,
             approval_state=ports.approval_state,
             model_picker_state=ports.model_picker_state,
+            update_selection=ports.update_selection,
             invalidate=invalidate,
         )
 
@@ -113,7 +118,14 @@ class CliTuiModalStateRuntime:
         )
 
     def normal_input_active(self) -> bool:
+        """Return True when editing key bindings should be active.
+
+        Clarify free-text mode keeps editing keys (history, tab completion)
+        enabled because the user types their answer in the prompt itself.
+        """
         ports = self.ports
+        if ports.clarify_state() and ports.clarify_freetext_active():
+            return True
         return not any(
             (
                 ports.clarify_state(),
@@ -196,6 +208,7 @@ class CliTuiHostAssemblyRuntime:
                     clarify_freetext_active=ports.modal_navigation.clarify_freetext_active,
                     approval_state=ports.modal_navigation.approval_state,
                     model_picker_state=ports.modal_navigation.model_picker_state,
+                    update_selection=ports.modal_navigation.update_selection,
                     invalidate=ports.modal_navigation.invalidate,
                 ),
                 normal_input_active=ports.normal_input_active,

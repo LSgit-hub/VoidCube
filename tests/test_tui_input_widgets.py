@@ -88,6 +88,59 @@ def test_input_area_continuation_lines_wrap_against_full_terminal_width(
     assert area.window.height() == 1 + 2
 
 
+def test_input_area_height_cache_reuses_terminal_query_for_unchanged_text(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    queries = 0
+
+    def get_size() -> SimpleNamespace:
+        nonlocal queries
+        queries += 1
+        return SimpleNamespace(columns=80, rows=24)
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.input_widgets.get_app",
+        lambda: SimpleNamespace(output=SimpleNamespace(get_size=get_size)),
+    )
+    area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
+    area.buffer.text = "line one\nline two"
+
+    # prompt_toolkit re-measures the height several times per render; a second
+    # call with unchanged text must hit the cache instead of querying the
+    # terminal (or re-walking the document) again.
+    assert area.window.height() == area.window.height()
+    assert queries == 1
+
+
+def test_input_area_height_cache_tracks_text_changes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    queries = 0
+
+    def get_size() -> SimpleNamespace:
+        nonlocal queries
+        queries += 1
+        return SimpleNamespace(columns=80, rows=24)
+
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.tui.input_widgets.get_app",
+        lambda: SimpleNamespace(output=SimpleNamespace(get_size=get_size)),
+    )
+    area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
+
+    area.buffer.text = "one line"
+    first = area.window.height()
+    area.buffer.text = "one line\nsecond line"
+    second = area.window.height()
+
+    assert second > first
+    # The height re-computes for the new text, but the terminal size is only
+    # queried once because both calls land in the same render frame.
+    assert queries == 1
+
+
 def test_placeholder_processor_only_appends_to_an_empty_first_line(tmp_path) -> None:
     area = build_input_area(ports=_ports(str(tmp_path / "history.txt")))
     install_placeholder_processor(area, placeholder_text=lambda: "ready")

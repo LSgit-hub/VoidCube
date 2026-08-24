@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 from voidcube.interfaces.cli.provider_runtime import CliProviderRuntime
@@ -9,6 +10,7 @@ from voidcube.infrastructure.config import provider_selection
 class _Host:
     def __init__(self) -> None:
         self._model_picker_state = None
+        self._modal_lock = threading.Lock()
         self._snapshot_calls: list[str] = []
         self._invalidate_calls = 0
         self.model = "old-model"

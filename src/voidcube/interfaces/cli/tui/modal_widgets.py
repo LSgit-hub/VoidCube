@@ -2,30 +2,27 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
-from prompt_toolkit.application import get_app
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
 
 from ....domain.contracts.interaction import ClarificationRequest
-from ..terminal_text_layout import display_width, pad_to_width, wrap_text as _wrap_panel_text
+from ..terminal_text_layout import (
+    append_blank_panel_line as _append_blank_panel_line,
+    append_panel_line as _append_panel_line,
+    display_width,
+    modal_panel_max_height as _modal_max_height,
+    pad_to_width,
+    panel_box_width as _panel_box_width,
+    wrap_text as _wrap_panel_text,
+)
 
 
 ModalState = Mapping[str, object]
-
-
-def _modal_max_height() -> int:
-    """Cap the modal stack height to the visible terminal area."""
-    try:
-        rows = get_app().output.get_size().rows
-    except Exception:
-        rows = shutil.get_terminal_size((100, 20)).lines
-    return max(6, min(20, rows - 4))
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +59,7 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         request = cast(ClarificationRequest, state["request"])
         question = request.question
         choices = _string_sequence(state.get("choices"))
-        selected = int(state.get("selected", 0))
+        selected = _as_int(state.get("selected"))
         freetext_active = ports.clarify_freetext_active()
         preview_lines = _wrap_panel_text(question, 60)
         for index, choice in enumerate(choices):
@@ -189,17 +186,27 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         _append_panel_line(lines, "class:clarify-border", "class:clarify-hint", hint, box_width)
         _append_blank_panel_line(lines, "class:clarify-border", box_width)
 
-        selected = int(state.get("selected", 0))
+        selected = _as_int(state.get("selected"))
         total_choices = len(choices)
         if total_choices > max_visible:
             window_start = _visible_window_start(selected, total_choices, max_visible)
             window_end = min(window_start + max_visible, total_choices)
             if window_start > 0:
-                _append_scroll_indicator(lines, box_width)
+                _append_scroll_indicator(
+                    lines,
+                    box_width,
+                    border_style="class:clarify-border",
+                    content_style="class:clarify-choice",
+                )
             for index in range(window_start, window_end):
                 _append_picker_choice(lines, choices[index], index == selected, inner_text_width, box_width)
             if window_end < total_choices:
-                _append_scroll_indicator(lines, box_width)
+                _append_scroll_indicator(
+                    lines,
+                    box_width,
+                    border_style="class:clarify-border",
+                    content_style="class:clarify-choice",
+                )
             _append_panel_line(
                 lines,
                 "class:clarify-border",
@@ -222,11 +229,11 @@ def build_modal_widgets(*, ports: ModalWidgetPorts) -> ModalWidgets:
         )
 
     return ModalWidgets(
-        clarify=ConditionalContainer(Window(FormattedTextControl(clarify_display), wrap_lines=True), filter=Condition(lambda: ports.clarify_state() is not None)),
-        sudo=ConditionalContainer(Window(FormattedTextControl(sudo_display), wrap_lines=True), filter=Condition(lambda: ports.sudo_state() is not None)),
-        secret=ConditionalContainer(Window(FormattedTextControl(secret_display), wrap_lines=True), filter=Condition(lambda: ports.secret_state() is not None)),
+        clarify=ConditionalContainer(Window(FormattedTextControl(cast(AnyFormattedText, clarify_display)), wrap_lines=True), filter=Condition(lambda: ports.clarify_state() is not None)),
+        sudo=ConditionalContainer(Window(FormattedTextControl(cast(AnyFormattedText, sudo_display)), wrap_lines=True), filter=Condition(lambda: ports.sudo_state() is not None)),
+        secret=ConditionalContainer(Window(FormattedTextControl(cast(AnyFormattedText, secret_display)), wrap_lines=True), filter=Condition(lambda: ports.secret_state() is not None)),
         approval=ConditionalContainer(Window(FormattedTextControl(ports.approval_fragments), wrap_lines=True), filter=Condition(lambda: ports.approval_state() is not None)),
-        model_picker=ConditionalContainer(Window(FormattedTextControl(model_picker_display), wrap_lines=True), filter=Condition(lambda: ports.model_picker_state() is not None)),
+        model_picker=ConditionalContainer(Window(FormattedTextControl(cast(AnyFormattedText, model_picker_display)), wrap_lines=True), filter=Condition(lambda: ports.model_picker_state() is not None)),
     )
 
 
@@ -258,7 +265,7 @@ def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
         choices = []
         for provider in _mapping_sequence(state.get("providers")):
             models = _string_sequence(provider.get("models"))
-            count = int(provider.get("total_models", len(models)))
+            count = _as_int(provider.get("total_models", len(models)))
             label = f"{provider['name']} ({count} model{'s' if count != 1 else ''})"
             if provider.get("is_current"):
                 label += "  ← current"
@@ -279,41 +286,24 @@ def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
     return title, hint, choices
 
 
-def _panel_box_width(title: str, content_lines: list[str], min_width: int = 46, max_width: int = 76) -> int:
-    try:
-        term_cols = get_app().output.get_size().columns
-    except Exception:
-        term_cols = shutil.get_terminal_size((100, 20)).columns
-    # The modal overlay floats with left=2/right=2 insets and every panel line
-    # carries two border cells, so the box must fit into term_cols - 6 cells.
-    available_inner = max(8, term_cols - 8)
-    longest = max(
-        [display_width(title)]
-        + [display_width(line) for line in content_lines]
-    )
-    inner = min(
-        max(longest + 4, min_width - 2),
-        max_width - 2,
-        available_inner,
-    )
-    return inner + 2
+def _append_scroll_indicator(
+    lines: list[tuple[str, str]],
+    box_width: int,
+    *,
+    border_style: str = "class:clarify-border",
+    content_style: str = "class:clarify-choice",
+) -> None:
+    """Append a scrolled-outside-the-window row, styled by the caller.
 
-
-def _append_panel_line(lines: list[tuple[str, str]], border_style: str, content_style: str, text: str, box_width: int) -> None:
-    inner_width = max(0, box_width - 2)
-    lines.extend([(border_style, "│ "), (content_style, pad_to_width(text, inner_width)), (border_style, " │\n")])
-
-
-def _append_blank_panel_line(lines: list[tuple[str, str]], border_style: str, box_width: int) -> None:
-    lines.append((border_style, "│" + (" " * box_width) + "│\n"))
-
-
-def _append_scroll_indicator(lines: list[tuple[str, str]], box_width: int) -> None:
+    The indicator is generic: it only draws a bordered row with an ellipsis,
+    so the panel that owns it must pass its own style classes instead of
+    inheriting the model-picker/clarify styles by accident.
+    """
     lines.extend(
         [
-            ("class:clarify-border", "│"),
-            ("class:clarify-choice", pad_to_width("  ...", max(0, box_width))),
-            ("class:clarify-border", "│\n"),
+            (border_style, "│"),
+            (content_style, pad_to_width("  ...", max(0, box_width))),
+            (border_style, "│\n"),
         ]
     )
 
@@ -390,6 +380,16 @@ def _visible_window_start(selected: int, total: int, visible: int) -> int:
     if selected > total - visible // 2 - 1:
         return max(0, total - visible)
     return selected - visible // 2
+
+
+def _as_int(value: object, default: int = 0) -> int:
+    """Coerce an untyped modal-state value to int, preserving ``int(...)`` semantics."""
+    if isinstance(value, int):
+        return value
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _string_sequence(value: object) -> list[str]:

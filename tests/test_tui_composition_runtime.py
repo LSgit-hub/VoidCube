@@ -218,3 +218,50 @@ def test_composed_tui_runs_through_real_pty_on_unix() -> None:
         assert output.writes
     finally:
         os.close(master_fd)
+
+
+def test_completion_menu_height_tracks_terminal_budget(monkeypatch) -> None:
+    from prompt_toolkit.layout.dimension import Dimension
+
+    captured: dict = {}
+
+    def build_children(**kwargs):
+        captured.update(kwargs)
+        return [Window()]
+
+    monkeypatch.setattr(composition_module, "build_tui_layout_children", build_children)
+    monkeypatch.setattr(
+        composition_module,
+        "create_tui_application",
+        lambda **kwargs: SimpleNamespace(),
+    )
+
+    runtime = TuiCompositionRuntime(
+        TuiCompositionPorts(
+            cursor=None,
+            store_application=lambda _application: None,
+            install_resize_cleanup=lambda _application: None,
+        )
+    )
+    runtime.compose(
+        key_bindings=KeyBindings(),
+        widgets=_window_widgets(modal_visible=False),
+        extra_widgets=lambda: [],
+    )
+
+    menu = captured["completions_menu"]
+    # The menu height is re-evaluated per frame against the terminal budget,
+    # not fixed at construction time.
+    assert callable(menu.content.height)
+    height = menu.content.height()
+    assert isinstance(height, Dimension)
+    assert height.min == 1
+    assert height.max == composition_module._completion_menu_max_height()
+
+    # A smaller terminal shrinks the menu cap through the same helper.
+    monkeypatch.setattr(
+        composition_module,
+        "_completion_menu_max_height",
+        lambda: 4,
+    )
+    assert menu.content.height().max == 4

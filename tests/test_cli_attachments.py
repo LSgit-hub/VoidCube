@@ -93,6 +93,22 @@ def test_attachment_badges_adapt_to_terminal_width():
 
 
 @pytest.mark.unit
+def test_attachment_badges_truncate_wide_filenames_by_display_width():
+    from voidcube.interfaces.cli.terminal_text_layout import display_width
+
+    # 12 codepoints but 72 terminal cells — a naive len() truncation would
+    # let it overrun the 20-cell badge slot.
+    wide_name = "照片文件名称" * 6 + ".png"
+    images = [Path(wide_name)]
+
+    badge = _format_image_attachment_badges(images, 1, width=40)
+
+    assert "..." in badge
+    # Fixed chrome "[📎 name]" is 6 cells; the name must stay within 20.
+    assert display_width(badge) <= 26
+
+
+@pytest.mark.unit
 def test_clipboard_auto_attach_requires_image_only_paste():
     assert _should_auto_attach_clipboard_image_on_paste("  ") is True
     assert _should_auto_attach_clipboard_image_on_paste("text") is False
