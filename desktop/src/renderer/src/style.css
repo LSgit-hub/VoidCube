@@ -775,6 +775,10 @@ body.resizing * {
   color: var(--amber);
 }
 
+.body-verification-context svg {
+  color: var(--amber);
+}
+
 .context-item span {
   font-size: 10px;
 }

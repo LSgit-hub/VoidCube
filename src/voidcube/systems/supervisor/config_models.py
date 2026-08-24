@@ -347,6 +347,8 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     body_improvement_editable_dirs: list[str] = ["skills/", "src/voidcube/runtime/agent/", "src/voidcube/extensions/tools/", "prompts/"]
     body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "src/voidcube/systems/**"]
     body_improvement_max_files: int = 5
+    # Body employee verification is deliberately independent of the normal terminal.
+    body_improvement_backend: Literal["docker", "podman"] = "podman"
 class SupervisorBodyRuntimeConfig(BaseModel):
     state_root: str = Field(default_factory=_default_body_state_root)
     slot_a_name: str = "slot-A"

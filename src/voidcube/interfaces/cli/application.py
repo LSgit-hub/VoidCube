@@ -1413,6 +1413,7 @@ class VoidcubeCLI:
     def _create_scheduled_executor_runtime(self) -> ScheduledTaskExecutorRuntime:
         """Assemble scheduled execution from explicit CLI-owned state ports."""
         from ...infrastructure.config.scheduled import scheduled_timeout_seconds
+        from ...infrastructure.config.system import get_config
         from ...infrastructure.gateway.scheduled_tasks import SupervisorScheduledTaskClient
         from ...infrastructure.llm.scheduled_errors import scheduled_rate_limit_metadata
         from ...infrastructure.persistence.scheduled_writeback import (
@@ -1428,6 +1429,9 @@ class VoidcubeCLI:
         )
 
         gateway_client = SupervisorScheduledTaskClient()
+        body_improvement_backend = (
+            get_config().supervisor.service_runtime.body_improvement_backend
+        )
         outbox = SqliteScheduledWritebackOutbox(
             get_runtime_layout().runtime_root / "cli" / "scheduled_writebacks.db"
         )
@@ -1473,6 +1477,7 @@ class VoidcubeCLI:
                 writeback_outbox=outbox,
                 inspect_body_execution_readiness=inspect_body_execution_readiness,
                 prepare_task_git_worktree=prepare_task_git_worktree,
+                body_improvement_backend=body_improvement_backend,
                 release_task_environment=release_task_environment,
                 validate_execution_lease=validate_execution_lease,
                 recover_executor=self._recover_scheduled_executor,

@@ -327,6 +327,13 @@ def load_config_from_env() -> SystemConfig:
         "SUPERVISOR_ENDOGENOUS_DRIVE_LM_TASK_MODEL_ROLE",
         config.supervisor.service_runtime.endogenous_drive_lm_task_model_role,
     )
+    body_improvement_backend = os.getenv(
+        "SUPERVISOR_BODY_IMPROVEMENT_BACKEND",
+        config.supervisor.service_runtime.body_improvement_backend,
+    ).strip().lower()
+    config.supervisor.service_runtime.body_improvement_backend = TypeAdapter(
+        Literal["docker", "podman"]
+    ).validate_python(body_improvement_backend)
     cognition_charter = config.supervisor.service_runtime.endogenous_drive_cognition_charter
     charter_core_mission = os.getenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_CORE_MISSION",

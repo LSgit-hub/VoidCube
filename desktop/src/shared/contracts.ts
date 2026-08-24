@@ -38,6 +38,7 @@ export interface ExecutionContext {
   worktree: boolean
   workspaceMounted: boolean
   fallbackToLocal: boolean
+  bodyImprovementBackend?: string
   pid?: number
   updatedAt?: string
 }

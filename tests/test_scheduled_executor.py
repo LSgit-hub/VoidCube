@@ -92,15 +92,23 @@ def test_body_improvement_binding_uses_registry_worktree_and_expected_head(
     from voidcube.infrastructure.execution import terminal_tool
 
     captured_environment = {
-        "backend": "docker",
+        "backend": "podman",
         "validation_scope": "container",
         "repository_head": head,
         "execution_environment_id": "execution-environment-test",
     }
+
+    def prepare_environment(task_id, worktree_path, *, expected_head, backend):
+        assert task_id == "scheduled-body"
+        assert worktree_path == str(worktree.resolve())
+        assert expected_head == head
+        assert backend == "podman"
+        return captured_environment
+
     monkeypatch.setattr(
         terminal_tool,
         "prepare_task_git_worktree",
-        lambda task_id, worktree_path, *, expected_head: captured_environment,
+        prepare_environment,
         raising=False,
     )
     outbox = SimpleNamespace(
@@ -180,6 +188,38 @@ def test_body_improvement_report_gets_infrastructure_environment_manifest():
 
     payload = json.loads(enriched)
     assert payload["body_improvement_report"]["execution_environment"] == manifest
+
+
+def test_body_improvement_rejects_host_backend():
+    runtime = ScheduledTaskExecutorRuntime(
+        ScheduledTaskExecutorPorts(
+            autonomous_mode_active=lambda: True,
+            autonomous_mode_lock=None,
+            execution_gate=None,
+            get_session_id=lambda: "session",
+            set_execution_active=Mock(),
+            set_companion_active=Mock(),
+            start_background_task=Mock(return_value=False),
+            post_supervisor=Mock(),
+            rate_limit_metadata=lambda _error: {},
+            writeback_outbox=SimpleNamespace(
+                pending_count=Mock(return_value=0),
+                next_due=Mock(return_value=None),
+            ),
+            inspect_body_execution_readiness=Mock(return_value={"ready": True}),
+            prepare_task_git_worktree=Mock(),
+            body_improvement_backend="local",
+        )
+    )
+
+    with pytest.raises(ValueError, match="Docker or Podman"):
+        runtime._bind_body_improvement_worktree(
+            autonomous_task={
+                "execution_kind": "body_improvement",
+                "constraints": {"target_slot_id": "slot-B"},
+            },
+            task_id="scheduled-body",
+        )
 
 
 @pytest.mark.integration
@@ -315,7 +355,9 @@ def test_body_employee_scheduler_uses_real_podman_manifest(tmp_path, monkeypatch
         on_complete(True, json.dumps({"body_improvement_report": task_manifest}), "")
         return True
 
-    monkeypatch.setenv("TERMINAL_ENV", "podman")
+    # The ordinary terminal stays on Windows local; body verification must
+    # still select Podman through its dedicated execution policy.
+    monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_PODMAN_IMAGE", image)
     monkeypatch.setenv("TERMINAL_FALLBACK_TO_LOCAL", "false")
     from voidcube.infrastructure.execution import terminal_tool

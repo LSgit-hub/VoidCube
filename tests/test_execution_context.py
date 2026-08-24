@@ -13,6 +13,24 @@ def test_collect_execution_context_distinguishes_sandbox_and_worktree(monkeypatc
             "fallback_to_local": False,
         },
     )
+    monkeypatch.setattr(
+        "voidcube.infrastructure.config.system.get_config",
+        lambda: type(
+            "Config",
+            (),
+            {
+                "supervisor": type(
+                    "Supervisor",
+                    (),
+                    {
+                        "service_runtime": type(
+                            "Runtime", (), {"body_improvement_backend": "podman"}
+                        )()
+                    },
+                )()
+            },
+        )(),
+    )
 
     result = execution_context.collect_execution_context(
         {"path": "C:\\repo\\.worktrees\\task-1", "branch": "task-1"}
@@ -25,6 +43,7 @@ def test_collect_execution_context_distinguishes_sandbox_and_worktree(monkeypatc
     assert result["workspaceName"] == "task-1"
     assert result["branch"] == "task-1"
     assert result["worktree"] is True
+    assert result["bodyImprovementBackend"] == "podman"
 
 
 def test_published_execution_context_rejects_stale_pid_and_cleans_owner(

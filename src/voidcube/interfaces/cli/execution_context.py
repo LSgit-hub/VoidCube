@@ -30,11 +30,15 @@ def _git_branch(path: str) -> str:
 def collect_execution_context(
     worktree_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collect the configured tool backend and active CLI workspace."""
+    """Collect terminal context plus the governed body verification backend."""
     from ...infrastructure.execution.terminal_tool import _get_env_config
+    from ...infrastructure.config.system import get_config
 
     terminal = _get_env_config()
     backend = str(terminal.get("env_type") or "local").strip().lower()
+    body_improvement_backend = str(
+        get_config().supervisor.service_runtime.body_improvement_backend
+    ).strip().lower()
     if backend in _SANDBOX_BACKENDS:
         mode = "sandbox"
     elif backend == "ssh":
@@ -68,6 +72,7 @@ def collect_execution_context(
         "worktree": bool(worktree_path),
         "workspaceMounted": bool(terminal.get("host_cwd")),
         "fallbackToLocal": bool(terminal.get("fallback_to_local", False)),
+        "bodyImprovementBackend": body_improvement_backend,
     }
 
 

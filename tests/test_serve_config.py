@@ -26,6 +26,32 @@ def test_serve_supervisor_config_honors_lm_generation_env(monkeypatch):
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is False
 
 
+def test_body_improvement_backend_is_independent_from_terminal_backend(
+    monkeypatch,
+):
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.delenv("SUPERVISOR_BODY_IMPROVEMENT_BACKEND", raising=False)
+
+    config = load_config_from_env()
+
+    assert config.supervisor.service_runtime.body_improvement_backend == "podman"
+
+
+def test_body_improvement_backend_honors_explicit_supported_override(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_BODY_IMPROVEMENT_BACKEND", "docker")
+
+    config = load_config_from_env()
+
+    assert config.supervisor.service_runtime.body_improvement_backend == "docker"
+
+
+def test_body_improvement_backend_rejects_local_override(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_BODY_IMPROVEMENT_BACKEND", "local")
+
+    with pytest.raises(ValidationError, match="docker|podman"):
+        load_config_from_env()
+
+
 def test_memory_timing_policy_honors_environment_overrides(monkeypatch):
     monkeypatch.setenv("MEMORY_TIER1_RETENTION_DAYS", "11")
     monkeypatch.setenv("MEMORY_TIER2_BATCH_SIZE", "17")

@@ -11,6 +11,8 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+_BODY_IMPROVEMENT_BACKENDS = frozenset({"docker", "podman"})
+
 
 class ScheduledRequestRejected(RuntimeError):
     """A scheduled-task gateway request was permanently or temporarily rejected."""
@@ -45,6 +47,7 @@ class ScheduledTaskExecutorPorts:
     writeback_outbox: ScheduledWritebackOutbox
     inspect_body_execution_readiness: Callable[..., Dict[str, Any]] | None = None
     prepare_task_git_worktree: Callable[..., Dict[str, Any]] | None = None
+    body_improvement_backend: str = "podman"
     release_task_environment: Callable[[str], None] | None = None
     get_supervisor: Callable[[str], Dict[str, Any]] | None = None
     cancel_background_task: Callable[[str, str], bool] | None = None
@@ -100,6 +103,11 @@ class ScheduledTaskExecutorRuntime:
         prompt.  The terminal override is keyed by task id, so concurrent
         employees cannot overwrite each other's cwd.
         """
+        body_backend = str(self.ports.body_improvement_backend or "podman").strip().lower()
+        if body_backend not in _BODY_IMPROVEMENT_BACKENDS:
+            raise ValueError(
+                "body improvement verification requires a Docker or Podman backend"
+            )
         constraints = dict(autonomous_task.get("constraints") or {})
         slot_id = str(
             constraints.get("target_slot_id")
@@ -154,7 +162,6 @@ class ScheduledTaskExecutorRuntime:
         prepare_environment = self.ports.prepare_task_git_worktree
         if inspect_readiness is None or prepare_environment is None:
             raise ValueError("body improvement execution ports are not configured")
-
         readiness = inspect_readiness(
             slot_id=slot_id,
             worktree_path=str(canonical_path),
@@ -170,6 +177,7 @@ class ScheduledTaskExecutorRuntime:
             task_id,
             str(canonical_path),
             expected_head=expected_head,
+            backend=body_backend,
         )
 
         def verify() -> tuple[bool, str]:

@@ -50,6 +50,7 @@ const executionSelector = requiredElement<HTMLDetailsElement>('execution-selecto
 const executionSelectorSummary = requiredElement<HTMLElement>('execution-selector-summary')
 const executionMode = requiredElement<HTMLElement>('execution-mode')
 const executionWorkspace = requiredElement<HTMLElement>('execution-workspace')
+const bodyImprovementBackend = requiredElement<HTMLElement>('body-improvement-backend')
 const localBackendLabel = requiredElement<HTMLElement>('local-backend-label')
 const executionSelectorStatus = requiredElement<HTMLParagraphElement>('execution-selector-status')
 const backendButtons = Array.from(
@@ -316,6 +317,12 @@ function localEnvironmentLabel(): string {
   return '宿主本地环境'
 }
 
+function bodyImprovementBackendLabel(backend?: string): string {
+  if (backend === 'podman') return 'Podman / Linux'
+  if (backend === 'docker') return 'Docker / Linux'
+  return backend || '检测中'
+}
+
 function applyBackendSelection(backend?: string): void {
   localBackendLabel.textContent = localEnvironmentLabel()
   executionSelector.dataset.backend = backend ?? 'pending'
@@ -344,6 +351,7 @@ function applyExecutionContext(context?: ExecutionContext): void {
     executionMode.textContent = '检测中'
     applyBackendSelection()
     executionWorkspace.textContent = '等待 CLI'
+    bodyImprovementBackend.textContent = '检测中'
     executionContext.title = ''
     return
   }
@@ -353,8 +361,12 @@ function applyExecutionContext(context?: ExecutionContext): void {
   executionWorkspace.textContent = context.branch
     ? `${context.workspaceName} · ${context.branch}`
     : context.workspaceName
+  bodyImprovementBackend.textContent = bodyImprovementBackendLabel(
+    context.bodyImprovementBackend
+  )
   executionContext.title = [
     `执行方式：${executionModeLabel(context)}`,
+    `替身验证：${bodyImprovementBackendLabel(context.bodyImprovementBackend)}`,
     `Agent 目录：${context.backendWorkingDirectory}`,
     `宿主工作区：${context.hostWorkingDirectory}`,
     context.worktree ? 'Git 隔离：Worktree' : 'Git 隔离：主工作区',
