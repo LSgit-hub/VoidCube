@@ -2009,11 +2009,11 @@ class MemoryApplicationService:
     async def _app_lifespan(self, app: FastAPI):
         """Own Gateway registration and memory maintenance background tasks."""
         del app
-        svc_id = await self.register_with_gateway()
-        if svc_id:
-            logger.info("Memory service registered with gateway: %s", svc_id)
-        else:
-            logger.warning("Memory service failed to register with gateway")
+        # Gateway registration is control-plane bookkeeping.  It must not hold
+        # the local Memory data plane behind a remote service's retry window.
+        self._gateway_registration_task = asyncio.create_task(
+            self._gateway_registration_loop()
+        )
         # Startup LLM health check
         await self._check_llm_health()
         if self._llm_healthy:
@@ -2025,9 +2025,6 @@ class MemoryApplicationService:
             logger.info("Identity experience sync completed: %s", identity_sync)
         except Exception:
             logger.warning("Identity experience startup sync failed", exc_info=True)
-        self._gateway_registration_task = asyncio.create_task(
-            self._gateway_registration_loop()
-        )
         self._compression_task = asyncio.create_task(self._compression_loop())
         self._tier2_wake.set()
         self._semantic_task = asyncio.create_task(self._semantic_index_loop())
@@ -2118,7 +2115,6 @@ class MemoryApplicationService:
     async def _gateway_registration_loop(self) -> None:
         interval = max(1, int(self.config.gateway_registration_check_interval))
         while True:
-            await asyncio.sleep(interval)
             try:
                 await self._ensure_gateway_registration()
             except asyncio.CancelledError:
@@ -2129,6 +2125,7 @@ class MemoryApplicationService:
                     "Memory gateway registration recovery failed",
                     exc_info=True,
                 )
+            await asyncio.sleep(interval)
 
     async def _compression_loop(self) -> None:
         """Periodically trigger memory compression (runs in the memory service).
@@ -2269,7 +2266,9 @@ class MemoryApplicationService:
 
     async def _identity_experience_cycle(self) -> Dict[str, int]:
         from memai.application.identity_experience import sync_identity_experiences
-        return await self._repository_write_async(sync_identity_experiences)
+        return await self._repository_write_async(
+            lambda conn: sync_identity_experiences(conn, commit=False)
+        )
 
     @staticmethod
     def _rule_effective_count(result: Any) -> int:
@@ -2606,8 +2605,7 @@ class MemoryApplicationService:
             },
         }
         service_healthy = bool(
-            self._gateway_registration_healthy
-            and transport_outboxes["healthy"]
+            transport_outboxes["healthy"]
             and self._tier2_bridge_state != "degraded"
         )
         database_healthy = database["readable"] and database["integrity"] == "ok"
@@ -4377,7 +4375,7 @@ class MemoryApplicationService:
                 source_domains=source_domains,
                 limit=self.config.recall_candidate_limit,
             )
-            payload = self._repository_read(
+            payload = await self._repository_write_async(
                 lambda conn: recall_memories(
                     conn,
                     plan,

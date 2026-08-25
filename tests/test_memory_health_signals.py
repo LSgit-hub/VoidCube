@@ -380,6 +380,19 @@ async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letter
 
 
 @pytest.mark.asyncio
+async def test_memory_health_stays_local_when_gateway_registration_is_unavailable(
+    tmp_path,
+):
+    service = _make_service(tmp_path)
+    service._gateway_registration_healthy = False
+
+    health = await service.health_check()
+
+    assert health["status"] == "healthy"
+    assert health["gateway_registration"]["healthy"] is False
+
+
+@pytest.mark.asyncio
 async def test_memory_health_reports_commit_revision(tmp_path):
     service = _make_service(tmp_path)
     await service.create_session(SessionCreate(session_id="revision-session", metadata={}))

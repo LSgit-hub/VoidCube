@@ -50,6 +50,19 @@ async def test_memory_use_cases_run_without_constructing_http_adapter(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_identity_cycle_respects_repository_transaction_boundary(tmp_path: Path):
+    service = MemoryApplicationService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+
+    result = await service._identity_experience_cycle()
+
+    assert result["updated_count"] == 0
+    assert service._repository.execution_stats()["write_batch_failures"] == 0
+    service._repository.close()
+
+
+@pytest.mark.asyncio
 async def test_memory_application_uses_injected_repository(tmp_path: Path):
     class RecordingRepository(SQLiteMemoryRepository):
         def __init__(self, db_path: Path):

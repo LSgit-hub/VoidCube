@@ -18,6 +18,7 @@ def sync_identity_experiences(
     conn,
     *,
     now: datetime | None = None,
+    commit: bool = True,
 ) -> dict[str, int]:
     """Project only explicitly authored identity claims into core identity history.
 
@@ -28,7 +29,11 @@ def sync_identity_experiences(
     reference_time = now or datetime.now(timezone.utc)
     revision_count = _ingest_released_revisions(conn, reference_time)
     conversation_count = _ingest_verified_conversations(conn, reference_time)
-    conn.commit()
+    # Direct callers historically own the connection.  Memory Service passes
+    # ``commit=False`` because the repository owns the surrounding savepoint
+    # and commit boundary.
+    if commit:
+        conn.commit()
     return {
         # Keep the public projection counters stable for maintenance callers.
         # Revision proposals are governance history, not task or self-narrative
