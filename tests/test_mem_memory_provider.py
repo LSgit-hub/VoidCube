@@ -95,10 +95,9 @@ def test_mem_provider_forwards_explicit_supersession(monkeypatch):
 
 
 @pytest.mark.unit
-def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
+def test_mem_provider_search_and_prefetch_use_memory_service_route(monkeypatch):
     provider = MemMemoryProvider()
     provider._initialized = True
-    provider._gateway_url = "http://gateway.test"
     calls = []
 
     def fake_request(method, path, payload=None):
@@ -216,83 +215,49 @@ def test_mem_provider_timeline_only_filters_an_explicit_session(monkeypatch):
 
 
 @pytest.mark.unit
-def test_mem_provider_uses_gateway_issued_session_credential(monkeypatch):
+def test_mem_provider_uses_bound_memory_client_without_gateway_session():
     provider = MemMemoryProvider()
     provider._initialized = True
     provider._session_id = "session-1"
-    provider._gateway_url = "http://gateway.test"
     requests = []
 
-    class _FakeResponse:
-        def __init__(self, payload):
-            self._payload = json.dumps(payload).encode("utf-8")
+    class _MemoryClient:
+        def request_json(self, method, path, payload=None, **kwargs):
+            requests.append((method, path, payload, kwargs))
+            return {"status": "remembered"}
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return self._payload
-
-    def fake_urlopen(request, timeout=None):
-        requests.append((request, timeout))
-        if request.full_url.endswith("/v1/sessions/register"):
-            return _FakeResponse({"session_token": "session-secret"})
-        return _FakeResponse({"status": "remembered"})
-
-    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "root-secret")
-    monkeypatch.setattr(provider, "_gateway_is_reachable", lambda: True)
-    monkeypatch.setattr("plugins.memory.mem.urlopen", fake_urlopen)
+    provider._memory_client = _MemoryClient()
 
     result = provider._request_json(
         "POST",
         "/remember",
-        {"title": "Decision", "summary": "Keep rollback evidence."},
+        {"title": "Decision", "summary": "Keep rollback evidence.", "write_id": "write-1"},
+        identity_session_id="session-1",
     )
 
     assert result == {"status": "remembered"}
-    registration_request = requests[0][0]
-    memory_request = requests[1][0]
-    assert registration_request.get_header("Authorization") == "Bearer root-secret"
-    assert json.loads(registration_request.data) == {
-        "session_id": "session-1",
-        "source": "agent_memory_provider",
-        "owner_id": "local-user",
-        "workspace_id": "default",
-    }
-    assert memory_request.get_header("X-voidcube-session-id") == "session-1"
-    assert memory_request.get_header("X-voidcube-session-token") == "session-secret"
+    assert requests == [
+        (
+            "POST",
+            "/remember",
+            {
+                "title": "Decision",
+                "summary": "Keep rollback evidence.",
+                "write_id": "write-1",
+            },
+            {"identity_session_id": "session-1", "idempotency_key": "write-1"},
+        )
+    ]
 
 
 @pytest.mark.unit
-def test_mem_provider_caches_failed_gateway_probe(monkeypatch):
+def test_mem_provider_has_no_gateway_fallback_when_client_is_unavailable():
     provider = MemMemoryProvider()
     provider._initialized = True
-    provider._gateway_url = "http://unreachable.test:6000"
-    attempts = []
+    provider._memory_client = None
 
-    def fail_connection(address, timeout):
-        attempts.append((address, timeout))
-        raise TimeoutError("unreachable")
-
-    monkeypatch.setattr(
-        "plugins.memory.mem.socket.create_connection",
-        fail_connection,
-    )
-    monkeypatch.setattr(
-        "plugins.memory.mem.urlopen",
-        lambda *_args, **_kwargs: pytest.fail(
-            "HTTP request ran after a failed gateway probe"
-        ),
-    )
-
-    for _ in range(2):
-        with pytest.raises(ConnectionError, match="unreachable"):
-            provider._request_json("POST", "/recall", {"query": "x"})
-
-    assert attempts == [(('unreachable.test', 6000), 0.25)]
+    with pytest.raises(ConnectionError, match="Memory Service client"):
+        provider._request_json("POST", "/recall", {"query": "x"})
 
 
 @pytest.mark.unit

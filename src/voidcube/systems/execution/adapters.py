@@ -1298,9 +1298,11 @@ class MemoryMaintenanceExecutionAdapter:
         *,
         config: Any,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
+        memory_client_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.config = config
         self.attach_execution_route_hint = attach_execution_route_hint
+        self._memory_client_factory = memory_client_factory
 
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
@@ -1319,22 +1321,40 @@ class MemoryMaintenanceExecutionAdapter:
     async def _run_memory_service_maintenance(self, _request: dict) -> Dict[str, Any]:
         """Run the canonical maintenance rules owned by Memory Service."""
         try:
-            import aiohttp
-
-            async with aiohttp.ClientSession() as session:
-                gateway = str(self.config.gateway_address).rstrip("/")
-                url = f"{gateway}/api/mem/compressed/run-all-rules"
-                async with session.post(url, json={}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    return {
-                        "status": "error",
-                        "error": f"Memory Service returned HTTP {resp.status}",
-                    }
+            client = self._memory_client(
+                memory_actor="memory_maintenance",
+                memory_domain="evolution",
+                timeout_seconds=30,
+            )
+            return await client.request_json("POST", "/compressed/run-all-rules", {})
         except Exception as exc:
             logger.warning("Memory Service maintenance failed: %s", exc)
             return {
                 "status": "error",
                 "error": str(exc),
             }
+
+    def _memory_client(self, **kwargs: Any) -> Any:
+        if self._memory_client_factory is not None:
+            return self._memory_client_factory(**kwargs)
+        from ...infrastructure.config.system import get_config
+        from ...infrastructure.memory.client import AsyncMemoryClient, MemoryClientIdentity
+        from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+
+        memory_config = get_config().memory
+        actor = str(kwargs.get("memory_actor") or "memory_maintenance")
+        domain = str(kwargs.get("memory_domain") or "evolution")
+        service_tokens = dict(getattr(memory_config, "service_tokens", {}) or {})
+        service_token = service_tokens.get(actor) or getattr(memory_config, "service_token", None)
+        return AsyncMemoryClient(
+            f"http://{memory_config.host}:{memory_config.port}",
+            identity=MemoryClientIdentity(
+                actor=actor,
+                owner_id=DEFAULT_OWNER_ID,
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                memory_domain=domain,
+            ),
+            timeout_seconds=float(kwargs.get("timeout_seconds") or 30),
+            service_token=service_token,
+        )
 

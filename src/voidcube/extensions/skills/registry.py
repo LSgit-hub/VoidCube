@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ...infrastructure.config.runtime_paths import get_VoidCube_home
+from ...infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
 from .catalog import (
     extract_skill_conditions,
     extract_skill_description,
@@ -27,6 +28,20 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_FILENAME = ".skills_registry.sqlite3"
 SCHEMA_VERSION = "1"
+
+
+class _OwnedRegistryConnection(sqlite3.Connection):
+    """SQLite connection that releases the Skill Registry owner lease on close."""
+
+    owner_lease: SQLiteOwnerLease | None = None
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            if self.owner_lease is not None:
+                self.owner_lease.close()
+                self.owner_lease = None
 
 
 @dataclass(frozen=True)
@@ -134,7 +149,15 @@ def open_registry(path: str | Path | None = None) -> sqlite3.Connection:
     db_path = db_path.expanduser().resolve()
     database_exists = db_path.is_file()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(db_path), timeout=30)
+    lease = SQLiteOwnerLease(db_path, "skill-registry-owner")
+    try:
+        connection = sqlite3.connect(
+            str(db_path), timeout=30, factory=_OwnedRegistryConnection
+        )
+    except BaseException:
+        lease.close()
+        raise
+    connection.owner_lease = lease
     connection.row_factory = sqlite3.Row
     # WAL is persistent in the SQLite header.  Re-negotiating it on every
     # hot refresh can wait on another reader/writer on Windows, so configure

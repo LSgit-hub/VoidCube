@@ -24,7 +24,7 @@ for import_root in (ROOT, ROOT / "src"):
 
 from plugins.memory.mem import MemMemoryProvider
 from plugins.memory.mem.outbox import MemoryWriteOutbox
-from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig, InternalGateway
+from voidcube.infrastructure.memory.client import MemoryClient, MemoryClientIdentity
 from memai.application.memory_service import MemoryService, MemoryServiceConfig
 
 
@@ -64,19 +64,15 @@ async def _stop_uvicorn(
         await asyncio.wait_for(task, timeout=15)
 
 
-async def _wait_for_memory_registration(gateway_url: str) -> None:
+async def _wait_for_memory_ready(memory_url: str) -> None:
     deadline = asyncio.get_running_loop().time() + 20
     async with httpx.AsyncClient(timeout=2.0) as client:
         while asyncio.get_running_loop().time() < deadline:
-            response = await client.get(f"{gateway_url}/admin/services")
-            services = response.json().get("services", [])
-            if any(
-                item.get("service_type") == "memory" and item.get("healthy")
-                for item in services
-            ):
+            response = await client.get(f"{memory_url}/health")
+            if response.status_code == 200 and response.json().get("service") == "memory-service":
                 return
             await asyncio.sleep(0.1)
-    raise RuntimeError("Memory Service was not registered as healthy")
+    raise RuntimeError("Memory Service was not ready")
 
 
 def _run_child(arguments: list[str], *, timeout: float = 30.0) -> dict[str, Any]:
@@ -152,12 +148,23 @@ def _consume_child(
     return {"worker_id": worker_id, "claimed": claimed}
 
 
-def _report_child(path: str, gateway_url: str, session_id: str) -> dict[str, Any]:
+def _report_child(path: str, memory_url: str, session_id: str) -> dict[str, Any]:
     provider = MemMemoryProvider()
-    provider._gateway_url = gateway_url
     provider._request_timeout_seconds = 5.0
     provider._session_id = session_id
     provider._outbox = MemoryWriteOutbox(path)
+    provider._owner_id = "local-user"
+    provider._workspace_id = "default"
+    provider._memory_client = MemoryClient(
+        memory_url,
+        identity=MemoryClientIdentity(
+            actor="api_a",
+            owner_id="local-user",
+            workspace_id="default",
+            memory_domain="agent_interaction",
+        ),
+        timeout_seconds=5.0,
+    )
     provider._outbox.enqueue(
         {
             "write_id": f"{session_id}-write",
@@ -175,36 +182,26 @@ def _report_child(path: str, gateway_url: str, session_id: str) -> dict[str, Any
 
 
 async def run_http_health_smoke() -> dict[str, Any]:
-    """Exercise two provider processes through real Gateway and Memory sockets."""
-    gateway_port = _free_port()
+    """Exercise two provider processes through real Memory sockets."""
     memory_port = _free_port()
-    gateway_url = f"http://127.0.0.1:{gateway_port}"
+    memory_url = f"http://127.0.0.1:{memory_port}"
     with tempfile.TemporaryDirectory(prefix="voidcube-http-smoke-") as temp:
-        gateway = InternalGateway(
-            GatewayConfig(host="127.0.0.1", port=gateway_port)
-        )
         memory = MemoryService(
             MemoryServiceConfig(
                 host="127.0.0.1",
                 port=memory_port,
                 db_path=str(Path(temp) / "memory.db"),
-                gateway_address=gateway_url,
-                gateway_registration_check_interval=1,
                 compression_interval=3600,
             )
         )
         memory._check_llm_health = AsyncMock(return_value=None)
-        gateway_server = gateway_task = memory_server = memory_task = None
+        memory_server = memory_task = None
         try:
-            gateway_server, gateway_task = await _start_uvicorn(
-                gateway.app,
-                gateway_port,
-            )
             memory_server, memory_task = await _start_uvicorn(
                 memory.app,
                 memory_port,
             )
-            await _wait_for_memory_registration(gateway_url)
+            await _wait_for_memory_ready(memory_url)
             reports = await asyncio.gather(
                 *(
                     asyncio.to_thread(
@@ -212,7 +209,7 @@ async def run_http_health_smoke() -> dict[str, Any]:
                         [
                             "--child-report",
                             str(Path(temp) / f"agent-{index}" / "outbox.sqlite3"),
-                            gateway_url,
+                            memory_url,
                             f"http-agent-{index}",
                         ],
                     )
@@ -220,25 +217,7 @@ async def run_http_health_smoke() -> dict[str, Any]:
                 )
             )
             async with httpx.AsyncClient(timeout=5.0) as client:
-                registration = await client.post(
-                    f"{gateway_url}/v1/sessions/register",
-                    json={
-                        "session_id": "http-health-reader",
-                        "source": "outbox_smoke",
-                        "owner_id": "local-user",
-                        "workspace_id": "default",
-                    },
-                )
-                registration.raise_for_status()
-                health = await client.get(
-                    f"{gateway_url}/api/mem/health",
-                    headers={
-                        "X-VoidCube-Session-Id": "http-health-reader",
-                        "X-VoidCube-Session-Token": registration.json()[
-                            "session_token"
-                        ],
-                    },
-                )
+                health = await client.get(f"{memory_url}/health")
                 health.raise_for_status()
             payload = health.json()
             agent_outbox = payload["agent_outbox"]
@@ -263,7 +242,6 @@ async def run_http_health_smoke() -> dict[str, Any]:
             }
         finally:
             await _stop_uvicorn(memory_server, memory_task)
-            await _stop_uvicorn(gateway_server, gateway_task)
 
 
 def run_recovery_soak(

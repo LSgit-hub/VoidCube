@@ -22,6 +22,7 @@ from memai.domain.time_summary import (
     session_source_hash,
     turn_sort_key,
 )
+from memai.repository.contracts import MemoryRepository
 from memai.repository.sqlite import open_memory_sqlite
 
 
@@ -192,8 +193,42 @@ def get_active_time_summary(
     }
 
 
+def _connect(db_path: str | Path | None, repository: MemoryRepository | None):
+    if repository is not None:
+        return repository.connect()
+    if db_path is None:
+        raise ValueError("db_path is required when repository is not provided")
+    return open_memory_sqlite(db_path)
+
+
+def _execute_read(db_path: str | Path | None, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return repository.execute_read(operation)
+    connection = _connect(db_path, repository)
+    try:
+        return operation(connection)
+    finally:
+        connection.close()
+
+
+def _execute_write(db_path: str | Path | None, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return repository.execute_write(operation)
+    connection = _connect(db_path, repository)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        result = operation(connection)
+        connection.commit()
+        return result
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def persist_session_summary(
-    db_path: str | Path,
+    db_path: str | Path | None,
     *,
     session_id: str,
     owner_id: str,
@@ -202,11 +237,12 @@ def persist_session_summary(
     timezone_name: str,
     expected_source_hash: str,
     draft: TimeSummaryDraft,
+    connection=None,
 ) -> dict[str, Any]:
     """Atomically publish one immutable summary version for a stable snapshot."""
-    connection = open_memory_sqlite(db_path)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    owns_connection = connection is None
+
+    def write(connection):
         turns = load_session_turns(
             connection,
             session_id=session_id,
@@ -229,7 +265,8 @@ def persist_session_summary(
             memory_domain=memory_domain,
         )
         if current and current["source_hash"] == actual_source_hash:
-            connection.commit()
+            if owns_connection:
+                connection.commit()
             return {**current, "write_status": "current"}
 
         version = int(
@@ -301,7 +338,8 @@ def persist_session_summary(
                 for ordinal, turn in enumerate(turns)
             ],
         )
-        connection.commit()
+        if owns_connection:
+            connection.commit()
         stored = get_active_session_summary(
             connection,
             session_id=session_id,
@@ -312,15 +350,14 @@ def persist_session_summary(
         if stored is None:
             raise RuntimeError("Session summary write did not produce an active version")
         return {**stored, "write_status": "created"}
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+
+    if connection is not None:
+        return write(connection)
+    return _execute_write(db_path, None, write)
 
 
 def persist_day_summary(
-    db_path: str | Path,
+    db_path: str | Path | None,
     *,
     day_key: str,
     owner_id: str,
@@ -329,11 +366,12 @@ def persist_day_summary(
     timezone_name: str,
     expected_source_hash: str,
     draft: TimeSummaryDraft,
+    connection=None,
 ) -> dict[str, Any]:
     """Atomically publish one DaySummary for a stable active-session snapshot."""
-    connection = open_memory_sqlite(db_path)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    owns_connection = connection is None
+
+    def write(connection):
         summaries = load_day_session_summaries(
             connection,
             day_key=day_key,
@@ -357,7 +395,8 @@ def persist_day_summary(
             memory_domain=memory_domain,
         )
         if current and current["source_hash"] == actual_source_hash:
-            connection.commit()
+            if owns_connection:
+                connection.commit()
             return {**current, "write_status": "current"}
 
         version = int(
@@ -426,7 +465,8 @@ def persist_day_summary(
                 for summary in summaries
             ],
         )
-        connection.commit()
+        if owns_connection:
+            connection.commit()
         stored = get_active_day_summary(
             connection,
             day_key=day_key,
@@ -437,15 +477,14 @@ def persist_day_summary(
         if stored is None:
             raise RuntimeError("Day summary write did not produce an active version")
         return {**stored, "write_status": "created"}
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+
+    if connection is not None:
+        return write(connection)
+    return _execute_write(db_path, None, write)
 
 
 def supersede_empty_day_summary(
-    db_path: str | Path,
+    db_path: str | Path | None,
     *,
     day_key: str,
     owner_id: str,
@@ -453,11 +492,12 @@ def supersede_empty_day_summary(
     memory_domain: str,
     timezone_name: str,
     expected_summary_id: str,
+    connection=None,
 ) -> dict[str, Any]:
     """Deactivate a stale day index after its last active child moves away."""
-    connection = open_memory_sqlite(db_path)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    owns_connection = connection is None
+
+    def write(connection):
         summaries = load_day_session_summaries(
             connection,
             day_key=day_key,
@@ -478,7 +518,8 @@ def supersede_empty_day_summary(
             memory_domain=memory_domain,
         )
         if current is None:
-            connection.commit()
+            if owns_connection:
+                connection.commit()
             return {
                 "summary_type": "day",
                 "bucket_key": day_key,
@@ -492,15 +533,15 @@ def supersede_empty_day_summary(
             "WHERE summary_id = ?",
             (now, expected_summary_id),
         )
-        connection.commit()
+        if owns_connection:
+            connection.commit()
         return {
             **current,
             "status": "superseded",
             "updated_at": now,
             "write_status": "emptied",
         }
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+
+    if connection is not None:
+        return write(connection)
+    return _execute_write(db_path, None, write)

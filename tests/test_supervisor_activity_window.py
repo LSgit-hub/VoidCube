@@ -163,55 +163,24 @@ async def test_supervisor_reads_memory_maintenance_status_for_auto_gate(tmp_path
     supervisor = _make_supervisor(tmp_path)
     requests = []
 
-    class _Response:
-        status = 200
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def json(self):
+    class _MemoryClient:
+        async def request_json(self, method, path):
+            requests.append((method, path))
             return {"status": "completed", "maintenance_due": False}
 
-    class _Session:
-        def __init__(self, **kwargs):
-            del kwargs
+    def fake_memory_client(**kwargs):
+        requests.append(kwargs)
+        return _MemoryClient()
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, headers):
-            requests.append((url, headers))
-            return _Response()
-
-    monkeypatch.setattr(
-        "voidcube.systems.supervisor.planning_runtime.aiohttp",
-        SimpleNamespace(
-            ClientTimeout=lambda **kwargs: kwargs,
-            ClientSession=_Session,
-        ),
-    )
-    supervisor._gateway_service_id = "supervisor-local"
-    supervisor._gateway_service_tokens["supervisor"] = "local-service-token"
+    monkeypatch.setattr(supervisor, "_memory_client", fake_memory_client)
 
     first = await supervisor._fetch_memory_maintenance_status()
     second = await supervisor._fetch_memory_maintenance_status()
 
     assert first == second == {"status": "completed", "maintenance_due": False}
     assert requests == [
-        (
-            "http://127.0.0.1:6000/api/mem/compressed/rules-status",
-            {
-                "X-VoidCube-Service-Id": "supervisor-local",
-                "X-VoidCube-Service-Token": "local-service-token",
-                "X-VoidCube-Memory-Actor": "stellar_auto",
-            },
-        )
+        {"memory_actor": "stellar_auto", "memory_domain": "evolution", "timeout_seconds": 2},
+        ("GET", "/compressed/rules-status"),
     ]
 
 

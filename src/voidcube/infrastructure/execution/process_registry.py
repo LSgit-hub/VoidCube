@@ -23,6 +23,7 @@ import psutil
 
 from ...domain.contracts.execution import ExecutionState, state_from_exit_code, utc_now
 from ..runtime.layout import get_runtime_layout
+from ..persistence.sqlite_owner import SQLiteOwnerLease
 
 
 _IS_WINDOWS = os.name == "nt"
@@ -106,6 +107,7 @@ class ProcessRegistry:
         self.storage_dir = root.resolve()
         self.spool_dir = self.storage_dir / "spool"
         self.db_path = self.storage_dir / "registry.db"
+        self._owner_lease = SQLiteOwnerLease(self.db_path, "process-registry-owner")
         self.max_spool_bytes = max(1, int(max_spool_bytes))
         self.max_total_spool_bytes = max(self.max_spool_bytes, int(max_total_spool_bytes))
         self.max_retained_sessions = max(1, int(max_retained_sessions))

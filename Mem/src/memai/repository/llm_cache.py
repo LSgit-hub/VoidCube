@@ -16,6 +16,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from .contracts import MemoryRepository
+
 CACHE_TABLE = "mem_llm_cache"
 
 # Task names used as cache namespaces.
@@ -116,6 +118,18 @@ def open_cached(
         conn.close()
 
 
+def open_cached_with_repository(
+    repository: MemoryRepository,
+    cache_key: str,
+) -> Any | None:
+    conn = repository.connect()
+    try:
+        setup_llm_cache(conn)
+        return get_cached(conn, cache_key)
+    finally:
+        conn.close()
+
+
 def store_cached(
     db_path,
     *,
@@ -142,3 +156,26 @@ def store_cached(
         conn.commit()
     finally:
         conn.close()
+
+
+def store_cached_with_repository(
+    repository: MemoryRepository,
+    *,
+    cache_key: str,
+    task: str,
+    model: str,
+    input_text: str,
+    result: Any,
+) -> None:
+    def write(conn):
+        setup_llm_cache(conn)
+        put_cached(
+            conn,
+            cache_key=cache_key,
+            task=task,
+            model=model,
+            input_text=input_text,
+            result=result,
+        )
+
+    repository.execute_write(write)

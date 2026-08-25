@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
+from ...infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
 
 
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
@@ -99,11 +100,15 @@ class ScheduledTaskStore:
     ):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._owner_lease = SQLiteOwnerLease(self.path, "scheduled-task-owner")
         self.legacy_json_path = Path(legacy_json_path) if legacy_json_path else None
         self.run_history_limit = max(100, int(run_history_limit))
         self._lock = threading.RLock()
         self._initialize_schema()
         self._migrate_legacy_json_once()
+
+    def close(self) -> None:
+        self._owner_lease.close()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

@@ -122,16 +122,14 @@ class InternalGateway:
         ),
     }
     ROUTE_PREFIX_BY_SERVICE_TYPE = {
-        "memory": "/mem/",
         "supervisor": "/supervisor/",
         "executor": "/executor/",
     }
     UPSTREAM_PREFIX_BY_SERVICE_TYPE = {
-        "memory": "/",
         "supervisor": "/",
         "executor": "/executor/",
     }
-    ROUTED_SINGLETON_SERVICE_TYPES = frozenset(ROUTE_PREFIX_BY_SERVICE_TYPE)
+    ROUTED_SINGLETON_SERVICE_TYPES = frozenset({"memory", *ROUTE_PREFIX_BY_SERVICE_TYPE})
 
     def __init__(self, config: GatewayConfig = None):
         self.config = config or GatewayConfig()
@@ -1409,6 +1407,11 @@ class InternalGateway:
         suffix = normalized_path[len(gateway_prefix) :]
         return upstream_prefix.rstrip("/") + "/" + suffix
 
+    @staticmethod
+    def _is_retired_memory_proxy_path(path: str) -> bool:
+        normalized = "/" + str(path or "").lstrip("/")
+        return normalized == "/mem" or normalized.startswith("/mem/")
+
     def _invalidate_service_registration_cache(self, service_type: str) -> None:
         if service_type == "memory":
             self._memory_service_url = None
@@ -1716,6 +1719,15 @@ class InternalGateway:
     async def route_request(self, path: str, request: Request):
         self._request_counter += 1
         request_id = str(uuid.uuid4())
+
+        if self._is_retired_memory_proxy_path(path):
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Gateway /api/mem is retired; call Memory Service directly via "
+                    "MemoryClient or the Memory Service HTTP endpoint."
+                ),
+            )
         
         try:
             matched_route = None

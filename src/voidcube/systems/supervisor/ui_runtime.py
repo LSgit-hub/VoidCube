@@ -107,7 +107,7 @@ class SupervisorUIRuntimePorts:
     legal_scenes: Collection[str]
     record_activity_history: Callable[[JsonDict], None]
     load_gateway_url: Callable[[], str]
-    gateway_memory_headers: Callable[..., Dict[str, str]]
+    memory_client_factory: Callable[..., Any]
     ui_event_interval_seconds: float
     voice_realtime_status: Callable[[], JsonDict]
     load_runtime_observation_input: Callable[[], Any]
@@ -312,8 +312,7 @@ class SupervisorUIRuntime:
 
     def _identity_context(self) -> SupervisorUIIdentityProxyContext:
         return SupervisorUIIdentityProxyContext(
-            gateway_url=self.ports.load_gateway_url(),
-            gateway_memory_headers=self.ports.gateway_memory_headers,
+            memory_client_factory=self.ports.memory_client_factory,
         )
 
     async def get_identity_archive(self) -> JsonDict:

@@ -16,6 +16,7 @@ from plugins.memory.mem.outbox import (
     build_outbox_health_report,
     load_memory_outbox_settings,
 )
+from ...infrastructure.memory.client import AsyncMemoryClient, MemoryClientIdentity
 from ...infrastructure.config.runtime_paths import get_VoidCube_home
 from .scheduled_tasks import INTERNAL_SCHEDULE_REQUEST_SOURCES
 from ...application.companion_workers import (
@@ -125,19 +126,38 @@ class ServiceRuntimeMixin:
         token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
         return {"Authorization": f"Bearer {token}"} if token else {}
 
-    def _gateway_memory_headers(
+    def _memory_client(
         self,
         *,
         memory_actor: str = "stellar_companion",
-    ) -> Dict[str, str]:
-        token = self._gateway_service_tokens.get("supervisor", "")
-        if not self._gateway_service_id or not token:
-            return {}
-        return {
-            "X-VoidCube-Service-Id": self._gateway_service_id,
-            "X-VoidCube-Service-Token": token,
-            "X-VoidCube-Memory-Actor": memory_actor,
-        }
+        memory_domain: str = "companion",
+        owner_id: str | None = None,
+        workspace_id: str | None = None,
+        timeout_seconds: float = 3.0,
+    ) -> AsyncMemoryClient:
+        from ...infrastructure.config.system import get_config
+        from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+
+        config = get_config()
+        memory_config = config.memory
+        service_url = f"http://{memory_config.host}:{memory_config.port}"
+        service_tokens = dict(getattr(memory_config, "service_tokens", {}) or {})
+        service_token = service_tokens.get(memory_actor) or getattr(
+            memory_config,
+            "service_token",
+            None,
+        )
+        return AsyncMemoryClient(
+            service_url,
+            identity=MemoryClientIdentity(
+                actor=memory_actor,
+                owner_id=str(owner_id or DEFAULT_OWNER_ID),
+                workspace_id=str(workspace_id or DEFAULT_WORKSPACE_ID),
+                memory_domain=memory_domain,
+            ),
+            timeout_seconds=timeout_seconds,
+            service_token=service_token,
+        )
 
     @property
     def _service_runtime_started(self) -> bool:
@@ -472,9 +492,6 @@ class ServiceRuntimeMixin:
             return
         self._last_companion_outbox_health_report_at = now
         try:
-            import aiohttp
-
-            url = f"{self.config.execution.gateway_address}/api/mem/outbox/health"
             payload = build_outbox_health_report(
                 self._companion_memory_outbox,
                 queue_name="companion",
@@ -482,15 +499,11 @@ class ServiceRuntimeMixin:
                 memory_actor="stellar_companion",
                 memory_domain="companion",
             )
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    headers=self._gateway_memory_headers(),
-                    timeout=aiohttp.ClientTimeout(total=3),
-                ) as response:
-                    if response.status != 200:
-                        logger.debug("Companion outbox health report returned %d", response.status)
+            await self._memory_client(
+                memory_actor="stellar_companion",
+                memory_domain="companion",
+                timeout_seconds=3,
+            ).request_json("POST", "/outbox/health", payload)
         except Exception as exc:
             logger.debug("Companion outbox health report failed: %s", exc)
 
@@ -898,26 +911,22 @@ class ServiceRuntimeMixin:
         if not str(query or "").strip():
             return ""
         try:
-            import aiohttp
-
-            url = f"{self.config.execution.gateway_address}/api/mem/recall"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json={
-                        "query": str(query)[:2000],
-                        "limit": 5,
-                        "max_context_chars": 3500,
-                        "request_source": "tool",
-                        "source_domains": ["agent_interaction", "companion"],
-                    },
-                    headers=self._gateway_memory_headers(),
-                    timeout=3,
-                ) as response:
-                    if response.status != 200:
-                        return ""
-                    payload = await response.json()
-                    return str(payload.get("context") or "")[:3500]
+            payload = await self._memory_client(
+                memory_actor="stellar_companion",
+                memory_domain="companion",
+                timeout_seconds=3,
+            ).request_json(
+                "POST",
+                "/recall",
+                {
+                    "query": str(query)[:2000],
+                    "limit": 5,
+                    "max_context_chars": 3500,
+                    "request_source": "tool",
+                    "source_domains": ["agent_interaction", "companion"],
+                },
+            )
+            return str(payload.get("context") or "")[:3500]
         except Exception:
             return ""
 
@@ -1004,24 +1013,22 @@ class ServiceRuntimeMixin:
         )
 
     async def _deliver_companion_memory_write(self, item: dict[str, Any]) -> None:
-        import aiohttp
-
         payload = {
             key: value
             for key, value in item.items()
             if not key.startswith("_outbox_")
         }
-        url = f"{self.config.execution.gateway_address}/api/mem/turn-pairs"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=payload,
-                headers=self._gateway_memory_headers(),
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as response:
-                if response.status != 200:
-                    detail = (await response.text())[:500]
-                    raise RuntimeError(f"Memory Service returned {response.status}: {detail}")
+        await self._memory_client(
+            memory_actor="stellar_companion",
+            memory_domain="companion",
+            timeout_seconds=3,
+        ).request_json(
+            "POST",
+            "/turn-pairs",
+            payload,
+            identity_session_id=str(payload.get("session_id") or ""),
+            idempotency_key=str(payload.get("write_id") or ""),
+        )
 
     async def _stop_companion_memory_outbox(self) -> None:
         task = self._service_runtime.companion_memory_write_task

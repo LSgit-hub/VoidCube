@@ -24,6 +24,7 @@ import threading
 import time
 from pathlib import Path
 from ..config.runtime_paths import get_VoidCube_home
+from .sqlite_owner import SQLiteOwnerLease
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class SessionDB:
     def __init__(self, db_path: Path = None):
         self.db_path = db_path or DEFAULT_DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._owner_lease = SQLiteOwnerLease(self.db_path, "session-owner")
 
         self._lock = threading.Lock()
         self._write_count = 0
@@ -270,6 +272,9 @@ class SessionDB:
                     pass
                 self._conn.close()
                 self._conn = None
+            if self._owner_lease is not None:
+                self._owner_lease.close()
+                self._owner_lease = None
 
     def _init_schema(self):
         """Create tables and FTS if they don't exist, run migrations."""

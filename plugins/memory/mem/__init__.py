@@ -5,17 +5,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-import socket
+import asyncio
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import quote
 
 from voidcube.domain.agent.effect_outcomes import EffectOutcome, failed_effect
 from voidcube.domain.contracts.memory import MemoryProvider
+from voidcube.infrastructure.memory.client import (
+    DEFAULT_MEMORY_SERVICE_URL,
+    AsyncMemoryClient,
+    MemoryClient,
+    MemoryClientIdentity,
+)
 from voidcube.infrastructure.persistence.redaction import redact_sensitive_text
 from plugins.memory.mem.outbox import (
     MemoryWriteOutbox,
@@ -26,11 +31,6 @@ from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemorySco
 
 
 logger = logging.getLogger(__name__)
-
-
-_GATEWAY_PROBE_TIMEOUT_SECONDS = 0.25
-_GATEWAY_REACHABLE_TTL_SECONDS = 30.0
-_GATEWAY_UNREACHABLE_TTL_SECONDS = 5.0
 
 
 _IDENTITY_RECALL_GUIDANCE = (
@@ -56,7 +56,9 @@ class MemMemoryProvider(MemoryProvider):
     def __init__(self) -> None:
         self._initialized = False
         self._session_id = ""
-        self._gateway_url = "http://127.0.0.1:6000"
+        self._memory_service_url = DEFAULT_MEMORY_SERVICE_URL
+        self._memory_client: MemoryClient | None = None
+        self._async_memory_client: AsyncMemoryClient | None = None
         self._request_timeout_seconds = 2.0
         self._auto_sync = True
         self._prefetch_limit = 5
@@ -69,11 +71,6 @@ class MemMemoryProvider(MemoryProvider):
         self._owner_id = DEFAULT_OWNER_ID
         self._workspace_id = DEFAULT_WORKSPACE_ID
         self._redact_before_store = False
-        self._gateway_session_credentials: dict[str, str] = {}
-        self._gateway_credential_lock = threading.Lock()
-        self._gateway_probe_lock = threading.Lock()
-        self._gateway_probe_result: bool | None = None
-        self._gateway_probe_expires_at = 0.0
         self._outbox: MemoryWriteOutbox | None = None
         self._sync_thread: threading.Thread | None = None
         self._sync_stop = threading.Event()
@@ -102,14 +99,15 @@ class MemMemoryProvider(MemoryProvider):
             full_config = {}
             provider_config = {}
 
-        configured_gateway = str(
-            provider_config.get("gateway_address") or ""
-        ).strip()
-        if not configured_gateway:
-            from voidcube.infrastructure.config.system import load_config_from_env
+        from voidcube.infrastructure.config.system import load_config_from_env
 
-            configured_gateway = load_config_from_env().agent.gateway_address
-        self._gateway_url = configured_gateway.rstrip("/")
+        system_config = load_config_from_env()
+        configured_memory = str(
+            provider_config.get("service_url")
+            or os.getenv("MEMORY_SERVICE_URL")
+            or f"http://{system_config.memory.host}:{system_config.memory.port}"
+        ).strip()
+        self._memory_service_url = configured_memory.rstrip("/")
         self._request_timeout_seconds = max(
             0.1,
             float(provider_config.get("request_timeout_seconds", 2.0)),
@@ -138,6 +136,34 @@ class MemMemoryProvider(MemoryProvider):
         self._workspace_id = scope.workspace_id
         self._redact_before_store = bool(
             provider_config.get("redact_before_store", False)
+        )
+        self._memory_client = MemoryClient(
+            self._memory_service_url,
+            identity=MemoryClientIdentity(
+                actor="api_a",
+                owner_id=self._owner_id,
+                workspace_id=self._workspace_id,
+                memory_domain="agent_interaction",
+            ),
+            timeout_seconds=self._request_timeout_seconds,
+            service_token=(
+                provider_config.get("service_token")
+                or os.getenv("MEMORY_SERVICE_TOKEN")
+            ),
+        )
+        self._async_memory_client = AsyncMemoryClient(
+            self._memory_service_url,
+            identity=MemoryClientIdentity(
+                actor="api_a",
+                owner_id=self._owner_id,
+                workspace_id=self._workspace_id,
+                memory_domain="agent_interaction",
+            ),
+            timeout_seconds=self._request_timeout_seconds,
+            service_token=(
+                provider_config.get("service_token")
+                or os.getenv("MEMORY_SERVICE_TOKEN")
+            ),
         )
         home = Path(str(kwargs.get("VoidCube_home") or "."))
         self._outbox = self._outbox_settings.create("api_a", home=home)
@@ -256,6 +282,10 @@ class MemMemoryProvider(MemoryProvider):
                             ],
                         },
                         "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                        "idempotency_key": {
+                            "type": "string",
+                            "description": "Stable key for retrying the same durable memory write.",
+                        },
                     },
                     "required": ["title", "summary", "evidence_refs"],
                 },
@@ -348,6 +378,7 @@ class MemMemoryProvider(MemoryProvider):
                         "supersedes_memory_ids",
                         "event_kind",
                         "importance",
+                        "idempotency_key",
                     )
                     if args.get(key) not in (None, "")
                 }
@@ -658,55 +689,6 @@ class MemMemoryProvider(MemoryProvider):
             "memory_domain": "agent_interaction",
         }
 
-    def _ensure_gateway_session_credential(self, session_id: str) -> str:
-        resolved_session_id = str(session_id or "").strip()
-        if not resolved_session_id:
-            raise RuntimeError("Memory Gateway session identity is unavailable")
-        existing = self._gateway_session_credentials.get(resolved_session_id, "")
-        if existing:
-            return existing
-        with self._gateway_credential_lock:
-            existing = self._gateway_session_credentials.get(
-                resolved_session_id,
-                "",
-            )
-            if existing:
-                return existing
-            if not self._gateway_is_reachable():
-                raise ConnectionError("Memory Gateway is unreachable")
-            payload = json.dumps(
-                {
-                    "session_id": resolved_session_id,
-                    "source": "agent_memory_provider",
-                    "owner_id": self._owner_id,
-                    "workspace_id": self._workspace_id,
-                }
-            ).encode("utf-8")
-            headers = {"Content-Type": "application/json"}
-            gateway_token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
-            if gateway_token:
-                headers["Authorization"] = f"Bearer {gateway_token}"
-            request = Request(
-                f"{self._gateway_url}/v1/sessions/register",
-                data=payload,
-                headers=headers,
-                method="POST",
-            )
-            try:
-                with urlopen(
-                    request,
-                    timeout=self._request_timeout_seconds,
-                ) as response:
-                    result = json.loads(response.read().decode("utf-8") or "{}")
-            except Exception:
-                self._mark_gateway_unreachable()
-                raise
-            session_token = str(result.get("session_token") or "").strip()
-            if not session_token:
-                raise RuntimeError("Gateway did not issue a session credential")
-            self._gateway_session_credentials[resolved_session_id] = session_token
-            return session_token
-
     def _request_json(
         self,
         method: str,
@@ -715,78 +697,28 @@ class MemMemoryProvider(MemoryProvider):
         *,
         identity_session_id: str | None = None,
     ) -> dict[str, Any]:
-        if not self._gateway_is_reachable():
-            raise ConnectionError("Memory Gateway is unreachable")
-        identity_session_id = str(
+        request_session_id = str(
             identity_session_id
             or (payload or {}).get("session_id")
-            or (payload or {}).get("current_session_id")
             or self._session_id
             or ""
         ).strip()
-        session_token = self._ensure_gateway_session_credential(identity_session_id)
-        url = f"{self._gateway_url}/api/mem{path}"
-        data = None
-        headers = {
-            "Accept": "application/json",
-            "X-VoidCube-Session-Id": identity_session_id,
-            "X-VoidCube-Session-Token": session_token,
-        }
-        if method.upper() == "GET" and payload:
-            url += "?" + urlencode(payload)
-        elif payload is not None:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        request = Request(url, data=data, headers=headers, method=method.upper())
-        try:
-            with urlopen(request, timeout=self._request_timeout_seconds) as response:
-                body = response.read().decode("utf-8")
-        except Exception:
-            self._mark_gateway_unreachable()
-            raise
-        parsed = json.loads(body or "{}")
-        if not isinstance(parsed, dict):
-            raise ValueError("Memory Service returned a non-object response")
-        return parsed
-
-    def _gateway_is_reachable(self) -> bool:
-        now = time.monotonic()
-        with self._gateway_probe_lock:
-            if (
-                self._gateway_probe_result is not None
-                and now < self._gateway_probe_expires_at
-            ):
-                return self._gateway_probe_result
-
-            parsed = urlsplit(self._gateway_url)
-            host = parsed.hostname
-            if not host or parsed.scheme not in {"http", "https"}:
-                return True
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            try:
-                with socket.create_connection(
-                    (host, port),
-                    timeout=min(
-                        _GATEWAY_PROBE_TIMEOUT_SECONDS,
-                        self._request_timeout_seconds,
-                    ),
-                ):
-                    pass
-            except OSError:
-                reachable = False
-            else:
-                reachable = True
-            self._gateway_probe_result = reachable
-            self._gateway_probe_expires_at = time.monotonic() + (
-                _GATEWAY_REACHABLE_TTL_SECONDS
-                if reachable
-                else _GATEWAY_UNREACHABLE_TTL_SECONDS
-            )
-            return reachable
-
-    def _mark_gateway_unreachable(self) -> None:
-        with self._gateway_probe_lock:
-            self._gateway_probe_result = False
-            self._gateway_probe_expires_at = (
-                time.monotonic() + _GATEWAY_UNREACHABLE_TTL_SECONDS
-            )
+        if self._memory_client is None:
+            if self._async_memory_client is not None:
+                return asyncio.run(
+                    self._async_memory_client.request_json(
+                        method,
+                        path,
+                        payload,
+                        identity_session_id=request_session_id or None,
+                        idempotency_key=(payload or {}).get("write_id"),
+                    )
+                )
+            raise ConnectionError("Memory Service client is unavailable")
+        return self._memory_client.request_json(
+            method,
+            path,
+            payload,
+            identity_session_id=request_session_id or None,
+            idempotency_key=(payload or {}).get("write_id"),
+        )

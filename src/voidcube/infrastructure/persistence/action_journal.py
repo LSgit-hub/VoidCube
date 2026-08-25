@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from ..config.runtime_paths import get_VoidCube_home
+from .sqlite_owner import SQLiteOwnerLease
 
 
 EffectClass = Literal["read_only", "idempotent_write", "non_idempotent_write"]
@@ -67,6 +68,7 @@ class ActionJournal:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._owner_lease = SQLiteOwnerLease(self.path, "action-journal-owner")
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -118,6 +120,7 @@ class ActionJournal:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_actions_call_id ON actions(call_id)"
             )
+
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_actions_operation_id ON actions(operation_id)"
             )
@@ -125,6 +128,15 @@ class ActionJournal:
                 "INSERT OR REPLACE INTO action_meta(key, value) VALUES('schema_version', ?)",
                 (str(self.SCHEMA_VERSION),),
             )
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+            if self._owner_lease is not None:
+                self._owner_lease.close()
+                self._owner_lease = None
 
     @staticmethod
     def _canonical(value: Any) -> str:

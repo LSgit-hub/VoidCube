@@ -229,8 +229,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._autonomous_task_memory_promotion_service = (
         AutonomousTaskMemoryPromotionService(
             task_state=supervisor._autonomous_task_state,
-            gateway_address=execution_config.gateway_address,
-            gateway_memory_headers=supervisor._gateway_memory_headers,
+            memory_client_factory=supervisor._memory_client,
         )
     )
     scheduled_store_path = (
@@ -563,7 +562,7 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             load_gateway_url=lambda: str(
                 supervisor.config.execution.gateway_address
             ).rstrip("/"),
-            gateway_memory_headers=supervisor._gateway_memory_headers,
+            memory_client_factory=supervisor._memory_client,
             ui_event_interval_seconds=config.ui_event_interval_seconds,
             voice_realtime_status=supervisor._voice_manager.realtime_status,
             load_runtime_observation_input=supervisor.get_runtime_observation_input,
@@ -632,6 +631,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
     supervisor._memory_maintenance_executor = MemoryMaintenanceExecutionAdapter(
         config=execution_config,
         attach_execution_route_hint=attach_execution_route_hint,
+        memory_client_factory=supervisor._memory_client,
     )
     supervisor._governor_review_executor = GovernorReviewExecutionAdapter(
         body_registry=supervisor._body_registry,

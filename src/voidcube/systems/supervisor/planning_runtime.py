@@ -1253,17 +1253,12 @@ class PlanningRuntimeMixin:
         cached = getattr(self, "_memory_maintenance_status_cache", None)
         if isinstance(cached, dict) and now - cached_at < 30.0:
             return dict(cached)
-        url = f"{self.config.execution.gateway_address}/api/mem/compressed/rules-status"
         try:
-            timeout = aiohttp.ClientTimeout(total=2)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    url,
-                    headers=self._gateway_memory_headers(memory_actor="stellar_auto"),
-                ) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f"Memory rules status HTTP {response.status}")
-                    payload = await response.json()
+            payload = await self._memory_client(
+                memory_actor="stellar_auto",
+                memory_domain="evolution",
+                timeout_seconds=2,
+            ).request_json("GET", "/compressed/rules-status")
             status = dict(payload) if isinstance(payload, dict) else {}
         except Exception as exc:
             status = {"status": "unavailable", "error": type(exc).__name__}

@@ -385,6 +385,105 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     return supervisor
 
 
+class _RecordingMemoryClient:
+    def __init__(self, calls, **kwargs):
+        self.calls = calls
+        self.kwargs = kwargs
+
+    async def request_json(self, method, path, payload=None, **kwargs):
+        self.calls.append(
+            {
+                "client_kwargs": dict(self.kwargs),
+                "method": method,
+                "path": path,
+                "payload": payload,
+                "kwargs": kwargs,
+            }
+        )
+        if path == "/promotions":
+            return {
+                "promotions": [
+                    {
+                        "promotion_id": "promotion-active",
+                        "source_type": "compressed",
+                        "source_memory_id": "evolution-memory-1",
+                        "source_domain": "evolution",
+                        "target_domain": "companion",
+                        "reason": "Useful in companion mode.",
+                        "approved_by": "governor",
+                        "approval_ref": "review:1",
+                        "created_by": "governor",
+                        "status": "active",
+                        "created_at": "2026-07-27T08:00:00+00:00",
+                        "expires_at": None,
+                        "revoked_at": None,
+                        "revoked_by": None,
+                        "revoke_reason": None,
+                        "owner_id": "must-not-leak",
+                        "workspace_id": "must-not-leak",
+                    },
+                    {
+                        "promotion_id": "promotion-revoked",
+                        "source_type": "compressed",
+                        "source_memory_id": "evolution-memory-2",
+                        "source_domain": "evolution",
+                        "target_domain": "companion",
+                        "reason": "Useful in companion mode.",
+                        "approved_by": "governor",
+                        "approval_ref": "review:2",
+                        "created_by": "governor",
+                        "status": "revoked",
+                        "created_at": "2026-07-27T08:00:00+00:00",
+                        "expires_at": None,
+                        "revoked_at": None,
+                        "revoked_by": None,
+                        "revoke_reason": None,
+                    },
+                ],
+                "count": 2,
+            }
+        if method == "POST" and path == "/promotion-candidates":
+            return {
+                "candidate": {"candidate_id": "promotion-candidate-conclusion"}
+            }
+        if path == "/promotion-candidates":
+            return {
+                "candidates": [
+                    {
+                        "candidate_id": "candidate-1",
+                        "source_type": "compressed",
+                        "source_memory_id": "evolution-memory-1",
+                        "source_domain": "evolution",
+                        "target_domain": "companion",
+                        "reason": "Useful in companion mode.",
+                        "proposed_by": "governor",
+                        "governance_ref": "review:1",
+                        "status": "awaiting_user_consent",
+                        "requested_at": "2026-07-27T08:00:00+00:00",
+                        "expires_at": None,
+                        "owner_id": "must-not-leak",
+                        "workspace_id": "must-not-leak",
+                    },
+                    {
+                        "candidate_id": "candidate-wrong-direction",
+                        "source_domain": "agent_interaction",
+                        "target_domain": "companion",
+                        "status": "awaiting_user_consent",
+                    },
+                ],
+                "count": 2,
+            }
+        if path.endswith("/consent"):
+            return {"status": "approved", "candidate": {}, "promotion": {}}
+        if path == "/remember":
+            return {"memory": {"memory_id": "durable-evolution-conclusion"}}
+        return {}
+
+
+def _set_supervisor_ui_memory_client_factory(supervisor: Supervisor, factory) -> None:
+    object.__setattr__(supervisor._ui_runtime.ports, "memory_client_factory", factory)
+
+
 @pytest.mark.unit
 def test_supervisor_runtime_uses_configured_evolution_capability_policy(tmp_path):
     config = _make_supervisor_config(tmp_path)
@@ -1206,111 +1305,26 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
 @pytest.mark.unit
 async def test_supervisor_evolution_promotion_audit_is_fixed_read_only_projection(
     tmp_path,
-    monkeypatch,
 ):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._gateway_service_id = "supervisor-test"
-    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
-    requests = []
-    rows = [
-        {
-            "promotion_id": "promotion-active",
-            "source_type": "compressed",
-            "source_memory_id": "evolution-memory-1",
-            "source_domain": "evolution",
-            "target_domain": "companion",
-            "reason": "Approved for companion explanations.",
-            "approved_by": "owner-consent",
-            "approval_ref": "decision:1",
-            "created_by": "governor",
-            "status": "active",
-            "created_at": "2026-07-27T08:00:00+00:00",
-            "expires_at": None,
-            "revoked_at": None,
-            "revoked_by": None,
-            "revoke_reason": None,
-            "owner_id": "local-user",
-            "workspace_id": "default",
-        },
-        {
-            "promotion_id": "promotion-other-source",
-            "source_type": "turn",
-            "source_memory_id": "agent-turn-1",
-            "source_domain": "agent_interaction",
-            "target_domain": "companion",
-            "reason": "Not part of this audit direction.",
-            "status": "active",
-        },
-        {
-            "promotion_id": "promotion-revoked",
-            "source_type": "profile",
-            "source_memory_id": "evolution-profile-2",
-            "source_domain": "evolution",
-            "target_domain": "companion",
-            "reason": "Previously approved conclusion.",
-            "approved_by": "owner-consent",
-            "approval_ref": "decision:2",
-            "created_by": "governor",
-            "status": "revoked",
-            "created_at": "2026-07-26T08:00:00+00:00",
-            "expires_at": None,
-            "revoked_at": "2026-07-27T09:00:00+00:00",
-            "revoked_by": "governor",
-            "revoke_reason": "Superseded by stronger evidence.",
-        },
-    ]
-
-    class _Response:
-        def __init__(self, status, payload):
-            self.status = status
-            self._payload = payload
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def json(self):
-            return self._payload
-
-    class _Session:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            requests.append((url, params, headers))
-            return _Response(200, {"promotions": rows, "count": len(rows)})
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(
-            ClientTimeout=lambda **kwargs: kwargs,
-            ClientSession=_Session,
-        ),
+    calls = []
+    _set_supervisor_ui_memory_client_factory(
+        supervisor,
+        lambda **kwargs: _RecordingMemoryClient(calls, **kwargs),
     )
 
     audit = await supervisor._ui_runtime.get_evolution_promotion_audit(limit=25)
 
-    assert requests[0] == (
-        "http://127.0.0.1:6000/api/mem/promotions",
-        {
-            "limit": 500,
-            "target_domain": "companion",
-        },
-        {
-            "X-VoidCube-Service-Id": "supervisor-test",
-            "X-VoidCube-Service-Token": "supervisor-token",
-            "X-VoidCube-Memory-Actor": "stellar_companion",
-        },
-    )
+    assert calls[0]["client_kwargs"] == {
+        "memory_actor": "stellar_companion",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 5,
+    }
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"] == "/promotions"
+    assert calls[0]["payload"] == {"limit": 500, "target_domain": "companion"}
     assert audit["direction"] == {
         "source_domain": "evolution",
         "target_domain": "companion",
@@ -1328,78 +1342,31 @@ async def test_supervisor_evolution_promotion_audit_is_fixed_read_only_projectio
 @pytest.mark.unit
 async def test_supervisor_evolution_promotion_candidates_are_fixed_projection(
     tmp_path,
-    monkeypatch,
 ):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._gateway_service_id = "supervisor-test"
-    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
-    captured = {}
-    rows = [
-        {
-            "candidate_id": "candidate-1",
-            "source_type": "compressed",
-            "source_memory_id": "evolution-memory-1",
-            "source_domain": "evolution",
-            "target_domain": "companion",
-            "reason": "Useful in companion mode.",
-            "proposed_by": "governor",
-            "governance_ref": "review:1",
-            "status": "awaiting_user_consent",
-            "requested_at": "2026-07-27T08:00:00+00:00",
-            "expires_at": None,
-            "owner_id": "must-not-leak",
-            "workspace_id": "must-not-leak",
-        },
-        {
-            "candidate_id": "candidate-wrong-direction",
-            "source_domain": "agent_interaction",
-            "target_domain": "companion",
-            "status": "awaiting_user_consent",
-        },
-    ]
-
-    class _Response:
-        status = 200
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def json(self):
-            return {"candidates": rows, "count": len(rows)}
-
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            captured.update(url=url, params=params, headers=headers)
-            return _Response()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    calls = []
+    _set_supervisor_ui_memory_client_factory(
+        supervisor,
+        lambda **kwargs: _RecordingMemoryClient(calls, **kwargs),
     )
 
     result = await supervisor._ui_runtime.get_evolution_promotion_candidates(limit=20)
 
-    assert captured["url"] == "http://127.0.0.1:6000/api/mem/promotion-candidates"
-    assert captured["params"] == {
+    assert calls[0]["client_kwargs"] == {
+        "memory_actor": "governor",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 5,
+    }
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"] == "/promotion-candidates"
+    assert calls[0]["payload"] == {
         "limit": 20,
         "status": "awaiting_user_consent",
         "source_domain": "evolution",
         "target_domain": "companion",
     }
-    assert captured["headers"]["X-VoidCube-Memory-Actor"] == "governor"
     assert [item["candidate_id"] for item in result["candidates"]] == ["candidate-1"]
     assert "owner_id" not in result["candidates"][0]
     assert "workspace_id" not in result["candidates"][0]
@@ -1409,43 +1376,12 @@ async def test_supervisor_evolution_promotion_candidates_are_fixed_projection(
 @pytest.mark.unit
 async def test_supervisor_owner_consent_ignores_browser_scope_and_actor(
     tmp_path,
-    monkeypatch,
 ):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._gateway_service_id = "supervisor-test"
-    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
-    captured = {}
-
-    class _Response:
-        status = 200
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def json(self):
-            return {"status": "approved", "candidate": {}, "promotion": {}}
-
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, *, json=None, headers=None):
-            captured.update(url=url, json=json, headers=headers)
-            return _Response()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    calls = []
+    _set_supervisor_ui_memory_client_factory(
+        supervisor,
+        lambda **kwargs: _RecordingMemoryClient(calls, **kwargs),
     )
 
     result = await supervisor._ui_runtime.consent_evolution_promotion_candidate(
@@ -1462,18 +1398,21 @@ async def test_supervisor_owner_consent_ignores_browser_scope_and_actor(
     )
 
     assert result["status"] == "approved"
-    assert captured["url"].endswith(
-        "/api/mem/promotion-candidates/candidate-1/consent"
-    )
-    assert captured["json"] == {
+    assert calls[0]["client_kwargs"] == {
+        "memory_actor": "governor",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 8,
+    }
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"] == "/promotion-candidates/candidate-1/consent"
+    assert calls[0]["payload"] == {
         "approved": True,
         "reason": "I explicitly approve this conclusion.",
         "consented_by": "local-owner",
-        "owner_id": "local-user",
-        "workspace_id": "default",
         "memory_actor": "governor",
     }
-    assert captured["headers"]["X-VoidCube-Memory-Actor"] == "governor"
 
 
 @pytest.mark.unit
@@ -4388,58 +4327,12 @@ async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_
 @pytest.mark.unit
 async def test_governor_approved_verified_conclusion_creates_consent_candidate(
     tmp_path,
-    monkeypatch,
 ):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._gateway_service_id = "supervisor-test"
-    supervisor._gateway_service_tokens["supervisor"] = "supervisor-token"
-    captured = []
-
-    class _Response:
-        def __init__(self, status, payload):
-            self.status = status
-            self._payload = payload
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def json(self):
-            return self._payload
-
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, *, json=None, headers=None):
-            captured.append((url, json, headers))
-            if url.endswith("/api/mem/remember"):
-                return _Response(
-                    200,
-                    {"memory": {"memory_id": "durable-evolution-conclusion"}},
-                )
-            return _Response(
-                200,
-                {
-                    "candidate": {
-                        "candidate_id": "promotion-candidate-conclusion"
-                    }
-                },
-            )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    calls = []
+    supervisor._autonomous_task_memory_promotion_service._memory_client_factory = (  # type: ignore[attr-defined]
+        lambda **kwargs: _RecordingMemoryClient(calls, **kwargs)
     )
     submitted = await supervisor._autonomous_chain_planning_service.plan(
         {
@@ -4476,13 +4369,27 @@ async def test_governor_approved_verified_conclusion_creates_consent_candidate(
         "candidate_id": "promotion-candidate-conclusion",
         "source_memory_id": "durable-evolution-conclusion",
     }
-    assert captured[0][0].endswith("/api/mem/remember")
-    assert captured[0][1]["memory_domain"] == "evolution"
-    assert captured[0][2]["X-VoidCube-Memory-Actor"] == "stellar_auto"
-    assert captured[1][0].endswith("/api/mem/promotion-candidates")
-    assert captured[1][1]["source_domain"] == "evolution"
-    assert captured[1][1]["target_domain"] == "companion"
-    assert captured[1][2]["X-VoidCube-Memory-Actor"] == "governor"
+    assert calls[0]["client_kwargs"] == {
+        "memory_actor": "stellar_auto",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 8,
+    }
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"] == "/remember"
+    assert calls[0]["payload"]["memory_domain"] == "evolution"
+    assert calls[1]["client_kwargs"] == {
+        "memory_actor": "governor",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 8,
+    }
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["path"] == "/promotion-candidates"
+    assert calls[1]["payload"]["source_domain"] == "evolution"
+    assert calls[1]["payload"]["target_domain"] == "companion"
     stored = supervisor._autonomous_chain_store.get_task(task_id)
     assert stored is not None
     assert (

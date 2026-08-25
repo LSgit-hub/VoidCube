@@ -180,7 +180,7 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
     choices = state["choices"]
     selected = state.get("selected", 0)
     show_full = state.get("show_full", False)
-    title = "⚠️  Dangerous Command"
+    title = "[!] Dangerous Command"
     command_display = (
         command
         if show_full or display_width(command) <= 70

@@ -380,6 +380,20 @@ async def test_memory_health_aggregates_agent_outbox_and_degrades_on_dead_letter
 
 
 @pytest.mark.asyncio
+async def test_memory_health_reports_commit_revision(tmp_path):
+    service = _make_service(tmp_path)
+    await service.create_session(SessionCreate(session_id="revision-session", metadata={}))
+
+    health = await service.health_check()
+
+    assert health["database"]["commit_revision"] >= 1
+    assert health["database"]["repository"]["commit_revision"] == health["database"]["commit_revision"]
+    assert health["commit_revision"] == health["database"]["commit_revision"]
+    assert health["database"]["repository"]["write_queue_capacity"] >= 1
+    assert health["database"]["repository"]["write_batch_commits"] >= 1
+
+
+@pytest.mark.asyncio
 async def test_memory_health_deduplicates_reports_for_the_same_outbox(tmp_path):
     service = _make_service(tmp_path)
     service._gateway_registration_healthy = True

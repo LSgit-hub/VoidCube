@@ -30,6 +30,12 @@ def sync_identity_experiences(
     conversation_count = _ingest_verified_conversations(conn, reference_time)
     conn.commit()
     return {
+        # Keep the public projection counters stable for maintenance callers.
+        # Revision proposals are governance history, not task or self-narrative
+        # experiences; verified agent turns are conversation experiences.
+        "task_experiences": 0,
+        "conversation_experiences": conversation_count,
+        "self_narratives": 0,
         "revision_experiences": revision_count,
         "self_experiences": conversation_count,
         "updated_count": revision_count + conversation_count,

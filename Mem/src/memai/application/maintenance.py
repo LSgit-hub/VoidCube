@@ -8,22 +8,53 @@ import logging
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
+from memai.repository.contracts import MemoryRepository
 from memai.repository.sqlite import open_memory_sqlite
 from memai.application.tier1_to_tier2_bridge import Tier1ToTier2Bridge
 
 
+def _connect(db_path, repository: MemoryRepository | None):
+    if repository is not None:
+        return repository.connect()
+    return open_memory_sqlite(db_path)
+
+
+async def _execute_read(db_path, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return await repository.execute_read_async(operation)
+    conn = _connect(db_path, repository)
+    try:
+        return operation(conn)
+    finally:
+        conn.close()
+
+
+async def _execute_write(db_path, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return await repository.execute_write_async(operation)
+    conn = _connect(db_path, repository)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        result = operation(conn)
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 async def run_tier1_decay_cycle(
-    db_path, config: Any, *, now: datetime | None = None, logger: logging.Logger
+    db_path, config: Any, *, now: datetime | None = None, logger: logging.Logger,
+    repository: MemoryRepository | None = None,
 ) -> int:
     """Decay every uncompressed turn while preserving its full scope."""
-    conn = open_memory_sqlite(db_path)
     rate = float(config.tier1_decay_rate)
     interval_seconds = float(config.decay_interval_hours) * 3600.0
     if interval_seconds <= 0:
-        conn.close()
         raise ValueError("decay_interval_hours must be greater than zero")
     if not 0.0 <= rate <= 1.0:
-        conn.close()
         raise ValueError("tier1_decay_rate must be between zero and one")
     local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
     reference_time = now or datetime.now().astimezone()
@@ -31,8 +62,7 @@ async def run_tier1_decay_cycle(
         reference_time = reference_time.replace(tzinfo=local_timezone)
     reference_utc, reference_iso = reference_time.astimezone(timezone.utc), reference_time.isoformat()
     updates: list[tuple[float, str, str, str, str, str]] = []
-    try:
-        conn.execute("BEGIN IMMEDIATE")
+    def write(conn):
         rows = conn.execute(
             "SELECT turn_id, relevance_score, timestamp, last_decay_at, "
             "owner_id, workspace_id, memory_domain FROM turns "
@@ -63,12 +93,8 @@ async def run_tier1_decay_cycle(
                 "AND memory_domain = ? AND compression_status != 'compressed'",
                 updates,
             )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+
+    await _execute_write(db_path, repository, write)
     if updates:
         logger.debug(
             "Tier 1 decay applied to %d turns (rate=%.3f per %.1f hours)",
@@ -80,19 +106,19 @@ async def run_tier1_decay_cycle(
 async def run_tier2_bridge_cycle(
     db_path, config: Any, *, request_factory: Callable[..., Any],
     compress: Callable[[Any], Awaitable[dict[str, Any]]], maintenance_actor: Any,
-    logger: logging.Logger,
+    logger: logging.Logger, repository: MemoryRepository | None = None,
 ) -> dict[str, Any]:
     """Schedule independent Tier 1 to Tier 2 work for every active scope."""
-    conn = open_memory_sqlite(db_path)
-    try:
-        scopes = conn.execute(
+    scopes = await _execute_read(
+        db_path,
+        repository,
+        lambda conn: conn.execute(
             "SELECT DISTINCT memory_domain, owner_id, workspace_id "
             "FROM turns WHERE compression_status IN ('pending', 'retry_wait') "
             "GROUP BY memory_domain, owner_id, workspace_id "
             "ORDER BY memory_domain, owner_id, workspace_id",
-        ).fetchall()
-    finally:
-        conn.close()
+        ).fetchall(),
+    )
     processed = 0
     scope_results: list[dict[str, Any]] = []
     for domain, owner_id, workspace_id in scopes:
@@ -107,6 +133,7 @@ async def run_tier2_bridge_cycle(
             db_path, retention_days=config.tier1_retention_days,
             max_turns=config.tier1_max_turns, memory_domain=str(domain),
             owner_id=str(owner_id), workspace_id=str(workspace_id),
+            repository=repository,
         )
         candidates = bridge.candidate_health_snapshot()
         if candidates["eligible_count"] == 0:

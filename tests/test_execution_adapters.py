@@ -264,36 +264,29 @@ async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monke
         async def json(self):
             return {"status": "accepted", "run_id": "maintenance-1"}
 
-    class FakeSession:
-        async def __aenter__(self):
-            return self
+    class FakeClient:
+        async def request_json(self, method, path, payload=None, **kwargs):
+            captured_urls.append((method, path, payload, kwargs))
+            return {"status": "accepted", "run_id": "maintenance-1"}
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, *, json, timeout):
-            del json, timeout
-            captured_urls.append(url)
-            return FakeResponse()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(
-            ClientSession=lambda: FakeSession(),
-            ClientTimeout=lambda *, total: SimpleNamespace(total=total),
-        ),
-    )
     adapter = MemoryMaintenanceExecutionAdapter(
         config=SimpleNamespace(
             gateway_address="http://gateway",
         ),
         attach_execution_route_hint=_attach_route_hint,
+        memory_client_factory=lambda **kwargs: FakeClient(),
     )
 
     result = await adapter.trigger_memory_compression({"namespace": "default", "max_entries": 5})
 
-    assert captured_urls == ["http://gateway/api/mem/compressed/run-all-rules"]
+    assert captured_urls == [
+        (
+            "POST",
+            "/compressed/run-all-rules",
+            {},
+            {},
+        )
+    ]
     assert result["status"] == "accepted"
     assert result["memory_service_maintenance"] == {
         "status": "accepted",
@@ -307,30 +300,21 @@ async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monke
 async def test_memory_maintenance_normalizes_transport_failure_to_top_level_error(
     monkeypatch,
 ):
-    class FailingSession:
-        async def __aenter__(self):
-            raise OSError("gateway unavailable")
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientSession=lambda: FailingSession()),
-    )
     adapter = MemoryMaintenanceExecutionAdapter(
         config=SimpleNamespace(gateway_address="http://gateway"),
         attach_execution_route_hint=_attach_route_hint,
+        memory_client_factory=lambda **kwargs: (_ for _ in ()).throw(
+            OSError("memory service unavailable")
+        ),
     )
 
     result = await adapter.trigger_memory_compression()
 
     assert result["status"] == "error"
-    assert result["error"] == "gateway unavailable"
+    assert result["error"] == "memory service unavailable"
     assert result["memory_service_maintenance"] == {
         "status": "error",
-        "error": "gateway unavailable",
+        "error": "memory service unavailable",
     }
 
 

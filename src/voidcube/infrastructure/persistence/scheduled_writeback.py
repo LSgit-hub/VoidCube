@@ -8,12 +8,14 @@ import time
 from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict
+from .sqlite_owner import SQLiteOwnerLease
 
 
 class SqliteScheduledWritebackOutbox:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._owner_lease = SQLiteOwnerLease(self.path, "scheduled-writeback-owner")
         with closing(self._connect()) as connection:
             with connection:
                 connection.execute(
@@ -35,6 +37,9 @@ class SqliteScheduledWritebackOutbox:
         connection.execute("PRAGMA busy_timeout = 10000")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
+
+    def close(self) -> None:
+        self._owner_lease.close()
 
     def enqueue(self, run_id: str, payload: Dict[str, Any]) -> None:
         with closing(self._connect()) as connection:

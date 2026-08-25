@@ -5,8 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+import json
+import secrets
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from memai.domain.domain import MemoryActor
 
 
 HttpHandler = Callable[..., object]
@@ -109,6 +114,9 @@ def build_memory_http_app(
     handlers: Mapping[str, HttpHandler],
     *,
     lifespan: Lifespan,
+    service_token: str | None = None,
+    service_tokens: Mapping[str, str] | None = None,
+    service_actor: str = "api_a",
 ) -> FastAPI:
     """Build the HTTP adapter from explicit application handler ports."""
     expected = {route.handler for route in MEMORY_HTTP_ROUTES}
@@ -125,6 +133,84 @@ def build_memory_http_app(
         version="1.0",
         lifespan=lifespan,
     )
+
+    configured_token = str(service_token or "").strip()
+    configured_actor = str(service_actor or "").strip()
+    actor_tokens = {
+        str(actor).strip(): str(token).strip()
+        for actor, token in (service_tokens or {}).items()
+        if str(actor).strip() and str(token).strip()
+    }
+    if configured_token:
+        if not configured_actor:
+            raise ValueError("Memory service_actor is required when service_token is set")
+        for actor in MemoryActor:
+            actor_tokens.setdefault(actor.value, configured_token)
+
+    @app.middleware("http")
+    async def enforce_local_identity(request: Request, call_next):
+        # Health is intentionally public so the process supervisor can probe it.
+        if request.url.path in {"/", "/health"}:
+            return await call_next(request)
+
+        if actor_tokens:
+            authorization = str(request.headers.get("authorization") or "")
+            supplied_token = authorization.removeprefix("Bearer ").strip()
+            supplied_actor = str(
+                request.headers.get("x-voidcube-memory-actor") or ""
+            ).strip()
+            expected_token = actor_tokens.get(supplied_actor, "")
+            if not expected_token or not secrets.compare_digest(supplied_token, expected_token):
+                return JSONResponse(
+                    {"error": "unauthorized", "detail": "invalid Memory Service token"},
+                    status_code=401,
+                )
+
+        body = await request.body()
+        if body:
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return JSONResponse(
+                    {"error": "validation_error", "detail": "invalid JSON body"},
+                    status_code=400,
+                )
+            if isinstance(payload, dict):
+                # The transport-level idempotency key is part of the request
+                # envelope. Bind it to the durable-memory command so callers
+                # do not need to duplicate the key in JSON body and headers.
+                if request.url.path == "/remember":
+                    idempotency_key = str(
+                        request.headers.get("idempotency-key") or ""
+                    ).strip()
+                    body_key = str(payload.get("idempotency_key") or "").strip()
+                    if idempotency_key and body_key and idempotency_key != body_key:
+                        return JSONResponse(
+                            {
+                                "error": "validation_error",
+                                "detail": "idempotency_key does not match Idempotency-Key header",
+                            },
+                            status_code=422,
+                        )
+                    if idempotency_key and not body_key:
+                        payload["idempotency_key"] = idempotency_key
+                        request._body = json.dumps(
+                            payload, ensure_ascii=False, separators=(",", ":")
+                        ).encode("utf-8")
+                for key, header_name in (
+                    ("memory_actor", "x-voidcube-memory-actor"),
+                    ("owner_id", "x-voidcube-owner-id"),
+                    ("workspace_id", "x-voidcube-workspace-id"),
+                ):
+                    value = payload.get(key)
+                    header_value = request.headers.get(header_name)
+                    if value is not None and header_value is not None and str(value) != str(header_value):
+                        return JSONResponse(
+                            {"error": "validation_error", "detail": f"{key} does not match request identity"},
+                            status_code=422,
+                        )
+
+        return await call_next(request)
     for route in MEMORY_HTTP_ROUTES:
         app.add_api_route(
             route.path,

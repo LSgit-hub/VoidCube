@@ -360,6 +360,8 @@ async def test_only_self_authored_sources_settle_into_identity_history(
                         "identity_experience": True,
                         "verified": True,
                         "self_authored_identity": True,
+                        "verified_by": "stellar_companion",
+                        "verified_at": now.isoformat(),
                         "self_claim": "我确认全天候认知属于我的连续历史。",
                         "what_changed": "我不再把自主认知理解为时间窗口任务。",
                         "continuity_impact": "它连接了创始愿景与当前运行方式。",

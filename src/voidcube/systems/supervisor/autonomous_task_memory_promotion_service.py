@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Protocol
 
 from .autonomous_chain_store import AutonomousChainTask
+from memai.domain.scope import CLI_WORKSPACE_ID, DEFAULT_OWNER_ID
 
 
 logger = logging.getLogger("supervisor")
-GatewayMemoryHeaders = Callable[..., Dict[str, str]]
+
+
+class MemoryClientPort(Protocol):
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]: ...
+
+
+MemoryClientFactory = Callable[..., MemoryClientPort]
 
 
 class AutonomousTaskMemoryPromotionService:
@@ -19,12 +32,10 @@ class AutonomousTaskMemoryPromotionService:
         self,
         *,
         task_state: Any,
-        gateway_address: str,
-        gateway_memory_headers: GatewayMemoryHeaders,
+        memory_client_factory: MemoryClientFactory,
     ) -> None:
         self._task_state = task_state
-        self._gateway_address = gateway_address.rstrip("/")
-        self._gateway_memory_headers = gateway_memory_headers
+        self._memory_client_factory = memory_client_factory
 
     async def propose(
         self,
@@ -53,13 +64,6 @@ class AutonomousTaskMemoryPromotionService:
                 "source_memory_id": metadata.get("evolution_memory_id"),
             }
 
-        headers_auto = self._gateway_memory_headers(memory_actor="stellar_auto")
-        headers_governor = (
-            self._gateway_memory_headers(memory_actor="governor") if verified else {}
-        )
-        if not headers_auto or (verified and not headers_governor):
-            return {"status": "deferred", "reason": "gateway_identity_unavailable"}
-
         execution_request = task.execution_request
         decision_id = str(
             getattr(execution_request, "decision_id", None)
@@ -83,99 +87,92 @@ class AutonomousTaskMemoryPromotionService:
             return {"status": "deferred", "reason": "conclusion_is_empty"}
 
         try:
-            import aiohttp
-
-            timeout = aiohttp.ClientTimeout(total=8)
             topics = ["self_learning"]
             if source == "endogenous_drive":
                 topics.append("endogenous_drive")
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{self._gateway_address}/api/mem/remember",
-                    json={
-                        "title": f"Auto 结论：{str(task.title)[:280]}",
-                        "summary": conclusion,
-                        "topics": [
-                            *topics,
-                            *(["companion_candidate"] if verified else []),
-                        ],
-                        "evidence_refs": [governance_ref],
-                        "event_kind": "decision",
-                        "importance": 0.85,
-                        "source_actor": (
-                            "stellar_auto_governed_conclusion"
-                            if verified
-                            else "stellar_auto_learning_conclusion"
-                        ),
-                        "memory_domain": "evolution",
-                    },
-                    headers=headers_auto,
-                ) as response:
-                    memory_payload = await response.json()
-                    if response.status != 200:
-                        return {
-                            "status": "deferred",
-                            "reason": "evolution_memory_write_failed",
-                            "http_status": response.status,
-                        }
+            memory_payload = await self._memory_client_factory(
+                memory_actor="stellar_auto",
+                memory_domain="evolution",
+                owner_id=DEFAULT_OWNER_ID,
+                workspace_id=CLI_WORKSPACE_ID,
+                timeout_seconds=8,
+            ).request_json(
+                "POST",
+                "/remember",
+                {
+                    "title": f"Auto 结论：{str(task.title)[:280]}",
+                    "summary": conclusion,
+                    "topics": [
+                        *topics,
+                        *(["companion_candidate"] if verified else []),
+                    ],
+                    "evidence_refs": [governance_ref],
+                    "event_kind": "decision",
+                    "importance": 0.85,
+                    "source_actor": (
+                        "stellar_auto_governed_conclusion"
+                        if verified
+                        else "stellar_auto_learning_conclusion"
+                    ),
+                    "memory_domain": "evolution",
+                },
+                idempotency_key=f"auto-memory:{task.task_id}:{decision_id}",
+            )
 
-                memory_record = (
-                    memory_payload.get("memory")
-                    if isinstance(memory_payload, dict)
+            memory_record = (
+                memory_payload.get("memory")
+                if isinstance(memory_payload, dict)
+                else None
+            )
+            source_memory_id = str(
+                (memory_record or {}).get("memory_id") or ""
+            ).strip()
+            if not source_memory_id:
+                return {
+                    "status": "deferred",
+                    "reason": "evolution_memory_id_missing",
+                }
+
+            if not verified:
+                result = {
+                    "status": "recorded_only",
+                    "source_memory_id": source_memory_id,
+                }
+            else:
+                candidate_payload = await self._memory_client_factory(
+                    memory_actor="governor",
+                    memory_domain="evolution",
+                    owner_id=DEFAULT_OWNER_ID,
+                    workspace_id=CLI_WORKSPACE_ID,
+                    timeout_seconds=8,
+                ).request_json(
+                    "POST",
+                    "/promotion-candidates",
+                    {
+                        "source_memory_id": source_memory_id,
+                        "source_type": "compressed",
+                        "source_domain": "evolution",
+                        "target_domain": "companion",
+                        "reason": (
+                            "Governor 已确认该 Auto 结论，可由本机所有者决定是否供日常陪伴召回。"
+                        ),
+                        "governance_ref": governance_ref,
+                    },
+                    idempotency_key=f"auto-promotion:{task.task_id}:{decision_id}",
+                )
+                candidate = (
+                    candidate_payload.get("candidate")
+                    if isinstance(candidate_payload, dict)
                     else None
                 )
-                source_memory_id = str(
-                    (memory_record or {}).get("memory_id") or ""
-                ).strip()
-                if not source_memory_id:
-                    return {
-                        "status": "deferred",
-                        "reason": "evolution_memory_id_missing",
-                    }
-
-                if not verified:
-                    result = {
-                        "status": "recorded_only",
-                        "source_memory_id": source_memory_id,
-                    }
-                else:
-                    async with session.post(
-                        f"{self._gateway_address}/api/mem/promotion-candidates",
-                        json={
-                            "source_memory_id": source_memory_id,
-                            "source_type": "compressed",
-                            "source_domain": "evolution",
-                            "target_domain": "companion",
-                            "reason": (
-                                "Governor 已确认该 Auto 结论，可由本机所有者决定是否供日常陪伴召回。"
-                            ),
-                            "governance_ref": governance_ref,
-                        },
-                        headers=headers_governor,
-                    ) as response:
-                        candidate_payload = await response.json()
-                        if response.status == 409:
-                            result = {
-                                "status": "already_governed",
-                                "source_memory_id": source_memory_id,
-                            }
-                        elif response.status != 200:
-                            return {
-                                "status": "deferred",
-                                "reason": "promotion_candidate_write_failed",
-                                "http_status": response.status,
-                            }
-                        else:
-                            candidate = (
-                                candidate_payload.get("candidate")
-                                if isinstance(candidate_payload, dict)
-                                else None
-                            )
-                            result = {
-                                "status": "awaiting_user_consent",
-                                "candidate_id": (candidate or {}).get("candidate_id"),
-                                "source_memory_id": source_memory_id,
-                            }
+                result = {
+                    "status": candidate_payload.get(
+                        "status",
+                        "awaiting_user_consent",
+                    ),
+                    "candidate_id": (candidate or {}).get("candidate_id"),
+                    "source_memory_id": source_memory_id,
+                }
         except Exception as exc:
             logger.warning(
                 "Verified conclusion promotion proposal failed for task %s: %s",

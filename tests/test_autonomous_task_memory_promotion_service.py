@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from voidcube.systems.supervisor.autonomous_chain_store import (
@@ -19,21 +17,6 @@ class _TaskState:
         self.metadata_updates.append((task_id, dict(metadata)))
 
 
-class _Response:
-    def __init__(self, status, payload):
-        self.status = status
-        self._payload = payload
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    async def json(self):
-        return self._payload
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("source", "expected_topics"),
@@ -43,39 +26,26 @@ class _Response:
     ],
 )
 async def test_completed_unverified_learning_records_final_response_without_promotion(
-    monkeypatch,
     source,
     expected_topics,
 ):
     captured = []
 
-    class _Session:
+    class _MemoryClient:
         def __init__(self, **kwargs):
-            del kwargs
+            self.kwargs = kwargs
 
-        async def __aenter__(self):
-            return self
+        async def request_json(self, method, path, payload=None, **kwargs):
+            captured.append((self.kwargs, method, path, payload, kwargs))
+            return {"memory": {"memory_id": "learning-memory-1"}}
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, *, json, headers):
-            captured.append((url, json, headers))
-            return _Response(200, {"memory": {"memory_id": "learning-memory-1"}})
-
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
-    )
+    def memory_client_factory(**kwargs):
+        return _MemoryClient(**kwargs)
 
     state = _TaskState()
     service = AutonomousTaskMemoryPromotionService(
         task_state=state,
-        gateway_address="http://gateway",
-        gateway_memory_headers=lambda *, memory_actor: {
-            "X-VoidCube-Memory-Actor": memory_actor
-        },
+        memory_client_factory=memory_client_factory,
     )
     task = AutonomousChainTask(
         title="Research result",
@@ -101,7 +71,15 @@ async def test_completed_unverified_learning_records_final_response_without_prom
         "source_memory_id": "learning-memory-1",
     }
     assert len(captured) == 1
-    assert captured[0][0] == "http://gateway/api/mem/remember"
-    assert captured[0][1]["summary"] == "Primary-source conclusion"
-    assert captured[0][1]["topics"] == expected_topics
+    assert captured[0][0] == {
+        "memory_actor": "stellar_auto",
+        "memory_domain": "evolution",
+        "owner_id": "local-user",
+        "workspace_id": "VoidCube",
+        "timeout_seconds": 8,
+    }
+    assert captured[0][1:3] == ("POST", "/remember")
+    assert captured[0][3]["summary"] == "Primary-source conclusion"
+    assert captured[0][3]["topics"] == expected_topics
+    assert captured[0][4]["idempotency_key"].startswith("auto-memory:")
     assert state.metadata_updates[0][1]["memory_promotion_candidate_status"] == "recorded_only"

@@ -14,11 +14,14 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from memai.repository.contracts import MemoryRepository
 from memai.repository.llm_cache import (
     TASK_EXTRACT,
     build_cache_key,
     open_cached,
+    open_cached_with_repository,
     store_cached,
+    store_cached_with_repository,
 )
 
 
@@ -29,17 +32,28 @@ def _turn_input(turns: Sequence[Any]) -> str:
 class CachedLLMExtractionAdapter:
     """Adapt OpenAICompatibleLLMClient → LLMExtractionClient with caching."""
 
-    def __init__(self, llm, db_path, *, model: str = "") -> None:
+    def __init__(
+        self,
+        llm,
+        db_path,
+        *,
+        model: str = "",
+        repository: MemoryRepository | None = None,
+    ) -> None:
         self._llm = llm
         self._db_path = str(db_path)
         self._model = model or ""
+        self._repository = repository
 
     def extract_events(self, turns: Sequence[Any]):
         input_text = _turn_input(turns)
         cache_key = build_cache_key(TASK_EXTRACT, self._model, input_text)
         cached = None
         try:
-            cached = open_cached(self._db_path, cache_key)
+            if self._repository is not None:
+                cached = open_cached_with_repository(self._repository, cache_key)
+            else:
+                cached = open_cached(self._db_path, cache_key)
         except Exception:
             cached = None
         if cached is not None:
@@ -63,20 +77,35 @@ class CachedLLMExtractionAdapter:
         else:
             payload = []
         try:
-            store_cached(
-                self._db_path,
-                cache_key=cache_key,
-                task=TASK_EXTRACT,
-                model=self._model,
-                input_text=input_text,
-                result=payload,
-            )
+            if self._repository is not None:
+                store_cached_with_repository(
+                    self._repository,
+                    cache_key=cache_key,
+                    task=TASK_EXTRACT,
+                    model=self._model,
+                    input_text=input_text,
+                    result=payload,
+                )
+            else:
+                store_cached(
+                    self._db_path,
+                    cache_key=cache_key,
+                    task=TASK_EXTRACT,
+                    model=self._model,
+                    input_text=input_text,
+                    result=payload,
+                )
         except Exception:
             pass
         return payload
 
 
-def build_llm_first_pipeline(db_path, *, role: str = "extraction"):
+def build_llm_first_pipeline(
+    db_path,
+    *,
+    role: str = "extraction",
+    repository: MemoryRepository | None = None,
+):
     """Build a ChroniclePipeline — LLM-first with heuristic fallback.
 
     Returns an LLM-backed pipeline (cached extraction + LLM scholar) when a
@@ -111,6 +140,7 @@ def build_llm_first_pipeline(db_path, *, role: str = "extraction"):
                 extraction_client,
                 db_path,
                 model=extraction_model,
+                repository=repository,
             )
         )
         return ChroniclePipeline(

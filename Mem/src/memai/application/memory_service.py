@@ -62,7 +62,12 @@ from memai.application.recall import (
     recall_memories,
 )
 from memai.repository.contracts import MemoryRepository
-from memai.repository.sqlite_repository import SQLiteMemoryRepository
+from memai.repository.sqlite_repository import (
+    IdempotentWriteResult,
+    MemoryWriteBackpressure,
+    MemoryWriteReceiptConflict,
+    SQLiteMemoryRepository,
+)
 from memai.transport.http_adapter import build_memory_http_app
 from memai.application.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
 from memai.domain.lifecycle_policy import (
@@ -306,6 +311,7 @@ class RecallRequest(BaseModel):
         default="api",
         pattern=r"^(api|auto_prefetch|tool)$",
     )
+    min_revision: Optional[int] = Field(default=None, ge=0)
 
 
 class AgentOutboxHealthReport(BaseModel):
@@ -376,6 +382,7 @@ class DurableMemoryCreate(BaseModel):
     workspace_id: str = DEFAULT_WORKSPACE_ID
     memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
     memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
+    idempotency_key: Optional[str] = Field(default=None, min_length=1, max_length=300)
 
 
 class RecallFeedbackCreate(BaseModel):
@@ -672,6 +679,10 @@ class MemoryApplicationService:
         self._repository = repository or SQLiteMemoryRepository(
             self.config.db_path,
             backup_retention_count=self.config.backup_retention_count,
+            write_queue_max_size=self.config.memory_write_queue_max_size,
+            write_batch_size=self.config.memory_write_batch_size,
+            write_batch_wait_ms=self.config.memory_write_batch_wait_ms,
+            write_enqueue_timeout_ms=self.config.memory_write_enqueue_timeout_ms,
         )
         self._db_path = self._repository.db_path
         # Rule execution tracking
@@ -711,15 +722,116 @@ class MemoryApplicationService:
         self._last_recall_trace_id: Optional[str] = None
         self._last_recall_status: str = "idle"
         self._agent_outbox_reports: Dict[str, Dict[str, Any]] = {}
+        self._read_cache: Dict[tuple[Any, ...], tuple[int, Any]] = {}
         self._backup_manager = self._repository.backup_manager
         self._repository.initialize()
-        self._semantic_index = SemanticMemoryIndex(self._db_path)
+        self._semantic_index = SemanticMemoryIndex(
+            self._db_path,
+            repository=self._repository,
+        )
 
     def _memory_storage_value(self, value: Any) -> Any:
         return _prepare_memory_storage_value(
             value,
             redact=self.config.redact_before_store,
         )
+
+    def _repository_read(self, operation: Callable[[sqlite3.Connection], Any]) -> Any:
+        return self._repository.execute_read(operation)
+
+    def _repository_write(self, operation: Callable[[sqlite3.Connection], Any]) -> Any:
+        return self._repository.execute_write(operation)
+
+    async def _repository_read_async(self, operation: Callable[[sqlite3.Connection], Any]) -> Any:
+        return await self._repository.execute_read_async(operation)
+
+    async def _repository_write_async(self, operation: Callable[[sqlite3.Connection], Any]) -> Any:
+        try:
+            result = await self._repository.execute_write_async(operation)
+            self._read_cache.clear()
+            return result
+        except MemoryWriteBackpressure as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "busy",
+                    "code": "memory_write_backpressure",
+                    "retryable": True,
+                },
+            ) from exc
+
+    async def _repository_idempotent_write_async(
+        self,
+        *,
+        receipt_key: str,
+        operation: str,
+        fingerprint: str,
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+        callback: Callable[[sqlite3.Connection], Any],
+    ) -> IdempotentWriteResult:
+        execute = getattr(self._repository, "execute_idempotent_write_async", None)
+        if execute is None:
+            value = await self._repository_write_async(callback)
+            return IdempotentWriteResult(
+                value=value,
+                commit_revision=getattr(self._repository, "commit_revision", 0),
+            )
+        try:
+            result = await execute(
+                receipt_key=receipt_key,
+                operation=operation,
+                fingerprint=fingerprint,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_domain=memory_domain,
+                callback=callback,
+            )
+            self._read_cache.clear()
+            return result
+        except MemoryWriteBackpressure as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": "busy", "code": "memory_write_backpressure", "retryable": True},
+            ) from exc
+        except MemoryWriteReceiptConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "idempotency_conflict", "code": "memory_write_receipt_conflict", "retryable": False},
+            ) from exc
+
+    def _cached_read(self, key: tuple[Any, ...]) -> Any | None:
+        cached = self._read_cache.get(key)
+        if cached is None:
+            return None
+        revision, value = cached
+        if revision != getattr(self._repository, "commit_revision", 0):
+            self._read_cache.pop(key, None)
+            return None
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, list):
+            return list(value)
+        return value
+
+    def _store_cached_read(self, key: tuple[Any, ...], value: Any) -> Any:
+        revision = getattr(self._repository, "commit_revision", 0)
+        if isinstance(value, dict):
+            stored = dict(value)
+        elif isinstance(value, list):
+            stored = list(value)
+        else:
+            stored = value
+        self._read_cache[key] = (revision, stored)
+        return value
+
+    def _database_revision_snapshot(self) -> dict[str, Any]:
+        stats = getattr(self._repository, "execution_stats", lambda: {})()
+        return {
+            "commit_revision": getattr(self._repository, "commit_revision", 0),
+            **stats,
+        }
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
@@ -732,145 +844,202 @@ class MemoryApplicationService:
     _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
-        """Run lifecycle maintenance in one commit-or-rollback transaction."""
-        conn = self._repository.connect()
-        try:
-            result = await self._apply_compression_lifecycle_in_transaction(conn)
-            conn.commit()
-            return result
-        except BaseException:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    async def _apply_compression_lifecycle_in_transaction(
-        self, conn: sqlite3.Connection
-    ) -> Dict[str, Any]:
-        """Cascade compressed memories through compression levels.
-
-        For each memory, if its age exceeds the threshold for its current level,
-        it gets superseded by a higher-level summary. Eventually, level-4
-        (FinalSummary) entries are purged.
-        """
+        """Run lifecycle maintenance with model work outside the write lock."""
         now = datetime.now(timezone.utc)
-        escalated = 0
-        purged = 0
+
+        def read_candidates(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+            rows: list[tuple[Any, ...]] = []
+            for (mem_type, level), max_age_days in lifecycle_age_thresholds(self.config):
+                cutoff = (now - timedelta(days=max_age_days)).isoformat()
+                rows.extend(
+                    conn.execute(
+                        "SELECT memory_id, title, summary, topics, entities, event_kind, "
+                        "timespan_start, timespan_end, importance, confidence, source_turns, "
+                        "evidence_refs, origin_type, origin_id, verified_at, "
+                        "owner_id, workspace_id, memory_domain, memory_type, compression_level "
+                        "FROM compressed_memories "
+                        "WHERE memory_type = ? AND compression_level = ? "
+                        "AND status = 'active' AND hidden = 0 AND pinned = 0 "
+                        "AND identity_layer IS NULL "
+                        "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ? "
+                        "AND lifecycle_retry_count < ? "
+                        "AND (lifecycle_retry_after IS NULL OR lifecycle_retry_after <= ?)"
+                        ,
+                        (
+                            mem_type,
+                            level,
+                            cutoff,
+                            self.config.lifecycle_max_quality_retries,
+                            now.isoformat(),
+                        ),
+                    ).fetchall()
+                )
+            return rows
+
+        candidates = self._repository_read(read_candidates)
+        plans: list[dict[str, Any]] = []
         quality_rejected = 0
-        graph_scopes: set[tuple[str, str, str]] = set()
 
-        # ── Escalate: find entries past their level's max age ──
-        for (mem_type, level), max_age_days in lifecycle_age_thresholds(self.config):
-            cutoff = (now - timedelta(days=max_age_days)).isoformat()
-            rows = conn.execute(
-                "SELECT memory_id, title, summary, topics, entities, event_kind, "
-                "timespan_start, timespan_end, importance, confidence, source_turns, "
-                "evidence_refs, origin_type, origin_id, verified_at, "
-                "owner_id, workspace_id, memory_domain "
-                "FROM compressed_memories "
-                "WHERE memory_type = ? AND compression_level = ? "
-                "AND status = 'active' AND hidden = 0 AND pinned = 0 "
-                "AND identity_layer IS NULL "
-                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ? "
-                "AND lifecycle_retry_count < ? "
-                "AND (lifecycle_retry_after IS NULL OR lifecycle_retry_after <= ?)",
-                (
-                    mem_type,
-                    level,
-                    cutoff,
-                    self.config.lifecycle_max_quality_retries,
-                    now.isoformat(),
-                ),
-            ).fetchall()
+        for row in candidates:
+            (
+                mem_id,
+                title,
+                summary,
+                topics_json,
+                entities_json,
+                event_kind,
+                ts_start,
+                ts_end,
+                importance,
+                confidence,
+                source_turns_json,
+                evidence_refs_json,
+                origin_type,
+                origin_id,
+                verified_at,
+                owner_id,
+                workspace_id,
+                memory_domain,
+                mem_type,
+                level,
+            ) = row
 
-            for row in rows:
-                mem_id, title, summary, topics_json, entities_json, event_kind, \
-                    ts_start, ts_end, importance, confidence, source_turns_json, \
-                    evidence_refs_json, origin_type, origin_id, verified_at, \
-                    owner_id, workspace_id, memory_domain = row
-
-                if level >= 4:
-                    # Final level: LLM reviews before permanent deletion
-                    should_keep = await self._llm_purge_review(
-                        mem_id=mem_id, title=title, summary=summary,
-                        topics=_json_string_list(topics_json),
-                    )
-                    if should_keep:
-                        conn.execute(
-                            "UPDATE compressed_memories SET compression_level = 3, "
-                            "status = 'active', weight = 0.15, compressed_at = ? "
-                            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                            "AND memory_domain = ?",
-                            (now.isoformat(), mem_id, owner_id, workspace_id, memory_domain),
-                        )
-                    else:
-                        conn.execute(
-                            "UPDATE compressed_memories SET status = 'purged', "
-                            "weight = 0.0, compressed_at = ? WHERE memory_id = ? "
-                            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                            (now.isoformat(), mem_id, owner_id, workspace_id, memory_domain),
-                        )
-                        purged += 1
-                        graph_scopes.add(
-                            (str(owner_id), str(workspace_id), str(memory_domain))
-                        )
-                    continue
-
-                # Escalate to next level with LLM re-summarization
-                next_level = level + 1
-                next_type = {0: "scene", 1: "arc", 2: "epoch", 3: "epoch"}[level]
-                next_weight = self._LEVEL_WEIGHT.get(next_level, 0.1)
-
-                # ── LLM generates higher-level abstract ──
-                escalated_title, escalated_summary = await self._llm_escalate_summary(
-                    mem_id=mem_id,
-                    title=title,
-                    summary=summary,
-                    from_type=mem_type,
-                    from_level=level,
-                    to_type=next_type,
-                    to_level=next_level,
+            if int(level) >= 4:
+                should_keep = await self._llm_purge_review(
+                    mem_id=str(mem_id),
+                    title=str(title),
+                    summary=str(summary),
                     topics=_json_string_list(topics_json),
                 )
-                quality = evaluate_lifecycle_quality(
-                    source_title=str(title or ""),
-                    source_summary=str(summary or ""),
-                    proposed_title=str(escalated_title or ""),
-                    proposed_summary=str(escalated_summary or ""),
-                    min_source_support=self.config.lifecycle_min_source_support,
-                    min_identifier_fidelity=self.config.lifecycle_min_identifier_fidelity,
+                plans.append(
+                    {
+                        "kind": "final_keep" if should_keep else "final_purge",
+                        "memory_id": str(mem_id),
+                        "owner_id": str(owner_id),
+                        "workspace_id": str(workspace_id),
+                        "memory_domain": str(memory_domain),
+                    }
                 )
-                if not quality.passed:
-                    quality_rejected += 1
+                continue
+
+            next_level = int(level) + 1
+            next_type = {0: "scene", 1: "arc", 2: "epoch", 3: "epoch"}[int(level)]
+            next_weight = self._LEVEL_WEIGHT.get(next_level, 0.1)
+            escalated_title, escalated_summary = await self._llm_escalate_summary(
+                mem_id=str(mem_id),
+                title=str(title),
+                summary=str(summary),
+                from_type=str(mem_type),
+                from_level=int(level),
+                to_type=next_type,
+                to_level=next_level,
+                topics=_json_string_list(topics_json),
+            )
+            quality = evaluate_lifecycle_quality(
+                source_title=str(title or ""),
+                source_summary=str(summary or ""),
+                proposed_title=str(escalated_title or ""),
+                proposed_summary=str(escalated_summary or ""),
+                min_source_support=self.config.lifecycle_min_source_support,
+                min_identifier_fidelity=self.config.lifecycle_min_identifier_fidelity,
+            )
+            if not quality.passed:
+                quality_rejected += 1
+                plans.append(
+                    {
+                        "kind": "rejection",
+                        "memory_id": str(mem_id),
+                        "owner_id": str(owner_id),
+                        "workspace_id": str(workspace_id),
+                        "memory_domain": str(memory_domain),
+                        "reason": ",".join(quality.failed_checks),
+                    }
+                )
+                continue
+
+            plans.append(
+                {
+                    "kind": "escalate",
+                    "memory_id": str(mem_id),
+                    "owner_id": str(owner_id),
+                    "workspace_id": str(workspace_id),
+                    "memory_domain": str(memory_domain),
+                    "mem_type": str(mem_type),
+                    "next_type": next_type,
+                    "next_level": next_level,
+                    "next_weight": next_weight,
+                    "title": str(escalated_title),
+                    "summary": str(escalated_summary),
+                    "timespan_start": ts_start,
+                    "timespan_end": ts_end,
+                    "importance": float(importance),
+                    "confidence": float(confidence),
+                    "source_turns_json": source_turns_json,
+                    "evidence_refs_json": evidence_refs_json,
+                    "origin_type": origin_type,
+                    "origin_id": origin_id,
+                    "verified_at": verified_at,
+                    "event_kind": event_kind,
+                    "topics_json": topics_json,
+                    "entities_json": entities_json,
+                }
+            )
+
+        def write(conn: sqlite3.Connection) -> Dict[str, Any]:
+            escalated = 0
+            purged = 0
+            graph_scopes: set[tuple[str, str, str]] = set()
+            for plan in plans:
+                kind = plan["kind"]
+                memory_id = plan["memory_id"]
+                owner_id = plan["owner_id"]
+                workspace_id = plan["workspace_id"]
+                memory_domain = plan["memory_domain"]
+                if kind == "final_keep":
+                    conn.execute(
+                        "UPDATE compressed_memories SET compression_level = 3, "
+                        "status = 'active', weight = 0.15, compressed_at = ? "
+                        "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                        "AND memory_domain = ?",
+                        (now.isoformat(), memory_id, owner_id, workspace_id, memory_domain),
+                    )
+                    continue
+                if kind == "final_purge":
+                    conn.execute(
+                        "UPDATE compressed_memories SET status = 'purged', "
+                        "weight = 0.0, compressed_at = ? WHERE memory_id = ? "
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                        (now.isoformat(), memory_id, owner_id, workspace_id, memory_domain),
+                    )
+                    purged += 1
+                    graph_scopes.add((owner_id, workspace_id, memory_domain))
+                    continue
+                if kind == "rejection":
                     retry_count = record_lifecycle_rejection(
                         conn,
-                        memory_id=str(mem_id),
-                        owner_id=str(owner_id),
-                        workspace_id=str(workspace_id),
-                        memory_domain=str(memory_domain),
-                        reason=",".join(quality.failed_checks),
+                        memory_id=memory_id,
+                        owner_id=owner_id,
+                        workspace_id=workspace_id,
+                        memory_domain=memory_domain,
+                        reason=plan["reason"],
                         now=now,
                         max_retries=self.config.lifecycle_max_quality_retries,
                         retry_base_hours=self.config.lifecycle_retry_base_hours,
                     )
                     logger.warning(
-                        "Compression lifecycle rejected escalation for %s "
-                        "(attempt %d/%d): %s",
-                        mem_id,
-                        retry_count,
+                        "Compression lifecycle rejected escalation for %s (attempt ?/%d): %s",
+                        memory_id,
                         self.config.lifecycle_max_quality_retries,
-                        ", ".join(quality.failed_checks),
+                        plan["reason"],
                     )
                     continue
-
                 successor_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
                         "voidcube-memory-lifecycle:"
-                        f"{owner_id}:{workspace_id}:{memory_domain}:{mem_id}:{next_level}",
+                        f"{owner_id}:{workspace_id}:{memory_domain}:{memory_id}:{plan['next_level']}",
                     )
                 )
-                source_turns = _json_string_list(source_turns_json)
                 conn.execute(
                     "INSERT OR REPLACE INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
@@ -880,60 +1049,73 @@ class MemoryApplicationService:
                     "owner_id, workspace_id, memory_domain, event_kind, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        successor_id, next_type, escalated_title, escalated_summary,
-                        ts_start, ts_end,
-                        importance * 0.85, confidence * 0.9,
-                        topics_json, entities_json,
-                        json.dumps(source_turns),
-                        evidence_refs_json, origin_type, origin_id, verified_at,
-                        mem_id, now.isoformat(), next_level, "active", next_weight,
-                        owner_id, workspace_id, memory_domain, event_kind, now.isoformat(),
+                        successor_id,
+                        plan["next_type"],
+                        plan["title"],
+                        plan["summary"],
+                        plan["timespan_start"],
+                        plan["timespan_end"],
+                        plan["importance"] * 0.85,
+                        plan["confidence"] * 0.9,
+                        plan["topics_json"],
+                        plan["entities_json"],
+                        json.dumps(_json_string_list(plan["source_turns_json"])),
+                        plan["evidence_refs_json"],
+                        plan["origin_type"],
+                        plan["origin_id"],
+                        plan["verified_at"],
+                        memory_id,
+                        now.isoformat(),
+                        plan["next_level"],
+                        "active",
+                        plan["next_weight"],
+                        owner_id,
+                        workspace_id,
+                        memory_domain,
+                        plan["event_kind"],
+                        now.isoformat(),
                     ),
                 )
-
-                # Mark old entry as superseded
                 conn.execute(
                     "UPDATE compressed_memories SET status = 'superseded', "
                     "superseded_by = ?, weight = weight * 0.3 WHERE memory_id = ? "
                     "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (successor_id, mem_id, owner_id, workspace_id, memory_domain),
+                    (successor_id, memory_id, owner_id, workspace_id, memory_domain),
                 )
-                # Increment citation_count on the new parent (Dimension 3)
                 conn.execute(
                     "UPDATE compressed_memories SET citation_count = citation_count + 1 "
                     "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
                     "AND memory_domain = ?",
                     (successor_id, owner_id, workspace_id, memory_domain),
                 )
-                graph_scopes.add(
-                    (str(owner_id), str(workspace_id), str(memory_domain))
-                )
+                graph_scopes.add((owner_id, workspace_id, memory_domain))
                 escalated += 1
 
-        if graph_scopes:
-            from memai.indexes.entity_graph import rebuild_entity_graph
+            if graph_scopes:
+                from memai.indexes.entity_graph import rebuild_entity_graph
 
-            for owner_id, workspace_id, memory_domain in sorted(graph_scopes):
-                rebuild_entity_graph(
-                    conn,
-                    owner_id=owner_id,
-                    workspace_id=workspace_id,
-                    memory_domain=memory_domain,
-                )
+                for owner_id, workspace_id, memory_domain in sorted(graph_scopes):
+                    rebuild_entity_graph(
+                        conn,
+                        owner_id=owner_id,
+                        workspace_id=workspace_id,
+                        memory_domain=memory_domain,
+                    )
 
-        # Backfill the transaction-time anchor for any row still missing one.
-        conn.execute(
-            "UPDATE compressed_memories SET created_at = compressed_at "
-            "WHERE created_at IS NULL"
-        )
-        if escalated or purged:
-            logger.info(
-                "Compression lifecycle: %d escalated, %d purged", escalated, purged
+            conn.execute(
+                "UPDATE compressed_memories SET created_at = compressed_at "
+                "WHERE created_at IS NULL"
             )
-        result = {"escalated": escalated, "purged": purged}
-        if quality_rejected:
-            result["quality_rejected"] = quality_rejected
-        return result
+            if escalated or purged:
+                logger.info(
+                    "Compression lifecycle: %d escalated, %d purged", escalated, purged
+                )
+            result = {"escalated": escalated, "purged": purged}
+            if quality_rejected:
+                result["quality_rejected"] = quality_rejected
+            return result
+
+        return await self._repository_write_async(write)
 
     async def _llm_escalate_summary(
         self, *, mem_id: str, title: str, summary: str,
@@ -960,8 +1142,8 @@ class MemoryApplicationService:
         try:
             from memai.repository.llm_cache import (
                 build_cache_key,
-                open_cached,
-                store_cached,
+                open_cached_with_repository,
+                store_cached_with_repository,
             )
 
             client, model = self._resolve_mem_llm_client(role="summarization")
@@ -981,7 +1163,7 @@ class MemoryApplicationService:
                 cache_key = build_cache_key("escalate", model, input_text)
                 cached = None
                 try:
-                    cached = open_cached(self._db_path, cache_key)
+                    cached = open_cached_with_repository(self._repository, cache_key)
                 except Exception:
                     cached = None
                 if cached is not None and isinstance(cached, dict):
@@ -1007,8 +1189,8 @@ class MemoryApplicationService:
                     llm_summary = str(result.get("summary", "")).strip()
                     if llm_title and llm_summary:
                         try:
-                            store_cached(
-                                self._db_path,
+                            store_cached_with_repository(
+                                self._repository,
                                 cache_key=cache_key,
                                 task="escalate",
                                 model=model,
@@ -1045,8 +1227,8 @@ class MemoryApplicationService:
         try:
             from memai.repository.llm_cache import (
                 build_cache_key,
-                open_cached,
-                store_cached,
+                open_cached_with_repository,
+                store_cached_with_repository,
             )
 
             client, model = self._resolve_mem_llm_client()
@@ -1057,7 +1239,7 @@ class MemoryApplicationService:
             cache_key = build_cache_key("purge_review", model, input_text)
             cached = None
             try:
-                cached = open_cached(self._db_path, cache_key)
+                cached = open_cached_with_repository(self._repository, cache_key)
             except Exception:
                 cached = None
             if cached is not None and isinstance(cached, dict) and "keep" in cached:
@@ -1077,8 +1259,8 @@ class MemoryApplicationService:
             )
             if isinstance(result, dict):
                 try:
-                    store_cached(
-                        self._db_path,
+                    store_cached_with_repository(
+                        self._repository,
                         cache_key=cache_key,
                         task="purge_review",
                         model=model,
@@ -1094,19 +1276,18 @@ class MemoryApplicationService:
 
     async def _purge_expired_memories(self) -> int:
         """Hard-delete purged memories older than the audit retention period."""
-        conn = self._repository.connect()
         cutoff = (datetime.now() - timedelta(days=90)).isoformat()
-        # Only purge entries marked 'purged' for >90 days
-        cursor = conn.execute(
-            "DELETE FROM compressed_memories "
-            "WHERE status = 'purged' AND pinned = 0 "
-            "AND identity_layer IS NULL "
-            "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
-            (cutoff,),
-        )
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
+        def write(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                "DELETE FROM compressed_memories "
+                "WHERE status = 'purged' AND pinned = 0 "
+                "AND identity_layer IS NULL "
+                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
+                (cutoff,),
+            )
+            return max(0, int(cursor.rowcount or 0))
+
+        deleted = await self._repository_write_async(write)
         if deleted:
             logger.info("Purged %d expired compressed memories", deleted)
         return deleted
@@ -1231,17 +1412,15 @@ class MemoryApplicationService:
         from memai.indexes.entity_graph import list_graph_entities as _list_entities
 
         domains = self._authorized_graph_domains(source_domains, memory_actor)
-        conn = self._repository.connect()
-        try:
-            entities = _list_entities(
+        entities = self._repository_read(
+            lambda conn: _list_entities(
                 conn,
                 owner_id=owner_id,
                 workspace_id=workspace_id,
                 source_domains=domains,
                 limit=limit,
             )
-        finally:
-            conn.close()
+        )
         return {"entities": entities, "count": len(entities)}
 
     async def get_graph_neighbors(
@@ -1256,9 +1435,8 @@ class MemoryApplicationService:
         from memai.indexes.entity_graph import list_graph_neighbors as _neighbors
 
         domains = self._authorized_graph_domains(source_domains, memory_actor)
-        conn = self._repository.connect()
-        try:
-            neighbors = _neighbors(
+        neighbors = self._repository_read(
+            lambda conn: _neighbors(
                 conn,
                 entity_id,
                 owner_id=owner_id,
@@ -1266,8 +1444,7 @@ class MemoryApplicationService:
                 source_domains=domains,
                 limit=limit,
             )
-        finally:
-            conn.close()
+        )
         return {"entity_id": entity_id, "neighbors": neighbors, "count": len(neighbors)}
 
     async def rebuild_entity_graph(
@@ -1294,17 +1471,16 @@ class MemoryApplicationService:
                 )
         else:
             authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = self._repository.connect()
-        try:
+        def write(conn: sqlite3.Connection) -> int:
             linked = _rebuild(
                 conn,
                 owner_id=owner_id,
                 workspace_id=workspace_id,
                 memory_domain=authorized_domain,
             )
-            conn.commit()
-        finally:
-            conn.close()
+            return linked
+
+        linked = await self._repository_write_async(write)
         return {"status": "rebuilt", "memory_records_linked": linked}
 
     # ── Compression quality dashboard ─────────────────────────────────────
@@ -1316,18 +1492,17 @@ class MemoryApplicationService:
         workspace_id: str | None = None,
     ):
         bounded = max(1, min(int(limit), 200))
-        conn = self._repository.connect()
-        try:
-            clauses: list[str] = []
-            params: list[Any] = []
-            if owner_id is not None:
-                clauses.append("owner_id = ?")
-                params.append(str(owner_id))
-            if workspace_id is not None:
-                clauses.append("workspace_id = ?")
-                params.append(str(workspace_id))
-            where = " WHERE " + " AND ".join(clauses) if clauses else ""
-            rows = conn.execute(
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_id is not None:
+            clauses.append("owner_id = ?")
+            params.append(str(owner_id))
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(str(workspace_id))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self._repository_read(
+            lambda conn: conn.execute(
                 "SELECT evaluated_at, status, candidate_count, event_count, "
                 "covered_turn_count, event_coverage, backlink_completeness, "
                 "compression_ratio, degraded_fraction, source_support, "
@@ -1336,8 +1511,7 @@ class MemoryApplicationService:
                 + where + " ORDER BY evaluated_at DESC LIMIT ?",
                 [*params, bounded],
             ).fetchall()
-        finally:
-            conn.close()
+        )
         audits = [
             {
                 "evaluated_at": str(row[0] or ""),
@@ -1402,8 +1576,7 @@ class MemoryApplicationService:
         bounded_history = max(1, min(int(history_limit), 100))
         scope = MemoryScope.create(owner_id, workspace_id)
         manifest = load_founding_manifest()
-        conn = self._repository.connect()
-        try:
+        def read(conn: sqlite3.Connection) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
             anchors = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories "
                 "WHERE memory_id LIKE 'identity-founding-%' ORDER BY memory_id"
@@ -1432,8 +1605,9 @@ class MemoryApplicationService:
                 "ORDER BY created_at DESC LIMIT ?",
                 (bounded_history,),
             ).fetchall()
-        finally:
-            conn.close()
+            return anchors, self_experiences, governance_history, revisions
+
+        anchors, self_experiences, governance_history, revisions = self._repository_read(read)
 
         return {
             "identity": str(manifest.get("identity") or "xingzi"),
@@ -1490,8 +1664,7 @@ class MemoryApplicationService:
         if not evidence_refs or any(not item for item in evidence_refs):
             raise HTTPException(status_code=400, detail="evidence_refs cannot be empty")
 
-        conn = self._repository.connect()
-        try:
+        def write(conn: sqlite3.Connection) -> None:
             row = conn.execute(
                 "SELECT speaker, metadata FROM turns WHERE turn_id = ? AND owner_id = ? "
                 "AND workspace_id = ? AND memory_domain = ?",
@@ -1567,25 +1740,18 @@ class MemoryApplicationService:
                     authorized_domain,
                 ),
             )
-            conn.commit()
-        except HTTPException:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        await self._repository_write_async(write)
 
         sync_result = await self._identity_experience_cycle()
         digest = hashlib.sha256(request.turn_id.strip().encode("utf-8")).hexdigest()[:20]
         memory_id = f"identity-experience-turn-{digest}"
-        conn = self._repository.connect()
-        try:
-            experience_row = conn.execute(
+        experience_row = self._repository_read(
+            lambda conn: conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND owner_id = ? "
                 "AND workspace_id = ? AND memory_domain = ?",
                 (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
             ).fetchone()
-        finally:
-            conn.close()
+        )
         experience = _cmem_row_to_dict(experience_row) if experience_row else None
         return {
             "status": "authored",
@@ -1619,9 +1785,8 @@ class MemoryApplicationService:
             raise HTTPException(status_code=400, detail="evidence entries cannot be empty")
         proposal_id = f"identity-revision-{uuid.uuid4()}"
         created_at = datetime.now(timezone.utc).isoformat()
-        conn = self._repository.connect()
-        try:
-            conn.execute(
+        await self._repository_write_async(
+            lambda conn: conn.execute(
                 "INSERT INTO identity_revision_proposals "
                 "(proposal_id, target_memory_id, baseline_version, reason, "
                 "proposed_changes, evidence, source_actor, status, created_at) "
@@ -1640,9 +1805,7 @@ class MemoryApplicationService:
                     proposal.source_actor, created_at,
                 ),
             )
-            conn.commit()
-        finally:
-            conn.close()
+        )
         return {
             "proposal_id": proposal_id,
             "status": "pending",
@@ -1658,8 +1821,7 @@ class MemoryApplicationService:
             raise HTTPException(status_code=400, detail="decision must be approve or reject")
         status = "approved_pending_release" if normalized == "approve" else "rejected"
         decided_at = datetime.now(timezone.utc).isoformat()
-        conn = self._repository.connect()
-        try:
+        def write(conn: sqlite3.Connection) -> None:
             current = conn.execute(
                 "SELECT status FROM identity_revision_proposals WHERE proposal_id = ?",
                 (proposal_id,),
@@ -1673,9 +1835,7 @@ class MemoryApplicationService:
                 "decided_by = ?, decided_at = ? WHERE proposal_id = ?",
                 (status, decision.reasoning_summary, decision.decided_by, decided_at, proposal_id),
             )
-            conn.commit()
-        finally:
-            conn.close()
+        await self._repository_write_async(write)
         return {
             "proposal_id": proposal_id,
             "status": status,
@@ -1707,8 +1867,8 @@ class MemoryApplicationService:
         from memai.repository.llm_cache import (
             TASK_SESSION_SUMMARY,
             build_cache_key,
-            open_cached,
-            store_cached,
+            open_cached_with_repository,
+            store_cached_with_repository,
         )
 
         client, model = self._resolve_mem_llm_client(role="summarization")
@@ -1718,7 +1878,7 @@ class MemoryApplicationService:
                 detail="Mem summarization model is unavailable",
             )
         cache_key = build_cache_key(TASK_SESSION_SUMMARY, model, source_hash)
-        cached = open_cached(self._db_path, cache_key)
+        cached = open_cached_with_repository(self._repository, cache_key)
         if isinstance(cached, dict):
             try:
                 return normalize_session_summary(cached)
@@ -1758,8 +1918,8 @@ class MemoryApplicationService:
                 detail="Mem session summarization failed",
             ) from exc
         try:
-            store_cached(
-                self._db_path,
+            store_cached_with_repository(
+                self._repository,
                 cache_key=cache_key,
                 task=TASK_SESSION_SUMMARY,
                 model=model,
@@ -1780,8 +1940,8 @@ class MemoryApplicationService:
         from memai.repository.llm_cache import (
             TASK_DAY_SUMMARY,
             build_cache_key,
-            open_cached,
-            store_cached,
+            open_cached_with_repository,
+            store_cached_with_repository,
         )
 
         client, model = self._resolve_mem_llm_client(role="summarization")
@@ -1791,7 +1951,7 @@ class MemoryApplicationService:
                 detail="Mem summarization model is unavailable",
             )
         cache_key = build_cache_key(TASK_DAY_SUMMARY, model, source_hash)
-        cached = open_cached(self._db_path, cache_key)
+        cached = open_cached_with_repository(self._repository, cache_key)
         if isinstance(cached, dict):
             try:
                 return normalize_day_summary(cached)
@@ -1834,8 +1994,8 @@ class MemoryApplicationService:
                 detail="Mem day summarization failed",
             ) from exc
         try:
-            store_cached(
-                self._db_path,
+            store_cached_with_repository(
+                self._repository,
                 cache_key=cache_key,
                 task=TASK_DAY_SUMMARY,
                 model=model,
@@ -1894,6 +2054,12 @@ class MemoryApplicationService:
                 self._maintenance_run_status.update(
                     status="cancelled",
                     completed_at=datetime.now(timezone.utc).isoformat(),
+                )
+            close = getattr(self._repository, "close", None)
+            if close is not None:
+                await asyncio.to_thread(
+                    close,
+                    timeout=self.config.memory_write_shutdown_timeout_seconds,
                 )
 
     async def _semantic_index_loop(self) -> None:
@@ -2053,6 +2219,7 @@ class MemoryApplicationService:
                         self._db_path,
                         rule_name=rule_name,
                         cadence_days=self.config.lifecycle_cadence_days,
+                        repository=self._repository,
                     )
                     if not cadence.due:
                         results[rule_name] = {
@@ -2072,7 +2239,10 @@ class MemoryApplicationService:
                     effective_work += self._rule_effective_count(result)
                     if rule_name == "lifecycle_escalation":
                         record_rule_result(
-                            self._db_path, rule_name=rule_name, succeeded=True
+                            self._db_path,
+                            rule_name=rule_name,
+                            succeeded=True,
+                            repository=self._repository,
                         )
                 except Exception as exc:
                     logger.warning(
@@ -2088,6 +2258,7 @@ class MemoryApplicationService:
                             rule_name=rule_name,
                             succeeded=False,
                             error=str(exc),
+                            repository=self._repository,
                         )
             # Only real writes count as effective activity. Cadence and lock
             # skips must not make an idle memory pipeline look active.
@@ -2098,14 +2269,7 @@ class MemoryApplicationService:
 
     async def _identity_experience_cycle(self) -> Dict[str, int]:
         from memai.application.identity_experience import sync_identity_experiences
-        conn = self._repository.connect()
-        try:
-            return sync_identity_experiences(conn)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        return await self._repository_write_async(sync_identity_experiences)
 
     @staticmethod
     def _rule_effective_count(result: Any) -> int:
@@ -2228,7 +2392,11 @@ class MemoryApplicationService:
 
     async def rules_status(self):
         """Return the last execution time and count for each rule."""
-        lifecycle_state = get_rule_state(self._db_path, "lifecycle_escalation")
+        lifecycle_state = get_rule_state(
+            self._db_path,
+            "lifecycle_escalation",
+            repository=self._repository,
+        )
         maintenance_run = self._maintenance_run_snapshot()
         return {
             **{
@@ -2263,7 +2431,7 @@ class MemoryApplicationService:
 
     async def _tier1_decay_cycle(self, *, now: datetime | None = None) -> int:
         return await run_tier1_decay_cycle(
-            self._db_path, self.config, now=now, logger=logger
+            self._db_path, self.config, now=now, logger=logger, repository=self._repository
         )
 
     async def _tier2_bridge_cycle(self) -> Dict[str, Any]:
@@ -2273,6 +2441,7 @@ class MemoryApplicationService:
                 self._db_path, self.config, request_factory=Tier2CompressRequest,
                 compress=self.tier2_compress,
                 maintenance_actor=MemoryActor.MEMORY_MAINTENANCE, logger=logger,
+                repository=self._repository,
             )
         except Exception as exc:
             self._record_tier2_bridge_failure(str(exc))
@@ -2310,14 +2479,14 @@ class MemoryApplicationService:
         )
 
     def _tier2_candidate_health_snapshot(self) -> Dict[str, Any]:
-        conn = self._repository.connect()
-        try:
+        def read(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
             scopes = conn.execute(
                 "SELECT DISTINCT memory_domain, owner_id, workspace_id FROM turns "
                 "WHERE compression_status IN ('pending', 'retry_wait')"
             ).fetchall()
-        finally:
-            conn.close()
+            return [(str(domain), str(owner_id), str(workspace_id)) for domain, owner_id, workspace_id in scopes]
+
+        scopes = self._repository_read(read)
         eligible_count = 0
         oldest_at: str | None = None
         oldest_time: datetime | None = None
@@ -2363,8 +2532,7 @@ class MemoryApplicationService:
 
     def _memory_reference_health_snapshot(self) -> Dict[str, Any]:
         """统计 Tier2 来源引用类型，避免把外部证据误判为孤儿 turn。"""
-        conn = self._repository.connect()
-        try:
+        def read(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], set[str], set[str]]:
             rows = conn.execute(
                 """
                 SELECT source_turns
@@ -2381,8 +2549,9 @@ class MemoryApplicationService:
                 row[0]
                 for row in conn.execute("SELECT turn_id FROM turns_archive")
             }
-        finally:
-            conn.close()
+            return rows, active_turn_ids, archived_turn_ids
+
+        rows, active_turn_ids, archived_turn_ids = self._repository_read(read)
 
         total = active = archived = external = malformed = 0
         for row in rows:
@@ -2448,6 +2617,7 @@ class MemoryApplicationService:
             ),
             "service": "memory-service",
             "service_reachable": True,
+            "commit_revision": database["commit_revision"],
             "redaction": {
                 "enabled": self.config.redact_before_store,
                 "scope": "memory_persistence_and_recall",
@@ -2656,12 +2826,13 @@ class MemoryApplicationService:
         counts: dict[str, int] = {}
         readable = False
         integrity = "unavailable"
+        commit_revision = getattr(self._repository, "commit_revision", 0)
         try:
-            conn = self._repository.connect()
-            try:
+            def read(conn: sqlite3.Connection) -> tuple[str, dict[str, int], int]:
                 readable = True
                 integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
-                integrity = str(integrity_row[0] if integrity_row else "missing")
+                integrity_value = str(integrity_row[0] if integrity_row else "missing")
+                table_counts: dict[str, int] = {}
                 for table in (
                     "sessions",
                     "turns",
@@ -2669,17 +2840,26 @@ class MemoryApplicationService:
                     "compressed_memories",
                     "profile_memories",
                 ):
-                    counts[table] = int(
+                    table_counts[table] = int(
                         conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     )
-            finally:
-                conn.close()
+                revision_row = conn.execute(
+                    "SELECT state_value FROM memory_runtime_state WHERE state_key = ?",
+                    ("memory_commit_revision",),
+                ).fetchone()
+                revision_value = int(revision_row[0]) if revision_row and revision_row[0] is not None else 0
+                return integrity_value, table_counts, revision_value
+
+            integrity, counts, commit_revision = self._repository_read(read)
+            readable = True
         except Exception as exc:
             return {
                 "readable": False,
                 "integrity": "error",
                 "path": str(self._db_path),
                 "counts": counts,
+                "commit_revision": commit_revision,
+                "repository": self._database_revision_snapshot(),
                 "error": f"{type(exc).__name__}: {exc}",
             }
         return {
@@ -2687,6 +2867,8 @@ class MemoryApplicationService:
             "integrity": integrity,
             "path": str(self._db_path),
             "counts": counts,
+            "commit_revision": commit_revision,
+            "repository": self._database_revision_snapshot(),
             "error": None,
         }
 
@@ -2747,6 +2929,7 @@ class MemoryApplicationService:
             "usage": usage,
             "context_length": context_length,
             "last_request_usage_percent": last_request_usage_percent,
+            "commit_revision": getattr(self._repository, "commit_revision", 0),
         }
 
     # ── Tier 1: Short-term Conversation Store ──────────────────────
@@ -2759,42 +2942,44 @@ class MemoryApplicationService:
             request.memory_actor, request.memory_domain
         )
         now = datetime.now().isoformat()
-        conn = self._repository.connect()
-        existing = conn.execute(
-            "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        if existing and tuple(existing) != (
-            scope.owner_id,
-            scope.workspace_id,
-            memory_domain,
-        ):
-            conn.close()
-            raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
-        conn.execute(
-            "INSERT OR IGNORE INTO sessions "
-            "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                session_id,
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            existing = conn.execute(
+                "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if existing and tuple(existing) != (
                 scope.owner_id,
                 scope.workspace_id,
                 memory_domain,
-                now,
-                now,
-                json.dumps(self._memory_storage_value(request.metadata)),
-            ),
-        )
-        conn.commit()
-        conn.close()
+            ):
+                raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
+            conn.execute(
+                "INSERT OR IGNORE INTO sessions "
+                "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    memory_domain,
+                    now,
+                    now,
+                    json.dumps(self._memory_storage_value(request.metadata)),
+                ),
+            )
+            return {
+                "session_id": session_id,
+                "created_at": now,
+                "status": "created" if not existing else "existing",
+                "memory_domain": memory_domain,
+                **scope.as_dict(),
+            }
+
+        result = await self._repository_write_async(write)
         logger.info("Session created: %s", session_id)
-        return {
-            "session_id": session_id,
-            "created_at": now,
-            "status": "created" if not existing else "existing",
-            "memory_domain": memory_domain,
-            **scope.as_dict(),
-        }
+        result["write_status"] = "committed"
+        result["commit_revision"] = getattr(self._repository, "commit_revision", 0)
+        return result
 
     async def list_sessions(
         self,
@@ -2808,18 +2993,19 @@ class MemoryApplicationService:
         """List sessions in one private memory scope."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        rows = conn.execute(
-            "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
-            "COUNT(t.turn_id) as turn_count "
-            "FROM sessions s LEFT JOIN turns t ON s.session_id = t.session_id "
-            "AND t.owner_id = s.owner_id AND t.workspace_id = s.workspace_id "
-            "AND t.memory_domain = s.memory_domain "
-            "WHERE s.owner_id = ? AND s.workspace_id = ? AND s.memory_domain = ? "
-            "GROUP BY s.session_id ORDER BY s.created_at DESC LIMIT ? OFFSET ?",
-            (scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
-        ).fetchall()
-        conn.close()
+        def read(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+            return conn.execute(
+                "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
+                "COUNT(t.turn_id) as turn_count "
+                "FROM sessions s LEFT JOIN turns t ON s.session_id = t.session_id "
+                "AND t.owner_id = s.owner_id AND t.workspace_id = s.workspace_id "
+                "AND t.memory_domain = s.memory_domain "
+                "WHERE s.owner_id = ? AND s.workspace_id = ? AND s.memory_domain = ? "
+                "GROUP BY s.session_id ORDER BY s.created_at DESC LIMIT ? OFFSET ?",
+                (scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
+            ).fetchall()
+
+        rows = self._repository_read(read)
         return {
             "sessions": [
                 {
@@ -2846,21 +3032,22 @@ class MemoryApplicationService:
         """Get a session with its turn count."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        row = conn.execute(
-            "SELECT session_id, created_at, updated_at, metadata FROM sessions "
-            "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        ).fetchone()
-        if not row:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Session not found")
-        turn_count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
-            "AND workspace_id = ? AND memory_domain = ?",
-            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        ).fetchone()[0]
-        conn.close()
+        def read(conn: sqlite3.Connection) -> tuple[Any, Any]:
+            row = conn.execute(
+                "SELECT session_id, created_at, updated_at, metadata FROM sessions "
+                "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            turn_count = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ?",
+                (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            ).fetchone()[0]
+            return row, turn_count
+
+        row, turn_count = self._repository_read(read)
         return {
             "session_id": row[0],
             "created_at": row[1],
@@ -2883,8 +3070,7 @@ class MemoryApplicationService:
         )
         session_summary = None
         for _attempt in range(2):
-            conn = self._repository.connect()
-            try:
+            def read_snapshot(conn: sqlite3.Connection):
                 session = conn.execute(
                     "SELECT 1 FROM sessions WHERE session_id = ? AND owner_id = ? "
                     "AND workspace_id = ? AND memory_domain = ?",
@@ -2918,9 +3104,12 @@ class MemoryApplicationService:
                     memory_domain=memory_domain,
                 )
                 if current and current["source_hash"] == source_hash:
-                    session_summary = {**current, "write_status": "current"}
-            finally:
-                conn.close()
+                    return turns, source_hash, {**current, "write_status": "current"}
+                return turns, source_hash, None
+
+            turns, source_hash, current_summary = self._repository_read(read_snapshot)
+            if current_summary is not None:
+                session_summary = current_summary
 
             if session_summary is not None:
                 break
@@ -2930,16 +3119,18 @@ class MemoryApplicationService:
                 turns=turns,
             )
             try:
-                session_summary = await asyncio.to_thread(
-                    persist_session_summary,
-                    self._db_path,
-                    session_id=session_id,
-                    owner_id=scope.owner_id,
-                    workspace_id=scope.workspace_id,
-                    memory_domain=memory_domain,
-                    timezone_name=self.config.time_summary_timezone,
-                    expected_source_hash=source_hash,
-                    draft=draft,
+                session_summary = await self._repository_write_async(
+                    lambda conn: persist_session_summary(
+                        None,
+                        session_id=session_id,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                        expected_source_hash=source_hash,
+                        draft=draft,
+                        connection=conn,
+                    )
                 )
                 break
             except SessionSnapshotChanged:
@@ -2951,9 +3142,7 @@ class MemoryApplicationService:
             )
 
         affected_day_keys: set[str] = set()
-        conn = self._repository.connect()
-        try:
-            historical_periods = conn.execute(
+        historical_periods = self._repository_read(lambda conn: conn.execute(
                 "SELECT period_start FROM time_summaries WHERE summary_type = 'session' "
                 "AND bucket_key = ? AND owner_id = ? AND workspace_id = ? "
                 "AND memory_domain = ?",
@@ -2963,9 +3152,7 @@ class MemoryApplicationService:
                     scope.workspace_id,
                     memory_domain,
                 ),
-            ).fetchall()
-        finally:
-            conn.close()
+            ).fetchall())
         for row in historical_periods:
             affected_day_keys.add(
                 day_bucket_for_timestamp(
@@ -3009,8 +3196,7 @@ class MemoryApplicationService:
             request.memory_domain,
         )
         for _attempt in range(2):
-            conn = self._repository.connect()
-            try:
+            def read_snapshot(conn: sqlite3.Connection):
                 try:
                     summaries = load_day_session_summaries(
                         conn,
@@ -3029,9 +3215,10 @@ class MemoryApplicationService:
                     workspace_id=scope.workspace_id,
                     memory_domain=memory_domain,
                 )
+                expected_summary_id = None
                 if not summaries:
                     if current is None:
-                        return {
+                        return (), None, None, {
                             "summary_type": "day",
                             "bucket_key": day_key,
                             "write_status": "absent",
@@ -3040,21 +3227,30 @@ class MemoryApplicationService:
                 else:
                     source_hash = day_source_hash(summaries)
                 if summaries and current and current["source_hash"] == source_hash:
-                    return {**current, "write_status": "current"}
-            finally:
-                conn.close()
+                    return summaries, source_hash, None, {**current, "write_status": "current"}
+                return summaries, source_hash if summaries else None, (
+                    expected_summary_id if not summaries else None
+                ), None
+
+            summaries, source_hash, expected_summary_id, current_summary = self._repository_read(
+                read_snapshot
+            )
+            if current_summary is not None:
+                return current_summary
 
             if not summaries:
                 try:
-                    return await asyncio.to_thread(
-                        supersede_empty_day_summary,
-                        self._db_path,
-                        day_key=day_key,
-                        owner_id=scope.owner_id,
-                        workspace_id=scope.workspace_id,
-                        memory_domain=memory_domain,
-                        timezone_name=self.config.time_summary_timezone,
-                        expected_summary_id=expected_summary_id,
+                    return await self._repository_write_async(
+                        lambda conn: supersede_empty_day_summary(
+                            None,
+                            day_key=day_key,
+                            owner_id=scope.owner_id,
+                            workspace_id=scope.workspace_id,
+                            memory_domain=memory_domain,
+                            timezone_name=self.config.time_summary_timezone,
+                            expected_summary_id=expected_summary_id,
+                            connection=conn,
+                        )
                     )
                 except DaySnapshotChanged:
                     continue
@@ -3065,16 +3261,18 @@ class MemoryApplicationService:
                 summaries=summaries,
             )
             try:
-                return await asyncio.to_thread(
-                    persist_day_summary,
-                    self._db_path,
-                    day_key=day_key,
-                    owner_id=scope.owner_id,
-                    workspace_id=scope.workspace_id,
-                    memory_domain=memory_domain,
-                    timezone_name=self.config.time_summary_timezone,
-                    expected_source_hash=source_hash,
-                    draft=draft,
+                return await self._repository_write_async(
+                    lambda conn: persist_day_summary(
+                        None,
+                        day_key=day_key,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                        expected_source_hash=source_hash,
+                        draft=draft,
+                        connection=conn,
+                    )
                 )
             except DaySnapshotChanged:
                 continue
@@ -3115,7 +3313,6 @@ class MemoryApplicationService:
 
     async def add_turn(self, session_id: str, request: TurnCreate):
         """Add a conversation turn to a session."""
-        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
@@ -3132,97 +3329,106 @@ class MemoryApplicationService:
             self._memory_storage_value(request.metadata)
         )
         now = datetime.now().astimezone().isoformat()
-        # Ensure session exists in the same DB transaction as the turn write.
-        ses = conn.execute(
-            "SELECT session_id, owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        if ses and (str(ses[1]), str(ses[2]), str(ses[3])) != (
-            scope.owner_id,
-            scope.workspace_id,
-            memory_domain,
-        ):
-            conn.close()
-            raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
-        if not ses:
-            conn.execute(
-                "INSERT INTO sessions "
-                "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    session_id,
-                    scope.owner_id,
-                    scope.workspace_id,
-                    memory_domain,
-                    now,
-                    now,
-                    json.dumps({"source": "turn_auto_create"}),
-                ),
-            )
         dedup_key = self._derive_turn_dedup_key(
             session_id,
             request,
             stored_text=stored_text,
         )
-        if dedup_key:
-            existing = conn.execute(
-                "SELECT turn_id, timestamp FROM turns WHERE session_id = ? AND dedup_key = ?",
-                (session_id, dedup_key),
+
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            ses = conn.execute(
+                "SELECT session_id, owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
+                (session_id,),
             ).fetchone()
-            if existing:
-                conn.close()
-                return {
-                    "turn_id": existing[0],
-                    "session_id": session_id,
-                    "timestamp": existing[1],
-                    "status": "deduplicated",
-                    "dedup_key": dedup_key,
-                }
-        turn_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
-            "relevance_score, decay_factor, tags, metadata, dedup_key, "
-            "compression_status, last_decay_at, owner_id, workspace_id, memory_domain) "
-            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 'pending', ?, ?, ?, ?)",
-            (
-                turn_id,
-                session_id,
-                request.speaker,
-                stored_text,
-                now,
-                json.dumps(stored_tags, ensure_ascii=False),
-                json.dumps(stored_metadata),
-                dedup_key,
-                now,
+            if ses and (str(ses[1]), str(ses[2]), str(ses[3])) != (
                 scope.owner_id,
                 scope.workspace_id,
                 memory_domain,
-            ),
-        )
-        profile_settlement = {"action": "none"}
-        if request.speaker == "user":
-            profile_settlement = _settle_explicit_profile_capture(
-                conn,
-                text=stored_text,
-                turn_id=turn_id,
-                timestamp=now,
-                scope=scope,
-                memory_domain=memory_domain,
-                now=now,
+            ):
+                raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
+            if not ses:
+                conn.execute(
+                    "INSERT INTO sessions "
+                    "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        memory_domain,
+                        now,
+                        now,
+                        json.dumps({"source": "turn_auto_create"}),
+                    ),
+                )
+            if dedup_key:
+                existing = conn.execute(
+                    "SELECT turn_id, timestamp FROM turns WHERE session_id = ? AND dedup_key = ?",
+                    (session_id, dedup_key),
+                ).fetchone()
+                if existing:
+                    return {
+                        "turn_id": existing[0],
+                        "session_id": session_id,
+                        "timestamp": existing[1],
+                        "status": "deduplicated",
+                        "dedup_key": dedup_key,
+                    }
+            turn_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
+                "relevance_score, decay_factor, tags, metadata, dedup_key, "
+                "compression_status, last_decay_at, owner_id, workspace_id, memory_domain) "
+                "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+                (
+                    turn_id,
+                    session_id,
+                    request.speaker,
+                    stored_text,
+                    now,
+                    json.dumps(stored_tags, ensure_ascii=False),
+                    json.dumps(stored_metadata),
+                    dedup_key,
+                    now,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    memory_domain,
+                ),
             )
-        conn.execute(
-            "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
-            (now, session_id),
-        )
-        conn.commit()
-        conn.close()
-        logger.debug("Turn %s added to session %s", turn_id, session_id)
-        self._semantic_wake.set()
-        self._tier2_wake.set()
-        response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created", "memory_domain": memory_domain}
-        response["profile_settlement"] = profile_settlement
-        if dedup_key:
-            response["dedup_key"] = dedup_key
+            profile_settlement = {"action": "none"}
+            if request.speaker == "user":
+                profile_settlement = _settle_explicit_profile_capture(
+                    conn,
+                    text=stored_text,
+                    turn_id=turn_id,
+                    timestamp=now,
+                    scope=scope,
+                    memory_domain=memory_domain,
+                    now=now,
+                )
+            conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
+                (now, session_id),
+            )
+            response = {
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "timestamp": now,
+                "status": "created",
+                "memory_domain": memory_domain,
+                "profile_settlement": profile_settlement,
+            }
+            if dedup_key:
+                response["dedup_key"] = dedup_key
+            return response
+
+        response = await self._repository_write_async(write)
+        if response.get("status") != "deduplicated":
+            logger.debug("Turn %s added to session %s", response["turn_id"], session_id)
+            self._semantic_wake.set()
+            self._tier2_wake.set()
+        response["write_status"] = "committed"
+        response["commit_revision"] = getattr(self._repository, "commit_revision", 0)
         return response
 
     async def add_turn_pair(self, request: TurnPairCreate):
@@ -3233,10 +3439,21 @@ class MemoryApplicationService:
         )
         session_id = request.session_id.strip()
         now = datetime.now().astimezone().isoformat()
-        conn = self._repository.connect()
-        turn_ids: dict[str, str] = {}
-        profile_settlement: dict[str, Any] = {"action": "none"}
-        try:
+        stored_metadata = _strip_identity_verification_metadata(
+            self._memory_storage_value(request.metadata)
+        )
+        stored_tags = list(
+            dict.fromkeys(
+                str(self._memory_storage_value(tag)).strip()
+                for tag in request.tags
+                if str(tag).strip()
+            )
+        )
+        stored_tags_json = json.dumps(stored_tags, ensure_ascii=False)
+
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            turn_ids: dict[str, str] = {}
+            profile_settlement: dict[str, Any] = {"action": "none"}
             existing_session = conn.execute(
                 "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
                 (session_id,),
@@ -3264,17 +3481,6 @@ class MemoryApplicationService:
                     json.dumps({"source": "agent_memory_provider"}),
                 ),
             )
-            stored_metadata = _strip_identity_verification_metadata(
-                self._memory_storage_value(request.metadata)
-            )
-            stored_tags = list(
-                dict.fromkeys(
-                    str(self._memory_storage_value(tag)).strip()
-                    for tag in request.tags
-                    if str(tag).strip()
-                )
-            )
-            stored_tags_json = json.dumps(stored_tags, ensure_ascii=False)
             for speaker, content in (
                 ("user", request.user_content),
                 ("agent", request.assistant_content),
@@ -3343,22 +3549,53 @@ class MemoryApplicationService:
                 "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
                 (now, session_id),
             )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            return {"turn_ids": turn_ids, "profile_settlement": profile_settlement}
+
+        fingerprint_payload = {
+            "session_id": session_id,
+            "user_content": str(self._memory_storage_value(request.user_content or "")).strip(),
+            "assistant_content": str(self._memory_storage_value(request.assistant_content or "")).strip(),
+            "tags": stored_tags,
+            "metadata": stored_metadata,
+            "owner_id": scope.owner_id,
+            "workspace_id": scope.workspace_id,
+            "memory_domain": memory_domain,
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        receipt = await self._repository_idempotent_write_async(
+            receipt_key=f"turn-pair:{request.write_id}",
+            operation="add_turn_pair",
+            fingerprint=fingerprint,
+            owner_id=scope.owner_id,
+            workspace_id=scope.workspace_id,
+            memory_domain=memory_domain,
+            callback=write,
+        )
+        result = receipt.value
+        turn_ids = dict(result["turn_ids"])
+        profile_settlement = dict(result["profile_settlement"])
+        if receipt.replay and profile_settlement.get("inserted"):
+            # Keep the established API meaning for a replay: no new profile rows
+            # were inserted by this request, even though the durable receipt
+            # returns the original committed response payload.
+            profile_settlement["inserted"] = 0
+        if receipt.replay and profile_settlement.get("action") == "revoked":
+            profile_settlement["action"] = "already_revoked"
 
         self._semantic_wake.set()
         return {
             "status": "stored",
             "session_id": session_id,
             "write_id": request.write_id,
+            "write_status": "committed",
             "turn_ids": turn_ids,
             "identity_settlement": None,
             "profile_settlement": profile_settlement,
             "memory_domain": memory_domain,
+            "replayed": receipt.replay,
+            "commit_revision": receipt.commit_revision,
             **scope.as_dict(),
         }
 
@@ -3384,21 +3621,19 @@ class MemoryApplicationService:
                 ).strip(),
             }
         )
-        conn = self._repository.connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
             result = create_memory_promotion_candidate(conn, request)
-            conn.commit()
+            return result
+
+        try:
+            result = await self._repository_write_async(write)
         except (
             MemoryPromotionAccessError,
             MemoryPromotionConflictError,
             MemoryPromotionNotFoundError,
             MemoryPromotionValidationError,
         ) as exc:
-            conn.rollback()
             raise self._promotion_http_error(exc) from exc
-        finally:
-            conn.close()
         return {"status": "awaiting_user_consent", "candidate": result}
 
     async def list_promotion_candidates(
@@ -3414,9 +3649,8 @@ class MemoryApplicationService:
         scope = MemoryScope.create(owner_id, workspace_id)
         try:
             authorize_promotion_manager(memory_actor)
-            conn = self._repository.connect()
-            try:
-                candidates = list_memory_promotion_candidates(
+            candidates = self._repository_read(
+                lambda conn: list_memory_promotion_candidates(
                     conn,
                     scope=scope,
                     source_domain=source_domain,
@@ -3424,8 +3658,7 @@ class MemoryApplicationService:
                     status=status,
                     limit=limit,
                 )
-            finally:
-                conn.close()
+            )
         except (
             MemoryPromotionAccessError,
             MemoryPromotionValidationError,
@@ -3444,25 +3677,23 @@ class MemoryApplicationService:
                 "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
-        conn = self._repository.connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        def write(conn: sqlite3.Connection) -> tuple[dict[str, Any], dict[str, Any]]:
             candidate, promotion = consent_memory_promotion_candidate(
                 conn,
                 candidate_id,
                 request,
             )
-            conn.commit()
+            return candidate, promotion
+
+        try:
+            candidate, promotion = await self._repository_write_async(write)
         except (
             MemoryPromotionAccessError,
             MemoryPromotionConflictError,
             MemoryPromotionNotFoundError,
             MemoryPromotionValidationError,
         ) as exc:
-            conn.rollback()
             raise self._promotion_http_error(exc) from exc
-        finally:
-            conn.close()
         return {
             "status": candidate["status"],
             "candidate": candidate,
@@ -3487,18 +3718,15 @@ class MemoryApplicationService:
                 target_domains = None
             else:
                 target_domains = authorize_read(actor, None)
-            conn = self._repository.connect()
-            try:
-                promotions = list_memory_promotions(
+            promotions = self._repository_read(
+                lambda conn: list_memory_promotions(
                     conn,
                     scope=scope,
                     target_domains=target_domains,
                     status=status,
                     limit=limit,
                 )
-                conn.commit()
-            finally:
-                conn.close()
+            )
         except (
             MemoryPromotionValidationError,
             MemoryDomainAccessError,
@@ -3517,20 +3745,17 @@ class MemoryApplicationService:
                 "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
-        conn = self._repository.connect()
         try:
-            result = revoke_memory_promotion(conn, promotion_id, request)
-            conn.commit()
+            result = await self._repository_write_async(
+                lambda conn: revoke_memory_promotion(conn, promotion_id, request)
+            )
         except (
             MemoryPromotionAccessError,
             MemoryPromotionConflictError,
             MemoryPromotionNotFoundError,
             MemoryPromotionValidationError,
         ) as exc:
-            conn.rollback()
             raise self._promotion_http_error(exc) from exc
-        finally:
-            conn.close()
         return {"status": "revoked", "promotion": result}
 
     async def get_session_turns(
@@ -3546,21 +3771,23 @@ class MemoryApplicationService:
         """Get all turns for a session, ordered by timestamp."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        rows = conn.execute(
-            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compression_status, memory_domain "
-            "FROM turns WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ? "
-            "ORDER BY timestamp ASC LIMIT ? OFFSET ?",
-            (session_id, scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
-        ).fetchall()
-        total = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
-            "AND workspace_id = ? AND memory_domain = ?",
-            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        ).fetchone()[0]
-        conn.close()
+        def read(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], int]:
+            rows = conn.execute(
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+                "decay_factor, tags, metadata, compression_status, memory_domain "
+                "FROM turns WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? "
+                "ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+                (session_id, scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
+            ).fetchall()
+            total = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ?",
+                (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            ).fetchone()[0]
+            return rows, total
+
+        rows, total = self._repository_read(read)
         return {
             "session_id": session_id,
             "turns": [_turn_row_to_dict(r) for r in rows],
@@ -3580,7 +3807,6 @@ class MemoryApplicationService:
         """Query turns by time range, speaker, or session."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
         sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
               "decay_factor, tags, metadata, compression_status, memory_domain FROM turns " \
               "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?"
@@ -3599,8 +3825,7 @@ class MemoryApplicationService:
             params.append(session_id)
         sql += f" ORDER BY timestamp {'DESC' if newest_first else 'ASC'} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
+        rows = self._repository_read(lambda conn: conn.execute(sql, params).fetchall())
         return {
             "turns": [_turn_row_to_dict(r) for r in rows],
             "count": len(rows),
@@ -3617,41 +3842,38 @@ class MemoryApplicationService:
         """Get a single turn by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        row = conn.execute(
-            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compression_status, memory_domain "
-            "FROM turns WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ?",
-            (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        ).fetchone()
-        if not row:
-            # Check archive
+        def read(conn: sqlite3.Connection) -> dict[str, Any]:
             row = conn.execute(
-                "SELECT turn_id, session_id, speaker, text_summary, timestamp, "
-                "compressed_at, event_ids, scene_ids, original_text "
-                "FROM turns_archive WHERE turn_id = ? AND owner_id = ? "
-                "AND workspace_id = ? AND memory_domain = ?",
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+                "decay_factor, tags, metadata, compression_status, memory_domain "
+                "FROM turns WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
                 (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
             ).fetchone()
             if not row:
-                conn.close()
-                raise HTTPException(status_code=404, detail="Turn not found")
-            conn.close()
-            return {
-                "turn_id": row[0], "session_id": row[1], "speaker": row[2],
-                "text": row[8] or row[3], "timestamp": row[4],
-                "in_archive": True, "compressed_at": row[5],
-                "event_ids": json.loads(row[6]) if row[6] else [],
-                "scene_ids": json.loads(row[7]) if row[7] else [],
-                "memory_domain": authorized_domain,
-            }
-        conn.close()
-        return _turn_row_to_dict(row)
+                row = conn.execute(
+                    "SELECT turn_id, session_id, speaker, text_summary, timestamp, "
+                    "compressed_at, event_ids, scene_ids, original_text "
+                    "FROM turns_archive WHERE turn_id = ? AND owner_id = ? "
+                    "AND workspace_id = ? AND memory_domain = ?",
+                    (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
+                ).fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Turn not found")
+                return {
+                    "turn_id": row[0], "session_id": row[1], "speaker": row[2],
+                    "text": row[8] or row[3], "timestamp": row[4],
+                    "in_archive": True, "compressed_at": row[5],
+                    "event_ids": json.loads(row[6]) if row[6] else [],
+                    "scene_ids": json.loads(row[7]) if row[7] else [],
+                    "memory_domain": authorized_domain,
+                }
+            return _turn_row_to_dict(row)
+
+        return self._repository_read(read)
 
     async def timeline_view(self, request: TimelineQuery):
         """Get timeline view for a specific date with turn summaries."""
-        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains
@@ -3675,8 +3897,7 @@ class MemoryApplicationService:
             params.append(request.speaker)
         sql += " ORDER BY timestamp ASC LIMIT ?"
         params.append(request.limit)
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
+        rows = self._repository_read(lambda conn: conn.execute(sql, params).fetchall())
         return {
             "date": requested_date,
             "turns": [
@@ -3803,7 +4024,11 @@ class MemoryApplicationService:
 
         from memai.application.llm_extraction import build_llm_first_pipeline
 
-        return build_llm_first_pipeline(self._db_path, role="extraction")
+        return build_llm_first_pipeline(
+            self._db_path,
+            role="extraction",
+            repository=self._repository,
+        )
 
     async def tier1_stats(
         self,
@@ -3813,80 +4038,82 @@ class MemoryApplicationService:
         """Return storage statistics visible to one memory scope."""
         scope = MemoryScope.create(owner_id, workspace_id)
         private = (scope.owner_id, scope.workspace_id)
-        conn = self._repository.connect()
-        total_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        active_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed' "
-            "AND owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        compressed_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compression_status = 'compressed' "
-            "AND owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        archived_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns_archive WHERE owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        total_sessions = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        oldest = conn.execute(
-            "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed' "
-            "AND owner_id = ? AND workspace_id = ?",
-            private,
-        ).fetchone()[0]
-        visible = (
-            scope.owner_id,
-            scope.workspace_id,
-            GLOBAL_SCOPE_ID,
-            GLOBAL_SCOPE_ID,
-        )
-        visible_clause = (
-            "((owner_id = ? AND workspace_id = ?) OR "
-            "(owner_id = ? AND workspace_id = ?))"
-        )
-        compressed_total = conn.execute(
-            f"SELECT COUNT(*) FROM compressed_memories WHERE {visible_clause}",
-            visible,
-        ).fetchone()[0]
-        compressed_events = conn.execute(
-            f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='event' "
-            f"AND {visible_clause}",
-            visible,
-        ).fetchone()[0]
-        compressed_scenes = conn.execute(
-            f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='scene' "
-            f"AND {visible_clause}",
-            visible,
-        ).fetchone()[0]
-        compressed_arcs = conn.execute(
-            f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='arc' "
-            f"AND {visible_clause}",
-            visible,
-        ).fetchone()[0]
-        conn.close()
+        def read(conn: sqlite3.Connection) -> dict[str, Any]:
+            total_turns = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            active_turns = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed' "
+                "AND owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            compressed_turns = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE compression_status = 'compressed' "
+                "AND owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            archived_turns = conn.execute(
+                "SELECT COUNT(*) FROM turns_archive WHERE owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            total_sessions = conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            oldest = conn.execute(
+                "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed' "
+                "AND owner_id = ? AND workspace_id = ?",
+                private,
+            ).fetchone()[0]
+            visible = (
+                scope.owner_id,
+                scope.workspace_id,
+                GLOBAL_SCOPE_ID,
+                GLOBAL_SCOPE_ID,
+            )
+            visible_clause = (
+                "((owner_id = ? AND workspace_id = ?) OR "
+                "(owner_id = ? AND workspace_id = ?))"
+            )
+            compressed_total = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            compressed_events = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='event' "
+                f"AND {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            compressed_scenes = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='scene' "
+                f"AND {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            compressed_arcs = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE memory_type='arc' "
+                f"AND {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            return locals()
+
+        stats = self._repository_read(read)
         return {
             "tier1": {
-                "total_turns": total_turns,
-                "active_turns": active_turns,
-                "compressed_turns": compressed_turns,
-                "archived_turns": archived_turns,
-                "total_sessions": total_sessions,
-                "oldest_active_turn": oldest,
+                "total_turns": stats["total_turns"],
+                "active_turns": stats["active_turns"],
+                "compressed_turns": stats["compressed_turns"],
+                "archived_turns": stats["archived_turns"],
+                "total_sessions": stats["total_sessions"],
+                "oldest_active_turn": stats["oldest"],
                 "retention_days": self.config.tier1_retention_days,
                 "max_turns": self.config.tier1_max_turns,
             },
             "tier2": {
-                "total_compressed": compressed_total,
-                "events": compressed_events,
-                "scenes": compressed_scenes,
-                "arcs": compressed_arcs,
+                "total_compressed": stats["compressed_total"],
+                "events": stats["compressed_events"],
+                "scenes": stats["compressed_scenes"],
+                "arcs": stats["compressed_arcs"],
             },
         }
 
@@ -3899,7 +4126,6 @@ class MemoryApplicationService:
         weight DESC. Pass ``include_superseded`` or ``include_hidden`` when an
         explicit administrative view is required.
         """
-        conn = self._repository.connect()
         memory_type = request.get("memory_type")  # "event"|"scene"|"arc"|"epoch"
         topic = request.get("topic")
         query_text = request.get("query", "")
@@ -3967,38 +4193,24 @@ class MemoryApplicationService:
         )
         params.append(limit)
 
-        rows = conn.execute(sql, params).fetchall()
-        # Track access and compute dynamic weights
-        now_iso = datetime.now().isoformat()
-        results = []
-        for r in rows:
-            d = _cmem_row_to_dict(r)
-            results.append(d)
-        # Sort by dynamic_weight DESC after computing
-        results.sort(key=lambda x: x.get("dynamic_weight", 0), reverse=True)
-        # Update access_count in background (best-effort)
-        try:
-            for d in results[:limit]:
+        def read_and_touch(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+            rows = conn.execute(sql, params).fetchall()
+            results = [_cmem_row_to_dict(row) for row in rows]
+            results.sort(key=lambda item: item.get("dynamic_weight", 0), reverse=True)
+            now_iso = datetime.now().isoformat()
+            for item in results[:limit]:
                 conn.execute(
                     "UPDATE compressed_memories SET access_count = access_count + 1, "
                     "last_accessed_at = ? WHERE memory_id = ? AND "
                     "((owner_id = ? AND workspace_id = ?) OR "
                     "(owner_id = ? AND workspace_id = ?)) "
                     f"AND memory_domain IN ({domain_placeholders})",
-                    (
-                        now_iso,
-                        d["memory_id"],
-                        scope.owner_id,
-                        scope.workspace_id,
-                        GLOBAL_SCOPE_ID,
-                        GLOBAL_SCOPE_ID,
-                        *source_domains,
-                    ),
+                    (now_iso, item["memory_id"], scope.owner_id, scope.workspace_id,
+                     GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID, *source_domains),
                 )
-            conn.commit()
-        except Exception:
-            pass
-        conn.close()
+            return results
+
+        results = await self._repository_write_async(read_and_touch)
         return {
             "results": results,
             "count": len(results),
@@ -4012,18 +4224,15 @@ class MemoryApplicationService:
         target_domains: tuple[str, ...],
         plan,
     ) -> tuple[list[Dict[str, Any]], set[tuple[str, str, str]], int]:
-        conn = self._repository.connect()
-        try:
-            promotions = list_memory_promotions(
+        promotions = self._repository_read(
+            lambda conn: list_memory_promotions(
                 conn,
                 scope=scope,
                 target_domains=target_domains,
                 status="active",
                 limit=500,
             )
-            conn.commit()
-        finally:
-            conn.close()
+        )
         if not promotions:
             return [], set(), 0
 
@@ -4051,9 +4260,8 @@ class MemoryApplicationService:
             source_domains=source_domains,
             limit=max(self.config.recall_candidate_limit, len(promotions)),
         )
-        conn = self._repository.connect()
-        try:
-            source_payload = recall_memories(
+        source_payload = self._repository_read(
+            lambda conn: recall_memories(
                 conn,
                 plan,
                 limit=min(50, max(request.limit or self.config.recall_default_limit, len(promotions))),
@@ -4076,8 +4284,7 @@ class MemoryApplicationService:
                 record_filter=record_filter,
                 graph_min_relevance=self.config.recall_graph_min_relevance,
             )
-        finally:
-            conn.close()
+        )
 
         projected: list[Dict[str, Any]] = []
         projected_source_keys: set[tuple[str, str, str]] = set()
@@ -4125,6 +4332,17 @@ class MemoryApplicationService:
         """Recall a bounded mix of recent turns and durable Tier 2 memory."""
         if not request.query.strip():
             raise HTTPException(status_code=400, detail="query is required")
+        current_revision = getattr(self._repository, "commit_revision", 0)
+        if request.min_revision is not None and current_revision < request.min_revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "revision_not_available",
+                    "current_revision": current_revision,
+                    "min_revision": request.min_revision,
+                    "retryable": True,
+                },
+            )
         if not request.include_tier1 and not request.include_tier2:
             raise HTTPException(
                 status_code=400,
@@ -4159,9 +4377,8 @@ class MemoryApplicationService:
                 source_domains=source_domains,
                 limit=self.config.recall_candidate_limit,
             )
-            conn = self._repository.connect()
-            try:
-                payload = recall_memories(
+            payload = self._repository_read(
+                lambda conn: recall_memories(
                     conn,
                     plan,
                     limit=request.limit or self.config.recall_default_limit,
@@ -4184,8 +4401,7 @@ class MemoryApplicationService:
                     semantic_matches=semantic_matches,
                     graph_min_relevance=self.config.recall_graph_min_relevance,
                 )
-            finally:
-                conn.close()
+            )
             payload["promotion_count"] = 0
             if request.include_promotions:
                 promoted, promoted_source_keys, promoted_candidate_count = (
@@ -4243,6 +4459,9 @@ class MemoryApplicationService:
             )
             payload["request_source"] = request.request_source
             payload["source_domains"] = list(source_domains)
+            payload["commit_revision"] = getattr(
+                self._repository, "commit_revision", 0
+            )
             self._last_recall_count = int(payload["count"])
             if self._last_recall_count:
                 self._recall_hits += 1
@@ -4267,7 +4486,7 @@ class MemoryApplicationService:
                     else "miss"
                 )
             )
-            self._persist_recall_trace(
+            await self._persist_recall_trace(
                 trace_id=trace_id,
                 created_at=created_at,
                 request=request,
@@ -4277,7 +4496,7 @@ class MemoryApplicationService:
                 failure=failure,
             )
 
-    def _persist_recall_trace(
+    async def _persist_recall_trace(
         self,
         *,
         trace_id: str,
@@ -4312,55 +4531,52 @@ class MemoryApplicationService:
             if failure is not None
             else ("hit" if payload and payload.get("count") else "empty")
         )
-        conn = self._repository.connect()
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains
         )
         try:
-            conn.execute(
-                "INSERT INTO recall_traces "
-                "(trace_id, created_at, completed_at, request_source, session_id, "
-                "query, status, intent, query_plan, candidate_count, result_count, "
-                "selected_results, context_chars, latency_ms, error_type, error_detail, "
-                "memory_actor, owner_id, workspace_id, source_domains) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    trace_id,
-                    created_at,
-                    datetime.now().astimezone().isoformat(),
-                    request.request_source,
-                    request.current_session_id,
-                    self._memory_storage_value(request.query),
-                    status,
-                    (plan or {}).get("intent"),
-                    json.dumps(
-                        self._memory_storage_value(plan or {}),
-                        ensure_ascii=False,
-                    ),
-                    int((payload or {}).get("candidate_count") or 0),
-                    int((payload or {}).get("count") or 0),
-                    json.dumps(selected, ensure_ascii=False),
-                    int((payload or {}).get("context_chars") or 0),
-                    latency_ms,
-                    type(failure).__name__ if failure is not None else None,
+            await self._repository_write_async(
+                lambda conn: conn.execute(
+                    "INSERT INTO recall_traces "
+                    "(trace_id, created_at, completed_at, request_source, session_id, "
+                    "query, status, intent, query_plan, candidate_count, result_count, "
+                    "selected_results, context_chars, latency_ms, error_type, error_detail, "
+                    "memory_actor, owner_id, workspace_id, source_domains) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        str(self._memory_storage_value(str(failure)))[:500]
-                        if failure is not None
-                        else None
+                        trace_id,
+                        created_at,
+                        datetime.now().astimezone().isoformat(),
+                        request.request_source,
+                        request.current_session_id,
+                        self._memory_storage_value(request.query),
+                        status,
+                        (plan or {}).get("intent"),
+                        json.dumps(
+                            self._memory_storage_value(plan or {}),
+                            ensure_ascii=False,
+                        ),
+                        int((payload or {}).get("candidate_count") or 0),
+                        int((payload or {}).get("count") or 0),
+                        json.dumps(selected, ensure_ascii=False),
+                        int((payload or {}).get("context_chars") or 0),
+                        latency_ms,
+                        type(failure).__name__ if failure is not None else None,
+                        (
+                            str(self._memory_storage_value(str(failure)))[:500]
+                            if failure is not None
+                            else None
+                        ),
+                        request.memory_actor.value,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        json.dumps(source_domains),
                     ),
-                    request.memory_actor.value,
-                    scope.owner_id,
-                    scope.workspace_id,
-                    json.dumps(source_domains),
                 ),
             )
-            conn.commit()
         except Exception:
-            conn.rollback()
             logger.warning("Failed to persist recall trace %s", trace_id, exc_info=True)
-        finally:
-            conn.close()
 
     async def list_recall_traces(
         self,
@@ -4383,9 +4599,8 @@ class MemoryApplicationService:
             clauses.append("status = ?")
             params.append(status)
         params.append(bounded_limit)
-        conn = self._repository.connect()
-        try:
-            rows = conn.execute(
+        rows = self._repository_read(
+            lambda conn: conn.execute(
                 "SELECT trace_id, created_at, completed_at, request_source, "
                 "session_id, query, status, intent, query_plan, candidate_count, "
                 "result_count, selected_results, context_chars, latency_ms, "
@@ -4394,8 +4609,7 @@ class MemoryApplicationService:
                 + " ORDER BY created_at DESC LIMIT ?",
                 params,
             ).fetchall()
-        finally:
-            conn.close()
+        )
         traces = []
         for row in rows:
             traces.append(
@@ -4423,8 +4637,7 @@ class MemoryApplicationService:
     async def record_recall_feedback(self, request: RecallFeedbackCreate):
         """Record scoped user feedback for one actually selected recall item."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
-        conn = self._repository.connect()
-        try:
+        def write(conn: sqlite3.Connection) -> tuple[str, str]:
             row = conn.execute(
                 "SELECT selected_results, source_domains FROM recall_traces "
                 "WHERE trace_id = ? AND owner_id = ? AND workspace_id = ? "
@@ -4484,12 +4697,9 @@ class MemoryApplicationService:
                     now,
                 ),
             )
-            conn.commit()
-        except HTTPException:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            return feedback_id, memory_domain
+
+        feedback_id, memory_domain = await self._repository_write_async(write)
         return {
             "status": "recorded",
             "feedback_id": feedback_id,
@@ -4512,28 +4722,27 @@ class MemoryApplicationService:
         memory_domain = _authorized_write_domain(
             request.memory_actor, request.memory_domain
         )
-        conn = self._repository.connect()
-        counts = {
-            "compressed_memories": 0,
-            "profile_memories": 0,
-            "profile_memory_tombstones": 0,
-            "compression_quality_audit": 0,
-            "turns": 0,
-            "turns_archive": 0,
-            "sessions": 0,
-            "recall_feedback": 0,
-            "recall_traces": 0,
-            "recall_trace_references": 0,
-            "memory_embeddings": 0,
-            "memory_promotions_revoked": 0,
-            "memory_promotion_candidates_rejected": 0,
-            "time_summaries": 0,
-            "time_summary_links": 0,
-            "session_summary_sources": 0,
-        }
         target_kind = "memory" if memory_id else "session"
         target = memory_id or session_id
-        try:
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            counts = {
+                "compressed_memories": 0,
+                "profile_memories": 0,
+                "profile_memory_tombstones": 0,
+                "compression_quality_audit": 0,
+                "turns": 0,
+                "turns_archive": 0,
+                "sessions": 0,
+                "recall_feedback": 0,
+                "recall_traces": 0,
+                "recall_trace_references": 0,
+                "memory_embeddings": 0,
+                "memory_promotions_revoked": 0,
+                "memory_promotion_candidates_rejected": 0,
+                "time_summaries": 0,
+                "time_summary_links": 0,
+                "session_summary_sources": 0,
+            }
             turn_query = (
                 "SELECT turn_id FROM turns WHERE {predicate} AND owner_id = ? "
                 "AND workspace_id = ? AND memory_domain = ? UNION SELECT turn_id "
@@ -4875,20 +5084,16 @@ class MemoryApplicationService:
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
-            conn.commit()
-        except HTTPException:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-        return {
-            "status": "forgotten",
-            "audit_id": audit_id,
-            "target_kind": target_kind,
-            "memory_domain": memory_domain,
-            "deleted_counts": counts,
-            **scope.as_dict(),
-        }
+            return {
+                "status": "forgotten",
+                "audit_id": audit_id,
+                "target_kind": target_kind,
+                "memory_domain": memory_domain,
+                "deleted_counts": counts,
+                **scope.as_dict(),
+            }
+
+        return await self._repository_write_async(write)
 
     async def remember(self, request: DurableMemoryCreate):
         """Persist an explicit durable memory in the canonical Mem store."""
@@ -4939,8 +5144,7 @@ class MemoryApplicationService:
             for ref in evidence_refs
             if ref.startswith("turn:") and ref.removeprefix("turn:")
         ]
-        conn = self._repository.connect()
-        try:
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
             if supersedes_memory_ids:
                 placeholders = ",".join("?" for _ in supersedes_memory_ids)
                 rows = conn.execute(
@@ -5026,21 +5230,63 @@ class MemoryApplicationService:
                 workspace_id=scope.workspace_id,
                 memory_domain=memory_domain,
             )
-            conn.commit()
             row = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? "
                 "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
                 (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
             ).fetchone()
-        except HTTPException:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+            return _cmem_row_to_dict(row)
+
+        if request.idempotency_key:
+            fingerprint_payload = {
+                "title": title,
+                "summary": summary,
+                "topics": topics,
+                "entities": entities,
+                "evidence_refs": evidence_refs,
+                "supersedes_memory_ids": supersedes_memory_ids,
+                "event_kind": event_kind,
+                "importance": request.importance,
+                "source_actor": source_actor,
+                "owner_id": scope.owner_id,
+                "workspace_id": scope.workspace_id,
+                "memory_domain": memory_domain,
+            }
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    fingerprint_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            receipt = await self._repository_idempotent_write_async(
+                receipt_key=(
+                    f"remember:{scope.owner_id}:{scope.workspace_id}:"
+                    f"{memory_domain}:{request.idempotency_key}"
+                ),
+                operation="remember",
+                fingerprint=fingerprint,
+                owner_id=scope.owner_id,
+                workspace_id=scope.workspace_id,
+                memory_domain=memory_domain,
+                callback=write,
+            )
+            memory = dict(receipt.value)
+            self._semantic_wake.set()
+            return {
+                "status": "remembered",
+                "memory": memory,
+                "write_status": "committed",
+                "commit_revision": receipt.commit_revision,
+                "replayed": receipt.replay,
+            }
+
+        memory = await self._repository_write_async(write)
         self._semantic_wake.set()
         return {
             "status": "remembered",
-            "memory": _cmem_row_to_dict(row),
+            "memory": memory,
         }
 
     async def get_compressed(
@@ -5054,24 +5300,36 @@ class MemoryApplicationService:
         """Get a single compressed memory by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        row = conn.execute(
-            f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND "
-            "((owner_id = ? AND workspace_id = ?) OR "
-            "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ?",
-            (
-                memory_id,
-                scope.owner_id,
-                scope.workspace_id,
-                GLOBAL_SCOPE_ID,
-                GLOBAL_SCOPE_ID,
-                authorized_domain,
-            ),
-        ).fetchone()
-        conn.close()
+        cache_key = (
+            "compressed",
+            memory_id,
+            scope.owner_id,
+            scope.workspace_id,
+            authorized_domain,
+        )
+        cached = self._cached_read(cache_key)
+        if cached is not None:
+            return cached
+        row = self._repository_read(
+            lambda conn: conn.execute(
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND "
+                "((owner_id = ? AND workspace_id = ?) OR "
+                "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ?",
+                (
+                    memory_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    GLOBAL_SCOPE_ID,
+                    GLOBAL_SCOPE_ID,
+                    authorized_domain,
+                ),
+            ).fetchone()
+        )
         if not row:
             raise HTTPException(status_code=404, detail="Compressed memory not found")
-        return _cmem_row_to_dict(row)
+        payload = _cmem_row_to_dict(row)
+        payload["commit_revision"] = getattr(self._repository, "commit_revision", 0)
+        return self._store_cached_read(cache_key, payload)
 
     async def trace_compressed_by_turn(
         self,
@@ -5084,23 +5342,23 @@ class MemoryApplicationService:
         """Find all compressed memories that reference a given turn_id."""
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
-        conn = self._repository.connect()
-        rows = conn.execute(
-            "SELECT c.* FROM compressed_memories c WHERE "
-            "((c.owner_id = ? AND c.workspace_id = ?) OR "
-            "(c.owner_id = ? AND c.workspace_id = ?)) "
-            "AND c.memory_domain = ? "
-            "AND EXISTS (SELECT 1 FROM json_each(c.source_turns) WHERE value = ?)",
-            (
-                scope.owner_id,
-                scope.workspace_id,
-                GLOBAL_SCOPE_ID,
-                GLOBAL_SCOPE_ID,
-                authorized_domain,
-                turn_id,
-            ),
-        ).fetchall()
-        conn.close()
+        rows = self._repository_read(
+            lambda conn: conn.execute(
+                "SELECT c.* FROM compressed_memories c WHERE "
+                "((c.owner_id = ? AND c.workspace_id = ?) OR "
+                "(c.owner_id = ? AND c.workspace_id = ?)) "
+                "AND c.memory_domain = ? "
+                "AND EXISTS (SELECT 1 FROM json_each(c.source_turns) WHERE value = ?)",
+                (
+                    scope.owner_id,
+                    scope.workspace_id,
+                    GLOBAL_SCOPE_ID,
+                    GLOBAL_SCOPE_ID,
+                    authorized_domain,
+                    turn_id,
+                ),
+            ).fetchall()
+        )
         return {
             "turn_id": turn_id,
             "compressed_memories": [_cmem_row_to_dict(r) for r in rows],
@@ -5160,23 +5418,22 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = self._repository.connect()
-        cur = conn.execute(
-            "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
-            "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ?",
-            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        )
-        if cur.rowcount == 0:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Memory not found")
-        self._rebuild_scoped_entity_graph(
-            conn,
-            scope=scope,
-            memory_domain=authorized_domain,
-        )
-        conn.commit()
-        conn.close()
+        def write(conn: sqlite3.Connection) -> None:
+            cur = conn.execute(
+                "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
+                "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
+                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            self._rebuild_scoped_entity_graph(
+                conn,
+                scope=scope,
+                memory_domain=authorized_domain,
+            )
+
+        await self._repository_write_async(write)
         return {"memory_id": memory_id, "pinned": True, "status": "ok"}
 
     async def hide_memory(
@@ -5191,23 +5448,22 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = self._repository.connect()
-        cur = conn.execute(
-            "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
-            "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ?",
-            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        )
-        if cur.rowcount == 0:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Memory not found")
-        self._rebuild_scoped_entity_graph(
-            conn,
-            scope=scope,
-            memory_domain=authorized_domain,
-        )
-        conn.commit()
-        conn.close()
+        def write(conn: sqlite3.Connection) -> None:
+            cur = conn.execute(
+                "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
+                "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
+                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            self._rebuild_scoped_entity_graph(
+                conn,
+                scope=scope,
+                memory_domain=authorized_domain,
+            )
+
+        await self._repository_write_async(write)
         return {"memory_id": memory_id, "hidden": True, "status": "ok"}
 
     async def unpin_memory(
@@ -5222,31 +5478,31 @@ class MemoryApplicationService:
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
         authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
-        conn = self._repository.connect()
-        row = conn.execute(
-            "SELECT memory_type, compression_level FROM compressed_memories "
-            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ?",
-            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        ).fetchone()
-        if not row:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Memory not found")
-        mem_type, level = row[0], row[1] or 0
-        base_w = self._LEVEL_WEIGHT.get(level, 0.2)
-        conn.execute(
-            "UPDATE compressed_memories SET pinned = 0, hidden = 0, "
-            "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-            "AND memory_domain = ?",
-            (base_w, memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
-        )
-        self._rebuild_scoped_entity_graph(
-            conn,
-            scope=scope,
-            memory_domain=authorized_domain,
-        )
-        conn.commit()
-        conn.close()
+        def write(conn: sqlite3.Connection) -> float:
+            row = conn.execute(
+                "SELECT memory_type, compression_level FROM compressed_memories "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
+                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            _mem_type, level = row[0], row[1] or 0
+            base_w = self._LEVEL_WEIGHT.get(level, 0.2)
+            conn.execute(
+                "UPDATE compressed_memories SET pinned = 0, hidden = 0, "
+                "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ?",
+                (base_w, memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+            )
+            self._rebuild_scoped_entity_graph(
+                conn,
+                scope=scope,
+                memory_domain=authorized_domain,
+            )
+            return base_w
+
+        base_w = await self._repository_write_async(write)
         return {"memory_id": memory_id, "pinned": False, "hidden": False, "base_weight": base_w, "status": "ok"}
 
     async def register_with_gateway(self, *, max_retries: int = 5):
@@ -5331,6 +5587,9 @@ class MemoryService(MemoryApplicationService):
         self.app = build_memory_http_app(
             self._http_handlers(),
             lifespan=asynccontextmanager(self._app_lifespan),
+            service_token=self.config.service_token,
+            service_tokens=self.config.service_tokens,
+            service_actor="api_a",
         )
 
     async def start(self) -> None:

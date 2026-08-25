@@ -475,6 +475,49 @@ async def test_recall_mixes_recent_tier1_and_durable_tier2(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_compressed_read_cache_is_invalidated_after_repository_write(tmp_path):
+    service = _service(tmp_path)
+    _insert_compressed(
+        service,
+        memory_id="cached-memory",
+        title="旧标题",
+        summary="旧摘要",
+        timestamp=datetime.now(timezone.utc),
+        topics=["cache"],
+    )
+
+    first = await service.get_compressed("cached-memory")
+    assert first["title"] == "旧标题"
+
+    await service._repository_write_async(
+        lambda conn: conn.execute(
+            "UPDATE compressed_memories SET title = ? WHERE memory_id = ?",
+            ("新标题", "cached-memory"),
+        )
+    )
+    second = await service.get_compressed("cached-memory")
+    assert second["title"] == "新标题"
+    assert second["commit_revision"] == service._repository.commit_revision
+
+
+@pytest.mark.asyncio
+async def test_recall_rejects_a_revision_that_is_not_available_yet(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.recall(
+            RecallRequest(
+                query="revision probe",
+                min_revision=service._repository.commit_revision + 1,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"] == "revision_not_available"
+    assert exc_info.value.detail["retryable"] is True
+
+
+@pytest.mark.asyncio
 async def test_mixed_language_query_scores_latin_and_numeric_matches(tmp_path):
     service = _service(tmp_path)
     _insert_compressed(

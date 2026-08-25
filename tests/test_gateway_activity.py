@@ -758,316 +758,78 @@ def test_gateway_recovers_evicted_cli_session_from_matching_execution_lease():
     assert exc.value.status_code == 409
 
 
-def test_gateway_memory_recall_does_not_update_memory_activity_when_upstream_fails():
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-
-    register_response = client.post(
-        "/register",
-        json={
-            "service_name": "memory-service",
-            "service_type": "memory",
-            "address": "http://127.0.0.1:65529",
-        },
-    )
-    assert register_response.status_code == 201
-    identity_headers = _register_agent_identity(client)
-
-    response = client.post(
+@pytest.mark.parametrize(
+    "path",
+    [
         "/api/mem/recall",
-        json={"query": "hello"},
-        headers=identity_headers,
-    )
-    assert response.status_code in {500, 504}
-
-    activity = client.get("/admin/activity").json()
-    assert activity["last_memory_task_at"] is None
-    assert activity["counts"]["memory_task_count"] == 0
-
-
-def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-    register_response = client.post(
-        "/register",
-        json={
-            "service_name": "memory-service",
-            "service_type": "memory",
-            "address": "http://memory-service",
-        },
-    )
-    assert register_response.status_code == 201
-    identity_headers = _register_agent_identity(client)
-    captured = {}
-
-    class _FakeResponse:
-        status = 200
-        headers = {"content-type": "application/json"}
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def read(self):
-            return b'{"traces": [], "count": 0}'
-
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def request(self, method, url, **kwargs):
-            captured.update(method=method, url=url, params=kwargs.get("params"))
-            return _FakeResponse()
-
-    monkeypatch.setattr(
-        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
-        _FakeSession,
-    )
-
-    response = client.get(
+        "/api/mem/remember",
         "/api/mem/recall/traces?session_id=session-1&status=hit&limit=3",
-        headers=identity_headers,
-    )
-
-    assert response.status_code == 200
-    assert captured["url"] == "http://memory-service/recall/traces"
-    assert captured["params"] == [
-        ("session_id", "session-1"),
-        ("status", "hit"),
-        ("limit", "3"),
-        ("memory_actor", "api_a"),
-    ]
-
-
-def test_gateway_remember_route_updates_memory_activity_even_when_upstream_fails():
+        "/api/mem/promotion-candidates",
+        "/api/mem/promotion-candidates/candidate-1/consent",
+    ],
+)
+def test_gateway_retired_memory_proxy_returns_410(path):
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
-    register_response = client.post(
-        "/register",
-        json={
-            "service_name": "memory-service",
-            "service_type": "memory",
-            "address": "http://127.0.0.1:65529",
-        },
-    )
-    assert register_response.status_code == 201
-    identity_headers = _register_agent_identity(client)
+    response = client.get(path) if path.endswith("traces?session_id=session-1&status=hit&limit=3") else client.post(path, json={})
 
-    response = client.post(
-        "/api/mem/remember",
-        json={"title": "Greeting", "summary": "hello"},
-        headers=identity_headers,
-    )
-    assert response.status_code in {500, 504}
-
-    activity = client.get("/admin/activity").json()
-    assert activity["last_memory_task_at"] is not None
-    assert activity["counts"]["memory_task_count"] == 1
+    assert response.status_code == 410
+    assert "retired" in response.json()["detail"]
 
 
-def test_gateway_memory_proxy_requires_authenticated_identity():
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-    _register_memory_target(client)
+def test_memory_client_binds_actor_and_scope_and_rejects_spoofed_fields(monkeypatch):
+    from voidcube.infrastructure.memory.client import MemoryClient, MemoryClientIdentity
 
-    response = client.post(
-        "/api/mem/remember",
-        json={"title": "Greeting", "summary": "hello"},
-    )
-
-    assert response.status_code == 401
-    assert "Authenticated service or session identity" in response.json()["detail"]
-    activity = client.get("/admin/activity").json()
-    assert activity["counts"]["memory_task_count"] == 0
-
-
-def test_gateway_memory_proxy_overwrites_spoofed_actor_and_strips_credentials(
-    monkeypatch,
-):
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-    _register_memory_target(client)
-    identity_headers = _register_agent_identity(client)
     captured = {}
 
     class _FakeResponse:
-        status = 200
-        headers = {"content-type": "application/json"}
-
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def read(self):
-            return b'{"status":"remembered"}'
-
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def request(self, method, url, **kwargs):
-            captured.update(
-                method=method,
-                url=url,
-                body=json.loads(kwargs["data"].decode("utf-8")),
-                headers=kwargs["headers"],
-            )
-            return _FakeResponse()
-
-    monkeypatch.setattr(
-        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
-        _FakeSession,
-    )
-    response = client.post(
-        "/api/mem/remember",
-        json={
-            "title": "Greeting",
-            "summary": "hello",
-            "memory_actor": "governor",
-        },
-        headers=identity_headers,
-    )
-
-    assert response.status_code == 200
-    assert captured["body"]["memory_actor"] == "api_a"
-    assert "x-voidcube-service-token" not in captured["headers"]
-    assert "authorization" not in captured["headers"]
-
-
-def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-    _register_memory_target(client)
-    registration = client.post(
-        "/register",
-        json={
-            "service_name": "supervisor",
-            "service_type": "supervisor",
-            "address": "http://supervisor-service",
-        },
-    ).json()
-    headers = {
-        "X-VoidCube-Service-Id": registration["service_id"],
-        "X-VoidCube-Service-Token": registration["service_token"],
-        "X-VoidCube-Memory-Actor": "governor",
-    }
-    captured = {}
-
-    class _FakeResponse:
-        status = 200
-        headers = {"content-type": "application/json"}
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def read(self):
+        def read(self):
             return b'{"candidates":[]}'
 
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def request(self, method, url, **kwargs):
-            captured["body"] = json.loads(kwargs["data"].decode("utf-8"))
-            return _FakeResponse()
+    def fake_urlopen(request, timeout=None):
+        del timeout
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse()
 
     monkeypatch.setattr(
-        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
-        _FakeSession,
+        "voidcube.infrastructure.memory.client.urlopen",
+        fake_urlopen,
     )
-    allowed = client.post(
-        "/api/mem/promotion-candidates",
-        json={"reason": "approved by governance", "memory_actor": "api_a"},
-        headers=headers,
+    client = MemoryClient(
+        "http://memory-service",
+        identity=MemoryClientIdentity(
+            actor="governor",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+            memory_domain="agent_interaction",
+        ),
     )
-    assert allowed.status_code == 200
+
+    response = client.request_json(
+        "POST",
+        "/promotion-candidates",
+        {"reason": "approved by governance", "memory_actor": "governor"},
+    )
+    assert response == {"candidates": []}
     assert captured["body"]["memory_actor"] == "governor"
+    assert captured["body"]["owner_id"] == "owner-a"
+    assert captured["body"]["workspace_id"] == "workspace-a"
 
-    denied = client.post(
-        "/api/mem/promotion-candidates",
-        json={"reason": "approved by governance"},
-        headers={**headers, "X-VoidCube-Memory-Actor": "api_a"},
-    )
-    assert denied.status_code == 403
-
-
-def test_gateway_governor_logical_identity_has_fixed_memory_actor(monkeypatch):
-    gateway = InternalGateway(GatewayConfig())
-    client = TestClient(gateway.app)
-    _register_memory_target(client)
-    registration = client.post(
-        "/register",
-        json={
-            "service_name": "governor-runtime",
-            "service_type": "governor",
-            "address": "internal://governor",
-        },
-    ).json()
-    headers = {
-        "X-VoidCube-Service-Id": registration["service_id"],
-        "X-VoidCube-Service-Token": registration["service_token"],
-    }
-    captured = {}
-
-    class _FakeResponse:
-        status = 200
-        headers = {"content-type": "application/json"}
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def read(self):
-            return b'{"status":"approved"}'
-
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def request(self, method, url, **kwargs):
-            captured["body"] = json.loads(kwargs["data"].decode("utf-8"))
-            return _FakeResponse()
-
-    monkeypatch.setattr(
-        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
-        _FakeSession,
-    )
-    response = client.post(
-        "/api/mem/promotion-candidates/candidate-1/consent",
-        json={"approved": True, "reason": "local owner approved"},
-        headers=headers,
-    )
-
-    assert response.status_code == 200
-    assert captured["body"]["memory_actor"] == "governor"
-    denied = client.post(
-        "/api/mem/promotion-candidates/candidate-1/consent",
-        json={"approved": True, "reason": "local owner approved"},
-        headers={**headers, "X-VoidCube-Memory-Actor": "stellar_auto"},
-    )
-    assert denied.status_code == 403
+    with pytest.raises(Exception):
+        client.request_json(
+            "POST",
+            "/promotion-candidates",
+            {"reason": "approved by governance", "memory_actor": "api_a"},
+        )
 
 
 def test_gateway_registration_requires_root_token_when_configured():
@@ -1197,7 +959,6 @@ def test_gateway_executor_registration_adds_standard_route_and_health_count():
 @pytest.mark.parametrize(
     ("service_type", "route_prefix"),
     [
-        ("memory", "/mem/"),
         ("supervisor", "/supervisor/"),
         ("executor", "/executor/"),
     ],
@@ -1242,7 +1003,6 @@ def test_gateway_replaces_previous_instance_for_routed_singleton_service(
 @pytest.mark.parametrize(
     ("service_type", "gateway_path", "upstream_path"),
     [
-        ("memory", "mem/tier1/stats", "/tier1/stats"),
         ("supervisor", "supervisor/runtime/activity", "/runtime/activity"),
         ("executor", "executor/body/registry", "/executor/body/registry"),
     ],

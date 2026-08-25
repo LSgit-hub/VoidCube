@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Protocol
 
 from fastapi import HTTPException
 
@@ -15,12 +15,21 @@ _IDENTITY_MEMORY_ACTOR = "stellar_companion"
 _IDENTITY_MEMORY_DOMAIN = "agent_interaction"
 
 
+class MemoryClientPort(Protocol):
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SupervisorUIIdentityProxyContext:
     """Runtime resources needed by the UI's canonical-memory proxy routes."""
 
-    gateway_url: str
-    gateway_memory_headers: Callable[..., Dict[str, str]]
+    memory_client_factory: Callable[..., MemoryClientPort]
 
 
 async def get_identity_archive(
@@ -30,26 +39,14 @@ async def get_identity_archive(
     """Proxy the canonical Mem archive without creating UI-owned identity state."""
 
     try:
-        import aiohttp
-
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                f"{context.gateway_url}/api/mem/identity/archive",
-                params={
-                    "owner_id": DEFAULT_OWNER_ID,
-                    "workspace_id": CLI_WORKSPACE_ID,
-                },
-                headers=context.gateway_memory_headers(
-                    memory_actor=_IDENTITY_MEMORY_ACTOR
-                ),
-            ) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Memory identity archive unavailable",
-                    )
-                return await response.json()
+        payload = await context.memory_client_factory(
+            memory_actor=_IDENTITY_MEMORY_ACTOR,
+            memory_domain=_IDENTITY_MEMORY_DOMAIN,
+            owner_id=DEFAULT_OWNER_ID,
+            workspace_id=CLI_WORKSPACE_ID,
+            timeout_seconds=5,
+        ).request_json("GET", "/identity/archive")
+        return payload
     except HTTPException:
         raise
     except Exception as exc:
@@ -66,32 +63,23 @@ async def get_identity_turns(
     """Return recent Tier 1 turns for explicit identity verification in the room UI."""
 
     try:
-        import aiohttp
-
         bounded_limit = max(1, min(int(limit), 50))
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                f"{context.gateway_url}/api/mem/turns",
-                params={
-                    "limit": bounded_limit,
-                    "newest_first": "true",
-                    "owner_id": DEFAULT_OWNER_ID,
-                    "workspace_id": CLI_WORKSPACE_ID,
-                    "memory_domain": _IDENTITY_MEMORY_DOMAIN,
-                },
-                headers=context.gateway_memory_headers(
-                    memory_actor=_IDENTITY_MEMORY_ACTOR
-                ),
-            ) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Memory turns unavailable",
-                    )
-                payload = await response.json()
-                turns = list(payload.get("turns") or [])
-                return {"turns": turns, "count": len(turns)}
+        payload = await context.memory_client_factory(
+            memory_actor=_IDENTITY_MEMORY_ACTOR,
+            memory_domain=_IDENTITY_MEMORY_DOMAIN,
+            owner_id=DEFAULT_OWNER_ID,
+            workspace_id=CLI_WORKSPACE_ID,
+            timeout_seconds=5,
+        ).request_json(
+            "GET",
+            "/turns",
+            {
+                "limit": bounded_limit,
+                "newest_first": "true",
+            },
+        )
+        turns = list(payload.get("turns") or [])
+        return {"turns": turns, "count": len(turns)}
     except HTTPException:
         raise
     except Exception as exc:
@@ -110,23 +98,17 @@ async def get_evolution_promotion_audit(
 
     bounded_limit = max(1, min(int(limit), 500))
     try:
-        import aiohttp
-
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                f"{context.gateway_url}/api/mem/promotions",
-                params={"limit": 500, "target_domain": "companion"},
-                headers=context.gateway_memory_headers(
-                    memory_actor="stellar_companion"
-                ),
-            ) as response:
-                if response.status != 200:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Memory promotion audit unavailable",
-                    )
-                payload = await response.json()
+        payload = await context.memory_client_factory(
+            memory_actor="stellar_companion",
+            memory_domain="evolution",
+            owner_id=DEFAULT_OWNER_ID,
+            workspace_id=CLI_WORKSPACE_ID,
+            timeout_seconds=5,
+        ).request_json(
+            "GET",
+            "/promotions",
+            {"limit": 500, "target_domain": "companion"},
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -193,27 +175,22 @@ async def get_evolution_promotion_candidates(
 
     bounded_limit = max(1, min(int(limit), 100))
     try:
-        import aiohttp
-
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                f"{context.gateway_url}/api/mem/promotion-candidates",
-                params={
-                    "limit": bounded_limit,
-                    "status": "awaiting_user_consent",
-                    "source_domain": "evolution",
-                    "target_domain": "companion",
-                },
-                headers=context.gateway_memory_headers(memory_actor="governor"),
-            ) as response:
-                payload = await response.json()
-                if response.status != 200:
-                    detail = payload.get("detail") if isinstance(payload, dict) else None
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=detail or "Memory promotion candidates unavailable",
-                    )
+        payload = await context.memory_client_factory(
+            memory_actor="governor",
+            memory_domain="evolution",
+            owner_id=DEFAULT_OWNER_ID,
+            workspace_id=CLI_WORKSPACE_ID,
+            timeout_seconds=5,
+        ).request_json(
+            "GET",
+            "/promotion-candidates",
+            {
+                "limit": bounded_limit,
+                "status": "awaiting_user_consent",
+                "source_domain": "evolution",
+                "target_domain": "companion",
+            },
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -266,11 +243,9 @@ async def consent_evolution_promotion_candidate(
     candidate_id: str,
     request: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Record the local owner's immutable decision through the Gateway."""
+    """Record the local owner's immutable decision through Memory Service."""
 
     try:
-        import aiohttp
-
         from memai.application.promotion import MemoryPromotionConsent
 
         consent = MemoryPromotionConsent.model_validate(
@@ -281,21 +256,21 @@ async def consent_evolution_promotion_candidate(
                 "memory_actor": "governor",
             }
         )
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{context.gateway_url}/api/mem/promotion-candidates/{candidate_id}/consent",
-                json=consent.model_dump(mode="json"),
-                headers=context.gateway_memory_headers(memory_actor="governor"),
-            ) as response:
-                payload = await response.json()
-                if response.status != 200:
-                    detail = payload.get("detail") if isinstance(payload, dict) else None
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=detail or "Memory promotion consent failed",
-                    )
-                return payload
+        payload = await context.memory_client_factory(
+            memory_actor="governor",
+            memory_domain="evolution",
+            owner_id=DEFAULT_OWNER_ID,
+            workspace_id=CLI_WORKSPACE_ID,
+            timeout_seconds=8,
+        ).request_json(
+            "POST",
+            f"/promotion-candidates/{candidate_id}/consent",
+            consent.model_dump(
+                mode="json",
+                exclude={"owner_id", "workspace_id"},
+            ),
+        )
+        return payload
     except HTTPException:
         raise
     except ValueError as exc:

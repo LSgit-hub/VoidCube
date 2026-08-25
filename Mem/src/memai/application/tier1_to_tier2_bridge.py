@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from memai.repository.contracts import MemoryRepository
 from memai.repository.sqlite import open_memory_sqlite
 from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 from memai.domain.quality_signals import (
@@ -426,6 +427,7 @@ class Tier1ToTier2Bridge:
         memory_domain: str = "agent_interaction",
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        repository: MemoryRepository | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -438,6 +440,7 @@ class Tier1ToTier2Bridge:
         self.workspace_id = str(workspace_id)
         self.pipeline_factory = pipeline_factory
         self.compression_degraded = compression_degraded
+        self._repository = repository
         self.quality_thresholds = {
             "min_backlink_completeness": min_backlink_completeness,
             "max_compression_ratio": max_compression_ratio,
@@ -447,56 +450,84 @@ class Tier1ToTier2Bridge:
             "min_polarity_consistency": min_polarity_consistency,
         }
 
+    def _connect(self):
+        return open_memory_sqlite(self.db_path)
+
+    def _execute_read(self, operation):
+        if self._repository is not None:
+            return self._repository.execute_read(operation)
+        conn = self._connect()
+        try:
+            return operation(conn)
+        finally:
+            conn.close()
+
+    def _execute_write(self, operation):
+        if self._repository is not None:
+            return self._repository.execute_write(operation)
+        conn = self._connect()
+        try:
+            result = operation(conn)
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     # ── Query candidates ──────────────────────────────────────────
 
     def select_candidate_turns(self, *, force_oldest: bool = False) -> CandidateBatch:
         """Select one deterministic candidate batch and report fallback semantics."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
-        conn = open_memory_sqlite(self.db_path)
-        base_conditions = [
-            "compression_status IN ('pending', 'retry_wait')",
-            _RETRY_ELIGIBLE_TURN_SQL,
-            "memory_domain = ?",
-            _NON_EVALUATION_TURN_SQL,
-        ]
-        base_params: list[Any] = [
-            _MAX_QUALITY_RETRIES,
-            datetime.now(timezone.utc).isoformat(),
-            self.memory_domain,
-        ]
-        if self.owner_id is not None:
-            base_conditions.append("owner_id = ?")
-            base_params.append(self.owner_id)
-        if self.workspace_id is not None:
-            base_conditions.append("workspace_id = ?")
-            base_params.append(self.workspace_id)
-        time_clause = [] if force_oldest else ["timestamp < ?"]
-        time_params: list[Any] = [] if force_oldest else [cutoff]
-        eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
-        eligible_params = [*time_params, *base_params, self.min_relevance]
-        rows = conn.execute(
-            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "owner_id, workspace_id "
-            ", memory_domain FROM turns WHERE "
-            + " AND ".join(eligible_conditions)
-            + " ORDER BY timestamp ASC LIMIT ?",
-            [*eligible_params, self.batch_size],
-        ).fetchall()
-        low_relevance_fallback = False
-        if not rows:
+        def read(conn):
+            base_conditions = [
+                "compression_status IN ('pending', 'retry_wait')",
+                _RETRY_ELIGIBLE_TURN_SQL,
+                "memory_domain = ?",
+                _NON_EVALUATION_TURN_SQL,
+            ]
+            base_params: list[Any] = [
+                _MAX_QUALITY_RETRIES,
+                datetime.now(timezone.utc).isoformat(),
+                self.memory_domain,
+            ]
+            if self.owner_id is not None:
+                base_conditions.append("owner_id = ?")
+                base_params.append(self.owner_id)
+            if self.workspace_id is not None:
+                base_conditions.append("workspace_id = ?")
+                base_params.append(self.workspace_id)
+            time_clause = [] if force_oldest else ["timestamp < ?"]
+            time_params: list[Any] = [] if force_oldest else [cutoff]
+            eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
+            eligible_params = [*time_params, *base_params, self.min_relevance]
             rows = conn.execute(
                 "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
                 "owner_id, workspace_id "
                 ", memory_domain FROM turns WHERE "
-                + " AND ".join([*time_clause, *base_conditions])
+                + " AND ".join(eligible_conditions)
                 + " ORDER BY timestamp ASC LIMIT ?",
-                [*time_params, *base_params, self.batch_size],
+                [*eligible_params, self.batch_size],
             ).fetchall()
-            low_relevance_fallback = bool(rows)
-        owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
-        workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
-        memory_domain = str(rows[0][8]) if rows else self.memory_domain
-        conn.close()
+            low_relevance_fallback = False
+            if not rows:
+                rows = conn.execute(
+                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+                    "owner_id, workspace_id "
+                    ", memory_domain FROM turns WHERE "
+                    + " AND ".join([*time_clause, *base_conditions])
+                    + " ORDER BY timestamp ASC LIMIT ?",
+                    [*time_params, *base_params, self.batch_size],
+                ).fetchall()
+                low_relevance_fallback = bool(rows)
+            owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
+            workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
+            memory_domain = str(rows[0][8]) if rows else self.memory_domain
+            return rows, low_relevance_fallback, owner_id, workspace_id, memory_domain
+
+        rows, low_relevance_fallback, owner_id, workspace_id, memory_domain = self._execute_read(read)
         turns = [
             {
                 "turn_id": r[0],
@@ -527,17 +558,14 @@ class Tier1ToTier2Bridge:
         return self.select_candidate_turns(force_oldest=force_oldest).turns
 
     def _active_turn_count(self, *, conn=None) -> int:
-        owns_connection = conn is None
         if conn is None:
-            conn = open_memory_sqlite(self.db_path)
+            return self._execute_read(lambda read_conn: self._active_turn_count(conn=read_conn))
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compression_status IN ('pending', 'retry_wait') "
             "AND memory_domain = ? AND " + _NON_EVALUATION_TURN_SQL
             + self._scope_sql_suffix(),
             [self.memory_domain, *self._scope_params()],
         ).fetchone()[0]
-        if owns_connection:
-            conn.close()
         return int(count)
 
     def count_candidates(self) -> int:
@@ -549,30 +577,32 @@ class Tier1ToTier2Bridge:
         current_time = datetime.now(timezone.utc)
         now = current_time.isoformat()
         cutoff = (current_time - timedelta(days=self.retention_days)).isoformat()
-        conn = open_memory_sqlite(self.db_path)
-        retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
-        row = conn.execute(
-            "SELECT COUNT(*), MIN(timestamp) FROM turns "
-            "WHERE timestamp < ? AND compression_status IN ('pending', 'retry_wait') "
-            "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
-            + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
-            [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
-        ).fetchone()
-        count, oldest_at = int(row[0]), row[1]
-        force_oldest = False
-        if count == 0:
-            total = self._active_turn_count(conn=conn)
-            if total >= self.max_turns:
-                force_oldest = True
-                row = conn.execute(
-                    "SELECT COUNT(*), MIN(timestamp) FROM turns "
-                    "WHERE compression_status IN ('pending', 'retry_wait') AND "
-                    + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
-                    + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
-                    [*retry_params, self.memory_domain, *self._scope_params()],
-                ).fetchone()
-                count, oldest_at = int(row[0]), row[1]
-        conn.close()
+        def read(conn):
+            retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
+            row = conn.execute(
+                "SELECT COUNT(*), MIN(timestamp) FROM turns "
+                "WHERE timestamp < ? AND compression_status IN ('pending', 'retry_wait') "
+                "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
+                + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
+                [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
+            ).fetchone()
+            count, oldest_at = int(row[0]), row[1]
+            force_oldest = False
+            if count == 0:
+                total = self._active_turn_count(conn=conn)
+                if total >= self.max_turns:
+                    force_oldest = True
+                    row = conn.execute(
+                        "SELECT COUNT(*), MIN(timestamp) FROM turns "
+                        "WHERE compression_status IN ('pending', 'retry_wait') AND "
+                        + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
+                        + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
+                        [*retry_params, self.memory_domain, *self._scope_params()],
+                    ).fetchone()
+                    count, oldest_at = int(row[0]), row[1]
+            return count, oldest_at, force_oldest
+
+        count, oldest_at, force_oldest = self._execute_read(read)
         oldest = _parse_utc_timestamp(oldest_at)
         oldest_age_seconds = (
             max(0.0, (current_time - oldest).total_seconds()) if oldest else 0.0
@@ -622,7 +652,11 @@ class Tier1ToTier2Bridge:
 
         from memai.application.llm_extraction import build_llm_first_pipeline
 
-        return build_llm_first_pipeline(self.db_path, role="extraction")
+        return build_llm_first_pipeline(
+            self.db_path,
+            role="extraction",
+            repository=self._repository,
+        )
 
     def _build_tier2_output(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Convert turns to TranscriptTurn and feed into ChroniclePipeline."""
@@ -928,22 +962,15 @@ class Tier1ToTier2Bridge:
         quality_evidence: Dict[str, Any],
         status: str,
     ) -> None:
-        conn = open_memory_sqlite(self.db_path)
-        try:
-            self._write_quality_audit(conn, quality_evidence, status)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        self._execute_write(
+            lambda conn: self._write_quality_audit(conn, quality_evidence, status)
+        )
 
     def _record_quality_rejection(self, turns: Sequence[Dict[str, Any]]) -> None:
         """Bound retries without accepting a summary that failed its gate."""
         if not turns:
             return
-        conn = open_memory_sqlite(self.db_path)
-        try:
+        def write(conn):
             for turn in turns:
                 row = conn.execute(
                     "SELECT compression_retry_count FROM turns WHERE turn_id = ? "
@@ -967,12 +994,8 @@ class Tier1ToTier2Bridge:
                     (retry_count, retry_after, state, turn["turn_id"], turn["owner_id"],
                      turn["workspace_id"], turn["memory_domain"]),
                 )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+
+        self._execute_write(write)
 
     # ── Archive processed turns ───────────────────────────────────
 
@@ -1016,47 +1039,40 @@ class Tier1ToTier2Bridge:
                         turn_to_scenes.setdefault(turn_id, []).append(stable_ids.get(scene.id, scene.id))
 
         now = datetime.now(timezone.utc).isoformat()
-        conn = open_memory_sqlite(self.db_path)
-        try:
-            try:
-                for t in turns:
-                    turn_id = t["turn_id"]
-                    event_ids = turn_to_events.get(turn_id, [])
-                    scene_ids = turn_to_scenes.get(turn_id, [])
-                    original_text = t["text"] if self.archive_keep_original else None
-                    text_summary = t["text"][:500]
+        def write(conn):
+            for t in turns:
+                turn_id = t["turn_id"]
+                event_ids = turn_to_events.get(turn_id, [])
+                scene_ids = turn_to_scenes.get(turn_id, [])
+                original_text = t["text"] if self.archive_keep_original else None
+                text_summary = t["text"][:500]
 
-                    conn.execute(
-                        "INSERT OR REPLACE INTO turns_archive "
-                        "(turn_id, session_id, speaker, text_summary, original_text, "
-                        "timestamp, compressed_at, event_ids, scene_ids, owner_id, workspace_id, "
-                        "memory_domain) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            turn_id, t["session_id"], t["speaker"],
-                            text_summary, original_text,
-                            t["timestamp"], now,
-                            json.dumps(event_ids), json.dumps(scene_ids),
-                            t["owner_id"], t["workspace_id"],
-                            t["memory_domain"],
-                        ),
-                    )
-                    conn.execute(
-                        "UPDATE turns SET compression_status = 'compressed' WHERE turn_id = ? "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (turn_id, t["owner_id"], t["workspace_id"], t["memory_domain"]),
-                    )
+                conn.execute(
+                    "INSERT OR REPLACE INTO turns_archive "
+                    "(turn_id, session_id, speaker, text_summary, original_text, "
+                    "timestamp, compressed_at, event_ids, scene_ids, owner_id, workspace_id, "
+                    "memory_domain) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        turn_id, t["session_id"], t["speaker"],
+                        text_summary, original_text,
+                        t["timestamp"], now,
+                        json.dumps(event_ids), json.dumps(scene_ids),
+                        t["owner_id"], t["workspace_id"],
+                        t["memory_domain"],
+                    ),
+                )
+                conn.execute(
+                    "UPDATE turns SET compression_status = 'compressed' WHERE turn_id = ? "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (turn_id, t["owner_id"], t["workspace_id"], t["memory_domain"]),
+                )
 
-                # ── Write compressed memories back to SQLite ─────────────
-                _write_compressed_memories_to_db(conn, result, now, scope=scope)
-                self._write_quality_audit(conn, quality_evidence, "passed")
+            # ── Write compressed memories back to SQLite ─────────────
+            _write_compressed_memories_to_db(conn, result, now, scope=scope)
+            self._write_quality_audit(conn, quality_evidence, "passed")
 
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-        finally:
-            conn.close()
+        self._execute_write(write)
         logger.info("Archived %d turns with Tier 2 back-references + compressed memories", len(turns))
 
     # ── Full cycle ────────────────────────────────────────────────
@@ -1190,17 +1206,19 @@ class Tier1ToTier2Bridge:
 
     def stats(self) -> Dict[str, Any]:
         """Return Tier 1 storage statistics."""
-        conn = open_memory_sqlite(self.db_path)
-        total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
-        active_turns = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed'"
-        ).fetchone()[0]
-        archived = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
-        sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        oldest = conn.execute(
-            "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed'"
-        ).fetchone()[0]
-        conn.close()
+        def read(conn):
+            total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+            active_turns = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed'"
+            ).fetchone()[0]
+            archived = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
+            sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            oldest = conn.execute(
+                "SELECT MIN(timestamp) FROM turns WHERE compression_status != 'compressed'"
+            ).fetchone()[0]
+            return total_turns, active_turns, archived, sessions, oldest
+
+        total_turns, active_turns, archived, sessions, oldest = self._execute_read(read)
         return {
             "total_turns": total_turns,
             "active_turns": active_turns,

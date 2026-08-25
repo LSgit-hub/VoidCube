@@ -16,7 +16,10 @@ class SupervisorUIMemoryStatusContext:
 
 def _memory_service_address(services_payload: Any) -> Any:
     services = (
-        list(services_payload.values())
+        list(services_payload.get("services") or [])
+        if isinstance(services_payload, dict)
+        and "services" in services_payload
+        else list(services_payload.values())
         if isinstance(services_payload, dict)
         else list(services_payload)
         if isinstance(services_payload, list)
@@ -85,12 +88,15 @@ async def fetch_tier1_stats(
             ) as response:
                 if response.status == 200:
                     rules_data = await response.json()
-            async with session.get(
-                f"{memory_url}/health",
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as response:
-                if response.status == 200:
-                    health_data = await response.json()
+            try:
+                async with session.get(
+                    f"{memory_url}/health",
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as response:
+                    if response.status == 200:
+                        health_data = await response.json()
+            except Exception:
+                health_data = {}
 
             result = dict(stats_data)
             result["rules"] = rules_data.get("rules", {})
@@ -102,6 +108,11 @@ async def fetch_tier1_stats(
             result["maintenance_run"] = dict(
                 rules_data.get("maintenance_run") or {}
             )
+            if "turn_count" not in result:
+                for source in (health_data, stats_data, rules_data):
+                    if isinstance(source, dict) and "turn_count" in source:
+                        result["turn_count"] = source.get("turn_count")
+                        break
             result["memory_active"] = _memory_active(
                 rules_data.get("effective_activity_at")
             )

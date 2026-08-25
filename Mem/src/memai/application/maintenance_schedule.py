@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from memai.repository.contracts import MemoryRepository
+from memai.repository.sqlite import open_memory_sqlite
+
 
 @dataclass(frozen=True, slots=True)
 class RuleCadenceDecision:
@@ -29,6 +32,38 @@ def setup_memory_rule_state(conn) -> None:
         conn.execute("ALTER TABLE memory_rule_state ADD COLUMN lease_until TEXT")
 
 
+def _connect(db_path: str | Path, repository: MemoryRepository | None):
+    if repository is not None:
+        return repository.connect()
+    return open_memory_sqlite(db_path)
+
+
+def _execute_read(db_path: str | Path, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return repository.execute_read(operation)
+    conn = _connect(db_path, repository)
+    try:
+        return operation(conn)
+    finally:
+        conn.close()
+
+
+def _execute_write(db_path: str | Path, repository: MemoryRepository | None, operation):
+    if repository is not None:
+        return repository.execute_write(operation)
+    conn = _connect(db_path, repository)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        result = operation(conn)
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def claim_rule_execution(
     db_path: str | Path,
     *,
@@ -36,15 +71,11 @@ def claim_rule_execution(
     cadence_days: int,
     lease_minutes: int = 120,
     now: datetime | None = None,
+    repository: MemoryRepository | None = None,
 ) -> RuleCadenceDecision:
-    from memai.repository.sqlite import open_memory_sqlite
-
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    conn = open_memory_sqlite(db_path)
-    try:
+    def write(conn):
         setup_memory_rule_state(conn)
-        conn.commit()
-        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT last_succeeded_at, lease_until FROM memory_rule_state "
             "WHERE rule_name = ?",
@@ -63,7 +94,6 @@ def claim_rule_execution(
             except ValueError:
                 next_due = None
         if next_due is not None and reference < next_due:
-            conn.commit()
             return RuleCadenceDecision(
                 False, last_succeeded_at, next_due.isoformat(), "cadence"
             )
@@ -74,7 +104,6 @@ def claim_rule_execution(
                 if lease_until.tzinfo is None:
                     lease_until = lease_until.replace(tzinfo=timezone.utc)
                 if reference < lease_until.astimezone(timezone.utc):
-                    conn.commit()
                     return RuleCadenceDecision(
                         False, last_succeeded_at, next_due.isoformat() if next_due else None,
                         "in_progress",
@@ -90,15 +119,11 @@ def claim_rule_execution(
             "lease_until = excluded.lease_until",
             (rule_name, reference.isoformat(), lease_until.isoformat()),
         )
-        conn.commit()
         return RuleCadenceDecision(
             True, last_succeeded_at, next_due.isoformat() if next_due else None
         )
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+
+    return _execute_write(db_path, repository, write)
 
 
 def record_rule_result(
@@ -108,14 +133,12 @@ def record_rule_result(
     succeeded: bool,
     attempted_at: datetime | None = None,
     error: str = "",
+    repository: MemoryRepository | None = None,
 ) -> None:
-    from memai.repository.sqlite import open_memory_sqlite
-
     timestamp = (attempted_at or datetime.now(timezone.utc)).astimezone(
         timezone.utc
     ).isoformat()
-    conn = open_memory_sqlite(db_path)
-    try:
+    def write(conn):
         setup_memory_rule_state(conn)
         if succeeded:
             conn.execute(
@@ -136,23 +159,19 @@ def record_rule_result(
                 "last_error = excluded.last_error, lease_until = NULL",
                 (rule_name, timestamp, str(error)[:1000]),
             )
-        conn.commit()
-    finally:
-        conn.close()
+
+    _execute_write(db_path, repository, write)
 
 
-def get_rule_state(db_path: str | Path, rule_name: str) -> dict[str, str | None]:
-    from memai.repository.sqlite import open_memory_sqlite
-
-    conn = open_memory_sqlite(db_path)
-    try:
-        row = conn.execute(
+def get_rule_state(db_path: str | Path, rule_name: str, *, repository: MemoryRepository | None = None) -> dict[str, str | None]:
+    def read(conn):
+        return conn.execute(
             "SELECT last_attempted_at, last_succeeded_at, last_error "
             "FROM memory_rule_state WHERE rule_name = ?",
             (rule_name,),
         ).fetchone()
-    finally:
-        conn.close()
+
+    row = _execute_read(db_path, repository, read)
     return {
         "last_attempted_at": str(row[0]) if row and row[0] else None,
         "last_succeeded_at": str(row[1]) if row and row[1] else None,

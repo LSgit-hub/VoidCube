@@ -67,7 +67,13 @@ def build_indicator_widgets(*, ports: IndicatorWidgetPorts) -> IndicatorWidgets:
             height=Condition(ports.images_visible),
         ),
         voice_status_bar=ConditionalContainer(
-            Window(FormattedTextControl(ports.voice_fragments), height=1),
+            Window(
+                FormattedTextControl(ports.voice_fragments),
+                height=1,
+                # 同 status_bar：Window 需自带背景样式，否则内容不足满宽时
+                # 右侧缺口透出终端默认背景，顶部蓝色条形同样不顶到右边缘。
+                style="class:voice-status",
+            ),
             filter=Condition(ports.voice_visible),
         ),
         autonomous_execution_panel=ConditionalContainer(
@@ -82,6 +88,10 @@ def build_indicator_widgets(*, ports: IndicatorWidgetPorts) -> IndicatorWidgets:
                 content=FormattedTextControl(ports.status_fragments),
                 height=1,
                 wrap_lines=False,
+                # 关键：Window 自身必须带背景样式，否则状态栏内容不足满宽时
+                # 右侧缺口透出终端默认背景，导致蓝色条形（含 git 组件）不顶到
+                # 右边缘，与下方满宽的输入栏长度不一致。
+                style="class:status-bar",
             ),
             filter=Condition(ports.status_visible),
         ),

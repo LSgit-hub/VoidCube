@@ -105,6 +105,18 @@ def _apply_canonical_file_config(config: SystemConfig) -> None:
                 memory_provider["redact_before_store"],
                 default=config.memory.redact_before_store,
             )
+        for source_name, target_name in (
+            ("write_queue_max_size", "memory_write_queue_max_size"),
+            ("write_batch_size", "memory_write_batch_size"),
+            ("write_batch_wait_ms", "memory_write_batch_wait_ms"),
+            ("write_enqueue_timeout_ms", "memory_write_enqueue_timeout_ms"),
+            (
+                "write_shutdown_timeout_seconds",
+                "memory_write_shutdown_timeout_seconds",
+            ),
+        ):
+            if source_name in memory_provider:
+                setattr(config.memory, target_name, memory_provider[source_name])
         supervisor = dict(raw.get("supervisor") or {})
         service_runtime = dict(supervisor.get("service_runtime") or {})
         if service_runtime:
@@ -134,6 +146,7 @@ def load_config_from_env() -> SystemConfig:
         config.memory.time_summary_timezone,
     )
     config.memory.gateway_address = os.getenv("MEMORY_GATEWAY_ADDRESS", config.memory.gateway_address)
+    config.memory.service_token = os.getenv("MEMORY_SERVICE_TOKEN", config.memory.service_token)
     config.memory.gateway_registration_check_interval = int(
         os.getenv(
             "MEMORY_GATEWAY_REGISTRATION_CHECK_INTERVAL",
@@ -153,6 +166,12 @@ def load_config_from_env() -> SystemConfig:
         ("MEMORY_TIER1_RETENTION_DAYS", "tier1_retention_days"),
         ("MEMORY_TIER2_BATCH_SIZE", "tier2_batch_size"),
         ("MEMORY_TIER2_SCOPE_TIMEOUT_SECONDS", "tier2_scope_timeout_seconds"),
+        ("MEMORY_WRITE_QUEUE_MAX_SIZE", "memory_write_queue_max_size"),
+        ("MEMORY_WRITE_BATCH_SIZE", "memory_write_batch_size"),
+        (
+            "MEMORY_WRITE_SHUTDOWN_TIMEOUT_SECONDS",
+            "memory_write_shutdown_timeout_seconds",
+        ),
         ("MEMORY_LIFECYCLE_CADENCE_DAYS", "lifecycle_cadence_days"),
         ("MEMORY_EVENT_TO_SCENE_DAYS", "lifecycle_event_to_scene_days"),
         ("MEMORY_SCENE_TO_ARC_DAYS", "lifecycle_scene_to_arc_days"),
@@ -161,6 +180,14 @@ def load_config_from_env() -> SystemConfig:
         ("MEMORY_FINAL_REVIEW_DAYS", "lifecycle_final_review_days"),
     ):
         _apply_int_override(config.memory, env_name, field_name)
+    for env_name, field_name in (
+        ("MEMORY_WRITE_BATCH_WAIT_MS", "memory_write_batch_wait_ms"),
+        (
+            "MEMORY_WRITE_ENQUEUE_TIMEOUT_MS",
+            "memory_write_enqueue_timeout_ms",
+        ),
+    ):
+        _apply_float_override(config.memory, env_name, field_name)
     config.memory.recall_default_limit = int(
         os.getenv("MEMORY_RECALL_LIMIT", config.memory.recall_default_limit)
     )

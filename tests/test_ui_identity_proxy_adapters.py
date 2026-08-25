@@ -1,6 +1,3 @@
-from types import SimpleNamespace
-import sys
-
 import pytest
 from fastapi import HTTPException
 
@@ -14,109 +11,66 @@ from voidcube.systems.supervisor.ui_identity_proxy_adapters import (
 )
 
 
-def _context():
-    return SupervisorUIIdentityProxyContext(
-        gateway_url="http://gateway",
-        gateway_memory_headers=lambda **kwargs: {
-            "X-VoidCube-Memory-Actor": kwargs["memory_actor"]
-        },
-    )
+class _MemoryClient:
+    def __init__(self, calls, payload):
+        self._calls = calls
+        self._payload = payload
+
+    async def request_json(self, method, path, payload=None, **kwargs):
+        self._calls.append((method, path, payload, kwargs))
+        return self._payload
+
+
+def _context(payload):
+    calls = []
+
+    def factory(**kwargs):
+        calls.append(kwargs)
+        return _MemoryClient(calls, payload)
+
+    return SupervisorUIIdentityProxyContext(memory_client_factory=factory), calls
 
 
 @pytest.mark.asyncio
-async def test_identity_archive_uses_gateway_and_fixed_scope(monkeypatch):
-    captured = {}
+async def test_identity_archive_uses_memory_client_and_fixed_scope():
+    context, calls = _context({"layers": {}})
 
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            captured.update(url=url, params=params, headers=headers)
-            return _Response({"layers": {}})
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
-    )
-
-    result = await get_identity_archive(context=_context())
+    result = await get_identity_archive(context=context)
 
     assert result == {"layers": {}}
-    assert captured == {
-        "url": "http://gateway/api/mem/identity/archive",
-        "params": {"owner_id": "local-user", "workspace_id": "VoidCube"},
-        "headers": {"X-VoidCube-Memory-Actor": "stellar_companion"},
-    }
-
-
-class _Response:
-    def __init__(self, payload, status=200):
-        self.status = status
-        self.payload = payload
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    async def json(self):
-        return self.payload
+    assert calls == [
+        {
+            "memory_actor": "stellar_companion",
+            "memory_domain": "agent_interaction",
+            "owner_id": "local-user",
+            "workspace_id": "VoidCube",
+            "timeout_seconds": 5,
+        },
+        ("GET", "/identity/archive", None, {}),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_identity_proxy_uses_gateway_and_bounds_turn_scope(monkeypatch):
-    requests = []
+async def test_identity_proxy_uses_memory_client_and_bounds_turn_scope():
+    context, calls = _context({"turns": [{"turn_id": "turn-1"}]})
 
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
+    result = await get_identity_turns(context=context, limit=999)
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            requests.append((url, params, headers))
-            return _Response({"turns": [{"turn_id": "turn-1"}]})
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
-    )
-
-    result = await get_identity_turns(context=_context(), limit=999)
-
-    assert requests == [
-        (
-            "http://gateway/api/mem/turns",
-            {
-                "limit": 50,
-                "newest_first": "true",
-                "owner_id": "local-user",
-                "workspace_id": "VoidCube",
-                "memory_domain": "agent_interaction",
-            },
-            {"X-VoidCube-Memory-Actor": "stellar_companion"},
-        ),
+    assert calls == [
+        {
+            "memory_actor": "stellar_companion",
+            "memory_domain": "agent_interaction",
+            "owner_id": "local-user",
+            "workspace_id": "VoidCube",
+            "timeout_seconds": 5,
+        },
+        ("GET", "/turns", {"limit": 50, "newest_first": "true"}, {}),
     ]
     assert result == {"turns": [{"turn_id": "turn-1"}], "count": 1}
 
 
 @pytest.mark.asyncio
-async def test_promotion_proxy_owner_filters_direction_and_public_fields(monkeypatch):
-    captured = {}
+async def test_promotion_proxy_owner_filters_direction_and_public_fields():
     rows = [
         {
             "promotion_id": "allowed",
@@ -133,87 +87,58 @@ async def test_promotion_proxy_owner_filters_direction_and_public_fields(monkeyp
             "status": "active",
         },
     ]
+    context, calls = _context({"promotions": rows})
 
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
+    result = await get_evolution_promotion_audit(context=context, limit=1)
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            captured.update(url=url, params=params, headers=headers)
-            return _Response({"promotions": rows})
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    assert calls[0]["memory_actor"] == "stellar_companion"
+    assert calls[1] == (
+        "GET",
+        "/promotions",
+        {"limit": 500, "target_domain": "companion"},
+        {},
     )
-
-    result = await get_evolution_promotion_audit(context=_context(), limit=1)
-
-    assert captured["params"] == {"limit": 500, "target_domain": "companion"}
-    assert captured["headers"] == {"X-VoidCube-Memory-Actor": "stellar_companion"}
     assert [item["promotion_id"] for item in result["promotions"]] == ["allowed"]
     assert "owner_id" not in result["promotions"][0]
     assert result["status_counts"] == {"active": 1, "revoked": 0, "expired": 0}
 
 
 @pytest.mark.asyncio
-async def test_promotion_candidate_owner_forces_pending_direction_and_limit(monkeypatch):
-    captured = {}
-
-    class _Session:
-        def __init__(self, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url, *, params=None, headers=None):
-            captured.update(url=url, params=params, headers=headers)
-            return _Response(
+async def test_promotion_candidate_owner_forces_pending_direction_and_limit():
+    context, calls = _context(
+        {
+            "candidates": [
                 {
-                    "candidates": [
-                        {
-                            "candidate_id": "candidate-1",
-                            "source_domain": "evolution",
-                            "target_domain": "companion",
-                            "status": "awaiting_user_consent",
-                            "owner_id": "must-not-leak",
-                        },
-                        {
-                            "candidate_id": "candidate-2",
-                            "source_domain": "evolution",
-                            "target_domain": "companion",
-                            "status": "awaiting_user_consent",
-                        },
-                    ]
-                }
-            )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+                    "candidate_id": "candidate-1",
+                    "source_domain": "evolution",
+                    "target_domain": "companion",
+                    "status": "awaiting_user_consent",
+                    "owner_id": "must-not-leak",
+                },
+                {
+                    "candidate_id": "candidate-2",
+                    "source_domain": "evolution",
+                    "target_domain": "companion",
+                    "status": "awaiting_user_consent",
+                },
+            ]
+        }
     )
 
-    result = await get_evolution_promotion_candidates(context=_context(), limit=999)
+    result = await get_evolution_promotion_candidates(context=context, limit=999)
 
-    assert captured["params"] == {
-        "limit": 100,
-        "status": "awaiting_user_consent",
-        "source_domain": "evolution",
-        "target_domain": "companion",
-    }
-    assert captured["headers"] == {"X-VoidCube-Memory-Actor": "governor"}
+    assert calls[0]["memory_actor"] == "governor"
+    assert calls[1] == (
+        "GET",
+        "/promotion-candidates",
+        {
+            "limit": 100,
+            "status": "awaiting_user_consent",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+        },
+        {},
+    )
     assert [item["candidate_id"] for item in result["candidates"]] == [
         "candidate-1",
         "candidate-2",
@@ -222,16 +147,12 @@ async def test_promotion_candidate_owner_forces_pending_direction_and_limit(monk
 
 
 @pytest.mark.asyncio
-async def test_promotion_consent_owner_maps_validation_to_422(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "aiohttp",
-        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs),
-    )
+async def test_promotion_consent_owner_maps_validation_to_422():
+    context, _calls = _context({})
 
     with pytest.raises(HTTPException) as raised:
         await consent_evolution_promotion_candidate(
-            context=_context(),
+            context=context,
             candidate_id="candidate-1",
             request={"approved": True, "reason": ""},
         )

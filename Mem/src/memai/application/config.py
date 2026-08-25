@@ -21,6 +21,8 @@ class MemoryServiceConfig(BaseModel):
     port: int = 6001
     db_path: str = Field(default_factory=_default_memory_db_path)
     gateway_address: str = "http://127.0.0.1:6000"
+    service_token: str | None = None
+    service_tokens: dict[str, str] = Field(default_factory=dict)
     gateway_registration_check_interval: int = 30
     redact_before_store: bool = False
     time_summary_timezone: str = "Asia/Shanghai"
@@ -55,6 +57,13 @@ class MemoryServiceConfig(BaseModel):
     lifecycle_epoch_to_final_days: int = Field(default=365, ge=1, le=3650)
     lifecycle_final_review_days: int = Field(default=90, ge=1, le=3650)
     backup_retention_count: int = Field(default=5, ge=1, le=100)
+    memory_write_queue_max_size: int = Field(default=256, ge=1, le=10000)
+    memory_write_batch_size: int = Field(default=16, ge=1, le=256)
+    memory_write_batch_wait_ms: float = Field(default=2.0, ge=0.0, le=1000.0)
+    memory_write_enqueue_timeout_ms: float = Field(default=0.0, ge=0.0, le=60000.0)
+    memory_write_shutdown_timeout_seconds: float = Field(
+        default=5.0, ge=0.1, le=120.0
+    )
     recall_default_limit: int = Field(default=5, ge=1, le=50)
     recall_candidate_limit: int = Field(default=200, ge=10, le=2000)
     recall_max_context_chars: int = Field(default=3500, ge=256, le=20000)

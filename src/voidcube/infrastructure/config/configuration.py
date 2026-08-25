@@ -639,8 +639,9 @@ DEFAULT_CONFIG = {
     "memory": {
         # Mem provider configuration
         "mem": {
-            # Empty means use systems.config Agent gateway_address.
-            "gateway_address": "",
+            # Direct local Memory Service data-plane endpoint.
+            "service_url": "http://127.0.0.1:6001",
+            "service_token": "",
             "request_timeout_seconds": 2.0,
             # Auto-sync conversations to Mem
             "auto_sync": True,

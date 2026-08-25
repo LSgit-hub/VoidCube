@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 
 from memai.domain.scope import GLOBAL_SCOPE_ID
 from memai.host_integration import get_mem_host_integration
+from memai.repository.contracts import MemoryRepository
 from memai.repository.sqlite import open_memory_sqlite
 
 logger = logging.getLogger(__name__)
@@ -142,10 +143,12 @@ class SemanticMemoryIndex:
         config: SemanticIndexConfig | None = None,
         *,
         transport: EmbeddingTransport | None = None,
+        repository: MemoryRepository | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.config = config or SemanticIndexConfig.from_host_config()
         self._transport = transport
+        self._repository = repository
         self._local_fallback = False
         if (
             self._transport is None
@@ -165,19 +168,44 @@ class SemanticMemoryIndex:
         self._index_lock = threading.Lock()
         self._setup_table()
 
+    def _connect(self):
+        return open_memory_sqlite(self.db_path)
+
+    def _execute_read(self, operation):
+        if self._repository is not None:
+            return self._repository.execute_read(operation)
+        conn = self._connect()
+        try:
+            return operation(conn)
+        finally:
+            conn.close()
+
+    def _execute_write(self, operation):
+        if self._repository is not None:
+            return self._repository.execute_write(operation)
+        conn = self._connect()
+        try:
+            result = operation(conn)
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     @property
     def enabled(self) -> bool:
         return self.config.ready or self._transport is not None
 
     def status(self) -> dict[str, Any]:
-        conn = open_memory_sqlite(self.db_path)
-        try:
-            indexed = conn.execute(
+        def read(conn):
+            return conn.execute(
                 "SELECT COUNT(*) FROM memory_embeddings WHERE provider = ? AND model = ?",
                 (self.config.provider, self.config.model),
             ).fetchone()[0]
-        finally:
-            conn.close()
+
+        indexed = self._execute_read(read)
         return {
             "enabled": self.enabled,
             "provider": self.config.provider,
@@ -210,9 +238,8 @@ class SemanticMemoryIndex:
             vectors = self._embed([record[5] for record in records])
             if len(vectors) != len(records):
                 raise ValueError("Embedding response count does not match input count")
-            conn = open_memory_sqlite(self.db_path)
-            indexed = 0
-            try:
+            def write(conn):
+                indexed = 0
                 now = datetime.now(timezone.utc).isoformat()
                 vec0 = _vec0_available(conn)
                 for record, vector in zip(records, vectors):
@@ -280,9 +307,9 @@ class SemanticMemoryIndex:
                             (rowid, _vector_blob(vector)),
                         )
                     indexed += 1
-                conn.commit()
-            finally:
-                conn.close()
+                return indexed
+
+            indexed = self._execute_write(write)
             self._last_error = ""
             return indexed
         except Exception as exc:
@@ -356,11 +383,11 @@ class SemanticMemoryIndex:
             query_vector = self._embed([str(query)])[0]
             self._validate_vector(query_vector)
             bounded_limit = max(1, min(int(limit), 500))
-            conn = open_memory_sqlite(self.db_path)
-            try:
-                domains = tuple(dict.fromkeys(str(item) for item in source_domains))
-                if not domains:
-                    return {}
+            domains = tuple(dict.fromkeys(str(item) for item in source_domains))
+            if not domains:
+                return {}
+
+            def read(conn):
                 if self._vec0_ready:
                     return self._search_vec0(
                         conn,
@@ -371,7 +398,7 @@ class SemanticMemoryIndex:
                         bounded_limit,
                     )
                 domain_placeholders = ",".join("?" for _ in domains)
-                rows = conn.execute(
+                return conn.execute(
                     "SELECT source_type, memory_id, vector FROM memory_embeddings "
                     "WHERE provider = ? AND model = ? AND dimensions = ? "
                     "AND ((owner_id = ? AND workspace_id = ?) OR "
@@ -388,8 +415,11 @@ class SemanticMemoryIndex:
                         *domains,
                     ),
                 ).fetchall()
-            finally:
-                conn.close()
+
+            rows = self._execute_read(read)
+            if isinstance(rows, dict):
+                self._last_error = ""
+                return rows
             ranked = sorted(
                 (
                     (
@@ -439,9 +469,8 @@ class SemanticMemoryIndex:
             GLOBAL_SCOPE_ID,
             *domains,
         )
-        conn = open_memory_sqlite(self.db_path)
-        try:
-            rows = conn.execute(
+        def read(conn):
+            return conn.execute(
                 "WITH source_records(source_type, memory_id, owner_id, workspace_id, "
                 "memory_domain, content) AS ("
                 "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, text "
@@ -464,8 +493,8 @@ class SemanticMemoryIndex:
                 f"AND memory_domain IN ({placeholders})",
                 scope_params,
             ).fetchall()
-        finally:
-            conn.close()
+
+        rows = self._execute_read(read)
         def calibrated_score(content: object) -> float:
             similarity, _ = CharNgramEmbedder.exact_similarity_evidence(
                 query,
@@ -555,8 +584,7 @@ class SemanticMemoryIndex:
         return results
 
     def _setup_table(self) -> None:
-        conn = open_memory_sqlite(self.db_path)
-        try:
+        def write(conn):
             existing = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' "
                 "AND name = 'memory_embeddings'"
@@ -796,13 +824,10 @@ class SemanticMemoryIndex:
                         "AND owner_id = OLD.owner_id AND workspace_id = OLD.workspace_id "
                         "AND memory_domain = OLD.memory_domain; END"
                     )
-            conn.commit()
-        finally:
-            conn.close()
+        self._execute_write(write)
 
     def _pending_records(self, limit: int) -> list[tuple[str, str, str, str, str, str]]:
-        conn = open_memory_sqlite(self.db_path)
-        try:
+        def read(conn):
             conn.create_function(
                 "memory_content_hash",
                 1,
@@ -815,7 +840,7 @@ class SemanticMemoryIndex:
                 dimension_clause = " OR embedding.dimensions != ?"
                 params.append(self.config.dimensions)
             params.append(max(1, int(limit)))
-            rows = conn.execute(
+            return conn.execute(
                 "WITH source_records(source_type, memory_id, owner_id, workspace_id, memory_domain, content) AS ("
                 "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, COALESCE(text, '') "
                 "FROM turns WHERE compression_status != 'compressed' "
@@ -845,8 +870,8 @@ class SemanticMemoryIndex:
                 + " ORDER BY source.source_type, source.memory_id LIMIT ?",
                 params,
             ).fetchall()
-        finally:
-            conn.close()
+
+        rows = self._execute_read(read)
         return [
             (
                 str(row[0] or ""),

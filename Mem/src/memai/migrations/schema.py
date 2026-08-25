@@ -27,6 +27,8 @@ from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 
 logger = logging.getLogger(__name__)
 
+_MEMORY_RUNTIME_STATE_KEY = "memory_commit_revision"
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryDatabaseBootstrap:
@@ -125,6 +127,7 @@ class MemoryDatabaseBootstrap:
             cursor = connection.cursor()
             self._drop_empty_obsolete_memories_table(cursor)
             self._create_tables(cursor)
+            self._migrate_write_receipts_schema(cursor)
             setup_memory_promotion_schema(connection)
             self._migrate_scope_schema(cursor)
             self._migrate_domain_schema(cursor)
@@ -159,6 +162,33 @@ class MemoryDatabaseBootstrap:
         logger.info("Removed empty obsolete memories table")
 
     def _create_tables(self, cursor: sqlite3.Cursor) -> None:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_runtime_state (
+                state_key TEXT PRIMARY KEY,
+                state_value INTEGER NOT NULL DEFAULT 0 CHECK(state_value >= 0),
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_receipts (
+                receipt_key TEXT PRIMARY KEY,
+                operation TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                memory_domain TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'committed',
+                commit_revision INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -519,6 +549,25 @@ class MemoryDatabaseBootstrap:
         if "released_at" not in revision_columns:
             cursor.execute(
                 "ALTER TABLE identity_revision_proposals ADD COLUMN released_at TEXT"
+            )
+
+        cursor.execute(
+            "INSERT OR IGNORE INTO memory_runtime_state "
+            "(state_key, state_value, updated_at) VALUES (?, 0, ?)" ,
+            (_MEMORY_RUNTIME_STATE_KEY, datetime.now(timezone.utc).isoformat()),
+        )
+
+    @staticmethod
+    def _migrate_write_receipts_schema(cursor: sqlite3.Cursor) -> None:
+        columns = {
+            str(row[1])
+            for row in cursor.execute(
+                "PRAGMA table_info(memory_write_receipts)"
+            ).fetchall()
+        }
+        if "result_json" not in columns:
+            cursor.execute(
+                "ALTER TABLE memory_write_receipts ADD COLUMN result_json TEXT NOT NULL DEFAULT '{}'"
             )
 
     def _setup_subsystem_schema(self, connection: sqlite3.Connection) -> None:

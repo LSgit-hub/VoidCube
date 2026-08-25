@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import socket
 import subprocess
+from urllib.request import Request, urlopen
 from unittest.mock import AsyncMock
 
 import httpx
@@ -11,6 +12,7 @@ import pytest
 import uvicorn
 
 from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig, InternalGateway
+from voidcube.infrastructure.memory.client import MemoryClient, MemoryClientIdentity
 from memai.application.config import MemoryServiceConfig
 from memai.application.memory_service import MemoryService
 from plugins.memory.mem import MemMemoryProvider
@@ -267,10 +269,23 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
             item for item in services["services"] if item["service_type"] == "memory"
         )
 
+        memory_client = MemoryClient(
+            f"http://127.0.0.1:{memory_port}",
+            identity=MemoryClientIdentity(
+                actor="api_a",
+                owner_id="local-user",
+                workspace_id="default",
+                memory_domain="agent_interaction",
+            ),
+        )
+
         async with httpx.AsyncClient(timeout=10.0) as client:
-            proxied_health = (await client.get(f"{gateway_url}/api/mem/")).json()
-            assert proxied_health["service"] == "memory-service"
-            assert proxied_health["gateway_registration"]["healthy"] is True
+            memory_health = (await client.get(f"http://127.0.0.1:{memory_port}/health")).json()
+            assert memory_health["service"] == "memory-service"
+            assert memory_health["status"] in {"healthy", "degraded"}
+
+            retired = await client.get(f"{gateway_url}/api/mem/health")
+            assert retired.status_code == 410
 
             trace_id = "live-three-service-trace"
             touched = await client.post(
@@ -292,8 +307,13 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
 
             provider = MemMemoryProvider()
             provider._initialized = True
-            provider._gateway_url = gateway_url
+            provider._gateway_url = ""
             provider._request_timeout_seconds = 5.0
+            provider._memory_client = memory_client
+            provider._async_memory_client = None
+            provider._owner_id = "local-user"
+            provider._workspace_id = "default"
+            provider._session_id = "live agent session"
             await asyncio.to_thread(
                 provider._write_turn_pair,
                 {
@@ -303,17 +323,12 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
                     "write_id": "live-write-1",
                 },
             )
-            turns = (
-                await client.get(
-                    f"{gateway_url}/api/mem/sessions/live%20agent%20session/turns",
-                    headers={
-                        "X-VoidCube-Session-Id": "live agent session",
-                        "X-VoidCube-Session-Token": provider._gateway_session_credentials[
-                            "live agent session"
-                        ],
-                    },
-                )
-            ).json()
+            turns = await asyncio.to_thread(
+                memory_client.request_json,
+                "GET",
+                "/sessions/live%20agent%20session/turns",
+                identity_session_id="live agent session",
+            )
             assert [turn["speaker"] for turn in turns["turns"]] == ["user", "agent"]
             assert [turn["text"] for turn in turns["turns"]] == [
                 "remember this question",
