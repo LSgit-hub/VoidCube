@@ -150,13 +150,13 @@ Memory Service 内部负责全部 SQLite 细节：
 
 | 数据库/模式 | 业务域 | 当前或目标 owner |
 |---|---|---|
-| `state.db` | 会话、transcript、搜索投影 | Session owner；后续可独立 Session Service |
-| `actions.db` | 动作审计日志 | Action Journal owner |
-| `scheduled_tasks.db` | Supervisor 定时任务 | Scheduled Task owner |
-| `scheduled_writebacks.db` | 调度回写传输队列 | 调度/写回 owner |
-| `registry.db` | 进程执行注册 | Process Registry owner |
-| `.skills_registry.sqlite3` | 可重建技能索引 | Skill Registry owner；文件系统仍是内容权威 |
-| `runtime/memory/*-write-outbox.sqlite3` | 迁移期 durable spool | 发送方临时 owner，最终评估收敛到 Memory Service |
+| `state.db` | 会话、transcript、搜索投影 | Session owner：`SQLiteOwnerLease("session-owner")` 文件级独占 + `BEGIN IMMEDIATE` jitter 写门禁 + 启动恢复（阶段 5 已落实） |
+| `actions.db` | 动作审计日志 | Action Journal owner：`SQLiteOwnerLease("action-journal-owner")`，全部写路径走 `_execute_write`（阶段 5 已落实） |
+| `scheduled_tasks.db` | Supervisor 定时任务 | Scheduled Task owner：`SQLiteOwnerLease("scheduled-task-owner")`，构造时启动恢复 expired claims（阶段 5 已落实） |
+| `scheduled_writebacks.db` | 调度回写传输队列 | 调度/写回 owner：`SQLiteOwnerLease("scheduled-writeback-owner")`（阶段 5 已落实） |
+| `registry.db` | 进程执行注册 | Process Registry owner：`SQLiteOwnerLease("process-registry-owner")`；`ensure_process_registry()` 惰性单例，import 不获取 lease（阶段 5 已落实） |
+| `.skills_registry.sqlite3` | 可重建技能索引 | Skill Registry owner：连接级 `SQLiteOwnerLease("skill-registry-owner")`（进程内重入、跨进程互斥）；文件系统仍是内容权威（阶段 5 已落实） |
+| `runtime/memory/*-write-outbox.sqlite3` | durable 传输队列（非迁移期临时态） | 行级 lease 即并发门禁（显式声明，无文件级独占锁）：api_a→agent、companion→supervisor、gateway→gateway 守护进程；多进程 drain `duplicate_claims == 0` 为入库契约；`outbox_state` 持久化 `outbox_owner` 元数据（阶段 5 已落实） |
 
 这些文件的客户端同样只能使用领域 API。outbox 是传输可靠性机制，不是长期记忆的第二份真相；在确认断线恢复和关闭顺序前，不得擅自删除现有客户端 outbox。
 

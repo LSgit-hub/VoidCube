@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, TypeVar
 
 from ..config.runtime_paths import get_VoidCube_home
 from .sqlite_owner import SQLiteOwnerLease
+
+
+T = TypeVar("T")
 
 
 EffectClass = Literal["read_only", "idempotent_write", "non_idempotent_write"]
@@ -65,16 +69,99 @@ class ActionRef:
 class ActionJournal:
     SCHEMA_VERSION = 4
 
+    # ── Write-contention tuning ──
+    # Mirrors SessionDB: keep the SQLite busy timeout short and retry at the
+    # application level with random jitter so competing writers (e.g. a second
+    # ActionJournal instance in the same process, or external SQLite tools
+    # during WAL checkpoints) stagger instead of convoying.
+    _WRITE_MAX_RETRIES = 15
+    _WRITE_RETRY_MIN_S = 0.020   # 20ms
+    _WRITE_RETRY_MAX_S = 0.150   # 150ms
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._owner_lease = SQLiteOwnerLease(self.path, "action-journal-owner")
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._closed = False
+        self._write_count = 0
+        self._write_busy_retries = 0
+        self._write_failures = 0
+        self._conn = sqlite3.connect(
+            self.path,
+            check_same_thread=False,
+            # Short timeout; application-level jitter retry handles contention.
+            timeout=1.0,
+            # We manage transactions explicitly via BEGIN IMMEDIATE.
+            isolation_level=None,
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=10000")
         self._init_schema()
+
+    def _ensure_open(self) -> None:
+        if self._closed or self._conn is None:
+            raise RuntimeError("ActionJournal is closed")
+
+    def execution_stats(self) -> dict[str, int | bool]:
+        """Return bounded owner metrics for Action Journal health checks."""
+        with self._lock:
+            return {
+                "closed": self._closed,
+                "write_count": self._write_count,
+                "write_busy_retries": self._write_busy_retries,
+                "write_failures": self._write_failures,
+            }
+
+    def _execute_write(self, fn: Callable[[sqlite3.Connection], T]) -> T:
+        """Run one write transaction with BEGIN IMMEDIATE and jitter retry.
+
+        *fn* receives the connection and performs the INSERT/UPDATE/DELETE
+        statements; it must not call ``commit()`` (handled here).  On
+        ``database is locked`` the Python lock is released, a random
+        20-150ms sleep is applied, and the whole transaction is retried.
+        """
+        last_err: Exception | None = None
+        for attempt in range(self._WRITE_MAX_RETRIES):
+            try:
+                with self._lock:
+                    self._ensure_open()
+                    self._conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        result = fn(self._conn)
+                        self._conn.commit()
+                    except BaseException:
+                        try:
+                            self._conn.rollback()
+                        except Exception:
+                            pass
+                        raise
+                self._write_count += 1
+                return result
+            except sqlite3.OperationalError as exc:
+                err_msg = str(exc).lower()
+                if "locked" in err_msg or "busy" in err_msg:
+                    last_err = exc
+                    if attempt < self._WRITE_MAX_RETRIES - 1:
+                        with self._lock:
+                            self._write_busy_retries += 1
+                        time.sleep(
+                            random.uniform(
+                                self._WRITE_RETRY_MIN_S,
+                                self._WRITE_RETRY_MAX_S,
+                            )
+                        )
+                        continue
+                with self._lock:
+                    self._write_failures += 1
+                raise
+        with self._lock:
+            self._write_failures += 1
+        raise last_err or sqlite3.OperationalError(
+            "database is locked after max retries"
+        )
 
     def _init_schema(self) -> None:
         with self._conn:
@@ -131,6 +218,7 @@ class ActionJournal:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
@@ -191,8 +279,9 @@ class ActionJournal:
         retryability = "safe" if effect == "idempotent_write" else "reconcile_first"
         action_id = f"act_{uuid.uuid4().hex}"
         now = time.time()
-        with self._lock, self._conn:
-            cursor = self._conn.execute(
+
+        def _write(conn: sqlite3.Connection) -> PreparedAction:
+            cursor = conn.execute(
                 """INSERT OR IGNORE INTO actions(
                 action_id, task_id, lease_generation, attempt_id, call_id, operation_id,
                 owner_session_id,
@@ -206,10 +295,11 @@ class ActionJournal:
             )
             if cursor.rowcount == 1:
                 self._transition_row(
+                    conn,
                     action_id, None, "prepared", "coordinator", "write_before_dispatch"
                 )
                 return PreparedAction(action_id, idempotency_key)
-            existing = self._conn.execute(
+            existing = conn.execute(
                 "SELECT action_id, idempotency_key, state, arguments_hash FROM actions "
                 "WHERE idempotency_key = ?",
                 (idempotency_key,),
@@ -221,7 +311,7 @@ class ActionJournal:
                     "operation_identity_conflict: operation reused with different arguments"
                 )
             if str(existing["state"]) == "prepared":
-                self._conn.execute(
+                conn.execute(
                     "UPDATE actions SET lease_generation = ?, attempt_id = ?, call_id = ?, "
                     "owner_session_id = ? "
                     "WHERE action_id = ? AND state = 'prepared'",
@@ -235,6 +325,8 @@ class ActionJournal:
                 )
             return PreparedAction(existing["action_id"], existing["idempotency_key"])
 
+        return self._execute_write(_write)
+
     @staticmethod
     def _target(arguments: dict[str, Any]) -> str:
         for key in ("path", "file_path", "url", "resource", "command"):
@@ -247,8 +339,8 @@ class ActionJournal:
         error_code: str | None = None, error_summary: str | None = None,
         evidence: dict[str, Any] | None = None,
     ) -> None:
-        with self._lock, self._conn:
-            row = self._conn.execute(
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute(
                 "SELECT state FROM actions WHERE action_id = ?", (action_id,)
             ).fetchone()
             if not row:
@@ -261,7 +353,7 @@ class ActionJournal:
             now = time.time()
             dispatched_at = now if state == "dispatched" else None
             finished_at = now if state in {"succeeded", "failed", "cancelled", "timed_out", "unknown"} else None
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 """UPDATE actions SET state = ?, dispatched_at = COALESCE(dispatched_at, ?),
                 finished_at = COALESCE(?, finished_at), error_code = ?, error_summary = ?
                 WHERE action_id = ? AND state = ?""",
@@ -279,14 +371,16 @@ class ActionJournal:
                 raise RuntimeError(
                     f"concurrent_action_transition: {action_id} changed from {current}"
                 )
-            self._transition_row(action_id, current, state, "coordinator", reason)
+            self._transition_row(conn, action_id, current, state, "coordinator", reason)
             if evidence is not None:
                 payload = self._canonical(evidence)
-                self._conn.execute(
+                conn.execute(
                     "INSERT INTO action_evidence VALUES(?, ?, ?, ?, ?, ?)",
                     (str(uuid.uuid4()), action_id, "execution_result", payload,
                      hashlib.sha256(payload.encode()).hexdigest(), now),
                 )
+
+        self._execute_write(_write)
 
     def claim_dispatch(
         self,
@@ -298,9 +392,9 @@ class ActionJournal:
         owner_session_id: str | None = None,
     ) -> bool:
         """原子抢占 prepared 动作的实际执行权。"""
-        with self._lock, self._conn:
+        def _write(conn: sqlite3.Connection) -> bool:
             now = time.time()
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 "UPDATE actions SET state = 'dispatched', dispatched_at = ? "
                 "WHERE action_id = ? AND state = 'prepared' "
                 "AND lease_generation IS ? AND attempt_id IS ? "
@@ -316,6 +410,7 @@ class ActionJournal:
             if cursor.rowcount != 1:
                 return False
             self._transition_row(
+                conn,
                 action_id,
                 "prepared",
                 "dispatched",
@@ -324,15 +419,26 @@ class ActionJournal:
             )
             return True
 
-    def _transition_row(self, action_id, from_state, to_state, actor, reason) -> None:
+        return self._execute_write(_write)
+
+    def _transition_row(
+        self,
+        conn: sqlite3.Connection,
+        action_id,
+        from_state,
+        to_state,
+        actor,
+        reason,
+    ) -> None:
         details_hash = hashlib.sha256(str(reason).encode()).hexdigest()
-        self._conn.execute(
+        conn.execute(
             "INSERT INTO action_transitions VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), action_id, from_state, to_state, actor, time.time(), reason, details_hash),
         )
 
     def get(self, action_id: str) -> dict[str, Any] | None:
         with self._lock:
+            self._ensure_open()
             row = self._conn.execute("SELECT * FROM actions WHERE action_id = ?", (action_id,)).fetchone()
             return dict(row) if row else None
 
@@ -345,6 +451,7 @@ class ActionJournal:
         if not call_id:
             return None
         with self._lock:
+            self._ensure_open()
             if task_id is None:
                 row = self._conn.execute(
                     "SELECT action_id FROM actions WHERE call_id = ? "
@@ -361,6 +468,7 @@ class ActionJournal:
 
     def action_ref(self, action_id: str) -> ActionRef | None:
         with self._lock:
+            self._ensure_open()
             action = self._conn.execute(
                 "SELECT action_id, state, target_resource FROM actions WHERE action_id = ?",
                 (action_id,),
@@ -395,6 +503,7 @@ class ActionJournal:
     ) -> list[dict[str, Any]]:
         """Return evidence metadata, with a small filtered payload only on request."""
         with self._lock:
+            self._ensure_open()
             rows = self._conn.execute(
                 "SELECT evidence_id, kind, payload_json, content_hash, collected_at "
                 "FROM action_evidence WHERE action_id = ? ORDER BY collected_at",
@@ -427,6 +536,7 @@ class ActionJournal:
 
     def list_unknown(self) -> list[dict[str, Any]]:
         with self._lock:
+            self._ensure_open()
             return [dict(row) for row in self._conn.execute(
                 "SELECT * FROM actions WHERE state = 'unknown' ORDER BY prepared_at"
             ).fetchall()]
@@ -438,6 +548,7 @@ class ActionJournal:
     ) -> int:
         """Move only dispatches whose execution owner is confirmed abandoned."""
         with self._lock:
+            self._ensure_open()
             rows = self._conn.execute(
                 "SELECT * FROM actions WHERE state = 'dispatched' "
                 "ORDER BY dispatched_at",
@@ -447,10 +558,11 @@ class ActionJournal:
             for row in rows
             if is_abandoned(dict(row))
         ]
-        with self._lock, self._conn:
+
+        def _write(conn: sqlite3.Connection) -> int:
             recovered = 0
             for action_id in abandoned_ids:
-                cursor = self._conn.execute(
+                cursor = conn.execute(
                     "UPDATE actions SET state = 'unknown', finished_at = ?, "
                     "error_code = 'abandoned_dispatch', "
                     "error_summary = 'Execution owner was confirmed inactive before outcome' "
@@ -460,6 +572,7 @@ class ActionJournal:
                 if cursor.rowcount == 1:
                     recovered += 1
                     self._transition_row(
+                        conn,
                         action_id,
                         "dispatched",
                         "unknown",
@@ -467,6 +580,8 @@ class ActionJournal:
                         "abandoned_dispatch_confirmed",
                     )
             return recovered
+
+        return self._execute_write(_write)
 
     def record_outcome(
         self,

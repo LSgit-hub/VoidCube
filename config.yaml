@@ -234,11 +234,6 @@ memory:
     prefetch_limit: 5
     prefetch_max_context_chars: 3500
     redact_before_store: false
-    write_queue_max_size: 256
-    write_batch_size: 16
-    write_batch_wait_ms: 2.0
-    write_enqueue_timeout_ms: 0.0
-    write_shutdown_timeout_seconds: 5.0
   outbox:
     paths:
       api_a: runtime/memory/write-outbox.sqlite3

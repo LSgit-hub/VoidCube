@@ -1,4 +1,20 @@
-"""Durable transport outbox for completed memory turns."""
+"""Durable transport outbox for completed memory turns.
+
+Owner semantics (Stage 5):
+- Each queue is its own SQLite file; the DB path *is* the queue identity.
+  Production topology owns exactly one writer process per file:
+    api_a     -> agent main process      (runtime/memory/write-outbox.sqlite3)
+    companion -> supervisor process      (runtime/memory/companion-write-outbox.sqlite3)
+    gateway   -> gateway daemon process  (runtime/memory/gateway-write-outbox.sqlite3)
+- There is deliberately NO file-level exclusive lease (SQLiteOwnerLease) here:
+  the outbox is a transport spool that must survive process restarts and
+  tolerate crash-window takeover.  The row-level lease (lease_owner +
+  lease_until, claimed under BEGIN IMMEDIATE) IS the domain concurrency gate.
+  Any process may append or claim rows; at most one worker may hold a row's
+  lease, and expired leases are re-claimed automatically (duplicate_claims == 0
+  is a committed contract covered by tests/test_memory_outbox_operational.py).
+- Client code must only use this module's domain API; no direct sqlite access.
+"""
 
 from __future__ import annotations
 
@@ -46,6 +62,7 @@ class MemoryOutboxRuntimeSettings:
             lease_seconds=self.lease_seconds,
             retry_base_seconds=self.retry_base_seconds,
             retry_max_seconds=self.retry_max_seconds,
+            owner_label=queue_name,
         )
 
 
@@ -134,6 +151,7 @@ class MemoryWriteOutbox:
         lease_seconds: float = 30.0,
         retry_base_seconds: float = 2.0,
         retry_max_seconds: float = 60.0,
+        owner_label: str | None = None,
     ) -> None:
         self.path = Path(path)
         self.max_attempts = max(1, int(max_attempts))
@@ -147,6 +165,7 @@ class MemoryWriteOutbox:
         self.outbox_id = hashlib.sha256(
             str(self.path.resolve()).casefold().encode("utf-8")
         ).hexdigest()[:24]
+        self.owner_label = owner_label
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn:
             with conn:
@@ -180,6 +199,21 @@ class MemoryWriteOutbox:
                     "CREATE TABLE IF NOT EXISTS outbox_state ("
                     "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
                 )
+                if self.owner_label:
+                    conn.execute(
+                        "INSERT INTO outbox_state(key, value) VALUES ('outbox_owner', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (
+                            json.dumps(
+                                {
+                                    "queue_name": self.owner_label,
+                                    "worker_id": self._worker_id,
+                                    "path": str(self.path),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
 
     def enqueue(self, payload: dict[str, Any]) -> None:
         write_id = str(payload["write_id"])

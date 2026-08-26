@@ -16,6 +16,7 @@ class TuiTeardownPorts:
     close_voice_session: Callable[[], None]
     unregister_tool_callbacks: Callable[[], None]
     close_session: Callable[[], None]
+    close_session_owner: Callable[[], None]
     finish_interrupted_session: Callable[[], None]
     run_global_cleanup: Callable[[], None]
     print_exit_summary: Callable[[], None]
@@ -32,6 +33,7 @@ def run_tui_teardown(ports: TuiTeardownPorts) -> None:
     ports.close_voice_session()
     ports.unregister_tool_callbacks()
     ports.close_session()
+    ports.close_session_owner()
     ports.finish_interrupted_session()
     ports.run_global_cleanup()
     ports.print_exit_summary()

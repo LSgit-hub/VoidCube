@@ -933,7 +933,25 @@ class ProcessRegistry:
         return session
 
 
-process_registry = ProcessRegistry()
+_process_registry_instance: ProcessRegistry | None = None
+_process_registry_lock = threading.Lock()
+
+
+def ensure_process_registry() -> ProcessRegistry:
+    """Lazily construct the process-wide ProcessRegistry singleton.
+
+    The default registry owns the runtime registry.db lease, so constructing it
+    eagerly at import time would make every process that merely imports the
+    execution package claim the lease (and crash the detached spool wrapper,
+    which imports the same package).  Only construct it when a caller actually
+    needs the shared registry.
+    """
+    global _process_registry_instance
+    if _process_registry_instance is None:
+        with _process_registry_lock:
+            if _process_registry_instance is None:
+                _process_registry_instance = ProcessRegistry()
+    return _process_registry_instance
 
 
 PROCESS_SCHEMA = {
@@ -963,26 +981,27 @@ PROCESS_SCHEMA = {
 def process_tool(args: dict | None = None, **_: Any) -> str:
     args = args or {}
     action = args.get("action")
+    registry = ensure_process_registry()
     try:
         if action == "list":
-            result: dict[str, Any] = {"sessions": process_registry.list_sessions()}
+            result: dict[str, Any] = {"sessions": registry.list_sessions()}
         else:
             session_id = args.get("session_id")
             if not session_id:
                 raise ValueError(f"session_id is required for action {action!r}")
             if action == "poll":
-                result = process_registry.poll(session_id)
+                result = registry.poll(session_id)
             elif action == "wait":
-                result = process_registry.wait(session_id, args.get("timeout"))
+                result = registry.wait(session_id, args.get("timeout"))
             elif action == "write":
                 data = args.get("data")
                 if not isinstance(data, str):
                     raise ValueError("data must be a string")
-                result = process_registry.write(session_id, data)
+                result = registry.write(session_id, data)
             elif action == "close":
-                result = process_registry.close(session_id)
+                result = registry.close(session_id)
             elif action == "kill":
-                result = process_registry.kill(session_id)
+                result = registry.kill(session_id)
             else:
                 raise ValueError(f"Unknown process action: {action!r}")
         return json.dumps({"success": True, **result}, ensure_ascii=False)

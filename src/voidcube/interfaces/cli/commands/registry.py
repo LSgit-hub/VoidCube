@@ -1938,15 +1938,15 @@ def _context_length(agent: Any) -> int | None:
 
 
 def _list_processes() -> list[dict[str, Any]]:
-    from voidcube.infrastructure.execution.process_registry import process_registry
+    from voidcube.infrastructure.execution.process_registry import ensure_process_registry
 
-    return process_registry.list_sessions()
+    return ensure_process_registry().list_sessions()
 
 
 def _kill_all_processes() -> int:
-    from voidcube.infrastructure.execution.process_registry import process_registry
+    from voidcube.infrastructure.execution.process_registry import ensure_process_registry
 
-    return process_registry.kill_all()
+    return ensure_process_registry().kill_all()
 
 
 def _voidcube_home() -> Path:

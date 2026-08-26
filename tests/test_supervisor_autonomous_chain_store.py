@@ -12171,6 +12171,80 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
 
 
 @pytest.mark.unit
+def test_detect_needs_hands_learning_primary_back_after_history_clears_until_live_review_debt_exists():
+    def _detect(*, pending_review_count: int, api_b_judgement_count: int):
+        return detect_needs(
+            perception=DrivePerceptionSnapshot(
+                user_mode="user_chain_quiet",
+                autonomous_chain_gate_active=False,
+                system_posture="stable",
+                active_sessions=0,
+                recent_errors=0,
+                uncertainty_count=1,
+                correction_signals=1,
+                learning_quality=41.36,
+                has_learning_history=True,
+                shell_slot_present=False,
+                shell_slot_id="",
+                api_b_judgement_count=api_b_judgement_count,
+                learning_backlog_count=0,
+                body_improvement_backlog_count=0,
+                stale_backlog_count=0,
+                pending_review_count=pending_review_count,
+                checks={"has_memory_idle": True},
+                idle_seconds={"user": 900, "employee_execution": 900, "memory": 900},
+            ),
+            world_model=DriveWorldModel(
+                user_mode="user_chain_quiet",
+                system_posture="stable",
+                truthfulness_pressure=0.275,
+                learning_momentum=0.431,
+                body_upgrade_readiness=0.29,
+                governance_load_state="clear",
+                memory_pressure=0.25,
+                self_confidence=0.55,
+            ),
+            reflection=DriveReflection(
+                recent_learning_count=1,
+                recent_learning_quality=0.46,
+                learning_yield_state="mixed",
+                api_b_judgement_blockage_pressure=0.0,
+                api_b_judgement_blockage_state="clear",
+                body_growth_blocked=False,
+                repeated_drive_pressure=0.0,
+                autonomy_readiness=0.35,
+                dominant_constraint="none",
+                rationale="Cleared history should no longer suppress useful learning.",
+                source_evidence=[],
+            ),
+            adaptive_policy=DriveAdaptivePolicy(
+                learning_expansion_bias=0.4,
+                truthfulness_bias=0.66,
+                memory_continuity_bias=0.73,
+                governance_hygiene_bias=0.48,
+                body_growth_bias=0.28,
+                observation_bias=0.34,
+                candidate_throttle=0.25,
+                candidate_budget=4,
+                exploratory_learning_quota=2,
+                body_growth_quota=0,
+                preferred_focus="memory_continuity",
+                rationale="Strategy memory still favors memory continuity.",
+                source_evidence=[],
+            ),
+            memory_plan={"eligible_for_planning": True},
+            self_learning_plan={"eligible_for_planning": True},
+            autonomous_improvement_plan={"eligible_for_planning": True},
+        )
+
+    clear_window = _detect(pending_review_count=0, api_b_judgement_count=0)
+    live_review_debt = _detect(pending_review_count=1, api_b_judgement_count=1)
+
+    assert clear_window[0].need_type == "expand_learning_frontier"
+    assert live_review_debt[0].need_type == "stabilize_memory_continuity"
+
+
+@pytest.mark.unit
 def test_detect_needs_does_not_prepare_body_growth_while_api_a_lane_is_unsettled():
     needs = detect_needs(
         perception=DrivePerceptionSnapshot(

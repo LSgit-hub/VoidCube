@@ -1482,9 +1482,9 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
     # Check the process registry -- skip cleanup for sandboxes with active
     # background processes (their _last_activity gets refreshed to keep them alive).
     try:
-        from .process_registry import process_registry
+        from .process_registry import ensure_process_registry
         for task_id in list(_last_activity.keys()):
-            if process_registry.has_active_processes(task_id):
+            if ensure_process_registry().has_active_processes(task_id):
                 _last_activity[task_id] = current_time  # Keep sandbox alive
     except ImportError:
         pass
@@ -2133,12 +2133,12 @@ def terminal_tool(
             # Spawn a tracked background process via the process registry.
             # For local backends: uses subprocess.Popen with output buffering.
             # For non-local backends: runs inside the sandbox via env.execute().
-            from .process_registry import process_registry
+            from .process_registry import ensure_process_registry
 
             effective_cwd = workdir or cwd
             try:
                 if active_env_type == "local":
-                    proc_session = process_registry.spawn_local(
+                    proc_session = ensure_process_registry().spawn_local(
                         command=command,
                         cwd=effective_cwd,
                         task_id=effective_task_id,
@@ -2147,7 +2147,7 @@ def terminal_tool(
                         watch_patterns=watch_patterns,
                     )
                 else:
-                    proc_session = process_registry.spawn_via_env(
+                    proc_session = ensure_process_registry().spawn_via_env(
                         env=env,
                         command=command,
                         cwd=effective_cwd,

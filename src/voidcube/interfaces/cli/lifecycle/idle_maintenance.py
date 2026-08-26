@@ -43,21 +43,22 @@ class CliIdleMaintenanceRuntime:
 def drain_process_notifications(enqueue_pending_input: Callable[[str], None]) -> None:
     """Move completed terminal-process notifications into the CLI input queue."""
     try:
-        from voidcube.infrastructure.execution.process_registry import process_registry
+        from voidcube.infrastructure.execution.process_registry import ensure_process_registry
         from ..runtime_handlers import _format_process_notification
 
-        while not process_registry.completion_queue.empty():
-            event = process_registry.completion_queue.get_nowait()
+        registry = ensure_process_registry()
+        while not registry.completion_queue.empty():
+            event = registry.completion_queue.get_nowait()
             session_id = event.get("session_id", "")
             if (
                 event.get("type") == "completion"
-                and process_registry.is_completion_consumed(session_id)
+                and registry.is_completion_consumed(session_id)
             ):
                 continue
             synthesized = _format_process_notification(event)
             if synthesized:
                 enqueue_pending_input(synthesized)
                 if event.get("type") == "completion" and session_id:
-                    process_registry.mark_completion_consumed(session_id)
+                    registry.mark_completion_consumed(session_id)
     except Exception:
         pass

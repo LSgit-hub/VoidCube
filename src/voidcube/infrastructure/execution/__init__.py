@@ -19,7 +19,7 @@ from .task_execution import (
     mark_task_execution_ready,
     release_task_execution,
 )
-from .process_registry import ProcessRegistry, process_registry
+from .process_registry import ProcessRegistry, ensure_process_registry
 
 __all__ = [
     "TaskExecutionBlocked",
@@ -36,5 +36,5 @@ __all__ = [
     "mark_task_execution_ready",
     "release_task_execution",
     "ProcessRegistry",
-    "process_registry",
+    "ensure_process_registry",
 ]

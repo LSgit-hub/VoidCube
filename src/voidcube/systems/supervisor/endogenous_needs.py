@@ -98,6 +98,21 @@ def detect_needs(
         perception=perception,
         reflection=reflection,
     )
+    # A cleared history should hand the primary axis back to learning when
+    # there is no live review debt and recent learning still carries signal.
+    learning_frontier_recovery_window = (
+        reflection.dominant_constraint == "none"
+        and not has_truthfulness_review_signal(perception)
+        and perception.pending_review_count <= 0
+        and perception.stale_backlog_count <= 0
+        and perception.api_b_judgement_count <= 0
+        and perception.employee_dispatch_count <= 0
+        and perception.employee_running_count <= 0
+        and perception.has_learning_history
+        and reflection.api_b_judgement_blockage_pressure <= 0.22
+        and reflection.learning_yield_state in {"mixed", "strong"}
+        and reflection.recent_learning_quality >= 0.45
+    )
     if memory_plan.get("eligible_for_planning"):
         memory_constraint_penalty = 0.0
         memory_recovery_bonus = 0.0
@@ -117,6 +132,10 @@ def detect_needs(
             memory_constraint_penalty += 0.05
         if memory_backlog_recovery_window:
             memory_recovery_bonus += 0.12
+        if learning_frontier_recovery_window:
+            memory_constraint_penalty += 0.05
+            if adaptive_policy.preferred_focus == "memory_continuity":
+                memory_constraint_penalty += 0.03
         needs.append(
             DriveNeed(
                 need_type="stabilize_memory_continuity",
@@ -145,6 +164,7 @@ def detect_needs(
                     f"memory_idle={perception.checks.get('has_memory_idle', False)}",
                     f"memory_continuity_bias={adaptive_policy.memory_continuity_bias:.2f}",
                     f"memory_recovery_bonus={memory_recovery_bonus:.2f}",
+                    f"learning_frontier_recovery_window={learning_frontier_recovery_window}",
                 ],
             )
         )
@@ -183,9 +203,11 @@ def detect_needs(
         )
     if self_learning_plan.get("eligible_for_planning"):
         learning_constraint_penalty = 0.0
-        learning_recovery_bonus = (
-            0.03 if historical_observation_carryover_released else 0.0
-        )
+        learning_recovery_bonus = 0.0
+        if learning_frontier_recovery_window:
+            learning_recovery_bonus += 0.08
+        if historical_observation_carryover_released:
+            learning_recovery_bonus += 0.03
         if reflection.dominant_constraint == "historical_underdelivery":
             learning_constraint_penalty += 0.14
         if adaptive_policy.preferred_focus == "observation":
@@ -239,6 +261,7 @@ def detect_needs(
                     f"api_b_judgement_blockage_state={reflection.api_b_judgement_blockage_state}",
                     f"learning_expansion_bias={adaptive_policy.learning_expansion_bias:.2f}",
                     f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
+                    f"learning_recovery_bonus={learning_recovery_bonus:.2f}",
                     f"learning_constraint_penalty={learning_constraint_penalty:.2f}",
                     f"historical_observation_carryover_released={historical_observation_carryover_released}",
                     f"employee_dispatch_count={perception.employee_dispatch_count}",

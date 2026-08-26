@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -14,6 +15,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 from ...infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
+
+
+logger = logging.getLogger(__name__)
 
 
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
@@ -106,9 +110,27 @@ class ScheduledTaskStore:
         self._lock = threading.RLock()
         self._initialize_schema()
         self._migrate_legacy_json_once()
+        self._recover_expired_claims_at_startup()
 
     def close(self) -> None:
         self._owner_lease.close()
+
+    def _recover_expired_claims_at_startup(self) -> None:
+        """Fail any run whose lease expired while this process was not the
+        owner (crash window), so the store starts with no stale ``running``
+        claims.  Idempotent no-op when no runs are claimed; failures are
+        logged and deferred to the next claim/recover call so a startup scan
+        can never prevent the store from opening."""
+        try:
+            with self._transaction() as connection:
+                self._recover_expired_claims(
+                    connection, now=_utc_now()
+                )
+        except Exception:  # pragma: no cover - defensive startup guard
+            logger.warning(
+                "ScheduledTaskStore startup claim recovery failed; "
+                "will be retried on next claim_due", exc_info=True
+            )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

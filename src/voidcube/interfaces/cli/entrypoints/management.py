@@ -38,13 +38,21 @@ def _confirm_prompt(prompt: str) -> bool:
         return False
 
 def cmd_sessions(args):
-    import json as _json
     try:
         from ....infrastructure.persistence.session_db import SessionDB
         db = SessionDB()
     except Exception as e:
         print(f"Error: Could not open session database: {e}")
         return
+
+    try:
+        _run_sessions_command(args, db)
+    finally:
+        db.close()
+
+
+def _run_sessions_command(args, db):
+    import json as _json
 
     action = args.sessions_action
 
@@ -158,7 +166,6 @@ def cmd_sessions(args):
             limit=limit,
             exclude_id_prefixes=["scheduled_"],
         )
-        db.close()
         if not sessions:
             print("No sessions found.")
             return
@@ -170,6 +177,7 @@ def cmd_sessions(args):
 
         # Launch VoidCube --resume <id> by replacing the current process
         print(f"Resuming session: {selected_id}")
+        db.close()
         import shutil
         voidcube_bin = shutil.which("VoidCube")
         if voidcube_bin:

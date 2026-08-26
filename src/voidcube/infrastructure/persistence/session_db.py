@@ -159,12 +159,15 @@ class SessionDB:
     _CHECKPOINT_EVERY_N_WRITES = 50
 
     def __init__(self, db_path: Path = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path = Path(db_path or DEFAULT_DB_PATH).expanduser().resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._owner_lease = SQLiteOwnerLease(self.db_path, "session-owner")
 
         self._lock = threading.Lock()
         self._write_count = 0
+        self._write_busy_retries = 0
+        self._write_failures = 0
+        self._closed = False
         self._conn = sqlite3.connect(
             str(self.db_path),
             check_same_thread=False,
@@ -182,6 +185,49 @@ class SessionDB:
         self._conn.execute("PRAGMA foreign_keys=ON")
 
         self._init_schema()
+
+    def __enter__(self) -> "SessionDB":
+        self._ensure_open()
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.close()
+
+    @property
+    def owner_lock_path(self) -> Path:
+        """Return the recoverable owner marker path for observability/tests."""
+        return self.db_path.with_name(self.db_path.name + ".owner")
+
+    def owner_status(self) -> Dict[str, Any]:
+        """Describe this Session owner without exposing its SQLite connection."""
+        marker: Dict[str, Any] = {}
+        try:
+            marker = json.loads(self.owner_lock_path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return {
+            "domain": "session",
+            "owner": "session-owner",
+            "db_path": str(self.db_path),
+            "lock_path": str(self.owner_lock_path),
+            "owned": bool(self._owner_lease is not None and not self._closed),
+            "pid": marker.get("pid"),
+            "closed": self._closed,
+        }
+
+    def execution_stats(self) -> Dict[str, int | bool]:
+        """Return bounded owner metrics for Session health and diagnostics."""
+        with self._lock:
+            return {
+                "closed": self._closed,
+                "write_count": self._write_count,
+                "write_busy_retries": self._write_busy_retries,
+                "write_failures": self._write_failures,
+            }
+
+    def _ensure_open(self) -> None:
+        if self._closed or self._conn is None:
+            raise RuntimeError("SessionDB is closed")
 
     # ── Core write helper ──
 
@@ -204,6 +250,7 @@ class SessionDB:
         for attempt in range(self._WRITE_MAX_RETRIES):
             try:
                 with self._lock:
+                    self._ensure_open()
                     self._conn.execute("BEGIN IMMEDIATE")
                     try:
                         result = fn(self._conn)
@@ -224,6 +271,8 @@ class SessionDB:
                 if "locked" in err_msg or "busy" in err_msg:
                     last_err = exc
                     if attempt < self._WRITE_MAX_RETRIES - 1:
+                        with self._lock:
+                            self._write_busy_retries += 1
                         jitter = random.uniform(
                             self._WRITE_RETRY_MIN_S,
                             self._WRITE_RETRY_MAX_S,
@@ -231,8 +280,12 @@ class SessionDB:
                         time.sleep(jitter)
                         continue
                 # Non-lock error or retries exhausted — propagate.
+                with self._lock:
+                    self._write_failures += 1
                 raise
         # Retries exhausted (shouldn't normally reach here).
+        with self._lock:
+            self._write_failures += 1
         raise last_err or sqlite3.OperationalError(
             "database is locked after max retries"
         )
@@ -265,6 +318,9 @@ class SessionDB:
         help keep the WAL file from growing unbounded.
         """
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             if self._conn:
                 try:
                     self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")

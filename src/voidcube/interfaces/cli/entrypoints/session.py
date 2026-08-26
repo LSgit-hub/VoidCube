@@ -287,9 +287,8 @@ def _resolve_last_cli_session() -> Optional[str]:
     """Look up the most recent CLI session ID from SQLite. Returns None if unavailable."""
     try:
         from ....infrastructure.persistence.session_db import SessionDB
-        db = SessionDB()
-        sessions = db.search_sessions(source="cli", limit=1)
-        db.close()
+        with SessionDB() as db:
+            sessions = db.search_sessions(source="cli", limit=1)
         if sessions:
             return sessions[0]["id"]
     except Exception:
@@ -413,18 +412,14 @@ def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
     """
     try:
         from ....infrastructure.persistence.session_db import SessionDB
-        db = SessionDB()
+        with SessionDB() as db:
+            # Try as exact session ID first
+            session = db.get_session(name_or_id)
+            if session:
+                return session["id"]
 
-        # Try as exact session ID first
-        session = db.get_session(name_or_id)
-        if session:
-            db.close()
-            return session["id"]
-
-        # Try as title (with auto-latest for lineage)
-        session_id = db.resolve_session_by_title(name_or_id)
-        db.close()
-        return session_id
+            # Try as title (with auto-latest for lineage)
+            return db.resolve_session_by_title(name_or_id)
     except Exception:
         pass
     return None

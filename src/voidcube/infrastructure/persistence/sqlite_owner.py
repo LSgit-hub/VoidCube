@@ -41,11 +41,53 @@ class SQLiteOwnerLease:
             return False
         if pid == os.getpid():
             return True
+        if os.name == "nt":
+            # os.kill(pid, 0) on Windows maps to TerminateProcess semantics
+            # and would actually kill the target process, so probe liveness
+            # read-only instead: OpenProcess + GetExitCodeProcess.
+            return SQLiteOwnerLease._pid_alive_windows(pid)
         try:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):
             return False
         return True
+
+    @staticmethod
+    def _pid_alive_windows(pid: int) -> bool:
+        """Read-only liveness probe for Windows (no side effects)."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            # PROCESS_QUERY_LIMITED_INFORMATION: query-only, no terminate access.
+            handle = kernel32.OpenProcess(0x1000, False, wintypes.DWORD(pid))
+            if not handle:
+                return False
+            try:
+                code = wintypes.DWORD()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return False
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            # Conservative fallback: keep the marker owned if unknown.
+            return True
 
     def acquire(self) -> None:
         with self._guard:

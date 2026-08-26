@@ -548,7 +548,9 @@ def test_process_tool_reports_unknown_session():
 @pytest.mark.unit
 def test_terminal_background_execution_uses_process_registry(monkeypatch, tmp_path):
     import voidcube.infrastructure.execution.terminal_tool as terminal_tool_module
-    from voidcube.infrastructure.execution.process_registry import process_registry as shared_registry
+    from voidcube.infrastructure.execution.process_registry import ensure_process_registry
+
+    shared_registry = ensure_process_registry()
 
     task_id = "terminal-background-integration"
     monkeypatch.setenv("TERMINAL_ENV", "local")
@@ -575,3 +577,35 @@ def test_terminal_background_execution_uses_process_registry(monkeypatch, tmp_pa
     assert started["output"] == "Background process started"
     assert result["output"] == "integrated"
     assert result["exit_code"] == 0
+
+
+@pytest.mark.unit
+def test_ensure_process_registry_initializes_single_shared_instance(monkeypatch):
+    import voidcube.infrastructure.execution.process_registry as registry_module
+
+    created = []
+
+    class FakeRegistry:
+        def __init__(self):
+            time.sleep(0.02)
+            created.append(self)
+
+    monkeypatch.setattr(registry_module, "ProcessRegistry", FakeRegistry)
+    monkeypatch.setattr(registry_module, "_process_registry_instance", None)
+
+    barrier = threading.Barrier(8)
+    results = []
+
+    def _worker():
+        barrier.wait()
+        results.append(registry_module.ensure_process_registry())
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(results) == 8
+    assert len({id(item) for item in results}) == 1
+    assert len(created) == 1

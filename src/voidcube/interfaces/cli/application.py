@@ -4112,13 +4112,13 @@ class VoidcubeCLI:
         def recent_sessions() -> list[dict[str, Any]]:
             try:
                 from ...infrastructure.persistence.session_db import SessionDB
-
-                return SessionDB().list_sessions_rich(
-                    source="cli",
-                    exclude_sources=["tool"],
-                    limit=5,
-                    exclude_id_prefixes=["scheduled_"],
-                )
+                with SessionDB() as session_db:
+                    return session_db.list_sessions_rich(
+                        source="cli",
+                        exclude_sources=["tool"],
+                        limit=5,
+                        exclude_id_prefixes=["scheduled_"],
+                    )
             except Exception:
                 return []
 
@@ -4229,6 +4229,14 @@ class VoidcubeCLI:
             if runtime is not None:
                 runtime.close()
 
+        def close_session_owner() -> None:
+            repository = self.__dict__.get("_session_db")
+            if repository is not None:
+                try:
+                    repository.close()
+                finally:
+                    self._session_db = None
+
         def unregister_tool_callbacks() -> None:
             _get_set_sudo_password_callback(None)
             _get_set_approval_sink(None)
@@ -4268,6 +4276,7 @@ class VoidcubeCLI:
             close_voice_session=close_voice_session,
             unregister_tool_callbacks=unregister_tool_callbacks,
             close_session=session_teardown.close_session,
+            close_session_owner=close_session_owner,
             finish_interrupted_session=session_teardown.finish_interrupted_session,
             run_global_cleanup=_run_cleanup,
             print_exit_summary=self._print_exit_summary,
