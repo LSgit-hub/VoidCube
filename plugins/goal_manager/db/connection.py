@@ -917,11 +917,30 @@ class GoalStore:
             query = "SELECT * FROM goal_events WHERE project_id=?"
             params: list[Any] = [project_id]
             if after:
-                query += " AND created_at > ?"
-                params.append(after)
-            query += " ORDER BY created_at LIMIT ?"
+                cursor = conn.execute(
+                    "SELECT rowid FROM goal_events WHERE id=? AND project_id=?",
+                    (after, project_id),
+                ).fetchone()
+                if cursor is not None:
+                    query += " AND rowid > ?"
+                    params.append(cursor["rowid"])
+                else:
+                    # Preserve the original timestamp cursor for callers
+                    # using the non-streaming events endpoint.
+                    query += " AND created_at > ?"
+                    params.append(after)
+            query += " ORDER BY rowid LIMIT ?"
             params.append(limit)
             return [_event_payload(dict(row)) for row in conn.execute(query, params).fetchall()]
+
+    def latest_event_id(self, project_id: str) -> str | None:
+        with self._connect() as conn:
+            self._ensure_project(conn, project_id)
+            row = conn.execute(
+                "SELECT id FROM goal_events WHERE project_id=? ORDER BY rowid DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+            return row["id"] if row is not None else None
 
     def next_actions(self, project_id: str, limit: int = 10, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}

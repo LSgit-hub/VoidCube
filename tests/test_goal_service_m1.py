@@ -167,3 +167,37 @@ def test_api_and_tool_schemas(tmp_path):
     model_tools.ensure_tools_discovered()
     definitions = registry.get_definitions(list(SCHEMAS))
     assert {item["function"]["name"] for item in definitions} >= set(SCHEMAS)
+
+
+def test_event_stream_uses_event_id_cursor(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/goals/projects",
+            json={"name": "SSE", "reason": "stream test"},
+        )
+        assert created.status_code == 201
+        project_id = created.json()["project"]["id"]
+        events = client.get(f"/api/goals/events?project_id={project_id}").json()["events"]
+        assert events
+
+        response = client.get(
+            f"/api/goals/events/stream?project_id={project_id}"
+            f"&after={events[0]['id']}&poll_seconds=0.2&max_seconds=1"
+        )
+        initial = client.get(
+            f"/api/goals/events/stream?project_id={project_id}"
+            "&poll_seconds=0.2&max_seconds=1"
+        )
+        canonical = client.get(
+            f"/api/goals/projects/{project_id}/events"
+            f"?after={events[0]['id']}&poll_seconds=0.2&max_seconds=1"
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert f"id: {events[1]['id']}" in response.text
+    assert f"id: {events[0]['id']}" not in response.text
+    assert "id:" not in initial.text
+    assert canonical.status_code == 200
+    assert f"id: {events[1]['id']}" in canonical.text

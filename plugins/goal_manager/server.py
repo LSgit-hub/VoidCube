@@ -7,8 +7,9 @@ import json
 import os
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import service_config
@@ -137,6 +138,17 @@ def _error_response(exc: Exception) -> JSONResponse:
 def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     runtime_config = service_config(config)
     app = FastAPI(title="VoidCube Goal Manager", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://127.0.0.1:6002",
+            "http://localhost:6002",
+        ],
+        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Accept", "Content-Type", "Authorization", "X-Goal-Service-Token"],
+    )
     store = GoalStore(runtime_config["db_path"])
     app.state.goal_store = store
     configured_token = str(runtime_config.get("service_token") or "").strip()
@@ -323,6 +335,39 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.get("/api/goals/events")
     def events(project_id: str, after: str | None = None, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
         return {"events": store.list_events(project_id, after, limit)}
+
+    @app.get("/api/goals/events/latest")
+    def latest_event(project_id: str) -> dict[str, Any]:
+        return {"event_id": store.latest_event_id(project_id)}
+
+    @app.get("/api/goals/events/stream")
+    @app.get("/api/goals/projects/{project_id}/events")
+    async def event_stream(
+        project_id: str,
+        after: str | None = None,
+        poll_seconds: float = Query(1.0, ge=0.2, le=10.0),
+        max_seconds: float = Query(25.0, ge=1.0, le=60.0),
+    ) -> StreamingResponse:
+        store.get_project(project_id)
+
+        async def generate():
+            cursor = after or store.latest_event_id(project_id)
+            started = asyncio.get_running_loop().time()
+            while asyncio.get_running_loop().time() - started < max_seconds:
+                changes = store.list_events(project_id, cursor, 100)
+                if changes:
+                    for event in changes:
+                        yield f"id: {event['id']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    cursor = changes[-1]["id"]
+                else:
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(poll_seconds)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/goals/nodes/{node_id}/context")
     def context(node_id: str) -> dict[str, Any]:
