@@ -135,6 +135,11 @@ class GoalClient:
                 "batch_id": args["batchId"], "reason": args.get("reason", "rollback batch"),
                 "confirm": args.get("confirm", False), **actor,
             })
+        if tool_name == "goal_redo":
+            return self.request("POST", "/api/goals/redo", {
+                "project_id": args.get("projectId"), "batch_id": args.get("batchId"),
+                "reason": args.get("reason", "redo batch"), **actor,
+            })
         if tool_name == "goal_next_actions":
             return self.request("GET", f"/api/goals/projects/{args['projectId']}/next-actions", query={
                 "limit": args.get("limit", 10),

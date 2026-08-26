@@ -100,6 +100,16 @@ class RollbackRequest(BaseModel):
     session_id: str | None = None
 
 
+class RedoRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    project_id: str | None = None
+    batch_id: str | None = None
+    reason: str = "redo batch"
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
 class EvidenceCreate(BaseModel):
     model_config = ConfigDict(extra="allow")
     evidence_type: str
@@ -324,6 +334,10 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def rollback(payload: RollbackRequest) -> dict[str, Any]:
         return store.rollback(**payload.model_dump())
 
+    @app.post("/api/goals/redo")
+    def redo(payload: RedoRequest) -> dict[str, Any]:
+        return store.redo(**payload.model_dump())
+
     @app.post("/api/goals/nodes/{node_id}/evidence", status_code=201)
     def attach_evidence(node_id: str, payload: EvidenceCreate) -> dict[str, Any]:
         return store.attach_evidence(
@@ -339,6 +353,10 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.get("/api/goals/events/latest")
     def latest_event(project_id: str) -> dict[str, Any]:
         return {"event_id": store.latest_event_id(project_id)}
+
+    @app.get("/api/goals/projects/{project_id}/history")
+    def history(project_id: str) -> dict[str, Any]:
+        return store.history(project_id)
 
     @app.get("/api/goals/events/stream")
     @app.get("/api/goals/projects/{project_id}/events")

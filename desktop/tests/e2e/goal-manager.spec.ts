@@ -5,7 +5,25 @@ const goalServiceUrl = 'http://127.0.0.1:6003'
 const projectId = 'project-m3-smoke'
 const rootId = 'root-m3-smoke'
 
-function buildFixture() {
+type GoalFixtureNode = {
+  id: string
+  project_id: string
+  node_type: string
+  title: string
+  description: string
+  status: string
+  progress: number
+  version: number
+  acceptance_criteria: Array<{ text: string; met: boolean }>
+  evidence?: Array<Record<string, string>>
+  events?: Array<Record<string, string>>
+}
+
+function buildFixture(): {
+  root: GoalFixtureNode
+  nodes: GoalFixtureNode[]
+  edges: Array<Record<string, unknown>>
+} {
   const root = {
     id: rootId,
     project_id: projectId,
@@ -40,8 +58,10 @@ function buildFixture() {
   return { root, nodes, edges }
 }
 
-async function installGoalServiceRoute(page: Page): Promise<void> {
+async function installGoalServiceRoute(page: Page): Promise<() => void> {
   const fixture = buildFixture()
+  let rolledBack = false
+  let liveEventPending = false
   Object.assign(fixture.root, {
     acceptance_criteria: [{ text: '回归测试通过', met: false }],
     evidence: [],
@@ -80,6 +100,19 @@ async function installGoalServiceRoute(page: Page): Promise<void> {
       })
       return
     }
+    if (url.pathname === `/api/goals/projects/${projectId}` && request.method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: projectId,
+          name: fixture.root.title,
+          description: '',
+          root_node_id: rootId,
+          progress: fixture.root.progress
+        })
+      })
+      return
+    }
     if (url.pathname === `/api/goals/projects/${projectId}/overview`) {
       await route.fulfill({
         contentType: 'application/json',
@@ -91,7 +124,33 @@ async function installGoalServiceRoute(page: Page): Promise<void> {
       await route.fulfill({ contentType: 'application/json', body: '{"event_id":null}' })
       return
     }
+    if (url.pathname === `/api/goals/projects/${projectId}/history`) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          can_undo: !rolledBack,
+          can_redo: rolledBack,
+          undo_batch_id: rolledBack ? null : 'batch-m4-seed',
+          redo_batch_id: rolledBack ? 'batch-m4-seed' : null
+        })
+      })
+      return
+    }
     if (url.pathname === '/api/goals/events/stream' || url.pathname === `/api/goals/projects/${projectId}/events`) {
+      if (liveEventPending) {
+        liveEventPending = false
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/event-stream',
+          body: [
+            'id: event-m4-live',
+            'data: {"id":"event-m4-live","event_type":"update_node","batch_id":"batch-m4-live","reason":"external batch"}',
+            '',
+            ''
+          ].join('\n')
+        })
+        return
+      }
       await route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
@@ -122,15 +181,48 @@ async function installGoalServiceRoute(page: Page): Promise<void> {
         await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ evidence, batch_id: 'batch-m4-evidence' }) })
         return
       }
+      if (request.method() === 'DELETE') {
+        const confirmToken = url.searchParams.get('confirm_token')
+        if (confirmToken !== 'delete-token-m4') {
+          await route.fulfill({
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              detail: '确认后才能删除',
+              requires_confirm: true,
+              confirm_token: 'delete-token-m4'
+            })
+          })
+          return
+        }
+        const index = fixture.nodes.findIndex((item) => item.id === nodeId)
+        if (index >= 0) fixture.nodes.splice(index, 1)
+        fixture.edges = fixture.edges.filter((edge) => (
+          edge.source_id !== nodeId && edge.target_id !== nodeId
+        ))
+        await route.fulfill({ contentType: 'application/json', body: '{"deleted":true}' })
+        return
+      }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(node) })
       return
     }
     if (url.pathname === '/api/goals/rollback' && request.method() === 'POST') {
+      rolledBack = true
       await route.fulfill({ contentType: 'application/json', body: '{"batch_id":"batch-m4-seed","rolled_back":true}' })
+      return
+    }
+    if (url.pathname === '/api/goals/redo' && request.method() === 'POST') {
+      rolledBack = false
+      await route.fulfill({ contentType: 'application/json', body: '{"batch_id":"batch-m4-seed","redone":true}' })
       return
     }
     await route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"not mocked"}' })
   })
+  return () => {
+    fixture.root.title = 'M4 SSE 已刷新'
+    fixture.root.progress = 0.73
+    liveEventPending = true
+  }
 }
 
 test('renders a 500-node overview in a worker and keeps focus synchronized', async () => {
@@ -178,7 +270,8 @@ test('supports detail editing, evidence write-back, rollback, and context action
   try {
     await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
     const root = page.locator(`#radial-content [data-node-id="${rootId}"]`)
-    await root.click()
+    await expect(root).toBeVisible()
+    await root.dispatchEvent('click')
     await expect(page.locator('#detail-title')).toHaveText('M3 总览验证')
     await expect(page.locator('#add-evidence-button')).toBeVisible()
 
@@ -195,12 +288,86 @@ test('supports detail editing, evidence write-back, rollback, and context action
     await page.locator('#dialog-confirm-button').click()
     await expect(page.locator('.evidence-item')).toContainText('Playwright 回归')
 
-    await root.click({ button: 'right' })
+    await root.dispatchEvent('contextmenu', {
+      button: 2,
+      clientX: 220,
+      clientY: 180
+    })
     await expect(page.locator('#node-menu')).toBeVisible()
-    await page.locator('#node-menu [data-menu-action="rollback"]').click()
+    await page.locator('#node-menu [data-menu-action="rollback"]').dispatchEvent('click')
     await expect(page.locator('#goal-dialog')).toBeVisible()
     await page.locator('#dialog-confirm-button').click()
     await expect(page.locator('#goal-dialog')).toBeHidden()
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('completes server confirm-token flow for deleting a child node', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  const deleteRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE') deleteRequests.push(request.url())
+  })
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    const child = page.locator('#radial-content [data-node-id="goal-m3-0"]')
+    await expect(child).toBeVisible()
+    await child.dispatchEvent('contextmenu', {
+      button: 2,
+      clientX: 220,
+      clientY: 180
+    })
+    await page.locator('#node-menu [data-menu-action="delete"]').dispatchEvent('click')
+    await expect(page.locator('#goal-dialog')).toBeVisible()
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('服务端确认删除')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#goal-dialog')).toBeHidden()
+    expect(deleteRequests).toHaveLength(2)
+    expect(deleteRequests[1]).toContain('confirm_token=delete-token-m4')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('supports project-level undo and redo controls', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#undo-button')).toBeEnabled()
+    await expect(page.locator('#redo-button')).toBeDisabled()
+
+    await page.locator('#undo-button').click()
+    await expect(page.locator('#goal-dialog')).toBeVisible()
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#undo-button')).toBeDisabled()
+    await expect(page.locator('#redo-button')).toBeEnabled()
+
+    await page.locator('#redo-button').click()
+    await expect(page.locator('#goal-dialog')).toBeVisible()
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#redo-button')).toBeDisabled()
+    await expect(page.locator('#undo-button')).toBeEnabled()
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('refreshes focus after an external batch SSE event', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  const publishLiveEvent = await installGoalServiceRoute(page)
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#focus-heading')).toHaveText('M3 总览验证')
+    publishLiveEvent()
+    await expect(page.locator('#focus-heading')).toHaveText('M4 SSE 已刷新', { timeout: 15_000 })
+    await expect(page.locator('#project-progress')).toHaveText('项目进度 73%')
     expect(pageErrors).toEqual([])
   } finally {
     await browser.close()

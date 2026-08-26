@@ -942,6 +942,101 @@ class GoalStore:
             ).fetchone()
             return row["id"] if row is not None else None
 
+    def history(self, project_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            self._ensure_project(conn, project_id)
+            batches = conn.execute(
+                "SELECT batch_id, MAX(rowid) AS last_rowid FROM goal_events "
+                "WHERE project_id=? AND batch_id IS NOT NULL "
+                "GROUP BY batch_id ORDER BY last_rowid DESC",
+                (project_id,),
+            ).fetchall()
+            undo_batch_id = next(
+                (
+                    row["batch_id"] for row in batches
+                    if self._batch_marker(conn, row["batch_id"]) != "rollback"
+                ),
+                None,
+            )
+            latest = conn.execute(
+                "SELECT event_type, entity_type, entity_id FROM goal_events "
+                "WHERE project_id=? ORDER BY rowid DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+            redo_batch_id = None
+            if (
+                latest is not None
+                and latest["event_type"] == "rollback"
+                and latest["entity_type"] == "batch"
+                and self._batch_marker(conn, latest["entity_id"]) == "rollback"
+            ):
+                redo_batch_id = latest["entity_id"]
+            return {
+                "can_undo": undo_batch_id is not None,
+                "can_redo": redo_batch_id is not None,
+                "undo_batch_id": undo_batch_id,
+                "redo_batch_id": redo_batch_id,
+            }
+
+    @staticmethod
+    def _batch_marker(conn: sqlite3.Connection, batch_id: str) -> str | None:
+        row = conn.execute(
+            "SELECT event_type FROM goal_events "
+            "WHERE entity_type='batch' AND entity_id=? AND event_type IN ('rollback','redo') "
+            "ORDER BY rowid DESC LIMIT 1",
+            (batch_id,),
+        ).fetchone()
+        return row["event_type"] if row is not None else None
+
+    def _restore_event_after(self, conn: sqlite3.Connection, event: sqlite3.Row) -> None:
+        after = load_json(event["after_json"])
+        if not after:
+            return
+        entity_id = event["entity_id"]
+        if event["entity_type"] == "node":
+            conn.execute(
+                "UPDATE goal_nodes SET node_type=?, title=?, description=?, status=?, progress=?, "
+                "progress_mode=?, confidence=?, priority=?, start_at=?, due_at=?, completed_at=?, "
+                "acceptance_criteria_json=?, owner=?, assigned_to=?, deleted_at=?, version=version+1, "
+                "updated_at=? WHERE id=?",
+                (
+                    after["node_type"], after["title"], after["description"], after["status"],
+                    after["progress"], after["progress_mode"], after["confidence"], after["priority"],
+                    after["start_at"], after["due_at"], after["completed_at"],
+                    json.dumps(after["acceptance_criteria"], ensure_ascii=False),
+                    after["owner"], after["assigned_to"], after.get("deleted_at"), utc_now(), entity_id,
+                ),
+            )
+        elif event["entity_type"] == "edge":
+            conn.execute(
+                "UPDATE goal_edges SET project_id=?, source_id=?, target_id=?, edge_type=?, "
+                "progress_weight=?, required=?, created_by=?, created_at=?, deleted_at=? WHERE id=?",
+                (
+                    after["project_id"], after["source_id"], after["target_id"], after["edge_type"],
+                    after["progress_weight"], 1 if after.get("required", True) else 0,
+                    after["created_by"], after["created_at"], after.get("deleted_at"), entity_id,
+                ),
+            )
+        elif event["entity_type"] == "evidence":
+            conn.execute(
+                "UPDATE goal_evidence SET node_id=?, evidence_type=?, title=?, content=?, uri=?, "
+                "created_by=?, created_at=?, deleted_at=? WHERE id=?",
+                (
+                    after["node_id"], after["evidence_type"], after.get("title"), after.get("content"),
+                    after.get("uri"), after["created_by"], after["created_at"], after.get("deleted_at"),
+                    entity_id,
+                ),
+            )
+        elif event["entity_type"] == "project":
+            conn.execute(
+                "UPDATE goal_projects SET name=?, description=?, root_node_id=?, created_by=?, "
+                "created_at=?, updated_at=?, deleted_at=? WHERE id=?",
+                (
+                    after["name"], after["description"], after.get("root_node_id"), after["created_by"],
+                    after["created_at"], after["updated_at"], after.get("deleted_at"), entity_id,
+                ),
+            )
+
     def next_actions(self, project_id: str, limit: int = 10, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         with self._connect() as conn:
@@ -997,19 +1092,19 @@ class GoalStore:
                 raise KeyError(f"batch not found: {batch_id}")
             project_id = events[0]["project_id"]
             latest = conn.execute(
-                "SELECT e.batch_id FROM goal_events e WHERE e.project_id=? "
-                "AND e.batch_id IS NOT NULL AND e.event_type != 'rollback' "
-                "AND NOT EXISTS (SELECT 1 FROM goal_events r "
-                "WHERE r.event_type='rollback' AND r.entity_id=e.batch_id) "
-                "GROUP BY e.batch_id ORDER BY MAX(e.created_at) DESC LIMIT 1",
+                "SELECT e.batch_id, MAX(e.rowid) AS last_rowid FROM goal_events e "
+                "WHERE e.project_id=? AND e.batch_id IS NOT NULL "
+                "AND e.event_type NOT IN ('rollback','redo') "
+                "GROUP BY e.batch_id ORDER BY last_rowid DESC",
                 (project_id,),
-            ).fetchone()
-            if latest and latest["batch_id"] != batch_id:
-                raise GoalConflict("only the latest unrolled batch can be rolled back", latest_batch_id=latest["batch_id"])
-            if conn.execute(
-                "SELECT 1 FROM goal_events WHERE event_type='rollback' AND entity_id=?",
-                (batch_id,),
-            ).fetchone():
+            ).fetchall()
+            latest_active = next(
+                (row for row in latest if self._batch_marker(conn, row["batch_id"]) != "rollback"),
+                None,
+            )
+            if latest_active and latest_active["batch_id"] != batch_id:
+                raise GoalConflict("only the latest unrolled batch can be rolled back", latest_batch_id=latest_active["batch_id"])
+            if self._batch_marker(conn, batch_id) == "rollback":
                 raise GoalConflict("batch has already been rolled back")
             if not confirm and len(events) > 10:
                 # Keep large replays explicit while preserving the same token contract.
@@ -1054,3 +1149,41 @@ class GoalStore:
             )
             self._recompute_project_progress(conn, project_id)
             return {"batch_id": batch_id, "rolled_back": True}
+
+    def redo(self, project_id: str | None = None, batch_id: str | None = None, *,
+             reason: str = "redo batch",
+             actor_type: str = "agent", actor_id: str | None = None,
+             session_id: str | None = None) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        with self._transaction() as conn:
+            if project_id:
+                self._ensure_project(conn, project_id)
+            latest = conn.execute(
+                "SELECT * FROM goal_events "
+                "WHERE (? IS NULL OR project_id=?) ORDER BY rowid DESC LIMIT 1",
+                (project_id, project_id),
+            ).fetchone()
+            if latest is None or latest["event_type"] != "rollback" or latest["entity_type"] != "batch":
+                raise GoalConflict("only the latest rollback can be redone")
+            target_batch_id = batch_id or latest["entity_id"]
+            if target_batch_id != latest["entity_id"]:
+                raise GoalConflict("only the latest rollback can be redone", latest_batch_id=latest["entity_id"])
+            if self._batch_marker(conn, target_batch_id) != "rollback":
+                raise GoalConflict("batch is not currently rolled back")
+            events = conn.execute(
+                "SELECT * FROM goal_events WHERE batch_id=? ORDER BY rowid",
+                (target_batch_id,),
+            ).fetchall()
+            if not events:
+                raise KeyError(f"batch not found: {target_batch_id}")
+            target_project_id = events[0]["project_id"]
+            for event in events:
+                self._restore_event_after(conn, event)
+            self._event(
+                conn, project_id=target_project_id, event_type="redo", entity_type="batch",
+                entity_id=target_batch_id, before=None, after={"batch_id": target_batch_id},
+                reason=reason, batch_id=None, actor_type=actor_type, actor_id=actor_id,
+                session_id=session_id,
+            )
+            self._recompute_project_progress(conn, target_project_id)
+            return {"batch_id": target_batch_id, "redone": True}

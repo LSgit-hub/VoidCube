@@ -88,6 +88,36 @@ def test_batch_is_atomic_and_rollback_is_lifo(store):
         store.get_node(node_id)
 
 
+def test_rollback_can_be_redone_and_new_writes_close_redo_branch(store):
+    project = store.create_project("P", reason="init")
+    project_id = project["project"]["id"]
+    applied = store.apply_batch(
+        project_id,
+        [{"op": "create_node", "temp_id": "n1", "node_type": "task", "title": "N1"}],
+        reason="create batch",
+    )
+    node_id = applied["temp_ids"]["n1"]
+    store.rollback(applied["batch_id"])
+    with pytest.raises(KeyError):
+        store.get_node(node_id)
+
+    history = store.history(project_id)
+    assert history["can_redo"] is True
+    assert history["redo_batch_id"] == applied["batch_id"]
+    assert history["can_undo"] is True
+    assert history["undo_batch_id"] != applied["batch_id"]
+
+    redone = store.redo(project_id=project_id)
+    assert redone == {"batch_id": applied["batch_id"], "redone": True}
+    assert store.get_node(node_id)["title"] == "N1"
+    assert store.history(project_id)["can_redo"] is False
+
+    store.rollback(applied["batch_id"])
+    store.create_node(project_id, {"node_type": "task", "title": "new branch"}, reason="new write")
+    with pytest.raises(GoalConflict):
+        store.redo(project_id=project_id, batch_id=applied["batch_id"])
+
+
 def test_optimistic_lock_and_soft_delete(store):
     project = store.create_project("P", reason="init")
     node = store.create_node(project["project"]["id"], {"node_type": "task", "title": "T"}, reason="add")["node"]
@@ -157,7 +187,7 @@ def test_api_and_tool_schemas(tmp_path):
         app.state.goal_store.db_path.unlink(missing_ok=True)
         app.state.goal_store.db_path.with_name("test_goal_service_api.db.owner").unlink(missing_ok=True)
 
-    assert len(SCHEMAS) == 13
+    assert len(SCHEMAS) == 14
     for schema in SCHEMAS.values():
         assert schema["parameters"]["type"] == "object"
         assert "properties" in schema["parameters"]

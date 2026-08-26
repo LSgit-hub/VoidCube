@@ -89,6 +89,12 @@ SCHEMAS = {
          "confirm": {"type": "boolean"}, **COMMON_CONTEXT},
         ["batchId"],
     ),
+    "goal_redo": _schema(
+        "重放项目最近一次回滚的批次；如果回滚后产生了新写入则拒绝重做。",
+        {"projectId": {"type": "string"}, "batchId": {"type": "string"},
+         "reason": {"type": "string"}, **COMMON_CONTEXT},
+        ["projectId"],
+    ),
     "goal_next_actions": _schema(
         "按依赖满足、未阻塞、优先级和期限推荐下一步。",
         {"projectId": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100},
