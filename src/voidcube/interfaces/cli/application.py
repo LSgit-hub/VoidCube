@@ -815,7 +815,7 @@ def _get_plugin_cmd_handler_names() -> set:
     """Return plugin command names (without slash prefix) for dispatch matching."""
     try:
         from ...extensions.plugins.cli_adapter import get_plugin_manager
-        return set(get_plugin_manager()._plugin_commands.keys())  # type: ignore[attr-defined]
+        return set(get_plugin_manager().list_command_handlers())
     except Exception:
         return set()
 

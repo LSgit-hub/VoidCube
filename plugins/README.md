@@ -46,13 +46,14 @@ plugins/
 
   "service": {
     "enabled": true,
-    "port": 6010,
+    "port": 6003,
     "module": "plugins.goal_manager.server:create_app",
-    "gateway_service_type": "goal"
+    "health_path": "/health",
+    "gateway_service_type": "goal_service"
   },
 
   "web": {
-    "mount_path": "/goal-manager",
+    "mount_path": "/ui/goal-manager",
     "static_dir": "web/dist",
     "entry": "index.html"
   }
@@ -70,8 +71,8 @@ plugins/
 | `config_key` | 否 | `config.yaml` 中本插件的配置段名（见 §5） |
 | `enabled` | 否 | 默认启用开关，默认 `true`；被 config 段 `enabled` 覆盖 |
 | `tools.namespace` | 工具集 | 工具命名空间（唯一 key） |
-| `service` | 服务 | 见 §4.2；`enabled=false` 则不启动 |
-| `web` | UI | 见 §4.3；`mount_path` 必须以 `/` 开头 |
+| `service` | 服务 | 见 §4.2；`enabled=false` 则不启动；`health_path` 默认 `/` |
+| `web` | UI | 见 §4.3；`mount_path` 必须以 `/` 开头且不得覆盖保留路由 |
 
 ## 4. 四层对接
 
@@ -127,9 +128,9 @@ from fastapi import FastAPI
 def create_app(config: dict) -> FastAPI:
     app = FastAPI()
 
-    @app.get("/")
-    def root():
-        # 必须：根路径返回服务标识，供端口归属校验（_health_endpoint_is_service）
+    @app.get("/health")
+    def health():
+        # 必须：health_path 返回服务标识，供端口归属校验（_health_endpoint_is_service）
         return {"service": "goal_manager", "status": "ok"}
 
     @app.get("/api/goals")
@@ -141,8 +142,8 @@ def create_app(config: dict) -> FastAPI:
 - `service.module` 格式固定为 `模块路径:工厂函数名`。
 - `create_app` 收到的是普通 dict：`config.yaml[config_key]` 段内容
   （无该段则为空 dict）+ `name` / `port` / `service_port`。
-- **根路径 `/` 必须返回 `{"service": "<插件名>", ...}`**，否则 launcher 无法
-  确认端口归属，服务可能被判定为"端口被他人占用"而反复重启。
+- `service.health_path`（默认 `/`）必须返回 `{"service": "<插件名>", ...}`，
+  否则 launcher 无法确认端口归属，服务可能被判定为"端口被他人占用"而反复重启。
 - 若声明 `gateway_service_type`，启动后会等待该 type 出现在 Gateway 注册表
   （插件服务需自行调用 Gateway 的注册接口上报身份，参考 supervisor 的
   service_runtime 注册方式）。
@@ -153,8 +154,8 @@ Supervisor 启动时自动把 `web.static_dir`（相对插件目录）挂到
 `web.mount_path` 下，`html=True` 模式直接服务 `entry`（默认 index.html）。
 
 - 产物为纯静态文件（构建后的 SPA 或简单页面）。
-- `mount_path` 需避开 Supervisor 已占用路径（`/ui*`、`/runtime*`、`/api*`、
-  `/media*` 等）。建议 `/goal-manager` 式独立前缀。
+- `mount_path` 需避开 Supervisor 已占用路径和保留前缀（`/runtime*`、
+  `/api*`、`/docs` 等）。目标管理插件使用 `/ui/goal-manager`。
 - 前端通过 `/api/*` 与插件服务通信（插件服务与 Supervisor 同机）。
 
 ### 4.4 CLI —— 命令扩展
@@ -170,8 +171,8 @@ CLI 侧工具集通过 `cli_adapter.get_plugin_toolsets()` 暴露；需要自定
 ```yaml
 goal_manager:
   enabled: true          # false 则停用插件（工具不激活、服务不启动、UI 不挂载）
-  port: 6010             # 可覆盖清单 service.port
-  db_path: ~/.VoidCube/runtime/goal_manager/goals.db
+  port: 6003             # 可覆盖清单 service.port
+  db_path: ~/.VoidCube/runtime/goals/goals.db
   remind_hour: 9
 ```
 
@@ -196,7 +197,7 @@ CLI 启动
 
 1. **入口模块可导入**：`entrypoint` 必须是 `importlib.import_module` 可直接
    导入的完整模块路径（`plugins.goal_manager`），不要写文件名。
-2. **根路径 health 契约**：服务端 `/` 忘返回 `{"service": <name>}` 是最高频
+2. **health 契约**：服务端 `service.health_path` 忘返回 `{"service": <name>}` 是最高频
    故障，症状为 launcher 反复提示"端口被占用"。
 3. **端口唯一**：插件服务端口不能与 6000/6001/6002 及彼此冲突；改端口同时
    改清单 `service.port` 与 config 段（config 优先）。

@@ -21,6 +21,13 @@ class PluginManifest:
     api_version: str
     capabilities: tuple[str, ...] = ()
     entrypoint: str = ""
+    description: str = ""
+    config_key: str = ""
+    data_owner: str = ""
+    data_root: str = ""
+    tools: dict[str, Any] | None = None
+    service: dict[str, Any] | None = None
+    web: dict[str, Any] | None = None
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> "PluginManifest":
@@ -45,6 +52,13 @@ class PluginManifest:
             api_version=api_version,
             capabilities=tuple(dict.fromkeys(value.strip() for value in capabilities)),
             entrypoint=entrypoint,
+            description=str(raw.get("description") or "").strip(),
+            config_key=str(raw.get("config_key") or "").strip(),
+            data_owner=str(raw.get("data_owner") or "").strip(),
+            data_root=str(raw.get("data_root") or "").strip(),
+            tools=dict(raw["tools"]) if isinstance(raw.get("tools"), dict) else None,
+            service=dict(raw["service"]) if isinstance(raw.get("service"), dict) else None,
+            web=dict(raw["web"]) if isinstance(raw.get("web"), dict) else None,
         )
 
     @classmethod
@@ -56,13 +70,22 @@ class PluginManifest:
         return cls.from_mapping(raw)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "name": self.name,
             "version": self.version,
             "api_version": self.api_version,
             "capabilities": list(self.capabilities),
             "entrypoint": self.entrypoint,
         }
+        for key in ("description", "config_key", "data_owner", "data_root"):
+            value = getattr(self, key)
+            if value:
+                result[key] = value
+        for key in ("tools", "service", "web"):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = dict(value)
+        return result
 
 
 def discover_plugin_manifests(root: Path) -> tuple[PluginManifest, ...]:

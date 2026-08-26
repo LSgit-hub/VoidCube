@@ -39,6 +39,10 @@ class PluginManager:
     def get_command_handler(self, name: str) -> Callable[..., Any] | None:
         return self._command_handlers.get(name)
 
+    def list_command_handlers(self) -> tuple[str, ...]:
+        """Return registered CLI command names in stable order."""
+        return tuple(sorted(self._command_handlers))
+
     def register_plugin(self, name: str, info: dict[str, Any]) -> None:
         self._plugins[name] = info
 

@@ -103,7 +103,7 @@ memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 "voidcube.systems.supervisor" = ["web/*.html"]
 "voidcube.infrastructure.execution" = ["containerfiles/*.Containerfile"]
 "voidcube.extensions.tools" = ["presets/*.yaml", "dependency_manifest.yaml"]
-plugins = ["*/plugin.json"]
+plugins = ["*/plugin.json", "*/web/dist/*", "*/web/dist/**/*"]
 
 [tool.ruff]
 target-version = "py314"

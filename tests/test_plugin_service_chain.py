@@ -41,6 +41,7 @@ FAKE_MANIFEST = {
         "enabled": True,
         "port": 6010,
         "module": f"plugins.{PLUGIN_NAME}.server:create_app",
+        "health_path": "/health",
         "gateway_service_type": "goal",
     },
     "web": {"mount_path": "/fake-goal", "static_dir": "web/dist", "entry": "index.html"},
@@ -207,6 +208,7 @@ def test_service_merged_into_launcher(plugin_env):
     info = sl.SERVICES[PLUGIN_NAME]
     assert info.kind == "plugin"
     assert info.port == 6010
+    assert info.health_path == "/health"
     assert info.gateway_service_type == "goal"
     assert "create_app" in info.create_app
 
@@ -291,3 +293,58 @@ def test_web_mount_missing_dir_does_not_block(plugin_env):
     mount_plugin_web_routes(app)  # 不抛异常
     resp = TestClient(app).get("/fake-goal/")
     assert resp.status_code == 200
+
+
+def test_plugin_config_overrides_declared_port(plugin_env, tmp_path, monkeypatch):
+    config_home = tmp_path / "VoidCube-home"
+    config_home.mkdir()
+    (config_home / "config.yaml").write_text(
+        "goal_manager:\n  enabled: true\n  port: 6011\n  custom_value: retained\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(config_home))
+
+    pr.reset_scan_cache()
+    services = pr.find_plugin_services()
+    assert services[0]["port"] == 6011
+    assert services[0]["health_path"] == "/health"
+
+    sl._plugin_services_registered = False
+    sl.register_plugin_services(force=True)
+    assert sl.SERVICES[PLUGIN_NAME].port == 6011
+    config = sl._build_service_config(PLUGIN_NAME, 6011, SimpleNamespace())
+    assert config["custom_value"] == "retained"
+
+
+def test_web_declarations_reject_escape_and_reserved_mounts(plugin_env):
+    escaped = plugin_env / "escaped_web"
+    escaped.mkdir()
+    (escaped / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "escaped_web",
+                "version": "0.1.0",
+                "api_version": "1",
+                "entrypoint": "plugins.escaped_web",
+                "web": {"mount_path": "/ui/../escape", "static_dir": "../outside"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    reserved = plugin_env / "reserved_web"
+    reserved.mkdir()
+    (reserved / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "reserved_web",
+                "version": "0.1.0",
+                "api_version": "1",
+                "entrypoint": "plugins.reserved_web",
+                "web": {"mount_path": "/api", "static_dir": "web/dist"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    pr.reset_scan_cache()
+    names = {item["name"] for item in pr.find_plugin_web_uis()}
+    assert names == {PLUGIN_NAME}

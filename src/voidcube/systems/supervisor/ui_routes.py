@@ -116,8 +116,18 @@ def mount_plugin_web_routes(app: FastAPI) -> None:
     """
     from ...extensions.plugins.registry import find_plugin_web_uis
 
+    mounted_paths: set[str] = set()
+    existing_paths = {
+        str(getattr(route, "path", "")).rstrip("/") or "/"
+        for route in app.routes
+        if getattr(route, "path", None)
+    }
     for web_ui in find_plugin_web_uis():
         static_dir = Path(web_ui["static_dir"])
+        mount_path = str(web_ui["mount_path"]).rstrip("/") or "/"
+        if mount_path in mounted_paths or _plugin_mount_conflicts(mount_path, existing_paths):
+            logger.warning("插件 %s web 挂载路径冲突: %s", web_ui["name"], mount_path)
+            continue
         if not static_dir.is_dir():
             logger.warning(
                 "插件 %s web 静态目录不存在: %s", web_ui["name"], static_dir
@@ -125,18 +135,28 @@ def mount_plugin_web_routes(app: FastAPI) -> None:
             continue
         try:
             app.mount(
-                web_ui["mount_path"],
+                mount_path,
                 StaticFiles(directory=str(static_dir), html=True),
                 name=f"plugin-web-{web_ui['name']}",
             )
+            mounted_paths.add(mount_path)
             logger.info(
                 "挂载插件 %s web UI %s -> %s",
                 web_ui["name"],
-                web_ui["mount_path"],
+                mount_path,
                 static_dir,
             )
         except Exception as exc:
             logger.warning("挂载插件 %s web UI 失败: %s", web_ui["name"], exc)
+
+
+def _plugin_mount_conflicts(mount_path: str, existing_paths: set[str]) -> bool:
+    for path in existing_paths:
+        if path == mount_path:
+            return True
+        if path.startswith(f"{mount_path}/"):
+            return True
+    return False
 
 
 __all__ = [

@@ -1,0 +1,1 @@
+"""Goal graph domain helpers."""

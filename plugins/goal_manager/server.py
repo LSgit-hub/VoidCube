@@ -1,0 +1,347 @@
+"""FastAPI application for the Goal Manager service."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from .config import service_config
+from .db.connection import GoalStore
+from .domain.graph import GoalConflict
+from .domain.guard import ConfirmationRequired
+
+
+class ProjectCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    name: str
+    description: str = ""
+    created_by: str = "agent"
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class NodeCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    project_id: str
+    node_type: str | None = None
+    type: str | None = None
+    title: str
+    description: str = ""
+    status: str = "planned"
+    progress: float = Field(default=0, ge=0, le=1)
+    progress_mode: str = "manual"
+    confidence: float = Field(default=1, ge=0, le=1)
+    priority: int = 0
+    start_at: str | None = None
+    due_at: str | None = None
+    completed_at: str | None = None
+    acceptance_criteria: list[dict[str, Any]] = Field(default_factory=list)
+    owner: str | None = None
+    assigned_to: str | None = None
+    created_by: str = "agent"
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class NodeUpdate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    expected_version: int
+    patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class EdgeCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    source_id: str
+    target_id: str
+    edge_type: str
+    progress_weight: float = Field(default=1, ge=0)
+    required: bool = True
+    created_by: str = "agent"
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class BatchRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    project_id: str
+    reason: str
+    operations: list[dict[str, Any]]
+    created_by: str = "agent"
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+    confirm_token: str | None = None
+
+
+class RollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    batch_id: str
+    reason: str = "rollback batch"
+    confirm: bool = False
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class EvidenceCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    evidence_type: str
+    title: str | None = None
+    content: str | None = None
+    uri: str | None = None
+    created_by: str = "agent"
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+def _error_response(exc: Exception) -> JSONResponse:
+    if isinstance(exc, ConfirmationRequired):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": exc.detail,
+                "requires_confirm": True,
+                "confirm_token": exc.token,
+            },
+        )
+    if isinstance(exc, GoalConflict):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": exc.detail, **exc.payload},
+        )
+    if isinstance(exc, KeyError):
+        return JSONResponse(status_code=404, content={"detail": str(exc).strip("'")})
+    if isinstance(exc, (ValueError, TypeError)):
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+    return JSONResponse(status_code=500, content={"detail": "goal_service_internal_error"})
+
+
+def create_app(config: dict[str, Any] | None = None) -> FastAPI:
+    runtime_config = service_config(config)
+    app = FastAPI(title="VoidCube Goal Manager", version="0.1.0")
+    store = GoalStore(runtime_config["db_path"])
+    app.state.goal_store = store
+    configured_token = str(runtime_config.get("service_token") or "").strip()
+
+    @app.middleware("http")
+    async def require_service_token(request: Request, call_next):
+        if configured_token and request.url.path.startswith("/api/"):
+            supplied = str(
+                request.headers.get("x-goal-service-token")
+                or request.headers.get("authorization", "").removeprefix("Bearer ")
+            ).strip()
+            if supplied != configured_token:
+                return JSONResponse(status_code=401, content={"detail": "invalid goal service token"})
+        return await call_next(request)
+
+    @app.exception_handler(GoalConflict)
+    async def handle_goal_conflict(_request: Request, exc: GoalConflict):
+        return _error_response(exc)
+
+    @app.exception_handler(ConfirmationRequired)
+    async def handle_confirmation(_request: Request, exc: ConfirmationRequired):
+        return _error_response(exc)
+
+    @app.exception_handler(KeyError)
+    async def handle_not_found(_request: Request, exc: KeyError):
+        return _error_response(exc)
+
+    @app.exception_handler(ValueError)
+    async def handle_value_error(_request: Request, exc: ValueError):
+        return _error_response(exc)
+
+    @app.exception_handler(Exception)
+    async def handle_exception(_request: Request, exc: Exception):
+        return _error_response(exc)
+
+    @app.on_event("shutdown")
+    def close_store() -> None:
+        store.close()
+
+    async def register_with_gateway() -> None:
+        gateway = str(
+            runtime_config.get("gateway_address")
+            or os.getenv("GATEWAY_ADDRESS")
+            or "http://127.0.0.1:6000"
+        ).rstrip("/")
+        payload = {
+            "service_name": "goal_manager",
+            "service_type": "goal_service",
+            "address": f"http://127.0.0.1:{runtime_config['service_port']}",
+            "health_endpoint": "/health",
+            "metadata": {"version": "0.1.0", "plugin": "goal_manager"},
+        }
+        headers = {}
+        gateway_token = str(
+            runtime_config.get("gateway_auth_token")
+            or os.getenv("GATEWAY_AUTH_TOKEN")
+            or ""
+        ).strip()
+        if gateway_token:
+            headers["Authorization"] = f"Bearer {gateway_token}"
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{gateway}/register", json=payload, headers=headers)
+        except Exception:
+            # Gateway registration is an optional control-plane signal; the
+            # Goal Service remains directly usable when Gateway is unavailable.
+            return
+
+    @app.on_event("startup")
+    async def schedule_gateway_registration() -> None:
+        app.state.gateway_registration_task = asyncio.create_task(register_with_gateway())
+
+    @app.get("/")
+    def root() -> dict[str, Any]:
+        return {"service": "goal_manager", "status": "ok"}
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        return {"service": "goal_manager", "status": "ok"}
+
+    @app.get("/api/goals/projects")
+    def list_projects() -> dict[str, Any]:
+        return {"projects": store.list_projects()}
+
+    @app.post("/api/goals/projects", status_code=201)
+    def create_project(payload: ProjectCreate) -> dict[str, Any]:
+        return store.create_project(**payload.model_dump())
+
+    @app.get("/api/goals/projects/{project_id}")
+    def get_project(project_id: str) -> dict[str, Any]:
+        return store.get_project(project_id)
+
+    @app.get("/api/goals/projects/{project_id}/focus")
+    def focus(project_id: str, node: str | None = None) -> dict[str, Any]:
+        return store.get_focus(project_id, node)
+
+    @app.get("/api/goals/projects/{project_id}/overview")
+    def overview(project_id: str, mode: str = Query("parents_only")) -> dict[str, Any]:
+        return store.overview(project_id, mode)
+
+    @app.get("/api/goals/projects/{project_id}/graph")
+    def graph(
+        project_id: str,
+        start_node: str,
+        depth: int = Query(3, ge=0, le=3),
+        edge_types: list[str] | None = Query(None),
+    ) -> dict[str, Any]:
+        return store.graph_query(project_id, start_node, depth, edge_types)
+
+    @app.get("/api/goals/nodes/{node_id}")
+    def get_node(node_id: str) -> dict[str, Any]:
+        return store.get_node(node_id)
+
+    @app.post("/api/goals/nodes", status_code=201)
+    def create_node(payload: NodeCreate) -> dict[str, Any]:
+        return store.create_node(
+            payload.project_id,
+            payload.model_dump(exclude={"project_id", "created_by", "reason", "actor_type", "actor_id", "session_id"}),
+            created_by=payload.created_by,
+            reason=payload.reason,
+            actor_type=payload.actor_type,
+            actor_id=payload.actor_id,
+            session_id=payload.session_id,
+        )
+
+    @app.patch("/api/goals/nodes/{node_id}")
+    def update_node(node_id: str, payload: NodeUpdate) -> dict[str, Any]:
+        return store.update_node(node_id, payload.expected_version, payload.patch, **payload.model_dump(exclude={"expected_version", "patch"}))
+
+    @app.delete("/api/goals/nodes/{node_id}")
+    def delete_node(
+        node_id: str,
+        reason: str = Query(...),
+        cascade: bool = False,
+        confirm_token: str | None = None,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return store.delete_node(
+            node_id, cascade=cascade, reason=reason, confirm_token=confirm_token,
+            actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+        )
+
+    @app.post("/api/goals/edges", status_code=201)
+    def create_edge(payload: EdgeCreate) -> dict[str, Any]:
+        data = payload.model_dump()
+        return store.create_edge(
+            data,
+            created_by=payload.created_by,
+            reason=payload.reason,
+            actor_type=payload.actor_type,
+            actor_id=payload.actor_id,
+            session_id=payload.session_id,
+        )
+
+    @app.delete("/api/goals/edges/{edge_id}")
+    def delete_edge(
+        edge_id: str,
+        reason: str = Query(...),
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return store.delete_edge(edge_id, reason=reason, actor_type=actor_type, actor_id=actor_id, session_id=session_id)
+
+    @app.post("/api/goals/batch")
+    def apply_batch(payload: BatchRequest) -> dict[str, Any]:
+        return store.apply_batch(**payload.model_dump())
+
+    @app.post("/api/goals/rollback")
+    def rollback(payload: RollbackRequest) -> dict[str, Any]:
+        return store.rollback(**payload.model_dump())
+
+    @app.post("/api/goals/nodes/{node_id}/evidence", status_code=201)
+    def attach_evidence(node_id: str, payload: EvidenceCreate) -> dict[str, Any]:
+        return store.attach_evidence(
+            node_id, payload.model_dump(exclude={"created_by", "reason", "actor_type", "actor_id", "session_id"}),
+            created_by=payload.created_by, reason=payload.reason, actor_type=payload.actor_type,
+            actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.get("/api/goals/events")
+    def events(project_id: str, after: str | None = None, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        return {"events": store.list_events(project_id, after, limit)}
+
+    @app.get("/api/goals/nodes/{node_id}/context")
+    def context(node_id: str) -> dict[str, Any]:
+        return store.get_context(node_id)
+
+    @app.get("/api/goals/projects/{project_id}/next-actions")
+    def next_actions(
+        project_id: str,
+        limit: int = Query(10, ge=1, le=100),
+        filters: str | None = None,
+    ) -> dict[str, Any]:
+        parsed_filters: dict[str, Any] = {}
+        if filters:
+            try:
+                parsed_filters = json.loads(filters)
+            except json.JSONDecodeError as exc:
+                raise ValueError("filters must be a JSON object") from exc
+            if not isinstance(parsed_filters, dict):
+                raise ValueError("filters must be a JSON object")
+        return {"actions": store.next_actions(project_id, limit, parsed_filters)}
+
+    return app

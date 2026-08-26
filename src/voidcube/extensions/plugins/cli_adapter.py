@@ -20,7 +20,11 @@ _plugin_manager = get_plugin_manager()
 
 
 def discover_plugins() -> List[str]:
-    """Return names of explicitly registered executable plugins."""
+    """Discover and activate enabled plugins before exposing their extensions."""
+    from .registry import activate_all_plugins, register_discovered_manifests
+
+    register_discovered_manifests()
+    activate_all_plugins()
     return list(_plugin_manager.list_plugins())
 
 

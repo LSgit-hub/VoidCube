@@ -1,0 +1,27 @@
+{
+  "name": "goal_manager",
+  "version": "0.1.0",
+  "api_version": "1",
+  "description": "软件开发目标管理（DAG 目标图谱）",
+  "entrypoint": "plugins.goal_manager",
+  "data_owner": "goal_service",
+  "data_root": "~/.VoidCube/runtime/goals",
+  "capabilities": ["tools", "service", "web"],
+  "tools": {
+    "toolset": "goal_manager",
+    "module": "plugins.goal_manager.tools.agent_tools"
+  },
+  "service": {
+    "enabled": true,
+    "port": 6003,
+    "module": "plugins.goal_manager.server:create_app",
+    "health_path": "/health",
+    "gateway_service_type": "goal_service"
+  },
+  "web": {
+    "mount_path": "/ui/goal-manager",
+    "static_dir": "web/dist",
+    "entry": "index.html"
+  },
+  "config_key": "goal_manager"
+}

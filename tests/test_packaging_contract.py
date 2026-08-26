@@ -78,6 +78,11 @@ def test_package_data_uses_canonical_asset_owners():
         "presets/*.yaml",
         "dependency_manifest.yaml",
     ]
+    assert package_data["plugins"] == [
+        "*/plugin.json",
+        "*/web/dist/*",
+        "*/web/dist/**/*",
+    ]
 
 
 @pytest.mark.unit

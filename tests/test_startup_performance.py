@@ -9,7 +9,7 @@ def test_cold_service_start_launches_independent_services_in_parallel(
     monkeypatch,
     tmp_path,
 ):
-    """Keep Memory and Supervisor off the sequential cold-start critical path."""
+    """Keep core services off the sequential cold-start critical path."""
     calls: list[tuple[str, str]] = []
     pids: dict[str, int] = {}
 
@@ -44,9 +44,12 @@ def test_cold_service_start_launches_independent_services_in_parallel(
         "gateway",
         "supervisor",
         "memory",
+        *serve._plugin_service_names(),
     ]
     assert result["supervisor"]["started"] is True
     assert result["memory"]["started"] is True
+    for plugin_name in serve._plugin_service_names():
+        assert result[plugin_name]["started"] is True
 
 
 def test_port_probe_uses_short_cold_start_timeout(monkeypatch):

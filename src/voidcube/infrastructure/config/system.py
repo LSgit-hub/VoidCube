@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -84,6 +84,8 @@ class SystemConfig(BaseModel):
     supervisor: SupervisorConfig = Field(default_factory=SupervisorConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
+    model_config = {"extra": "allow"}
+
 
 def _apply_canonical_file_config(config: SystemConfig) -> None:
     """Load service settings owned by VOIDCUBE_HOME/config.yaml.
@@ -98,6 +100,9 @@ def _apply_canonical_file_config(config: SystemConfig) -> None:
         if not path.is_file():
             return
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for key, value in raw.items():
+            if key not in {"gateway", "memory", "supervisor", "agent"} and isinstance(value, dict):
+                setattr(config, key, dict(value))
         memory = dict(raw.get("memory") or {})
         memory_provider = dict(memory.get("mem") or {})
         if "redact_before_store" in memory_provider:

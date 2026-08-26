@@ -38,6 +38,7 @@ SUPERVISOR_UI_RESOURCE = Path("voidcube/systems/supervisor/web/supervisor.html")
 CANONICAL_SUPERVISOR_UI_RESOURCE = Path("voidcube/systems/supervisor/web/supervisor.html")
 PODMAN_CONTAINERFILE_RESOURCE = Path("voidcube/infrastructure/execution/containerfiles/podman-agent.Containerfile")
 PLUGIN_MANIFEST_GLOB = "plugins/*/plugin.json"
+PLUGIN_WEB_DIST_GLOB = "plugins/*/web/dist/**/*"
 
 
 class WheelContractError(RuntimeError):
@@ -151,6 +152,11 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
         for path in root.glob(PLUGIN_MANIFEST_GLOB)
         if path.is_file()
     )
+    expected.update(
+        path.relative_to(root).as_posix()
+        for path in root.glob(PLUGIN_WEB_DIST_GLOB)
+        if path.is_file()
+    )
 
     return expected
 
@@ -218,6 +224,11 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
             ) or name == "voidcube/extensions/tools/dependency_manifest.yaml"
             or name == PODMAN_CONTAINERFILE_RESOURCE.as_posix()
             or (name.startswith("plugins/") and name.endswith("/plugin.json"))
+            or (
+                name.startswith("plugins/")
+                and "/web/dist/" in name
+                and not name.endswith("/")
+            )
         }
         retired_files = sorted(
             name

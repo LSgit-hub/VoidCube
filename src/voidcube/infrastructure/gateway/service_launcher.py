@@ -85,6 +85,7 @@ class ServiceInfo:
     create_app: Optional[str] = None  # "module:factory"，插件服务 app 构建入口
     config_key: Optional[str] = None  # config.yaml 插件配置段
     gateway_service_type: Optional[str] = None  # 插件在 Gateway 注册的 service_type
+    health_path: str = "/"
 
     @property
     def is_running(self) -> bool:
@@ -94,7 +95,7 @@ class ServiceInfo:
 
     @property
     def health_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}/"
+        return f"http://127.0.0.1:{self.port}{self.health_path}"
 
 
 SERVICES: Dict[str, ServiceInfo] = {
@@ -127,15 +128,18 @@ SERVICES: Dict[str, ServiceInfo] = {
 _plugin_services_registered = False
 
 
-def register_plugin_services() -> None:
+def register_plugin_services(*, force: bool = False) -> None:
     """将启用了 service 能力的插件（plugins/*/plugin.json）动态并入 SERVICES。
 
     幂等：同一进程只扫描并入一次。单插件声明损坏不影响其它插件；
     注册失败只记日志，不阻断核心服务（插件故障隔离）。
     """
     global _plugin_services_registered
-    if _plugin_services_registered:
+    if _plugin_services_registered and not force:
         return
+    if force:
+        for name in _plugin_service_names():
+            SERVICES.pop(name, None)
     _plugin_services_registered = True
 
     try:
@@ -156,6 +160,7 @@ def register_plugin_services() -> None:
                 create_app=spec["create_app"],
                 config_key=spec["config_key"],
                 gateway_service_type=spec["gateway_service_type"],
+                health_path=spec.get("health_path", "/"),
             )
             logger.info("并入插件服务 %s (port %s)", name, spec["port"])
     except Exception as exc:
@@ -332,12 +337,18 @@ def _process_belongs_to_runtime(pid: int) -> bool:
     return any(marker in command_line for marker in runtime_markers)
 
 
-def _health_endpoint_is_service(port: int, name: str) -> bool:
+def _health_endpoint_is_service(
+    port: int,
+    name: str,
+    health_path: str | None = None,
+) -> bool:
     """Verify an occupied port from the service's own health identity."""
     try:
         from urllib.request import urlopen
 
-        with urlopen(f"http://127.0.0.1:{port}/", timeout=2.0) as response:
+        svc = SERVICES.get(name)
+        path = health_path or (svc.health_path if svc is not None else "/")
+        with urlopen(f"http://127.0.0.1:{port}{path}", timeout=2.0) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return False
@@ -356,7 +367,11 @@ def _health_endpoint_is_service(port: int, name: str) -> bool:
     return bool(expected_service and payload.get("service") == expected_service)
 
 
-def _health_check(port: int, timeout: float = 2.0) -> bool:
+def _health_check(
+    port: int,
+    timeout: float = 2.0,
+    health_path: str = "/",
+) -> bool:
     """Check if a service is responding on its health endpoint.
 
     Uses a raw-socket connect + minimal HTTP handshake to avoid
@@ -374,7 +389,7 @@ def _health_check(port: int, timeout: float = 2.0) -> bool:
 
         # Send a minimal HTTP request
         request = (
-            f"GET / HTTP/1.0\r\n"
+            f"GET {health_path} HTTP/1.0\r\n"
             f"Host: 127.0.0.1:{port}\r\n"
             f"Connection: close\r\n"
             f"\r\n"
@@ -404,6 +419,15 @@ def _health_check(port: int, timeout: float = 2.0) -> bool:
                 sock.close()
             except Exception:
                 pass
+
+
+def _service_health_check(svc: ServiceInfo) -> bool:
+    """Check a service using its declared path, with legacy test-hook fallback."""
+    try:
+        return _health_check(svc.port, health_path=svc.health_path)
+    except TypeError:
+        # A few embedders monkeypatch the historical one-argument probe.
+        return _health_check(svc.port)
 
 
 # ── Service management ────────────────────────────────────────────────
@@ -454,14 +478,9 @@ def _build_plugin_service_config(svc: ServiceInfo, port: int, system_config: Any
     插件 create_app 收到的 config 为普通 dict：
       {"name": ..., "port": ..., "service_port": ...} ∪ 插件自有配置段
     """
-    config: Dict[str, Any] = {}
-    if svc.config_key:
-        section = getattr(system_config, svc.config_key, None)
-        if section is not None:
-            if hasattr(section, "model_dump"):
-                config.update(section.model_dump())
-            elif isinstance(section, dict):
-                config.update(section)
+    from ...extensions.plugins.registry import load_plugin_config
+
+    config: Dict[str, Any] = load_plugin_config(svc.config_key, system_config)
     config.setdefault("name", svc.name)
     config.setdefault("port", port)
     config["service_port"] = port
@@ -497,6 +516,12 @@ def _build_plugin_service_app(svc: ServiceInfo, service_config: Dict[str, Any]):
     module_path, _, factory_name = svc.create_app.partition(":")
     if not module_path or not factory_name:
         raise ValueError(f"插件服务 {svc.name} 的 create_app 格式非法: {svc.create_app}")
+    from ...extensions.plugins.registry import get_plugin_roots
+
+    for root in get_plugin_roots():
+        parent = str(root.parent)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
     module = importlib.import_module(module_path)
     factory = getattr(module, factory_name, None)
     if not callable(factory):
@@ -541,8 +566,11 @@ def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
 
 def _service_python_path_entries() -> list[str]:
     """Return repo-local import roots required by service subprocesses."""
+    from ...extensions.plugins.registry import get_plugin_import_paths
+
     repo_root = Path(__file__).resolve().parents[4]
-    return [str(repo_root), str(repo_root / "Mem" / "src")]
+    entries = [repo_root, repo_root / "Mem" / "src", *get_plugin_import_paths()]
+    return [str(path) for path in dict.fromkeys(entries)]
 
 
 def _service_python_executable(
@@ -677,7 +705,7 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
         owner_pid = _port_owner_pid(svc.port)
         if owner_pid and _process_belongs_to_runtime(owner_pid) and (
             _process_is_service(owner_pid, svc.name)
-            or _health_endpoint_is_service(svc.port, svc.name)
+            or _health_endpoint_is_service(svc.port, svc.name, svc.health_path)
         ):
             svc.pid = owner_pid
             _write_pid(svc.pid_file, owner_pid)
@@ -798,11 +826,12 @@ def stop_service(name: str, silent: bool = False) -> bool:
 
 def status_all() -> Dict[str, Any]:
     """Return status of all services."""
+    register_plugin_services(force=True)
     result: Dict[str, Any] = {}
     for name, svc in SERVICES.items():
         pid = _read_pid(svc.pid_file)
         alive = pid is not None and _pid_alive(pid)
-        healthy = _health_check(svc.port) if alive else False
+        healthy = _service_health_check(svc) if alive else False
         result[name] = {
             "name": name,
             "port": svc.port,
@@ -841,6 +870,7 @@ def start_all(foreground: bool = False) -> None:
     Body/agent subprocesses are not part of the default startup path.
     They should only be started by an explicit body-runtime operation.
     """
+    register_plugin_services(force=True)
     if foreground and not _running_with_service_python():
         _restart_foreground_with_service_python()
         return
@@ -912,6 +942,7 @@ def stop_all(force: bool = False) -> None:
     When ``force=True``, skip status messages and terminate immediately
     without prompting (used by /quit and other automated shutdown paths).
     """
+    register_plugin_services(force=True)
     if not force:
         _safe_print("\n  Stopping VoidCube services...\n")
     for name in SERVICES:
@@ -924,7 +955,12 @@ def _wait_for_health(name: str, port: int, timeout: float = 15.0) -> bool:
     """Wait for a service to become healthy."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _health_check(port):
+        svc = SERVICES.get(name)
+        if svc is not None:
+            healthy = _service_health_check(svc)
+        else:
+            healthy = _health_check(port)
+        if healthy:
             return True
         time.sleep(0.1)
     _safe_print(f"  ⚠ {name} did not respond within {timeout}s")
@@ -981,6 +1017,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     Called automatically by ``voidcube`` (interactive mode).
     Skipped for ``voidcube -q`` (single-query fast path).
     """
+    register_plugin_services(force=True)
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
     prestarted_services: set[str] = set()
@@ -1018,7 +1055,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             healthy = (
                 _wait_for_health(name, svc.port, timeout=30.0)
                 if name in prestarted_services
-                else _health_check(svc.port)
+                else _service_health_check(svc)
             )
             if healthy:
                 required_gateway_types = _required_gateway_service_types(name)
@@ -1069,7 +1106,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         if proc is None:
             # start_service returned None — could be port-occupied by unknown
             # process, or already-running detected late.
-            healthy = _health_check(svc.port)
+            healthy = _service_health_check(svc)
             pid = _read_pid(svc.pid_file)
             result[name] = {"running": healthy, "healthy": healthy, "pid": pid, "started": False}
             if not silent:
