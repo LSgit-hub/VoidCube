@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -79,6 +80,11 @@ class ServiceInfo:
     log_file: str
     process: Optional[subprocess.Popen] = None
     pid: Optional[int] = None
+    # 插件服务扩展字段（kind="plugin" 时生效）
+    kind: str = "core"  # "core" | "plugin"
+    create_app: Optional[str] = None  # "module:factory"，插件服务 app 构建入口
+    config_key: Optional[str] = None  # config.yaml 插件配置段
+    gateway_service_type: Optional[str] = None  # 插件在 Gateway 注册的 service_type
 
     @property
     def is_running(self) -> bool:
@@ -116,6 +122,53 @@ SERVICES: Dict[str, ServiceInfo] = {
     # Autonomous-chain display and execution tracking live in the main CLI's
     # narrow execution owner, not in a standalone service process.
 }
+
+
+_plugin_services_registered = False
+
+
+def register_plugin_services() -> None:
+    """将启用了 service 能力的插件（plugins/*/plugin.json）动态并入 SERVICES。
+
+    幂等：同一进程只扫描并入一次。单插件声明损坏不影响其它插件；
+    注册失败只记日志，不阻断核心服务（插件故障隔离）。
+    """
+    global _plugin_services_registered
+    if _plugin_services_registered:
+        return
+    _plugin_services_registered = True
+
+    try:
+        from ...extensions.plugins.registry import find_plugin_services
+
+        for spec in find_plugin_services():
+            name = spec["name"]
+            if name in SERVICES:
+                logger.warning("插件服务 %s 与既有服务重名，跳过", name)
+                continue
+            SERVICES[name] = ServiceInfo(
+                name=name,
+                port=spec["port"],
+                module=spec["create_app"],
+                pid_file=str(PID_DIR / f"{name}.pid"),
+                log_file=str(PID_DIR / f"{name}.log"),
+                kind="plugin",
+                create_app=spec["create_app"],
+                config_key=spec["config_key"],
+                gateway_service_type=spec["gateway_service_type"],
+            )
+            logger.info("并入插件服务 %s (port %s)", name, spec["port"])
+    except Exception as exc:
+        logger.error("注册插件服务失败: %s", exc, exc_info=True)
+
+
+# 模块加载即并入：CLI 与服务子进程都能看到插件服务声明
+register_plugin_services()
+
+
+def _plugin_service_names() -> list[str]:
+    """返回已并入的插件服务名（保持声明顺序）。"""
+    return [name for name, svc in SERVICES.items() if svc.kind == "plugin"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -250,7 +303,11 @@ def _process_is_service(pid: int, name: str) -> bool:
         "gateway": ("internal_gateway", "gateway"),
         "memory": ("memory_service",),
         "supervisor": ("voidcube.systems.supervisor.supervisor", "supervisor"),
-    }.get(name, ())
+    }.get(name)
+    if markers is None:
+        # 插件服务：后台 spawn 的 python -c 脚本 cmdline 内嵌服务名
+        svc = SERVICES.get(name)
+        markers = (name,) if svc is not None and svc.kind == "plugin" else ()
     return "voidcube" in command_line and any(marker in command_line for marker in markers)
 
 
@@ -292,6 +349,10 @@ def _health_endpoint_is_service(port: int, name: str) -> bool:
         "memory": "memory-service",
         "supervisor": "supervisor",
     }.get(name)
+    if expected_service is None:
+        # 插件服务约定：health 端点返回 {"service": "<插件名>"}
+        svc = SERVICES.get(name)
+        expected_service = name if svc is not None and svc.kind == "plugin" else None
     return bool(expected_service and payload.get("service") == expected_service)
 
 
@@ -380,7 +441,31 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
         memory_config = system_config.memory.model_copy(deep=True)
         memory_config.port = port
         return memory_config
+
+    svc = SERVICES.get(name)
+    if svc is not None and svc.kind == "plugin":
+        return _build_plugin_service_config(svc, port, system_config)
     raise ValueError(f"Unknown service: {name}")
+
+
+def _build_plugin_service_config(svc: ServiceInfo, port: int, system_config: Any) -> Dict[str, Any]:
+    """构建插件服务配置：config.yaml[config_key] 段（转 dict）+ 端口/服务名。
+
+    插件 create_app 收到的 config 为普通 dict：
+      {"name": ..., "port": ..., "service_port": ...} ∪ 插件自有配置段
+    """
+    config: Dict[str, Any] = {}
+    if svc.config_key:
+        section = getattr(system_config, svc.config_key, None)
+        if section is not None:
+            if hasattr(section, "model_dump"):
+                config.update(section.model_dump())
+            elif isinstance(section, dict):
+                config.update(section)
+    config.setdefault("name", svc.name)
+    config.setdefault("port", port)
+    config["service_port"] = port
+    return config
 
 
 def _build_service_app(name: str, port: int):
@@ -397,7 +482,26 @@ def _build_service_app(name: str, port: int):
         return Supervisor(config=service_config).app
     elif name == "memory":
         return MemoryService(config=service_config).app
+
+    svc = SERVICES.get(name)
+    if svc is not None and svc.kind == "plugin" and svc.create_app:
+        return _build_plugin_service_app(svc, service_config)
     raise ValueError(f"Unknown service: {name}")
+
+
+def _build_plugin_service_app(svc: ServiceInfo, service_config: Dict[str, Any]):
+    """构建插件服务 FastAPI app：解析 ``module:factory`` 并调用 factory(config)。
+
+    约定：factory 接收一个 dict 配置，返回 FastAPI app 实例。
+    """
+    module_path, _, factory_name = svc.create_app.partition(":")
+    if not module_path or not factory_name:
+        raise ValueError(f"插件服务 {svc.name} 的 create_app 格式非法: {svc.create_app}")
+    module = importlib.import_module(module_path)
+    factory = getattr(module, factory_name, None)
+    if not callable(factory):
+        raise AttributeError(f"插件服务 {svc.name} 的 factory {factory_name} 不可调用")
+    return factory(service_config)
 
 
 def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
@@ -437,7 +541,7 @@ def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
 
 def _service_python_path_entries() -> list[str]:
     """Return repo-local import roots required by service subprocesses."""
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[4]
     return [str(repo_root), str(repo_root / "Mem" / "src")]
 
 
@@ -455,7 +559,7 @@ def _service_python_executable(
     Installed distributions without a repository ``.venv`` keep using the
     interpreter that launched the CLI.
     """
-    root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+    root = (repo_root or Path(__file__).resolve().parents[4]).resolve()
     active_platform = platform or sys.platform
     relative_path = (
         Path("Scripts") / "python.exe"
@@ -528,8 +632,11 @@ def _run_service_in_thread(name: str, port: int) -> None:
     import asyncio
     import uvicorn
 
-    _sync_canonical_mem_binding_before_start()
-    _verify_canonical_mem_import_source()
+    svc = SERVICES.get(name)
+    if svc is not None and svc.kind == "core":
+        # mem 规范绑定校验仅适用于核心服务；插件服务自带依赖
+        _sync_canonical_mem_binding_before_start()
+        _verify_canonical_mem_import_source()
     app = _build_service_app(name, port)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -607,7 +714,7 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
     service_python = _service_python_executable()
     log_path = json.dumps(str(Path(svc.log_file).resolve()))
     path_entries = json.dumps(_service_python_path_entries())
-    project_env_path = json.dumps(str(Path(__file__).resolve().parents[2] / ".env"))
+    project_env_path = json.dumps(str(Path(__file__).resolve().parents[4] / ".env"))
 
     script = f"""
 import sys, os
@@ -621,8 +728,9 @@ os.chdir({json.dumps(str(Path.cwd()))})
 from voidcube.infrastructure.config.environment import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env={project_env_path}, force_reload=True)
 import uvicorn
-from voidcube.infrastructure.gateway.service_launcher import _build_service_app, _verify_canonical_mem_import_source
-_verify_canonical_mem_import_source()
+from voidcube.infrastructure.gateway.service_launcher import _build_service_app, SERVICES, _verify_canonical_mem_import_source
+if SERVICES[{json.dumps(name)}].kind == 'core':
+    _verify_canonical_mem_import_source()
 app = _build_service_app({json.dumps(name)}, {svc.port})
 uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
 """
@@ -769,6 +877,15 @@ def start_all(foreground: bool = False) -> None:
             _wait_for_gateway_service_type("supervisor")
             _wait_for_gateway_service_type("executor")
 
+    # 4. Plugin services (declared in plugins/*/plugin.json)
+    for plugin_name in _plugin_service_names():
+        start_service(plugin_name, foreground=foreground)
+        if not foreground:
+            _wait_for_health(plugin_name, SERVICES[plugin_name].port)
+            plugin_svc = SERVICES[plugin_name]
+            if plugin_svc.gateway_service_type:
+                _wait_for_gateway_service_type(plugin_svc.gateway_service_type)
+
     if foreground:
         # Foreground: default stable services are running in daemon threads.
         # Wait for them (join) — the main thread stays alive until interrupted.
@@ -836,6 +953,9 @@ def _gateway_has_service_type(service_type: str) -> bool:
 
 
 def _required_gateway_service_types(service_name: str) -> tuple[str, ...]:
+    svc = SERVICES.get(service_name)
+    if svc is not None and svc.gateway_service_type:
+        return (svc.gateway_service_type,)
     return {
         "memory": ("memory",),
         "supervisor": ("supervisor", "executor"),
@@ -866,10 +986,10 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     prestarted_services: set[str] = set()
     _sync_canonical_mem_binding_before_start()
 
-    # Default stable path: Gateway → Mem → Supervisor.
+    # Default stable path: Gateway → Mem → Supervisor → plugin services.
     # The live CLI session is the canonical API-A runtime; body/agent
     # subprocesses are only started explicitly for body-runtime workflows.
-    startup_order = ["gateway", "memory", "supervisor"]
+    startup_order = ["gateway", "memory", "supervisor"] + _plugin_service_names()
     for name in startup_order:
         svc = SERVICES.get(name)
         if svc is None:

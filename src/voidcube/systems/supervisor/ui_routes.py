@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger("supervisor.ui")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +45,6 @@ class SupervisorUIRoutePorts:
 def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
     if not ports.enabled:
         return
-
     app = ports.app
     app.add_api_route(ports.ui_path, ports.get_ui, methods=["GET"])
     app.add_api_route("/ui/state", ports.get_state, methods=["GET"])
@@ -102,4 +106,41 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
         app.add_api_route("/ui/accounts/{account_id}/verify", ports.verify_account, methods=["POST"])
 
 
-__all__ = ["SupervisorUIRoutePorts", "mount_supervisor_ui_routes"]
+def mount_plugin_web_routes(app: FastAPI) -> None:
+    """Mount static UIs declared by enabled plugins (plugins/*/plugin.json web 段).
+
+    插件通过清单声明：
+      "web": {"mount_path": "/goal-manager", "static_dir": "web/dist", "entry": "index.html"}
+
+    目录缺失或挂载失败只记日志，不阻断 Supervisor 启动（插件故障隔离）。
+    """
+    from ...extensions.plugins.registry import find_plugin_web_uis
+
+    for web_ui in find_plugin_web_uis():
+        static_dir = Path(web_ui["static_dir"])
+        if not static_dir.is_dir():
+            logger.warning(
+                "插件 %s web 静态目录不存在: %s", web_ui["name"], static_dir
+            )
+            continue
+        try:
+            app.mount(
+                web_ui["mount_path"],
+                StaticFiles(directory=str(static_dir), html=True),
+                name=f"plugin-web-{web_ui['name']}",
+            )
+            logger.info(
+                "挂载插件 %s web UI %s -> %s",
+                web_ui["name"],
+                web_ui["mount_path"],
+                static_dir,
+            )
+        except Exception as exc:
+            logger.warning("挂载插件 %s web UI 失败: %s", web_ui["name"], exc)
+
+
+__all__ = [
+    "SupervisorUIRoutePorts",
+    "mount_supervisor_ui_routes",
+    "mount_plugin_web_routes",
+]

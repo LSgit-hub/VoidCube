@@ -55,6 +55,7 @@ from .service_runtime import ServiceRuntimeMixin
 from .trace_runtime import TraceRuntimeMixin
 from .ui_routes import (
     SupervisorUIRoutePorts,
+    mount_plugin_web_routes,
     mount_supervisor_ui_routes,
 )
 from ..voice import VoiceConfig, VoiceSessionManager
@@ -277,6 +278,8 @@ class Supervisor(
                 verify_account=self._ui_runtime.verify_account_endpoint,
             )
         )
+        # 插件 web UI 静态挂载（plugins/*/plugin.json web 段声明）
+        mount_plugin_web_routes(self.app)
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])
         self.app.add_api_route("/runtime/observation-input", self.get_runtime_observation_input, methods=["GET"])
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])
