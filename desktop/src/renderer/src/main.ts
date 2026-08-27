@@ -20,6 +20,7 @@ import {
 } from 'lucide'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import { MonitorHealthGate } from './monitor-health'
@@ -104,6 +105,7 @@ createIcons({
 })
 
 const terminal = new Terminal({
+  allowProposedApi: true,
   allowTransparency: false,
   convertEol: false,
   cursorBlink: true,
@@ -142,6 +144,11 @@ const terminal = new Terminal({
 })
 const fitAddon = new FitAddon()
 terminal.loadAddon(fitAddon)
+// 加载 Unicode11 宽度规则：修复 emoji 等 astral 字符被按 1 列宽处理
+// 导致的显示半宽/光标错位问题（xterm 6.0.0 默认只注册 UnicodeV6）
+const unicode11Addon = new Unicode11Addon()
+terminal.loadAddon(unicode11Addon)
+terminal.unicode.activeVersion = '11'
 terminal.open(terminalHost)
 terminal.attachCustomKeyEventHandler((event) => {
   const isPasteShortcut = event.type === 'keydown'
