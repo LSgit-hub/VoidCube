@@ -71,4 +71,5 @@ registry.register(
     toolset="assistant",
     schema=CLARIFY_SCHEMA,
     handler=_handle_clarify,
+    effect="read_only",
 )

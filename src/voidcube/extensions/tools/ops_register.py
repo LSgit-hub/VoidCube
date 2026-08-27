@@ -313,6 +313,7 @@ def register_ops_tools() -> List[str]:
         toolset="system",
         schema=system_info_schema,
         handler=system_info_tool,
+        effect="read_only",
     )
     registered_tools.append("system_info")
     
@@ -325,6 +326,7 @@ def register_ops_tools() -> List[str]:
         toolset="system",
         schema=cpu_stats_schema,
         handler=cpu_stats_tool,
+        effect="read_only",
     )
     registered_tools.append("cpu_stats")
     
@@ -337,6 +339,7 @@ def register_ops_tools() -> List[str]:
         toolset="system",
         schema=memory_stats_schema,
         handler=memory_stats_tool,
+        effect="read_only",
     )
     registered_tools.append("memory_stats")
     
@@ -349,6 +352,7 @@ def register_ops_tools() -> List[str]:
         toolset="system",
         schema=disk_usage_schema,
         handler=disk_usage_tool,
+        effect="read_only",
     )
     registered_tools.append("disk_usage")
     
@@ -361,6 +365,7 @@ def register_ops_tools() -> List[str]:
         toolset="system",
         schema=top_processes_schema,
         handler=top_processes_tool,
+        effect="read_only",
     )
     registered_tools.append("top_processes")
     
@@ -376,6 +381,7 @@ def register_ops_tools() -> List[str]:
         toolset="network",
         schema=ping_schema,
         handler=ping_tool,
+        effect="read_only",
     )
     registered_tools.append("ping")
     
@@ -391,6 +397,7 @@ def register_ops_tools() -> List[str]:
         toolset="network",
         schema=check_port_schema,
         handler=check_port_tool,
+        effect="read_only",
     )
     registered_tools.append("check_port")
     
@@ -406,6 +413,7 @@ def register_ops_tools() -> List[str]:
         toolset="network",
         schema=dns_lookup_schema,
         handler=dns_lookup_tool,
+        effect="read_only",
     )
     registered_tools.append("dns_lookup")
     
@@ -420,6 +428,7 @@ def register_ops_tools() -> List[str]:
         toolset="network",
         schema=curl_check_schema,
         handler=curl_check_tool,
+        effect="read_only",
     )
     registered_tools.append("curl_check")
     
@@ -436,6 +445,7 @@ def register_ops_tools() -> List[str]:
         toolset="logs",
         schema=read_log_schema,
         handler=read_log_tool,
+        effect="read_only",
     )
     registered_tools.append("read_log")
     
@@ -461,6 +471,7 @@ def register_ops_tools() -> List[str]:
         toolset="logs",
         schema=analyze_log_schema,
         handler=analyze_log_tool,
+        effect="read_only",
     )
     registered_tools.append("analyze_log")
     

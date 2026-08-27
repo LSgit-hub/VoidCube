@@ -483,4 +483,5 @@ registry.register(
     ),
     check_fn=check_bootstrap_requirements,
     emoji="🔍",
+    effect="read_only",
 )

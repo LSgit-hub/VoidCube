@@ -1271,6 +1271,7 @@ registry.register(
     ),
     check_fn=check_skills_requirements,
     emoji="📚",
+    effect="read_only",
 )
 registry.register(
     name="skill_view",
@@ -1281,4 +1282,5 @@ registry.register(
     ),
     check_fn=check_skills_requirements,
     emoji="📚",
+    effect="read_only",
 )

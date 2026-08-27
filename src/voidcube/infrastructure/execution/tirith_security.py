@@ -628,6 +628,22 @@ def check_command_security(command: str) -> dict:
     timeout = cfg["tirith_timeout"]
     fail_open = cfg["tirith_fail_open"]
 
+    if _resolved_path is _INSTALL_FAILED:
+        reason = _install_failure_reason or "not_found"
+        if fail_open:
+            return {
+                "action": "allow",
+                "findings": [],
+                "summary": f"tirith unavailable: {reason}",
+                "scanner_status": "unavailable",
+            }
+        return {
+            "action": "block",
+            "findings": [],
+            "summary": f"tirith unavailable (fail-closed): {reason}",
+            "scanner_status": "unavailable",
+        }
+
     try:
         result = subprocess.run(
             [tirith_path, "check", "--json", "--non-interactive",

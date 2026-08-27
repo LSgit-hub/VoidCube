@@ -145,5 +145,40 @@ def test_registry_has_no_legacy_default_toolset_aliases():
     } <= set(resolve_toolset("voidcube"))
 
 
+def test_status_and_lookup_tools_are_registered_read_only():
+    from voidcube.extensions.tools.model_tools import get_all_tool_names
+    from voidcube.extensions.tools.registry import registry
+
+    get_all_tool_names()
+
+    read_only = {
+        "account_status",
+        "analyze_log",
+        "check_dependencies",
+        "check_port",
+        "cpu_stats",
+        "curl_check",
+        "disk_usage",
+        "dns_lookup",
+        "memory_stats",
+        "ping",
+        "read_log",
+        "skill_view",
+        "skills_list",
+        "system_info",
+        "top_processes",
+        "vision_analyze",
+        "web_crawl",
+        "web_extract",
+        "web_search",
+    }
+    assert {name: registry.get_effect(name) for name in read_only} == {
+        name: "read_only" for name in read_only
+    }
+    assert registry.get_effect("terminal") == "non_idempotent_write"
+    assert registry.get_effect("execute_code") == "non_idempotent_write"
+    assert registry.get_effect("write_file") == "idempotent_write"
+
+
 
 

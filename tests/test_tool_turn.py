@@ -36,7 +36,7 @@ def _owner(events, *, tool_name="terminal", compress=False):
         messages.append(
             {
                 "role": "tool",
-                "tool_call_id": f"call-{tool_name}",
+                "tool_call_id": _assistant.tool_calls[0].id,
                 "content": "done",
             }
         )
@@ -167,6 +167,38 @@ def test_successful_tool_turn_runs_one_ordered_sequence():
         "assistant",
         "tool",
     ]
+
+
+def test_successful_tool_turn_uses_generated_id_for_missing_tool_call_id():
+    events = []
+    owner = _owner(events, tool_name="read_file")
+    state = ConversationTurnState()
+    assistant = SimpleNamespace(
+        content="",
+        tool_calls=[
+            SimpleNamespace(
+                id="",
+                function=SimpleNamespace(name="read_file", arguments="{}"),
+            )
+        ],
+    )
+
+    result = execute_successful_tool_turn(
+        owner,
+        state=state,
+        assistant_message=assistant,
+        finish_reason="tool_calls",
+        messages=[{"role": "user", "content": "question"}],
+        system_message="policy",
+        active_system_prompt="active-policy",
+        task_id="task-1",
+        pressure_tracker=ContextPressureTracker(),
+    )
+
+    assistant_call_id = result.messages[-2]["tool_calls"][0]["id"]
+    result_call_id = result.messages[-1]["tool_call_id"]
+    assert assistant_call_id.startswith("call_")
+    assert result_call_id == assistant_call_id
 
 
 def test_successful_tool_turn_emits_pressure_and_returns_compressed_state():

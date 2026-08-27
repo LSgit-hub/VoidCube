@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -101,6 +102,80 @@ def _value(source: Any, key: str, default: Any = None) -> Any:
     if isinstance(source, Mapping):
         return source.get(key, default)
     return getattr(source, key, default)
+
+
+def _replace_value(source: Any, key: str, value: Any) -> None:
+    if isinstance(source, Mapping):
+        try:
+            source[key] = value
+        except Exception:
+            pass
+        return
+    try:
+        setattr(source, key, value)
+    except Exception:
+        pass
+
+
+def _tool_call_with_id(tool_call: Any, generated_id: str) -> Any:
+    if isinstance(tool_call, Mapping):
+        clone = dict(tool_call)
+        clone["id"] = generated_id
+        return clone
+
+    raw = getattr(tool_call, "__dict__", None)
+    if isinstance(raw, Mapping):
+        clone = SimpleNamespace(**dict(raw))
+        clone.id = generated_id
+        return clone
+
+    return SimpleNamespace(
+        id=generated_id,
+        type=_value(tool_call, "type", "function"),
+        function=_value(tool_call, "function", {}),
+        extra_content=_value(tool_call, "extra_content", None),
+    )
+
+
+def ensure_tool_call_ids(
+    message: Any,
+    *,
+    tool_call_id_factory: Callable[[], str] | None = None,
+) -> list[Any]:
+    tool_calls = _value(message, "tool_calls")
+    if not tool_calls:
+        return []
+    normalized_tool_calls: list[Any] = []
+    changed = False
+    for tool_call in tool_calls:
+        raw_id = _value(tool_call, "id")
+        if isinstance(raw_id, str) and raw_id.strip():
+            normalized_tool_calls.append(tool_call)
+            continue
+        generated = (
+            tool_call_id_factory()
+            if tool_call_id_factory is not None
+            else f"call_{uuid.uuid4().hex}"
+        )
+        changed = True
+        if isinstance(tool_call, Mapping):
+            try:
+                tool_call["id"] = generated
+                normalized_tool_calls.append(tool_call)
+                continue
+            except Exception:
+                pass
+        try:
+            setattr(tool_call, "id", generated)
+            normalized_tool_calls.append(tool_call)
+            continue
+        except Exception:
+            pass
+        normalized_tool_calls.append(_tool_call_with_id(tool_call, generated))
+
+    if changed:
+        _replace_value(message, "tool_calls", normalized_tool_calls)
+    return normalized_tool_calls
 
 
 def inspect_chat_response(
@@ -330,7 +405,10 @@ def normalize_assistant_message(
         if preserved:
             normalized["reasoning_details"] = preserved
 
-    tool_calls = _value(message, "tool_calls")
+    tool_calls = ensure_tool_call_ids(
+        message,
+        tool_call_id_factory=tool_call_id_factory,
+    )
     if not tool_calls:
         return normalized
 

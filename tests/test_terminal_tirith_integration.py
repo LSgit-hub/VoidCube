@@ -184,3 +184,46 @@ def test_tirith_operational_failure_respects_config(
 
     assert result["action"] == expected_action
     assert result["scanner_status"] in {"unavailable", "timeout"}
+
+
+@pytest.mark.unit
+def test_tirith_known_unavailable_does_not_spawn(monkeypatch):
+    monkeypatch.setattr(
+        tirith_security_module,
+        "_load_security_config",
+        lambda: {
+            "tirith_enabled": True,
+            "tirith_path": "tirith",
+            "tirith_timeout": 3,
+            "tirith_fail_open": True,
+        },
+    )
+    monkeypatch.setattr(
+        tirith_security_module,
+        "_resolve_tirith_path",
+        lambda path: path,
+    )
+    monkeypatch.setattr(
+        tirith_security_module,
+        "_resolved_path",
+        tirith_security_module._INSTALL_FAILED,
+    )
+    monkeypatch.setattr(
+        tirith_security_module,
+        "_install_failure_reason",
+        "unsupported_platform",
+    )
+    monkeypatch.setattr(
+        tirith_security_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("known-missing tirith must not spawn"),
+    )
+
+    result = tirith_security_module.check_command_security("fetch example")
+
+    assert result == {
+        "action": "allow",
+        "findings": [],
+        "summary": "tirith unavailable: unsupported_platform",
+        "scanner_status": "unavailable",
+    }

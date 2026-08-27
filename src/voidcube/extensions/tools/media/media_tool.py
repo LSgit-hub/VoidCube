@@ -480,4 +480,5 @@ registry.register(
     schema=ACCOUNT_STATUS_SCHEMA,
     handler=lambda args, **kw: account_status(),
     emoji="🔑",
+    effect="read_only",
 )

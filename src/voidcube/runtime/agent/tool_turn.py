@@ -7,7 +7,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ...domain.agent.response import has_visible_content, strip_thinking_blocks
+from ...domain.agent.response import (
+    ensure_tool_call_ids,
+    has_visible_content,
+    strip_thinking_blocks,
+)
 from ...domain.agent.conversation_runtime import ConversationTurnRuntime
 from ...domain.agent.conversation_turn import ConversationTurnState
 from ...infrastructure.providers.model_metadata import estimate_messages_tokens_rough
@@ -131,6 +135,7 @@ def execute_successful_tool_turn(
     pressure_tracker: ContextPressureTracker = context_pressure_tracker,
 ) -> SuccessfulToolTurnExecution:
     """Apply the canonical successful tool-turn sequence once."""
+    assistant_message.tool_calls = ensure_tool_call_ids(assistant_message)
     assistant_message.tool_calls = owner._cap_delegate_task_calls(
         assistant_message.tool_calls
     )

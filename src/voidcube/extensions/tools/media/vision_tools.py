@@ -173,4 +173,5 @@ registry.register(
     schema=VISION_SCHEMA,
     handler=lambda args, **kwargs: vision_analyze_tool(**args, **kwargs),
     check_fn=_vision_backends_configured,
+    effect="read_only",
 )

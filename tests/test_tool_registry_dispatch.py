@@ -124,3 +124,24 @@ def test_unregister_removes_tool_metadata():
     assert registry.unregister("temporary_tool") is True
     assert registry.has_tool("temporary_tool") is False
     assert registry.get_toolset_requirements() == {}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_async_dispatch_is_safe_inside_running_event_loop():
+    registry = ToolRegistry()
+
+    async def handler(args):
+        return json.dumps({"success": True, "value": args["value"]})
+
+    registry.register(name="async_probe", handler=handler, is_async=True)
+
+    result = json.loads(
+        registry.dispatch(
+            "async_probe",
+            {"value": "ok"},
+            raise_exceptions=True,
+        )
+    )
+
+    assert result == {"success": True, "value": "ok"}

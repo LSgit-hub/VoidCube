@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import hashlib
 import threading
 import time
 
@@ -50,6 +51,68 @@ class SQLiteOwnerLease:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):
             return False
+        return True
+
+    @staticmethod
+    def _process_identity(pid: int) -> dict[str, object]:
+        try:
+            import psutil
+
+            process = psutil.Process(pid)
+            cmdline = "\0".join(process.cmdline())
+            return {
+                "pid": pid,
+                "create_time": float(process.create_time()),
+                "name": process.name(),
+                "exe": process.exe(),
+                "cmdline_hash": hashlib.sha256(
+                    cmdline.encode("utf-8", errors="replace")
+                ).hexdigest(),
+            }
+        except Exception:
+            return {"pid": pid}
+
+    @staticmethod
+    def _identity_matches(
+        current: dict[str, object],
+        recorded: dict[str, object],
+    ) -> bool:
+        current_create_time = current.get("create_time")
+        recorded_create_time = recorded.get("create_time")
+        if current_create_time is not None and recorded_create_time is not None:
+            try:
+                if abs(float(current_create_time) - float(recorded_create_time)) > 1:
+                    return False
+            except (TypeError, ValueError):
+                return False
+
+        for key in ("exe", "cmdline_hash"):
+            if recorded.get(key) and current.get(key) != recorded.get(key):
+                return False
+        return True
+
+    @classmethod
+    def _marker_owner_alive(cls, marker: dict[str, object]) -> bool:
+        try:
+            pid = int(marker.get("pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        if not cls._pid_alive(pid):
+            return False
+
+        current_identity = cls._process_identity(pid)
+        recorded_identity = marker.get("process")
+        if isinstance(recorded_identity, dict):
+            return cls._identity_matches(current_identity, recorded_identity)
+
+        acquired_at = marker.get("acquired_at")
+        current_create_time = current_identity.get("create_time")
+        if acquired_at is not None and current_create_time is not None:
+            try:
+                if float(current_create_time) > float(acquired_at) + 1:
+                    return False
+            except (TypeError, ValueError):
+                pass
         return True
 
     @staticmethod
@@ -108,6 +171,7 @@ class SQLiteOwnerLease:
                 "owner": self.owner,
                 "db_path": str(self.db_path),
                 "acquired_at": time.time(),
+                "process": self._process_identity(os.getpid()),
             }
             while True:
                 try:
@@ -130,7 +194,7 @@ class SQLiteOwnerLease:
                         pid = int(current.get("pid") or 0)
                     except (OSError, TypeError, ValueError, json.JSONDecodeError):
                         pid = 0
-                    if self._pid_alive(pid):
+                    if self._marker_owner_alive(current):
                         raise SQLiteOwnerConflict(
                             f"SQLite file is owned by process {pid} ({current.get('owner', 'unknown')}): {self.db_path}"
                         )

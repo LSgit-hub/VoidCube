@@ -91,4 +91,5 @@ registry.register(
     toolset="session_search",
     schema=SESSION_SEARCH_SCHEMA,
     handler=_handle_session_search,
+    effect="read_only",
 )

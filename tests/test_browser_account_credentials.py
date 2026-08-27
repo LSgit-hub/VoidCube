@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
 from voidcube.systems.supervisor.account_store import ParsedCookie
@@ -63,3 +66,38 @@ def test_cloud_browser_never_receives_saved_cookies(monkeypatch) -> None:
     browser_tool._inject_saved_account_cookies(
         "task-1", "https://www.bilibili.com/", {}
     )
+
+
+def test_npx_browser_fallback_preserves_windows_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(browser_tool, "_find_agent_browser", lambda: "npx agent-browser")
+    monkeypatch.setattr(browser_tool, "_is_local_mode", lambda: False)
+    monkeypatch.setattr(
+        browser_tool,
+        "_get_session_info",
+        lambda _task_id: {"session_name": "test-session"},
+    )
+    monkeypatch.setattr(browser_tool, "_socket_safe_tmpdir", lambda: str(tmp_path))
+    monkeypatch.setattr(browser_tool.shutil, "which", lambda name: f"C:/node/{name}.CMD")
+    monkeypatch.setattr(browser_tool.os, "pathsep", ";")
+    monkeypatch.setenv("PATH", r"C:\Program Files\nodejs;C:\Windows\System32")
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, cmd, stdout, stderr, env, **_kwargs):
+            captured["cmd"] = cmd
+            captured["path"] = env["PATH"]
+            os.write(stdout, b'{"success": true, "data": {}}')
+
+        def wait(self, timeout=None):
+            return None
+
+    monkeypatch.setattr(browser_tool.subprocess, "Popen", FakeProcess)
+
+    result = browser_tool._run_browser_command("task-1", "snapshot", [])
+
+    assert result == {"success": True, "data": {}}
+    assert captured["cmd"][:2] == ["C:/node/npx.CMD", "agent-browser"]
+    assert r"C:\Program Files\nodejs" in str(captured["path"]).split(";")

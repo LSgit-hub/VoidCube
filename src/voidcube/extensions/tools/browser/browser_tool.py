@@ -1179,7 +1179,10 @@ def _run_browser_command(
 
     # Keep concrete executable paths intact, even when they contain spaces.
     # Only the synthetic npx fallback needs to expand into multiple argv items.
-    cmd_prefix = ["npx", "agent-browser"] if browser_cmd == "npx agent-browser" else [browser_cmd]
+    if browser_cmd == "npx agent-browser":
+        cmd_prefix = [shutil.which("npx") or "npx", "agent-browser"]
+    else:
+        cmd_prefix = [browser_cmd]
 
     cmd_parts = cmd_prefix + backend_args + [
         "--json",
@@ -1206,18 +1209,19 @@ def _run_browser_command(
         VoidCube_node_bin = str(VoidCube_home / "node" / "bin")
 
         existing_path = browser_env.get("PATH", "")
-        path_parts = [p for p in existing_path.split(":") if p]
+        path_parts = [p for p in existing_path.split(os.pathsep) if p]
         candidate_dirs = (
             [VoidCube_node_bin]
             + list(_discover_homebrew_node_dirs())
-            + [p for p in _SANE_PATH.split(":") if p]
         )
+        if os.name != "nt":
+            candidate_dirs += tuple(p for p in _SANE_PATH.split(":") if p)
 
         for part in reversed(candidate_dirs):
             if os.path.isdir(part) and part not in path_parts:
                 path_parts.insert(0, part)
 
-        browser_env["PATH"] = ":".join(path_parts)
+        browser_env["PATH"] = os.pathsep.join(path_parts)
         browser_env["AGENT_BROWSER_SOCKET_DIR"] = task_socket_dir
         
         # Use temp files for stdout/stderr instead of pipes.

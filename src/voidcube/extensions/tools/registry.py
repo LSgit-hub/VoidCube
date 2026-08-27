@@ -8,6 +8,8 @@ from typing import Dict, Any, List, Optional
 import json
 import inspect
 import asyncio
+import concurrent.futures
+import threading
 
 
 def tool_error(message: str, **kwargs) -> str:
@@ -15,6 +17,46 @@ def tool_error(message: str, **kwargs) -> str:
     result = {"success": False, "error": message}
     result.update(kwargs)
     return json.dumps(result, ensure_ascii=False)
+
+
+class _ToolLoopState:
+    _tool_loop = None
+    _tool_loop_lock = threading.Lock()
+
+
+_worker_thread_local = threading.local()
+
+
+def _get_tool_loop():
+    with _ToolLoopState._tool_loop_lock:
+        if _ToolLoopState._tool_loop is None or _ToolLoopState._tool_loop.is_closed():
+            _ToolLoopState._tool_loop = asyncio.new_event_loop()
+        return _ToolLoopState._tool_loop
+
+
+def _get_worker_loop():
+    loop = getattr(_worker_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _worker_thread_local.loop = loop
+    return loop
+
+
+def _run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result(timeout=300)
+
+    if threading.current_thread() is not threading.main_thread():
+        return _get_worker_loop().run_until_complete(coro)
+
+    return _get_tool_loop().run_until_complete(coro)
 
 
 class ToolRegistry:
@@ -450,12 +492,12 @@ class ToolRegistry:
                     if params and params[0] == 'args':
                         # 函数签名: (args, **kwargs) - 直接传递字典
                         filtered_kwargs = _filter_kwargs(kwargs, skip_first_arg=True)
-                        result = asyncio.run(tool(args, **filtered_kwargs))
+                        result = _run_async(tool(args, **filtered_kwargs))
                     else:
                         # 函数签名: (command=..., ...) - 作为关键字参数传递
                         merged_args = {**args, **kwargs}
                         filtered_args = _filter_kwargs(merged_args)
-                        result = asyncio.run(tool(**filtered_args))
+                        result = _run_async(tool(**filtered_args))
                 else:
                     # 同步函数
                     if params and params[0] == 'args':

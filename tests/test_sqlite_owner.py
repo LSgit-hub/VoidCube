@@ -49,6 +49,68 @@ def test_owner_lease_recovers_dead_process_marker(tmp_path):
     lease.close()
 
 
+def test_owner_lease_recovers_reused_pid_marker(tmp_path, monkeypatch):
+    db_path = tmp_path / "actions.db"
+    marker = tmp_path / "actions.db.owner"
+    marker.write_text(
+        json.dumps(
+            {
+                "pid": 1234,
+                "owner": "action-journal-owner",
+                "acquired_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(SQLiteOwnerLease, "_pid_alive", staticmethod(lambda _pid: True))
+    monkeypatch.setattr(
+        SQLiteOwnerLease,
+        "_process_identity",
+        staticmethod(lambda pid: {"pid": pid, "create_time": 200.0}),
+    )
+
+    lease = SQLiteOwnerLease(db_path, "action-journal-owner")
+
+    assert json.loads(marker.read_text(encoding="utf-8"))["pid"] == os.getpid()
+    lease.close()
+
+
+def test_owner_lease_rejects_matching_live_identity_marker(tmp_path, monkeypatch):
+    db_path = tmp_path / "actions.db"
+    marker = tmp_path / "actions.db.owner"
+    marker.write_text(
+        json.dumps(
+            {
+                "pid": 1234,
+                "owner": "other-owner",
+                "process": {
+                    "pid": 1234,
+                    "create_time": 100.0,
+                    "exe": "C:/agent/python.exe",
+                    "cmdline_hash": "abc",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(SQLiteOwnerLease, "_pid_alive", staticmethod(lambda _pid: True))
+    monkeypatch.setattr(
+        SQLiteOwnerLease,
+        "_process_identity",
+        staticmethod(
+            lambda pid: {
+                "pid": pid,
+                "create_time": 100.0,
+                "exe": "C:/agent/python.exe",
+                "cmdline_hash": "abc",
+            }
+        ),
+    )
+
+    with pytest.raises(SQLiteOwnerConflict):
+        SQLiteOwnerLease(db_path, "action-journal-owner")
+
+
 def test_owner_lease_conflict_is_visible_across_processes(tmp_path):
     db_path = tmp_path / "registry.db"
     lease = SQLiteOwnerLease(db_path, "process-registry-owner")
