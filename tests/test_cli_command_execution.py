@@ -159,6 +159,14 @@ def test_every_discoverable_cli_builtin_has_an_execution_spec() -> None:
     assert discoverable <= set(BUILTIN_COMMAND_SPECS)
 
 
+def test_every_cli_builtin_is_present_in_the_command_catalog() -> None:
+    catalog_names = {
+        command.name for command in COMMAND_REGISTRY if not command.gateway_only
+    }
+
+    assert set(BUILTIN_COMMAND_SPECS) <= catalog_names
+
+
 def test_executor_distinguishes_exit_builtin_and_dynamic_command() -> None:
     host = SimpleNamespace(_command_running=False, _command_status="")
     host._invalidate = lambda **kwargs: None

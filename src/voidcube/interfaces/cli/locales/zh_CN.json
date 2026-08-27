@@ -124,6 +124,18 @@
         "description": "显示可用提供商和当前提供商",
         "usage": "用法: /provider"
       },
+      "memory": {
+        "description": "显示记忆数据库位置",
+        "usage": "用法: /memory"
+      },
+      "mcp": {
+        "description": "管理MCP服务器配置",
+        "usage": "用法: /mcp [list|add|remove|test]"
+      },
+      "plan": {
+        "description": "管理当前任务计划",
+        "usage": "用法: /plan"
+      },
       "personality": {
         "description": "设置预定义人格",
         "usage": "用法: /personality [名称]"

@@ -108,6 +108,24 @@ COMMAND_REGISTRY: list[CommandDef] = [
                defer_subcommands_until_prefix=True),
     CommandDef("resume", "恢复之前的会话", "会话管理",
                args_hint="[name]"),
+    CommandDef("title", "为当前会话设置标题", "会话管理",
+               cli_only=True, args_hint="[name]"),
+    CommandDef("branch", "分支当前会话(探索不同路径)", "会话管理",
+               cli_only=True, args_hint="[name]"),
+    CommandDef("background", "在后台运行提示", "会话管理",
+               cli_only=True, args_hint="<prompt>"),
+    CommandDef("btw", "使用会话上下文的临时旁注(无工具,不持久化)", "会话管理",
+               cli_only=True, args_hint="<question>"),
+    CommandDef("queue", "为下一轮排队提示(不中断)", "会话管理",
+               cli_only=True, args_hint="<prompt>"),
+    CommandDef("compress", "手动压缩对话上下文", "会话管理",
+               cli_only=True, args_hint="[focus]"),
+    CommandDef("rollback", "列出或恢复文件系统检查点", "会话管理",
+               cli_only=True, args_hint="[number]"),
+    CommandDef("stop", "终止所有运行中的后台进程", "会话管理",
+               cli_only=True),
+    CommandDef("usage", "显示当前会话的令牌使用和速率限制", "会话管理",
+               cli_only=True),
 
     # Configuration - 配置管理
     CommandDef("config", "显示当前配置", "配置管理",
@@ -115,13 +133,61 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("model", "切换LLM模型", "配置管理", args_hint="[model] [--global]"),
     CommandDef("provider", "显示已配置 API Provider",
                "配置管理"),
+    CommandDef("memory", "显示记忆数据库位置", "配置管理",
+               cli_only=True),
     CommandDef("language", "显示或更改显示语言", "配置管理",
                cli_only=True, args_hint="[-CN|-EN]",
                subcommands=("-CN", "-EN")),
+    CommandDef("personality", "设置预定义人格", "配置管理",
+               cli_only=True, args_hint="[name]"),
+    CommandDef("reasoning", "管理推理努力和显示", "配置管理",
+               cli_only=True,
+               args_hint="[none|minimal|low|medium|high|xhigh|show|hide]",
+               subcommands=(
+                   "none", "minimal", "low", "medium", "high", "xhigh",
+                   "show", "hide", "on", "off",
+               )),
+    CommandDef("fast", "切换快速模式 — OpenAI优先处理(正常/快速)", "配置管理",
+               cli_only=True, args_hint="[normal|fast|status]",
+               subcommands=("normal", "fast", "status", "on", "off")),
+    CommandDef("statusbar", "切换上下文/模型状态栏", "配置管理",
+               cli_only=True),
+    CommandDef("verbose", "循环工具进度显示: 关闭 -> 新 -> 全部 -> 详细", "配置管理",
+               cli_only=True),
+    CommandDef("yolo", "切换YOLO模式(跳过所有危险命令批准)", "配置管理",
+               cli_only=True),
+    CommandDef("voice", "切换语音模式", "配置管理",
+               cli_only=True, args_hint="[on|off|tts|status]",
+               subcommands=("on", "off", "tts", "status")),
+
     # Server Management - 服务器管理
     CommandDef("tools", "查看可用工具列表", "服务器管理",
-               cli_only=True),
+               cli_only=True, args_hint="[list|disable|enable] [name...]",
+               subcommands=("list", "disable", "enable")),
     CommandDef("toolsets", "列出可用工具集", "服务器管理",
+               cli_only=True),
+    CommandDef("mcp", "管理MCP服务器配置", "服务器管理",
+               cli_only=True, args_hint="[list|add|remove|test]",
+               subcommands=("list", "add", "remove", "test")),
+    CommandDef("browser", "通过CDP连接到当前Chrome", "服务器管理",
+               cli_only=True, args_hint="[connect|disconnect|status]",
+               subcommands=("connect", "disconnect", "status")),
+    CommandDef("reload-mcp", "从配置重新加载MCP服务器", "服务器管理",
+               cli_only=True),
+    CommandDef("plugins", "列出已安装插件及其状态", "服务器管理",
+               cli_only=True),
+    CommandDef("profile", "显示活动配置文件名称和主目录", "服务器管理",
+               cli_only=True),
+    CommandDef("paste", "检查剪贴板中的图像并附加它", "服务器管理",
+               cli_only=True),
+    CommandDef("image", "为下一个提示附加本地图像文件", "服务器管理",
+               cli_only=True, args_hint="<path>"),
+    CommandDef("skills", "搜索、安装、检查或管理技能", "服务器管理",
+               cli_only=True, args_hint="[list|search|install|uninstall]",
+               subcommands=("list", "search", "install", "uninstall")),
+    CommandDef("debug", "上传调试报告并获取可分享链接", "服务器管理",
+               cli_only=True),
+    CommandDef("plan", "管理当前任务计划", "服务器管理",
                cli_only=True),
     CommandDef("preset", "应用部署预设 (LNMP, Docker等)",
                "服务器管理", cli_only=True, args_hint="[list|apply|show] [name]",
@@ -647,7 +713,7 @@ class SlashCommandCompleter(Completer):
                 if not sub_text and self._defer_subcommands(base_cmd):
                     return
                 for sub in SUBCOMMANDS[base_cmd]:
-                    if sub.startswith(sub_lower) and sub != sub_lower:
+                    if sub.lower().startswith(sub_lower) and sub.lower() != sub_lower:
                         yield Completion(
                             sub,
                             start_position=-len(sub_text),
@@ -656,7 +722,7 @@ class SlashCommandCompleter(Completer):
                         )
             return
 
-        word = text[1:]
+        word = text[1:].lower()
 
         for cmd, desc in COMMANDS.items():
             if not self._command_allowed(cmd):
@@ -672,7 +738,7 @@ class SlashCommandCompleter(Completer):
 
         for cmd, info in self._iter_skill_commands().items():
             cmd_name = cmd[1:]
-            if cmd_name.startswith(word):
+            if cmd_name.lower().startswith(word):
                 description = str(info.get("description", "技能命令"))
                 try:
                     from ..i18n import t
@@ -743,7 +809,7 @@ class SlashCommandAutoSuggest(AutoSuggest):
                 if not sub_text and self._completer is not None and self._completer._defer_subcommands(base_cmd):
                     return None
                 for sub in SUBCOMMANDS[base_cmd]:
-                    if sub.startswith(sub_lower) and sub != sub_lower:
+                    if sub.lower().startswith(sub_lower) and sub.lower() != sub_lower:
                         return Suggestion(sub[len(sub_text):])
 
         # Fall back to history

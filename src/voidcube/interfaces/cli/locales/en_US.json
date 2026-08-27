@@ -95,6 +95,15 @@
       "provider": {
         "description": "Show available providers and current provider"
       },
+      "memory": {
+        "description": "Show the memory database location"
+      },
+      "mcp": {
+        "description": "Manage MCP server configuration"
+      },
+      "plan": {
+        "description": "Manage the current task plan"
+      },
       "personality": {
         "description": "Set a predefined personality"
       },

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from voidcube.interfaces.cli.commands.catalog import SlashCommandAutoSuggest, SlashCommandCompleter
+from voidcube.interfaces.cli.commands.execution import BUILTIN_COMMAND_SPECS
 from voidcube.interfaces.cli.i18n import get_i18n, init_i18n, set_locale
 
 
@@ -48,6 +49,21 @@ def test_goal_subcommands_include_localized_completion_descriptions():
         "blocked": "将活动目标标记为阻塞，后接原因",
         "clear": "清除已结束的目标",
     }
+
+
+def test_command_completion_includes_voice_and_accepts_uppercase_prefix():
+    completions = list(SlashCommandCompleter().get_completions(_doc("/V"), None))
+
+    assert any(item.text == "voice" for item in completions)
+
+
+def test_slash_completion_includes_every_builtin_command():
+    completed_names = {
+        item.text.strip()
+        for item in SlashCommandCompleter().get_completions(_doc("/"), None)
+    }
+
+    assert set(BUILTIN_COMMAND_SPECS) <= completed_names
 
 
 def test_tasks_auto_suggest_is_hidden_until_prefix_is_typed():
