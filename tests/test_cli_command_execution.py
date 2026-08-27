@@ -1844,3 +1844,36 @@ def test_cli_process_routes_status_through_display_handler(monkeypatch) -> None:
             ]
         )
     ]
+
+
+def test_cli_process_status_argument_saves_startup_history_limit(monkeypatch) -> None:
+    from voidcube.infrastructure.config import configuration as config_module
+
+    saved: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        config_module,
+        "save_config_value",
+        lambda key, value: saved.append((key, value)) or True,
+    )
+    output: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.startup_history_limit = 4
+    app._session_status_display_ports = None
+    app._session_db = None
+    app._get_subagent_observability_snapshot = lambda: {"active": False}
+    app.console = SimpleNamespace(
+        print=lambda text, **_kwargs: output.append(text),
+    )
+    app.session_id = "session-1"
+    app.session_start = datetime(2026, 7, 30, 10, 0, 0)
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/status 8") is True
+    assert app.startup_history_limit == 8
+    assert saved == [("display.startup_history_limit", 8)]
+    assert output == [
+        "  Startup history display count set to 8 (saved to config)"
+    ]

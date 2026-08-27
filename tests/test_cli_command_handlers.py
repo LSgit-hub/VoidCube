@@ -1610,6 +1610,41 @@ def test_session_status_handler_uses_timestamp_fallbacks_and_idle_projection() -
     ]
 
 
+def test_session_status_handler_sets_startup_history_limit_only_with_valid_argument() -> None:
+    output: list[str] = []
+    state = {"limit": 4}
+    saved: list[int] = []
+
+    ports = SessionStatusDisplayPorts(
+        session_metadata=lambda: {},
+        session_id=lambda: "session-1",
+        session_start=lambda: datetime(2026, 7, 30, 10, 0, 0),
+        home_path=lambda: "home",
+        model=lambda: "model",
+        provider=lambda: "provider",
+        total_tokens=lambda: 0,
+        agent_running=lambda: False,
+        subagent_snapshot=lambda: {"active": False},
+        autonomous_sections=lambda: (),
+        emit=output.append,
+        set_history_limit=lambda value: state.__setitem__("limit", value),
+        save_history_limit=lambda value: saved.append(value) or True,
+    )
+
+    handle_session_status_command(parse_cli_command("/status 7"), ports=ports)
+    assert state["limit"] == 7
+    assert saved == [7]
+    assert output == [
+        "  Startup history display count set to 7 (saved to config)"
+    ]
+
+    output.clear()
+    handle_session_status_command(parse_cli_command("/status 11"), ports=ports)
+    assert state["limit"] == 7
+    assert saved == [7]
+    assert output == ["  Usage: /status [1-10]"]
+
+
 def test_retry_handler_requeues_original_payload_through_ports() -> None:
     payload = ("inspect", ["screen.png"])
     queued: list[object] = []

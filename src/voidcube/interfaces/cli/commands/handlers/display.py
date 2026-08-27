@@ -90,6 +90,8 @@ class SessionStatusDisplayPorts:
     autonomous_sections: Callable[[], Sequence[str]]
     emit: Callable[[str], None]
     goal_snapshot: Callable[[], Mapping[str, Any]] = lambda: {}
+    set_history_limit: Callable[[int], None] | None = None
+    save_history_limit: Callable[[int], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,7 +299,11 @@ def handle_session_status_command(
     ports: SessionStatusDisplayPorts,
 ) -> None:
     """Project session, subagent, and autonomous status through read ports."""
-    del request
+    argument = request.arguments.strip()
+    if argument:
+        _set_startup_history_limit(argument, ports)
+        return
+
     metadata = ports.session_metadata()
     session_start = ports.session_start()
     created_at = _timestamp_or_default(metadata.get("started_at"), session_start)
@@ -351,6 +357,41 @@ def handle_session_status_command(
             lines.append(f"Goal Reason: {reason}")
     lines.extend(ports.autonomous_sections())
     ports.emit("\n".join(lines))
+
+
+def _set_startup_history_limit(
+    argument: str,
+    ports: SessionStatusDisplayPorts,
+) -> None:
+    from ...lifecycle.startup import (
+        MAX_STARTUP_HISTORY_LIMIT,
+        MIN_STARTUP_HISTORY_LIMIT,
+    )
+
+    parts = argument.split()
+    try:
+        limit = int(parts[0]) if len(parts) == 1 else -1
+    except ValueError:
+        limit = -1
+    if not MIN_STARTUP_HISTORY_LIMIT <= limit <= MAX_STARTUP_HISTORY_LIMIT:
+        ports.emit("  Usage: /status [1-10]")
+        return
+    if (
+        ports.set_history_limit is None
+        or ports.save_history_limit is None
+    ):
+        ports.emit("  Startup history display setting is unavailable.")
+        return
+
+    ports.set_history_limit(limit)
+    if ports.save_history_limit(limit):
+        ports.emit(
+            f"  Startup history display count set to {limit} (saved to config)"
+        )
+    else:
+        ports.emit(
+            f"  Startup history display count set to {limit} (session only)"
+        )
 
 
 def handle_provider_display_command(

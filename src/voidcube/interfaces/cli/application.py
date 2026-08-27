@@ -198,7 +198,12 @@ from .chat_error_runtime import (
     CliChatErrorPorts,
     CliChatErrorRuntime,
 )
-from .lifecycle.startup import CliStartupPorts, CliStartupRuntime
+from .lifecycle.startup import (
+    CliStartupPorts,
+    CliStartupRuntime,
+    normalize_startup_history_limit,
+    render_compact_history_panel,
+)
 from .lifecycle.guards import (
     CliLifecycleGuardPorts,
     CliLifecycleGuardRuntime,
@@ -1068,6 +1073,9 @@ class VoidcubeCLI:
         self.tool_progress_mode = "off" if _raw_tp is False else str(_raw_tp)
         # resume_display: "full" (show history) | "minimal" (one-liner only)
         self.resume_display = display_config.get("resume_display", "full")
+        self.startup_history_limit = normalize_startup_history_limit(
+            display_config.get("startup_history_limit", 4)
+        )
         # bell_on_complete: play terminal bell (\a) when agent finishes a response
         self.bell_on_complete = display_config.get("bell_on_complete", False)
         # show_reasoning: display model thinking/reasoning before the response
@@ -4116,23 +4124,14 @@ class VoidcubeCLI:
                     return session_db.list_sessions_rich(
                         source="cli",
                         exclude_sources=["tool"],
-                        limit=5,
+                        limit=self.startup_history_limit + 1,
                         exclude_id_prefixes=["scheduled_"],
                     )
             except Exception:
                 return []
 
         def render_history_panel(lines: list[str]) -> None:
-            from rich.panel import Panel
-
-            self.console.print(
-                Panel(
-                    "\n".join(lines),
-                    border_style="dim",
-                    padding=(0, 1),
-                    height=12,
-                )
-            )
+            render_compact_history_panel(self.console, lines)
 
         def tools_count() -> int:
             try:
@@ -4163,6 +4162,7 @@ class VoidcubeCLI:
                 preload_resumed_session=self._preload_resumed_session,
                 display_resumed_history=self._display_resumed_history,
                 recent_sessions=recent_sessions,
+                history_limit=lambda: self.startup_history_limit,
                 terminal_width=lambda: shutil.get_terminal_size((80, 24)).columns,
                 render_history_panel=render_history_panel,
                 tools_count=tools_count,

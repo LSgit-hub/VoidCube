@@ -4,6 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
+
+
+DEFAULT_STARTUP_HISTORY_LIMIT = 4
+MIN_STARTUP_HISTORY_LIMIT = 1
+MAX_STARTUP_HISTORY_LIMIT = 10
+
+
+def normalize_startup_history_limit(value: object) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_STARTUP_HISTORY_LIMIT
+    if not MIN_STARTUP_HISTORY_LIMIT <= limit <= MAX_STARTUP_HISTORY_LIMIT:
+        return DEFAULT_STARTUP_HISTORY_LIMIT
+    return limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +33,7 @@ class CliStartupPorts:
     preload_resumed_session: Callable[[], bool]
     display_resumed_history: Callable[[], None]
     recent_sessions: Callable[[], Sequence[Mapping[str, object]]]
+    history_limit: Callable[[], int]
     terminal_width: Callable[[], int]
     render_history_panel: Callable[[list[str]], None]
     tools_count: Callable[[], int]
@@ -45,7 +62,7 @@ class CliStartupRuntime:
             session
             for session in self.ports.recent_sessions()
             if session.get("id") != self.ports.session_id()
-        ][:4]
+        ][: normalize_startup_history_limit(self.ports.history_limit())]
         if sessions:
             self.ports.render_history_panel(self._history_lines(sessions))
         else:
@@ -88,3 +105,18 @@ class CliStartupRuntime:
                 display_text = display_text[: max_preview_length - 3] + "..."
             lines.append(f"  {id_part}{separator}{display_text}")
         return lines
+
+
+def render_compact_history_panel(
+    console: Any,
+    lines: Sequence[str],
+) -> None:
+    from rich.panel import Panel
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            border_style="dim",
+            padding=(0, 1),
+        )
+    )

@@ -1748,6 +1748,8 @@ def _fast_command_ports(
 
 
 def _session_status_display_ports(host: Any) -> SessionStatusDisplayPorts:
+    from ....infrastructure.config.configuration import save_config_value
+
     def session_metadata() -> dict[str, Any]:
         repository = getattr(host, "_session_db", None)
         if repository is None:
@@ -1774,6 +1776,11 @@ def _session_status_display_ports(host: Any) -> SessionStatusDisplayPorts:
         autonomous_sections=lambda: _autonomous_observation_summary_sections(host),
         emit=emit,
         goal_snapshot=lambda: _session_goal_snapshot(host),
+        set_history_limit=lambda value: setattr(host, "startup_history_limit", value),
+        save_history_limit=lambda value: save_config_value(
+            "display.startup_history_limit",
+            value,
+        ),
     )
 
 

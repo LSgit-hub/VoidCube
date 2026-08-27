@@ -1,4 +1,8 @@
-from voidcube.interfaces.cli.lifecycle.startup import CliStartupPorts, CliStartupRuntime
+from voidcube.interfaces.cli.lifecycle.startup import (
+    CliStartupPorts,
+    CliStartupRuntime,
+    render_compact_history_panel,
+)
 
 
 def _runtime(calls, state):
@@ -11,6 +15,7 @@ def _runtime(calls, state):
             preload_resumed_session=lambda: calls.append("preload") or state["preload"],
             display_resumed_history=lambda: calls.append("history"),
             recent_sessions=lambda: state["sessions"],
+            history_limit=lambda: state.get("history_limit", 4),
             terminal_width=lambda: 80,
             render_history_panel=lambda lines: calls.append(("panel", lines)),
             tools_count=lambda: 3,
@@ -63,3 +68,44 @@ def test_startup_runtime_uses_welcome_and_no_history_for_new_session():
     assert "preload" not in calls
     assert ("emit", "[dim]暂无对话历史[/]") in calls
     assert ("emit", "[#FFF8DC]3 个工具 · 2 技能 · 当前会话: current[/]") in calls
+
+
+def test_history_panel_does_not_reserve_unused_height(monkeypatch):
+    captured = {}
+
+    class FakePanel:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    class FakeConsole:
+        def print(self, value):
+            captured["panel"] = value
+
+    monkeypatch.setattr("rich.panel.Panel", FakePanel)
+
+    render_compact_history_panel(FakeConsole(), ["标题", "列表行"])
+
+    assert captured["args"] == ("标题\n列表行",)
+    assert captured["kwargs"] == {"border_style": "dim", "padding": (0, 1)}
+
+
+def test_startup_runtime_uses_configured_history_limit():
+    calls = []
+    state = {
+        "resumed": False,
+        "preload": False,
+        "sessions": [
+            {"id": "one", "preview": "one"},
+            {"id": "two", "preview": "two"},
+            {"id": "three", "preview": "three"},
+        ],
+        "history_limit": 2,
+        "skills": [],
+        "skills_shown": False,
+    }
+
+    _runtime(calls, state).run()
+
+    panel = next(value for value in calls if value[0] == "panel")
+    assert len(panel[1]) == 4

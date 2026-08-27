@@ -548,6 +548,7 @@ DEFAULT_CONFIG = {
         "compact": False,
         "personality": "kawaii",
         "resume_display": "full",
+        "startup_history_limit": 4,
         "bell_on_complete": False,
         "show_reasoning": False,
         "streaming": False,
