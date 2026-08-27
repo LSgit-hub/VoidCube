@@ -423,6 +423,40 @@ body[data-exec-window="false"] .floor {
   transform: rotate(45deg);
 }
 .companion-widget-panel.chat-open .companion-chat-content { display: grid; gap: 6px; padding-top: 22px; }
+.companion-think-bubble {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: calc(100% + 8px);
+  z-index: 11;
+  max-height: 96px;
+  overflow: hidden;
+  padding: 8px 10px;
+  border: 1px solid rgba(226,176,74,.34);
+  border-radius: 8px;
+  background: rgba(255,250,240,.97);
+  box-shadow: 0 8px 22px rgba(20,36,52,.2);
+  color: #2a1d18;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  transform: translateY(0);
+  opacity: 1;
+  transition: opacity .25s ease, transform .25s ease;
+}
+.companion-think-bubble[hidden] { display: block; pointer-events: none; opacity: 0; transform: translateY(6px); }
+.companion-think-bubble::after {
+  content: "";
+  position: absolute;
+  left: 28px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: rgba(255,250,240,.97);
+  border-right: 1px solid rgba(226,176,74,.34);
+  border-bottom: 1px solid rgba(226,176,74,.34);
+  transform: rotate(45deg);
+}
 .sofa-shadow {
   position: absolute; left: 8px; right: 8px; bottom: -8px; height: 16px;
   background: radial-gradient(ellipse, rgba(0,0,0,.35), transparent 70%);
@@ -4304,6 +4338,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 沙发 + 日常辅助聊天组件 -->
     <div class="companion-widget" data-companion-widget hidden>
+      <div class="companion-think-bubble" data-companion-think-bubble aria-live="polite" hidden>
+        <span data-companion-think-text></span>
+      </div>
       <div class="companion-chat companion-widget-panel empty" id="companionChatPanel" data-companion-chat aria-live="polite">
         <div class="companion-chat-content" id="companionChatContent">
           <div class="companion-chat-line user" data-chat-user-line>
@@ -5011,6 +5048,8 @@ const els = {
   companionInputs: $$('[data-companion-input]'),
   companionSends: $$('[data-companion-send]'),
   companionStatuses: $$('[data-chat-status]'),
+  companionThinkBubble: $('[data-companion-think-bubble]'),
+  companionThinkText: $('[data-companion-think-text]'),
   windowMailEntry: $('[data-scene-entry="mail"].window'),
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
@@ -5101,6 +5140,10 @@ const els = {
 let companionChatOpen = false;
 let companionChatBusy = false;
 let companionChatSessionId = '';
+let companionThinkHideTimer = null;
+let lastCompanionThinkKey = '';
+let lastCompanionThinkText = '';
+let lastCompanionThinkShownAt = 0;
 let connectionState = 'connecting';
 let lastSyncAt = 0;
 let lastSyncTimer = null;
@@ -7879,7 +7922,10 @@ function renderCompanionChat(state) {
 
   if (!daily) {
     companionChatOpen = false;
+    hideCompanionThinkBubble();
     els.companionChats.forEach(chat => { chat.classList.remove('chat-open'); });
+  } else {
+    renderCompanionThink(dialogue);
   }
   const activeChat = activeCompanionChat();
   els.companionChats.forEach(chat => {
@@ -7956,6 +8002,146 @@ function activeCompanionStatus() {
   return chat ? $('[data-chat-status]', chat) : null;
 }
 
+function extractLatestThinkText(source) {
+  const text = String(source || '');
+  if (!text) return '';
+  let latest = '';
+  const completeTag = /<think\b[^>]*>([\s\S]*?)<\/think\s*>/gi;
+  let match = null;
+  while ((match = completeTag.exec(text)) !== null) {
+    latest = String(match[1] || '').trim();
+  }
+  if (latest) return latest;
+  const openAt = text.toLowerCase().lastIndexOf('<think');
+  if (openAt < 0) return '';
+  const close = text.indexOf('>', openAt);
+  if (close < 0) return '';
+  return text.slice(close + 1).replace(/<\/think\s*>/gi, '').trim();
+}
+
+function hideCompanionThinkBubble() {
+  if (companionThinkHideTimer) {
+    clearTimeout(companionThinkHideTimer);
+    companionThinkHideTimer = null;
+  }
+  if (els.companionThinkBubble) els.companionThinkBubble.hidden = true;
+  if (els.companionThinkText) els.companionThinkText.textContent = '';
+}
+
+function showCompanionThinkBubble(text, key) {
+  if (!els.companionThinkBubble || !els.companionThinkText || !text) return;
+  if (key && key === lastCompanionThinkKey) return;
+  if (
+    text === lastCompanionThinkText
+    && Date.now() - lastCompanionThinkShownAt < 3000
+  ) return;
+  lastCompanionThinkKey = key || text;
+  lastCompanionThinkText = text;
+  lastCompanionThinkShownAt = Date.now();
+  els.companionThinkText.textContent = text.substring(0, 360);
+  els.companionThinkText.title = text;
+  els.companionThinkBubble.hidden = false;
+  if (companionThinkHideTimer) clearTimeout(companionThinkHideTimer);
+  companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 3000);
+}
+
+function renderCompanionThink(dialogue) {
+  const source = String((dialogue || {}).reply_text || '');
+  const text = extractLatestThinkText(source);
+  if (!text) return;
+  const key = [
+    String((dialogue || {}).session_id || ''),
+    String((dialogue || {}).recorded_at || ''),
+    text,
+  ].join('|');
+  showCompanionThinkBubble(text, key);
+}
+
+function parseCompanionStreamEvent(block) {
+  const lines = String(block || '').split('\n');
+  let eventName = 'message';
+  const dataLines = [];
+  lines.forEach(line => {
+    if (line.startsWith('event:')) eventName = line.slice(6).trim() || 'message';
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  });
+  if (!dataLines.length) return null;
+  try {
+    return {eventName, payload: JSON.parse(dataLines.join('\n'))};
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function readCompanionMessageStream(response) {
+  const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+  if (!reader) return await response.json().catch(() => ({}));
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+  const consume = final => {
+    buffer = buffer.replace(/\r\n/g, '\n');
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const event = parseCompanionStreamEvent(block);
+      if (event && event.eventName === 'think') {
+        showCompanionThinkBubble(
+          String(event.payload.text || ''),
+          'stream|' + String(event.payload.text || '')
+        );
+      } else if (event && event.eventName === 'result') {
+        result = event.payload || {};
+      } else if (event && event.eventName === 'error') {
+        throw new Error(String(event.payload.reason || 'companion_stream_failed'));
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+    if (final && buffer.trim()) {
+      const event = parseCompanionStreamEvent(buffer);
+      if (event && event.eventName === 'result') result = event.payload || {};
+    }
+  };
+  while (true) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    consume(false);
+  }
+  buffer += decoder.decode();
+  consume(true);
+  return result || {};
+}
+
+async function postCompanionMessage(text) {
+  const response = await fetch('/companion/message', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text, session_id: companionChatSessionId}),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(String(result.detail || 'companion_request_failed'));
+  return result;
+}
+
+async function streamCompanionMessage(text) {
+  if (!window.ReadableStream || !window.TextDecoder) return await postCompanionMessage(text);
+  const response = await fetch('/companion/message/stream', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text, session_id: companionChatSessionId}),
+  });
+  if (response.status === 404 || response.status === 405 || !response.body) {
+    return await postCompanionMessage(text);
+  }
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(String(result.detail || 'companion_request_failed'));
+  }
+  return await readCompanionMessageStream(response);
+}
+
 function openCompanionChat() {
   const chat = activeCompanionChat();
   const input = activeCompanionInput();
@@ -8008,13 +8194,7 @@ async function sendCompanionText() {
   els.companionSends.forEach(button => { button.disabled = true; });
   if (status) status.textContent = '正在回复…';
   try {
-    const response = await fetch('/companion/message', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text, session_id: companionChatSessionId}),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(String(result.detail || 'companion_request_failed'));
+    const result = await streamCompanionMessage(text);
     if (result.session_id) companionChatSessionId = String(result.session_id);
     if (result.status === 'unavailable' && result.reason === 'stellar_auto_evolution_active') {
       if (status) status.textContent = 'Auto 模式运行时暂不可聊天';

@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import threading
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib import request
@@ -15,6 +16,9 @@ from .schema import TranscriptTurn
 
 
 Transport = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
+StreamTransport = Callable[
+    [str, dict[str, str], dict[str, Any]], Iterable[dict[str, Any]]
+]
 SYSTEM_PROMPT_STYLES = frozenset({"system", "developer", "inline_user"})
 RESPONSE_FORMAT_STYLES = frozenset({"json_object", "json_object_string", "none"})
 RESPONSE_CONTENT_STYLES = frozenset(
@@ -499,6 +503,77 @@ def _default_transport(
     return result
 
 
+def _iter_sse_json_events(lines: Iterable[bytes]) -> Iterator[dict[str, Any]]:
+    data_lines: list[str] = []
+    for raw_line in lines:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+            if not data_lines:
+                continue
+            data = "\n".join(data_lines).strip()
+            data_lines = []
+            if not data or data == "[DONE]":
+                if data == "[DONE]":
+                    break
+                continue
+            yield json.loads(data)
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if data_lines:
+        data = "\n".join(data_lines).strip()
+        if data and data != "[DONE]":
+            yield json.loads(data)
+
+
+def _default_stream_transport(
+    url: str, headers: dict[str, str], payload: dict[str, Any]
+) -> Iterator[dict[str, Any]]:
+    stream_payload = dict(payload)
+    body = json.dumps(stream_payload).encode("utf-8")
+    stream_headers = dict(headers)
+    stream_headers.setdefault("Accept", "text/event-stream")
+    http_request = request.Request(
+        url,
+        data=body,
+        headers=stream_headers,
+        method="POST",
+    )
+    with request.urlopen(http_request, timeout=60) as response:
+        yield from _iter_sse_json_events(response)
+
+
+def _text_from_content_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "".join(parts)
+    return ""
+
+
+def _extract_stream_chunk_text(chunk: dict[str, Any]) -> tuple[str, str]:
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return "", ""
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return "", ""
+    delta = choice.get("delta")
+    if isinstance(delta, dict):
+        content = _text_from_content_value(delta.get("content"))
+        reasoning = _text_from_content_value(
+            delta.get("reasoning_content") or delta.get("reasoning")
+        )
+        return content, reasoning
+    return _text_from_content_value(choice.get("text")), ""
+
+
 def _extract_json_object(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
@@ -632,6 +707,7 @@ class OpenAICompatibleLLMClient:
         prompt_registry: PromptRegistry | None = None,
         temperature: float = 0.1,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -643,6 +719,7 @@ class OpenAICompatibleLLMClient:
         self.prompt_registry = prompt_registry or PromptRegistry.default()
         self.temperature = temperature
         self.transport = transport or _default_transport
+        self.stream_transport = stream_transport or _default_stream_transport
         # Update the global context-length estimate.  Pass base_url and
         # api_key so we can try to fetch the real value from the API
         # instead of relying on the static fallback list.
@@ -665,6 +742,7 @@ class OpenAICompatibleLLMClient:
         prompt_registry: PromptRegistry | None = None,
         temperature: float = 0.1,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
     ) -> "OpenAICompatibleLLMClient":
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -707,6 +785,7 @@ class OpenAICompatibleLLMClient:
             prompt_registry=prompt_registry,
             temperature=temperature,
             transport=transport,
+            stream_transport=stream_transport,
         )
 
     @staticmethod
@@ -813,6 +892,85 @@ class OpenAICompatibleLLMClient:
         audio_path: str | Path | None = None,
         request_audio: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        payload = self._build_json_request_payload(
+            system_prompt=system_prompt,
+            prompt_key=prompt_key,
+            fallback_prompt=fallback_prompt,
+            user_payload=user_payload,
+            task=task,
+            response_schema=response_schema,
+            audio_path=audio_path,
+            request_audio=request_audio,
+        )
+        response = self.transport(
+            self.provider_capabilities.build_url(self.base_url),
+            {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            payload,
+        )
+        content = _extract_message_content(response, self.provider_capabilities)
+        audio = _extract_response_audio(response)
+        return unwrap_protocol_response(_extract_json_object(content), task=task), audio
+
+    def complete_json_stream(
+        self,
+        *,
+        system_prompt: str | None = None,
+        prompt_key: str | None = None,
+        fallback_prompt: str | None = None,
+        user_payload: dict[str, Any],
+        task: str | None = None,
+        response_schema: str | None = None,
+        on_content: Callable[[str], None] | None = None,
+        on_reasoning: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._build_json_request_payload(
+            system_prompt=system_prompt,
+            prompt_key=prompt_key,
+            fallback_prompt=fallback_prompt,
+            user_payload=user_payload,
+            task=task,
+            response_schema=response_schema,
+        )
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        stream_payload.setdefault("stream_options", {"include_usage": True})
+        content_parts: list[str] = []
+        for chunk in self.stream_transport(
+            self.provider_capabilities.build_url(self.base_url),
+            {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            stream_payload,
+        ):
+            usage = chunk.get("usage") if isinstance(chunk, dict) else None
+            if isinstance(usage, dict):
+                _accumulate_memory_usage(usage)
+            content_delta, reasoning_delta = _extract_stream_chunk_text(chunk)
+            if content_delta:
+                content_parts.append(content_delta)
+                if on_content is not None:
+                    on_content(content_delta)
+            if reasoning_delta and on_reasoning is not None:
+                on_reasoning(reasoning_delta)
+        content = "".join(content_parts)
+        return unwrap_protocol_response(_extract_json_object(content), task=task)
+
+    def _build_json_request_payload(
+        self,
+        *,
+        system_prompt: str | None,
+        prompt_key: str | None,
+        fallback_prompt: str | None,
+        user_payload: dict[str, Any],
+        task: str | None,
+        response_schema: str | None,
+        audio_path: str | Path | None = None,
+        request_audio: bool = False,
+    ) -> dict[str, Any]:
         resolved_prompt = system_prompt
         if prompt_key is not None:
             resolved_prompt = self.prompt_registry.get(
@@ -889,17 +1047,7 @@ class OpenAICompatibleLLMClient:
             payload["modalities"] = ["text", "audio"]
             payload["audio"] = {"voice": "alloy", "format": "wav"}
         self.provider_capabilities.apply_request_format(payload)
-        response = self.transport(
-            self.provider_capabilities.build_url(self.base_url),
-            {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            payload,
-        )
-        content = _extract_message_content(response, self.provider_capabilities)
-        audio = _extract_response_audio(response)
-        return unwrap_protocol_response(_extract_json_object(content), task=task), audio
+        return payload
 
     def safe_complete_json(
         self,

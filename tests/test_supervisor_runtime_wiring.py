@@ -964,9 +964,18 @@ def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
     assert 'data-companion-chat' in UI_HTML
     assert 'data-chat-user' in UI_HTML
     assert 'data-chat-reply' in UI_HTML
+    assert 'data-companion-think-bubble' in UI_HTML
+    assert 'data-companion-think-text' in UI_HTML
+    assert 'function extractLatestThinkText' in UI_HTML
+    assert 'const completeTag = /<think\\b[^>]*>([\\s\\S]*?)<\\/think\\s*>/gi' in UI_HTML
+    assert 'renderCompanionThink(dialogue)' in UI_HTML
+    assert 'setTimeout(hideCompanionThinkBubble, 3000)' in UI_HTML
+    assert "fetch('/companion/message/stream'" in UI_HTML
+    assert 'readCompanionMessageStream(response)' in UI_HTML
     assert 'renderCompanionChat' in UI_HTML
     assert "dialogue.user_text || voice.last_transcript" in UI_HTML
     assert "dialogue.reply_text || reminder.reminder_text || voice.last_reply" in UI_HTML
+    assert "fetch('/companion/message'" in UI_HTML
     assert "SCENE_TO_ACTION" in UI_HTML
     assert "idle: 'rest'" in UI_HTML
     assert "planning: 'write'" in UI_HTML
@@ -1270,6 +1279,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui/evolution-promotions" in route_paths
     assert "/ui/evolution-promotion-candidates" in route_paths
     assert "/ui/evolution-promotion-candidates/{candidate_id}/consent" in route_paths
+    assert "/companion/message" in route_paths
+    assert "/companion/message/stream" in route_paths
     assert "/runtime/timeline" in route_paths
     assert "/runtime/traces" in route_paths
     assert "/runtime/traces/{trace_id}" in route_paths
@@ -3444,6 +3455,37 @@ async def test_daily_companion_calls_api_b_only_for_changed_complete_evidence(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_companion_model_stream_forwards_only_think_tag_content(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    updates: list[str] = []
+
+    class _StreamingClient:
+        def complete_json_stream(self, **kwargs):
+            on_content = kwargs["on_content"]
+            on_content('{"reply_text":"<think>先检查')
+            on_content('上下文</think>已确认。","reason":"ok"}')
+            return {"reply_text": "<think>先检查上下文</think>已确认。", "reason": "ok"}
+
+        def complete_json(self, **_kwargs):
+            raise AssertionError("streaming path should not fall back")
+
+    with patch(
+        "memai.model_config.resolve_mem_llm_client",
+        return_value=(_StreamingClient(), "stream-model"),
+    ):
+        result = await supervisor._call_companion_model(
+            system_prompt="Return JSON",
+            payload={"message": "继续"},
+            task="companion.direct_dialogue",
+            thinking_callback=updates.append,
+        )
+
+    assert result["reply_text"] == "<think>先检查上下文</think>已确认。"
+    assert updates == ["先检查", "先检查上下文"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_daily_companion_rejects_low_confidence_reminder(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     normalized = supervisor._normalize_companion_judgement(
@@ -3572,6 +3614,37 @@ async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp
     unavailable = await supervisor.handle_companion_message(text="还在吗？")
     assert unavailable["status"] == "unavailable"
     assert unavailable["reason"] == "stellar_auto_evolution_active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_companion_message_stream_emits_latest_think_updates_and_result(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    async def fake_handle_companion_message(**kwargs):
+        thinking_callback = kwargs["thinking_callback"]
+        thinking_callback("先检查上下文")
+        thinking_callback("再确认用户目标")
+        return {
+            "status": "ok",
+            "session_id": "stream-session",
+            "reply_text": "已确认。",
+        }
+
+    supervisor.handle_companion_message = fake_handle_companion_message  # type: ignore[method-assign]
+
+    with TestClient(supervisor.app) as client:
+        response = client.post(
+            "/companion/message/stream",
+            json={"text": "继续", "session_id": "stream-session"},
+        )
+
+    assert response.status_code == 200
+    assert "event: start" in response.text
+    assert '"text":"先检查上下文"' in response.text
+    assert '"text":"再确认用户目标"' in response.text
+    assert "event: result" in response.text
+    assert '"reply_text":"已确认。"' in response.text
 
 
 @pytest.mark.asyncio

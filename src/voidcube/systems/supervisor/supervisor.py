@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import subprocess
@@ -5,7 +6,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ..body_registry import BodyImprovementReport
@@ -58,6 +60,8 @@ from .ui_routes import (
     mount_plugin_web_routes,
     mount_supervisor_ui_routes,
 )
+from .ui_projection import format_supervisor_ui_event
+from .ui_stream_adapters import SSE_HEADERS
 from ..voice import VoiceConfig, VoiceSessionManager
 
 logger = logging.getLogger("supervisor")
@@ -370,6 +374,7 @@ class Supervisor(
         self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
         self.app.add_api_route("/stellar-mode/status", self.get_stellar_mode_status, methods=["GET"])
         self.app.add_api_route("/companion/message", self.companion_message, methods=["POST"])
+        self.app.add_api_route("/companion/message/stream", self.companion_message_stream, methods=["POST"])
         self.app.add_api_route("/scheduled-tasks", self.list_scheduled_tasks, methods=["GET"])
         self.app.add_api_route("/scheduled-tasks", self.create_scheduled_task, methods=["POST"])
         self.app.add_api_route("/scheduled-tasks/claim", self.claim_scheduled_task, methods=["POST"])
@@ -492,6 +497,87 @@ class Supervisor(
             text=request.text,
             session_id=request.session_id,
             speak_reply=True,
+        )
+
+    async def companion_message_stream(
+        self,
+        request: CompanionMessageRequest,
+        http_request: Request,
+    ) -> StreamingResponse:
+        async def event_stream():
+            queue: asyncio.Queue[tuple[str, Dict[str, Any]]] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            last_think = {"value": ""}
+            think_sequence = {"value": 0}
+
+            def emit_thinking(text: str) -> None:
+                think_text = str(text or "").strip()
+                if not think_text or think_text == last_think["value"]:
+                    return
+                last_think["value"] = think_text
+                think_sequence["value"] += 1
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    (
+                        "think",
+                        {
+                            "text": think_text,
+                            "sequence": think_sequence["value"],
+                        },
+                    ),
+                )
+
+            task = asyncio.create_task(
+                self.handle_companion_message(
+                    text=request.text,
+                    session_id=request.session_id,
+                    speak_reply=True,
+                    thinking_callback=emit_thinking,
+                )
+            )
+            yield format_supervisor_ui_event("start", {"status": "ok"})
+            try:
+                while not task.done():
+                    if await http_request.is_disconnected():
+                        task.cancel()
+                        return
+                    try:
+                        event_name, payload = await asyncio.wait_for(
+                            queue.get(),
+                            timeout=0.2,
+                        )
+                    except TimeoutError:
+                        continue
+                    yield format_supervisor_ui_event(event_name, payload)
+                result = await task
+                while not queue.empty():
+                    event_name, payload = queue.get_nowait()
+                    yield format_supervisor_ui_event(event_name, payload)
+                yield format_supervisor_ui_event("result", result)
+            except asyncio.CancelledError:
+                task.cancel()
+                raise
+            except Exception as exc:
+                task.cancel()
+                logger.debug("Companion stream failed: %s", exc)
+                yield format_supervisor_ui_event(
+                    "error",
+                    {"status": "error", "reason": type(exc).__name__},
+                )
+            finally:
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug("Companion stream task cleanup failed", exc_info=True)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers=dict(SSE_HEADERS),
         )
 
     async def _handle_voice_companion_message(

@@ -239,6 +239,41 @@ def test_openai_compatible_client_reads_output_text_responses() -> None:
     assert payload["events"][0]["summary"] == "output text"
 
 
+def test_openai_compatible_client_streams_json_content_and_reasoning_tags() -> None:
+    updates: list[str] = []
+    seen_payloads: list[dict] = []
+
+    def fake_stream_transport(url, headers, payload):
+        seen_payloads.append(payload)
+        return [
+            {"choices": [{"delta": {"content": '{"reply_text":"<think>'}}]},
+            {"choices": [{"delta": {"content": "先检查上下文"}}]},
+            {"choices": [{"delta": {"content": "</think>已确认。"}}]},
+            {"choices": [{"delta": {"content": '","reason":"ok"}'}}]},
+        ]
+
+    client = OpenAICompatibleLLMClient(
+        model="test-model",
+        api_key="test-key",
+        stream_transport=fake_stream_transport,
+    )
+
+    payload = client.complete_json_stream(
+        system_prompt="Return JSON",
+        user_payload={"message": "继续"},
+        task="companion.direct_dialogue",
+        on_content=updates.append,
+    )
+
+    assert payload == {
+        "reply_text": "<think>先检查上下文</think>已确认。",
+        "reason": "ok",
+    }
+    assert "".join(updates) == '{"reply_text":"<think>先检查上下文</think>已确认。","reason":"ok"}'
+    assert seen_payloads[0]["stream"] is True
+    assert seen_payloads[0]["stream_options"] == {"include_usage": True}
+
+
 def test_openai_compatible_client_from_env_applies_provider_overrides(
     monkeypatch,
 ) -> None:

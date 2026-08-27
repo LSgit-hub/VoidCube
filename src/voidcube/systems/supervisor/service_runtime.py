@@ -4,12 +4,13 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 import uuid
 
 from plugins.memory.mem.outbox import (
@@ -27,9 +28,24 @@ from ...application.companion_workers import (
 logger = logging.getLogger("supervisor")
 
 
+_THINK_TAG_RE = re.compile(
+    r"<think\b[^>]*>(?P<body>.*?)(?:</think\s*>|$)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
 class StellarMode(str, Enum):
     DAILY_COMPANION = "daily_companion"
     AUTO_EVOLUTION = "auto_evolution"
+
+
+def latest_think_tag_text(content: str) -> str:
+    latest = ""
+    for match in _THINK_TAG_RE.finditer(str(content or "")):
+        body = match.group("body").strip()
+        if body:
+            latest = body
+    return latest
 
 
 @dataclass(slots=True)
@@ -858,6 +874,7 @@ class ServiceRuntimeMixin:
         payload: Dict[str, Any],
         task: str,
         audio_path: str | Path | None = None,
+        thinking_callback: Callable[[str], None] | None = None,
     ) -> Dict[str, Any] | None:
         try:
             from memai.model_config import resolve_mem_llm_client
@@ -877,12 +894,56 @@ class ServiceRuntimeMixin:
                     task=task,
                 )
             else:
-                operation = asyncio.to_thread(
-                    client.complete_json,
-                    system_prompt=system_prompt,
-                    user_payload=payload,
-                    task=task,
-                )
+                complete_stream = getattr(client, "complete_json_stream", None)
+                if thinking_callback is not None and callable(complete_stream):
+                    stream_content = {"value": ""}
+                    stream_think = {"value": ""}
+
+                    def on_content(delta: str) -> None:
+                        stream_content["value"] += delta
+                        latest = latest_think_tag_text(stream_content["value"])
+                        if latest and latest != stream_think["value"]:
+                            stream_think["value"] = latest
+                            thinking_callback(latest)
+
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                complete_stream,
+                                system_prompt=system_prompt,
+                                user_payload=payload,
+                                task=task,
+                                on_content=on_content,
+                            ),
+                            timeout=max(
+                                1.0,
+                                float(
+                                    self.config.service_runtime.companion_model_timeout_seconds
+                                ),
+                            ),
+                        )
+                        return dict(result) if isinstance(result, dict) else None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.debug(
+                            "Companion streaming API-B call unavailable; "
+                            "falling back to non-streaming: %s",
+                            exc,
+                        )
+                        operation = asyncio.to_thread(
+                            client.complete_json,
+                            system_prompt=system_prompt,
+                            user_payload=payload,
+                            task=task,
+                        )
+                else:
+                    operation = asyncio.to_thread(
+                        client.complete_json,
+                        system_prompt=system_prompt,
+                        user_payload=payload,
+                        task=task,
+                    )
             result = await asyncio.wait_for(
                 operation,
                 timeout=max(
@@ -1509,6 +1570,7 @@ class ServiceRuntimeMixin:
         session_id: str = "",
         audio_path: str | Path | None = None,
         speak_reply: bool = False,
+        thinking_callback: Callable[[str], None] | None = None,
     ) -> Dict[str, Any]:
         if self._service_runtime.stellar_mode != StellarMode.DAILY_COMPANION:
             return {
@@ -1583,6 +1645,7 @@ class ServiceRuntimeMixin:
             },
             task="companion.direct_dialogue",
             audio_path=audio_path if native_audio_enabled else None,
+            thinking_callback=thinking_callback,
         )
         normalized_result = dict(result or {})
         schedule_action = normalized_result.get("schedule_action")
