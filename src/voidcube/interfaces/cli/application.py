@@ -1870,6 +1870,7 @@ class VoidcubeCLI:
                 recording=lambda: bool(self._voice_state().recording),
                 processing=lambda: bool(self._voice_state().processing),
                 continuous=lambda: bool(self._voice_state().continuous),
+                target=lambda: self._voice_target(),
             )
         ).build(width)
 
@@ -1932,6 +1933,7 @@ class VoidcubeCLI:
                 voice_restart_ready=lambda: bool(
                     self._voice_state().mode
                     and self._voice_state().continuous
+                    and self._voice_target() == "terminal"
                     and not self._voice_state().recording
                 ),
                 restart_voice_recording=self._voice_start_recording,
@@ -3140,15 +3142,13 @@ class VoidcubeCLI:
         except Exception:
             return False
 
-    def _toggle_verbose(self):
-        """Cycle tool progress mode: off → new → all → verbose → off."""
-        cycle = ["off", "new", "all", "verbose"]
-        try:
-            idx = cycle.index(self.tool_progress_mode)
-        except ValueError:
-            idx = 2  # default to "all"
-        self.tool_progress_mode = cycle[(idx + 1) % len(cycle)]
-        self.verbose = self.tool_progress_mode == "verbose"
+    def _set_verbose_mode(self, mode: str) -> None:
+        """Apply one explicit tool-progress mode to the current CLI session."""
+        mode = str(mode or "").strip().lower()
+        if mode not in {"off", "new", "all", "verbose"}:
+            raise ValueError(f"Unsupported tool progress mode: {mode}")
+        self.tool_progress_mode = mode
+        self.verbose = mode == "verbose"
 
         if self.agent:
             self.agent.verbose_logging = self.verbose
@@ -3166,7 +3166,7 @@ class VoidcubeCLI:
             "all": f"{_Colors.GREEN}Tool progress: ALL{_Colors.RESET} — show every tool call.",
             "verbose": f"{_Colors.BOLD}{_Colors.GREEN}Tool progress: VERBOSE{_Colors.RESET} — full args, results, think blocks, and debug logs.",
         }
-        _cprint(labels.get(self.tool_progress_mode, ""))
+        _cprint(labels[self.tool_progress_mode])
         if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
             for noisy in (
@@ -3335,16 +3335,121 @@ class VoidcubeCLI:
         )
 
     def _voice_start_recording(self) -> None:
+        if self._voice_target() == "supervisor":
+            self._start_supervisor_voice_session()
+            return
         start_terminal_voice_recording(self._voice_recording_ports())
 
     def _voice_stop_and_transcribe(self) -> None:
+        if self._voice_target() == "supervisor":
+            self._interrupt_supervisor_voice_session()
+            return
         stop_terminal_voice_recording(self._voice_recording_ports())
+
+    def _voice_input_prefix(self, message: Any, *, owner: Any) -> str:
+        """Mark only local terminal voice turns before they enter API-A."""
+        if (
+            owner is not self
+            or not self._voice_state().mode
+            or self._voice_target() != "terminal"
+            or not isinstance(message, str)
+        ):
+            return ""
+        return (
+            "[Voice input - respond concisely and conversationally, "
+            "2-3 sentences max. No code blocks or markdown.] "
+        )
+
+    def _show_voice_help(self) -> None:
+        """Show the complete CLI voice target and control surface."""
+        from .commands.catalog import resolve_command
+
+        command = resolve_command("voice")
+        usage = t(
+            "commands.voice.usage",
+            default=(
+                "Usage: /voice [on|off|status|target terminal|target supervisor|"
+                "supervisor|terminal|session|interrupt|continuous on|continuous off|tts [text]|help]"
+            ),
+        )
+        _cprint(f"\n{_BOLD}Voice Command Help{_RST}")
+        _cprint(f"  {_DIM}{usage}{_RST}")
+        descriptions = {
+            "on": "Enable the selected voice target",
+            "off": "Disable the selected voice target",
+            "status": "Show current voice target and runtime status",
+            "target": "Select terminal or supervisor as the voice target",
+            "supervisor": "Enable API-B/Supervisor voice from the terminal",
+            "terminal": "Select local CLI voice input for API-A",
+            "session": "Start one API-B voice session",
+            "interrupt": "Interrupt the active API-B voice session",
+            "continuous": "Use continuous API-B wake listening",
+            "tts": "Speak text with local terminal TTS",
+            "help": "Show this help",
+        }
+        for subcommand in command.subcommands if command else descriptions:
+            description = command.get_subcommand_description(subcommand) if command else ""
+            _cprint(f"  /voice {subcommand:<11} {description or descriptions.get(subcommand, '')}")
+
+    def _voice_target(self) -> str:
+        target = str(getattr(self._voice_state(), "target", "terminal") or "terminal")
+        return "supervisor" if target == "supervisor" else "terminal"
+
+    @staticmethod
+    def _normalize_voice_target(target: str) -> str:
+        normalized = str(target or "").strip().lower()
+        if normalized in {"supervisor", "web", "api-b", "apib"}:
+            return "supervisor"
+        if normalized in {"terminal", "cli", "local"}:
+            return "terminal"
+        return ""
+
+    def _set_voice_target(self, target: str) -> None:
+        normalized = self._normalize_voice_target(target)
+        if not normalized:
+            _cprint(f"{_DIM}Unknown voice target: {target}. Use terminal or supervisor.{_RST}")
+            return
+
+        state = self._voice_state()
+        previous = self._voice_target()
+        if previous == normalized:
+            _cprint(f"{_DIM}Voice target is already {normalized}.{_RST}")
+            return
+
+        with state.lock:
+            was_enabled = state.mode
+            recording = state.recording
+            state.mode = False
+            state.recording = False
+            state.processing = False
+            state.continuous = False
+            state.target = normalized
+
+        if was_enabled:
+            try:
+                if previous == "supervisor":
+                    client = self._supervisor_voice_client()
+                    self._cache_supervisor_voice_status(client.interrupt_session())
+                    self._cache_supervisor_voice_status(client.stop_continuous())
+                    self._cache_supervisor_voice_status(client.set_microphone(False))
+                else:
+                    if recording:
+                        self._voice_session().interrupt()
+                    self._voice_session().disable()
+            except Exception:
+                pass
+
+        _cprint(f"{_DIM}Voice target set to {normalized}.{_RST}")
 
     def _enable_voice_mode(self):
         """Enable voice mode after checking requirements."""
         state = self._voice_state()
         if state.mode:
             _cprint(f"{_DIM}Voice mode is already enabled.{_RST}")
+            return
+
+        if self._voice_target() == "supervisor":
+            self._enable_supervisor_voice_mode()
             return
 
         voice = self._voice_session()
@@ -3375,19 +3480,73 @@ class VoidcubeCLI:
         _cprint(f"\n{_ACCENT}Voice mode enabled{_RST}")
         _cprint(f"  {_DIM}{_ptt_display} to start/stop recording{_RST}")
         _cprint(f"  {_DIM}/voice tts checks terminal playback; add text to speak{_RST}")
+        _cprint(f"  {_DIM}/voice supervisor switches Ctrl+B to API-B voice{_RST}")
         _cprint(f"  {_DIM}/voice off  to disable voice mode{_RST}")
+
+    def _enable_supervisor_voice_mode(self) -> None:
+        """Enable CLI control of the Supervisor-owned voice session."""
+        state = self._voice_state()
+        try:
+            reqs = self._supervisor_voice_client().set_microphone(True)
+            self._cache_supervisor_voice_status(reqs)
+        except Exception as error:
+            _cprint(f"\n{_ACCENT}Supervisor voice unavailable:{_RST}")
+            _cprint(f"  {_DIM}{error}{_RST}")
+            return
+
+        if reqs.get("status") == "unavailable":
+            _cprint(f"\n{_ACCENT}Supervisor voice unavailable:{_RST}")
+            _cprint(f"  {_DIM}{reqs.get('reason', 'unknown')}{_RST}")
+            return
+        if not reqs.get("capture_available") or not reqs.get("stt_configured"):
+            try:
+                self._cache_supervisor_voice_status(
+                    self._supervisor_voice_client().set_microphone(False)
+                )
+            except Exception:
+                pass
+            _cprint(f"\n{_ACCENT}Supervisor voice requirements not met:{_RST}")
+            if not reqs.get("capture_available"):
+                _cprint(f"  {_DIM}Install sounddevice and numpy for the Supervisor process.{_RST}")
+            if not reqs.get("stt_configured"):
+                _cprint(f"  {_DIM}Configure the canonical STT provider for API-B voice.{_RST}")
+            return
+
+        with state.lock:
+            state.mode = True
+            state.target = "supervisor"
+            state.recording = bool(reqs.get("active"))
+            state.continuous = bool(
+                reqs.get("continuous_active") or reqs.get("continuous_task_running")
+            )
+
+        _cprint(f"\n{_ACCENT}Supervisor voice enabled{_RST}")
+        _cprint(f"  {_DIM}Ctrl+B starts/stops the API-B voice session{_RST}")
+        _cprint(f"  {_DIM}/voice continuous on enables API-B wake listening{_RST}")
+        _cprint(f"  {_DIM}/voice terminal switches back to local terminal voice{_RST}")
 
     def _disable_voice_mode(self):
         """Disable voice mode, cancel any active recording, and stop TTS."""
         state = self._voice_state()
+        target = self._voice_target()
         with state.lock:
             recording = state.recording
             state.recording = False
             state.mode = False
             state.continuous = False
-        if recording:
-            self._voice_session().interrupt()
-        self._voice_session().disable()
+        if target == "supervisor":
+            try:
+                client = self._supervisor_voice_client()
+                if recording:
+                    self._cache_supervisor_voice_status(client.interrupt_session())
+                self._cache_supervisor_voice_status(client.stop_continuous())
+                self._cache_supervisor_voice_status(client.set_microphone(False))
+            except Exception as error:
+                _cprint(f"\n{_DIM}Supervisor voice disable failed: {error}{_RST}")
+        else:
+            if recording:
+                self._voice_session().interrupt()
+            self._voice_session().disable()
 
         _cprint(f"\n{_DIM}Voice mode disabled.{_RST}")
 
@@ -3397,6 +3556,146 @@ class VoidcubeCLI:
             runtime = VoiceSessionRuntime()
             self._voice_session_runtime = runtime
         return runtime
+
+    def _supervisor_voice_client(self):
+        client = self.__dict__.get("_supervisor_voice_client_instance")
+        if client is None:
+            from ...infrastructure.gateway.supervisor_voice import SupervisorVoiceClient
+
+            client = SupervisorVoiceClient(timeout_seconds=90.0)
+            self._supervisor_voice_client_instance = client
+        return client
+
+    def _cache_supervisor_voice_status(self, voice_status: Mapping[str, Any]) -> None:
+        if not isinstance(voice_status, Mapping):
+            return
+        cache = getattr(self, "_supervisor_state_cache", None)
+        if not isinstance(cache, dict):
+            cache = {"scene": "idle"}
+            self._supervisor_state_cache = cache
+        cache["voice"] = dict(voice_status)
+
+    def _start_supervisor_voice_session(self) -> None:
+        state = self._voice_state()
+        if self._should_exit:
+            return
+        with state.lock:
+            if state.recording:
+                return
+            state.mode = True
+            state.target = "supervisor"
+            state.recording = True
+            state.processing = False
+        app = getattr(self, "_app", None)
+        if app:
+            app.invalidate()
+        _cprint(f"{_DIM}\nAPI-B 语音会话启动中……{_RST}")
+        try:
+            client = self._supervisor_voice_client()
+            status_payload = client.status()
+            if not status_payload.get("enabled"):
+                status_payload = client.set_microphone(True)
+                self._cache_supervisor_voice_status(status_payload)
+            result = client.start_session(
+                session_id=str(self.session_id or "")
+            )
+            try:
+                self._cache_supervisor_voice_status(client.status())
+            except Exception:
+                pass
+            status = str(result.get("status") or "unknown")
+            if status == "complete":
+                _cprint(f"{_DIM}API-B 语音会话完成。{_RST}")
+            elif status == "interrupted":
+                _cprint(f"{_DIM}API-B 语音会话已中断。{_RST}")
+            elif status == "rejected":
+                _cprint(f"{_DIM}API-B 声纹验证未通过。{_RST}")
+            elif status in {"empty", "disabled"}:
+                _cprint(f"{_DIM}API-B 语音未产生输入：{result.get('reason', status)}.{_RST}")
+            else:
+                _cprint(f"{_DIM}API-B 语音状态：{result.get('reason', status)}.{_RST}")
+        except Exception as error:
+            _cprint(f"{_DIM}\nAPI-B 语音会话失败：{error}{_RST}")
+        finally:
+            with state.lock:
+                state.recording = False
+                state.processing = False
+            if app:
+                app.invalidate()
+
+    def _interrupt_supervisor_voice_session(self) -> None:
+        state = self._voice_state()
+        with state.lock:
+            state.recording = False
+            state.processing = False
+            state.continuous = False
+        try:
+            result = self._supervisor_voice_client().interrupt_session()
+            self._cache_supervisor_voice_status(result)
+            _cprint(f"{_DIM}\nAPI-B 语音会话已请求中断。{_RST}")
+        except Exception as error:
+            _cprint(f"{_DIM}\nAPI-B 语音中断失败：{error}{_RST}")
+        app = getattr(self, "_app", None)
+        if app:
+            app.invalidate()
+
+    def _start_supervisor_continuous_voice(self) -> None:
+        if self._voice_target() != "supervisor":
+            _cprint(f"{_DIM}Continuous voice is available for the supervisor target.{_RST}")
+            return
+        try:
+            client = self._supervisor_voice_client()
+            status = client.status()
+            if not status.get("enabled"):
+                status = client.set_microphone(True)
+                self._cache_supervisor_voice_status(status)
+            result = client.start_continuous(session_id=str(self.session_id or ""))
+            self._cache_supervisor_voice_status(result)
+        except Exception as error:
+            _cprint(f"{_DIM}API-B continuous voice failed: {error}{_RST}")
+            return
+        with self._voice_state().lock:
+            self._voice_state().mode = True
+            self._voice_state().target = "supervisor"
+            self._voice_state().continuous = bool(
+                result.get("continuous_active")
+                or result.get("continuous_task_running")
+                or result.get("status") == "already_running"
+            )
+        _cprint(f"{_DIM}API-B continuous voice: {result.get('status', 'ok')}.{_RST}")
+
+    def _stop_supervisor_continuous_voice(self) -> None:
+        if self._voice_target() != "supervisor":
+            with self._voice_state().lock:
+                self._voice_state().continuous = False
+            _cprint(f"{_DIM}Terminal continuous voice disabled.{_RST}")
+            return
+        try:
+            result = self._supervisor_voice_client().stop_continuous()
+            self._cache_supervisor_voice_status(result)
+        except Exception as error:
+            _cprint(f"{_DIM}API-B continuous voice stop failed: {error}{_RST}")
+            return
+        with self._voice_state().lock:
+            self._voice_state().continuous = False
+        _cprint(f"{_DIM}API-B continuous voice: {result.get('status', 'stopped')}.{_RST}")
+
+    def _voice_realtime_status(self) -> dict[str, Any]:
+        if self._voice_target() == "supervisor":
+            status = _supervisor_activity_snapshot_view(self)
+            return dict(status.get("voice") or {})
+        return self._voice_session().realtime_status()
+
+    def _interrupt_active_voice(self) -> None:
+        if self._voice_target() == "supervisor":
+            try:
+                client = self._supervisor_voice_client()
+                self._cache_supervisor_voice_status(client.interrupt_session())
+                self._cache_supervisor_voice_status(client.stop_continuous())
+            except Exception:
+                pass
+            return
+        self._voice_session().interrupt()
 
     def _show_voice_tts_status(self):
         """Project canonical voice transport readiness into terminal text."""
@@ -3427,17 +3726,30 @@ class VoidcubeCLI:
         """Show current voice mode status."""
         from ...infrastructure.config.configuration import load_config
 
-        reqs = self._voice_session().status().get("voice", {})
-
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
         state = self._voice_state()
+        target = self._voice_target()
         _cprint(f"  Mode:      {'ON' if state.mode else 'OFF'}")
-        tts_status = self._voice_session().status()
-        _cprint(
-            f"  TTS:       {tts_status.get('status', 'unavailable')} "
-            f"({tts_status.get('reason', 'unknown')})"
-        )
-        _cprint(f"  Recording: {'YES' if state.recording else 'no'}")
+        _cprint(f"  Target:    {target}")
+        if target == "supervisor":
+            try:
+                reqs = self._supervisor_voice_client().status()
+            except Exception:
+                reqs = dict(_supervisor_activity_snapshot_view(self).get("voice") or {})
+            _cprint(f"  API-B mic: {'ON' if reqs.get('enabled') else 'off'}")
+            _cprint(f"  Active:    {'YES' if reqs.get('active') or state.recording else 'no'}")
+            _cprint(
+                "  Continuous: "
+                f"{'YES' if reqs.get('continuous_active') or reqs.get('continuous_task_running') else 'no'}"
+            )
+        else:
+            tts_status = self._voice_session().status()
+            reqs = dict(tts_status.get("voice") or {})
+            _cprint(
+                f"  TTS:       {tts_status.get('status', 'unavailable')} "
+                f"({tts_status.get('reason', 'unknown')})"
+            )
+            _cprint(f"  Recording: {'YES' if state.recording else 'no'}")
         _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
         _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
         _cprint(f"  Record key: {_display_key}")
@@ -3648,16 +3960,7 @@ class VoidcubeCLI:
                 print(flush=True)
 
         def voice_prefix(message: Any) -> str:
-            if (
-                owner is not self
-                or not self._voice_state().mode
-                or not isinstance(message, str)
-            ):
-                return ""
-            return (
-                "[Voice input - respond concisely and conversationally, "
-                "2-3 sentences max. No code blocks or markdown.] "
-            )
+            return self._voice_input_prefix(message, owner=owner)
 
         def agent_call_ports(
             message: Any,
@@ -3723,7 +4026,9 @@ class VoidcubeCLI:
                 session_db=lambda: owner._session_db,
                 session_id=lambda: str(owner.session_id or ""),
                 voice_continuous=lambda: bool(
-                    owner is self and self._voice_state().continuous
+                    owner is self
+                    and self._voice_target() == "terminal"
+                    and self._voice_state().continuous
                 ),
                 stop_voice_continuous=lambda: setattr(
                     self._voice_state(),
@@ -3886,7 +4191,7 @@ class VoidcubeCLI:
                 voice_mode=lambda: bool(self._voice_state().mode),
                 minimal_tui_chrome=layout_metrics.minimal_chrome,
                 terminal_width=layout_metrics.terminal_width,
-                audio_status=lambda: self._voice_session().realtime_status(),
+                audio_status=self._voice_realtime_status,
             )
         )
 
@@ -4272,7 +4577,7 @@ class VoidcubeCLI:
                 interrupt=True
             ),
             interrupt_agent=interrupt_running_agent,
-            interrupt_voice=lambda: self._voice_session().interrupt(),
+            interrupt_voice=self._interrupt_active_voice,
             close_voice_session=close_voice_session,
             unregister_tool_callbacks=unregister_tool_callbacks,
             close_session=session_teardown.close_session,

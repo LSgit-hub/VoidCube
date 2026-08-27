@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>xterm.js 6.0.0 vs 6.1.0-beta 宽度对比</title>
+<link rel="stylesheet" href="/xterm-beta.css">
+<style>
+  body { background: #0d1117; color: #d7dde5; font-family: sans-serif; padding: 16px; }
+  h3 { color: #68d5b3; }
+  .term-wrap { margin-bottom: 24px; border: 1px solid #384453; border-radius: 6px; overflow: hidden; }
+  .term { padding: 8px; }
+  .note { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+  pre { color: #68d5b3; font-size: 12px; }
+</style>
+</head>
+<body>
+<h3>xterm.js 6.1.0-beta 宽度实测</h3>
+<div class="note">场景: 修复后 fontFamily（含 Segoe UI Emoji）</div>
+<div class="term-wrap"><div id="term-beta" class="term"></div></div>
+<pre id="dump"></pre>
+
+<script src="/xterm-beta.js"></script>
+<script>
+const TEST_LINES = [
+  ['常见emoji',        '😀 ❤️ 🚀 👍'],
+  ['Unicode14+新emoji', '🫠 🫨 🩷'],
+  ['ZWJ家庭序列',       '👨\u200d👩\u200d👧'],
+  ['旗帜',             '🇨🇳'],
+  ['keycap',           '1️⃣'],
+  ['混合行',            '你好😀世界👨\u200d👩\u200d👧测试'],
+];
+
+const term = new Terminal({
+  fontFamily: '"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Segoe UI Emoji", "Apple Color Emoji", monospace',
+  fontSize: 14,
+  lineHeight: 1.25,
+  scrollback: 1000,
+  theme: { background: '#0d1117', foreground: '#d7dde5' }
+});
+term.open(document.getElementById('term-beta'));
+for (const [label, text] of TEST_LINES) {
+  term.writeln('\x1b[90m' + label + ':\x1b[0m ' + text);
+}
+
+// 渲染后 dump buffer 宽度
+setTimeout(() => {
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const line = term.buffer.active.getLine(i);
+    const parts = [];
+    for (let c = 0; c < line.length; c++) {
+      const cell = line.getCell(c);
+      if (cell && cell.getChars()) {
+        parts.push('[' + c + ']"' + cell.getChars() + '"w' + cell.getWidth());
+      }
+    }
+    out.push('L' + i + ': ' + parts.join(' '));
+  }
+  document.getElementById('dump').textContent = out.join('\n');
+}, 300);
+window.__termBeta = term;
+</script>
+</body>
+</html>

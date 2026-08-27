@@ -5,6 +5,7 @@ def test_voice_runtime_state_is_initialized_for_idle_voice_session() -> None:
     state = CliVoiceRuntimeState()
 
     assert state.mode is False
+    assert state.target == "terminal"
     assert state.recording is False
     assert state.processing is False
     assert state.continuous is False

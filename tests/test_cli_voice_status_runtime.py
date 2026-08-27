@@ -1,7 +1,15 @@
 from voidcube.interfaces.cli.voice_status_runtime import CliVoiceStatusPorts, CliVoiceStatusRuntime
 
 
-def _runtime(*, width=80, compact=False, recording=False, processing=False, continuous=False):
+def _runtime(
+    *,
+    width=80,
+    compact=False,
+    recording=False,
+    processing=False,
+    continuous=False,
+    target="terminal",
+):
     return CliVoiceStatusRuntime(
         CliVoiceStatusPorts(
             terminal_width=lambda: width,
@@ -9,6 +17,7 @@ def _runtime(*, width=80, compact=False, recording=False, processing=False, cont
             recording=lambda: recording,
             processing=lambda: processing,
             continuous=lambda: continuous,
+            target=lambda: target,
         )
     )
 
@@ -26,3 +35,9 @@ def test_voice_status_compacts_and_marks_continuous_mode():
 
     assert compact == " 🎤 Ctrl+B "
     assert "Voice mode | Continuous" in full
+
+
+def test_voice_status_labels_supervisor_target():
+    rendered = "".join(text for _, text in _runtime(target="supervisor").build())
+
+    assert "API-B Voice" in rendered

@@ -201,6 +201,18 @@ class CliMiddleStatusRuntime:
             "idle": "", "planning": "规划", "memory": "记忆", "drive": "驱动",
             "handoff": "交接", "maintenance": "记忆", "body_switch": "切换",
         }
+        voice = dict(supervisor.get("voice") or {})
+        voice_enabled = bool(
+            voice.get("enabled")
+            or voice.get("active")
+            or voice.get("continuous_active")
+            or voice.get("continuous_task_running")
+        )
+        if scene == "idle" and voice_enabled:
+            icons = dict(icons)
+            colors = dict(colors)
+            icons["idle"] = "(V)" if ascii_mode else "🎤"
+            colors["idle"] = "#78e6aa"
         color = colors.get(scene, "#9CA3AF")
         fragments: list[StatusFragment] = []
         if has_prefix:

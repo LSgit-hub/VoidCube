@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>xterm.js 6.0.0 emoji 渲染测试</title>
+<link rel="stylesheet" href="/xterm.css">
+<style>
+  body { background: #0d1117; color: #d7dde5; font-family: sans-serif; padding: 16px; }
+  h3 { color: #68d5b3; }
+  .term-wrap { margin-bottom: 24px; border: 1px solid #384453; border-radius: 6px; overflow: hidden; }
+  .term { padding: 8px; }
+  .note { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<h3>xterm.js 6.0.0 emoji 渲染测试</h3>
+<div class="note">场景1: 默认 fontFamily（Consolas, monospace）— 模拟修复前</div>
+<div class="term-wrap"><div id="term-default" class="term"></div></div>
+<div class="note">场景2: 修复后 fontFamily（Consolas + Segoe UI Emoji + Apple Color Emoji）</div>
+<div class="term-wrap"><div id="term-fixed" class="term"></div></div>
+
+<script src="/xterm.js"></script>
+<script>
+const TEST_LINES = [
+  ['常见emoji',        '😀 ❤️ 🚀 👍'],
+  ['Unicode14+新emoji', '🫠 🫨 🩷'],
+  ['ZWJ家庭序列',       '👨\u200d👩\u200d👧'],
+  ['旗帜',             '🇨🇳'],
+  ['keycap',           '1️⃣'],
+  ['混合行',            '你好😀世界👨\u200d👩\u200d👧测试'],
+];
+
+function makeTerm(el, fontFamily) {
+  const term = new Terminal({
+    fontFamily,
+    fontSize: 14,
+    lineHeight: 1.25,
+    scrollback: 1000,
+    theme: { background: '#0d1117', foreground: '#d7dde5' }
+  });
+  term.open(el);
+  for (const [label, text] of TEST_LINES) {
+    term.writeln('\x1b[90m' + label + ':\x1b[0m ' + text);
+  }
+  return term;
+}
+
+const t1 = makeTerm(document.getElementById('term-default'), '"Cascadia Code", Consolas, monospace');
+const t2 = makeTerm(document.getElementById('term-fixed'), '"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Segoe UI Emoji", "Apple Color Emoji", monospace');
+
+// 导出到全局供 console 检查
+window.__termDefault = t1;
+window.__termFixed = t2;
+window.__dumpCells = (term, lineIdx) => {
+  const line = term.buffer.active.getLine(lineIdx);
+  if (!line) return 'no line';
+  const out = [];
+  for (let c = 0; c < line.length; c++) {
+    const cell = line.getCell(c);
+    if (cell && cell.getChars()) {
+      out.push(`[${c}] "${cell.getChars()}" w=${cell.getWidth()}`);
+    }
+  }
+  return out.join(' ');
+};
+</script>
+</body>
+</html>

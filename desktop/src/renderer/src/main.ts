@@ -109,7 +109,7 @@ const terminal = new Terminal({
   cursorBlink: true,
   cursorStyle: 'block',
   drawBoldTextInBrightColors: true,
-  fontFamily: '"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace',
+  fontFamily: '"Cascadia Code", "JetBrains Mono", "SFMono-Regular", Consolas, "Segoe UI Emoji", "Apple Color Emoji", monospace',
   fontSize: 14,
   fontWeight: '400',
   fontWeightBold: '600',

@@ -191,6 +191,10 @@ from .handlers.voice import (
     VoiceCommandPorts,
     handle_voice_command,
 )
+from .handlers.verbose import (
+    VerboseCommandPorts,
+    handle_verbose_command,
+)
 from ....application.scheduling.background_task_runtime import BackgroundTaskSnapshot
 from .handlers.tasks import (
     TaskMoveResult,
@@ -609,7 +613,21 @@ def install_cli_command_execution(
                     tts_status=host._show_voice_tts_status,
                     tts_speak=host._speak_voice_tts,
                     show_status=host._show_voice_status,
+                    set_target=host._set_voice_target,
+                    start_session=host._voice_start_recording,
+                    interrupt_session=host._voice_stop_and_transcribe,
+                    start_continuous=host._start_supervisor_continuous_voice,
+                    stop_continuous=host._stop_supervisor_continuous_voice,
                     voice_mode_enabled=lambda: host._voice_state().mode,
+                    emit=emit,
+                    show_help=host._show_voice_help,
+                ),
+            ),
+            "verbose": lambda request: handle_verbose_command(
+                request,
+                ports=VerboseCommandPorts(
+                    mode=lambda: host.tool_progress_mode,
+                    set_mode=host._set_verbose_mode,
                     emit=emit,
                 ),
             ),

@@ -58,7 +58,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "cancel": BuiltinCommandSpec(handler_key="cancel"),
         "tasks": BuiltinCommandSpec(handler_key="tasks"),
         "statusbar": BuiltinCommandSpec(handler_key="statusbar"),
-        "verbose": BuiltinCommandSpec("_toggle_verbose"),
+        "verbose": BuiltinCommandSpec(handler_key="verbose"),
         "yolo": BuiltinCommandSpec("_toggle_yolo"),
         "reasoning": BuiltinCommandSpec(handler_key="reasoning"),
         "fast": BuiltinCommandSpec(handler_key="fast"),

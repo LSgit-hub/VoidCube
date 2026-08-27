@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from voidcube.interfaces.cli.commands.catalog import SlashCommandAutoSuggest, SlashCommandCompleter
+from voidcube.interfaces.cli.commands.catalog import (
+    COMMAND_REGISTRY,
+    SlashCommandAutoSuggest,
+    SlashCommandCompleter,
+)
 from voidcube.interfaces.cli.commands.execution import BUILTIN_COMMAND_SPECS
 from voidcube.interfaces.cli.i18n import get_i18n, init_i18n, set_locale
 
@@ -55,6 +59,48 @@ def test_command_completion_includes_voice_and_accepts_uppercase_prefix():
     completions = list(SlashCommandCompleter().get_completions(_doc("/V"), None))
 
     assert any(item.text == "voice" for item in completions)
+
+
+def test_verbose_subcommand_completion_lists_explicit_modes():
+    completions = {
+        item.text: item.display_meta_text
+        for item in SlashCommandCompleter().get_completions(_doc("/verbose "), None)
+    }
+
+    assert set(completions) == {"off", "new", "all", "verbose"}
+    assert completions["off"]
+    assert completions["verbose"]
+
+
+def test_voice_subcommand_completion_includes_supervisor_target():
+    completions = {
+        item.text
+        for item in SlashCommandCompleter().get_completions(_doc("/voice s"), None)
+    }
+
+    assert {"status", "supervisor", "session"} <= completions
+
+
+def test_voice_subcommand_completion_has_localized_help_text():
+    init_i18n()
+    original_locale = get_i18n().get_current_locale()
+    try:
+        set_locale("zh_CN")
+        completions = list(
+            SlashCommandCompleter().get_completions(_doc("/voice h"), None)
+        )
+    finally:
+        set_locale(original_locale)
+
+    assert len(completions) == 1
+    assert completions[0].text == "help"
+    assert completions[0].display_meta_text == "显示语音命令帮助"
+
+
+def test_voice_subcommand_completion_keeps_help_text_without_loaded_locale():
+    command = next(command for command in COMMAND_REGISTRY if command.name == "voice")
+
+    assert command.get_subcommand_description("help")
 
 
 def test_slash_completion_includes_every_builtin_command():

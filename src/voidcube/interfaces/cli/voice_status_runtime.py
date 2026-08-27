@@ -18,6 +18,7 @@ class CliVoiceStatusPorts:
     recording: Callable[[], bool]
     processing: Callable[[], bool]
     continuous: Callable[[], bool]
+    target: Callable[[], str] = lambda: "terminal"
 
 
 class CliVoiceStatusRuntime:
@@ -29,10 +30,12 @@ class CliVoiceStatusRuntime:
     def build(self, width: int | None = None) -> list[StatusFragment]:
         width = width or self.ports.terminal_width()
         compact = self.ports.minimal_chrome(width)
+        target = str(self.ports.target() or "terminal").strip().lower()
+        label = "API-B Voice" if target == "supervisor" else "Voice mode"
         if self.ports.recording():
             if compact:
                 return [("class:voice-status-recording", " ● REC ")]
-            return [("class:voice-status-recording", " ● REC  Ctrl+B to stop ")]
+            return [("class:voice-status-recording", f" ● REC  {label} · Ctrl+B to stop ")]
         if self.ports.processing():
             if compact:
                 return [("class:voice-status", " ◉ STT ")]
@@ -43,6 +46,6 @@ class CliVoiceStatusRuntime:
         return [
             (
                 "class:voice-status",
-                f" 🎤 Voice mode{continuous}  —  Ctrl+B to record ",
+                f" 🎤 {label}{continuous}  —  Ctrl+B to record ",
             )
         ]

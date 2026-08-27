@@ -164,3 +164,16 @@ def test_middle_status_uses_compact_unicode_user_and_model_status():
     assert "B✓" not in rendered
     assert "用户" not in rendered
     assert "running" not in rendered
+
+
+def test_middle_status_projects_supervisor_voice_as_microphone_icon():
+    rendered = "".join(
+        text
+        for _, text in _runtime(
+            supervisor={"scene": "idle", "voice": {"enabled": True}},
+            ascii_mode=False,
+        ).build()
+    )
+
+    assert "🎤" in rendered
+    assert "💤" not in rendered

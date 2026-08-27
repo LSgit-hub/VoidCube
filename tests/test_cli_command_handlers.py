@@ -122,6 +122,10 @@ from voidcube.interfaces.cli.commands.handlers.voice import (
     VoiceCommandPorts,
     handle_voice_command,
 )
+from voidcube.interfaces.cli.commands.handlers.verbose import (
+    VerboseCommandPorts,
+    handle_verbose_command,
+)
 from voidcube.interfaces.cli.commands.handlers.preset import (
     PresetCommandPorts,
     PresetCommandText,
@@ -314,6 +318,64 @@ def test_voice_handler_dispatches_runtime_operations_and_tts_status_or_speak() -
     assert events == ["enable", "disable", "tts_status", "tts_speak:hello", "status", "enable", "disable"]
 
 
+def test_voice_handler_dispatches_supervisor_target_and_sessions() -> None:
+    events: list[str] = []
+    ports = VoiceCommandPorts(
+        enable=lambda: events.append("enable"),
+        disable=lambda: events.append("disable"),
+        tts_status=lambda: events.append("tts_status"),
+        tts_speak=lambda text: events.append(f"tts_speak:{text}"),
+        show_status=lambda: events.append("status"),
+        voice_mode_enabled=lambda: False,
+        emit=events.append,
+        set_target=lambda target: events.append(f"target:{target}"),
+        start_session=lambda: events.append("session"),
+        interrupt_session=lambda: events.append("interrupt"),
+        start_continuous=lambda: events.append("continuous:on"),
+        stop_continuous=lambda: events.append("continuous:off"),
+    )
+
+    for command in (
+        "/voice target supervisor",
+        "/voice supervisor",
+        "/voice terminal",
+        "/voice session",
+        "/voice interrupt",
+        "/voice continuous on",
+        "/voice continuous off",
+    ):
+        handle_voice_command(parse_cli_command(command), ports=ports)
+
+    assert events == [
+        "target:supervisor",
+        "target:supervisor",
+        "enable",
+        "target:terminal",
+        "session",
+        "interrupt",
+        "continuous:on",
+        "continuous:off",
+    ]
+
+
+def test_voice_handler_dispatches_help() -> None:
+    events: list[str] = []
+    ports = VoiceCommandPorts(
+        enable=lambda: None,
+        disable=lambda: None,
+        tts_status=lambda: None,
+        tts_speak=lambda _text: None,
+        show_status=lambda: None,
+        voice_mode_enabled=lambda: False,
+        emit=events.append,
+        show_help=lambda: events.append("help"),
+    )
+
+    handle_voice_command(parse_cli_command("/voice help"), ports=ports)
+
+    assert events == ["help"]
+
+
 def test_voice_handler_reports_unknown_subcommand() -> None:
     output: list[str] = []
     ports = VoiceCommandPorts(
@@ -330,7 +392,32 @@ def test_voice_handler_reports_unknown_subcommand() -> None:
 
     assert output == [
         "Unknown voice subcommand: later",
-        "Usage: /voice [on|off|tts [text]|status]",
+        (
+            "Usage: /voice [on|off|status|target terminal|target supervisor|"
+            "supervisor|terminal|session|interrupt|continuous on|continuous off|tts [text]|help]"
+        ),
+    ]
+
+
+def test_verbose_handler_requires_explicit_mode_and_reports_status() -> None:
+    output: list[str] = []
+    selected: list[str] = []
+    ports = VerboseCommandPorts(
+        mode=lambda: "new",
+        set_mode=selected.append,
+        emit=output.append,
+    )
+
+    handle_verbose_command(parse_cli_command("/verbose"), ports=ports)
+    handle_verbose_command(parse_cli_command("/verbose verbose"), ports=ports)
+    handle_verbose_command(parse_cli_command("/verbose later"), ports=ports)
+
+    assert selected == ["verbose"]
+    assert output == [
+        "  Tool progress: NEW",
+        "  Usage: /verbose [off|new|all|verbose]",
+        "  Unknown tool progress mode: later",
+        "  Usage: /verbose [off|new|all|verbose]",
     ]
 
 

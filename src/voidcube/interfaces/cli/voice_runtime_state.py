@@ -12,6 +12,7 @@ class CliVoiceRuntimeState:
 
     lock: Lock = field(default_factory=Lock)
     mode: bool = False
+    target: str = "terminal"
     recording: bool = False
     processing: bool = False
     continuous: bool = False

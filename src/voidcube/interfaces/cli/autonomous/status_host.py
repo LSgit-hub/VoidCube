@@ -85,6 +85,7 @@ def supervisor_activity_snapshot(host: Any) -> Dict[str, Any]:
         "scene": scene,
         "is_active": scene != "idle",
         "mem_usage": dict(status.get("mem_usage") or {}),
+        "voice": dict(status.get("voice") or {}),
     }
 
 

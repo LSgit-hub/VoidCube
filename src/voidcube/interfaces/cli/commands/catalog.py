@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # prompt_toolkit is an optional CLI dependency — only needed for
@@ -45,6 +45,7 @@ class CommandDef:
     gateway_only: bool = False         # only available in gateway/messaging
     gateway_config_gate: str | None = None  # config dotpath; when truthy, overrides cli_only for gateway
     defer_subcommands_until_prefix: bool = False  # hide default subcommand suggestions until user starts typing one
+    subcommand_descriptions: Mapping[str, str] = field(default_factory=dict)
     
     def get_description(self) -> str:
         """Get translated description."""
@@ -66,13 +67,14 @@ class CommandDef:
 
     def get_subcommand_description(self, subcommand: str) -> str:
         """Get a translated completion description for one subcommand."""
+        fallback = self.subcommand_descriptions.get(subcommand, "")
         try:
             from ..i18n import t
 
             key = f"commands.{self.name}.subcommands.{subcommand}"
-            return t(key, default="")
+            return t(key, default=fallback)
         except Exception:
-            return ""
+            return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -152,13 +154,37 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("normal", "fast", "status", "on", "off")),
     CommandDef("statusbar", "切换上下文/模型状态栏", "配置管理",
                cli_only=True),
-    CommandDef("verbose", "循环工具进度显示: 关闭 -> 新 -> 全部 -> 详细", "配置管理",
-               cli_only=True),
+    CommandDef("verbose", "选择工具进度显示级别", "配置管理",
+               cli_only=True, args_hint="[off|new|all|verbose]",
+               subcommands=("off", "new", "all", "verbose"),
+               subcommand_descriptions={
+                   "off": "Silent mode, show only the final response",
+                   "new": "Show only new tools, skipping repeats",
+                   "all": "Show every tool call",
+                   "verbose": "Show full arguments, results, think blocks, and debug logs",
+               }),
     CommandDef("yolo", "切换YOLO模式(跳过所有危险命令批准)", "配置管理",
                cli_only=True),
     CommandDef("voice", "切换语音模式", "配置管理",
-               cli_only=True, args_hint="[on|off|tts|status]",
-               subcommands=("on", "off", "tts", "status")),
+               cli_only=True,
+               args_hint="[on|off|status|target|supervisor|terminal|session|interrupt|continuous|tts|help]",
+               subcommands=(
+                   "on", "off", "status", "target", "supervisor", "terminal",
+                   "session", "interrupt", "continuous", "tts", "help",
+               ),
+               subcommand_descriptions={
+                   "on": "Enable the selected voice target",
+                   "off": "Disable the selected voice target",
+                   "status": "Show current voice target and runtime status",
+                   "target": "Select terminal or supervisor as the voice target",
+                   "supervisor": "Use API-B/Supervisor voice from the terminal",
+                   "terminal": "Use local CLI voice input for API-A",
+                   "session": "Start one API-B voice session",
+                   "interrupt": "Interrupt the active API-B voice session",
+                   "continuous": "Control API-B continuous listening",
+                   "tts": "Speak text with local terminal TTS",
+                   "help": "Show voice command help",
+               }),
 
     # Server Management - 服务器管理
     CommandDef("tools", "查看可用工具列表", "服务器管理",

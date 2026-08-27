@@ -145,8 +145,14 @@
         "usage": "用法: /statusbar"
       },
       "verbose": {
-        "description": "循环工具进度显示: 关闭 -> 新 -> 全部 -> 详细",
-        "usage": "用法: /verbose"
+        "description": "选择工具进度显示级别",
+        "usage": "用法: /verbose [off|new|all|verbose]",
+        "subcommands": {
+          "off": "静默模式，只显示最终回答",
+          "new": "只显示新工具，跳过重复调用",
+          "all": "显示每一次工具调用",
+          "verbose": "完整显示参数、结果、思考块和调试日志"
+        }
       },
       "yolo": {
         "description": "切换YOLO模式(跳过所有危险命令批准)",
@@ -189,12 +195,19 @@
       },
       "voice": {
         "description": "切换语音模式",
-        "usage": "用法: /voice [on|off|tts|status]",
+        "usage": "用法: /voice [on|off|status|target|supervisor|terminal|session|interrupt|continuous|tts [文本]|help]",
         "subcommands": {
           "on": "开启",
           "off": "关闭",
           "tts": "文字转语音",
-          "status": "查看状态"
+          "status": "查看状态",
+          "target": "选择语音目标",
+          "supervisor": "切换到 API-B/Supervisor 语音",
+          "terminal": "切换到 CLI 本地语音",
+          "session": "启动一次 API-B 语音会话",
+          "interrupt": "中断 API-B 语音会话",
+          "continuous": "控制 API-B 持续监听",
+          "help": "显示语音命令帮助"
         }
       },
       "tools": {
@@ -3082,7 +3095,7 @@
       "prompts.browser_is_not_connected_to_live_chrome_(already_using_default_mode)": "Browser is not connected to live Chrome (already using default mode)",
       "prompts.no_plugins_installed.": "No plugins installed.",
       "prompts.usage__browser_connect|disconnect|status": "Usage: /browser connect|disconnect|status",
-      "prompts.usage__voice_[on|off|tts|status]": "Usage: /voice [on|off|tts|status]",
+      "prompts.usage__voice_[on|off|status|target|supervisor|terminal|session|interrupt|continuous|tts|help]": "Usage: /voice [on|off|status|target|supervisor|terminal|session|interrupt|continuous|tts|help]",
       "prompts.\\n_[tools]": "\\n  [Tools]",
       "prompts.\\n🔧_force_exiting...": "\\n🔧 Force exiting...",
       "prompts.🌐_browser_connected_to_live_chrome_via_cdp": "🌐 Browser connected to live Chrome via CDP",

@@ -512,6 +512,13 @@ def test_cli_process_routes_voice_through_explicit_ports() -> None:
     app._show_voice_tts_status = lambda: events.append("tts_status")
     app._speak_voice_tts = lambda text: events.append(f"tts_speak:{text}")
     app._show_voice_status = lambda: events.append("status")
+    app._voice_target = lambda: "terminal"
+    app._set_voice_target = lambda target: events.append(f"target:{target}")
+    app._voice_start_recording = lambda: events.append("session")
+    app._voice_stop_and_transcribe = lambda: events.append("interrupt")
+    app._start_supervisor_continuous_voice = lambda: events.append("continuous:on")
+    app._stop_supervisor_continuous_voice = lambda: events.append("continuous:off")
+    app._show_voice_help = lambda: events.append("help")
     install_cli_command_execution(app, emit=output.append)
 
     assert app.process_command("/voice status") is True
@@ -1118,7 +1125,7 @@ def test_api_command_ports_bind_only_explicit_runtime_updates(monkeypatch) -> No
     )
 
 
-def test_verbose_toggle_applies_logging_levels_without_usage_command(monkeypatch) -> None:
+def test_verbose_explicit_mode_applies_logging_levels(monkeypatch) -> None:
     monkeypatch.setattr(cli_module, "_cprint", lambda _text: None)
     root_logger = logging.getLogger()
     noisy_names = (
@@ -1133,7 +1140,7 @@ def test_verbose_toggle_applies_logging_levels_without_usage_command(monkeypatch
     app.agent = None
 
     try:
-        app._toggle_verbose()
+        app._set_verbose_mode("verbose")
 
         assert app.tool_progress_mode == "verbose"
         assert app.verbose is True
@@ -1145,6 +1152,30 @@ def test_verbose_toggle_applies_logging_levels_without_usage_command(monkeypatch
         root_logger.setLevel(original_levels[0])
         for logger, level in zip(noisy_loggers, original_levels[1:]):
             logger.setLevel(level)
+
+
+def test_cli_process_routes_verbose_through_explicit_mode_handler() -> None:
+    output: list[str] = []
+    selected: list[str] = []
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    app.tool_progress_mode = "all"
+    app._set_verbose_mode = selected.append
+    install_cli_command_execution(app, emit=output.append)
+
+    assert app.process_command("/verbose") is True
+    assert selected == []
+    assert output == [
+        "  Tool progress: ALL",
+        "  Usage: /verbose [off|new|all|verbose]",
+    ]
+
+    output.clear()
+    assert app.process_command("/verbose off") is True
+    assert selected == ["off"]
+    assert output == []
 
 
 

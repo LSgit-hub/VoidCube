@@ -111,7 +111,14 @@
         "description": "Toggle the context/model status bar"
       },
       "verbose": {
-        "description": "Cycle tool progress display: off -> new -> all -> verbose"
+        "description": "Select the tool progress display level",
+        "usage": "Usage: /verbose [off|new|all|verbose]",
+        "subcommands": {
+          "off": "Silent mode, show only the final response",
+          "new": "Show only new tools, skipping repeats",
+          "all": "Show every tool call",
+          "verbose": "Show full arguments, results, think blocks, and debug logs"
+        }
       },
       "yolo": {
         "description": "Toggle YOLO mode (skip all dangerous command approvals)"
@@ -126,7 +133,21 @@
         "description": "Show or change the display language"
       },
       "voice": {
-        "description": "Toggle voice mode"
+        "description": "Toggle voice mode",
+        "usage": "Usage: /voice [on|off|status|target|supervisor|terminal|session|interrupt|continuous|tts [text]|help]",
+        "subcommands": {
+          "on": "Enable voice mode",
+          "off": "Disable voice mode",
+          "status": "Show voice status",
+          "target": "Select the voice target",
+          "supervisor": "Use API-B/Supervisor voice",
+          "terminal": "Use local CLI voice",
+          "session": "Start one API-B voice session",
+          "interrupt": "Interrupt the API-B voice session",
+          "continuous": "Control API-B continuous listening",
+          "tts": "Speak text with terminal TTS",
+          "help": "Show voice command help"
+        }
       },
       "tools": {
         "description": "Manage tools: /tools [list|disable|enable] [name...]"
