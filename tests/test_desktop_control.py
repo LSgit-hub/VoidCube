@@ -43,6 +43,10 @@ def test_snapshot_exposes_only_stable_desktop_service_fields(monkeypatch):
         {"name": "memory", "port": 6001, "pid": 4101, "state": "unhealthy"},
         {"name": "supervisor", "port": 6002, "pid": None, "state": "stopped"},
     ]
+    goal = next(plugin for plugin in result["plugins"] if plugin["name"] == "goal_manager")
+    assert goal["displayName"] == "目标管理器"
+    assert goal["uiPath"] == "/ui/goal-manager/"
+    assert goal["service"]["port"] == 6003
 
 
 def test_execute_lifecycle_actions_delegate_to_canonical_service_owner(monkeypatch):

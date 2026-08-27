@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process'
 import type { RuntimePaths } from './runtime-locator'
 import type {
+  PluginControlAction,
+  ExecutionContext,
+  PluginInfo,
+  PluginServiceInfo,
   ServiceControlAction,
   ServiceControlResult,
-  ExecutionContext,
   ServiceInfo,
   ServiceLifecycleAction,
   TerminalBackend
@@ -41,6 +44,32 @@ function isExecutionContext(value: unknown): value is ExecutionContext {
   )
 }
 
+function isPluginServiceInfo(value: unknown): value is PluginServiceInfo {
+  if (!value || typeof value !== 'object') return false
+  const service = value as Partial<PluginServiceInfo>
+  return (
+    typeof service.port === 'number' &&
+    (service.pid === undefined || service.pid === null || typeof service.pid === 'number') &&
+    (service.state === 'healthy' || service.state === 'unhealthy' || service.state === 'stopped')
+  )
+}
+
+function isPluginInfo(value: unknown): value is PluginInfo {
+  if (!value || typeof value !== 'object') return false
+  const plugin = value as Partial<PluginInfo>
+  return (
+    typeof plugin.name === 'string' &&
+    typeof plugin.displayName === 'string' &&
+    typeof plugin.version === 'string' &&
+    typeof plugin.description === 'string' &&
+    typeof plugin.enabled === 'boolean' &&
+    Array.isArray(plugin.capabilities) &&
+    plugin.capabilities.every((capability) => typeof capability === 'string') &&
+    (plugin.uiPath === undefined || plugin.uiPath === null || typeof plugin.uiPath === 'string') &&
+    (plugin.service === undefined || plugin.service === null || isPluginServiceInfo(plugin.service))
+  )
+}
+
 export function parseServiceControlResult(output: string): ServiceControlResult {
   const value: unknown = JSON.parse(output)
   if (!value || typeof value !== 'object') throw new Error('Service control returned an invalid response')
@@ -54,6 +83,9 @@ export function parseServiceControlResult(output: string): ServiceControlResult 
     typeof result.generatedAt !== 'string' ||
     !Array.isArray(result.services) ||
     !result.services.every(isServiceInfo) ||
+    (result.plugins !== undefined && (
+      !Array.isArray(result.plugins) || !result.plugins.every(isPluginInfo)
+    )) ||
     (result.executionContext !== undefined && !isExecutionContext(result.executionContext)) ||
     (result.error !== undefined && typeof result.error !== 'string')
   ) {
@@ -86,6 +118,14 @@ export class ServiceController {
   control(action: ServiceLifecycleAction): Promise<ServiceControlResult> {
     if (this.operation) return this.operation
     this.operation = this.invoke(action).finally(() => {
+      this.operation = undefined
+    })
+    return this.operation
+  }
+
+  plugin(name: string, action: PluginControlAction): Promise<ServiceControlResult> {
+    if (this.operation) return this.operation
+    this.operation = this.invoke(action, ['plugin', name, action]).finally(() => {
       this.operation = undefined
     })
     return this.operation
@@ -145,16 +185,21 @@ export class ServiceController {
     return this.executionContext?.hostWorkingDirectory
   }
 
-  private invoke(action: ServiceControlAction): Promise<ServiceControlResult> {
+  private invoke(
+    action: ServiceControlAction,
+    pluginArgs?: [string, string, PluginControlAction]
+  ): Promise<ServiceControlResult> {
     return new Promise((resolve) => {
       const executable = this.runtime.cliExecutable ?? this.runtime.pythonCommand
       const args = this.runtime.cliExecutable
-        ? ['--desktop-control', action]
+        ? pluginArgs
+          ? ['--desktop-plugin', pluginArgs[1], pluginArgs[2]]
+          : ['--desktop-control', action]
         : [
             ...this.runtime.pythonPrefixArgs,
             '-m',
             'voidcube.interfaces.desktop.desktop_control',
-            action
+            ...(pluginArgs ? pluginArgs : [action])
           ]
       const child = spawn(executable, args, {
         cwd: this.runtime.workingDirectory,

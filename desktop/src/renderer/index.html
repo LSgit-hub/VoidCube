@@ -32,47 +32,19 @@
             </button>
           </div>
           <span class="action-divider" aria-hidden="true"></span>
-          <details id="service-menu" class="service-menu">
-            <summary class="icon-button" title="后台服务" aria-label="后台服务">
-              <i data-lucide="server-cog" aria-hidden="true"></i>
+          <details id="plugin-menu" class="plugin-menu">
+            <summary class="icon-button" title="插件管理器" aria-label="插件管理器">
+              <i data-lucide="puzzle" aria-hidden="true"></i>
             </summary>
-            <div class="service-popover">
-              <div class="service-popover-heading">
-                <strong>后台服务</strong>
-                <span id="services-summary">检查中</span>
+            <div class="plugin-popover">
+              <div class="plugin-popover-heading">
+                <strong>插件管理器</strong>
+                <span id="plugins-summary">检查中</span>
               </div>
-              <div class="service-list" aria-live="polite">
-                <div class="service-row" data-service="gateway">
-                  <span class="state-dot" aria-hidden="true"></span>
-                  <span>Gateway</span>
-                  <small>6000</small>
-                </div>
-                <div class="service-row" data-service="memory">
-                  <span class="state-dot" aria-hidden="true"></span>
-                  <span>Memory</span>
-                  <small>6001</small>
-                </div>
-                <div class="service-row" data-service="supervisor">
-                  <span class="state-dot" aria-hidden="true"></span>
-                  <span>Supervisor</span>
-                  <small>6002</small>
-                </div>
+              <div id="plugin-list" class="plugin-list" aria-live="polite">
+                <p id="plugins-empty" class="plugins-empty">正在读取插件</p>
               </div>
-              <p id="services-error" class="services-error" hidden></p>
-              <div class="service-commands">
-                <button id="start-services" type="button">
-                  <i data-lucide="play" aria-hidden="true"></i>
-                  <span>启动</span>
-                </button>
-                <button id="restart-services" type="button">
-                  <i data-lucide="refresh-cw" aria-hidden="true"></i>
-                  <span>重启</span>
-                </button>
-                <button id="stop-services" type="button">
-                  <i data-lucide="square" aria-hidden="true"></i>
-                  <span>停止</span>
-                </button>
-              </div>
+              <p id="plugins-error" class="plugins-error" hidden></p>
             </div>
           </details>
           <button id="reload-monitor" class="icon-button" type="button" title="重新加载监控页面" aria-label="重新加载监控页面">
@@ -101,6 +73,29 @@
             sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-popups"
             allow="fullscreen"
           ></iframe>
+          <section id="plugin-view" class="plugin-view" aria-label="插件界面" hidden>
+            <div class="plugin-view-bar">
+              <div class="plugin-view-title">
+                <i data-lucide="puzzle" aria-hidden="true"></i>
+                <strong id="plugin-view-title">插件</strong>
+              </div>
+              <button id="close-plugin-view" class="icon-button" type="button" title="关闭插件界面" aria-label="关闭插件界面">
+                <i data-lucide="x" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="plugin-frame-host">
+              <iframe
+                id="plugin-frame"
+                title="VoidCube 插件界面"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-popups"
+                allow="fullscreen"
+              ></iframe>
+              <div id="plugin-overlay" class="plugin-overlay">
+                <span class="loading-ring" aria-hidden="true"></span>
+                <strong>正在打开插件</strong>
+              </div>
+            </div>
+          </section>
           <div id="monitor-overlay" class="monitor-overlay">
             <span class="loading-ring" aria-hidden="true"></span>
             <strong id="monitor-overlay-title">正在启动 Supervisor</strong>
@@ -173,7 +168,34 @@
                 <strong id="execution-workspace">等待 CLI</strong>
               </button>
             </div>
-            <span id="terminal-meta" class="pane-meta">等待进程</span>
+            <details id="service-process-menu" class="service-process-menu">
+              <summary class="pane-meta-button" title="后台服务进程" aria-label="后台服务进程">
+                <span id="terminal-meta" class="pane-meta">等待进程</span>
+                <i data-lucide="chevron-down" class="selector-chevron" aria-hidden="true"></i>
+              </summary>
+              <div class="service-process-popover">
+                <div class="service-process-heading">
+                  <strong>后台服务进程</strong>
+                  <span id="services-summary">检查中</span>
+                </div>
+                <div id="service-list" class="service-list" aria-live="polite"></div>
+                <p id="services-error" class="services-error" hidden></p>
+                <div class="service-commands">
+                  <button id="start-services" type="button">
+                    <i data-lucide="play" aria-hidden="true"></i>
+                    <span>启动全部</span>
+                  </button>
+                  <button id="restart-services" type="button">
+                    <i data-lucide="refresh-cw" aria-hidden="true"></i>
+                    <span>重启全部</span>
+                  </button>
+                  <button id="stop-services" type="button">
+                    <i data-lucide="square" aria-hidden="true"></i>
+                    <span>停止全部</span>
+                  </button>
+                </div>
+              </div>
+            </details>
           </div>
           <div id="terminal" class="terminal-host"></div>
           <div id="terminal-error" class="terminal-error" hidden>

@@ -8,6 +8,7 @@ import { TerminalSession } from './terminal-session'
 import { loginToPlatform } from './platform-login'
 import type {
   MonitorProbe,
+  PluginControlAction,
   ServiceLifecycleAction,
   TerminalBackend,
   TerminalBackendChangeResult
@@ -208,6 +209,13 @@ function registerIpc(): void {
 
     const terminalState = terminal?.restart()
     return { ok: true, backend, services: serviceResult, terminal: terminalState }
+  })
+  ipcMain.handle('plugins:control', (_event, name: unknown, action: unknown) => {
+    if (typeof name !== 'string' || !name || (action !== 'start' && action !== 'stop' && action !== 'restart')) {
+      throw new Error('Invalid plugin lifecycle action')
+    }
+    if (!services) throw new Error('Service control is unavailable')
+    return services.plugin(name, action as PluginControlAction)
   })
   ipcMain.handle('terminal:start', () => terminal?.start() ?? { phase: 'error', message: 'Terminal is unavailable' })
   ipcMain.handle('terminal:restart', () => terminal?.restart() ?? { phase: 'error', message: 'Terminal is unavailable' })

@@ -1,5 +1,6 @@
 {
   "name": "goal_manager",
+  "display_name": "目标管理器",
   "version": "0.1.0",
   "api_version": "1",
   "description": "软件开发目标管理（DAG 目标图谱）",

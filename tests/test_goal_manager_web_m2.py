@@ -33,6 +33,9 @@ def test_goal_manager_static_bundle_is_self_contained_and_interactive():
     assert "computeOverviewLayoutInWorker" in javascript
     assert "nodes.length > 500" in javascript
     assert "new Worker" in javascript
+    assert "create-child-form" in javascript
+    assert '"/api/goals/batch"' in javascript
+    assert "data-menu-action=\"create-child\"" in html
     assert "https://cdn." not in javascript.lower()
     assert '<script src="./app.js"></script>' in html
     assert "@media (max-width: 560px)" in css

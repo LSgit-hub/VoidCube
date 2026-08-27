@@ -31,6 +31,7 @@ plugins/
 ```json
 {
   "name": "goal_manager",
+  "display_name": "目标管理器",
   "version": "0.1.0",
   "api_version": "1",
   "description": "目标管理：目标、里程碑、OKR 的创建/跟踪/复盘",
@@ -65,6 +66,7 @@ plugins/
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `name` | ✅ | 插件唯一名，必须等于目录名；同时是服务名/服务标识 |
+| `display_name` | 否 | 桌面插件管理器中的显示名称，缺省使用 `name` |
 | `entrypoint` | ✅ | 插件入口模块，`importlib.import_module` 直接可导入 |
 | `api_version` | ✅ | 清单协议版本，当前 `"1"` |
 | `capabilities` | 否 | 从 `tools` / `service` / `web` 中声明 |
@@ -154,6 +156,12 @@ Supervisor 启动时自动把 `web.static_dir`（相对插件目录）挂到
 `web.mount_path` 下，`html=True` 模式直接服务 `entry`（默认 index.html）。
 
 - 产物为纯静态文件（构建后的 SPA 或简单页面）。
+- 桌面端在主窗口的标准 Web 内容区内嵌入和关闭这些页面；常驻的 Supervisor
+  监控 iframe 始终保留，插件 UI 不创建独立 Electron 窗口、不占用 CLI 区域，
+  三种桌面布局切换继续有效。
+- 插件 UI 必须适配宿主内容区尺寸：根布局使用可收缩的 `width: 100%` /
+  `height: 100%`，避免固定独立窗口最小高度；窄窗口和低高度分屏应提供内部
+  滚动或紧凑布局。
 - `mount_path` 需避开 Supervisor 已占用路径和保留前缀（`/runtime*`、
   `/api*`、`/docs` 等）。目标管理插件使用 `/ui/goal-manager`。
 - 前端通过 `/api/*` 与插件服务通信（插件服务与 Supervisor 同机）。

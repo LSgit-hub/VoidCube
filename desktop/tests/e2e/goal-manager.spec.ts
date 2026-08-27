@@ -136,6 +136,53 @@ async function installGoalServiceRoute(page: Page): Promise<() => void> {
       })
       return
     }
+    if (url.pathname === '/api/goals/batch' && request.method() === 'POST') {
+      const body = request.postDataJSON() as {
+        operations?: Array<Record<string, unknown>>
+      }
+      const createOperation = body.operations?.find((operation) => operation.op === 'create_node')
+      const edgeOperation = body.operations?.find((operation) => operation.op === 'create_edge')
+      if (!createOperation || !edgeOperation) {
+        await route.fulfill({ status: 422, contentType: 'application/json', body: '{"detail":"invalid batch"}' })
+        return
+      }
+      const nodeType = typeof createOperation.node_type === 'string' ? createOperation.node_type : 'task'
+      const title = typeof createOperation.title === 'string' ? createOperation.title : '新建子目标'
+      const description = typeof createOperation.description === 'string'
+        ? createOperation.description
+        : ''
+      const child = {
+        id: 'goal-m4-created-child',
+        project_id: projectId,
+        node_type: nodeType,
+        title,
+        description,
+        status: 'planned',
+        progress: 0,
+        version: 1,
+        acceptance_criteria: []
+      }
+      fixture.nodes.splice(1, 0, child)
+      fixture.edges.push({
+        id: 'edge-m4-created-child',
+        project_id: projectId,
+        source_id: edgeOperation.source_id ?? rootId,
+        target_id: child.id,
+        edge_type: 'decomposes_to',
+        progress_weight: 1,
+        required: true
+      })
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          batch_id: 'batch-m4-create-child',
+          temp_ids: { new_child: child.id },
+          results: [{ op: 'create_node', node: child }]
+        })
+      })
+      return
+    }
     if (url.pathname === '/api/goals/events/stream' || url.pathname === `/api/goals/projects/${projectId}/events`) {
       if (liveEventPending) {
         liveEventPending = false
@@ -274,6 +321,13 @@ test('supports detail editing, evidence write-back, rollback, and context action
     await root.dispatchEvent('click')
     await expect(page.locator('#detail-title')).toHaveText('M3 总览验证')
     await expect(page.locator('#add-evidence-button')).toBeVisible()
+
+    await page.locator('#add-child-button').click()
+    await expect(page.locator('#goal-dialog')).toBeVisible()
+    await page.locator('#create-child-title').fill('新建训练任务')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#focus-heading')).toHaveText('M3 总览验证')
+    await expect(page.locator('#radial-content [data-node-id="goal-m4-created-child"]')).toBeVisible()
 
     await page.locator('#edit-detail-button').click()
     await page.locator('#detail-edit-title').fill('M4 已编辑目标')

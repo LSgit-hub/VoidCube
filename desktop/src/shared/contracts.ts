@@ -17,12 +17,30 @@ export type ServiceLifecycleAction = 'start' | 'stop' | 'restart'
 export type ServiceControlAction = 'status' | ServiceLifecycleAction
 export type ServicePhase = 'healthy' | 'unhealthy' | 'stopped'
 export type TerminalBackend = 'local' | 'podman'
+export type PluginControlAction = ServiceLifecycleAction
 
 export interface ServiceInfo {
   name: string
   port: number
   pid?: number | null
   state: ServicePhase
+}
+
+export interface PluginServiceInfo {
+  port: number
+  pid?: number | null
+  state: ServicePhase
+}
+
+export interface PluginInfo {
+  name: string
+  displayName: string
+  version: string
+  description: string
+  enabled: boolean
+  capabilities: string[]
+  uiPath?: string | null
+  service?: PluginServiceInfo | null
 }
 
 export type ExecutionMode = 'system' | 'sandbox' | 'remote'
@@ -49,6 +67,7 @@ export interface ServiceControlResult {
   ok: boolean
   generatedAt: string
   services: ServiceInfo[]
+  plugins?: PluginInfo[]
   executionContext?: ExecutionContext
   error?: string
 }
@@ -92,6 +111,9 @@ export interface VoidCubeDesktopApi {
     status: () => Promise<ServiceControlResult>
     control: (action: ServiceLifecycleAction) => Promise<ServiceControlResult>
     setBackend: (backend: TerminalBackend) => Promise<TerminalBackendChangeResult>
+  }
+  plugins: {
+    control: (name: string, action: PluginControlAction) => Promise<ServiceControlResult>
   }
   window: {
     minimize: () => void

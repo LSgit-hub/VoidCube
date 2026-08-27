@@ -135,12 +135,17 @@ def main(
 
     # ── Desktop service-control entry (bundled desktop shell) ──────
     # The desktop shell invokes this same executable with
-    # ``--desktop-control <status|start|stop|restart>`` so a single
+    # ``--desktop-control <status|start|stop|restart>`` and
+    # ``--desktop-plugin <name> <start|stop|restart>`` so a single
     # compiled binary serves both the terminal CLI and desktop UI.
     if args and args[0] == "--desktop-control":
         from ..desktop.desktop_control import main as desktop_control_main
 
         return desktop_control_main(args[1:])
+    if args and args[0] == "--desktop-plugin":
+        from ..desktop.desktop_control import main as desktop_control_main
+
+        return desktop_control_main(["plugin", *args[1:]])
 
     # ── Daemon lifecycle shortcuts ─────────────────────────────────
     if _is_daemon_lifecycle_command(args):

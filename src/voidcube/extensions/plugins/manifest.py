@@ -28,6 +28,7 @@ class PluginManifest:
     tools: dict[str, Any] | None = None
     service: dict[str, Any] | None = None
     web: dict[str, Any] | None = None
+    display_name: str = ""
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> "PluginManifest":
@@ -48,6 +49,7 @@ class PluginManifest:
         entrypoint = str(raw.get("entrypoint") or "").strip()
         return cls(
             name=name,
+            display_name=str(raw.get("display_name") or "").strip(),
             version=version,
             api_version=api_version,
             capabilities=tuple(dict.fromkeys(value.strip() for value in capabilities)),
@@ -77,7 +79,7 @@ class PluginManifest:
             "capabilities": list(self.capabilities),
             "entrypoint": self.entrypoint,
         }
-        for key in ("description", "config_key", "data_owner", "data_root"):
+        for key in ("display_name", "description", "config_key", "data_owner", "data_root"):
             value = getattr(self, key)
             if value:
                 result[key] = value

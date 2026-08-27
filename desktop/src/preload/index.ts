@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   MonitorProbe,
+  PluginControlAction,
   ServiceControlResult,
   ServiceLifecycleAction,
   TerminalBackend,
@@ -28,6 +29,10 @@ const api: VoidCubeDesktopApi = {
       ipcRenderer.invoke('services:control', action) as Promise<ServiceControlResult>,
     setBackend: (backend: TerminalBackend) =>
       ipcRenderer.invoke('services:set-backend', backend) as Promise<TerminalBackendChangeResult>
+  },
+  plugins: {
+    control: (name: string, action: PluginControlAction) =>
+      ipcRenderer.invoke('plugins:control', name, action) as Promise<ServiceControlResult>,
   },
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),

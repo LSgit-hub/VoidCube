@@ -3,15 +3,16 @@ import {
   Check,
   ChevronDown,
   createIcons,
+  ExternalLink,
   FolderGit2,
   Monitor,
   Minus,
   PanelTop,
   Play,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Rows3,
-  ServerCog,
   ShieldCheck,
   Square,
   SquareTerminal,
@@ -25,6 +26,8 @@ import { MonitorHealthGate } from './monitor-health'
 import type {
   ServiceControlResult,
   ExecutionContext,
+  PluginControlAction,
+  PluginInfo,
   ServiceInfo,
   ServiceLifecycleAction,
   TerminalBackend,
@@ -42,6 +45,11 @@ const monitorOverlay = requiredElement<HTMLDivElement>('monitor-overlay')
 const monitorOverlayTitle = requiredElement<HTMLElement>('monitor-overlay-title')
 const monitorOverlayDetail = requiredElement<HTMLElement>('monitor-overlay-detail')
 const retryMonitor = requiredElement<HTMLButtonElement>('retry-monitor')
+const pluginView = requiredElement<HTMLElement>('plugin-view')
+const pluginViewTitle = requiredElement<HTMLElement>('plugin-view-title')
+const pluginFrame = requiredElement<HTMLIFrameElement>('plugin-frame')
+const pluginOverlay = requiredElement<HTMLElement>('plugin-overlay')
+const closePluginViewButton = requiredElement<HTMLButtonElement>('close-plugin-view')
 const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
@@ -56,9 +64,15 @@ const executionSelectorStatus = requiredElement<HTMLParagraphElement>('execution
 const backendButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('[data-terminal-backend]')
 )
+const pluginsSummary = requiredElement<HTMLElement>('plugins-summary')
+const pluginList = requiredElement<HTMLElement>('plugin-list')
+const pluginsEmpty = requiredElement<HTMLElement>('plugins-empty')
+const pluginsError = requiredElement<HTMLParagraphElement>('plugins-error')
 const servicesSummary = requiredElement<HTMLElement>('services-summary')
+const serviceList = requiredElement<HTMLElement>('service-list')
 const servicesError = requiredElement<HTMLParagraphElement>('services-error')
-const serviceMenu = requiredElement<HTMLDetailsElement>('service-menu')
+const pluginMenu = requiredElement<HTMLDetailsElement>('plugin-menu')
+const serviceProcessMenu = requiredElement<HTMLDetailsElement>('service-process-menu')
 const workspace = requiredElement<HTMLElement>('workspace')
 const splitter = requiredElement<HTMLElement>('splitter')
 const layoutButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-layout-mode]'))
@@ -77,10 +91,10 @@ createIcons({
     FolderGit2,
     Monitor,
     Play,
+    Puzzle,
     RefreshCw,
     RotateCcw,
     Rows3,
-    ServerCog,
     ShieldCheck,
     Square,
     SquareTerminal,
@@ -146,6 +160,8 @@ let monitorProbePending = false
 const monitorHealth = new MonitorHealthGate(3)
 let servicePollTimer: number | undefined
 let serviceActionPending = false
+let pluginActionPending: string | undefined
+let activePluginName: string | undefined
 let backendChangePending = false
 let splitPercent = readSplitPercent()
 let layoutMode = readLayoutMode()
@@ -246,6 +262,22 @@ async function connectMonitor(forceReload = false): Promise<void> {
 
 function showMonitorFailure(message: string): void {
   showMonitorWaiting('Supervisor 页面无法加载', message, true)
+}
+
+function closePluginView(): void {
+  activePluginName = undefined
+  pluginView.hidden = true
+  pluginFrame.removeAttribute('src')
+  pluginViewTitle.textContent = '插件'
+  pluginOverlay.hidden = false
+}
+
+function showPluginView(name: string, title: string, url: string): void {
+  activePluginName = name
+  pluginViewTitle.textContent = title
+  pluginOverlay.hidden = false
+  pluginView.hidden = false
+  pluginFrame.src = url
 }
 
 function invalidateMonitorProbe(): void {
@@ -381,18 +413,55 @@ function serviceLabel(service: ServiceInfo): string {
   return '已停止'
 }
 
+function serviceDisplayName(service: ServiceInfo, plugins: PluginInfo[]): string {
+  const plugin = plugins.find((item) => item.name === service.name)
+  if (plugin) return plugin.displayName
+  const labels: Record<string, string> = {
+    gateway: 'Gateway',
+    memory: 'Memory',
+    supervisor: 'Supervisor'
+  }
+  return labels[service.name] ?? service.name
+}
+
+function renderServiceRows(services: ServiceInfo[], plugins: PluginInfo[]): void {
+  serviceList.replaceChildren()
+  if (services.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'services-empty'
+    empty.textContent = '暂无后台服务进程'
+    serviceList.append(empty)
+    return
+  }
+
+  for (const service of services) {
+    const row = document.createElement('div')
+    row.className = `service-row ${service.state}`
+    row.dataset.service = service.name
+
+    const stateDot = document.createElement('span')
+    stateDot.className = 'state-dot'
+    stateDot.setAttribute('aria-hidden', 'true')
+
+    const name = document.createElement('span')
+    name.textContent = serviceDisplayName(service, plugins)
+    name.title = service.name
+
+    const detail = document.createElement('small')
+    detail.textContent = `${serviceLabel(service)} · ${service.port}`
+
+    row.append(stateDot, name, detail)
+    serviceList.append(row)
+  }
+}
+
 function applyServiceResult(result: ServiceControlResult): void {
   servicesError.hidden = !result.error
   servicesError.textContent = result.error ?? ''
+  applyPluginResult(result)
 
+  renderServiceRows(result.services, result.plugins ?? [])
   const serviceByName = new Map(result.services.map((service) => [service.name, service]))
-  for (const row of document.querySelectorAll<HTMLElement>('.service-row')) {
-    const name = row.dataset.service
-    const service = name ? serviceByName.get(name) : undefined
-    row.className = `service-row ${service?.state ?? 'unknown'}`
-    const detail = row.querySelector('small')
-    if (detail && service) detail.textContent = serviceLabel(service)
-  }
 
   if (result.error) {
     servicesSummary.textContent = '控制不可用'
@@ -419,10 +488,148 @@ function applyServiceResult(result: ServiceControlResult): void {
   }
 }
 
+function pluginStateLabel(plugin: PluginInfo): string {
+  if (!plugin.enabled) return '已禁用'
+  if (!plugin.service) return '工具插件'
+  if (plugin.service.state === 'healthy') {
+    return plugin.service.pid ? `PID ${plugin.service.pid}` : '运行中'
+  }
+  if (plugin.service.state === 'unhealthy') return '无响应'
+  return '已停止'
+}
+
+function pluginStateClass(plugin: PluginInfo): string {
+  if (!plugin.enabled) return 'disabled'
+  return plugin.service?.state ?? 'available'
+}
+
+function pluginCapabilitiesLabel(plugin: PluginInfo): string {
+  const labels: Record<string, string> = {
+    tools: '工具',
+    service: '服务',
+    web: '界面',
+    memory: '记忆'
+  }
+  return plugin.capabilities.map((capability) => labels[capability] ?? capability).join(' · ')
+}
+
+function pluginActionButton(
+  label: string,
+  icon: string,
+  action: PluginControlAction,
+  name: string
+): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'plugin-action'
+  button.dataset.pluginAction = action
+  button.dataset.pluginName = name
+  button.title = `${label} ${name}`
+  button.setAttribute('aria-label', `${label} ${name}`)
+  const iconElement = document.createElement('i')
+  iconElement.dataset.lucide = icon
+  iconElement.setAttribute('aria-hidden', 'true')
+  button.append(iconElement)
+  return button
+}
+
+function renderPlugin(plugin: PluginInfo): HTMLElement {
+  const row = document.createElement('article')
+  row.className = `plugin-row ${pluginStateClass(plugin)}`
+  row.dataset.plugin = plugin.name
+
+  const stateDot = document.createElement('span')
+  stateDot.className = 'state-dot'
+  stateDot.setAttribute('aria-hidden', 'true')
+
+  const copy = document.createElement('div')
+  copy.className = 'plugin-copy'
+  const heading = document.createElement('div')
+  heading.className = 'plugin-heading'
+  const name = document.createElement('strong')
+  name.textContent = plugin.displayName
+  const version = document.createElement('small')
+  version.textContent = `v${plugin.version}`
+  heading.append(name, version)
+  const detail = document.createElement('span')
+  detail.textContent = plugin.description || pluginCapabilitiesLabel(plugin)
+  detail.title = plugin.description || pluginCapabilitiesLabel(plugin)
+  copy.append(heading, detail)
+
+  const meta = document.createElement('small')
+  meta.className = 'plugin-meta'
+  meta.textContent = plugin.service
+    ? `${pluginStateLabel(plugin)} · ${plugin.service.port}`
+    : pluginStateLabel(plugin)
+
+  const actions = document.createElement('div')
+  actions.className = 'plugin-actions'
+  if (plugin.service && plugin.enabled) {
+    if (plugin.service.state === 'healthy') {
+      actions.append(
+        pluginActionButton('重启', 'refresh-cw', 'restart', plugin.name),
+        pluginActionButton('停止', 'square', 'stop', plugin.name)
+      )
+    } else {
+      actions.append(pluginActionButton('启动', 'play', 'start', plugin.name))
+    }
+  }
+  if (plugin.uiPath && plugin.enabled) {
+    const openButton = document.createElement('button')
+    openButton.type = 'button'
+    openButton.className = 'plugin-action plugin-open'
+    openButton.dataset.pluginOpen = plugin.name
+    openButton.title = `打开 ${plugin.displayName}`
+    openButton.setAttribute('aria-label', `打开 ${plugin.displayName}`)
+    const openIcon = document.createElement('i')
+    openIcon.dataset.lucide = 'external-link'
+    openIcon.setAttribute('aria-hidden', 'true')
+    openButton.append(openIcon)
+    actions.append(openButton)
+  }
+
+  row.append(stateDot, copy, meta, actions)
+  return row
+}
+
+function applyPluginResult(result: ServiceControlResult): void {
+  const plugins = result.plugins ?? []
+  pluginsError.hidden = !result.error
+  pluginsError.textContent = result.error ?? ''
+  pluginList.replaceChildren()
+  pluginsEmpty.hidden = plugins.length > 0
+  if (plugins.length === 0) {
+    pluginList.append(pluginsEmpty)
+  } else {
+    for (const plugin of plugins) pluginList.append(renderPlugin(plugin))
+  }
+  const enabled = plugins.filter((plugin) => plugin.enabled)
+  const available = enabled.filter(
+    (plugin) => !plugin.service || plugin.service.state === 'healthy'
+  )
+  pluginsSummary.textContent = result.error
+    ? '控制不可用'
+    : `${available.length}/${enabled.length} 可用`
+  createIcons({
+    icons: {
+      ExternalLink,
+      Play,
+      RefreshCw,
+      Square
+    }
+  })
+  if (activePluginName) {
+    const activePlugin = plugins.find((plugin) => plugin.name === activePluginName)
+    if (!activePlugin || (activePlugin.service && activePlugin.service.state !== 'healthy')) {
+      closePluginView()
+    }
+  }
+}
+
 function setServiceBusy(action?: ServiceLifecycleAction): void {
   serviceActionPending = action !== undefined
   for (const button of serviceButtons) button.disabled = serviceActionPending
-  serviceMenu.classList.toggle('busy', serviceActionPending)
+  serviceProcessMenu.classList.toggle('busy', serviceActionPending)
   if (!action) return
   const labels: Record<ServiceLifecycleAction, string> = {
     start: '服务启动中',
@@ -430,6 +637,80 @@ function setServiceBusy(action?: ServiceLifecycleAction): void {
     stop: '服务停止中'
   }
   servicesSummary.textContent = labels[action]
+}
+
+function setPluginBusy(name?: string): void {
+  pluginActionPending = name
+  pluginMenu.classList.toggle('busy', pluginActionPending !== undefined)
+  for (const button of pluginList.querySelectorAll<HTMLButtonElement>('.plugin-action')) {
+    button.disabled = pluginActionPending !== undefined
+  }
+}
+
+async function runPluginAction(name: string, action: PluginControlAction): Promise<void> {
+  if (pluginActionPending) return
+  setPluginBusy(name)
+  try {
+    applyServiceResult(await api.plugins.control(name, action))
+  } catch (error) {
+    pluginsError.hidden = false
+    pluginsError.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    setPluginBusy()
+  }
+}
+
+async function supervisorOrigin(): Promise<string | undefined> {
+  const current = monitorFrame.getAttribute('src')
+  if (current) {
+    try {
+      return new URL(current).origin
+    } catch {
+      // Fall through to the authoritative monitor probe.
+    }
+  }
+  const probe = await api.monitor.probe()
+  if (!probe.ready || !probe.url) return undefined
+  return new URL(probe.url).origin
+}
+
+async function openPlugin(name: string): Promise<void> {
+  if (pluginActionPending) return
+  let plugin: PluginInfo | undefined
+  try {
+    plugin = (await api.services.status()).plugins?.find((item) => item.name === name)
+  } catch (error) {
+    pluginsError.hidden = false
+    pluginsError.textContent = error instanceof Error ? error.message : String(error)
+    return
+  }
+  if (!plugin || !plugin.enabled || !plugin.uiPath) return
+  if (plugin.service && plugin.service.state !== 'healthy') {
+    setPluginBusy(name)
+    try {
+      const result = await api.plugins.control(name, 'start')
+      applyServiceResult(result)
+      const refreshed = result.plugins?.find((item) => item.name === name)
+      if (!refreshed || (refreshed.service && refreshed.service.state !== 'healthy')) return
+      plugin = refreshed
+    } catch (error) {
+      pluginsError.hidden = false
+      pluginsError.textContent = error instanceof Error ? error.message : String(error)
+      return
+    } finally {
+      setPluginBusy()
+    }
+  }
+  const origin = await supervisorOrigin()
+  if (!origin) {
+    pluginsError.hidden = false
+    pluginsError.textContent = 'Supervisor 页面尚未就绪'
+    return
+  }
+  if (!plugin.uiPath) return
+  if (layoutMode === 'terminal') setLayoutMode('split', true)
+  showPluginView(name, plugin.displayName, new URL(plugin.uiPath, origin).toString())
+  pluginMenu.open = false
 }
 
 async function runServiceAction(action: ServiceLifecycleAction): Promise<ServiceControlResult> {
@@ -571,8 +852,12 @@ monitorFrame.addEventListener('load', () => {
   monitorOverlay.hidden = true
 })
 monitorFrame.addEventListener('error', () => showMonitorFailure('请检查 Supervisor 服务日志后重试'))
+pluginFrame.addEventListener('load', () => {
+  pluginOverlay.hidden = true
+})
 requiredElement<HTMLButtonElement>('reload-monitor').addEventListener('click', () => void connectMonitor(true))
 retryMonitor.addEventListener('click', () => void connectMonitor(true))
+closePluginViewButton.addEventListener('click', closePluginView)
 requiredElement<HTMLButtonElement>('restart-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.restart()))
 requiredElement<HTMLButtonElement>('retry-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.start()))
 requiredElement<HTMLButtonElement>('minimize-window').addEventListener('click', () => api.window.minimize())
@@ -580,6 +865,19 @@ requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () 
 requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
 requiredElement<HTMLButtonElement>('restart-services').addEventListener('click', () => void runServiceAction('restart'))
 requiredElement<HTMLButtonElement>('stop-services').addEventListener('click', () => void runServiceAction('stop'))
+pluginList.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement
+  const actionButton = target.closest<HTMLButtonElement>('[data-plugin-action]')
+  if (actionButton?.dataset.pluginName && actionButton.dataset.pluginAction) {
+    const action = actionButton.dataset.pluginAction
+    if (action === 'start' || action === 'stop' || action === 'restart') {
+      void runPluginAction(actionButton.dataset.pluginName, action)
+    }
+    return
+  }
+  const openButton = target.closest<HTMLButtonElement>('[data-plugin-open]')
+  if (openButton?.dataset.pluginOpen) void openPlugin(openButton.dataset.pluginOpen)
+})
 for (const button of backendButtons) {
   button.addEventListener('click', () => {
     const backend = button.dataset.terminalBackend
