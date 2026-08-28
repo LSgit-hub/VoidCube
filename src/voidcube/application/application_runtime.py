@@ -344,11 +344,20 @@ class ApplicationRuntime:
         self.state.pending_input_queue.put(payload)
         return TurnInputRoute.NEXT_TURN
 
-    def begin_turn(self, user_message: Any) -> TurnInput:
+    def begin_turn(
+        self,
+        user_message: Any,
+        *,
+        attachments: Sequence[Mapping[str, Any]] = (),
+    ) -> TurnInput:
         if self.state.turn_active:
             raise RuntimeError("an application turn is already active")
         turn_id = self._new_turn_id()
-        turn_input = _begin_turn(self.state.conversation_history, user_message)
+        turn_input = _begin_turn(
+            self.state.conversation_history,
+            user_message,
+            attachments=attachments,
+        )
         self.state.conversation_history = list(turn_input.conversation_history)
         self.state.active_turn_id = turn_id
         self.set_agent_running(True)

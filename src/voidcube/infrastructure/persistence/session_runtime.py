@@ -164,6 +164,7 @@ class SessionPersistence:
                     "tool_calls": tool_calls,
                     "tool_call_id": message.get("tool_call_id"),
                     "action_refs": message.get("action_refs"),
+                    "attachments": message.get("attachments"),
                     "finish_reason": message.get("finish_reason"),
                     "reasoning": (
                         message.get("reasoning") if role == "assistant" else None

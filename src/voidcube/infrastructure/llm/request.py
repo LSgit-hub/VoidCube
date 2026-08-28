@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...domain.contracts.integration_policy import require_active_integration
+from .multimodal import build_user_content_with_attachments
 from .prompt_policy import DEVELOPER_ROLE_MODELS
 from .tool_schema import normalize_tool_definitions
 
@@ -177,16 +178,43 @@ def prepare_chat_messages(
     prefill_messages: Sequence[dict[str, Any]] = (),
     user_message_index: int | None = None,
     user_contexts: Sequence[str] = (),
+    native_input_modalities: Sequence[str] = (),
+    native_image_input: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Build API-only messages without mutating persisted history."""
     prepared: list[dict[str, Any]] = []
+    effective_native_modalities = set(native_input_modalities)
+    if native_image_input is True:
+        effective_native_modalities.add("image")
     contexts = [context.strip() for context in user_contexts if context.strip()]
     for index, message in enumerate(messages):
         api_message = dict(message)
+        attachments = api_message.pop("attachments", ())
         if index == user_message_index and message.get("role") == "user" and contexts:
             base_content = api_message.get("content", "")
             if isinstance(base_content, str):
                 api_message["content"] = base_content.strip() + "\n\n" + "\n\n".join(contexts)
+        if (
+            effective_native_modalities
+            and message.get("role") == "user"
+            and isinstance(attachments, Sequence)
+            and not isinstance(attachments, (str, bytes))
+            and attachments
+        ):
+            content = api_message.get("content", "")
+            if not isinstance(content, str):
+                raise ValueError(
+                    "Native attachment input requires string user message content"
+                )
+            api_message["content"] = build_user_content_with_attachments(
+                content.strip(),
+                [
+                    attachment
+                    for attachment in attachments
+                    if isinstance(attachment, dict)
+                ],
+                native_modalities=effective_native_modalities,
+            )
         if message.get("role") == "assistant" and message.get("reasoning"):
             api_message["reasoning_content"] = message["reasoning"]
         for field_name in tuple(api_message):

@@ -282,6 +282,10 @@
         "description": "为下一个提示附加本地图像文件",
         "usage": "用法: /image <路径>"
       },
+      "attach": {
+        "description": "为下一个提示附加本地图像、音频或视频文件",
+        "usage": "用法: /attach <图像|音频|视频路径>"
+      },
       "update": {
         "description": "将Voidcube Agent更新到最新版本",
         "usage": "用法: /update"

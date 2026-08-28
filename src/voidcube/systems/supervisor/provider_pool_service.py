@@ -62,6 +62,8 @@ class ProviderPoolEntryRequest(BaseModel):
     concurrency_limit: int = Field(default=2, ge=1, le=16)
     audio_input: bool = False
     audio_output: bool = False
+    image_input: bool = False
+    video_input: bool = False
     make_active: bool = False
 
     @field_validator("label", "type", "base_url", "selected_model", "api_key_env")
@@ -303,6 +305,8 @@ class ProviderPoolService:
             if isinstance(selected_capabilities, Mapping) and selected_capabilities:
                 public_provider["audio_input"] = bool(selected_capabilities.get("audio_input"))
                 public_provider["audio_output"] = bool(selected_capabilities.get("audio_output"))
+                public_provider["image_input"] = bool(selected_capabilities.get("image_input"))
+                public_provider["video_input"] = bool(selected_capabilities.get("video_input"))
             public_providers.append(public_provider)
 
         public_roles = []
@@ -403,10 +407,18 @@ class ProviderPoolService:
             }
         )
         model_capabilities = dict(current.get("model_capabilities") or {})
-        if request.audio_input or request.audio_output or request.selected_model in model_capabilities:
+        if (
+            request.audio_input
+            or request.audio_output
+            or request.image_input
+            or request.video_input
+            or request.selected_model in model_capabilities
+        ):
             model_capabilities[request.selected_model] = {
                 "audio_input": bool(request.audio_input),
                 "audio_output": bool(request.audio_output),
+                "image_input": bool(request.image_input),
+                "video_input": bool(request.video_input),
             }
             current["model_capabilities"] = model_capabilities
         if catalog_invalidated:

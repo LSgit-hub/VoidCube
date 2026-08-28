@@ -67,6 +67,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 EXPECTED_BUILTINS = {
     "api",
+    "attach",
     "auto",
     "auto-q",
     "background",

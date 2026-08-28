@@ -132,6 +132,22 @@ def test_provider_pool_persists_provider_concurrency_policy(tmp_path, monkeypatc
     }
 
 
+def test_provider_pool_persists_selected_model_image_input_capability(tmp_path, monkeypatch):
+    _configure_home(tmp_path, monkeypatch)
+    service = ProviderPoolService()
+
+    snapshot = service.upsert_provider(
+        "deepseek",
+        _provider_request(
+            type="deepseek",
+            selected_model="deepseek-v4-flash-vision-exp",
+            image_input=True,
+        ),
+    )
+
+    assert snapshot["providers"][0]["image_input"] is True
+
+
 def test_provider_pool_assigns_roles_and_protects_referenced_provider(
     tmp_path,
     monkeypatch,

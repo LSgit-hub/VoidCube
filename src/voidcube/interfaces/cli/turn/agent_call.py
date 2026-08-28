@@ -24,6 +24,7 @@ class CliAgentTurnCallPorts:
     run_conversation: Callable[..., Mapping[str, Any] | None]
     summarize_error: Callable[[Exception], str]
     log_error: Callable[[Exception], None]
+    attachments: Sequence[Mapping[str, Any]] = ()
 
 
 class CliAgentTurnCallRuntime:
@@ -54,6 +55,11 @@ class CliAgentTurnCallRuntime:
                 task_id=ports.session_id,
                 trace_id=trace_id,
                 persist_user_message=ports.persist_user_message,
+                attachments=[
+                    dict(attachment)
+                    for attachment in ports.attachments
+                    if isinstance(attachment, Mapping)
+                ],
             )
         except Exception as error:
             ports.log_error(error)

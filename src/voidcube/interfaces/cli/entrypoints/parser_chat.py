@@ -23,6 +23,12 @@ def register_chat_command(subparsers: argparse._SubParsersAction) -> None:
         help="Optional local image path to attach to a single query"
     )
     chat_parser.add_argument(
+        "--attachment",
+        action="append",
+        default=None,
+        help="Local image, audio, or video path; repeat for multiple attachments"
+    )
+    chat_parser.add_argument(
         "-m", "--model",
         help="Exact model ID returned by the selected provider API"
     )

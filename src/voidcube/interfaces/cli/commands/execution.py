@@ -67,6 +67,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "debug": BuiltinCommandSpec(handler_key="debug"),
         "paste": BuiltinCommandSpec(handler_key="paste"),
         "image": BuiltinCommandSpec(handler_key="image"),
+        "attach": BuiltinCommandSpec(handler_key="attach"),
         "reload-mcp": BuiltinCommandSpec(handler_key="reload-mcp", busy=True),
         "browser": BuiltinCommandSpec(handler_key="browser"),
         "plugins": BuiltinCommandSpec(handler_key="plugins"),

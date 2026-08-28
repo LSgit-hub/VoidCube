@@ -992,9 +992,10 @@ class ServiceRuntimeMixin:
             return ""
 
     @staticmethod
-    def _companion_native_audio_enabled() -> bool:
+    def _companion_native_input_modalities() -> frozenset[str]:
         try:
             from ...infrastructure.config.configuration import load_config
+            from ...infrastructure.llm.multimodal import native_input_modalities
 
             config = load_config()
             memory = config.get("memory") if isinstance(config, dict) else {}
@@ -1007,13 +1008,15 @@ class ServiceRuntimeMixin:
                 model_capabilities.get(str(llm.get("model") or ""), {})
                 if isinstance(model_capabilities, dict) else {}
             )
-            return bool(
-                isinstance(selected_capabilities, dict)
-                and selected_capabilities.get("audio_input")
-                and selected_capabilities.get("audio_output")
+            if not isinstance(selected_capabilities, dict):
+                return frozenset()
+            return native_input_modalities(
+                provider,
+                str(llm.get("model") or ""),
+                configured_capabilities=selected_capabilities,
             )
         except Exception:
-            return False
+            return frozenset()
 
     async def _persist_companion_turn_pair(
         self,
@@ -1579,7 +1582,7 @@ class ServiceRuntimeMixin:
                 "stellar_mode": self._service_runtime.stellar_mode.value,
             }
         message = str(text or "").strip()
-        native_audio_enabled = self._companion_native_audio_enabled()
+        native_audio_enabled = "audio" in self._companion_native_input_modalities()
         if audio_path is not None and not native_audio_enabled:
             return {"status": "needs_transcript", "session_id": session_id}
         if not message and audio_path is None:

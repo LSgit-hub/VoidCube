@@ -16,6 +16,9 @@ _IMAGE_EXTENSIONS = frozenset(
         ".tiff", ".tif", ".svg", ".ico",
     }
 )
+_ATTACHMENT_EXTENSIONS = _IMAGE_EXTENSIONS | frozenset(
+    {".mp3", ".wav", ".mp4", ".m4v", ".mov", ".webm"}
+)
 
 
 def _split_path_input(raw: str) -> tuple[str, str]:
@@ -129,6 +132,45 @@ def _collect_query_images(
             continue
         seen.add(normalized)
         deduped.append(image)
+    return message, deduped
+
+
+def _collect_query_attachments(
+    query: str | None,
+    attachment_args: list[str] | tuple[str, ...] | None = None,
+) -> tuple[str, list[Path]]:
+    """Collect local image, audio, and video paths for a single query."""
+    message = query or ""
+    attachments: list[Path] = []
+    dropped = _detect_file_drop(message) if isinstance(message, str) else None
+    if dropped and dropped["path"].suffix.lower() in _ATTACHMENT_EXTENSIONS:
+        attachments.append(dropped["path"])
+        suffix = dropped["path"].suffix.lower()
+        modality = (
+            "image" if suffix in _IMAGE_EXTENSIONS
+            else "audio" if suffix in {".mp3", ".wav"}
+            else "video"
+        )
+        message = dropped["remainder"] or (
+            f"[User attached {modality}: {dropped['path'].name}]"
+        )
+
+    for raw_path in attachment_args or ():
+        attachment_path = _resolve_attachment_path(raw_path)
+        if attachment_path is None:
+            raise ValueError(f"Attachment file not found: {raw_path}")
+        if attachment_path.suffix.lower() not in _ATTACHMENT_EXTENSIONS:
+            raise ValueError(f"Not a supported attachment file: {attachment_path}")
+        attachments.append(attachment_path)
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for attachment in attachments:
+        normalized = attachment.resolve()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
     return message, deduped
 
 

@@ -128,12 +128,21 @@ class TurnOutcome:
 def begin_turn(
     conversation_history: Sequence[Message],
     user_message: Any,
+    *,
+    attachments: Sequence[Mapping[str, Any]] = (),
 ) -> TurnInput:
     prior = tuple(conversation_history)
+    user_turn: Message = {"role": "user", "content": user_message}
+    if attachments:
+        user_turn["attachments"] = [
+            dict(attachment)
+            for attachment in attachments
+            if isinstance(attachment, Mapping)
+        ]
     return TurnInput(
         user_message=user_message,
         prior_history=prior,
-        conversation_history=(*prior, {"role": "user", "content": user_message}),
+        conversation_history=(*prior, user_turn),
     )
 
 

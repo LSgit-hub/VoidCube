@@ -45,6 +45,40 @@ class ImageCommandPorts:
     text: ImageCommandText
 
 
+@dataclass(frozen=True, slots=True)
+class AttachmentCommandPorts:
+    split_path: Callable[[str], tuple[str, str]]
+    resolve_path: Callable[[str], Path | None]
+    supported_extensions: AbstractSet[str]
+    append_attachment: Callable[[Path], None]
+    emit: Callable[[str], None]
+
+
+def handle_attachment_command(
+    request: ParsedCliCommand,
+    *,
+    ports: AttachmentCommandPorts,
+) -> None:
+    """Attach one local image, audio, or video for the next user turn."""
+    if not request.arguments:
+        ports.emit("  Usage: /attach <image|audio|video path>")
+        return
+    path_token, remainder = ports.split_path(request.arguments)
+    attachment_path = ports.resolve_path(path_token)
+    if attachment_path is None:
+        ports.emit(f"  File not found: {path_token}")
+        return
+    if attachment_path.suffix.lower() not in ports.supported_extensions:
+        ports.emit(
+            f"  Not a supported attachment file: {attachment_path.name}"
+        )
+        return
+    ports.append_attachment(attachment_path)
+    ports.emit(f"  Attached: {attachment_path.name}")
+    if remainder:
+        ports.emit(f"  Next prompt: {remainder}")
+
+
 def handle_paste_command(
     request: ParsedCliCommand,
     *,

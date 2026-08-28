@@ -310,3 +310,84 @@ def test_request_can_explicitly_omit_default_reasoning_payload():
     )
 
     assert "extra_body" not in kwargs
+
+
+def test_native_image_input_expands_persisted_reference_only_for_api_request(tmp_path):
+    image = tmp_path / "diagram.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nnative-image")
+    attachment = {
+        "kind": "local_image",
+        "path": str(image),
+        "mime_type": "image/png",
+        "detail": "high",
+    }
+    history = [{"role": "user", "content": "describe it", "attachments": [attachment]}]
+
+    prepared = prepare_chat_messages(history, native_image_input=True)
+
+    assert history[0]["attachments"] == [attachment]
+    assert "attachments" not in prepared[0]
+    assert prepared[0]["content"][0] == {"type": "text", "text": "describe it"}
+    assert prepared[0]["content"][1]["type"] == "image_url"
+    assert prepared[0]["content"][1]["image_url"]["detail"] == "high"
+    assert prepared[0]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+
+
+def test_text_model_request_drops_attachment_metadata_without_expanding_image(tmp_path):
+    image = tmp_path / "diagram.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\ntext-only")
+
+    prepared = prepare_chat_messages(
+        [
+            {
+                "role": "user",
+                "content": "describe it",
+                "attachments": [{"kind": "local_image", "path": str(image)}],
+            }
+        ],
+        native_image_input=False,
+    )
+
+    assert prepared == [{"role": "user", "content": "describe it"}]
+
+
+def test_native_audio_and_video_inputs_are_projected_without_persisting_bytes(
+    tmp_path,
+):
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF" + b"\x00" * 12)
+    video = tmp_path / "sample.mp4"
+    video.write_bytes(b"video")
+    history = [
+        {
+            "role": "user",
+            "content": "inspect media",
+            "attachments": [
+                {
+                    "kind": "local_audio",
+                    "path": str(audio),
+                    "mime_type": "audio/wav",
+                },
+                {
+                    "kind": "local_video",
+                    "path": str(video),
+                    "mime_type": "video/mp4",
+                },
+            ],
+        }
+    ]
+
+    prepared = prepare_chat_messages(
+        history,
+        native_input_modalities={"audio", "video"},
+    )
+
+    assert history[0]["attachments"][0]["kind"] == "local_audio"
+    assert "attachments" not in prepared[0]
+    assert [part["type"] for part in prepared[0]["content"]] == [
+        "text",
+        "input_audio",
+        "video_url",
+    ]

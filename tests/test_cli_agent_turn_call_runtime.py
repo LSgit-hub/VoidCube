@@ -45,6 +45,18 @@ def test_agent_turn_call_runtime_projects_note_voice_and_trace_inputs():
     assert kwargs["task_id"] == "session"
     assert kwargs["trace_id"] == "trace-id"
     assert kwargs["persist_user_message"] == "question"
+    assert kwargs["attachments"] == []
+
+
+def test_agent_turn_call_passes_native_attachment_metadata_to_agent():
+    events = []
+    attachment = {"kind": "local_image", "path": "sample.png"}
+
+    CliAgentTurnCallRuntime(
+        _ports(events, attachments=[attachment])
+    ).run()
+
+    assert events[1][1]["attachments"] == [attachment]
 
 
 def test_agent_turn_call_runtime_returns_normalized_error_result():

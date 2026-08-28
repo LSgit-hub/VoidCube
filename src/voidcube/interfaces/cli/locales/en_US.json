@@ -191,6 +191,9 @@
       "image": {
         "description": "Attach a local image file for your next prompt"
       },
+      "attach": {
+        "description": "Attach a local image, audio, or video file for your next prompt"
+      },
       "update": {
         "description": "Update Voidcube Agent to the latest version"
       },

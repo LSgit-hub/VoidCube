@@ -168,6 +168,7 @@ from ...infrastructure.llm.request import (
     build_chat_completion_kwargs,
     prepare_chat_messages,
 )
+from ...infrastructure.llm.multimodal import native_input_modalities
 from ...domain.agent.response import (
     TruncationAction,
     decide_truncation_recovery,
@@ -2780,6 +2781,30 @@ class AIAgent:
             timeout=float(os.getenv("VOIDCUBE_API_TIMEOUT", 1800.0)),
         )
 
+    def _native_input_modalities(self) -> frozenset[str]:
+        """Resolve native attachment support without probing at turn time."""
+        configured_capabilities = None
+        try:
+            from ...infrastructure.config.configuration import (
+                get_configured_providers,
+                load_config,
+            )
+
+            entry = get_configured_providers(load_config()).get(self.provider)
+            if isinstance(entry, dict):
+                capability_map = entry.get("model_capabilities")
+                if isinstance(capability_map, dict):
+                    candidate = capability_map.get(self.model)
+                    if isinstance(candidate, dict):
+                        configured_capabilities = candidate
+        except Exception:
+            pass
+        return native_input_modalities(
+            self.provider,
+            self.model,
+            configured_capabilities=configured_capabilities,
+        )
+
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
         """Normalize a response message and emit non-streaming reasoning."""
         msg = normalize_assistant_message(assistant_message, finish_reason)
@@ -3551,6 +3576,7 @@ class AIAgent:
                 system_prompt=self._cached_system_prompt or "",
                 ephemeral_system_prompt=self.ephemeral_system_prompt or "",
                 prefill_messages=self.prefill_messages or (),
+                native_input_modalities=self._native_input_modalities(),
             )
 
             summary_kwargs = build_chat_completion_kwargs(
@@ -3608,6 +3634,7 @@ class AIAgent:
         stream_callback: Optional[callable] = None,
         persist_user_message: Optional[str] = None,
         trace_id: str = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Run a complete conversation with tool calling until completion.
@@ -3623,6 +3650,9 @@ class AIAgent:
             persist_user_message: Optional clean user message to store in
                 transcripts/history when user_message contains API-only
                 synthetic prefixes.
+            attachments: Persistable local media references attached to the
+                current user message. They become native content blocks only
+                for modalities supported by the selected model.
                     or queuing follow-up prefetch work.
             trace_id (str): Per-interaction trace identifier for end-to-end
                 observability (C-03).  Stored in activity logs and passed
@@ -3720,6 +3750,12 @@ class AIAgent:
 
         # Add user message
         user_msg = {"role": "user", "content": user_message}
+        if attachments:
+            user_msg["attachments"] = [
+                dict(attachment)
+                for attachment in attachments
+                if isinstance(attachment, dict)
+            ]
         messages.append(user_msg)
         current_turn_user_idx = len(messages) - 1
         self._persist_user_message_idx = current_turn_user_idx
@@ -3976,6 +4012,7 @@ class AIAgent:
                 prefill_messages=self.prefill_messages or (),
                 user_message_index=current_turn_user_idx,
                 user_contexts=user_contexts,
+                native_input_modalities=self._native_input_modalities(),
             )
 
             # Calculate approximate request size for logging

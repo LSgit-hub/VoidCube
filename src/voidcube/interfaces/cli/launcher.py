@@ -14,7 +14,7 @@ from typing import Optional
 
 from . import application as _app
 from ...infrastructure.gateway import daemon_runtime as _daemon_runtime
-from .attachments import _collect_query_images
+from .attachments import _collect_query_attachments
 from .runtime_handlers import (
     _cleanup_worktree,
     _git_repo_root,
@@ -60,6 +60,7 @@ def main(
     query: Optional[str] = None,
     q: Optional[str] = None,
     image: Optional[str] = None,
+    attachments: Optional[list[str]] = None,
     toolsets: Optional[str] = None,
     skills: Optional[str | list[str] | tuple[str, ...]] = None,
     model: Optional[str] = None,
@@ -87,6 +88,7 @@ def main(
         query: Single query to execute (then exit). Alias: -q
         q: Shorthand for --query
         image: Optional local image path to attach to a single query
+        attachments: Optional local image, audio, or video paths
         toolsets: Comma-separated list of toolsets to enable (e.g., "web,terminal")
         skills: Comma-separated or repeated list of skills to preload for the session
         model: Model to use (default: from the active provider config)
@@ -281,21 +283,73 @@ def main(
     atexit.register(_run_cleanup)
     
     # Handle single query mode
-    if query or image:
-        query, single_query_images = _collect_query_images(query, image)
+    if query or image or attachments:
+        query, single_query_images = _collect_query_attachments(
+            query,
+            [*(attachments or ()), *([image] if image else ())],
+        )
         if quiet:
             # Quiet mode: suppress banner, spinner, tool previews.
             # Only print the final response and parseable session info.
             cli.tool_progress_mode = "off"
             if cli._ensure_runtime_credentials():
                 effective_query = query
-                if single_query_images:
-                    effective_query = cli._preprocess_images_with_vision(
+                native_attachments = ()
+                turn_route = cli._resolve_turn_agent_config(effective_query)
+                try:
+                    from ...infrastructure.llm.multimodal import (
+                        attachments_from_paths,
+                        configured_model_capabilities,
+                        native_input_modalities,
+                    )
+
+                    provider = str(turn_route["runtime"].get("provider") or "")
+                    model = str(turn_route["model"] or "")
+                    native_modalities = native_input_modalities(
+                        provider,
+                        model,
+                        configured_capabilities=configured_model_capabilities(
+                            provider,
+                            model,
+                        ),
+                    )
+                    if single_query_images and native_modalities:
+                        all_attachments = attachments_from_paths(single_query_images)
+                        from ...infrastructure.llm.multimodal import (
+                            attachment_modality,
+                            native_attachment_supported,
+                        )
+
+                        native_attachments = tuple(
+                            attachment
+                            for attachment in all_attachments
+                            if (
+                                attachment_modality(attachment) in native_modalities
+                                and native_attachment_supported(attachment)
+                            )
+                        )
+                        fallback_paths = [
+                            path
+                            for path, attachment in zip(
+                                single_query_images,
+                                all_attachments,
+                            )
+                            if (
+                                attachment_modality(attachment) not in native_modalities
+                                or not native_attachment_supported(attachment)
+                            )
+                        ]
+                    else:
+                        fallback_paths = list(single_query_images)
+                except Exception:
+                    native_attachments = ()
+                    fallback_paths = list(single_query_images)
+                if fallback_paths:
+                    effective_query = cli._preprocess_attachments_with_text(
                         query,
-                        single_query_images,
+                        fallback_paths,
                         announce=False,
                     )
-                turn_route = cli._resolve_turn_agent_config(effective_query)
                 if turn_route["signature"] != cli._active_agent_route_signature:
                     cli.agent = None
                 if cli._init_agent(
@@ -309,6 +363,7 @@ def main(
                     result = cli.agent.run_conversation(
                         user_message=effective_query,
                         conversation_history=cli.conversation_history,
+                        attachments=list(native_attachments),
                     )
                     response = result.get("final_response", "") if isinstance(result, dict) else str(result)
                     if response:

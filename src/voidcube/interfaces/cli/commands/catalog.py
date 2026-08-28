@@ -208,6 +208,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True),
     CommandDef("image", "为下一个提示附加本地图像文件", "服务器管理",
                cli_only=True, args_hint="<path>"),
+    CommandDef("attach", "为下一个提示附加本地媒体文件", "服务器管理",
+               cli_only=True, args_hint="<image|audio|video path>"),
     CommandDef("skills", "搜索、安装、检查或管理技能", "服务器管理",
                cli_only=True, args_hint="[list|search|install|uninstall]",
                subcommands=("list", "search", "install", "uninstall")),

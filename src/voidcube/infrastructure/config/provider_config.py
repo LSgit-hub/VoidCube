@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
+from collections.abc import Iterable
 from typing import Any, Callable
 
 
@@ -113,7 +114,7 @@ def persist_provider_pool_entry(
     normalized_capabilities = {
         key: bool(value)
         for key, value in (capabilities or {}).items()
-        if key in {"audio_input", "audio_output"}
+        if key in {"audio_input", "audio_output", "image_input", "video_input"}
     }
     entry = {
         "label": label,
@@ -237,19 +238,41 @@ def persist_api_b_config(
     provider: str,
     model: str,
     native_audio: bool | None = None,
+    native_modalities: Iterable[str] | None = None,
+    native_audio_output: bool | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
     providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     if provider not in providers:
         raise ValueError(f"Unknown Provider: {provider}")
     result = dict(config or {})
-    if native_audio is not None:
+    if (
+        native_audio is not None
+        or native_modalities is not None
+        or native_audio_output is not None
+    ):
         provider_entry = dict(providers[provider])
         model_capabilities = dict(provider_entry.get("model_capabilities") or {})
-        model_capabilities[str(model or "").strip()] = {
-            "audio_input": bool(native_audio),
-            "audio_output": bool(native_audio),
-        }
+        selected_model = str(model or "").strip()
+        existing = dict(model_capabilities.get(selected_model) or {})
+        if native_modalities is not None:
+            selected_modalities = {
+                str(modality or "").strip().lower()
+                for modality in native_modalities
+            }
+            existing.update(
+                {
+                    "image_input": "image" in selected_modalities,
+                    "audio_input": "audio" in selected_modalities,
+                    "video_input": "video" in selected_modalities,
+                }
+            )
+        if native_audio is not None:
+            existing["audio_input"] = bool(native_audio)
+            existing["audio_output"] = bool(native_audio)
+        if native_audio_output is not None:
+            existing["audio_output"] = bool(native_audio_output)
+        model_capabilities[selected_model] = existing
         provider_entry["model_capabilities"] = model_capabilities
         result["providers"] = {**providers, provider: provider_entry}
     memory = dict(result.get("memory") or {})

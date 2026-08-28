@@ -7,6 +7,7 @@ import subprocess
 import sys
 import re
 import getpass
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -139,6 +140,8 @@ def save_memory_llm_config(
     model: str,
     *,
     native_audio: bool | None = None,
+    native_modalities: Sequence[str] | None = None,
+    native_audio_output: bool | None = None,
 ) -> bool:
     """Persist API-B's Provider/model reference without touching API-A."""
     try:
@@ -149,6 +152,8 @@ def save_memory_llm_config(
             provider=provider,
             model=model,
             native_audio=native_audio,
+            native_modalities=native_modalities,
+            native_audio_output=native_audio_output,
         )
         save_config(cfg)
         return True
@@ -1458,19 +1463,37 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                     if isinstance(provider_cfg.get("model_capabilities"), dict)
                     else {}
                 )
-                default_native_audio = "y" if (
-                    isinstance(existing_capabilities, dict)
-                    and existing_capabilities.get("audio_input")
-                    and existing_capabilities.get("audio_output")
-                ) else "n"
-                native_audio = inp(
-                    "该模型支持 API-B 原生语音输入和输出？(y/n)",
-                    default_native_audio,
+                def capability_default(name: str) -> str:
+                    return "y" if (
+                        isinstance(existing_capabilities, dict)
+                        and existing_capabilities.get(name)
+                    ) else "n"
+
+                native_modalities = []
+                if inp(
+                    "该模型支持 API-B 原生图像输入？(y/n)",
+                    capability_default("image_input"),
+                ).strip().lower() in {"y", "yes", "1", "true"}:
+                    native_modalities.append("image")
+                if inp(
+                    "该模型支持 API-B 原生音频输入？(y/n)",
+                    capability_default("audio_input"),
+                ).strip().lower() in {"y", "yes", "1", "true"}:
+                    native_modalities.append("audio")
+                if inp(
+                    "该模型支持 API-B 原生视频输入？(y/n)",
+                    capability_default("video_input"),
+                ).strip().lower() in {"y", "yes", "1", "true"}:
+                    native_modalities.append("video")
+                native_audio_output = inp(
+                    "该模型支持 API-B 原生语音输出？(y/n)",
+                    capability_default("audio_output"),
                 ).strip().lower() in {"y", "yes", "1", "true"}
                 if not save_memory_llm_config(
                     provider_key,
                     memory_model,
-                    native_audio=native_audio,
+                    native_modalities=native_modalities,
+                    native_audio_output=native_audio_output,
                 ):
                     pe("保存 API-B Provider/模型引用失败")
                     break

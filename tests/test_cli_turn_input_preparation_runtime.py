@@ -46,6 +46,35 @@ def test_turn_input_preparation_projects_images_sanitization_and_begin_turn():
     }
 
 
+def test_turn_input_preparation_uses_native_attachments_without_preanalysis():
+    output = []
+    attachment = {
+        "kind": "local_image",
+        "path": "sample.png",
+        "mime_type": "image/png",
+    }
+    result = CliTurnInputPreparationRuntime(
+        _ports(
+            "inspect",
+            output,
+            images=["sample.png"],
+            native_input_modalities=lambda *_args: ("image",),
+            build_attachments=lambda _images: [attachment],
+            preprocess_images=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("native image input must not be preprocessed")
+            ),
+        )
+    ).prepare()
+
+    assert result.message == "inspect"
+    assert result.attachments == (attachment,)
+    assert result.turn_input.conversation_history[-1] == {
+        "role": "user",
+        "content": "inspect",
+        "attachments": [attachment],
+    }
+
+
 def test_turn_input_preparation_expands_context_and_projects_warnings():
     output = []
     context = SimpleNamespace(

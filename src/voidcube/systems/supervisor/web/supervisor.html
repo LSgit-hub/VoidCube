@@ -4725,6 +4725,14 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <span>API-B 原生语音输出</span>
                 </label>
                 <label class="provider-active-field">
+                  <input id="providerImageInput" type="checkbox"/>
+                  <span>模型原生图像输入</span>
+                </label>
+                <label class="provider-active-field">
+                  <input id="providerVideoInput" type="checkbox"/>
+                  <span>模型原生视频输入</span>
+                </label>
+                <label class="provider-active-field">
                   <input id="providerMakeActive" type="checkbox"/>
                   <span>设为 API-A 当前 Provider</span>
                 </label>
@@ -5088,6 +5096,8 @@ const els = {
   providerConcurrency: $('#providerConcurrency'),
   providerAudioInput: $('#providerAudioInput'),
   providerAudioOutput: $('#providerAudioOutput'),
+  providerImageInput: $('#providerImageInput'),
+  providerVideoInput: $('#providerVideoInput'),
   providerRuntimeMetrics: $('#providerRuntimeMetrics'),
   providerCooldownReset: $('#providerCooldownReset'),
   providerMakeActive: $('#providerMakeActive'),
@@ -8662,6 +8672,8 @@ function editProvider(providerKey) {
   els.providerConcurrency.value = String(provider ? provider.concurrency_limit || 2 : 2);
   els.providerAudioInput.checked = Boolean(provider && provider.audio_input);
   els.providerAudioOutput.checked = Boolean(provider && provider.audio_output);
+  els.providerImageInput.checked = Boolean(provider && provider.image_input);
+  els.providerVideoInput.checked = Boolean(provider && provider.video_input);
   els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
@@ -9001,6 +9013,8 @@ async function saveProviderPoolEntry() {
         concurrency_limit: Number(els.providerConcurrency.value || 2),
         audio_input: Boolean(els.providerAudioInput.checked),
         audio_output: Boolean(els.providerAudioOutput.checked),
+        image_input: Boolean(els.providerImageInput.checked),
+        video_input: Boolean(els.providerVideoInput.checked),
         make_active: Boolean(els.providerMakeActive.checked),
       }),
     });

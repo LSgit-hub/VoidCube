@@ -14,6 +14,7 @@ from ..clear_command_adapter import (
     render_clear_display,
 )
 from ..attachments import (
+    _ATTACHMENT_EXTENSIONS,
     _IMAGE_EXTENSIONS,
     _resolve_attachment_path,
     _split_path_input,
@@ -22,10 +23,12 @@ from ..attachments import (
 from .execution import initialize_command_execution
 from .router import parse_cli_command
 from .handlers.attachments import (
+    AttachmentCommandPorts,
     ImageCommandPorts,
     ImageCommandText,
     PasteCommandPorts,
     PasteCommandText,
+    handle_attachment_command,
     handle_image_command,
     handle_paste_command,
 )
@@ -362,6 +365,16 @@ def install_cli_command_execution(
                         reset_suffix="\033[0m",
                         tip_prefix=translate("tips.tip_prefix", default="Tip:"),
                     ),
+                ),
+            ),
+            "attach": lambda request: handle_attachment_command(
+                request,
+                ports=AttachmentCommandPorts(
+                    split_path=_split_path_input,
+                    resolve_path=_resolve_attachment_path,
+                    supported_extensions=_ATTACHMENT_EXTENSIONS,
+                    append_attachment=host._attached_images.append,
+                    emit=emit,
                 ),
             ),
             "language": lambda request: handle_language_command(

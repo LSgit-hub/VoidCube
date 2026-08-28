@@ -12,11 +12,13 @@ from voidcube.interfaces.cli.attachments import (
     _termux_example_image_path,
 )
 from voidcube.interfaces.cli.commands.handlers.attachments import (
+    AttachmentCommandPorts,
     ImageCommandPorts,
     ImageCommandText,
     PasteCommandPorts,
     PasteCommandText,
     handle_image_command,
+    handle_attachment_command,
     handle_paste_command,
 )
 from voidcube.interfaces.cli.commands.router import parse_cli_command
@@ -290,3 +292,25 @@ def test_image_handler_projects_termux_followup_for_attached_image():
             "--image ~/storage/shared/Pictures/sample.png \"What do you see?\"</dim>"
         ),
     ]
+
+
+@pytest.mark.unit
+def test_attachment_handler_accepts_audio_and_video_paths(tmp_path):
+    output: list[str] = []
+    attached: list[Path] = []
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"audio")
+
+    handle_attachment_command(
+        parse_cli_command(f'/attach "{audio}" inspect'),
+        ports=AttachmentCommandPorts(
+            split_path=_split_path_input,
+            resolve_path=lambda value: audio if value == str(audio) else None,
+            supported_extensions={".wav", ".mp4"},
+            append_attachment=attached.append,
+            emit=output.append,
+        ),
+    )
+
+    assert attached == [audio]
+    assert output == [f"  Attached: {audio.name}", "  Next prompt: inspect"]

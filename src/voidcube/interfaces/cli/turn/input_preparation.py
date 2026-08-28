@@ -33,6 +33,11 @@ class CliTurnInputPreparationPorts:
     expand_context: Optional[Callable[..., Any]] = None
     sanitize: Optional[Callable[[str], str]] = None
     begin_turn: Optional[Callable[[Any], TurnInput]] = None
+    native_input_modalities: Optional[Callable[[str, str], Sequence[str]]] = None
+    preprocess_attachments: Optional[Callable[[str, Sequence[Any]], str]] = None
+    build_attachments: Optional[
+        Callable[[Sequence[Any]], Sequence[Mapping[str, Any]]]
+    ] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +46,7 @@ class PreparedCliTurnInput:
 
     message: Any
     turn_input: TurnInput | None
+    attachments: tuple[dict[str, Any], ...] = ()
     blocked_response: str | None = None
 
 
@@ -53,11 +59,45 @@ class CliTurnInputPreparationRuntime:
     def prepare(self) -> PreparedCliTurnInput:
         ports = self.ports
         message = ports.message
+        attachments: tuple[dict[str, Any], ...] = ()
         if ports.images:
-            message = ports.preprocess_images(
-                message if isinstance(message, str) else "",
-                ports.images,
-            )
+            native_modalities = self._native_input_modalities()
+            if native_modalities:
+                builder = (
+                    ports.build_attachments
+                    or self._default_build_attachments
+                )
+                candidate_attachments = tuple(
+                    dict(attachment)
+                    for attachment in builder(ports.images)
+                    if isinstance(attachment, Mapping)
+                )
+                native_attachments = []
+                fallback_paths = []
+                for attachment, path in zip(candidate_attachments, ports.images):
+                    from ....infrastructure.llm.multimodal import (
+                        attachment_modality,
+                        native_attachment_supported,
+                    )
+
+                    if (
+                        attachment_modality(attachment) in native_modalities
+                        and native_attachment_supported(attachment)
+                    ):
+                        native_attachments.append(attachment)
+                    else:
+                        fallback_paths.append(path)
+                attachments = tuple(native_attachments)
+                if fallback_paths:
+                    message = self._preprocess_attachments(
+                        message if isinstance(message, str) else "",
+                        fallback_paths,
+                    )
+            else:
+                message = self._preprocess_attachments(
+                    message if isinstance(message, str) else "",
+                    ports.images,
+                )
 
         if isinstance(message, str) and "@" in message:
             context_result = self._expand_context(message)
@@ -89,14 +129,40 @@ class CliTurnInputPreparationRuntime:
 
         turn_builder = ports.begin_turn
         turn_input = (
-            turn_builder(message)
+            turn_builder(message, attachments=attachments)
             if turn_builder is not None
-            else begin_turn(ports.conversation_history, message)
+            else begin_turn(
+                ports.conversation_history,
+                message,
+                attachments=attachments,
+            )
         )
         return PreparedCliTurnInput(
             message=message,
             turn_input=turn_input,
+            attachments=attachments,
         )
+
+    def _native_input_modalities(self) -> frozenset[str]:
+        checker = self.ports.native_input_modalities
+        if checker is not None:
+            return frozenset(checker(self.ports.model, self.ports.base_url))
+        try:
+            from ....infrastructure.llm.multimodal import native_input_modalities
+
+            return native_input_modalities("", self.ports.model)
+        except Exception:
+            return frozenset()
+
+    def _preprocess_attachments(
+        self,
+        message: str,
+        attachments: Sequence[Any],
+    ) -> str:
+        processor = self.ports.preprocess_attachments
+        if processor is not None:
+            return processor(message, attachments)
+        return self.ports.preprocess_images(message, attachments)
 
     def _expand_context(self, message: str) -> Any:
         ports = self.ports
@@ -131,6 +197,14 @@ class CliTurnInputPreparationRuntime:
         from ....runtime.agent.context_references import preprocess_context_references
 
         return preprocess_context_references(message, **kwargs)
+
+    @staticmethod
+    def _default_build_attachments(
+        images: Sequence[Any],
+    ) -> Sequence[Mapping[str, Any]]:
+        from ....infrastructure.llm.multimodal import attachments_from_paths
+
+        return attachments_from_paths(images)
 
     @staticmethod
     def _default_sanitize(message: str) -> str:

@@ -2508,7 +2508,7 @@ class VoidcubeCLI:
         return False
 
     def _preprocess_images_with_vision(self, text: str, images: list, *, announce: bool = True) -> str:
-        """Analyze attached images via the vision tool and return enriched text.
+        """Analyze legacy image attachments via the auxiliary vision tool.
 
         Instead of embedding raw base64 ``image_url`` content parts in the
         conversation (which only works with vision-capable models), this
@@ -2573,6 +2573,123 @@ class VoidcubeCLI:
             prefix = "\n\n".join(enriched_parts)
             return f"{prefix}\n\n{user_text}" if user_text else prefix
         return user_text or "What do you see in this image?"
+
+    def _preprocess_attachments_with_text(self, text: str, attachments: Sequence[Any]) -> str:
+        """Convert non-native local media into text for ordinary models."""
+        image_paths: list[Path] = []
+        audio_paths: list[Path] = []
+        video_paths: list[Path] = []
+        from ...infrastructure.llm.multimodal import attachment_modality_from_path
+
+        for value in attachments:
+            path = Path(value)
+            modality = attachment_modality_from_path(path)
+            if modality == "image":
+                image_paths.append(path)
+            elif modality == "audio":
+                audio_paths.append(path)
+            elif modality == "video":
+                video_paths.append(path)
+
+        enriched = text if isinstance(text, str) else ""
+        if image_paths:
+            enriched = self._preprocess_images_with_vision(
+                enriched,
+                image_paths,
+                announce=False,
+            )
+        for path in audio_paths:
+            transcript = self._transcribe_attachment_for_text(path)
+            if transcript:
+                enriched = (
+                    f"{enriched}\n\n[The user attached audio. Transcript:\n"
+                    f"{transcript}]"
+                ).strip()
+            else:
+                enriched = (
+                    f"{enriched}\n\n[The user attached audio: {path.name}; "
+                    "transcription was unavailable.]"
+                ).strip()
+        for path in video_paths:
+            video_context = self._preprocess_video_with_vision(path)
+            enriched = f"{enriched}\n\n{video_context}".strip()
+        return enriched or "Please inspect the attached media."
+
+    def _preprocess_video_with_vision(self, path: Path) -> str:
+        """Sample video frames and reuse the established image recognizer."""
+        import shutil as _shutil
+        import subprocess as _subprocess
+        import tempfile as _tempfile
+
+        ffmpeg = _shutil.which("ffmpeg")
+        if not ffmpeg:
+            return (
+                f"[The user attached video: {path.name}; ffmpeg is unavailable, "
+                "so the selected text model could not inspect its frames.]"
+            )
+        with _tempfile.TemporaryDirectory(prefix="voidcube-video-") as directory:
+            frame_pattern = str(Path(directory) / "frame_%02d.jpg")
+            try:
+                result = _subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        str(path),
+                        "-vf",
+                        "fps=1/3,scale=1280:-2",
+                        "-frames:v",
+                        "6",
+                        frame_pattern,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+            except (OSError, _subprocess.SubprocessError):
+                result = None
+            frames = sorted(Path(directory).glob("frame_*.jpg"))
+            if not frames or result is None or result.returncode != 0:
+                return (
+                    f"[The user attached video: {path.name}; frame extraction "
+                    "failed for the selected text model.]"
+                )
+            description = self._preprocess_images_with_vision(
+                "",
+                frames,
+                announce=False,
+            )
+            return (
+                f"[The user attached video: {path.name}. Sampled-frame analysis:\n"
+                f"{description}]"
+            )
+
+    def _transcribe_attachment_for_text(self, path: Path) -> str:
+        """Use the existing STT service as the ordinary-model audio fallback."""
+        try:
+            from ...systems.voice.config import VoiceConfig
+            from ...systems.voice.stt import SpeechToText
+
+            config = VoiceConfig.from_env()
+            stt = SpeechToText(
+                provider=config.stt_provider,
+                base_url=config.stt_base_url,
+                api_key=config.stt_api_key,
+                model=config.stt_model,
+                language=config.stt_language,
+                hotwords=config.stt_hotwords,
+                device=config.stt_device,
+                compute_type=config.stt_compute_type,
+            )
+            import asyncio
+
+            return str(asyncio.run(stt.transcribe(path))).strip()
+        except Exception as exc:
+            logging.debug("attachment audio transcription failed: %s", exc)
+            return ""
 
     def _show_status(self):
         """Show compact startup status line."""
@@ -3932,11 +4049,39 @@ class VoidcubeCLI:
             message: Any,
             images: Sequence[Any] | None,
         ) -> CliTurnInputPreparationPorts:
+            def build_attachments(values: Sequence[Any]):
+                from ...infrastructure.llm.multimodal import attachments_from_paths
+
+                return attachments_from_paths(values)
+
+            def native_input_modalities(model: str, _base_url: str):
+                try:
+                    from ...infrastructure.llm.multimodal import (
+                        configured_model_capabilities,
+                        native_input_modalities,
+                    )
+
+                    provider = str(
+                        getattr(owner.agent, "provider", "")
+                        or getattr(self, "provider", "")
+                    )
+                    return native_input_modalities(
+                        provider,
+                        model,
+                        configured_capabilities=configured_model_capabilities(
+                            provider,
+                            model,
+                        ),
+                    )
+                except Exception:
+                    return frozenset()
+
             return CliTurnInputPreparationPorts(
                 message=message,
                 images=images,
                 conversation_history=owner.conversation_history,
                 preprocess_images=self._preprocess_images_with_vision,
+                preprocess_attachments=self._preprocess_attachments_with_text,
                 model=getattr(self, "model", "") or "",
                 base_url=getattr(self, "base_url", "") or "",
                 api_key=getattr(self, "api_key", "") or "",
@@ -3944,6 +4089,8 @@ class VoidcubeCLI:
                 should_emit=should_emit,
                 emit=_cprint,
                 begin_turn=application_runtime.begin_turn,
+                native_input_modalities=native_input_modalities,
+                build_attachments=build_attachments,
             )
 
         def record_user_message(message: Any) -> None:
@@ -3964,11 +4111,13 @@ class VoidcubeCLI:
 
         def agent_call_ports(
             message: Any,
+            attachments: Sequence[Mapping[str, Any]],
             prefix: str,
             prior_history: Sequence[Mapping[str, Any]],
         ) -> CliAgentTurnCallPorts:
             return CliAgentTurnCallPorts(
                 message=message,
+                attachments=attachments,
                 voice_prefix=prefix,
                 pending_model_switch_note=lambda: getattr(
                     self,

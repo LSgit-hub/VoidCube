@@ -65,7 +65,7 @@ class CliAgentTurnExecutorPorts:
     begin_stream: Callable[[], None]
     voice_prefix: Callable[[Any], str]
     agent_call_ports: Callable[
-        [Any, str, Sequence[Mapping[str, Any]]],
+        [Any, Sequence[Mapping[str, Any]], str, Sequence[Mapping[str, Any]]],
         CliAgentTurnCallPorts,
     ]
     execution_ports: Callable[[], TurnExecutionPorts]
@@ -135,6 +135,7 @@ class CliAgentTurnExecutorRuntime:
                 return CliAgentTurnCallRuntime(
                     ports.agent_call_ports(
                         message,
+                        prepared.attachments,
                         ports.voice_prefix(message),
                         prepared.turn_input.prior_history,
                     )

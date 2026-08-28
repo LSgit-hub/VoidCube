@@ -117,6 +117,32 @@ def test_sequences_remain_unique_when_timestamps_match(tmp_path):
     ] == "first"
 
 
+def test_attachments_round_trip_without_embedding_image_data_in_content(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session", source="cli")
+    attachment = {
+        "kind": "local_image",
+        "path": "C:/images/sample.png",
+        "mime_type": "image/png",
+        "sha256": "abc123",
+    }
+    message = _message(db, "session", 1, "inspect this image")
+    message["attachments"] = [attachment]
+
+    db.append_messages_batch("session", [message])
+
+    restored = db.get_messages_as_conversation("session")
+    assert restored == [
+        {
+            "role": "user",
+            "content": "inspect this image",
+            "timestamp": restored[0]["timestamp"],
+            "attachments": [attachment],
+        }
+    ]
+    assert "base64" not in db.get_messages("session")[0]["content"]
+
+
 def test_concurrent_instances_allocate_contiguous_sequences_atomically(tmp_path):
     path = tmp_path / "sessions.db"
     first = SessionDB(path)
@@ -265,7 +291,7 @@ def test_action_refs_migrate_and_round_trip_in_authoritative_session_store(tmp_p
     message["message_id"] = migrated.stable_message_id("session", 1, message)
     migrated.append_messages_batch("session", [message])
 
-    assert migrated._conn.execute("SELECT version FROM schema_version").fetchone()[0] == 10
+    assert migrated._conn.execute("SELECT version FROM schema_version").fetchone()[0] == SCHEMA_VERSION
     assert migrated.get_messages_as_conversation("session")[0]["action_refs"] == message["action_refs"]
 
 

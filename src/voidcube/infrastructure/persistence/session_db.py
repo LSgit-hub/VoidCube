@@ -38,7 +38,7 @@ class SessionSequenceConflictError(RuntimeError):
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS messages (
     reasoning TEXT,
     reasoning_details TEXT,
     action_refs TEXT,
+    attachments TEXT,
     message_id TEXT,
     sequence_no INTEGER
 );
@@ -473,6 +474,11 @@ class SessionDB:
                 except sqlite3.OperationalError:
                     pass
                 cursor.execute("UPDATE schema_version SET version = 9")
+            if current_version < 11:
+                try:
+                    cursor.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
+                except sqlite3.OperationalError:
+                    pass
             if current_version < 10:
                 for name, column_type in (
                     ("transcript_revision", "INTEGER NOT NULL DEFAULT 0"),
@@ -503,7 +509,8 @@ class SessionDB:
                         ),
                     )
                 cursor.execute("UPDATE schema_version SET version = 10")
-
+            if current_version < 11:
+                cursor.execute("UPDATE schema_version SET version = 11")
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
         try:
@@ -732,6 +739,7 @@ class SessionDB:
             "reasoning",
             "reasoning_details",
             "action_refs",
+            "attachments",
         )
         normalized = [
             {field: message.get(field) for field in fields}
@@ -754,12 +762,17 @@ class SessionDB:
     ) -> str:
         rows = conn.execute(
             "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-            "finish_reason, reasoning, reasoning_details, action_refs "
+            "finish_reason, reasoning, reasoning_details, action_refs, attachments "
             "FROM messages WHERE session_id = ? ORDER BY sequence_no",
             (session_id,),
         ).fetchall()
         messages: List[Dict[str, Any]] = []
-        json_fields = {"tool_calls", "reasoning_details", "action_refs"}
+        json_fields = {
+            "tool_calls",
+            "reasoning_details",
+            "action_refs",
+            "attachments",
+        }
         for row in rows:
             message = dict(row)
             for field in json_fields:
@@ -1323,12 +1336,18 @@ class SessionDB:
                     if action_refs is not None
                     else None
                 )
+                attachments = message.get("attachments")
+                attachments_json = (
+                    json.dumps(attachments, ensure_ascii=False)
+                    if attachments is not None
+                    else None
+                )
                 cursor = conn.execute(
                     """INSERT INTO messages (
                        message_id, session_id, sequence_no, role, content,
                        tool_call_id, tool_calls, tool_name, timestamp, token_count,
-                       finish_reason, reasoning, reasoning_details, action_refs
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       finish_reason, reasoning, reasoning_details, action_refs, attachments
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         message_id,
                         session_id,
@@ -1344,6 +1363,7 @@ class SessionDB:
                         message.get("reasoning"),
                         reasoning_details_json,
                         action_refs_json,
+                        attachments_json,
                     ),
                 )
                 row_ids.append(int(cursor.lastrowid))
@@ -1446,12 +1466,18 @@ class SessionDB:
                     if action_refs is not None
                     else None
                 )
+                attachments = message.get("attachments")
+                attachments_json = (
+                    json.dumps(attachments, ensure_ascii=False)
+                    if attachments is not None
+                    else None
+                )
                 cursor = conn.execute(
                     """INSERT INTO messages (
                        message_id, session_id, sequence_no, role, content,
                        tool_call_id, tool_calls, tool_name, timestamp, token_count,
-                       finish_reason, reasoning, reasoning_details, action_refs
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       finish_reason, reasoning, reasoning_details, action_refs, attachments
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         message["message_id"],
                         session_id,
@@ -1467,6 +1493,7 @@ class SessionDB:
                         message.get("reasoning"),
                         reasoning_details_json,
                         action_refs_json,
+                        attachments_json,
                     ),
                 )
                 row_ids.append(int(cursor.lastrowid))
@@ -1493,8 +1520,8 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT id, session_id, role, content, tool_call_id, tool_calls, "
-                "tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_details, "
-                "action_refs, message_id, sequence_no FROM messages WHERE session_id = ? "
+            "tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_details, "
+            "action_refs, attachments, message_id, sequence_no FROM messages WHERE session_id = ? "
                 "ORDER BY sequence_no",
                 (session_id,),
             )
@@ -1514,6 +1541,12 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     logger.warning("Failed to deserialize action_refs in get_messages")
                     msg["action_refs"] = []
+            if msg.get("attachments"):
+                try:
+                    msg["attachments"] = json.loads(msg["attachments"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to deserialize attachments in get_messages")
+                    msg["attachments"] = []
             result.append(msg)
         return result
 
@@ -1532,7 +1565,7 @@ class SessionDB:
     ) -> List[Dict[str, Any]]:
         rows = conn.execute(
             "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-            "finish_reason, reasoning, reasoning_details, action_refs, timestamp "
+            "finish_reason, reasoning, reasoning_details, action_refs, attachments, timestamp "
             "FROM messages WHERE session_id = ? ORDER BY sequence_no",
             (session_id,),
         ).fetchall()
@@ -1553,6 +1586,12 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     logger.warning("Failed to deserialize action_refs in conversation replay")
                     msg["action_refs"] = []
+            if row["attachments"]:
+                try:
+                    msg["attachments"] = json.loads(row["attachments"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to deserialize attachments in conversation replay")
+                    msg["attachments"] = []
             if row["tool_calls"]:
                 try:
                     msg["tool_calls"] = json.loads(row["tool_calls"])
