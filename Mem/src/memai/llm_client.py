@@ -579,6 +579,21 @@ def _extract_stream_chunk_text(chunk: dict[str, Any]) -> tuple[str, str]:
     return _text_from_content_value(choice.get("text")), ""
 
 
+def _extract_response_reasoning(response: dict[str, Any]) -> str:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return ""
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return ""
+    return _text_from_content_value(
+        message.get("reasoning_content") or message.get("reasoning")
+    ).strip()
+
+
 def latest_think_tag_text(content: str) -> str:
     latest = ""
     for match in _THINK_TAG_RE.finditer(str(content or "")):
@@ -942,7 +957,8 @@ class OpenAICompatibleLLMClient:
         )
         content = _extract_message_content(response, self.provider_capabilities)
         audio = _extract_response_audio(response)
-        self._publish_latest_api_b_thinking(content, "")
+        reasoning = _extract_response_reasoning(response)
+        self._publish_latest_api_b_thinking(content, "", reasoning_text=reasoning)
         return unwrap_protocol_response(_extract_json_object(content), task=task), audio
 
     def complete_json_stream(
@@ -970,6 +986,7 @@ class OpenAICompatibleLLMClient:
         stream_payload.setdefault("stream_options", {"include_usage": True})
         content_parts: list[str] = []
         streamed_content = ""
+        streamed_reasoning = ""
         latest_thinking = ""
         for chunk in self.stream_transport(
             self.provider_capabilities.build_url(self.base_url),
@@ -988,10 +1005,13 @@ class OpenAICompatibleLLMClient:
                 streamed_content += content_delta
                 if on_content is not None:
                     on_content(content_delta)
-                latest_thinking = self._publish_latest_api_b_thinking(
-                    streamed_content,
-                    latest_thinking,
-                )
+            if reasoning_delta:
+                streamed_reasoning += reasoning_delta
+            latest_thinking = self._publish_latest_api_b_thinking(
+                streamed_content,
+                latest_thinking,
+                reasoning_text=streamed_reasoning,
+            )
             if reasoning_delta and on_reasoning is not None:
                 on_reasoning(reasoning_delta)
         content = "".join(content_parts)
@@ -1001,10 +1021,14 @@ class OpenAICompatibleLLMClient:
         self,
         content: str,
         previous: str,
+        *,
+        reasoning_text: str = "",
     ) -> str:
         if not self.api_b_thinking_enabled:
             return previous
         latest = latest_think_tag_text(content)
+        if not latest:
+            latest = str(reasoning_text or "").strip()
         if not latest or latest == previous:
             return previous
         try:

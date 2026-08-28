@@ -311,6 +311,39 @@ def test_openai_compatible_client_auto_streams_api_b_think_updates() -> None:
     assert seen_payloads[0]["stream"] is True
 
 
+def test_openai_compatible_client_streams_reasoning_fallback_updates() -> None:
+    thinking_updates: list[str] = []
+
+    def fake_stream_transport(url, headers, payload):
+        return [
+            {"choices": [{"delta": {"reasoning_content": "正在梳理上下文"}}]},
+            {"choices": [{"delta": {"reasoning_content": "，确认目标"}}]},
+            {"choices": [{"delta": {"content": '{"reply_text":"完成"}'}}]},
+        ]
+
+    configure_mem_host_integration(
+        MemHostIntegration(api_b_thinking_sink=thinking_updates.append)
+    )
+    try:
+        client = OpenAICompatibleLLMClient(
+            model="test-model",
+            api_key="test-key",
+            stream_transport=fake_stream_transport,
+            api_b_thinking_enabled=True,
+        )
+
+        payload = client.complete_json(
+            system_prompt="Return JSON",
+            user_payload={"message": "继续"},
+            task="companion.direct_dialogue",
+        )
+    finally:
+        configure_mem_host_integration(MemHostIntegration())
+
+    assert payload["reply_text"] == "完成"
+    assert thinking_updates == ["正在梳理上下文", "正在梳理上下文，确认目标"]
+
+
 def test_openai_compatible_client_from_env_applies_provider_overrides(
     monkeypatch,
 ) -> None:

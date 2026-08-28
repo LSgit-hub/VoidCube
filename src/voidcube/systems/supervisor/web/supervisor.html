@@ -146,6 +146,10 @@ html, body {
   transform-origin: 50% 42px;
 }
 .wc-tick.major { width: 3px; height: 14px; background: var(--trim); }
+.wc-tick.t0 { transform: rotate(0deg); }
+.wc-tick.t1 { transform: rotate(90deg); }
+.wc-tick.t2 { transform: rotate(180deg); }
+.wc-tick.t3 { transform: rotate(270deg); }
 .wc-hand {
   position: absolute; left: 50%; top: 50%;
   background: var(--ink);
@@ -253,6 +257,10 @@ html, body {
   position: absolute; border-radius: 50%; background: #fff;
   z-index: 2; opacity: 0; animation: twinkle 2.5s ease-in-out infinite;
 }
+.star.s1 { left: 20%; top: 20%; width: 2px; height: 2px; animation-delay: 0s; }
+.star.s2 { left: 50%; top: 12%; width: 3px; height: 3px; animation-delay: .6s; }
+.star.s3 { left: 70%; top: 30%; width: 2px; height: 2px; animation-delay: 1.2s; }
+.star.s4 { left: 32%; top: 38%; width: 2px; height: 2px; animation-delay: 1.8s; }
 @keyframes twinkle { 50% { opacity: .8; } }
 
 /* 夜间模式 */
@@ -1393,9 +1401,6 @@ body[data-panel-open] .companion-chat { display: none; }
    4 个角色动作状态
    ═══════════════════════════════════════ */
 
-/* 默认: 站立 */
-.xz-default {}
-
 /* 整理书架: 站在书架前, 伸手够书 */
 body[data-action="organize"] .xizi {
   left: 12%; margin-left: -65px;
@@ -1850,8 +1855,8 @@ body[data-has-errors="true"] .xs-brow.r { transform: rotate(12deg) translateY(-1
   border: 1px solid rgba(255,255,255,.08);
   border-radius: var(--radius-md);
   box-shadow: 0 18px 32px var(--shadow-deep);
-  backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   color: var(--text-primary);
   z-index: 10;
   font-size: 12px;
@@ -1994,8 +1999,8 @@ body:has(.status:not(.collapsed)) .status-toggle {
   border-radius: var(--radius-md);
   padding: 12px 14px;
   display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: center;
-  backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   min-width: 220px; max-width: 260px;
   color: var(--text-primary);
   box-shadow: 0 12px 24px var(--shadow-deep);
@@ -2140,8 +2145,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
     0 -4px 20px rgba(0,0,0,.5),
     0 -1px 0 rgba(255,255,255,.06),
     inset 0 1px 0 rgba(255,255,255,.04);
-  backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
   transform: translateY(calc(100% - 4px));
   transition: transform .35s var(--ease-out);
   /* 顶部发光线 */
@@ -2293,8 +2298,8 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   box-shadow:
     0 -8px 32px rgba(0,0,0,.55),
     inset 0 1px 0 rgba(255,255,255,.04);
-  backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   overflow: hidden;
   flex-direction: column;
   pointer-events: auto;
@@ -2841,7 +2846,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 10.5px; color: rgba(244,228,188,.7);
   line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
 .game-card-meta {
   display: flex; align-items: center; justify-content: space-between;
@@ -3203,7 +3208,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .dcs-name { font-size: 10.5px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
 .dcs-status { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dcs-hp-bar { height: 2px; border-radius: 1px; background: rgba(255,255,255,.08); width: 40px; overflow: hidden; }
-.dcs-hp-fill { height: 100%; border-radius: 1px; transition: width .5s, background .5s; }
+.dcs-hp-fill { width: 100%; height: 100%; border-radius: 1px; transition: width .5s, background .5s; }
 .dcs-hp-fill.good { background: var(--mint); }
 .dcs-hp-fill.warn { background: var(--gold); }
 .dcs-hp-fill.danger { background: var(--coral); }
@@ -3376,8 +3381,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border-radius: 20px;
   background: rgba(20,14,10,.75);
   border: 1px solid rgba(255,255,255,.06);
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   font-size: 11px; font-weight: 600;
   color: var(--text-primary);
   pointer-events: none;
@@ -3409,8 +3414,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border: 1px solid rgba(255,255,255,.08);
   border-radius: 6px;
   background: rgba(20,14,10,.78);
-  backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 .stellar-mode-control button {
   border: 0;
@@ -3799,8 +3804,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   z-index: 200;
   display: flex; align-items: center; justify-content: center;
   background: rgba(30,14,8,.5);
-  backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   opacity: 0; pointer-events: none;
   transition: opacity .25s var(--ease-out);
 }
@@ -4289,10 +4294,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <div class="wall-clock" id="scheduleClock" role="button" tabindex="0" data-scene-entry="api-a-schedules" title="查看 API-A 定时任务" aria-label="查看 API-A 定时任务">
       <div class="wc-body">
-        <span class="wc-tick major" style="transform: rotate(0deg);"></span>
-        <span class="wc-tick major" style="transform: rotate(90deg);"></span>
-        <span class="wc-tick major" style="transform: rotate(180deg);"></span>
-        <span class="wc-tick major" style="transform: rotate(270deg);"></span>
+        <span class="wc-tick major t0"></span>
+        <span class="wc-tick major t1"></span>
+        <span class="wc-tick major t2"></span>
+        <span class="wc-tick major t3"></span>
         <div class="wc-hand h" id="wcHour"></div>
         <div class="wc-hand m" id="wcMinute"></div>
         <div class="wc-hand s" id="wcSecond"></div>
@@ -4957,7 +4962,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           <div class="dcs-name" id="dcsName">西子</div>
           <div class="dcs-status" id="dcsStatus">就绪</div>
         </div>
-        <div class="dcs-hp-bar" title="替身健康度"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
+        <div class="dcs-hp-bar" title="替身健康度"><div class="dcs-hp-fill good" id="dcsHpFill"></div></div>
       </div>
       <button class="dock-btn" data-panel="chain" title="观察">
         <span class="db-icon">🚦</span>
