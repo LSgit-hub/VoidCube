@@ -65,6 +65,24 @@ def provider_model_catalog(provider_cfg: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(str(item or "").strip() for item in raw_models if str(item or "").strip()))
 
 
+def _merge_model_ids(
+    model_ids: list[str],
+    preferred_model: str = "",
+) -> list[str]:
+    """Deduplicate model IDs and retain an explicitly configured model."""
+    merged = list(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in model_ids
+            if str(item or "").strip()
+        )
+    )
+    preferred = str(preferred_model or "").strip()
+    if preferred and preferred not in merged:
+        merged.append(preferred)
+    return merged
+
+
 def provider_pool_api_key(provider_cfg: dict[str, Any]) -> str:
     auth = _provider_auth_module()
     stored = str(provider_cfg.get("api_key") or "").strip()
@@ -94,16 +112,26 @@ def persist_provider_pool_entry(
     auth_mode: str = "",
     selected_model: str = "",
     capabilities: dict[str, Any] | None = None,
+    model_override: str | None = None,
 ) -> dict[str, Any]:
     """Return config with one shared provider credential/catalog entry updated."""
     auth = _provider_auth_module()
-    models = list(dict.fromkeys(str(item or "").strip() for item in model_catalog if str(item or "").strip()))
+    api_key_env = str(api_key_env or "").strip().upper()
     current_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     current = current_providers.get(provider_key) if isinstance(current_providers, dict) else {}
     current_model = str(current.get("selected_model") or "").strip() if isinstance(current, dict) else ""
+    manual_model = str(
+        model_override
+        if model_override is not None
+        else (current.get("model_override") if isinstance(current, dict) else "")
+        or ""
+    ).strip()
     requested_model = str(selected_model or "").strip()
+    models = _merge_model_ids(model_catalog, manual_model or requested_model)
     selected_model = (
-        requested_model
+        manual_model
+        if manual_model
+        else requested_model
         if requested_model in models
         else current_model
         if current_model in models
@@ -129,6 +157,8 @@ def persist_provider_pool_entry(
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
     }
+    if manual_model:
+        entry["model_override"] = manual_model
     current_model_capabilities = (
         dict(current.get("model_capabilities") or {})
         if isinstance(current, dict)
@@ -212,12 +242,16 @@ def refresh_provider_pool_catalog(
     model_ids = [model_id for model_id, _ in models]
     if not model_ids:
         return config, []
+    manual_model = str(provider_cfg.get("model_override") or "").strip()
+    model_ids = _merge_model_ids(model_ids, manual_model)
     updated_entry = dict(provider_cfg)
     updated_entry["model_catalog"] = {
         "models": model_ids,
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    if str(updated_entry.get("selected_model") or "").strip() not in model_ids:
+    if manual_model:
+        updated_entry["selected_model"] = manual_model
+    elif str(updated_entry.get("selected_model") or "").strip() not in model_ids:
         updated_entry["selected_model"] = model_ids[0]
     result = dict(config)
     result["providers"] = {**providers, provider_key: updated_entry}

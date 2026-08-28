@@ -199,6 +199,75 @@ def test_persist_provider_pool_entry_normalizes_chat_completions_url():
     assert updated["providers"]["agnes-ai"]["base_url"] == "https://api.agnes-ai.cn/v1"
 
 
+def test_provider_pool_persistence_normalizes_lowercase_env_name():
+    updated = persist_provider_pool_entry(
+        {},
+        provider_key="deepseek-v",
+        label="DeepSeek Vision",
+        model_catalog=["deepseek-v4-flash-vision-exp"],
+        provider_type="openai_compatible",
+        base_url="https://api.deepseek.com",
+        api_key_env="api_key",
+        auth_mode="env",
+        selected_model="deepseek-v4-flash-vision-exp",
+    )
+
+    assert updated["providers"]["deepseek-v"]["api_key_env"] == "API_KEY"
+
+
+def test_provider_pool_persistence_keeps_explicit_model_outside_api_catalog():
+    updated = persist_provider_pool_entry(
+        {},
+        provider_key="dsv",
+        label="DeepSeek Vision",
+        model_catalog=["deepseek-chat"],
+        provider_type="openai_compatible",
+        base_url="https://api.deepseek.com",
+        api_key_env="DEEPSEEK_API_KEY",
+        auth_mode="env",
+        selected_model="deepseek-v4-flash-vision-exp",
+        model_override="deepseek-v4-flash-vision-exp",
+    )
+
+    entry = updated["providers"]["dsv"]
+    assert entry["selected_model"] == "deepseek-v4-flash-vision-exp"
+    assert entry["model_override"] == "deepseek-v4-flash-vision-exp"
+    assert entry["model_catalog"]["models"] == [
+        "deepseek-chat",
+        "deepseek-v4-flash-vision-exp",
+    ]
+
+
+def test_refresh_provider_pool_catalog_retains_explicit_model():
+    cfg = {
+        "providers": {
+            "dsv": {
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "auth_mode": "env",
+                "selected_model": "deepseek-v4-flash-vision-exp",
+                "model_override": "deepseek-v4-flash-vision-exp",
+                "model_catalog": {
+                    "models": [
+                        "deepseek-chat",
+                        "deepseek-v4-flash-vision-exp",
+                    ]
+                },
+            }
+        }
+    }
+    updated, models = refresh_provider_pool_catalog(
+        cfg,
+        "dsv",
+        model_fetcher=lambda *_args, **_kwargs: [("deepseek-chat", "")],
+    )
+
+    assert models == ["deepseek-chat", "deepseek-v4-flash-vision-exp"]
+    assert updated["providers"]["dsv"]["selected_model"] == (
+        "deepseek-v4-flash-vision-exp"
+    )
+
+
 def test_persist_ollama_provider_uses_shared_pool_and_no_auth():
     updated = persist_ollama_provider(
         {"runtime": {}, "providers": {}},

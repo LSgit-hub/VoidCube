@@ -102,3 +102,10 @@ def test_config_command_dispatches_path_without_loading_full_config(tmp_path, mo
     config_command(SimpleNamespace(config_command="path"))
 
     assert capsys.readouterr().out.strip() == str(home / "config.yaml")
+
+
+def test_provider_wizard_uses_internal_api_key_environment_name():
+    from voidcube.interfaces.cli.configuration import _provider_api_key_env
+
+    assert _provider_api_key_env("dsv") == "VOIDCUBE_PROVIDER_DSV_API_KEY"
+    assert _provider_api_key_env("deepseek-v") == "VOIDCUBE_PROVIDER_DEEPSEEK_V_API_KEY"

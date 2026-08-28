@@ -586,6 +586,39 @@ async def test_provider_model_refresh_persists_common_catalog_shapes(
 
 
 @pytest.mark.asyncio
+async def test_provider_model_refresh_retains_explicit_model_override(
+    tmp_path,
+    monkeypatch,
+):
+    home = _configure_home(tmp_path, monkeypatch)
+    service, _client = _probe_service(
+        monkeypatch,
+        response=_ProbeResponse({"data": [{"id": "model-a"}]}),
+    )
+    service.upsert_provider(
+        "research-endpoint",
+        _provider_request(
+            selected_model="deepseek-v4-flash-vision-exp",
+            api_key="",
+        ),
+    )
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    config["providers"]["research-endpoint"]["model_override"] = (
+        "deepseek-v4-flash-vision-exp"
+    )
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = await service.refresh_model_catalog("research-endpoint")
+
+    assert result["models"] == ["model-a", "deepseek-v4-flash-vision-exp"]
+    assert result["count"] == 2
+    assert result["models"][-1] == "deepseek-v4-flash-vision-exp"
+
+
+@pytest.mark.asyncio
 async def test_provider_probe_returns_sanitized_timeout_and_http_errors(monkeypatch):
     request = httpx.Request("GET", "https://models.example/v1/models")
     timed_out, _client = _probe_service(

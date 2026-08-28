@@ -569,13 +569,16 @@ get_provider_models_from_api = _provider_config.get_provider_models_from_api
 
 
 def refresh_provider_pool_catalog(
-    config: dict[str, Any], provider_key: str
+    config: dict[str, Any],
+    provider_key: str,
+    *,
+    model_fetcher: Callable[..., list[tuple[str, str]]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """CLI adapter that keeps model discovery injectable for interactive tests."""
     return _provider_config.refresh_provider_pool_catalog(
         config,
         provider_key,
-        model_fetcher=get_provider_models_from_api,
+        model_fetcher=model_fetcher or get_provider_models_from_api,
     )
 
 
@@ -1169,6 +1172,12 @@ class Spinner:
 dc = DisplayComponents
 
 
+def _provider_api_key_env(provider_key: str) -> str:
+    """Return the internal environment variable name for one Provider."""
+    normalized_key = str(provider_key or "").strip().upper().replace("-", "_")
+    return f"VOIDCUBE_PROVIDER_{normalized_key}_API_KEY"
+
+
 def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     """运行 API 配置向导"""
     
@@ -1318,31 +1327,37 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 if not base_url:
                     pe("Base URL 不能为空")
                     continue
-                api_key_env = inp(
-                    "API Key 环境变量",
-                    f"VOIDCUBE_PROVIDER_{provider_key.upper().replace('-', '_')}_API_KEY",
-                ).strip()
-                api_key = secret_inp("API Key（本地无需鉴权可留空）")
-                auth_mode = "env" if api_key else "none"
-                if auth_mode == "env" and not re.fullmatch(
-                    r"[A-Z_][A-Z0-9_]*", api_key_env
-                ):
-                    pe("API Key 环境变量必须使用大写字母、数字和下划线")
+                api_key = secret_inp("API Key（必填）")
+                if not api_key:
+                    pe("API Key 不能为空；本地免鉴权请使用 [2] 本地模型（Ollama）")
                     continue
+                auth_mode = "env"
+                api_key_env = _provider_api_key_env(provider_key)
+                model_override = inp(
+                    "模型名称（可留空，留空则从 /models 获取）"
+                ).strip()
                 models = get_provider_models_from_api(
                     provider_key, api_key=api_key, base_url=base_url
                 )
                 model_ids = [model_id for model_id, _ in models]
-                if not model_ids:
+                if not model_ids and not model_override:
                     pe("无法从 Provider /models 获取模型列表；请检查 Base URL 和 Key")
                     continue
-                for i, model_id in enumerate(model_ids[:50], 1): p(f"   [{i}] {model_id}")
-                try: selected_model = model_ids[int(inp("选择默认模型", "1")) - 1]
-                except (ValueError, IndexError): selected_model = model_ids[0]
-                if api_key_env and api_key and not save_env_value(api_key_env, api_key):
+                if model_override:
+                    if model_override not in model_ids:
+                        model_ids.append(model_override)
+                    selected_model = model_override
+                else:
+                    for i, model_id in enumerate(model_ids[:50], 1):
+                        p(f"   [{i}] {model_id}")
+                    try:
+                        selected_model = model_ids[int(inp("选择默认模型", "1")) - 1]
+                    except (ValueError, IndexError):
+                        selected_model = model_ids[0]
+                if not save_env_value(api_key_env, api_key):
                     pe("API Key 保存失败")
                     continue
-                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env if auth_mode == "env" else "", auth_mode=auth_mode, selected_model=selected_model):
+                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env, auth_mode=auth_mode, selected_model=selected_model, model_override=model_override):
                     pe("Provider 配置保存失败")
                     continue
                 ps(f"Provider {provider_key} 与 {len(model_ids)} 个模型已保存")

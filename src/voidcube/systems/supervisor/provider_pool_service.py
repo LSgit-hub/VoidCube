@@ -639,10 +639,15 @@ class ProviderPoolService:
         if key not in providers:
             raise KeyError(key)
         entry = dict(providers[key])
+        manual_model = str(entry.get("model_override") or "").strip()
+        if manual_model and manual_model not in model_ids:
+            model_ids.append(manual_model)
         entry["model_catalog"] = {
             "models": model_ids,
             "updated_at": updated_at,
         }
+        if manual_model:
+            entry["selected_model"] = manual_model
         providers[key] = entry
         config["providers"] = providers
         save_config(config, preserve_structure=True)
