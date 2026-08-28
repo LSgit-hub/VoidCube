@@ -969,7 +969,7 @@ def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
     assert 'function renderApiBThinking' in UI_HTML
     assert "/ui/api-b-thinking-events" in UI_HTML
     assert "api_b_thinking" in UI_HTML
-    assert 'setTimeout(hideCompanionThinkBubble, 3000)' in UI_HTML
+    assert 'setTimeout(hideCompanionThinkBubble, 8000)' in UI_HTML
     assert "fetch('/companion/message/stream'" in UI_HTML
     assert 'readCompanionMessageStream(response)' in UI_HTML
     assert 'renderCompanionChat' in UI_HTML

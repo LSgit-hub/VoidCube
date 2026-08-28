@@ -2993,43 +2993,58 @@ class VoidcubeCLI:
         Returns:
             bool: True to continue, False to exit
         """
-        request = parse_cli_command(command)
-        if self._command_blocked_during_turn(request.canonical):
-            _cprint("  Command unavailable while a turn is active.")
+        try:
+            request = parse_cli_command(command)
+            if self._command_blocked_during_turn(request.canonical):
+                _cprint("  Command unavailable while a turn is active.")
+                return True
+            builtin = self._builtin_command_executor.execute(request)
+            if builtin.handled:
+                return builtin.continue_running
+
+            _skcmds = _get_skill_commands()
+            from ...extensions.plugins.cli_adapter import get_plugin_command_handler
+            config = getattr(self, "config", None)
+            quick_commands = config.get("quick_commands", {}) if isinstance(config, Mapping) else {}
+
+            def _emit_dynamic(text: str) -> None:
+                try:
+                    _cprint(text)
+                except Exception:
+                    print(text)
+
+            def _emit_dynamic_markup(text: str) -> None:
+                console = getattr(self, "console", None)
+                if console is not None:
+                    console.print(text)
+                else:
+                    ChatConsole().print(text)
+
+            return CliDynamicCommandRuntime(
+                CliDynamicCommandPorts(
+                    custom_commands=quick_commands,
+                    plugin_names=_get_plugin_cmd_handler_names(),
+                    skill_commands=_skcmds,
+                    get_plugin_handler=get_plugin_command_handler,
+                    build_skill_message=lambda name, arguments, task_id: _get_skill_invocation_message(
+                        name, arguments, task_id=task_id
+                    ),
+                    session_id=lambda: self.session_id,
+                    enqueue_pending_input=lambda message: (
+                        self._pending_input.put(message)
+                        if hasattr(self, "_pending_input")
+                        else None
+                    ),
+                    emit=_emit_dynamic,
+                    emit_markup=_emit_dynamic_markup,
+                )
+            ).run(request)
+        except Exception as error:
+            try:
+                _cprint(f"  Command error: {error}")
+            except Exception:
+                print(f"  Command error: {error}")
             return True
-        builtin = self._builtin_command_executor.execute(request)
-        if builtin.handled:
-            return builtin.continue_running
-
-        _skcmds = _get_skill_commands()
-        from ...extensions.plugins.cli_adapter import get_plugin_command_handler
-
-        def _emit_dynamic_markup(text: str) -> None:
-            console = getattr(self, "console", None)
-            if console is not None:
-                console.print(text)
-            else:
-                ChatConsole().print(text)
-
-        return CliDynamicCommandRuntime(
-            CliDynamicCommandPorts(
-                custom_commands=self.config.get("quick_commands", {}),
-                plugin_names=_get_plugin_cmd_handler_names(),
-                skill_commands=_skcmds,
-                get_plugin_handler=get_plugin_command_handler,
-                build_skill_message=lambda name, arguments, task_id: _get_skill_invocation_message(
-                    name, arguments, task_id=task_id
-                ),
-                session_id=lambda: self.session_id,
-                enqueue_pending_input=lambda message: (
-                    self._pending_input.put(message)
-                    if hasattr(self, "_pending_input")
-                    else None
-                ),
-                emit=_cprint,
-                emit_markup=_emit_dynamic_markup,
-            )
-        ).run(request)
 
     def _command_blocked_during_turn(self, command_name: str) -> bool:
         """Prevent session/model mutations from racing an active turn."""

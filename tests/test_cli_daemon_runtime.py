@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from voidcube.infrastructure.gateway import daemon_runtime
+import voidcube.infrastructure.gateway.service_launcher as service_launcher
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -63,3 +64,44 @@ def test_maybe_stop_releases_ownership_after_shutdown(monkeypatch):
 
     assert calls == [True]
     assert daemon_runtime.daemons_auto_started() is False
+
+
+def test_stop_all_uses_snapshot_when_service_registry_changes(monkeypatch):
+    original_services = dict(service_launcher.SERVICES)
+    service_launcher.SERVICES.clear()
+    service_launcher.SERVICES.update(
+        {
+            "gateway": service_launcher.ServiceInfo(
+                name="gateway",
+                port=6000,
+                module="gateway",
+                pid_file="gateway.pid",
+                log_file="gateway.log",
+            ),
+            "memory": service_launcher.ServiceInfo(
+                name="memory",
+                port=6001,
+                module="memory",
+                pid_file="memory.pid",
+                log_file="memory.log",
+            ),
+        }
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(service_launcher, "register_plugin_services", lambda *, force: None)
+
+    def stop_service(name: str, silent: bool = False) -> bool:
+        calls.append(name)
+        service_launcher.SERVICES.pop("memory", None)
+        return True
+
+    monkeypatch.setattr(service_launcher, "stop_service", stop_service)
+
+    try:
+        service_launcher.stop_all(force=True)
+    finally:
+        service_launcher.SERVICES.clear()
+        service_launcher.SERVICES.update(original_services)
+
+    assert calls == ["gateway", "memory"]

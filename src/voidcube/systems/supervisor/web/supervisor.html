@@ -10,7 +10,7 @@
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   VoidCube 监督者小屋  v4  ——  完整自由重设计
   视觉: 暖橘日落 / 木质 + 棉麻 / 现代插画感
-  角色: 义子(动漫比例少女), 4 个可切换动作 + 自动跟随
+  角色: 星子/西子(动漫比例少女), 4 个可切换动作 + 自动跟随
   状态: 保留任务卡片 + 状态面板, 通过 data-action/data-scene 驱动
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
 :root {
@@ -451,6 +451,11 @@ body[data-exec-window="false"] .floor {
   transform: translate(-50%, 0);
   opacity: 1;
   transition: opacity .25s ease, transform .25s ease;
+}
+.companion-think-bubble.is-updated { animation: think-pop .24s ease-out; }
+@keyframes think-pop {
+  0% { transform: translate(-50%, 2px) scale(.985); }
+  100% { transform: translate(-50%, 0) scale(1); }
 }
 .companion-think-bubble[hidden] { display: block; pointer-events: none; opacity: 0; transform: translate(-50%, 6px); }
 .companion-think-bubble::after {
@@ -5194,7 +5199,6 @@ let companionChatSessionId = '';
 let companionThinkHideTimer = null;
 let lastCompanionThinkKey = '';
 let lastCompanionThinkText = '';
-let lastCompanionThinkShownAt = 0;
 let connectionState = 'connecting';
 let lastSyncAt = 0;
 let lastSyncTimer = null;
@@ -8055,6 +8059,7 @@ function hideCompanionThinkBubble() {
     companionThinkHideTimer = null;
   }
   els.companionThinkBubbles.forEach(bubble => { bubble.hidden = true; });
+  els.companionThinkBubbles.forEach(bubble => { bubble.classList.remove('is-updated'); });
   els.companionThinkTexts.forEach(node => {
     node.textContent = '';
     node.title = '';
@@ -8073,27 +8078,7 @@ function activeCompanionThinkNodes() {
   ];
 }
 
-function showCompanionThinkBubble(text, key) {
-  if (!text) return;
-  const [bubble, node] = activeCompanionThinkNodes();
-  if (!bubble || !node) return;
-  const sameThinking = key && key === lastCompanionThinkKey;
-  if (sameThinking) {
-    els.companionThinkBubbles.forEach(item => { item.hidden = item !== bubble; });
-    els.companionThinkTexts.forEach(item => {
-      item.textContent = item === node ? text.substring(0, 240) : '';
-      item.title = item === node ? text : '';
-    });
-    bubble.hidden = false;
-    return;
-  }
-  if (
-    text === lastCompanionThinkText
-    && Date.now() - lastCompanionThinkShownAt < 3000
-  ) return;
-  lastCompanionThinkKey = key || text;
-  lastCompanionThinkText = text;
-  lastCompanionThinkShownAt = Date.now();
+function syncCompanionThinkBubble(bubble, node, text) {
   const preview = text.substring(0, 240);
   els.companionThinkBubbles.forEach(item => { item.hidden = item !== bubble; });
   els.companionThinkTexts.forEach(item => {
@@ -8101,8 +8086,41 @@ function showCompanionThinkBubble(text, key) {
     item.title = item === node ? text : '';
   });
   bubble.hidden = false;
+}
+
+function pulseCompanionThinkBubble(bubble) {
+  if (!bubble) return;
+  bubble.classList.remove('is-updated');
+  void bubble.offsetWidth;
+  bubble.classList.add('is-updated');
+  bubble.addEventListener('animationend', () => {
+    bubble.classList.remove('is-updated');
+  }, {once: true});
+}
+
+function showCompanionThinkBubble(text, key) {
+  if (!text) return;
+  const [bubble, node] = activeCompanionThinkNodes();
+  if (!bubble || !node) return;
+  const sameThinking = key && key === lastCompanionThinkKey;
+  if (sameThinking) {
+    syncCompanionThinkBubble(bubble, node, text);
+    if (companionThinkHideTimer) clearTimeout(companionThinkHideTimer);
+    companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 8000);
+    return;
+  }
+  if (text === lastCompanionThinkText) {
+    syncCompanionThinkBubble(bubble, node, text);
+    if (companionThinkHideTimer) clearTimeout(companionThinkHideTimer);
+    companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 8000);
+    return;
+  }
+  lastCompanionThinkKey = key || text;
+  lastCompanionThinkText = text;
+  syncCompanionThinkBubble(bubble, node, text);
+  pulseCompanionThinkBubble(bubble);
   if (companionThinkHideTimer) clearTimeout(companionThinkHideTimer);
-  companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 3000);
+  companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 8000);
 }
 
 function renderApiBThinking(state) {
@@ -10109,7 +10127,7 @@ if (els.workerRoleList) {
 setInterval(() => {
   const schedulerTab = $('[data-settings-view="providers"][aria-selected="true"], [data-settings-view="workers"][aria-selected="true"]', els.settingsTabs);
   if (panelOpen === 'settings' && schedulerTab) loadWorkerSchedulerState();
-}, 3000);
+}, 8000);
 
 function renderDeliveryPanel() {
   const hasPlayback = Boolean(currentMedia || mediaQueue.length);

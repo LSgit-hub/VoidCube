@@ -945,7 +945,7 @@ def stop_all(force: bool = False) -> None:
     register_plugin_services(force=True)
     if not force:
         _safe_print("\n  Stopping VoidCube services...\n")
-    for name in SERVICES:
+    for name in list(SERVICES):
         stop_service(name, silent=force)
     if not force:
         _safe_print()

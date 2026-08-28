@@ -1232,6 +1232,19 @@ def test_cli_process_uses_execution_table_for_quit() -> None:
     assert app.process_command("/quit") is False
 
 
+def test_cli_process_keeps_unknown_command_from_raising(capsys) -> None:
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    initialize_command_execution(app)
+
+    assert app.process_command("/not-a-real-command") is True
+    output = capsys.readouterr().out
+    assert "Unknown command" in output
+    assert "Type /help for available commands" in output
+
+
 def test_cli_process_uses_execution_table_for_queue(monkeypatch) -> None:
     output: list[str] = []
     app = VoidcubeCLI.__new__(VoidcubeCLI)
