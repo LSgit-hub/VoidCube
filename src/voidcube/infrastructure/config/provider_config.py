@@ -14,6 +14,11 @@ from collections.abc import Iterable
 from typing import Any, Callable
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Narrow an untyped configuration node to a mutable mapping."""
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _config_module():
     from . import configuration as config
     return config
@@ -117,6 +122,9 @@ def persist_provider_pool_entry(
     """Return config with one shared provider credential/catalog entry updated."""
     auth = _provider_auth_module()
     api_key_env = str(api_key_env or "").strip().upper()
+    if not api_key_env and str(auth_mode or "").strip().lower() != "none":
+        normalized_key = str(provider_key or "").strip().upper().replace("-", "_")
+        api_key_env = f"VOIDCUBE_PROVIDER_{normalized_key}_API_KEY"
     current_providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
     current = current_providers.get(provider_key) if isinstance(current_providers, dict) else {}
     current_model = str(current.get("selected_model") or "").strip() if isinstance(current, dict) else ""
@@ -185,6 +193,62 @@ def save_provider_pool_entry(provider_key: str, **kwargs: Any) -> bool:
         return False
 
 
+def provider_references(config: dict[str, Any], provider_key: str) -> list[str]:
+    """Return configured consumers that would break if a Provider is removed."""
+    key = str(provider_key or "").strip().lower()
+    references: list[str] = []
+    runtime = _as_dict(config.get("runtime"))
+    if str(runtime.get("active_provider") or "").strip().lower() == key:
+        references.append("API-A 当前 Provider")
+    memory_llm = _as_dict(_as_dict(config.get("memory")).get("llm"))
+    if str(memory_llm.get("provider") or "").strip().lower() == key:
+        references.append("API-B 当前 Provider")
+    roles = _as_dict(_as_dict(config.get("companion_workers")).get("roles"))
+    for role, values in roles.items():
+        role_config = _as_dict(values)
+        if str(role_config.get("provider") or "").strip().lower() == key:
+            references.append(f"员工角色 {role}")
+    fallback = config.get("fallback_providers")
+    if isinstance(fallback, list) and any(
+        isinstance(item, dict)
+        and str(item.get("provider") or "").strip().lower() == key
+        for item in fallback
+    ):
+        references.append("API-A 回退链")
+    cheap = _as_dict(_as_dict(config.get("smart_model_routing")).get("cheap_model"))
+    if str(cheap.get("provider") or "").strip().lower() == key:
+        references.append("智能模型路由")
+    return references
+
+
+def remove_provider_pool_entry(config: dict[str, Any], *, provider_key: str) -> dict[str, Any]:
+    """Remove an unused Provider while preserving its separately stored secret."""
+    key = str(provider_key or "").strip().lower()
+    providers = _as_dict(config.get("providers"))
+    if key not in providers:
+        raise KeyError(key)
+    references = provider_references(config, key)
+    if references:
+        raise ValueError(
+            f"Provider '{key}' 仍被使用：{', '.join(references)}；请先切换这些配置"
+        )
+    result = dict(config)
+    result["providers"] = {item_key: value for item_key, value in providers.items() if item_key != key}
+    return result
+
+
+def save_remove_provider_pool_entry(provider_key: str) -> bool:
+    try:
+        return save_config(
+            remove_provider_pool_entry(
+                load_current_config(),
+                provider_key=provider_key,
+            )
+        )
+    except Exception:
+        return False
+
+
 def persist_ollama_provider(
     config: dict[str, Any],
     *,
@@ -229,9 +293,9 @@ def refresh_provider_pool_catalog(
     *,
     model_fetcher: Callable[..., list[tuple[str, str]]] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    provider_cfg = providers.get(provider_key)
-    if not isinstance(provider_cfg, dict):
+    providers = _as_dict(config.get("providers"))
+    provider_cfg = _as_dict(providers.get(provider_key))
+    if not provider_cfg:
         return config, []
     fetch_models = model_fetcher or get_provider_models_from_api
     models = fetch_models(
@@ -258,12 +322,39 @@ def refresh_provider_pool_catalog(
     return result, model_ids
 
 
-def persist_api_a_selection(config: dict[str, Any], *, provider: str, model: str) -> dict[str, Any]:
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+def persist_api_a_selection(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    native_modalities: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    providers = _as_dict(config.get("providers"))
     if provider not in providers:
         raise ValueError(f"Unknown Provider: {provider}")
-    config = _config_module().set_provider_model(dict(config), provider, model, make_active=False)
-    return _config_module().set_active_provider(config, provider)
+    result = _config_module().set_provider_model(
+        dict(config),
+        provider,
+        model,
+        make_active=False,
+    )
+    if native_modalities is not None:
+        result_providers = _as_dict(result.get("providers")) or providers
+        provider_entry = _as_dict(result_providers.get(provider) or providers[provider])
+        model_capabilities = _as_dict(provider_entry.get("model_capabilities"))
+        selected_model = str(model or "").strip()
+        selected_modalities = {
+            str(modality or "").strip().lower()
+            for modality in native_modalities
+        }
+        model_capabilities[selected_model] = {
+            "image_input": "image" in selected_modalities,
+            "audio_input": "audio" in selected_modalities,
+            "video_input": "video" in selected_modalities,
+        }
+        provider_entry["model_capabilities"] = model_capabilities
+        result["providers"] = {**result_providers, provider: provider_entry}
+    return _config_module().set_active_provider(result, provider)
 
 
 def persist_api_b_config(
@@ -276,7 +367,7 @@ def persist_api_b_config(
     native_audio_output: bool | None = None,
 ) -> dict[str, Any]:
     provider = str(provider or "").strip().lower()
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    providers = _as_dict(config.get("providers"))
     if provider not in providers:
         raise ValueError(f"Unknown Provider: {provider}")
     result = dict(config or {})
@@ -285,10 +376,10 @@ def persist_api_b_config(
         or native_modalities is not None
         or native_audio_output is not None
     ):
-        provider_entry = dict(providers[provider])
-        model_capabilities = dict(provider_entry.get("model_capabilities") or {})
+        provider_entry = _as_dict(providers[provider])
+        model_capabilities = _as_dict(provider_entry.get("model_capabilities"))
         selected_model = str(model or "").strip()
-        existing = dict(model_capabilities.get(selected_model) or {})
+        existing = _as_dict(model_capabilities.get(selected_model))
         if native_modalities is not None:
             selected_modalities = {
                 str(modality or "").strip().lower()
@@ -426,4 +517,28 @@ def get_provider_models_from_api(provider: str, *, api_key: str = "", base_url: 
         return []
 
 
-__all__ = [name for name in globals() if not name.startswith("_")]
+__all__ = [
+    "api_a_key_configured",
+    "api_b_key_configured",
+    "credential_sources_have_usable_secret",
+    "get_provider_models_from_api",
+    "has_configured_api_key",
+    "load_current_config",
+    "persist_api_a_selection",
+    "persist_api_b_config",
+    "persist_ollama_provider",
+    "persist_provider_pool_entry",
+    "provider_credential_sources",
+    "provider_has_usable_credential",
+    "provider_key_from_name",
+    "provider_model_catalog",
+    "provider_pool_api_key",
+    "provider_references",
+    "refresh_provider_pool_catalog",
+    "remove_provider_pool_entry",
+    "save_config",
+    "save_env_value",
+    "save_ollama_provider",
+    "save_provider_pool_entry",
+    "save_remove_provider_pool_entry",
+]

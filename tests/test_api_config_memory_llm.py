@@ -16,6 +16,7 @@ from voidcube.interfaces.cli.configuration import (
     provider_credential_sources,
     provider_has_usable_credential,
     provider_pool_api_key,
+    remove_provider_pool_entry,
     refresh_provider_pool_catalog,
     render_api_config_summary,
 )
@@ -183,6 +184,57 @@ def test_persist_api_a_selection_does_not_touch_memory_llm():
     assert updated["providers"]["openrouter"]["selected_model"] == "deepseek/deepseek-chat"
     assert updated["memory"]["llm"]["provider"] == "deepseek"
     assert updated["memory"]["llm"]["model"] == "deepseek-v4-flash"
+
+
+def test_persist_api_a_selection_saves_confirmed_model_modalities():
+    cfg = {
+        "providers": {
+            "deepseek-v": {
+                "selected_model": "deepseek-v4-flash",
+                "model_capabilities": {
+                    "other-model": {"image_input": True},
+                },
+            }
+        },
+        "memory": {"llm": {"provider": "custom", "model": "memory-model"}},
+    }
+
+    updated = persist_api_a_selection(
+        cfg,
+        provider="deepseek-v",
+        model="deepseek-v4-flash-vision-exp",
+        native_modalities=("image",),
+    )
+
+    entry = updated["providers"]["deepseek-v"]
+    assert entry["selected_model"] == "deepseek-v4-flash-vision-exp"
+    assert entry["model_capabilities"] == {
+        "other-model": {"image_input": True},
+        "deepseek-v4-flash-vision-exp": {
+            "image_input": True,
+            "audio_input": False,
+            "video_input": False,
+        },
+    }
+    assert updated["memory"]["llm"] == cfg["memory"]["llm"]
+
+
+def test_remove_provider_pool_entry_rejects_referenced_provider_and_removes_unused():
+    cfg = {
+        "runtime": {"active_provider": "active"},
+        "providers": {
+            "active": {"selected_model": "active-model"},
+            "unused": {"selected_model": "unused-model"},
+        },
+        "memory": {"llm": {"provider": "active", "model": "memory-model"}},
+    }
+
+    with pytest.raises(ValueError, match="API-A 当前 Provider"):
+        remove_provider_pool_entry(cfg, provider_key="active")
+
+    updated = remove_provider_pool_entry(cfg, provider_key="unused")
+    assert set(updated["providers"]) == {"active"}
+    assert set(cfg["providers"]) == {"active", "unused"}
 
 
 def test_persist_provider_pool_entry_normalizes_chat_completions_url():

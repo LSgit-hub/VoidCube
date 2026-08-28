@@ -25,7 +25,7 @@ class TurnFinalizationPorts:
 
     cleanup_task_resources: Callable[[str], EffectOutcome]
     persist_session: Callable[
-        [list[dict[str, Any]], Sequence[Mapping[str, Any]] | None], EffectOutcome
+        [list[dict[str, Any]], Sequence[dict[str, Any]] | None], EffectOutcome
     ]
     model: str
     provider: str

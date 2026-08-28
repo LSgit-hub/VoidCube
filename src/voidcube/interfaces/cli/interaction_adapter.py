@@ -19,6 +19,7 @@ from .terminal_text_layout import (
     append_panel_line as _append_panel_line,
     display_width,
     panel_box_width as _panel_box_width,
+    modal_panel_max_height as _modal_max_height,
     trim_to_width,
     wrap_text as _wrap_panel_text,
 )
@@ -251,4 +252,80 @@ def approval_display_fragments(host: Any) -> list[tuple[str, str]]:
     lines.append(
         ("class:approval-border", "╰" + ("─" * box_width) + "╯\n")
     )
-    return lines
+    return _limit_approval_panel_lines(lines, _modal_max_height(), box_width)
+
+
+def _split_visual_lines(
+    fragments: list[tuple[str, str]],
+) -> list[list[tuple[str, str]]]:
+    """Group formatted fragments into rows so height limits are cell-accurate."""
+    visual_lines: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    for style, text in fragments:
+        parts = text.split("\n")
+        for index, part in enumerate(parts):
+            if part:
+                current.append((style, part))
+            if index < len(parts) - 1:
+                visual_lines.append(current)
+                current = []
+    if current:
+        visual_lines.append(current)
+    return visual_lines
+
+
+def _flatten_visual_lines(
+    visual_lines: list[list[tuple[str, str]]],
+) -> list[tuple[str, str]]:
+    flat: list[tuple[str, str]] = []
+    for visual_line in visual_lines:
+        for index, (style, text) in enumerate(visual_line):
+            flat.append((style, text + ("\n" if index == len(visual_line) - 1 else "")))
+    return flat
+
+
+def _limit_approval_panel_lines(
+    lines: list[tuple[str, str]],
+    max_lines: int,
+    box_width: int,
+) -> list[tuple[str, str]]:
+    """Trim long approval details without hiding the decision choices."""
+    visual_lines = _split_visual_lines(lines)
+    if len(visual_lines) <= max_lines:
+        return lines
+
+    closing = visual_lines[-1]
+    choice_rows = [
+        row
+        for row in visual_lines[:-1]
+        if any(
+            style in {"class:approval-choice", "class:approval-selected"}
+            for style, _text in row
+        )
+    ]
+    # Keep every decision row when possible.  The body is the expendable part.
+    available_head = max(1, max_lines - len(choice_rows) - 2)
+    head = visual_lines[:available_head]
+    tail = choice_rows[-max(1, max_lines - len(head) - 2) :]
+    remaining = len(visual_lines) - len(head) - len(tail) - 1
+    if remaining <= 0:
+        return lines
+
+    indicator = [
+        ("class:approval-border", "│"),
+        (
+            "class:approval-desc",
+            _pad_panel_text(
+                f"  … {remaining} more line{'s' if remaining != 1 else ''}",
+                box_width,
+            ),
+        ),
+        ("class:approval-border", "│"),
+    ]
+    return _flatten_visual_lines([*head, indicator, *tail, closing])
+
+
+def _pad_panel_text(text: str, box_width: int) -> str:
+    from .terminal_text_layout import pad_to_width
+
+    return pad_to_width(text, max(0, box_width))

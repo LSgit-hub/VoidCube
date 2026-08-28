@@ -20,7 +20,16 @@ class _Host:
         self.api_key = "old-key"
         self._explicit_base_url = "https://old.example/v1"
         self._explicit_api_key = "old-key"
+        self._session_model_capabilities = {}
         self.agent = None
+
+    def _remember_session_model_capabilities(
+        self,
+        provider: str,
+        model: str,
+        native_modalities: tuple[str, ...],
+    ) -> None:
+        self._session_model_capabilities[(provider, model)] = tuple(native_modalities)
 
     def _capture_modal_input_snapshot(self) -> None:
         self._snapshot_calls.append("capture")
@@ -110,6 +119,45 @@ def test_submit_picker_delegates_state_machine_and_preserves_session_scope(monke
     assert persist is False
 
 
+def test_submit_picker_confirms_native_modalities_before_apply(monkeypatch) -> None:
+    host = _Host()
+    host._model_picker_state = {
+        "stage": "model",
+        "selected": 0,
+        "providers": [{"slug": "provider-b"}],
+        "provider_data": {"slug": "provider-b"},
+        "model_list": ["vision-model"],
+        "user_provs": {"provider-b": {}},
+    }
+    calls: list[tuple[str, object]] = []
+    confirmed: list[tuple[str, str]] = []
+    runtime = CliProviderRuntime(
+        host,
+        emit=lambda _value: None,
+        translate=lambda value, **_: value,
+        confirm_capabilities=lambda provider, model: (
+            confirmed.append((provider, model)) or ("image",)
+        ),
+    )
+    runtime.apply_switch_result = lambda result, persist: calls.append(("apply", (result, persist)))
+    runtime.close_picker = lambda: calls.append(("close", None))
+    monkeypatch.setattr(
+        "voidcube.interfaces.cli.model_switch.switch_model",
+        lambda **kwargs: SimpleNamespace(
+            success=True,
+            new_model=kwargs["raw_input"],
+            target_provider=kwargs["explicit_provider"],
+        ),
+    )
+
+    runtime.submit_picker(persist_global=True)
+
+    assert confirmed == [("provider-b", "vision-model")]
+    result, persist = calls[1][1]
+    assert result.native_modalities == ("image",)
+    assert persist is True
+
+
 def test_apply_switch_result_updates_agent_and_skips_global_save_for_session_only() -> None:
     output: list[str] = []
     host = _Host()
@@ -176,6 +224,32 @@ def test_apply_switch_result_persists_active_provider_and_model() -> None:
 
     assert saved == [("provider-b", "next-model")]
     assert any("Saved to config.yaml" in line for line in output)
+
+
+def test_apply_switch_result_persists_confirmed_modalities() -> None:
+    host = _Host()
+    saved: list[tuple[object, ...]] = []
+    runtime = _runtime(
+        host,
+        persist_global_config=lambda *args: saved.append(args),
+    )
+    result = SimpleNamespace(
+        success=True,
+        new_model="vision-model",
+        target_provider="provider-b",
+        api_key=None,
+        base_url=None,
+        provider_label="Provider B",
+        warning_message=None,
+        model_info=None,
+        native_modalities=("image", "video"),
+    )
+
+    runtime.apply_switch_result(result, persist_global=True)
+
+    assert saved == [
+        ("provider-b", "vision-model", ("image", "video")),
+    ]
 
 
 def test_provider_selection_adapter_owns_canonical_config_write(monkeypatch) -> None:

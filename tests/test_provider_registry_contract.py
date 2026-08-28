@@ -258,7 +258,7 @@ def test_named_custom_provider_remains_runtime_resolvable(monkeypatch):
 
     runtime = resolve_runtime_provider(requested="research-endpoint")
 
-    assert runtime["provider"] == "custom"
+    assert runtime["provider"] == "research-endpoint"
     assert runtime["base_url"] == "https://models.example/v1"
     assert runtime["api_key"] == "sk-research-token"
     assert runtime["model"] == "research-model"

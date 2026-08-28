@@ -32,6 +32,7 @@ import sys
 import time
 import threading
 import uuid
+from collections.abc import Callable, Iterable
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -169,6 +170,7 @@ from ...infrastructure.llm.request import (
     prepare_chat_messages,
 )
 from ...infrastructure.llm.multimodal import native_input_modalities
+from ...infrastructure.providers.rate_limit import RateLimitState
 from ...domain.agent.response import (
     TruncationAction,
     decide_truncation_recovery,
@@ -255,52 +257,52 @@ class AIAgent:
 
     def __init__(
         self,
-        base_url: str = None,
-        api_key: str = None,
-        provider: str = None,
-        acp_command: str = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        provider: str | None = None,
+        acp_command: str | None = None,
         acp_args: list[str] | None = None,
-        command: str = None,
+        command: str | None = None,
         args: list[str] | None = None,
         model: str = "",
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
-        enabled_toolsets: List[str] = None,
-        disabled_toolsets: List[str] = None,
+        enabled_toolsets: List[str] | None = None,
+        disabled_toolsets: List[str] | None = None,
         verbose_logging: bool = False,
         quiet_mode: bool = False,
-        ephemeral_system_prompt: str = None,
+        ephemeral_system_prompt: str | None = None,
         log_prefix_chars: int = 100,
         log_prefix: str = "",
-        providers_allowed: List[str] = None,
-        providers_ignored: List[str] = None,
-        providers_order: List[str] = None,
-        provider_sort: str = None,
+        providers_allowed: List[str] | None = None,
+        providers_ignored: List[str] | None = None,
+        providers_order: List[str] | None = None,
+        provider_sort: str | None = None,
         provider_require_parameters: bool = False,
-        provider_data_collection: str = None,
-        session_id: str = None,
+        provider_data_collection: str | None = None,
+        session_id: str | None = None,
         tool_event_sink: ToolEventSink | None = None,
-        thinking_callback: callable = None,
-        reasoning_callback: callable = None,
+        thinking_callback: Callable[..., Any] | None = None,
+        reasoning_callback: Callable[..., Any] | None = None,
         clarification_sink: ClarificationSink | None = None,
-        step_callback: callable = None,
-        stream_delta_callback: callable = None,
-        interim_assistant_callback: callable = None,
-        tool_gen_callback: callable = None,
-        status_callback: callable = None,
-        max_tokens: int = None,
-        reasoning_config: Dict[str, Any] = None,
-        service_tier: str = None,
-        request_overrides: Dict[str, Any] = None,
-        prefill_messages: List[Dict[str, Any]] = None,
-        platform: str = None,
-        user_id: str = None,
+        step_callback: Callable[..., Any] | None = None,
+        stream_delta_callback: Callable[..., Any] | None = None,
+        interim_assistant_callback: Callable[..., Any] | None = None,
+        tool_gen_callback: Callable[..., Any] | None = None,
+        status_callback: Callable[..., Any] | None = None,
+        max_tokens: int | None = None,
+        reasoning_config: Dict[str, Any] | None = None,
+        service_tier: str | None = None,
+        request_overrides: Dict[str, Any] | None = None,
+        prefill_messages: List[Dict[str, Any]] | None = None,
+        platform: str | None = None,
+        user_id: str | None = None,
         skip_context_files: bool = False,
         skip_memory: bool = False,
         session_db=None,
-        parent_session_id: str = None,
-        iteration_budget: "IterationBudget" = None,
-        fallback_providers: List[Dict[str, Any]] = None,
+        parent_session_id: str | None = None,
+        iteration_budget: Optional["IterationBudget"] = None,
+        fallback_providers: List[Dict[str, Any]] | None = None,
         credential_pool=None,
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 50,
@@ -460,7 +462,7 @@ class AIAgent:
 
         # Rate limit tracking — updated from x-ratelimit-* response headers
         # after each API call.  Accessed by /usage slash command.
-        self._rate_limit_state: Optional["RateLimitState"] = None
+        self._rate_limit_state: RateLimitState | None = None
 
         # Centralized logging — agent.log (INFO+) and errors.log (WARNING+)
         # both live under ~/.VoidCube/logs/.  Idempotent, so gateway mode
@@ -547,7 +549,7 @@ class AIAgent:
         # Provider fallback chain — ordered list of backup providers tried
         # when the primary is exhausted (rate-limit, overload, connection
         # failure).
-        self._fallback_chain = [
+        self._fallback_chain: list[dict[str, Any]] = [
             provider
             for provider in (fallback_providers or [])
             if isinstance(provider, dict)
@@ -573,7 +575,7 @@ class AIAgent:
         self.tools = normalize_tool_definitions(self.tools)
         
         # Show tool configuration and store valid tool names for validation
-        self.valid_tool_names = set()
+        self.valid_tool_names: set[str] = set()
         if self.tools:
             self.valid_tool_names = {tool["function"]["name"] for tool in self.tools}
             tool_names = sorted(self.valid_tool_names)
@@ -597,6 +599,7 @@ class AIAgent:
         
         # Cached system prompt -- built once per session, only rebuilt on compression
         self._cached_system_prompt: Optional[str] = None
+        self._last_content_with_tools: str | None = None
 
         # Session identity, DB registration, checkpointing and persistence are
         # initialized by one explicit runtime; the Agent keeps the resulting
@@ -655,6 +658,9 @@ class AIAgent:
             _agent_cfg = _load_agent_config()
         except Exception:
             _agent_cfg = {}
+        self.config: dict[str, Any] = (
+            dict(_agent_cfg) if isinstance(_agent_cfg, dict) else {}
+        )
 
         self._iters_since_skill = 0
 
@@ -668,7 +674,7 @@ class AIAgent:
                 self._memory_manager = _MemoryManager()
                 self._memory_manager.add_provider(MemMemoryProvider())
                 from ...infrastructure.config.runtime_paths import get_VoidCube_home as _ghh
-                _init_kwargs = {
+                _init_kwargs: dict[str, Any] = {
                     "session_id": self.session_id,
                     "platform": platform or "cli",
                     "VoidCube_home": str(_ghh()),
@@ -776,8 +782,12 @@ class AIAgent:
         if _engine_name != "compressor":
             # Try loading from plugins/context_engine/<name>/
             try:
-                from plugins.context_engine import load_context_engine
-                _selected_engine = load_context_engine(_engine_name)
+                from importlib import import_module
+
+                _context_engine_module = import_module("plugins.context_engine")
+                _selected_engine = _context_engine_module.load_context_engine(
+                    _engine_name
+                )
             except Exception as _ce_load_err:
                 logger.debug("Context engine load from plugins/context_engine/: %s", _ce_load_err)
 
@@ -1796,7 +1806,7 @@ class AIAgent:
                 logging.warning(f"Failed to dump API request debug payload: {dump_error}")
             return None
 
-    def interrupt(self, message: str = None) -> None:
+    def interrupt(self, message: str | None = None) -> None:
         """
         Request the agent to interrupt its current tool-calling loop.
         
@@ -1912,7 +1922,7 @@ class AIAgent:
             "budget_max": self.iteration_budget.max_total,
         }
 
-    def shutdown_memory_provider(self, messages: list = None) -> None:
+    def shutdown_memory_provider(self, messages: list | None = None) -> None:
         """Shut down the memory provider and context engine — call at actual session boundaries.
 
         This calls on_session_end() then shutdown_all() on the memory
@@ -2040,7 +2050,7 @@ class AIAgent:
 
 
 
-    def _build_system_prompt(self, system_message: str = None) -> str:
+    def _build_system_prompt(self, system_message: str | None = None) -> str:
         """
         Assemble the full system prompt from all layers.
         
@@ -2058,6 +2068,7 @@ class AIAgent:
         #   7. Platform-specific formatting hint
 
         # Try SOUL.md as primary identity (unless context files are skipped)
+        prompt_parts: list[str] = []
         _soul_loaded = False
         if not self.skip_context_files:
             _soul_content = load_soul_md()
@@ -2289,15 +2300,14 @@ class AIAgent:
         try:
             from ...infrastructure.providers.auth import resolve_nous_runtime_credentials
 
-            creds = resolve_nous_runtime_credentials(
-                min_key_ttl_seconds=max(60, int(os.getenv("VOIDCUBE_NOUS_MIN_KEY_TTL_SECONDS", "1800"))),
-                timeout_seconds=float(os.getenv("VOIDCUBE_NOUS_TIMEOUT_SECONDS", "15")),
-                force_mint=force,
-            )
+            del force
+            creds = resolve_nous_runtime_credentials()
         except Exception as exc:
             logger.debug("Nous credential refresh failed: %s", exc)
             return False
 
+        if not isinstance(creds, dict):
+            return False
         api_key = creds.get("api_key")
         base_url = creds.get("base_url")
         if not isinstance(api_key, str) or not api_key.strip():
@@ -2552,12 +2562,12 @@ class AIAgent:
             # Pass base_url and api_key from fallback config so custom
             # endpoints (e.g. Ollama Cloud) resolve correctly instead of
             # falling through to OpenRouter defaults.
-            fb_base_url_hint = (fb.get("base_url") or "").strip() or None
-            fb_api_key_hint = (fb.get("api_key") or "").strip() or None
+            fb_base_url_hint = str(fb.get("base_url") or "").strip()
+            fb_api_key_hint = str(fb.get("api_key") or "").strip()
             # For Ollama Cloud endpoints, pull OLLAMA_API_KEY from env
             # when no explicit key is in the fallback config.
             if fb_base_url_hint and "ollama.com" in fb_base_url_hint.lower() and not fb_api_key_hint:
-                fb_api_key_hint = os.getenv("OLLAMA_API_KEY") or None
+                fb_api_key_hint = os.getenv("OLLAMA_API_KEY", "").strip()
             fb_client, _resolved_fb_model = resolve_provider_client(
                 fb_provider, model=fb_model,
                 explicit_base_url=fb_base_url_hint,
@@ -2829,7 +2839,15 @@ class AIAgent:
                     pass
         return msg
 
-    def _compress_context(self, messages: list, system_message: str, *, approx_tokens: int = None, task_id: str = "default", focus_topic: str = None) -> tuple:
+    def _compress_context(
+        self,
+        messages: list[dict[str, Any]],
+        system_message: str | None,
+        *,
+        approx_tokens: int | None = None,
+        task_id: str = "default",
+        focus_topic: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str]:
         """Compress conversation context and split the session in SQLite.
 
         Args:
@@ -2854,7 +2872,11 @@ class AIAgent:
             except Exception:
                 pass
 
-        compressed = self.context_compressor.compress(messages, current_tokens=approx_tokens, focus_topic=focus_topic)
+        compressed = self.context_compressor.compress(
+            messages,
+            current_tokens=approx_tokens or 0,
+            focus_topic=focus_topic or "",
+        )
 
         todo_snapshot = self._todo_store.format_for_injection()
         if todo_snapshot:
@@ -3029,7 +3051,7 @@ class AIAgent:
 
         enforce_turn_budget(
             messages[-len(prepared) :],
-            env=get_active_env(effective_task_id),
+            env=get_active_env(effective_task_id) or "",
         )
 
     def _prepare_tool_call(
@@ -3070,7 +3092,7 @@ class AIAgent:
                 call_id=call.call_id,
                 name=call.name,
                 arguments=call.arguments,
-                preview=_build_tool_preview(call.name, call.arguments),
+                preview=_build_tool_preview(call.name, call.arguments) or "",
             )
         )
 
@@ -3106,7 +3128,7 @@ class AIAgent:
         messages: list,
         effective_task_id: str,
         parallel: bool,
-    ) -> str:
+    ) -> str | ToolExecutionResult:
         thread_id = self._register_tool_thread()
         try:
             return self._invoke_prepared_tool_in_current_thread(
@@ -3122,10 +3144,10 @@ class AIAgent:
         self,
         call: PreparedToolCall,
         *,
-        messages: list,
+        messages: list[dict[str, Any]],
         effective_task_id: str,
         parallel: bool,
-    ) -> str:
+    ) -> str | ToolExecutionResult:
         try:
             from ...infrastructure.execution.environments.base import set_activity_callback
 
@@ -3188,9 +3210,9 @@ class AIAgent:
         self,
         call: PreparedToolCall,
         *,
-        messages: list,
+        messages: list[dict[str, Any]],
         effective_task_id: str,
-    ) -> str:
+    ) -> str | ToolExecutionResult:
         function_name = call.name
         function_args = call.arguments
         if function_name == "todo":
@@ -3439,7 +3461,7 @@ class AIAgent:
             content=result,
             tool_name=call.name,
             tool_use_id=call.call_id,
-            env=get_active_env(effective_task_id),
+            env=get_active_env(effective_task_id) or "",
         )
         result = (
             persisted_result
@@ -3576,7 +3598,7 @@ class AIAgent:
                 system_prompt=self._cached_system_prompt or "",
                 ephemeral_system_prompt=self.ephemeral_system_prompt or "",
                 prefill_messages=self.prefill_messages or (),
-                native_input_modalities=self._native_input_modalities(),
+                native_input_modalities=tuple(self._native_input_modalities()),
             )
 
             summary_kwargs = build_chat_completion_kwargs(
@@ -3628,12 +3650,12 @@ class AIAgent:
     def run_conversation(
         self,
         user_message: str,
-        system_message: str = None,
-        conversation_history: List[Dict[str, Any]] = None,
-        task_id: str = None,
-        stream_callback: Optional[callable] = None,
+        system_message: str | None = None,
+        conversation_history: List[Dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback: Callable[..., Any] | None = None,
         persist_user_message: Optional[str] = None,
-        trace_id: str = None,
+        trace_id: str | None = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
@@ -3732,7 +3754,11 @@ class AIAgent:
         )
 
         # Initialize conversation (copy to avoid mutating the caller's list)
-        messages = list(conversation_history) if conversation_history else []
+        messages: list[dict[str, Any]] = (
+            [dict(message) for message in conversation_history]
+            if conversation_history
+            else []
+        )
 
         # Hydrate todo store from conversation history (gateway creates a fresh
         # AIAgent per message, so the in-memory store is empty -- we need to
@@ -3749,7 +3775,7 @@ class AIAgent:
         original_user_message = persist_user_message if persist_user_message is not None else user_message
 
         # Add user message
-        user_msg = {"role": "user", "content": user_message}
+        user_msg: dict[str, Any] = {"role": "user", "content": user_message}
         if attachments:
             user_msg["attachments"] = [
                 dict(attachment)
@@ -3812,7 +3838,7 @@ class AIAgent:
                     except Exception as e:
                         logger.debug("Session DB update_system_prompt failed: %s", e)
 
-        active_system_prompt = self._cached_system_prompt
+        active_system_prompt: str = self._cached_system_prompt or ""
 
         # ── Preflight context compression ──
         # Before entering the main loop, check if the loaded conversation
@@ -3898,7 +3924,7 @@ class AIAgent:
                 sender_id=getattr(self, "_user_id", None) or "",
             )
             _ctx_parts: list[str] = []
-            for r in _pre_results:
+            for r in (_pre_results or ()):
                 if isinstance(r, dict) and r.get("context"):
                     _ctx_parts.append(str(r["context"]))
                 elif isinstance(r, str) and r.strip():
@@ -4012,7 +4038,7 @@ class AIAgent:
                 prefill_messages=self.prefill_messages or (),
                 user_message_index=current_turn_user_idx,
                 user_contexts=user_contexts,
-                native_input_modalities=self._native_input_modalities(),
+                native_input_modalities=tuple(self._native_input_modalities()),
             )
 
             # Calculate approximate request size for logging
@@ -4052,6 +4078,7 @@ class AIAgent:
             
             attempt_state = ApiAttemptState(started_at=time.time())
 
+            api_duration = 0.0
             while attempt_state.can_retry:
                 try:
                     self._reset_stream_delivery_tracking()
@@ -4716,7 +4743,7 @@ class AIAgent:
                             recovery_kind,
                             error_message=error_msg,
                             messages=messages,
-                            system_prompt=system_message,
+                            system_prompt=system_message or "",
                             approx_tokens=approx_tokens,
                             task_id=effective_task_id,
                             previous_attempts=turn_state.compression_attempts,
@@ -4768,7 +4795,7 @@ class AIAgent:
                                 messages=messages,
                                 conversation_history=conversation_history,
                                 api_call_count=turn_state.api_call_count,
-                                error=recovery.error,
+                                error=recovery.error or "Context recovery failed",
                             )
 
                         if recovery.output_token_limit is not None:
@@ -5078,7 +5105,7 @@ class AIAgent:
                         task_id=effective_task_id,
                     )
                     if tool_action.control is ResponseLoopControl.terminal:
-                        return tool_action.terminal_result
+                        return tool_action.terminal_result or {}
                     if tool_action.control is ResponseLoopControl.continue_loop:
                         continue
 
@@ -5088,7 +5115,7 @@ class AIAgent:
                         assistant_message=assistant_message,
                         finish_reason=attempt_state.finish_reason,
                         messages=messages,
-                        system_message=system_message,
+                        system_message=system_message or "",
                         active_system_prompt=active_system_prompt,
                         task_id=effective_task_id,
                     )
@@ -5263,6 +5290,21 @@ class AIAgent:
                 turn_state.api_call_count,
             )
 
+        sync_memory_fn: Callable[[Any, str, str], EffectOutcome] | None = None
+        memory_manager = self._memory_manager
+        if memory_manager is not None:
+            def _sync_memory(
+                user_message: Any,
+                response: str,
+                session_id: str,
+            ) -> EffectOutcome:
+                return memory_manager.sync_turn(
+                    user_message,
+                    response,
+                    session_id=session_id,
+                )
+            sync_memory_fn = _sync_memory
+
         return finalize_conversation_turn(
             TurnFinalizationPorts(
                 cleanup_task_resources=self._cleanup_task_resources,
@@ -5301,15 +5343,7 @@ class AIAgent:
                 skill_nudge_interval=self._skill_nudge_interval,
                 iterations_since_skill=lambda: self._iters_since_skill,
                 clear_skill_nudge=lambda: setattr(self, "_iters_since_skill", 0),
-                sync_memory=(
-                    lambda user_message, response, session_id: self._memory_manager.sync_turn(
-                        user_message,
-                        response,
-                        session_id=session_id,
-                    )
-                    if self._memory_manager
-                    else None
-                ),
+                sync_memory=sync_memory_fn,
                 spawn_background_review=self._spawn_background_review,
             ),
             state=turn_state,
@@ -5319,7 +5353,11 @@ class AIAgent:
             original_user_message=original_user_message,
         )
 
-    def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
+    def chat(
+        self,
+        message: str,
+        stream_callback: Callable[..., Any] | None = None,
+    ) -> str:
         """
         Simple chat interface that returns just the final response.
 
@@ -5335,13 +5373,13 @@ class AIAgent:
 
 
 def main(
-    query: str = None,
+    query: str | None = None,
     model: str = "",
-    api_key: str = None,
+    api_key: str | None = None,
     base_url: str = "",
     max_turns: int = 10,
-    enabled_toolsets: str = None,
-    disabled_toolsets: str = None,
+    enabled_toolsets: str | None = None,
+    disabled_toolsets: str | None = None,
     list_tools: bool = False,
     save_sample: bool = False,
     verbose: bool = False,

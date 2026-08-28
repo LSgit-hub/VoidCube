@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Sequence
 
 from .model_picker_runtime import (
     CliModelPickerPorts,
@@ -20,12 +20,14 @@ class CliProviderRuntime:
         *,
         emit: Callable[[str], None],
         translate: Callable[..., str],
-        persist_global_config: Callable[[str, str], None] | None = None,
+        persist_global_config: Callable[..., None] | None = None,
+        confirm_capabilities: Callable[[str, str], Sequence[str] | None] | None = None,
     ) -> None:
         self.host = host
         self.emit = emit
         self.translate = translate
         self.persist_global_config = persist_global_config
+        self.confirm_capabilities = confirm_capabilities
 
     def open_picker(
         self,
@@ -81,6 +83,7 @@ class CliProviderRuntime:
                 current_model=lambda: host.model,
                 current_base_url=lambda: host.base_url or "",
                 current_api_key=lambda: host.api_key or "",
+                confirm_capabilities=self.confirm_capabilities,
             )
         ).submit(persist_global=persist_global)
 
@@ -94,6 +97,13 @@ class CliProviderRuntime:
         host.model = result.new_model
         host.provider = result.target_provider
         host.requested_provider = result.target_provider
+        native_modalities = getattr(result, "native_modalities", None)
+        if native_modalities is not None:
+            host._remember_session_model_capabilities(
+                result.target_provider,
+                result.new_model,
+                native_modalities,
+            )
         if result.api_key:
             host.api_key = result.api_key
             host._explicit_api_key = result.api_key
@@ -161,7 +171,15 @@ class CliProviderRuntime:
         try:
             if self.persist_global_config is None:
                 raise RuntimeError("provider config persistence adapter is not configured")
-            self.persist_global_config(result.target_provider, result.new_model)
+            native_modalities = getattr(result, "native_modalities", None)
+            if native_modalities is None:
+                self.persist_global_config(result.target_provider, result.new_model)
+            else:
+                self.persist_global_config(
+                    result.target_provider,
+                    result.new_model,
+                    native_modalities,
+                )
         except Exception as exc:
             self.emit(f"    ⚠ Failed to save config: {exc}")
             return

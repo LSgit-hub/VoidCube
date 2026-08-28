@@ -10,7 +10,7 @@ from __future__ import annotations
 import atexit
 import os
 import sys
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from . import application as _app
 from ...infrastructure.gateway import daemon_runtime as _daemon_runtime
@@ -33,10 +33,11 @@ from .application import (
     _run_cleanup,
     render_tools_for_host,
     render_toolsets_for_host,
-    t,
 )
+from .i18n import t
 
-CLI_CONFIG = None
+CLI_CONFIG: dict[str, Any] = {}
+translate: Callable[..., str] = t
 
 
 def _get_language_preference_prompt() -> str:
@@ -136,8 +137,9 @@ def main(
 
     # Ensure CLI_CONFIG is cached in module globals so bare-name references
     # in main(), VoidcubeCLI.__init__, and class methods resolve correctly.
-    _app.CLI_CONFIG = _get_cli_config()
-    globals()["CLI_CONFIG"] = _app.CLI_CONFIG
+    config = _get_cli_config()
+    _app.CLI_CONFIG = config
+    globals()["CLI_CONFIG"] = config
 
     # Signal to terminal_tool that we're in interactive mode
     # This enables interactive sudo password prompts with timeout
@@ -148,7 +150,7 @@ def main(
         # ── Git worktree isolation (#652) ──
         # Create an isolated worktree so this agent instance doesn't collide
         # with other agents working on the same repo.
-        use_worktree = worktree or w or CLI_CONFIG.get("worktree", False)
+        use_worktree = worktree or w or config.get("worktree", False)
         wt_info = None
         if use_worktree:
             # Prune stale worktrees from crashed/killed sessions
@@ -217,7 +219,7 @@ def main(
     else:
         # Use the shared resolver so MCP servers are included at runtime
         from ...extensions.tools.configuration import get_platform_tools
-        toolsets_list = sorted(get_platform_tools(CLI_CONFIG, "cli"))
+        toolsets_list = sorted(get_platform_tools(config, "cli"))
     
     parsed_skills = _parse_skills_argument(skills)
 
@@ -271,12 +273,12 @@ def main(
     # Handle list commands (don't init agent for these)
     if list_tools:
         cli.show_banner()
-        render_tools_for_host(cli, emit=print, translate=t)
+        render_tools_for_host(cli, emit=print, translate=translate)
         sys.exit(0)
     
     if list_toolsets:
         cli.show_banner()
-        render_toolsets_for_host(cli, emit=print, translate=t)
+        render_toolsets_for_host(cli, emit=print, translate=translate)
         sys.exit(0)
     
     # Register cleanup for single-query mode (interactive mode registers in run())
@@ -348,7 +350,6 @@ def main(
                     effective_query = cli._preprocess_attachments_with_text(
                         query,
                         fallback_paths,
-                        announce=False,
                     )
                 if turn_route["signature"] != cli._active_agent_route_signature:
                     cli.agent = None
@@ -358,20 +359,22 @@ def main(
                     route_label=turn_route["label"],
                     request_overrides=turn_route.get("request_overrides"),
                 ):
-                    cli.agent.quiet_mode = True
-                    cli.agent.suppress_status_output = True
-                    result = cli.agent.run_conversation(
-                        user_message=effective_query,
-                        conversation_history=cli.conversation_history,
-                        attachments=list(native_attachments),
-                    )
-                    response = result.get("final_response", "") if isinstance(result, dict) else str(result)
-                    if response:
-                        print(response)
-                    print(f"\nsession_id: {cli.session_id}")
-                    
-                    # Ensure proper exit code for automation wrappers
-                    sys.exit(1 if isinstance(result, dict) and result.get("failed") else 0)
+                    agent = cli.agent
+                    if agent is not None:
+                        agent.quiet_mode = True
+                        agent.suppress_status_output = True
+                        result = agent.run_conversation(
+                            user_message=effective_query,
+                            conversation_history=cli.conversation_history,
+                            attachments=list(native_attachments),
+                        )
+                        response = result.get("final_response", "") if isinstance(result, dict) else str(result)
+                        if response:
+                            print(response)
+                        print(f"\nsession_id: {cli.session_id}")
+
+                        # Ensure proper exit code for automation wrappers
+                        sys.exit(1 if isinstance(result, dict) and result.get("failed") else 0)
             
             # Exit with error code if credentials or agent init fails
             sys.exit(1)
@@ -380,7 +383,7 @@ def main(
             _query_label = query or ("[image attached]" if single_query_images else "")
             if _query_label:
                 cli.console.print(f"[bold blue]Query:[/] {_query_label}")
-            cli.chat(query, images=single_query_images or None)
+            cli.chat(query, images=single_query_images or [])
             cli._print_exit_summary()
         return
     

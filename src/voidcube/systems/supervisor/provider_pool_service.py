@@ -55,7 +55,8 @@ class ProviderPoolEntryRequest(BaseModel):
     label: str = Field(min_length=1, max_length=80)
     type: str = Field(default="openai_compatible", min_length=1, max_length=40)
     base_url: str = Field(default="", max_length=2048)
-    selected_model: str = Field(min_length=1, max_length=300)
+    selected_model: str = Field(default="", max_length=300)
+    model_override: bool = False
     auth_mode: Literal["env", "none"] = "env"
     api_key_env: str = Field(default="", max_length=120)
     api_key: str = Field(default="", max_length=8192)
@@ -78,6 +79,9 @@ class CompanionWorkerAssignmentRequest(BaseModel):
     model: str = Field(default="", max_length=300)
     toolsets: list[str] = Field(default_factory=list, max_length=40)
     concurrency_limit: int = Field(default=1, ge=1, le=8)
+    audio_input: bool = False
+    image_input: bool = False
+    video_input: bool = False
 
     @field_validator("provider", "model")
     @classmethod
@@ -198,6 +202,12 @@ def _provider_references(config: Mapping[str, Any], provider_key: str) -> list[s
     runtime = config.get("runtime")
     if isinstance(runtime, Mapping) and runtime.get("active_provider") == provider_key:
         references.append("API-A 当前 Provider")
+    memory = config.get("memory")
+    memory_llm = memory.get("llm") if isinstance(memory, Mapping) else None
+    if isinstance(memory_llm, Mapping) and str(
+        memory_llm.get("provider") or ""
+    ).strip().lower() == provider_key:
+        references.append("API-B 当前 Provider")
 
     _, roles = _configured_worker_entries(config)
     for role, values in roles.items():
@@ -307,6 +317,17 @@ class ProviderPoolService:
                 public_provider["audio_output"] = bool(selected_capabilities.get("audio_output"))
                 public_provider["image_input"] = bool(selected_capabilities.get("image_input"))
                 public_provider["video_input"] = bool(selected_capabilities.get("video_input"))
+            raw_capabilities = entry.get("model_capabilities")
+            if isinstance(raw_capabilities, Mapping):
+                public_provider["model_capabilities"] = {
+                    str(model_id): {
+                        "audio_input": bool(values.get("audio_input")),
+                        "image_input": bool(values.get("image_input")),
+                        "video_input": bool(values.get("video_input")),
+                    }
+                    for model_id, values in raw_capabilities.items()
+                    if isinstance(values, Mapping)
+                }
             public_providers.append(public_provider)
 
         public_roles = []
@@ -378,17 +399,21 @@ class ProviderPoolService:
         if provider_type not in _ALLOWED_PROVIDER_TYPES:
             raise ValueError("unsupported Provider type")
         base_url = _validate_base_url(key, request.base_url)
+        config = _raw_config()
+        providers = _provider_map(config)
+        current = dict(providers.get(key) or {})
         api_key_env = ""
         if request.auth_mode == "env":
-            api_key_env = request.api_key_env or _default_env_key(key)
+            api_key_env = (
+                request.api_key_env
+                or str(current.get("api_key_env") or "").strip()
+                or _default_env_key(key)
+            )
             if not _ENV_KEY_RE.fullmatch(api_key_env):
                 raise ValueError("api_key_env must be an uppercase environment variable name")
             if request.api_key:
                 save_env_value(api_key_env, request.api_key)
 
-        config = _raw_config()
-        providers = _provider_map(config)
-        current = dict(providers.get(key) or {})
         previous_type = str(current.get("type") or "openai_compatible").strip().lower()
         previous_base_url = normalize_openai_compatible_base_url(
             str(current.get("base_url") or "")
@@ -406,8 +431,14 @@ class ProviderPoolService:
                 "concurrency_limit": request.concurrency_limit,
             }
         )
+        if request.model_override and request.selected_model:
+            # A model entered in the Provider editor is an explicit override.
+            # It remains usable even when the endpoint omits it from /models.
+            current["model_override"] = request.selected_model
+        elif not request.selected_model:
+            current.pop("model_override", None)
         model_capabilities = dict(current.get("model_capabilities") or {})
-        if (
+        if request.selected_model and (
             request.audio_input
             or request.audio_output
             or request.image_input
@@ -461,6 +492,12 @@ class ProviderPoolService:
         self._ensure_writable("change companion worker assignments")
         config = _raw_config()
         providers = _provider_map(config)
+        runtime = config.get("runtime")
+        active_provider = (
+            str(runtime.get("active_provider") or "").strip().lower()
+            if isinstance(runtime, Mapping)
+            else ""
+        )
         _, existing_roles = _configured_worker_entries(config)
         known_toolsets = {item["name"] for item in _toolset_catalog(config)}
 
@@ -489,6 +526,25 @@ class ProviderPoolService:
                     "concurrency_limit": assignment.concurrency_limit,
                 }
             )
+            capability_provider = provider or active_provider
+            capability_model = assignment.model
+            if capability_provider and not capability_model:
+                capability_model = str(
+                    providers.get(capability_provider, {}).get("selected_model") or ""
+                ).strip()
+            if (
+                capability_provider in providers
+                and capability_model
+                and (provider or assignment.model)
+            ):
+                provider_entry = providers[capability_provider]
+                model_capabilities = dict(provider_entry.get("model_capabilities") or {})
+                model_capabilities[capability_model] = {
+                    "audio_input": bool(assignment.audio_input),
+                    "image_input": bool(assignment.image_input),
+                    "video_input": bool(assignment.video_input),
+                }
+                provider_entry["model_capabilities"] = model_capabilities
             normalized_roles[role] = values
 
         enabled_roles = {
@@ -504,6 +560,7 @@ class ProviderPoolService:
             "max_concurrent": request.max_concurrent,
             "roles": normalized_roles,
         }
+        config["providers"] = providers
         save_config(config, preserve_structure=True)
         return {**self.snapshot(), "status": "saved"}
 

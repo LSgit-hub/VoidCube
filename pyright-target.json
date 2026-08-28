@@ -1,0 +1,1710 @@
+{
+    "version": "1.1.413",
+    "time": "1787917085522",
+    "generalDiagnostics": [
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\infrastructure\\config\\provider_config.py",
+            "severity": "warning",
+            "message": "不支持对“__all__”执行操作，因此导出的符号列表可能不正确",
+            "range": {
+                "start": {
+                    "line": 516,
+                    "character": 0
+                },
+                "end": {
+                    "line": 516,
+                    "character": 66
+                }
+            },
+            "rule": "reportUnsupportedDunderAll"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\configuration.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"list[Unknown]\"类型的参数\n  “None”不可分配给“list[Unknown]”",
+            "range": {
+                "start": {
+                    "line": 734,
+                    "character": 48
+                },
+                "end": {
+                    "line": 734,
+                    "character": 52
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\configuration.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"list[Unknown]\"类型的参数\n  “None”不可分配给“list[Unknown]”",
+            "range": {
+                "start": {
+                    "line": 736,
+                    "character": 32
+                },
+                "end": {
+                    "line": 736,
+                    "character": 36
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\configuration.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 1140,
+                    "character": 40
+                },
+                "end": {
+                    "line": 1140,
+                    "character": 44
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\configuration.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 1156,
+                    "character": 36
+                },
+                "end": {
+                    "line": 1156,
+                    "character": 40
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“CLI_CONFIG”不是模块“..application”的已知属性",
+            "range": {
+                "start": {
+                    "line": 138,
+                    "character": 9
+                },
+                "end": {
+                    "line": 138,
+                    "character": 19
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "无法访问类“None”的属性“get”\n  属性“get”未知",
+            "range": {
+                "start": {
+                    "line": 150,
+                    "character": 51
+                },
+                "end": {
+                    "line": 150,
+                    "character": 54
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "无法将“None”类型的参数分配给函数“get_platform_tools”中类型为“dict[str, Any]”的参数“config”\n  “None”不可分配给“dict[str, Any]”",
+            "range": {
+                "start": {
+                    "line": 219,
+                    "character": 50
+                },
+                "end": {
+                    "line": 219,
+                    "character": 60
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "无法将“Unbound | str | Unknown”类型的参数分配给函数“render_tools_for_host”中类型为“(...) -> str”的参数“translate”\n  类型“Unbound | str | Unknown”不可分配给类型“(...) -> str”\n    类型“str”不可分配给类型“(...) -> str”",
+            "range": {
+                "start": {
+                    "line": 273,
+                    "character": 57
+                },
+                "end": {
+                    "line": 273,
+                    "character": 58
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“t”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 273,
+                    "character": 57
+                },
+                "end": {
+                    "line": 273,
+                    "character": 58
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "无法将“Unbound | str | Unknown”类型的参数分配给函数“render_toolsets_for_host”中类型为“(...) -> str”的参数“translate”\n  类型“Unbound | str | Unknown”不可分配给类型“(...) -> str”\n    类型“str”不可分配给类型“(...) -> str”",
+            "range": {
+                "start": {
+                    "line": 278,
+                    "character": 60
+                },
+                "end": {
+                    "line": 278,
+                    "character": 61
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“t”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 278,
+                    "character": 60
+                },
+                "end": {
+                    "line": 278,
+                    "character": 61
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "没有名为“announce”的参数",
+            "range": {
+                "start": {
+                    "line": 350,
+                    "character": 24
+                },
+                "end": {
+                    "line": 350,
+                    "character": 32
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“quiet_mode”不是 \"None\" 的已知属性",
+            "range": {
+                "start": {
+                    "line": 360,
+                    "character": 30
+                },
+                "end": {
+                    "line": 360,
+                    "character": 40
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“suppress_status_output”不是 \"None\" 的已知属性",
+            "range": {
+                "start": {
+                    "line": 361,
+                    "character": 30
+                },
+                "end": {
+                    "line": 361,
+                    "character": 52
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "“run_conversation”不是 \"None\" 的已知属性",
+            "range": {
+                "start": {
+                    "line": 362,
+                    "character": 39
+                },
+                "end": {
+                    "line": 362,
+                    "character": 55
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\interfaces\\cli\\launcher.py",
+            "severity": "error",
+            "message": "无法将“list[Path] | None”类型的参数分配给函数“chat”中类型为“list[Unknown]”的参数“images”\n  类型“list[Path] | None”不可分配给类型“list[Unknown]”\n    “None”不可分配给“list[Unknown]”",
+            "range": {
+                "start": {
+                    "line": 382,
+                    "character": 35
+                },
+                "end": {
+                    "line": 382,
+                    "character": 62
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 257,
+                    "character": 24
+                },
+                "end": {
+                    "line": 257,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 258,
+                    "character": 23
+                },
+                "end": {
+                    "line": 258,
+                    "character": 27
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 259,
+                    "character": 24
+                },
+                "end": {
+                    "line": 259,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 260,
+                    "character": 27
+                },
+                "end": {
+                    "line": 260,
+                    "character": 31
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 262,
+                    "character": 23
+                },
+                "end": {
+                    "line": 262,
+                    "character": 27
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[str]\"类型的参数\n  “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 267,
+                    "character": 38
+                },
+                "end": {
+                    "line": 267,
+                    "character": 42
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[str]\"类型的参数\n  “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 268,
+                    "character": 39
+                },
+                "end": {
+                    "line": 268,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 271,
+                    "character": 39
+                },
+                "end": {
+                    "line": 271,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[str]\"类型的参数\n  “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 274,
+                    "character": 39
+                },
+                "end": {
+                    "line": 274,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[str]\"类型的参数\n  “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 275,
+                    "character": 39
+                },
+                "end": {
+                    "line": 275,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[str]\"类型的参数\n  “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 276,
+                    "character": 37
+                },
+                "end": {
+                    "line": 276,
+                    "character": 41
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 277,
+                    "character": 29
+                },
+                "end": {
+                    "line": 277,
+                    "character": 33
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 279,
+                    "character": 40
+                },
+                "end": {
+                    "line": 279,
+                    "character": 44
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 280,
+                    "character": 26
+                },
+                "end": {
+                    "line": 280,
+                    "character": 30
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 282,
+                    "character": 27
+                },
+                "end": {
+                    "line": 282,
+                    "character": 35
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 283,
+                    "character": 28
+                },
+                "end": {
+                    "line": 283,
+                    "character": 36
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 285,
+                    "character": 23
+                },
+                "end": {
+                    "line": 285,
+                    "character": 31
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 286,
+                    "character": 31
+                },
+                "end": {
+                    "line": 286,
+                    "character": 39
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 287,
+                    "character": 36
+                },
+                "end": {
+                    "line": 287,
+                    "character": 44
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 288,
+                    "character": 27
+                },
+                "end": {
+                    "line": 288,
+                    "character": 35
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 289,
+                    "character": 25
+                },
+                "end": {
+                    "line": 289,
+                    "character": 33
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"int\"类型的参数\n  “None”不可分配给“int”",
+            "range": {
+                "start": {
+                    "line": 290,
+                    "character": 26
+                },
+                "end": {
+                    "line": 290,
+                    "character": 30
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"Dict[str, Any]\"类型的参数\n  “None”不可分配给“Dict[str, Any]”",
+            "range": {
+                "start": {
+                    "line": 291,
+                    "character": 43
+                },
+                "end": {
+                    "line": 291,
+                    "character": 47
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 292,
+                    "character": 28
+                },
+                "end": {
+                    "line": 292,
+                    "character": 32
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"Dict[str, Any]\"类型的参数\n  “None”不可分配给“Dict[str, Any]”",
+            "range": {
+                "start": {
+                    "line": 293,
+                    "character": 44
+                },
+                "end": {
+                    "line": 293,
+                    "character": 48
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[Dict[str, Any]]\"类型的参数\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 294,
+                    "character": 49
+                },
+                "end": {
+                    "line": 294,
+                    "character": 53
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 295,
+                    "character": 24
+                },
+                "end": {
+                    "line": 295,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 296,
+                    "character": 23
+                },
+                "end": {
+                    "line": 296,
+                    "character": 27
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 300,
+                    "character": 33
+                },
+                "end": {
+                    "line": 300,
+                    "character": 37
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"IterationBudget\"类型的参数\n  “None”不可分配给“IterationBudget”",
+            "range": {
+                "start": {
+                    "line": 301,
+                    "character": 46
+                },
+                "end": {
+                    "line": 301,
+                    "character": 50
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[Dict[str, Any]]\"类型的参数\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 302,
+                    "character": 51
+                },
+                "end": {
+                    "line": 302,
+                    "character": 55
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "未定义“RateLimitState”",
+            "range": {
+                "start": {
+                    "line": 462,
+                    "character": 42
+                },
+                "end": {
+                    "line": 462,
+                    "character": 56
+                }
+            },
+            "rule": "reportUndefinedVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“(messages: list[Message], conversation_history: Sequence[Message] | None = None) -> EffectOutcome”类型的参数分配给函数“__init__”中类型为“(list[Message], Sequence[Mapping[str, Any]] | None) -> EffectOutcome”的参数“persist_session”\n  类型“(messages: list[Message], conversation_history: Sequence[Message] | None = None) -> EffectOutcome”不可分配给类型“(list[Message], Sequence[Mapping[str, Any]] | None) -> EffectOutcome”\n    参数 2: 类型“Sequence[Mapping[str, Any]] | None”与类型“Sequence[Message] | None”不兼容\n      类型“Sequence[Mapping[str, Any]] | None”不可分配给类型“Sequence[Message] | None”\n        类型“Sequence[Mapping[str, Any]]”不可分配给类型“Sequence[Message] | None”\n          “Sequence[Mapping[str, Any]]”不可分配给“Sequence[Message]”\n          “Sequence[Mapping[str, Any]]”不可分配给“None”",
+            "range": {
+                "start": {
+                    "line": 635,
+                    "character": 32
+                },
+                "end": {
+                    "line": 635,
+                    "character": 65
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“str | None”类型的参数分配给函数“__setitem__”中类型为“str”的参数“value”\n  类型“str | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 682,
+                    "character": 20
+                },
+                "end": {
+                    "line": 682,
+                    "character": 50
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法解析导入“plugins.context_engine”",
+            "range": {
+                "start": {
+                    "line": 778,
+                    "character": 21
+                },
+                "end": {
+                    "line": 778,
+                    "character": 43
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法访问类“AIAgent*”的属性“config”\n  属性“config”未知",
+            "range": {
+                "start": {
+                    "line": 1277,
+                    "character": 29
+                },
+                "end": {
+                    "line": 1277,
+                    "character": 35
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 1798,
+                    "character": 39
+                },
+                "end": {
+                    "line": 1798,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"list[Unknown]\"类型的参数\n  “None”不可分配给“list[Unknown]”",
+            "range": {
+                "start": {
+                    "line": 1914,
+                    "character": 56
+                },
+                "end": {
+                    "line": 1914,
+                    "character": 60
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 2042,
+                    "character": 57
+                },
+                "end": {
+                    "line": 2042,
+                    "character": 61
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2080,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2080,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2104,
+                    "character": 16
+                },
+                "end": {
+                    "line": 2104,
+                    "character": 28
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2109,
+                    "character": 20
+                },
+                "end": {
+                    "line": 2109,
+                    "character": 32
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2113,
+                    "character": 20
+                },
+                "end": {
+                    "line": 2113,
+                    "character": 32
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2120,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2120,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2127,
+                    "character": 20
+                },
+                "end": {
+                    "line": 2127,
+                    "character": 32
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2147,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2147,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2158,
+                    "character": 16
+                },
+                "end": {
+                    "line": 2158,
+                    "character": 28
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2169,
+                    "character": 8
+                },
+                "end": {
+                    "line": 2169,
+                    "character": 20
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2176,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2176,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2187,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2187,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2191,
+                    "character": 12
+                },
+                "end": {
+                    "line": 2191,
+                    "character": 24
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“prompt_parts”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 2193,
+                    "character": 46
+                },
+                "end": {
+                    "line": 2193,
+                    "character": 58
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "没有名为“min_key_ttl_seconds”的参数",
+            "range": {
+                "start": {
+                    "line": 2292,
+                    "character": 16
+                },
+                "end": {
+                    "line": 2292,
+                    "character": 35
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "没有名为“timeout_seconds”的参数",
+            "range": {
+                "start": {
+                    "line": 2293,
+                    "character": 16
+                },
+                "end": {
+                    "line": 2293,
+                    "character": 31
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "没有名为“force_mint”的参数",
+            "range": {
+                "start": {
+                    "line": 2294,
+                    "character": 16
+                },
+                "end": {
+                    "line": 2294,
+                    "character": 26
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“LiteralString | Any | None”类型的参数分配给函数“resolve_provider_client”中类型为“str”的参数“explicit_base_url”\n  类型“LiteralString | Any | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 2562,
+                    "character": 34
+                },
+                "end": {
+                    "line": 2562,
+                    "character": 50
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“str | LiteralString | Any | None”类型的参数分配给函数“resolve_provider_client”中类型为“str”的参数“explicit_api_key”\n  类型“str | LiteralString | Any | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 2563,
+                    "character": 33
+                },
+                "end": {
+                    "line": 2563,
+                    "character": 48
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"int\"类型的参数\n  “None”不可分配给“int”",
+            "range": {
+                "start": {
+                    "line": 2831,
+                    "character": 93
+                },
+                "end": {
+                    "line": 2831,
+                    "character": 97
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 2831,
+                    "character": 144
+                },
+                "end": {
+                    "line": 2831,
+                    "character": 148
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“Any | None”类型的参数分配给函数“enforce_turn_budget”中类型为“str”的参数“env”\n  类型“Any | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3031,
+                    "character": 16
+                },
+                "end": {
+                    "line": 3031,
+                    "character": 49
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“str | None”类型的参数分配给函数“started”中类型为“str”的参数“preview”\n  类型“str | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3072,
+                    "character": 24
+                },
+                "end": {
+                    "line": 3072,
+                    "character": 70
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "类型“ToolExecutionResult”不可分配给返回类型“str”\n  “ToolExecutionResult”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3136,
+                    "character": 19
+                },
+                "end": {
+                    "line": 3136,
+                    "character": 51
+                }
+            },
+            "rule": "reportReturnType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“Any | None”类型的参数分配给函数“maybe_persist_tool_result”中类型为“str”的参数“env”\n  类型“Any | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3441,
+                    "character": 16
+                },
+                "end": {
+                    "line": 3441,
+                    "character": 49
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“frozenset[str]”类型的参数分配给函数“prepare_chat_messages”中类型为“Sequence[str]”的参数“native_input_modalities”\n  “frozenset[str]”不可分配给“Sequence[str]”",
+            "range": {
+                "start": {
+                    "line": 3578,
+                    "character": 40
+                },
+                "end": {
+                    "line": 3578,
+                    "character": 71
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3630,
+                    "character": 30
+                },
+                "end": {
+                    "line": 3630,
+                    "character": 34
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"List[Dict[str, Any]]\"类型的参数\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 3631,
+                    "character": 53
+                },
+                "end": {
+                    "line": 3631,
+                    "character": 57
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3632,
+                    "character": 23
+                },
+                "end": {
+                    "line": 3632,
+                    "character": 27
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 3633,
+                    "character": 34
+                },
+                "end": {
+                    "line": 3633,
+                    "character": 42
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3635,
+                    "character": 24
+                },
+                "end": {
+                    "line": 3635,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“list[dict[str, Any]]”类型的参数分配给函数“__setitem__”中类型为“str”的参数“value”\n  “list[dict[str, Any]]”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 3753,
+                    "character": 12
+                },
+                "end": {
+                    "line": 3753,
+                    "character": 35
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "类型“None”不可分配给声明的类型“List[Dict[str, Any]]”\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 3864,
+                    "character": 43
+                },
+                "end": {
+                    "line": 3864,
+                    "character": 47
+                }
+            },
+            "rule": "reportAssignmentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“None”不可迭代\n  未定义“__iter__”方法",
+            "range": {
+                "start": {
+                    "line": 3900,
+                    "character": 21
+                },
+                "end": {
+                    "line": 3900,
+                    "character": 33
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“frozenset[str]”类型的参数分配给函数“prepare_chat_messages”中类型为“Sequence[str]”的参数“native_input_modalities”\n  “frozenset[str]”不可分配给“Sequence[str]”",
+            "range": {
+                "start": {
+                    "line": 4014,
+                    "character": 40
+                },
+                "end": {
+                    "line": 4014,
+                    "character": 71
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "类型“None”不可分配给声明的类型“List[Dict[str, Any]]”\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 4737,
+                    "character": 51
+                },
+                "end": {
+                    "line": 4737,
+                    "character": 55
+                }
+            },
+            "rule": "reportAssignmentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“str | None”类型的参数分配给函数“partial_failure”中类型为“str”的参数“error”\n  类型“str | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 4770,
+                    "character": 38
+                },
+                "end": {
+                    "line": 4770,
+                    "character": 52
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "“api_duration”可能未绑定",
+            "range": {
+                "start": {
+                    "line": 5017,
+                    "character": 37
+                },
+                "end": {
+                    "line": 5017,
+                    "character": 49
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“Self@AIAgent”类型的参数分配给函数“apply_tool_call_inspection”中类型为“ResponseDispositionPort”的参数“owner”\n  “AIAgent*”与协议“ResponseDispositionPort”不兼容\n    “valid_tool_names”是固定的，因为它是可变的\n    \"valid_tool_names\"是不兼容的类型\n      类型“set[Unknown] | set[Any]”不可分配给类型“Iterable[str]”\n        “set[Any]”不可分配给“Iterable[str]”\n    “_last_content_with_tools”是固定的，因为它是可变的\n    \"_last_content_with_tools\"是不兼容的类型\n      类型“None”不可分配给类型“str | None”\n  ...",
+            "range": {
+                "start": {
+                    "line": 5070,
+                    "character": 24
+                },
+                "end": {
+                    "line": 5070,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "类型“dict[str, Any] | None”不可分配给返回类型“Dict[str, Any]”\n  类型“dict[str, Any] | None”不可分配给类型“Dict[str, Any]”\n    “None”不可分配给“Dict[str, Any]”",
+            "range": {
+                "start": {
+                    "line": 5080,
+                    "character": 31
+                },
+                "end": {
+                    "line": 5080,
+                    "character": 58
+                }
+            },
+            "rule": "reportReturnType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“Unknown | str | None”类型的参数分配给函数“execute_successful_tool_turn”中类型为“str”的参数“active_system_prompt”\n  类型“Unknown | str | None”不可分配给类型“str”\n    “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 5091,
+                    "character": 45
+                },
+                "end": {
+                    "line": 5091,
+                    "character": 65
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "类型“None”不可分配给声明的类型“List[Dict[str, Any]]”\n  “None”不可分配给“List[Dict[str, Any]]”",
+            "range": {
+                "start": {
+                    "line": 5097,
+                    "character": 47
+                },
+                "end": {
+                    "line": 5097,
+                    "character": 51
+                }
+            },
+            "rule": "reportAssignmentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“Self@AIAgent”类型的参数分配给函数“apply_text_response_disposition”中类型为“ResponseDispositionPort”的参数“owner”\n  “AIAgent*”与协议“ResponseDispositionPort”不兼容\n    “valid_tool_names”是固定的，因为它是可变的\n    \"valid_tool_names\"是不兼容的类型\n      类型“set[Unknown] | set[Any]”不可分配给类型“Iterable[str]”\n        “set[Any]”不可分配给“Iterable[str]”\n    “_last_content_with_tools”是固定的，因为它是可变的\n    \"_last_content_with_tools\"是不兼容的类型\n      类型“None”不可分配给类型“str | None”\n  ...",
+            "range": {
+                "start": {
+                    "line": 5123,
+                    "character": 24
+                },
+                "end": {
+                    "line": 5123,
+                    "character": 28
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“(user_message: Any, response: str, session_id: str) -> (EffectOutcome | Unknown | None)”类型的参数分配给函数“__init__”中类型为“((Any, str, str) -> EffectOutcome) | None”的参数“sync_memory”\n  类型“(user_message: Any, response: str, session_id: str) -> (EffectOutcome | Unknown | None)”不可分配给类型“((Any, str, str) -> EffectOutcome) | None”\n    类型“(user_message: Any, response: str, session_id: str) -> (EffectOutcome | Unknown | None)”不可分配给类型“(Any, str, str) -> EffectOutcome”\n      函数返回类型\"EffectOutcome | Unknown | None\"与类型\"EffectOutcome\"不兼容\n        类型“EffectOutcome | Unknown | None”不可分配给类型“EffectOutcome”\n          “None”不可分配给“EffectOutcome”\n    “FunctionType”不可分配给“None”",
+            "range": {
+                "start": {
+                    "line": 5303,
+                    "character": 28
+                },
+                "end": {
+                    "line": 5311,
+                    "character": 17
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "应为类，但收到“(obj: object, /) -> TypeIs[(...) -> object]”",
+            "range": {
+                "start": {
+                    "line": 5321,
+                    "character": 59
+                },
+                "end": {
+                    "line": 5321,
+                    "character": 67
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 5337,
+                    "character": 17
+                },
+                "end": {
+                    "line": 5337,
+                    "character": 21
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 5339,
+                    "character": 19
+                },
+                "end": {
+                    "line": 5339,
+                    "character": 23
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 5342,
+                    "character": 28
+                },
+                "end": {
+                    "line": 5342,
+                    "character": 32
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将\"None\"类型的表达式分配给\"str\"类型的参数\n  “None”不可分配给“str”",
+            "range": {
+                "start": {
+                    "line": 5343,
+                    "character": 29
+                },
+                "end": {
+                    "line": 5343,
+                    "character": 33
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“list[str] | None”类型的参数分配给函数“__init__”中类型为“List[str]”的参数“enabled_toolsets”\n  类型“list[str] | None”不可分配给类型“List[str]”\n    “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 5417,
+                    "character": 29
+                },
+                "end": {
+                    "line": 5417,
+                    "character": 50
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "f:\\My_code\\VScode_py\\VoidCube\\src\\voidcube\\runtime\\agent\\runner.py",
+            "severity": "error",
+            "message": "无法将“list[str] | None”类型的参数分配给函数“__init__”中类型为“List[str]”的参数“disabled_toolsets”\n  类型“list[str] | None”不可分配给类型“List[str]”\n    “None”不可分配给“List[str]”",
+            "range": {
+                "start": {
+                    "line": 5418,
+                    "character": 30
+                },
+                "end": {
+                    "line": 5418,
+                    "character": 52
+                }
+            },
+            "rule": "reportArgumentType"
+        }
+    ],
+    "summary": {
+        "filesAnalyzed": 4,
+        "errorCount": 105,
+        "warningCount": 1,
+        "informationCount": 0,
+        "timeInSec": 25.831
+    }
+}
+

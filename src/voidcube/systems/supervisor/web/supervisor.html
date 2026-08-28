@@ -2713,6 +2713,23 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .worker-role-test-state.error { color: var(--coral); }
 .worker-role-dispatch-state { grid-column: 2; color: var(--accent-blue); font-size: 8px; font-weight: 400; }
 .worker-role-field { min-width: 0; display: grid; gap: 4px; color: var(--text-muted); font-size: 8.5px; }
+.worker-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-height: 32px;
+}
+.worker-capability-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  color: var(--text-secondary);
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+.worker-capability-option input { accent-color: var(--mint); }
 .worker-toolsets { position: relative; }
 .worker-toolsets summary {
   height: 32px;
@@ -4736,10 +4753,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
                   <input id="providerMakeActive" type="checkbox"/>
                   <span>设为 API-A 当前 Provider</span>
                 </label>
-                <label class="provider-field provider-auth-fields wide" id="providerEnvField">
-                  <span>密钥变量</span>
-                  <input id="providerApiKeyEnv" name="provider_api_key_env" maxlength="120" pattern="[A-Z_][A-Z0-9_]*" autocomplete="off"/>
-                </label>
                 <label class="provider-field provider-auth-fields wide" id="providerSecretField">
                   <span>API Key</span>
                   <input id="providerApiKey" name="provider_api_key" type="password" maxlength="8192" autocomplete="new-password"/>
@@ -5101,9 +5114,7 @@ const els = {
   providerRuntimeMetrics: $('#providerRuntimeMetrics'),
   providerCooldownReset: $('#providerCooldownReset'),
   providerMakeActive: $('#providerMakeActive'),
-  providerEnvField: $('#providerEnvField'),
   providerSecretField: $('#providerSecretField'),
-  providerApiKeyEnv: $('#providerApiKeyEnv'),
   providerApiKey: $('#providerApiKey'),
   providerDelete: $('#providerDelete'),
   providerTest: $('#providerTest'),
@@ -8557,6 +8568,45 @@ function syncWorkerModelOptions(row, preferredModel) {
   select.value = values.includes(current) ? current : '';
 }
 
+function workerModelCapabilities(providerKey, model) {
+  const providers = Array.isArray((providerPoolSnapshot || {}).providers)
+    ? providerPoolSnapshot.providers : [];
+  const effectiveProviderKey = providerKey || String(
+    (providerPoolSnapshot || {}).active_provider || ''
+  );
+  const provider = providers.find(item => item.key === effectiveProviderKey) || null;
+  const capabilities = provider && provider.model_capabilities &&
+    typeof provider.model_capabilities === 'object'
+    ? provider.model_capabilities : {};
+  const effectiveModel = String(model || '').trim() || String(
+    (provider || {}).selected_model || ''
+  ).trim();
+  const selected = capabilities[effectiveModel];
+  return selected && typeof selected === 'object' ? selected : {};
+}
+
+function workerCapabilityOptions(providerKey, model) {
+  const capabilities = workerModelCapabilities(providerKey, model);
+  return [
+    ['image', '图像'],
+    ['audio', '音频'],
+    ['video', '视频'],
+  ].map(([modality, label]) =>
+    '<label class="worker-capability-option"><input type="checkbox" data-worker-' +
+    modality + '-input' + (capabilities[modality + '_input'] ? ' checked' : '') +
+    '/><span>原生' + label + '</span></label>'
+  ).join('');
+}
+
+function syncWorkerCapabilityOptions(row) {
+  if (!row) return;
+  const provider = $('[data-worker-provider]', row);
+  const model = $('[data-worker-model]', row);
+  const container = $('[data-worker-capabilities]', row);
+  if (!provider || !model || !container) return;
+  container.innerHTML = workerCapabilityOptions(provider.value, model.value);
+}
+
 function autoRefreshProviderModelCatalog(providerKey) {
   const providers = Array.isArray((providerPoolSnapshot || {}).providers)
     ? providerPoolSnapshot.providers : [];
@@ -8646,15 +8696,12 @@ function applyProviderPreset() {
   if (!preset) return;
   if (els.providerBaseUrl) els.providerBaseUrl.value = preset.base_url || '';
   if (els.providerAuthMode) els.providerAuthMode.value = preset.auth_mode || 'env';
-  if (els.providerApiKeyEnv) els.providerApiKeyEnv.value = preset.api_key_env || '';
   syncProviderAuthFields();
 }
 
 function syncProviderAuthFields() {
-  const usesEnv = !els.providerAuthMode || els.providerAuthMode.value === 'env';
-  if (els.providerEnvField) els.providerEnvField.hidden = !usesEnv;
-  if (els.providerSecretField) els.providerSecretField.hidden = !usesEnv;
-  if (els.providerApiKeyEnv) els.providerApiKeyEnv.required = usesEnv;
+  const needsKey = !els.providerAuthMode || els.providerAuthMode.value === 'env';
+  if (els.providerSecretField) els.providerSecretField.hidden = !needsKey;
 }
 
 function editProvider(providerKey) {
@@ -8674,7 +8721,6 @@ function editProvider(providerKey) {
   els.providerAudioOutput.checked = Boolean(provider && provider.audio_output);
   els.providerImageInput.checked = Boolean(provider && provider.image_input);
   els.providerVideoInput.checked = Boolean(provider && provider.video_input);
-  els.providerApiKeyEnv.value = provider ? provider.api_key_env : '';
   els.providerApiKey.value = '';
   renderProviderModelOptions(workerModelCandidates[selectedProviderKey] || []);
   renderProviderModelCatalogMeta(provider);
@@ -8719,6 +8765,8 @@ function renderWorkerAssignments() {
       providerOptions(role.provider) + '</select></label>' +
       '<label class="worker-role-field"><span>指定模型（可选）</span><select data-worker-model>' +
       workerModelOptionMarkup(role.provider, role.model) + '</select></label>' +
+      '<div class="worker-role-field worker-capabilities-field"><span>原生附件输入</span><div data-worker-capabilities class="worker-capabilities">' +
+      workerCapabilityOptions(role.provider, role.model) + '</div></div>' +
       '<label class="worker-role-field"><span>并发</span><input data-worker-concurrency type="number" min="1" max="8" step="1" value="' +
       Number(role.concurrency_limit || 1) + '" required/></label>' +
       '<label class="worker-role-field"><span>工具集</span><details class="worker-toolsets"><summary></summary><div class="worker-toolset-menu">' +
@@ -9007,8 +9055,8 @@ async function saveProviderPoolEntry() {
         type: els.providerType.value,
         base_url: els.providerBaseUrl.value.trim(),
         selected_model: els.providerModel.value.trim(),
+        model_override: Boolean(els.providerModel.value.trim()),
         auth_mode: els.providerAuthMode.value,
-        api_key_env: els.providerApiKeyEnv.value.trim(),
         api_key: els.providerApiKey.value,
         concurrency_limit: Number(els.providerConcurrency.value || 2),
         audio_input: Boolean(els.providerAudioInput.checked),
@@ -9137,6 +9185,9 @@ async function saveWorkerAssignments() {
       enabled: Boolean($('[data-worker-enabled]', row).checked),
       provider: $('[data-worker-provider]', row).value,
       model: $('[data-worker-model]', row).value.trim(),
+      image_input: Boolean($('[data-worker-image-input]', row)?.checked),
+      audio_input: Boolean($('[data-worker-audio-input]', row)?.checked),
+      video_input: Boolean($('[data-worker-video-input]', row)?.checked),
       toolsets: $$('[data-worker-toolset]:checked', row).map(input => input.value),
       concurrency_limit: Number($('[data-worker-concurrency]', row).value || 1),
     };
@@ -10014,7 +10065,12 @@ if (els.workerAssignmentForm) {
       setWorkerTestBusy(false);
     }
     if (event.target.matches('[data-worker-provider]')) {
-      syncWorkerModelOptions(event.target.closest('[data-worker-role]'), '');
+      const row = event.target.closest('[data-worker-role]');
+      syncWorkerModelOptions(row, '');
+      syncWorkerCapabilityOptions(row);
+    }
+    if (event.target.matches('[data-worker-model]')) {
+      syncWorkerCapabilityOptions(event.target.closest('[data-worker-role]'));
     }
     if (event.target.matches('[data-worker-concurrency]') || event.target === els.workerMaxConcurrent) {
       renderWorkerSchedulerState();

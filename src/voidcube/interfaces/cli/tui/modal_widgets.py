@@ -348,21 +348,31 @@ def _limit_panel_lines(
     content_style: str,
     box_width: int,
 ) -> list[tuple[str, str]]:
-    """Keep the closing border and indicate truncated content beyond the modal height."""
+    """Keep panel actions visible while indicating truncated middle content."""
     visual_lines = _split_visual_lines(lines)
     if len(visual_lines) <= max_lines:
         return lines
     closing = visual_lines[-1]
-    visible = visual_lines[: max(1, max_lines - 2)]
-    remaining = len(visual_lines) - len(visible) - 1
+    usable = max(1, max_lines - 2)
+    head_count = (
+        1
+        if usable == 1
+        else min(2, max(0, usable - 1), usable // 2)
+    )
+    tail_count = usable - head_count
+    head = visual_lines[:head_count]
+    tail = visual_lines[-1 - tail_count : -1] if tail_count else []
+    remaining = len(visual_lines) - len(head) - len(tail) - 1
     indicator = f"  … {remaining} more line{'s' if remaining != 1 else ''}"
+    visible = head
     visible.append(
         [
             (border_style, "│"),
             (content_style, pad_to_width(indicator, max(0, box_width))),
-            (border_style, "│\n"),
+            (border_style, "│"),
         ]
     )
+    visible.extend(tail)
     visible.append(closing)
     return _flatten_visual_lines(visible)
 

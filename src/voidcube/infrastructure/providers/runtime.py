@@ -250,7 +250,10 @@ def _resolve_named_custom_runtime(
         return None
 
     # Check if a credential pool exists for this custom endpoint
-    pool_result = _try_resolve_from_custom_pool(base_url, "custom")
+    pool_result = _try_resolve_from_custom_pool(
+        base_url,
+        _normalize_custom_provider_name(requested_provider),
+    )
     if pool_result:
         # Propagate the model name even when using pooled credentials.
         model_name = custom_provider.get("model")
@@ -287,7 +290,10 @@ def _resolve_named_custom_runtime(
         )
 
     result = {
-        "provider": "custom",
+        # Keep the configured Provider identity in the runtime.  The endpoint
+        # is custom, but capability declarations and route diagnostics are
+        # keyed by the user's named Provider (for example, ``deepseek-v``).
+        "provider": _normalize_custom_provider_name(requested_provider),
         "base_url": base_url,
         "api_key": api_key or "no-key-required",
         "source": f"custom_provider:{custom_provider.get('name', requested_provider)}",

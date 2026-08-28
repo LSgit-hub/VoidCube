@@ -149,6 +149,29 @@ def test_approval_display_reads_structured_request() -> None:
     assert "Deny" in rendered
 
 
+def test_approval_display_keeps_choices_visible_on_short_terminal(monkeypatch) -> None:
+    from collections import namedtuple
+
+    size = namedtuple("Size", "columns lines")
+    monkeypatch.setattr(
+        "shutil.get_terminal_size",
+        lambda _fallback: size(100, 10),
+    )
+    host, _ = _host(
+        _approval_state={
+            "request": ApprovalRequest("rm -rf " + "target " * 30, "destructive " * 40),
+            "choices": ["approved", "denied"],
+            "selected": 0,
+        }
+    )
+
+    rendered = "".join(text for _style, text in adapter.approval_display_fragments(host))
+
+    assert "Approve" in rendered
+    assert "Deny" in rendered
+    assert "╯" in rendered
+
+
 def test_approval_display_aligns_borders_with_wide_characters(monkeypatch) -> None:
     from collections import namedtuple
 
@@ -272,4 +295,3 @@ def test_approval_sink_releases_lock_while_waiting_for_decision() -> None:
     assert not errors
     assert decisions and decisions[0].status is ApprovalStatus.APPROVED
     assert invalidations  # sink invalidated on completion
-

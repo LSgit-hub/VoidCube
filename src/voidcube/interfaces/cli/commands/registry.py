@@ -1664,6 +1664,7 @@ def _model_command_ports(
         open_picker=host._open_model_picker,
         apply_result=host._apply_model_switch_result,
         emit=emit,
+        confirm_capabilities=host._confirm_model_capabilities,
     )
 
 

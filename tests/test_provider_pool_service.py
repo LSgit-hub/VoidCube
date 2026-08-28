@@ -148,6 +148,40 @@ def test_provider_pool_persists_selected_model_image_input_capability(tmp_path, 
     assert snapshot["providers"][0]["image_input"] is True
 
 
+def test_provider_pool_allows_empty_model_and_direct_model_override(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    service = ProviderPoolService()
+
+    empty = service.upsert_provider(
+        "catalog-later",
+        _provider_request(selected_model="", api_key=""),
+    )
+    assert empty["providers"][0]["selected_model"] == ""
+    saved_empty = yaml.safe_load(
+        (tmp_path / "home" / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert "model_override" not in saved_empty["providers"]["catalog-later"]
+
+    manual = service.upsert_provider(
+        "catalog-later",
+        _provider_request(
+            selected_model="deepseek-v4-flash-vision-exp",
+            api_key="",
+            model_override=True,
+        ),
+    )
+    assert manual["providers"][0]["selected_model"] == "deepseek-v4-flash-vision-exp"
+    saved_manual = yaml.safe_load(
+        (tmp_path / "home" / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert saved_manual["providers"]["catalog-later"]["model_override"] == (
+        "deepseek-v4-flash-vision-exp"
+    )
+
+
 def test_provider_pool_assigns_roles_and_protects_referenced_provider(
     tmp_path,
     monkeypatch,
@@ -197,6 +231,76 @@ def test_provider_pool_protects_active_provider_and_deletes_unused_entry(
 
     assert deleted["deleted_provider"] == "spare"
     assert [provider["key"] for provider in deleted["providers"]] == ["primary"]
+
+
+def test_worker_assignment_persists_native_modalities_for_selected_model(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    service = ProviderPoolService()
+    service.upsert_provider(
+        "vision",
+        _provider_request(
+            selected_model="vision-default",
+            api_key_env="VISION_API_KEY",
+        ),
+    )
+    assignments = _all_worker_assignments("vision")
+    assignments.roles["research"].model = "deepseek-v4-flash-vision-exp"
+    assignments.roles["research"].image_input = True
+    assignments.roles["research"].audio_input = False
+    assignments.roles["research"].video_input = True
+
+    snapshot = service.save_worker_assignments(assignments)
+
+    provider = next(item for item in snapshot["providers"] if item["key"] == "vision")
+    assert provider["model_capabilities"]["deepseek-v4-flash-vision-exp"] == {
+        "audio_input": False,
+        "image_input": True,
+        "video_input": True,
+    }
+
+
+def test_inherited_worker_assignment_does_not_overwrite_api_a_capabilities(
+    tmp_path,
+    monkeypatch,
+):
+    _configure_home(tmp_path, monkeypatch)
+    service = ProviderPoolService()
+    service.upsert_provider(
+        "primary",
+        _provider_request(
+            selected_model="vision-default",
+            api_key_env="PRIMARY_API_KEY",
+        ),
+    )
+    service.upsert_provider(
+        "other",
+        _provider_request(
+            selected_model="other-model",
+            api_key_env="OTHER_API_KEY",
+        ),
+    )
+    config = yaml.safe_load(
+        (tmp_path / "home" / "config.yaml").read_text(encoding="utf-8")
+    )
+    config["runtime"] = {"active_provider": "primary"}
+    config["providers"]["primary"]["model_capabilities"] = {
+        "vision-default": {
+            "audio_input": False,
+            "image_input": True,
+            "video_input": False,
+        }
+    }
+    from voidcube.infrastructure.config.configuration import save_config
+
+    save_config(config)
+
+    snapshot = service.save_worker_assignments(_all_worker_assignments())
+
+    provider = next(item for item in snapshot["providers"] if item["key"] == "primary")
+    assert provider["model_capabilities"]["vision-default"]["image_input"] is True
 
 
 def test_worker_assignment_rejects_unknown_provider_or_toolset(

@@ -21,6 +21,7 @@ class CliModelPickerPorts:
     current_model: Callable[[], str]
     current_base_url: Callable[[], str]
     current_api_key: Callable[[], str]
+    confirm_capabilities: Callable[[str, str], Sequence[str] | None] | None = None
 
 
 class CliModelPickerRuntime:
@@ -93,6 +94,14 @@ class CliModelPickerRuntime:
                 user_providers=state.get("user_provs"),
             )
             self.ports.close_picker()
+            if result.success and self.ports.confirm_capabilities is not None:
+                native_modalities = self.ports.confirm_capabilities(
+                    result.target_provider,
+                    result.new_model,
+                )
+                if native_modalities is None:
+                    return
+                result.native_modalities = tuple(native_modalities)
             self.ports.apply_switch_result(result, persist_global)
             return
 

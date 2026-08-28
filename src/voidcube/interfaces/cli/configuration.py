@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Narrow an untyped configuration node before field access."""
+    return dict(value) if isinstance(value, dict) else {}
+
+
 @dataclass(frozen=True, slots=True)
 class ApiConfigRuntime:
     """Optional CLI runtime updates applied after a successful wizard save."""
@@ -413,33 +418,21 @@ def api_b_key_configured(
 def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     """Return a secret-free API-A/API-B/media generation summary."""
     cfg = dict(config or {})
-    runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
-    providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
+    runtime = _as_dict(cfg.get("runtime"))
+    providers = _as_dict(cfg.get("providers"))
     active_provider = str(runtime.get("active_provider") or "").strip()
-    active_cfg = providers.get(active_provider) if active_provider in providers else {}
-    if not isinstance(active_cfg, dict):
-        active_cfg = {}
+    active_cfg = _as_dict(providers.get(active_provider))
 
-    memory = cfg.get("memory") if isinstance(cfg.get("memory"), dict) else {}
-    llm = memory.get("llm") if isinstance(memory.get("llm"), dict) else {}
+    memory = _as_dict(cfg.get("memory"))
+    llm = _as_dict(memory.get("llm"))
     api_b_provider = str(llm.get("provider") or "").strip().lower()
-    api_b_provider_cfg = providers.get(api_b_provider)
-    if not isinstance(api_b_provider_cfg, dict):
-        api_b_provider_cfg = {}
+    api_b_provider_cfg = _as_dict(providers.get(api_b_provider))
     api_b_key_env = str(
         api_b_provider_cfg.get("api_key_env")
         or ""
     ).strip()
-    image_generation = (
-        cfg.get("image_generation")
-        if isinstance(cfg.get("image_generation"), dict)
-        else {}
-    )
-    video_generation = (
-        cfg.get("video_generation")
-        if isinstance(cfg.get("video_generation"), dict)
-        else {}
-    )
+    image_generation = _as_dict(cfg.get("image_generation"))
+    video_generation = _as_dict(cfg.get("video_generation"))
 
     retired_fields = [
         key
@@ -552,6 +545,8 @@ load_current_config = _provider_config.load_current_config
 save_env_value = _provider_config.save_env_value
 _provider_key_from_name = _provider_config.provider_key_from_name
 save_provider_pool_entry = _provider_config.save_provider_pool_entry
+remove_provider_pool_entry = _provider_config.remove_provider_pool_entry
+save_remove_provider_pool_entry = _provider_config.save_remove_provider_pool_entry
 save_ollama_provider = _provider_config.save_ollama_provider
 persist_provider_pool_entry = _provider_config.persist_provider_pool_entry
 persist_ollama_provider = _provider_config.persist_ollama_provider
@@ -737,9 +732,9 @@ class DisplayComponents:
         return ''.join(result)
     
     @staticmethod
-    def table(data: list[list], headers: list = None, border_style: str = 'simple', 
+    def table(data: list[list], headers: list | None = None, border_style: str = 'simple',
              cell_padding: int = 2, header_color: str = 'cyan', 
-             row_colors: list = None, align: str = 'left') -> str:
+             row_colors: list | None = None, align: str = 'left') -> str:
         """生成表格
         
         Args:
@@ -1143,7 +1138,7 @@ class Spinner:
         """开始加载动画（这里只是占位，实际使用可能需要线程）"""
         self.running = True
         
-    def stop(self, final_message: str = None):
+    def stop(self, final_message: str | None = None):
         """停止加载动画"""
         self.running = False
         if final_message:
@@ -1159,7 +1154,7 @@ class Spinner:
         self.stop()
         return False
     
-    def update(self, message: str = None):
+    def update(self, message: str | None = None):
         """更新消息并返回当前帧"""
         if message:
             self.message = message
@@ -1176,6 +1171,39 @@ def _provider_api_key_env(provider_key: str) -> str:
     """Return the internal environment variable name for one Provider."""
     normalized_key = str(provider_key or "").strip().upper().replace("-", "_")
     return f"VOIDCUBE_PROVIDER_{normalized_key}_API_KEY"
+
+
+def _prompt_native_input_modalities(
+    inp: Callable[..., str],
+    *,
+    provider: str,
+    model: str,
+    provider_cfg: dict[str, Any],
+    scope: str,
+) -> list[str]:
+    """Confirm native attachment inputs for the selected model."""
+    from ...infrastructure.llm.multimodal import (
+        suggested_native_input_modalities,
+    )
+
+    capabilities = _as_dict(provider_cfg.get("model_capabilities"))
+    existing = _as_dict(capabilities.get(model))
+    suggested = suggested_native_input_modalities(provider, model)
+    labels = {"image": "图像", "audio": "音频", "video": "视频"}
+    selected: list[str] = []
+    for modality in ("image", "audio", "video"):
+        key = f"{modality}_input"
+        if key in existing:
+            default = "y" if bool(existing[key]) else "n"
+        else:
+            default = "y" if modality in suggested else "n"
+        answer = inp(
+            f"该模型支持 {scope} 原生{labels[modality]}输入？(y/n)",
+            default,
+        ).strip().lower()
+        if answer in {"y", "yes", "1", "true"}:
+            selected.append(modality)
+    return selected
 
 
 def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
@@ -1298,6 +1326,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
         p("   [5] 图像模型配置")
         p("   [6] 视频模型配置")
         p("   [7] 查看当前配置")
+        p("   [8] 删除 Provider")
         p("   [0] 退出")
         
         choice = inp("\n请选择")
@@ -1410,6 +1439,38 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             pi("API-A、API-B 和员工代理现在都可以选择该 Provider")
             continue
 
+        elif choice == "8":
+            ph("删除 Provider")
+            entries = [
+                (key, value)
+                for key, value in providers_config.items()
+                if isinstance(value, dict)
+            ]
+            if not entries:
+                pe("当前没有可删除的 Provider")
+                continue
+            for i, (key, value) in enumerate(entries, 1):
+                p(f"   [{i}] {value.get('label', key)} ({key})")
+            p("   [0] 返回")
+            try:
+                provider_key, _provider_cfg = entries[int(inp("选择 Provider")) - 1]
+            except (ValueError, IndexError):
+                continue
+            if inp(f"确认删除 Provider {provider_key}？(y/n)", "n").strip().lower() not in {
+                "y",
+                "yes",
+                "1",
+                "true",
+            }:
+                continue
+            if save_remove_provider_pool_entry(provider_key):
+                ps(f"Provider {provider_key} 已删除；原 API Key 环境变量未删除")
+                current_config = load_current_config()
+                providers_config = current_config.get("providers", {})
+            else:
+                pe("删除失败：Provider 仍可能被 API-A、API-B、员工角色或路由引用")
+            continue
+
         elif choice == "3":
             # API-A selection
             while True:
@@ -1421,6 +1482,9 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
                 except (ValueError, IndexError): break
                 model_ids = provider_model_catalog(provider_cfg)
+                manual_model = str(provider_cfg.get("model_override") or "").strip()
+                if manual_model and manual_model not in model_ids:
+                    model_ids.append(manual_model)
                 if not model_ids:
                     pi("该 Provider 尚无模型目录，正在从 /models 获取...")
                     refreshed, model_ids = refresh_provider_pool_catalog(
@@ -1432,13 +1496,27 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                         save_config(refreshed)
                         current_config = refreshed
                         providers_config = refreshed.get("providers", {})
+                    elif manual_model:
+                        model_ids = [manual_model]
                     else:
                         pe("模型目录获取失败，请检查该 Provider 的 Base URL 和 Key")
                         break
                 for i, model_id in enumerate(model_ids, 1): p(f"   [{i}] {model_id}")
                 try: selected_model = model_ids[int(inp("选择模型", "1")) - 1]
                 except (ValueError, IndexError): selected_model = model_ids[0]
-                current_config = persist_api_a_selection(load_current_config(), provider=provider_key, model=selected_model)
+                native_modalities = _prompt_native_input_modalities(
+                    inp,
+                    provider=provider_key,
+                    model=selected_model,
+                    provider_cfg=provider_cfg,
+                    scope="API-A",
+                )
+                current_config = persist_api_a_selection(
+                    load_current_config(),
+                    provider=provider_key,
+                    model=selected_model,
+                    native_modalities=native_modalities,
+                )
                 from ...infrastructure.config.configuration import save_config
                 save_config(current_config)
                 apply_runtime_updates(selected_model, provider_key)
@@ -1456,6 +1534,9 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
                 except (ValueError, IndexError): break
                 model_ids = provider_model_catalog(provider_cfg)
+                manual_model = str(provider_cfg.get("model_override") or "").strip()
+                if manual_model and manual_model not in model_ids:
+                    model_ids.append(manual_model)
                 if not model_ids:
                     pi("该 Provider 尚无模型目录，正在从 /models 获取...")
                     refreshed, model_ids = refresh_provider_pool_catalog(
@@ -1467,39 +1548,32 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                         save_config(refreshed)
                         current_config = refreshed
                         providers_config = refreshed.get("providers", {})
+                    elif manual_model:
+                        model_ids = [manual_model]
                     else:
                         pe("模型目录获取失败，请检查该 Provider 的 Base URL 和 Key")
                         break
                 for i, model_id in enumerate(model_ids, 1): p(f"   [{i}] {model_id}")
                 try: memory_model = model_ids[int(inp("选择模型", "1")) - 1]
                 except (ValueError, IndexError): memory_model = model_ids[0]
+                native_modalities = _prompt_native_input_modalities(
+                    inp,
+                    provider=provider_key,
+                    model=memory_model,
+                    provider_cfg=provider_cfg,
+                    scope="API-B",
+                )
                 existing_capabilities = (
                     (provider_cfg.get("model_capabilities") or {}).get(memory_model, {})
                     if isinstance(provider_cfg.get("model_capabilities"), dict)
                     else {}
                 )
-                def capability_default(name: str) -> str:
-                    return "y" if (
-                        isinstance(existing_capabilities, dict)
-                        and existing_capabilities.get(name)
-                    ) else "n"
+                if not isinstance(existing_capabilities, dict):
+                    existing_capabilities = {}
 
-                native_modalities = []
-                if inp(
-                    "该模型支持 API-B 原生图像输入？(y/n)",
-                    capability_default("image_input"),
-                ).strip().lower() in {"y", "yes", "1", "true"}:
-                    native_modalities.append("image")
-                if inp(
-                    "该模型支持 API-B 原生音频输入？(y/n)",
-                    capability_default("audio_input"),
-                ).strip().lower() in {"y", "yes", "1", "true"}:
-                    native_modalities.append("audio")
-                if inp(
-                    "该模型支持 API-B 原生视频输入？(y/n)",
-                    capability_default("video_input"),
-                ).strip().lower() in {"y", "yes", "1", "true"}:
-                    native_modalities.append("video")
+                def capability_default(name: str) -> str:
+                    return "y" if existing_capabilities.get(name) else "n"
+
                 native_audio_output = inp(
                     "该模型支持 API-B 原生语音输出？(y/n)",
                     capability_default("audio_output"),

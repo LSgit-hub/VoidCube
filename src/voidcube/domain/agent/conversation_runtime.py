@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +22,7 @@ class ConversationTurnPorts:
     """External effects used while one conversation turn is running."""
 
     persist_session: Callable[
-        [list[Message], Sequence[Mapping[str, Any]] | None], EffectOutcome
+        [list[Message], Sequence[Message] | None], EffectOutcome
     ]
     save_session_log: Callable[[list[Message]], None]
     cleanup_task_resources: Callable[[str], EffectOutcome]
@@ -40,7 +40,7 @@ class ConversationTurnRuntime:
     def persist(
         self,
         messages: list[Message],
-        conversation_history: Sequence[Mapping[str, Any]] | None = None,
+        conversation_history: Sequence[Message] | None = None,
     ) -> EffectOutcome:
         return self._ports.persist_session(messages, conversation_history)
 
@@ -57,7 +57,7 @@ class ConversationTurnRuntime:
         self,
         *,
         messages: list[Message],
-        conversation_history: Sequence[Mapping[str, Any]] | None,
+        conversation_history: Sequence[Message] | None,
         api_call_count: int,
         final_response: str | None | object = _MISSING,
         error: str | None = None,
@@ -165,7 +165,7 @@ class ConversationTurnRuntime:
         self,
         *,
         messages: list[Message],
-        conversation_history: Sequence[Mapping[str, Any]] | None,
+        conversation_history: Sequence[Message] | None,
         api_call_count: int,
         error: str,
         final_response: str | None | object = _MISSING,
@@ -185,7 +185,7 @@ class ConversationTurnRuntime:
         self,
         *,
         messages: list[Message],
-        conversation_history: Sequence[Mapping[str, Any]] | None,
+        conversation_history: Sequence[Message] | None,
         api_call_count: int,
         final_response: str,
     ) -> dict[str, Any]:

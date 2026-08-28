@@ -6,6 +6,7 @@ from voidcube.infrastructure.llm.multimodal import (
     MAX_IMAGES_PER_REQUEST,
     attachments_from_paths,
     build_user_content_with_images,
+    configured_model_capabilities,
     image_attachments_from_paths,
     native_input_modalities,
     supports_native_image_input,
@@ -18,6 +19,11 @@ pytestmark = pytest.mark.unit
 def test_deepseek_vision_exposes_native_image_input_capability():
     assert supports_native_image_input(
         "deepseek",
+        "deepseek-v4-flash-vision-exp",
+        configured_capabilities={"image_input": True},
+    )
+    assert not supports_native_image_input(
+        "deepseek-v",
         "deepseek-v4-flash-vision-exp",
     )
     assert not supports_native_image_input("deepseek", "deepseek-v4-flash")
@@ -71,6 +77,36 @@ def test_model_capabilities_are_resolved_per_input_modality():
             "video_input": False,
         },
     ) == frozenset({"image", "audio"})
+
+
+def test_named_provider_capabilities_are_loaded_for_the_effective_runtime_key(
+    monkeypatch,
+):
+    config = {
+        "providers": {
+            "deepseek-v": {
+                "model_capabilities": {
+                    "deepseek-v4-flash-vision-exp": {"image_input": True}
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(
+        "voidcube.infrastructure.config.configuration.load_config",
+        lambda: config,
+    )
+
+    capabilities = configured_model_capabilities(
+        "deepseek-v",
+        "deepseek-v4-flash-vision-exp",
+    )
+
+    assert capabilities == {"image_input": True}
+    assert native_input_modalities(
+        "deepseek-v",
+        "deepseek-v4-flash-vision-exp",
+        configured_capabilities=capabilities,
+    ) == frozenset({"image"})
 
 
 def test_native_media_content_uses_one_attachment_builder(tmp_path):

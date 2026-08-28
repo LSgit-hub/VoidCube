@@ -538,6 +538,9 @@ def _get_cli_config():
 # Module __getattr__ for transparent lazy config access.
 # After first access, stashes the result as CLI_CONFIG in the module namespace
 # so subsequent lookups avoid __getattr__ overhead entirely.
+CLI_CONFIG: Dict[str, Any]
+
+
 def __getattr__(name: str):
     if name == "CLI_CONFIG":
         cfg = _get_cli_config()
@@ -1268,6 +1271,7 @@ class VoidcubeCLI:
         # shared between request-thread sinks and the UI thread.
         self._modal_lock = threading.Lock()
         self._model_picker_state = None
+        self._session_model_capabilities: dict[tuple[str, str], dict[str, bool]] = {}
         self._secret_state = None
         self._secret_deadline = 0
         self._spinner_text: str = ""  # thinking spinner text for TUI
@@ -2850,17 +2854,104 @@ class VoidcubeCLI:
                 emit=_cprint,
                 translate=t,
                 persist_global_config=self._persist_provider_selection,
+                confirm_capabilities=self._confirm_model_capabilities,
             )
             self.__dict__["_provider_runtime_instance"] = runtime
         return runtime
 
     @staticmethod
-    def _persist_provider_selection(provider: str, model: str) -> None:
+    def _persist_provider_selection(
+        provider: str,
+        model: str,
+        native_modalities: Sequence[str] | None = None,
+    ) -> None:
         from ...infrastructure.config.provider_selection import (
             persist_provider_selection,
         )
 
-        persist_provider_selection(provider, model)
+        persist_provider_selection(provider, model, native_modalities)
+
+    def _remember_session_model_capabilities(
+        self,
+        provider: str,
+        model: str,
+        native_modalities: Sequence[str],
+    ) -> None:
+        """Keep confirmed capabilities available for session-only switches."""
+        normalized_provider = str(provider or "").strip()
+        normalized_model = str(model or "").strip()
+        if not normalized_provider or not normalized_model:
+            return
+        selected = {
+            str(modality or "").strip().lower()
+            for modality in native_modalities
+        }
+        self._session_model_capabilities[(normalized_provider, normalized_model)] = {
+            "image_input": "image" in selected,
+            "audio_input": "audio" in selected,
+            "video_input": "video" in selected,
+        }
+
+    def _configured_model_capabilities(
+        self,
+        provider: str,
+        model: str,
+    ) -> Mapping[str, Any] | None:
+        """Return session overrides first, then persisted provider capabilities."""
+        key = (str(provider or "").strip(), str(model or "").strip())
+        session_capabilities = self._session_model_capabilities.get(key)
+        if session_capabilities is not None:
+            return session_capabilities
+        from ...infrastructure.llm.multimodal import configured_model_capabilities
+
+        return configured_model_capabilities(provider, model)
+
+    def _confirm_model_capabilities(
+        self,
+        provider: str,
+        model: str,
+    ) -> Sequence[str] | None:
+        """Reuse confirmed inputs, asking only for an unannotated model."""
+        from ...infrastructure.llm.multimodal import native_input_modalities
+        from .configuration import _prompt_native_input_modalities
+        from ...infrastructure.config.configuration import load_config
+
+        configured_capabilities = self._configured_model_capabilities(provider, model)
+        if isinstance(configured_capabilities, Mapping) and any(
+            f"{modality}_input" in configured_capabilities
+            for modality in ("image", "audio", "video")
+        ):
+            return tuple(
+                modality
+                for modality in ("image", "audio", "video")
+                if modality in native_input_modalities(
+                    provider,
+                    model,
+                    configured_capabilities=configured_capabilities,
+                )
+            )
+
+        config = load_config()
+        providers = config.get("providers")
+        provider_cfg = (
+            providers.get(provider, {})
+            if isinstance(providers, Mapping)
+            else {}
+        )
+        if not isinstance(provider_cfg, dict):
+            provider_cfg = {}
+
+        def ask(question: str, default: str = "n") -> str:
+            answer = self._prompt_text_input(f"{question} [{default}] ")
+            return answer if answer is not None else default
+
+        return _prompt_native_input_modalities(
+            ask,
+            provider=provider,
+            model=model,
+            provider_cfg=provider_cfg,
+            scope="当前模型",
+        )
 
     def _open_model_picker(self, providers: list, current_model: str, current_provider: str, user_provs=None) -> None:
         self._provider_runtime().open_picker(
@@ -4056,21 +4147,23 @@ class VoidcubeCLI:
 
             def native_input_modalities(model: str, _base_url: str):
                 try:
-                    from ...infrastructure.llm.multimodal import (
-                        configured_model_capabilities,
-                        native_input_modalities,
-                    )
+                    from ...infrastructure.llm.multimodal import native_input_modalities
 
                     provider = str(
                         getattr(owner.agent, "provider", "")
                         or getattr(self, "provider", "")
-                    )
+                    ).strip()
+                    effective_model = str(
+                        getattr(owner.agent, "model", "")
+                        or getattr(self, "model", "")
+                        or model
+                    ).strip()
                     return native_input_modalities(
                         provider,
-                        model,
-                        configured_capabilities=configured_model_capabilities(
+                        effective_model,
+                        configured_capabilities=self._configured_model_capabilities(
                             provider,
-                            model,
+                            effective_model,
                         ),
                     )
                 except Exception:
@@ -4082,7 +4175,11 @@ class VoidcubeCLI:
                 conversation_history=owner.conversation_history,
                 preprocess_images=self._preprocess_images_with_vision,
                 preprocess_attachments=self._preprocess_attachments_with_text,
-                model=getattr(self, "model", "") or "",
+                model=(
+                    getattr(owner.agent, "model", "")
+                    or getattr(self, "model", "")
+                    or ""
+                ),
                 base_url=getattr(self, "base_url", "") or "",
                 api_key=getattr(self, "api_key", "") or "",
                 cwd=os.getcwd,

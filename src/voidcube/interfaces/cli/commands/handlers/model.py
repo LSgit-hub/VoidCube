@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from ..router import ParsedCliCommand
 
@@ -22,6 +22,7 @@ class ModelCommandPorts:
     open_picker: Callable[[list[dict[str, Any]], str, str, Mapping[str, Any] | None], None]
     apply_result: Callable[[Any, bool], None]
     emit: Callable[[str], None]
+    confirm_capabilities: Callable[[str, str], Sequence[str] | None] | None = None
 
 
 def handle_model_command(
@@ -71,4 +72,13 @@ def handle_model_command(
         explicit_provider=explicit_provider,
         user_providers=user_providers,
     )
+    if result.success and ports.confirm_capabilities is not None:
+        native_modalities = ports.confirm_capabilities(
+            result.target_provider,
+            result.new_model,
+        )
+        if native_modalities is None:
+            ports.emit("  No change.")
+            return
+        result.native_modalities = tuple(native_modalities)
     ports.apply_result(result, persist_global)

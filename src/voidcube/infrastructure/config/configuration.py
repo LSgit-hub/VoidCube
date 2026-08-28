@@ -2202,6 +2202,8 @@ def set_provider_model(
         return normalized
     entry = dict(providers[key])
     entry["selected_model"] = str(model_name or "").strip()
+    # Manual overrides describe Provider setup; an explicit model switch wins.
+    entry.pop("model_override", None)
     providers[key] = entry
     normalized["providers"] = providers
     if make_active:

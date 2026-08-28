@@ -191,7 +191,7 @@ class ResponseDispositionPort(Protocol):
     model: str
     provider: str
     log_prefix: str
-    valid_tool_names: Iterable[str]
+    valid_tool_names: set[str]
     quiet_mode: bool
     _invalid_tool_retries: int
     _invalid_json_retries: int

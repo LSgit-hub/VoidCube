@@ -149,6 +149,77 @@ def test_model_handler_delegates_result_to_single_apply_path() -> None:
     ]
 
 
+def test_model_handler_confirms_native_modalities_after_switch() -> None:
+    result = ModelSwitchResult(
+        success=True,
+        new_model="deepseek-v4-flash-vision-exp",
+        target_provider="deepseek-v",
+    )
+    applied: list[tuple[ModelSwitchResult, bool]] = []
+
+    handle_model_command(
+        parse_cli_command("/model deepseek-v4-flash-vision-exp"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: (
+                "deepseek-v4-flash-vision-exp",
+                "deepseek-v",
+                True,
+            ),
+            user_providers=lambda: {"deepseek-v": {}},
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "",
+            api_key=lambda: "",
+            provider_label=lambda value: value,
+            list_configured_providers=lambda **_kwargs: [],
+            switch_model=lambda **_kwargs: result,
+            open_picker=lambda *_args: pytest.fail("must not open picker"),
+            apply_result=lambda value, persist: applied.append((value, persist)),
+            emit=lambda _text: None,
+            confirm_capabilities=lambda provider, model: (
+                ("image",)
+                if provider == "deepseek-v" and model == "deepseek-v4-flash-vision-exp"
+                else ()
+            ),
+        ),
+    )
+
+    assert applied == [(result, True)]
+    assert result.native_modalities == ("image",)
+
+
+def test_model_handler_can_cancel_before_apply_when_capability_prompt_ends() -> None:
+    result = ModelSwitchResult(
+        success=True,
+        new_model="next-model",
+        target_provider="provider-b",
+    )
+    applied: list[object] = []
+    emitted: list[str] = []
+
+    handle_model_command(
+        parse_cli_command("/model next-model"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: ("next-model", "", True),
+            user_providers=lambda: {"provider-a": {}},
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "",
+            api_key=lambda: "",
+            provider_label=lambda value: value,
+            list_configured_providers=lambda **_kwargs: [],
+            switch_model=lambda **_kwargs: result,
+            open_picker=lambda *_args: pytest.fail("must not open picker"),
+            apply_result=lambda *_args: applied.append(True),
+            emit=emitted.append,
+            confirm_capabilities=lambda _provider, _model: None,
+        ),
+    )
+
+    assert applied == []
+    assert emitted == ["  No change."]
+
+
 def test_model_handler_opens_picker_from_configured_provider_snapshot() -> None:
     opened: list[tuple[object, ...]] = []
     providers = [{"slug": "provider-a", "is_current": True}]
@@ -226,3 +297,34 @@ def test_apply_model_switch_updates_cli_running_agent_and_turn_note(monkeypatch)
     assert "next-model" in app._pending_model_switch_note
     assert any("Model switched: next-model" in line for line in output)
     assert any("session only" in line for line in output)
+
+
+def test_model_capability_confirmation_reuses_existing_annotation(monkeypatch) -> None:
+    app = VoidcubeCLI.__new__(VoidcubeCLI)
+    app._session_model_capabilities = {}
+    monkeypatch.setattr(
+        "voidcube.infrastructure.config.configuration.load_config",
+        lambda: {
+            "providers": {
+                "deepseek-v": {
+                    "model_capabilities": {
+                        "deepseek-v4-flash-vision-exp": {
+                            "image_input": True,
+                            "audio_input": False,
+                            "video_input": False,
+                        }
+                    }
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_prompt_text_input",
+        lambda *_args, **_kwargs: pytest.fail("annotated model must not prompt"),
+    )
+
+    assert app._confirm_model_capabilities(
+        "deepseek-v",
+        "deepseek-v4-flash-vision-exp",
+    ) == ("image",)

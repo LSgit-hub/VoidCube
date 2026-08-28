@@ -75,6 +75,36 @@ def test_turn_input_preparation_uses_native_attachments_without_preanalysis():
     }
 
 
+def test_turn_input_preparation_uses_confirmed_named_provider_capability():
+    output = []
+    attachment = {
+        "kind": "local_image",
+        "path": "sample.png",
+        "mime_type": "image/png",
+    }
+    result = CliTurnInputPreparationRuntime(
+        _ports(
+            "inspect",
+            output,
+            images=["sample.png"],
+            model="deepseek-v4-flash-vision-exp",
+            native_input_modalities=(
+                lambda model, _base_url: (
+                    ("image",)
+                    if model == "deepseek-v4-flash-vision-exp"
+                    else ()
+                )
+            ),
+            build_attachments=lambda _images: [attachment],
+            preprocess_images=lambda *_args: (_ for _ in ()).throw(
+                AssertionError("confirmed native image input must not use vision_analyze")
+            ),
+        )
+    ).prepare()
+
+    assert result.attachments == (attachment,)
+
+
 def test_turn_input_preparation_expands_context_and_projects_warnings():
     output = []
     context = SimpleNamespace(

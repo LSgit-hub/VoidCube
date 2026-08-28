@@ -1034,12 +1034,18 @@ def test_supervisor_room_frontend_manages_provider_pool_and_worker_assignments()
     assert 'id="providerLoadModels"' in UI_HTML
     assert 'id="providerModelOptions"' in UI_HTML
     assert 'id="providerModelCatalogMeta"' in UI_HTML
+    assert 'id="providerApiKeyEnv"' not in UI_HTML
+    assert 'provider_api_key_env' not in UI_HTML
     assert 'id="providerConcurrency"' in UI_HTML
     assert 'id="providerRuntimeMetrics"' in UI_HTML
     assert 'id="providerCooldownReset"' in UI_HTML
     assert 'id="workerAssignmentForm"' in UI_HTML
     assert 'id="workerMaxConcurrent"' in UI_HTML
     assert 'data-worker-concurrency' in UI_HTML
+    assert 'data-worker-image-input' in UI_HTML
+    assert 'data-worker-audio-input' in UI_HTML
+    assert 'data-worker-video-input' in UI_HTML
+    assert 'workerModelCapabilities' in UI_HTML
     assert "fetch('/provider-pool'" in UI_HTML
     assert "fetch('/provider-pool/providers/'" in UI_HTML
     assert "fetch('/provider-pool/worker-roles'" in UI_HTML

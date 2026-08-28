@@ -60,12 +60,11 @@ _AUDIO_REQUEST_FORMATS = {
     "audio/wav": "wav",
 }
 
-# Only document-confirmed capabilities belong here. Provider configuration can
-# declare additional model capabilities without hard-coding vendor heuristics.
+# Only document-confirmed capabilities belong here. These are used as defaults
+# in the configuration prompt; runtime routing requires explicit confirmation
+# persisted under the selected Provider/model.
 _KNOWN_MODEL_INPUT_CAPABILITIES = {
-    "deepseek": {
-        "deepseek-v4-flash-vision-exp": frozenset({"image"}),
-    },
+    "deepseek-v4-flash-vision-exp": frozenset({"image"}),
 }
 
 
@@ -97,15 +96,8 @@ def native_input_modalities(
     *,
     configured_capabilities: Mapping[str, Any] | None = None,
 ) -> frozenset[str]:
-    """Return native input modalities supported by one selected model."""
-    normalized_provider = str(provider or "").strip().lower()
-    normalized_model = str(model or "").strip().lower()
-    modalities = set(
-        _KNOWN_MODEL_INPUT_CAPABILITIES.get(normalized_provider, {}).get(
-            normalized_model,
-            (),
-        )
-    )
+    """Return native input modalities explicitly confirmed for one model."""
+    modalities: set[str] = set()
     if isinstance(configured_capabilities, Mapping):
         for modality in INPUT_MODALITIES:
             explicit = configured_capabilities.get(f"{modality}_input")
@@ -116,6 +108,13 @@ def native_input_modalities(
             else:
                 modalities.discard(modality)
     return frozenset(modalities)
+
+
+def suggested_native_input_modalities(provider: str, model: str) -> frozenset[str]:
+    """Return known capabilities for configuration prompt defaults only."""
+    del provider
+    normalized_model = str(model or "").strip().lower()
+    return _KNOWN_MODEL_INPUT_CAPABILITIES.get(normalized_model, frozenset())
 
 
 def supports_native_input(
@@ -383,6 +382,7 @@ __all__ = [
     "image_attachments_from_paths",
     "native_input_modalities",
     "native_attachment_supported",
+    "suggested_native_input_modalities",
     "supports_native_image_input",
     "supports_native_input",
 ]

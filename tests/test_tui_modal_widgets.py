@@ -231,7 +231,10 @@ def test_panel_lines_are_limited_with_a_visible_indicator(monkeypatch) -> None:
 
     assert limited[-1] == ("class:a", "close\n")
     assert any("3 more lines" in text for _style, text in limited)
-    assert display_width(limited[-3][1]) == 30
+    indicator = next(
+        text for _style, text in limited if "more lines" in text
+    )
+    assert display_width(indicator) == 30
 
 
 def test_scroll_indicator_uses_callers_style_classes() -> None:
