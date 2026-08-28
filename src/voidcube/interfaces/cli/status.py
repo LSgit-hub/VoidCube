@@ -269,7 +269,7 @@ def show_status(args):
     nous_logged_in = bool(nous_status.get("logged_in"))
     print(
         f"  {'Nous Portal':<12}  {check_mark(nous_logged_in)} "
-        f"{'logged in' if nous_logged_in else 'not logged in (run: VoidCube model)'}"
+        f"{'logged in' if nous_logged_in else 'not logged in (run: /model)'}"
     )
     if nous_logged_in:
         portal_url = nous_status.get("portal_base_url") or "（未知）"
@@ -340,7 +340,7 @@ def show_status(args):
             if has_usable_secret(key_val):
                 break
         configured = has_usable_secret(key_val)
-        label = "已配置" if configured else "未配置（运行：VoidCube model）"
+        label = "已配置" if configured else "未配置（运行：/model）"
         print(f"  {pname:<16} {check_mark(configured)} {label}")
 
     # =========================================================================

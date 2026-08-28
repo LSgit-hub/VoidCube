@@ -94,7 +94,10 @@ class CliModelPickerRuntime:
                 user_providers=state.get("user_provs"),
             )
             self.ports.close_picker()
-            if result.success and self.ports.confirm_capabilities is not None:
+            if (
+                getattr(result, "success", False)
+                and self.ports.confirm_capabilities is not None
+            ):
                 native_modalities = self.ports.confirm_capabilities(
                     result.target_provider,
                     result.new_model,

@@ -46,7 +46,7 @@ def dispatch_cli(parser: argparse.ArgumentParser, argv: list[str] | None = None)
     # Only swap when NO session with that name exists — a real session
     # name that happens to match a subcommand takes priority.
     _KNOWN_COMMANDS = {
-        "chat", "model", "gateway", "login", "logout",
+        "chat", "gateway", "login", "logout",
         "body", "agent", "serve", "status", "autonomous", "doctor", "config", "tools",
         "mcp", "sessions", "insights", "version", "api", "acp", "logs",
         "memory", "profile", "update", "uninstall",

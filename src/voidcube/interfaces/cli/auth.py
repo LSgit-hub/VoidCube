@@ -158,7 +158,7 @@ def _login_nous(args) -> None:
                 print()
                 print("  ✓ Login successful!")
                 print()
-                print("  Run 'VoidCube model' to select a Nous model.")
+                print("  Run '/model' to select a Nous model.")
                 return
         except urllib.error.HTTPError as exc:
             body = ""

@@ -129,3 +129,35 @@ def test_tasks_auto_suggest_returns_suffix_after_explicit_prefix():
 
     assert suggestion is not None
     assert suggestion.text == "g"
+
+
+def test_model_completion_reads_configured_provider_catalog_and_override(monkeypatch):
+    monkeypatch.setattr(
+        "voidcube.infrastructure.config.configuration.load_config",
+        lambda: {
+            "providers": {
+                "deepseek-v": {
+                    "label": "DeepSeek Vision",
+                    "selected_model": "deepseek-v4-flash-vision-exp",
+                    "model_override": "deepseek-v4-flash-vision-exp",
+                    "model_catalog": {
+                        "models": ["deepseek-chat", "deepseek-reasoner"],
+                    },
+                }
+            }
+        },
+    )
+
+    completions = list(
+        SlashCommandCompleter().get_completions(
+            _doc("/model deepseek-v4"),
+            None,
+        )
+    )
+
+    assert [item.text for item in completions] == [
+        "deepseek-v4-flash-vision-exp",
+    ]
+    assert completions[0].display_meta_text == (
+        "DeepSeek Vision (deepseek-v)"
+    )

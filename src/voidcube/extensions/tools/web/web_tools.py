@@ -174,7 +174,7 @@ def _raise_web_backend_configuration_error() -> None:
     if managed_nous_tools_enabled():
         message += (
             " If you have the hidden Nous-managed tools flag enabled, you can also login to Nous "
-            "(`VoidCube model`) and provide FIRECRAWL_GATEWAY_URL or TOOL_GATEWAY_DOMAIN."
+            "(`/model`) and provide FIRECRAWL_GATEWAY_URL or TOOL_GATEWAY_DOMAIN."
         )
     raise ValueError(message)
 

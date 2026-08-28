@@ -139,7 +139,7 @@ class AgentClientInitializationRuntime:
             raise RuntimeError(
                 f"Provider '{explicit_provider}' is set in config.yaml but no API key "
                 f"was found. Set the {explicit_provider.upper()}_API_KEY environment "
-                "variable, or switch to a different provider with `VoidCube model`."
+                "variable, or switch to a different provider with `/model`."
             )
         return {
             "api_key": os.getenv("OPENROUTER_API_KEY", ""),

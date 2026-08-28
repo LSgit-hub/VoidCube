@@ -531,7 +531,7 @@ def _resolve_auto(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Option
 
     # ── Warn once if OPENAI_BASE_URL is set but config.yaml uses a named
     #    provider (not 'custom').  This catches the common "env poisoning"
-    #    scenario where a user switches providers via `VoidCube model` but the
+    #    scenario where a user switches providers via `/model` but the
     #    old OPENAI_BASE_URL lingers in ~/.VoidCube/.env. ──
     if not _stale_base_url_warned:
         _env_base = os.getenv("OPENAI_BASE_URL", "").strip()
@@ -542,7 +542,7 @@ def _resolve_auto(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Option
             logger.warning(
                 "OPENAI_BASE_URL is set (%s) but the active provider is '%s'. "
                 "Auxiliary clients may route to the wrong endpoint. "
-                "Run: VoidCube model to reconfigure, or remove "
+                "Run: /model to reconfigure, or remove "
                 "OPENAI_BASE_URL from ~/.VoidCube/.env",
                 _env_base, _cfg_provider,
             )

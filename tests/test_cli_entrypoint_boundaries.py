@@ -42,7 +42,6 @@ def test_parser_registry_is_independently_constructible():
 
     assert {
         "chat",
-        "model",
         "login",
         "logout",
         "doctor",
@@ -53,6 +52,7 @@ def test_parser_registry_is_independently_constructible():
         "api",
         "profile",
     } <= commands.keys()
+    assert "model" not in commands
     assert parser.parse_args(["body", "status"]).body_action == "status"
     assert parser.parse_args(["chat", "-q", "hello"]).query == "hello"
 

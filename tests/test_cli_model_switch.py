@@ -14,6 +14,7 @@ from voidcube.interfaces.cli.commands.handlers.model import (
 from voidcube.interfaces.cli.commands.registry import install_cli_command_execution
 from voidcube.interfaces.cli.commands.router import parse_cli_command
 from voidcube.interfaces.cli.model_switch import ModelSwitchResult
+from voidcube.interfaces.cli.model_switch import list_configured_providers
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -328,3 +329,33 @@ def test_model_capability_confirmation_reuses_existing_annotation(monkeypatch) -
         "deepseek-v",
         "deepseek-v4-flash-vision-exp",
     ) == ("image",)
+
+
+def test_configured_provider_models_use_shared_catalog_and_keep_override() -> None:
+    providers = list_configured_providers(
+        current_provider="deepseek-v",
+        user_providers={
+            "deepseek-v": {
+                "label": "DeepSeek Vision",
+                "selected_model": "deepseek-v4-flash-vision-exp",
+                "model_override": "deepseek-v4-flash-vision-exp",
+                "model_catalog": {
+                    "models": ["deepseek-chat", "deepseek-reasoner"],
+                },
+            },
+            "empty-provider": {
+                "label": "Empty",
+                "selected_model": "manual-only-model",
+                "model_catalog": {"models": []},
+            },
+        },
+        max_models=30,
+    )
+
+    assert providers[0]["slug"] == "deepseek-v"
+    assert providers[0]["models"] == [
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    ]
+    assert providers[1]["models"] == ["manual-only-model"]

@@ -678,17 +678,66 @@ class SlashCommandCompleter(Completer):
             count += 1
 
     def _model_completions(self, sub_text: str, sub_lower: str):
-        """Yield completions for /model from config aliases + built-in aliases."""
-        seen = set()
-        # Config-based direct aliases (preferred — include provider info)
+        """Yield model IDs from the configured Provider pool and aliases."""
+        seen: set[str] = set()
+
+        # The configured catalog is the source of truth for /model.  It is
+        # populated by /api refreshes and also contains explicit overrides.
+        try:
+            from ....infrastructure.config.configuration import load_config
+            from ....infrastructure.config.provider_config import (
+                provider_model_catalog,
+            )
+
+            config = load_config()
+            providers = config.get("providers") if isinstance(config, dict) else {}
+            if isinstance(providers, Mapping):
+                for provider_key, provider_cfg in providers.items():
+                    if not isinstance(provider_cfg, Mapping):
+                        continue
+                    label = str(
+                        provider_cfg.get("label")
+                        or provider_cfg.get("name")
+                        or provider_key
+                    )
+                    explicit_models = (
+                        provider_cfg.get("model_override"),
+                        provider_cfg.get("selected_model"),
+                        provider_cfg.get("default_model"),
+                        provider_cfg.get("model"),
+                    )
+                    model_ids = [
+                        str(model_id).strip()
+                        for model_id in (
+                            *explicit_models,
+                            *provider_model_catalog(dict(provider_cfg)),
+                        )
+                        if str(model_id or "").strip()
+                    ]
+                    for model_id in dict.fromkeys(model_ids):
+                        if model_id.lower().startswith(sub_lower) and model_id.lower() != sub_lower:
+                            seen.add(model_id.lower())
+                            yield Completion(
+                                model_id,
+                                start_position=-len(sub_text),
+                                display=model_id,
+                                display_meta=f"{label} ({provider_key})",
+                            )
+        except Exception:
+            pass
+
+        # Keep aliases as a compatibility convenience, but they are no longer
+        # the model list used by the picker or the primary completion source.
         try:
             from ..model_switch import (
                 _ensure_direct_aliases, DIRECT_ALIASES, MODEL_ALIASES,
             )
             _ensure_direct_aliases()
             for name, da in DIRECT_ALIASES.items():
-                if name.startswith(sub_lower) and name != sub_lower:
-                    seen.add(name)
+                if name.lower().startswith(sub_lower) and name.lower() != sub_lower:
+                    if name.lower() in seen:
+                        continue
+                    seen.add(name.lower())
                     yield Completion(
                         name,
                         start_position=-len(sub_text),
@@ -697,9 +746,10 @@ class SlashCommandCompleter(Completer):
                     )
             # Built-in catalog aliases not already covered
             for name in sorted(MODEL_ALIASES.keys()):
-                if name in seen:
+                if name.lower() in seen:
                     continue
-                if name.startswith(sub_lower) and name != sub_lower:
+                if name.lower().startswith(sub_lower) and name.lower() != sub_lower:
+                    seen.add(name.lower())
                     identity = MODEL_ALIASES[name]
                     yield Completion(
                         name,

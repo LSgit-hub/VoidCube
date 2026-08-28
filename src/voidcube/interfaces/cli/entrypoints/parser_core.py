@@ -4,59 +4,11 @@ import argparse
 
 from .operations import cmd_body, cmd_doctor
 from .provider import (
-    cmd_login, cmd_logout, cmd_model, cmd_status,
+    cmd_login, cmd_logout, cmd_status,
 )
 
 
 def register_core_commands(subparsers: argparse._SubParsersAction) -> None:
-
-    # =========================================================================
-    # model command
-    # =========================================================================
-    model_parser = subparsers.add_parser(
-        "model",
-        help="Switch model or active provider from saved configuration",
-        description="Switch among providers already configured by `VoidCube api`"
-    )
-    model_parser.add_argument(
-        "--portal-url",
-        help="Portal base URL for Nous login (default: production portal)"
-    )
-    model_parser.add_argument(
-        "--inference-url",
-        help="Inference API base URL for Nous login (default: production inference API)"
-    )
-    model_parser.add_argument(
-        "--client-id",
-        default=None,
-        help="OAuth client id to use for Nous login (default: VoidCube-cli)"
-    )
-    model_parser.add_argument(
-        "--scope",
-        default=None,
-        help="OAuth scope to request for Nous login"
-    )
-    model_parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Do not attempt to open the browser automatically during Nous login"
-    )
-    model_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=15.0,
-        help="HTTP request timeout in seconds for Nous login (default: 15)"
-    )
-    model_parser.add_argument(
-        "--ca-bundle",
-        help="Path to CA bundle PEM file for Nous TLS verification"
-    )
-    model_parser.add_argument(
-        "--insecure",
-        action="store_true",
-        help="Disable TLS verification for Nous login (testing only)"
-    )
-    model_parser.set_defaults(func=cmd_model)
 
     # =========================================================================
     # login command

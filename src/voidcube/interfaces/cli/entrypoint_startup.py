@@ -50,7 +50,7 @@ from typing import Optional
 def _require_tty(command_name: str) -> None:
     """Exit with a clear error if stdin is not a terminal.
 
-    Interactive TUI commands (VoidCube tools, VoidCube api, VoidCube model) use
+    Interactive TUI commands (VoidCube tools, VoidCube api, /model) use
     curses or input() prompts that spin at 100% CPU when stdin is a pipe.
     This guard prevents accidental non-interactive invocation.
     """

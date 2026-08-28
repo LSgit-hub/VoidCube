@@ -30,7 +30,6 @@ Examples:
     VoidCube -c "my project"        Resume a session by name (latest in lineage)
     VoidCube --resume <session_id>  Resume a specific session by ID
     VoidCube logout                 Clear stored authentication
-    VoidCube model                  Select default model
     VoidCube config                 View configuration
     VoidCube config edit            Edit config in $EDITOR
     VoidCube config set model gpt-4 Set a config value

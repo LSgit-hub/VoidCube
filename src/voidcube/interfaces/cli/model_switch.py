@@ -242,7 +242,7 @@ def switch_model(
         if pdef is None:
             _switch_err = (
                 f"Unknown provider '{explicit_provider}'. "
-                f"Check 'VoidCube model' for available providers, or define it "
+                f"Check '/model' for available providers, or define it "
                 f"in config.yaml under 'providers:'."
             )
             # Check for common config issues that cause provider resolution failures
@@ -464,8 +464,13 @@ def list_configured_providers(
     user_providers: dict = None,
     max_models: int = 8,
 ) -> List[dict]:
-    """List providers explicitly configured in config.yaml."""
-    from ...infrastructure.providers.model_catalog import curated_models_for_provider
+    """List providers and models from the shared configured Provider pool.
+
+    The picker must use the catalog persisted by ``/api``.  It intentionally
+    does not query a second model registry here: explicit model overrides and
+    models omitted by a provider's ``/models`` response must remain selectable.
+    """
+    from ...infrastructure.config.provider_config import provider_model_catalog
 
     results: List[dict] = []
     if not isinstance(user_providers, dict):
@@ -486,18 +491,16 @@ def list_configured_providers(
             or provider_cfg.get("model")
             or ""
         ).strip()
+        model_override = str(provider_cfg.get("model_override") or "").strip()
 
         models: list[str] = []
-        try:
-            curated = curated_models_for_provider(provider_key)
-            models = [mid for mid, _ in curated[:max_models]]
-        except Exception:
-            models = []
-
-        if selected_model:
-            if selected_model in models:
-                models.remove(selected_model)
-            models.insert(0, selected_model)
+        for model_id in (
+            model_override,
+            selected_model,
+            *provider_model_catalog(provider_cfg),
+        ):
+            if model_id and model_id not in models:
+                models.append(model_id)
         if max_models > 0:
             models = models[:max_models]
 
