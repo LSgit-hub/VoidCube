@@ -1855,8 +1855,6 @@ body[data-has-errors="true"] .xs-brow.r { transform: rotate(12deg) translateY(-1
   border: 1px solid rgba(255,255,255,.08);
   border-radius: var(--radius-md);
   box-shadow: 0 18px 32px var(--shadow-deep);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
   color: var(--text-primary);
   z-index: 10;
   font-size: 12px;
@@ -1888,7 +1886,6 @@ body[data-has-errors="true"] .status { border-color: rgba(232,130,110,.5); }
   z-index: 11;
   display: flex; align-items: center; justify-content: center;
   transition: all .3s var(--ease-out);
-  backdrop-filter: blur(10px);
 }
 .status-toggle:hover {
   background: rgba(40, 28, 20, .9);
@@ -1999,8 +1996,6 @@ body:has(.status:not(.collapsed)) .status-toggle {
   border-radius: var(--radius-md);
   padding: 12px 14px;
   display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: center;
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
   min-width: 220px; max-width: 260px;
   color: var(--text-primary);
   box-shadow: 0 12px 24px var(--shadow-deep);
@@ -2145,8 +2140,6 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
     0 -4px 20px rgba(0,0,0,.5),
     0 -1px 0 rgba(255,255,255,.06),
     inset 0 1px 0 rgba(255,255,255,.04);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
   transform: translateY(calc(100% - 4px));
   transition: transform .35s var(--ease-out);
   /* 顶部发光线 */
@@ -2298,8 +2291,6 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   box-shadow:
     0 -8px 32px rgba(0,0,0,.55),
     inset 0 1px 0 rgba(255,255,255,.04);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
   overflow: hidden;
   flex-direction: column;
   pointer-events: auto;
@@ -2359,8 +2350,6 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   max-width: 100%;
   padding: 12px 16px;
   display: grid; gap: 10px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,.1) transparent;
 }
 .panel-body::-webkit-scrollbar { width: 4px; }
 .panel-body::-webkit-scrollbar-thumb {
@@ -2846,8 +2835,10 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-size: 10.5px; color: rgba(244,228,188,.7);
   line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis;
-  display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: nowrap;
 }
+.game-card-sub.center { text-align: center; }
+.game-card-sub.muted { color: var(--text-muted); }
 .game-card-meta {
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px;
@@ -3224,6 +3215,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .panel-empty .pe-icon { font-size: 32px; opacity: .5; }
 .panel-empty .pe-text { font-size: 12px; }
+.panel-empty .pe-note { font-size: 10px; color: var(--text-muted); }
 .schedule-list { display: grid; gap: 8px; }
 .schedule-item {
   padding: 10px 12px;
@@ -3381,8 +3373,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border-radius: 20px;
   background: rgba(20,14,10,.75);
   border: 1px solid rgba(255,255,255,.06);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
   font-size: 11px; font-weight: 600;
   color: var(--text-primary);
   pointer-events: none;
@@ -3414,8 +3404,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border: 1px solid rgba(255,255,255,.08);
   border-radius: 6px;
   background: rgba(20,14,10,.78);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
 }
 .stellar-mode-control button {
   border: 0;
@@ -3804,8 +3792,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   z-index: 200;
   display: flex; align-items: center; justify-content: center;
   background: rgba(30,14,8,.5);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
   opacity: 0; pointer-events: none;
   transition: opacity .25s var(--ease-out);
 }
@@ -3848,11 +3834,32 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   font-size: 10px; color: var(--text-muted);
   margin: -8px 0 14px; line-height: 1.5;
 }
+.drawer-sub.tight { margin: 0; }
+.drawer-sub.mt-3 { margin-top: 3px; }
+.drawer-sub.mt-4 { margin-top: 4px; }
+.drawer-sub.mt-5 { margin-top: 5px; }
+.drawer-sub.mt-6 { margin-top: 6px; }
+.drawer-sub.mt-8 { margin-top: 8px; }
+.drawer-sub.mt-10 { margin-top: 10px; }
+.drawer-sub.center { text-align: center; }
+.drawer-sub.muted { color: var(--text-muted); }
+.drawer-sub.warn { color: var(--coral); }
+.drawer-sub.ok { color: var(--mint); }
 .panel-subtle-note {
   font-size: 10px;
   color: var(--text-muted);
   margin: 0 0 10px;
   line-height: 1.5;
+}
+.panel-subtle-note.mt-4 { margin-top: 4px; }
+.panel-subtle-note.mt-6 { margin-top: 6px; }
+.panel-subtle-note.mt-10 { margin-top: 10px; }
+.panel-subtle-note.muted { color: var(--text-muted); }
+.panel-subtle-note.warn { color: var(--coral); }
+.panel-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
 }
 /* 账号中心 */
 #panelAccount {
@@ -3884,6 +3891,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
   overflow-wrap: anywhere;
 }
+.account-card-label { color: var(--text-muted); font-weight: 400; }
 .account-card-detail {
   font-size: 10px; color: var(--text-secondary);
   margin-top: 3px;
@@ -3916,6 +3924,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   padding: 10px 0;
   border-top: 1px solid rgba(255,255,255,.06);
 }
+.account-add-bar.compact { border-top: none; padding-top: 4px; }
 .account-add-bar .provider-field { flex: 1; min-width: 0; }
 .account-add-bar > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
 .account-login-button { flex: 0 1 auto; }
@@ -3958,6 +3967,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   margin-top: 8px; padding: 8px; border-radius: 8px;
   background: rgba(0,0,0,.2); font-size: 10px; color: var(--text-secondary);
 }
+.segment-active.mt-6 { margin-top: 6px; }
+.segment-active.mt-8 { margin-top: 8px; }
+.segment-active.mt-10 { margin-top: 10px; }
 .segment-active .la-title { color: var(--text-primary); font-weight: 600; font-size: 11px; }
 /* 因果链 / 通用区块 */
 .drawer-section { margin-bottom: 14px; }
@@ -3983,6 +3995,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
 }
 .health-row .hr-val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.health-row .hr-val.muted { color: var(--text-muted); }
+.health-row .hr-val.ok { color: var(--mint); }
+.health-row .hr-val.warn { color: var(--coral); }
+.health-row.mt-5 { margin-top: 5px; }
+.health-row.mt-6 { margin-top: 6px; }
 .identity-anchor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 560px) { .identity-anchor-grid { grid-template-columns: 1fr; } }
 .identity-anchor {
@@ -4311,10 +4328,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <div class="window-moon"></div>
         <div class="window-cloud c1"></div>
         <div class="window-cloud c2"></div>
-        <span class="star" style="left:20%;top:20%;width:2px;height:2px;animation-delay:0s;"></span>
-        <span class="star" style="left:50%;top:12%;width:3px;height:3px;animation-delay:.6s;"></span>
-        <span class="star" style="left:70%;top:30%;width:2px;height:2px;animation-delay:1.2s;"></span>
-        <span class="star" style="left:32%;top:38%;width:2px;height:2px;animation-delay:1.8s;"></span>
+        <span class="star s1"></span>
+        <span class="star s2"></span>
+        <span class="star s3"></span>
+        <span class="star s4"></span>
       </div>
       <div class="window-frame-h"></div>
       <div class="window-frame-v"></div>
@@ -6241,7 +6258,7 @@ function buildChainSectionBand(group, options) {
           ' · ' + esc(String(latestEvent.summary || autonomousEventTypeLabel(latestEvent.event_type) || '动作').substring(0, 88)) + '</div>'
         : '') +
     '</div>' +
-    '<div style="display:grid;justify-items:end;gap:6px;">' +
+    '<div class="watch-band-meta">' +
       '<span class="game-card-badge ' + observationGroupBadgeClass(group) + '">' +
       esc(group.segment_status_label || '闭环分段') + '</span>' +
     '</div>';
@@ -6255,7 +6272,7 @@ function buildChainSectionBand(group, options) {
       const empty = document.createElement('div');
       empty.className = 'game-card rarity-common';
       empty.innerHTML =
-        '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">' +
+        '<div class="game-card-sub center muted">' +
         esc(group.empty_text || '暂无信号') +
         '</div>';
       body.append(empty);
@@ -6394,7 +6411,7 @@ function renderAutonomousDrawer(state) {
       '<div class="segment-metric"><span>' + esc(presentation.eventLabel) + '</span><b>' + eventCount + '</b></div>' +
       '<div class="segment-metric"><span>' + esc(presentation.traceLabel) + '</span><b>' + traceCount + '</b></div>' +
       '<div class="segment-active"><div class="la-title">' + esc(focusTitle) +
-      '</div><div style="margin-top:3px;">' + esc(group.segment_status_label || '闭环观察') +
+      '</div><div class="drawer-sub mt-3">' + esc(group.segment_status_label || '闭环观察') +
       (focusSummary ? ' · ' + esc(focusSummary) : '') +
       '</div></div></div>';
   }
@@ -6407,40 +6424,40 @@ function renderAutonomousDrawer(state) {
     const focusCountsSummary = String(focusGroup.drawer_counts_summary || '').trim();
     html += '<div class="drawer-section">' +
       '<div class="drawer-section-label">' + esc(focusGroup.label || '闭环分段') + '</div>' +
-      '<div class="drawer-sub" style="margin:0;">' +
-      esc(String(focusGroup.drawer_summary || focusGroup.summary || focusGroup.empty_text || '暂无状态').substring(0, 220)) +
-      '</div>' +
-      (focusNextStep
-        ? '<div class="drawer-sub" style="margin-top:6px;">接着 · ' + esc(focusNextStep).substring(0, 140) + '</div>'
+    '<div class="drawer-sub tight">' +
+    esc(String(focusGroup.drawer_summary || focusGroup.summary || focusGroup.empty_text || '暂无状态').substring(0, 220)) +
+    '</div>' +
+    (focusNextStep
+        ? '<div class="drawer-sub mt-6">接着 · ' + esc(focusNextStep).substring(0, 140) + '</div>'
         : '') +
-      (focusCountsSummary
-        ? '<div class="drawer-sub" style="margin-top:8px;">' +
+    (focusCountsSummary
+        ? '<div class="drawer-sub mt-8">' +
           esc(focusCountsSummary.substring(0, 220)) +
           '</div>'
         : '') +
       (focusItems.length
         ? focusItems.slice(0, 4).map(item =>
-            '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
+            '<div class="segment-active mt-6"><div class="la-title">' +
             esc(String(item.title || '未命名').substring(0, 56)) + '</div>' +
-            '<div style="margin-top:3px;">状态: ' + esc(observationDisplayStatus(item, '—')) +
+            '<div class="drawer-sub mt-3">状态: ' + esc(observationDisplayStatus(item, '—')) +
             (item.judgement_hint ? ' · ' + esc(String(item.judgement_hint).substring(0, 88)) : '') +
             (item.summary ? ' · ' + esc(String(item.summary).substring(0, 88)) : '') +
             '</div></div>'
           ).join('')
-        : '<div class="drawer-sub" style="margin-top:8px;">' + esc(String(focusGroup.drawer_empty_items_text || '').substring(0, 160)) + '</div>') +
+        : '<div class="drawer-sub mt-8">' + esc(String(focusGroup.drawer_empty_items_text || '').substring(0, 160)) + '</div>') +
       '</div>';
     html += '<div class="drawer-section"><div class="drawer-section-label">' + esc(String(focusGroup.drawer_recent_events_label || presentation.eventLabel || '最近动作').substring(0, 36)) + '</div>' +
       (selectedTraceEvents.length
         ? selectedTraceEvents.slice(0, 6).map(event =>
-            '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
+            '<div class="segment-active mt-6"><div class="la-title">' +
             esc(shortClock(event.recorded_at)) + ' · ' +
             esc(String(event.summary || autonomousEventTypeLabel(event.event_type) || '动作').substring(0, 84)) + '</div>' +
-            '<div style="margin-top:3px;">来自 ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
+            '<div class="drawer-sub mt-3">来自 ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
             (event.task_id ? ' · 链路项 ' + esc(String(event.task_id).substring(0, 16)) : '') +
             (event.trace_id ? ' · 回合 ' + esc(String(event.trace_id).substring(0, 18)) : '') +
             '</div></div>'
           ).join('')
-        : '<div class="drawer-sub" style="margin:0;">这一段最近没动作。</div>') +
+        : '<div class="drawer-sub tight">这一段最近没动作。</div>') +
       '</div>';
     html += '<div class="drawer-section"><div class="drawer-section-label">' + esc(String(focusGroup.drawer_recent_traces_label || presentation.traceLabel || '最近回合').substring(0, 36)) + '</div>' +
       (focusTraces.length
@@ -6452,18 +6469,18 @@ function renderAutonomousDrawer(state) {
             esc(String(trace.last_event_label || autonomousEventTypeLabel(trace.last_event_type) || '事件').substring(0, 14)) + ' · ' +
             esc(String(trace.event_count || 0)) + '</span>'
           ).join('') + '</div>'
-        : '<div class="drawer-sub" style="margin:0;">这一段最近没回合。</div>') +
+        : '<div class="drawer-sub tight">这一段最近没回合。</div>') +
       '</div>';
     if (selectedTrace) {
       html += '<div class="drawer-section"><div class="drawer-section-label">选中回合</div>' +
-        '<div class="drawer-sub" style="margin:0;">回合 ' + esc(String(selectedTrace.trace_id || '').substring(0, 24)) +
+        '<div class="drawer-sub tight">回合 ' + esc(String(selectedTrace.trace_id || '').substring(0, 24)) +
         ' · 最近 ' + esc(shortClock(selectedTrace.last_seen_at)) +
         ' · 事件 ' + esc(selectedTrace.event_count) +
         (selectedTrace.task_titles && selectedTrace.task_titles.length
           ? ' · 条目 ' + esc(selectedTrace.task_titles.slice(0, 2).join(' / '))
           : '') +
         '</div>' +
-        '<div class="drawer-sub" style="margin-top:8px;">来源 ' + esc((selectedTrace.source_labels || []).join(' / ') || (selectedTrace.sources || []).map(autonomousEventSourceLabel).join(' / ') || '未知来源') +
+        '<div class="drawer-sub mt-8">来源 ' + esc((selectedTrace.source_labels || []).join(' / ') || (selectedTrace.sources || []).map(autonomousEventSourceLabel).join(' / ') || '未知来源') +
         ' · ' + esc(String(selectedTrace.latest_summary || '').substring(0, 120) || '暂无摘要') +
         '</div></div>';
       if (selectedTraceDetail) {
@@ -6481,19 +6498,19 @@ function renderAutonomousDrawer(state) {
         const toggleLabel = focusTraceExpanded ? '收起回合' : '展开回合';
         const sourceKeys = Object.keys(sourceCounts);
         html += '<div class="drawer-section"><div class="drawer-section-label">回合</div>' +
-          '<div class="drawer-sub" style="margin:0;">记录 ' + esc(selectedTraceDetail.record_count) +
+          '<div class="drawer-sub tight">记录 ' + esc(selectedTraceDetail.record_count) +
           ' · 首次 ' + esc(shortClock(selectedTraceDetail.first_seen_at)) +
           ' · 最近 ' + esc(shortClock(selectedTraceDetail.last_seen_at)) +
           (sourceSummary ? ' · 来源 ' + esc(sourceSummary) : '') +
           '</div>' +
           (governanceLabels.length
-            ? '<div class="drawer-sub" style="margin-top:8px;">判断动作 ' + esc(governanceLabels.join(' / ')) + '</div>'
+            ? '<div class="drawer-sub mt-8">判断动作 ' + esc(governanceLabels.join(' / ')) + '</div>'
             : '') +
           (executionLabels.length
-            ? '<div class="drawer-sub" style="margin-top:4px;">执行动作 ' + esc(executionLabels.join(' / ')) + '</div>'
+            ? '<div class="drawer-sub mt-4">执行动作 ' + esc(executionLabels.join(' / ')) + '</div>'
             : '') +
           (decisionIds.length
-            ? '<div class="drawer-sub" style="margin-top:4px;">决策 ' + esc(decisionIds.slice(0, 3).join(' / ')) + '</div>'
+            ? '<div class="drawer-sub mt-4">决策 ' + esc(decisionIds.slice(0, 3).join(' / ')) + '</div>'
             : '') +
           (sourceKeys.length
             ? '<div class="trace-chip-row">' +
@@ -6512,26 +6529,26 @@ function renderAutonomousDrawer(state) {
               ).join('') +
               '</div>'
             : '') +
-          '<div class="drawer-sub" style="margin-top:8px;"><button type="button" class="drill-link" data-drill="autonomous" data-chain-group="' +
+          '<div class="drawer-sub mt-8"><button type="button" class="drill-link" data-drill="autonomous" data-chain-group="' +
           esc(focusGroup.key || '') + '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
           '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'false' : 'true') +
           '" data-chain-trace-source="' + esc(focusTraceSource) + '">🔬 ' + esc(toggleLabel) + '</button></div>' +
           (visibleEvents.length
             ? visibleEvents.map(event =>
-                '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
+                '<div class="segment-active mt-6"><div class="la-title">' +
                 esc(shortClock(event.recorded_at)) + ' · ' +
                 esc(String(event.summary || event.event_label || autonomousEventTypeLabel(event.event_type) || '动作').substring(0, 84)) + '</div>' +
-                '<div style="margin-top:3px;">来自 ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
+                '<div class="drawer-sub mt-3">来自 ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
                 (event.task_id ? ' · 链路项 ' + esc(String(event.task_id).substring(0, 16)) : '') +
                 (event.decision_id ? ' · 决策 ' + esc(String(event.decision_id).substring(0, 16)) : '') +
                 '</div></div>'
               ).join('')
-            : '<div class="drawer-sub" style="margin-top:8px;">这一轮没事件。</div>') +
+            : '<div class="drawer-sub mt-8">这一轮没事件。</div>') +
           '</div>';
       }
     }
   }
-  html += '<div class="drawer-sub" style="margin-top:10px;">快照 · ' +
+  html += '<div class="drawer-sub mt-10">快照 · ' +
     esc(observationSnapshotSourceLabel(snapshotSource)) + '</div>';
   if (!focusGroup && orderedGroups.length) {
     html += '<div class="segment-grid">' +
@@ -6595,18 +6612,18 @@ function renderProvenanceDrawer(state) {
 
   let uncertaintyHtml = '<div class="drawer-section-label">当前风险</div>';
   if (!(uncertainty.top_items || []).length) {
-    uncertaintyHtml += '<div class="drawer-sub" style="margin:0;">当前没有明显风险点。</div>';
+    uncertaintyHtml += '<div class="drawer-sub tight">当前没有明显风险点。</div>';
   } else {
     uncertaintyHtml += uncertainty.top_items.map(item =>
-        '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
+        '<div class="segment-active mt-6"><div class="la-title">' +
         esc(item.domain_label || '未命名风险') + ' · 风险 ' + esc(item.risk_label || '0%') +
         ' · 置信 ' + esc(item.confidence_label || '0%') + '</div>' +
-        '<div style="margin-top:3px;">先看: ' + esc(item.observation_target_label || '—') +
+        '<div class="drawer-sub mt-3">先看: ' + esc(item.observation_target_label || '—') +
         (item.recommended_next_step_label ? ' · 下一步 ' + esc(item.recommended_next_step_label) : '') +
         (item.persistence_label ? ' · 持续态 ' + esc(item.persistence_label) : '') +
         '</div>' +
-        (item.recommended_probe_label ? '<div style="margin-top:3px;">建议探针: ' + esc(String(item.recommended_probe_label).substring(0, 120)) + '</div>' : '') +
-        (item.why_uncertain ? '<div style="margin-top:3px;color:var(--text-muted);">还不确定: ' + esc(String(item.why_uncertain).substring(0, 140)) + '</div>' : '') +
+        (item.recommended_probe_label ? '<div class="drawer-sub mt-3">建议探针: ' + esc(String(item.recommended_probe_label).substring(0, 120)) + '</div>' : '') +
+        (item.why_uncertain ? '<div class="drawer-sub mt-3 muted">还不确定: ' + esc(String(item.why_uncertain).substring(0, 140)) + '</div>' : '') +
         '</div>'
       ).join('');
   }
@@ -6614,7 +6631,7 @@ function renderProvenanceDrawer(state) {
   // candidate provenance
   let candHtml = '<div class="drawer-section-label">当前候选 (' + cands.length + ')</div>';
   if (!cands.length) {
-    candHtml += '<div class="drawer-sub" style="margin:0;">当前没有候选。</div>';
+    candHtml += '<div class="drawer-sub tight">当前没有候选。</div>';
   } else {
     candHtml += cands.slice(0, 6).map(c => {
       const meta = c && c.metadata ? c.metadata : {};
@@ -6625,10 +6642,10 @@ function renderProvenanceDrawer(state) {
       const rationale = c.rationale || meta.rationale || '';
       const tags = rawTags.map(tag => esc(cognitionTypeLabel('core_value', tag))).join(' · ');
       const reasonHint = String(c.candidate_hint || '').trim();
-      return '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
-        (reasonHint ? '<div style="margin-top:3px;">出现原因: ' + esc(String(reasonHint).substring(0, 120)) + '</div>' : '') +
-        (rationale ? '<div style="margin-top:3px;">补充: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
-        (tags ? '<div style="margin-top:3px;color:var(--text-muted);">倾向: ' + tags + '</div>' : '') + '</div>';
+      return '<div class="segment-active mt-6"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
+        (reasonHint ? '<div class="drawer-sub mt-3">出现原因: ' + esc(String(reasonHint).substring(0, 120)) + '</div>' : '') +
+        (rationale ? '<div class="drawer-sub mt-3">补充: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
+        (tags ? '<div class="drawer-sub mt-3 muted">倾向: ' + tags + '</div>' : '') + '</div>';
     }).join('');
   }
 
@@ -6712,8 +6729,8 @@ function renderProjectionCard(item, emptyText) {
   const taskId = String(item.task_id || '').trim();
   return '<div class="drawer-section">' +
     '<div class="health-row"><span>' + title + '</span><span class="hr-val">' + status + '</span></div>' +
-    '<div class="drawer-sub" style="margin:6px 0 0;">' + summary + '</div>' +
-    (taskId ? '<div class="drawer-sub" style="margin:5px 0 0;">任务 ID · ' + esc(taskId) + '</div>' : '') +
+    '<div class="drawer-sub mt-6">' + summary + '</div>' +
+    (taskId ? '<div class="drawer-sub mt-5">任务 ID · ' + esc(taskId) + '</div>' : '') +
     '</div>';
 }
 
@@ -6754,12 +6771,12 @@ function renderEmployeeRunCard(item, memWritebacks) {
   return '<div class="drawer-section">' +
     '<div class="health-row"><span>' + esc(row.title || '未命名任务') + '</span><span class="hr-val">' +
       esc(row.status_label || row.display_status || statusLabel(row.status)) + '</span></div>' +
-    '<div class="drawer-sub" style="margin:6px 0 0;">' + esc(row.summary || '暂无执行摘要') + '</div>' +
-    (details.length ? '<div class="drawer-sub" style="margin:5px 0 0;">' + details.join(' · ') + '</div>' : '') +
-    '<div class="drawer-sub" style="margin:5px 0 0;color:' + (writebackFailed ? 'var(--coral)' : writeback ? 'var(--mint)' : 'var(--text-muted)') + ';">' +
+    '<div class="drawer-sub mt-6">' + esc(row.summary || '暂无执行摘要') + '</div>' +
+    (details.length ? '<div class="drawer-sub mt-5">' + details.join(' · ') + '</div>' : '') +
+    '<div class="drawer-sub mt-5 ' + (writebackFailed ? 'warn' : writeback ? 'ok' : 'muted') + '">' +
       (writebackFailed ? '⚠ Mem 写回失败或未完成' : writeback ? '✓ 已发现对应 Mem 写回' : '○ Mem 写回待确认') + '</div>' +
-    (result ? '<div class="drawer-sub" style="margin:5px 0 0;">结果 · ' + esc(result.substring(0, 240)) + '</div>' : '') +
-    (error ? '<div class="drawer-sub" style="margin:5px 0 0;color:var(--coral);">异常 · ' + esc(error.substring(0, 180)) + '</div>' : '') +
+    (result ? '<div class="drawer-sub mt-5">结果 · ' + esc(result.substring(0, 240)) + '</div>' : '') +
+    (error ? '<div class="drawer-sub mt-5 warn">异常 · ' + esc(error.substring(0, 180)) + '</div>' : '') +
     '</div>';
 }
 
@@ -6861,17 +6878,17 @@ function renderIdentityDrawer() {
         topics.map(topic => '<span class="identity-tag">' + esc(topic) + '</span>').join('') +
         '</article>';
     }).join('') + '</div>' :
-    '<div class="drawer-sub" style="margin:0;">' + esc(emptyText) + '</div>';
+    '<div class="drawer-sub tight">' + esc(emptyText) + '</div>';
 
   const revisionRows = revisions.length ? revisions.map(item =>
     '<div class="health-row"><span>' + esc(item.target_memory_id || '身份修订') +
     '<br><small>' + esc(item.reason || '') + '</small></span>' +
     '<span class="hr-val">' + esc(item.status || 'pending') + '</span></div>'
-  ).join('') : '<div class="drawer-sub" style="margin:0;">尚无身份修订记录。</div>';
+  ).join('') : '<div class="drawer-sub tight">尚无身份修订记录。</div>';
 
-  let recentTurnRows = '<div class="drawer-sub" style="margin:0;">正在读取最近对话...</div>';
+  let recentTurnRows = '<div class="drawer-sub tight">正在读取最近对话...</div>';
   if (identityTurnsError) {
-    recentTurnRows = '<div class="drawer-sub" style="margin:0;">最近对话暂时不可用 · ' +
+    recentTurnRows = '<div class="drawer-sub tight">最近对话暂时不可用 · ' +
       esc(identityTurnsError) + '</div>';
   } else if (identityTurns) {
     recentTurnRows = recentTurns.length ? '<div class="identity-turn-list">' + recentTurns.map(turn => {
@@ -6888,7 +6905,7 @@ function renderIdentityDrawer() {
             esc(turn.turn_id || '') + '" title="将这段对话写入星子的经历层"' +
             (busy ? ' disabled' : '') + '>' + (busy ? '正在确认...' : '确认为身份经历') + '</button>') +
         '</article>';
-    }).join('') + '</div>' : '<div class="drawer-sub" style="margin:0;">尚无可确认的最近对话。</div>';
+    }).join('') + '</div>' : '<div class="drawer-sub tight">尚无可确认的最近对话。</div>';
   }
 
   els.drawerBody.innerHTML =
@@ -6934,7 +6951,7 @@ function renderBodyTreeDrawer(state) {
   let html = '<div class="drawer-sub">只看替身结构。红点就是升级点。</div>';
   html += '<div class="drawer-section">';
   html += '<div class="drawer-section-label">' + esc(slot.role_label || '替身槽位') + ' · ' + esc(slot.slot_id || '—') + '</div>';
-  html += '<div class="drawer-sub" style="margin:0;">状态 ' + esc(slot.body_state_label || '未知') +
+  html += '<div class="drawer-sub tight">状态 ' + esc(slot.body_state_label || '未知') +
     ' · 版本 ' + esc(slot.body_version || 'bootstrap') +
     ' · 代次 ' + esc(slot.generation != null ? slot.generation : 0) + '</div>';
   const slotViolations = Array.isArray(slot.integrity_violations) ? slot.integrity_violations : [];
@@ -6943,7 +6960,7 @@ function renderBodyTreeDrawer(state) {
       slotViolations.map(item => esc(item.code || 'unknown')).join('、') + '</div>';
   }
   if (!signals.length) {
-    html += '<div class="drawer-sub" style="margin-top:6px;">' + esc(slot.focus_summary || '现在没有升级动作') + '</div>';
+    html += '<div class="drawer-sub mt-6">' + esc(slot.focus_summary || '现在没有升级动作') + '</div>';
   }
   html += '<div class="body-slot-tree">';
   html += '<div class="body-slot-tree-root">' + esc(slot.slot_id || 'slot') + '</div>';
@@ -6965,7 +6982,7 @@ function renderBodyTreeDrawer(state) {
   if (signals.length) {
     html += '<div class="drawer-section"><div class="drawer-section-label">升级焦点</div>' +
       signals.map(signal =>
-        '<div class="drawer-sub" style="margin:6px 0 0 0;">' +
+        '<div class="drawer-sub mt-6">' +
         esc(signal.source_label || '正在处理') + ' · ' +
         esc(signal.title || '替身改进任务') + ' · ' +
         esc(signal.status_label || '进行中') +
@@ -7447,8 +7464,7 @@ function renderLMInputPanel(state) {
     if (evNodes.length) {
       const firstEvidence = evNodes[0] || {};
       const evidenceHint = document.createElement('div');
-      evidenceHint.className = 'drawer-sub';
-      evidenceHint.style.margin = '8px 0 0 0';
+      evidenceHint.className = 'drawer-sub mt-8';
       evidenceHint.textContent = '依据 · ' + String(
         firstEvidence.title
           || firstEvidence.summary
@@ -7466,7 +7482,7 @@ function renderLMInputPanel(state) {
     appendObservationTabs(body, 'lminput');
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">还没有输入快照</div><div style="font-size:10px;color:var(--text-muted);">启动后这里会出现用户信号</div>';
+    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">还没有输入快照</div><div class="pe-note">启动后这里会出现用户信号</div>';
     body.append(empty);
   }
 }
@@ -7479,7 +7495,7 @@ function renderCognitionPanel(state) {
   appendObservationTabs(body, 'cognition');
 
   const drill = document.createElement('div');
-  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.className = 'panel-action-row';
   drill.innerHTML = drillButton('provenance', '决策溯源');
   body.append(drill);
 
@@ -7496,7 +7512,7 @@ function renderCognitionPanel(state) {
     appendObservationTabs(body, 'cognition');
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">还没有当前判断</div><div style="font-size:10px;color:var(--text-muted);">启动后这里会出现这轮状态</div>';
+    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">还没有当前判断</div><div class="pe-note">启动后这里会出现这轮状态</div>';
     body.append(empty);
     return;
   }
@@ -7531,7 +7547,7 @@ function renderCognitionPanel(state) {
         || judgement.employee_lane_summary
         || '当前没有明显卡点。'
     ).substring(0, 120) + '</div>' +
-    '<div class="game-card-sub" style="margin-top:6px;color:var(--text-muted);">' +
+    '<div class="game-card-sub muted">' +
     '当前需求 ' + esc(
       topNeed.need_type
         ? cognitionTypeLabel('need_type', topNeed.need_type)
@@ -7556,7 +7572,7 @@ function renderCognitionPanel(state) {
       esc(uncertainty.highest_risk_label || '风险较低') + '</span></div>' +
       '<div class="game-card-sub">' + esc(uncertainty.summary || '当前没有明显风险点').substring(0, 120) + '</div>' +
       (uncertainTop.recommended_probe_label
-        ? '<div class="game-card-sub" style="margin-top:6px;color:var(--text-muted);">接下来先看 ' +
+        ? '<div class="game-card-sub muted">接下来先看 ' +
           esc(String(uncertainTop.recommended_probe_label).substring(0, 90)) + '</div>'
         : '');
     cards.append(uncertaintyCard);
@@ -7576,7 +7592,7 @@ function renderObservationPanel(state) {
   const board = obs.board || {};
 
   const drill = document.createElement('div');
-  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.className = 'panel-action-row';
   drill.innerHTML = drillButton('autonomous', '链路总览');
   body.append(drill);
 
@@ -7622,7 +7638,7 @@ function renderStatsPanel(state) {
   const violations = Array.isArray(integrity.violations) ? integrity.violations : [];
 
   const drill = document.createElement('div');
-  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.className = 'panel-action-row';
   drill.innerHTML = drillButton('health', '健康度详情');
   body.append(drill);
 
@@ -9324,7 +9340,7 @@ function renderAccountPanel(data) {
     html += '<div class="panel-empty">';
     html += '<div class="pe-icon">🔑</div>';
     html += '<div class="pe-text">暂无已保存的平台账号</div>';
-    html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">添加账号后，B站等平台可获得高清播放和会员内容访问</div>';
+    html += '<div class="pe-note mt-4">添加账号后，B站等平台可获得高清播放和会员内容访问</div>';
     html += '</div>';
   } else {
     for (const account of accounts) {
@@ -9338,7 +9354,7 @@ function renderAccountPanel(data) {
       html += '<div class="account-card-title">';
       html += '<span class="account-status-dot ' + dotClass + '" title="' + statusText + '"></span>';
       html += esc(account.platform_name || account.platform);
-      if (account.label) html += ' <span style="font-weight:400;color:var(--text-muted);">· ' + esc(account.label) + '</span>';
+      if (account.label) html += ' <span class="account-card-label">· ' + esc(account.label) + '</span>';
       html += '</div>';
       html += '<div class="account-card-detail">' + statusText + ' · ' + credentialText + '</div>';
       html += '</div>';
@@ -9366,7 +9382,7 @@ function renderAccountPanel(data) {
   html += '<input id="accountLabel" placeholder="如：我的主号" maxlength="40" autocomplete="off">';
   html += '</div>';
   html += '</div>';
-  html += '<div class="account-add-bar" style="border-top:none; padding-top:4px;">';
+  html += '<div class="account-add-bar compact">';
   html += '<button id="accountDesktopLogin" class="provider-action primary account-login-button" onclick="loginAccountInDesktop()">在桌面应用中登录</button>';
   html += '<span class="account-login-note">登录状态保存在本机，并提供给本地 Agent 工具</span>';
   html += '</div>';
@@ -9572,13 +9588,13 @@ function renderMailMessages() {
     '<div class="drawer-sub">通过网关查看收件箱，并在这里直接写信发送。</div>' +
     '<div class="drawer-section">' +
       '<div class="drawer-section-label">邮件状态</div>' +
-      '<div class="drawer-sub" style="margin:0;">' +
+      '<div class="drawer-sub tight">' +
         esc(config.display_name || '星子邮件') + ' · ' +
         esc(config.address || '未配置地址') + ' · ' +
         esc(config.imap_host || 'IMAP 未配置') + ' / ' +
         esc(config.smtp_host || 'SMTP 未配置') +
       '</div>' +
-      (configured ? '<div class="drawer-sub" style="margin-top:6px;">收件箱 ' + esc(mailMessages.folder || config.inbox_folder || 'INBOX') + '</div>' : '') +
+      (configured ? '<div class="drawer-sub mt-6">收件箱 ' + esc(mailMessages.folder || config.inbox_folder || 'INBOX') + '</div>' : '') +
     '</div>' +
     '<div class="drawer-section">' +
       '<div class="drawer-section-label">收件箱</div>' +
@@ -9591,7 +9607,7 @@ function renderMailMessages() {
         '<label class="mail-compose-field"><span>主题</span><input data-mail-subject maxlength="200" autocomplete="off"/></label>' +
         '<label class="mail-compose-field wide"><span>正文</span><textarea data-mail-body rows="6" required maxlength="4000"></textarea></label>' +
         '<div class="mail-compose-actions">' +
-          '<span class="drawer-sub" style="margin:0;" data-mail-compose-status>' + (configured ? '准备发送' : '请先配置邮件服务器') + '</span>' +
+          '<span class="drawer-sub tight" data-mail-compose-status>' + (configured ? '准备发送' : '请先配置邮件服务器') + '</span>' +
           '<button type="button" class="drill-link" data-mail-refresh>刷新收件箱</button>' +
           '<button type="button" class="provider-action primary" data-mail-send' + (configured ? '' : ' disabled') + '>发送</button>' +
         '</div>' +
