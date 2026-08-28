@@ -257,6 +257,7 @@ class Supervisor(
                 get_ui=self._ui_runtime.get_ui,
                 get_state=self._ui_runtime.get_state,
                 get_events=self._ui_runtime.get_events,
+                get_api_b_thinking_events=self._ui_runtime.get_api_b_thinking_events,
                 get_voice_levels=self._ui_runtime.get_voice_levels,
                 get_media_events=self._ui_runtime.get_media_events,
                 enqueue_media=self._ui_runtime.enqueue_media_endpoint,

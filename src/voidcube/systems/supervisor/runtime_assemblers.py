@@ -596,6 +596,16 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             ui_auto_open_delay_seconds=config.ui_auto_open_delay_seconds,
         )
     )
+    try:
+        from ...infrastructure.memory.host_integration import (
+            configure_voidcube_mem_host,
+        )
+
+        configure_voidcube_mem_host(
+            api_b_thinking_sink=supervisor._ui_runtime.record_api_b_thinking,
+        )
+    except Exception:
+        logger.debug("Failed to register API-B thinking UI sink", exc_info=True)
 
 
 def assemble_supervisor_execution_runtime(supervisor: Any) -> None:

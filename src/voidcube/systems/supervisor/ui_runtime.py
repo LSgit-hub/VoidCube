@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -69,7 +70,7 @@ from .ui_open_lifecycle_adapters import (
     SupervisorUIOpenLifecycleContext,
     maybe_open_supervisor_ui,
 )
-from .ui_projection import default_observation_input_snapshot
+from .ui_projection import default_observation_input_snapshot, format_supervisor_ui_event
 from .ui_snapshot_adapters import (
     SupervisorUIMemorySnapshotContext,
     SupervisorUIObservationSnapshotContext,
@@ -171,6 +172,9 @@ class SupervisorUIRuntime:
             else str((self.delivery_items[0] if self.delivery_items else {}).get("delivery_id") or "")
         )
         self.delivery_revision = delivery_revision
+        self._api_b_thinking_lock = threading.Lock()
+        self.api_b_thinking: JsonDict = {}
+        self.api_b_thinking_revision = 0
 
     def _media_context(self) -> SupervisorUIMediaStateContext:
         return SupervisorUIMediaStateContext(
@@ -203,6 +207,55 @@ class SupervisorUIRuntime:
 
     def list_deliveries(self) -> list[JsonDict]:
         return [dict(item) for item in self.delivery_items]
+
+    def record_api_b_thinking(self, text: str) -> None:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return
+        with self._api_b_thinking_lock:
+            self.api_b_thinking_revision += 1
+            self.api_b_thinking = {
+                "text": cleaned[:600],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "revision": self.api_b_thinking_revision,
+            }
+
+    def current_api_b_thinking(self) -> JsonDict:
+        with self._api_b_thinking_lock:
+            snapshot = dict(self.api_b_thinking)
+            revision = self.api_b_thinking_revision
+        if not snapshot:
+            return {"text": "", "revision": revision}
+        updated_at = str(snapshot.get("updated_at") or "")
+        try:
+            updated = datetime.fromisoformat(updated_at)
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - updated).total_seconds()
+        except ValueError:
+            age_seconds = 0.0
+        if age_seconds > 3.5:
+            return {"text": "", "revision": revision}
+        return snapshot
+
+    async def get_api_b_thinking_events(self, request: Request) -> StreamingResponse:
+        async def event_stream():
+            last_revision = -1
+            while True:
+                if await request.is_disconnected():
+                    break
+                snapshot = self.current_api_b_thinking()
+                revision = int(snapshot.get("revision") or 0)
+                if revision != last_revision:
+                    last_revision = revision
+                    yield format_supervisor_ui_event("think", snapshot)
+                await asyncio.sleep(0.2)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     def push_delivery(self, delivery: JsonDict) -> JsonDict:
         evicted = (
@@ -667,6 +720,7 @@ class SupervisorUIRuntime:
         )
 
     async def get_state(self) -> JsonDict:
+        api_b_thinking = self.current_api_b_thinking()
         state = await build_supervisor_ui_state(
             context=SupervisorUIStateContext(
                 runtime_config=self.ports.load_runtime_config(),
@@ -687,6 +741,7 @@ class SupervisorUIRuntime:
             )
         )
         state["accounts_revision"] = self.accounts_revision
+        state["api_b_thinking"] = api_b_thinking
         return state
 
     async def load_recent_trace_details(

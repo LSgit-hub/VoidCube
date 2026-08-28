@@ -12,6 +12,7 @@ EnvLoader = Callable[[str], str]
 CredentialResolver = Callable[[str], str]
 IntegrationValidator = Callable[[str, str, str], None]
 SecretValidator = Callable[[str], bool]
+ThinkingSink = Callable[[str], None]
 
 
 def _empty_config() -> dict[str, Any]:
@@ -52,6 +53,7 @@ class MemHostIntegration:
     resolve_provider_credential: CredentialResolver = _no_credential
     validate_integration: IntegrationValidator = _allow_integration
     is_usable_secret: SecretValidator = _nonempty_secret
+    api_b_thinking_sink: ThinkingSink | None = None
 
 
 _host_integration = MemHostIntegration()

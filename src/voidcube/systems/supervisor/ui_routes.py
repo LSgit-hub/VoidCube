@@ -21,6 +21,7 @@ class SupervisorUIRoutePorts:
     get_ui: Callable[..., Any]
     get_state: Callable[..., Any]
     get_events: Callable[..., Any]
+    get_api_b_thinking_events: Callable[..., Any]
     get_voice_levels: Callable[..., Any]
     get_media_events: Callable[..., Any]
     enqueue_media: Callable[..., Any]
@@ -49,6 +50,11 @@ def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
     app.add_api_route(ports.ui_path, ports.get_ui, methods=["GET"])
     app.add_api_route("/ui/state", ports.get_state, methods=["GET"])
     app.add_api_route("/ui/events", ports.get_events, methods=["GET"])
+    app.add_api_route(
+        "/ui/api-b-thinking-events",
+        ports.get_api_b_thinking_events,
+        methods=["GET"],
+    )
     app.add_api_route("/ui/voice-levels", ports.get_voice_levels, methods=["GET"])
     app.add_api_route("/ui/media-events", ports.get_media_events, methods=["GET"])
     app.add_api_route("/ui/media/enqueue", ports.enqueue_media, methods=["POST"])

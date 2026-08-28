@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from memai.host_integration import MemHostIntegration, configure_mem_host_integration
+from memai.host_integration import (
+    MemHostIntegration,
+    configure_mem_host_integration,
+    get_mem_host_integration,
+)
 
 
-def configure_voidcube_mem_host() -> None:
+_UNSET = object()
+
+
+def configure_voidcube_mem_host(
+    *,
+    api_b_thinking_sink: Callable[[str], None] | None | object = _UNSET,
+) -> None:
     from ..config.configuration import get_env_value, load_config
     from ..providers.auth import has_usable_secret
     from ..providers.runtime import resolve_runtime_provider
@@ -25,6 +35,12 @@ def configure_voidcube_mem_host() -> None:
         api_key = str(runtime.get("api_key") or "").strip()
         return api_key if api_key == "no-key-required" or has_usable_secret(api_key) else ""
 
+    thinking_sink = (
+        get_mem_host_integration().api_b_thinking_sink
+        if api_b_thinking_sink is _UNSET
+        else api_b_thinking_sink
+    )
+
     configure_mem_host_integration(
         MemHostIntegration(
             load_config=config_loader,
@@ -32,5 +48,6 @@ def configure_voidcube_mem_host() -> None:
             resolve_provider_credential=credential_resolver,
             validate_integration=require_active_integration,
             is_usable_secret=has_usable_secret,
+            api_b_thinking_sink=thinking_sink if callable(thinking_sink) else None,
         )
     )

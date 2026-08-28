@@ -15,6 +15,7 @@ def _ports(app: FastAPI, *, enabled: bool) -> SupervisorUIRoutePorts:
         get_ui=callback,
         get_state=callback,
         get_events=callback,
+        get_api_b_thinking_events=callback,
         get_voice_levels=callback,
         get_media_events=callback,
         enqueue_media=callback,
@@ -43,6 +44,7 @@ def test_ui_routes_mount_only_when_enabled() -> None:
     assert "/ui" in paths
     assert "/ui/state" in paths
     assert "/ui/events" in paths
+    assert "/ui/api-b-thinking-events" in paths
     assert "/ui/media/enqueue" in paths
     assert "/ui/media/playlist" in paths
     assert "/ui/media/control" in paths

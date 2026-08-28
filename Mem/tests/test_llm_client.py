@@ -12,6 +12,7 @@ from memai import (
     resolve_provider_capabilities,
 )
 from memai.cli import build_parser
+from memai.host_integration import MemHostIntegration, configure_mem_host_integration
 
 
 def test_openai_compatible_client_parses_json_response() -> None:
@@ -272,6 +273,42 @@ def test_openai_compatible_client_streams_json_content_and_reasoning_tags() -> N
     assert "".join(updates) == '{"reply_text":"<think>先检查上下文</think>已确认。","reason":"ok"}'
     assert seen_payloads[0]["stream"] is True
     assert seen_payloads[0]["stream_options"] == {"include_usage": True}
+
+
+def test_openai_compatible_client_auto_streams_api_b_think_updates() -> None:
+    thinking_updates: list[str] = []
+    seen_payloads: list[dict] = []
+
+    def fake_stream_transport(url, headers, payload):
+        seen_payloads.append(payload)
+        return [
+            {"choices": [{"delta": {"content": '{"reply_text":"<think>先'}}]},
+            {"choices": [{"delta": {"content": "检查上下文</think>完成。"}}]},
+            {"choices": [{"delta": {"content": '","reason":"ok"}'}}]},
+        ]
+
+    configure_mem_host_integration(
+        MemHostIntegration(api_b_thinking_sink=thinking_updates.append)
+    )
+    try:
+        client = OpenAICompatibleLLMClient(
+            model="test-model",
+            api_key="test-key",
+            stream_transport=fake_stream_transport,
+            api_b_thinking_enabled=True,
+        )
+
+        payload = client.complete_json(
+            system_prompt="Return JSON",
+            user_payload={"message": "继续"},
+            task="companion.direct_dialogue",
+        )
+    finally:
+        configure_mem_host_integration(MemHostIntegration())
+
+    assert payload["reply_text"] == "<think>先检查上下文</think>完成。"
+    assert thinking_updates == ["先", "先检查上下文"]
+    assert seen_payloads[0]["stream"] is True
 
 
 def test_openai_compatible_client_from_env_applies_provider_overrides(

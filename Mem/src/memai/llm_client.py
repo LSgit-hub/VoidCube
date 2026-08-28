@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import base64
 import json
 import os
+import re
 import threading
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -23,6 +24,10 @@ SYSTEM_PROMPT_STYLES = frozenset({"system", "developer", "inline_user"})
 RESPONSE_FORMAT_STYLES = frozenset({"json_object", "json_object_string", "none"})
 RESPONSE_CONTENT_STYLES = frozenset(
     {"auto", "openai_message", "choices_text", "output_text"}
+)
+_THINK_TAG_RE = re.compile(
+    r"<think\b[^>]*>(?P<body>.*?)(?:</think\s*>|$)",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 
 # ── Token usage tracking (module-level, shared across LLMClient instances) ──
@@ -574,6 +579,15 @@ def _extract_stream_chunk_text(chunk: dict[str, Any]) -> tuple[str, str]:
     return _text_from_content_value(choice.get("text")), ""
 
 
+def latest_think_tag_text(content: str) -> str:
+    latest = ""
+    for match in _THINK_TAG_RE.finditer(str(content or "")):
+        body = match.group("body").strip()
+        if body:
+            latest = body
+    return latest
+
+
 def _extract_json_object(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
@@ -708,6 +722,7 @@ class OpenAICompatibleLLMClient:
         temperature: float = 0.1,
         transport: Transport | None = None,
         stream_transport: StreamTransport | None = None,
+        api_b_thinking_enabled: bool = False,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -720,6 +735,7 @@ class OpenAICompatibleLLMClient:
         self.temperature = temperature
         self.transport = transport or _default_transport
         self.stream_transport = stream_transport or _default_stream_transport
+        self.api_b_thinking_enabled = bool(api_b_thinking_enabled)
         # Update the global context-length estimate.  Pass base_url and
         # api_key so we can try to fetch the real value from the API
         # instead of relying on the static fallback list.
@@ -743,6 +759,7 @@ class OpenAICompatibleLLMClient:
         temperature: float = 0.1,
         transport: Transport | None = None,
         stream_transport: StreamTransport | None = None,
+        api_b_thinking_enabled: bool = False,
     ) -> "OpenAICompatibleLLMClient":
         api_key = os.environ.get(api_key_env)
         if not api_key:
@@ -786,6 +803,7 @@ class OpenAICompatibleLLMClient:
             temperature=temperature,
             transport=transport,
             stream_transport=stream_transport,
+            api_b_thinking_enabled=api_b_thinking_enabled,
         )
 
     @staticmethod
@@ -842,6 +860,18 @@ class OpenAICompatibleLLMClient:
         task: str | None = None,
         response_schema: str | None = None,
     ) -> dict[str, Any]:
+        if self.api_b_thinking_enabled:
+            try:
+                return self.complete_json_stream(
+                    system_prompt=system_prompt,
+                    prompt_key=prompt_key,
+                    fallback_prompt=fallback_prompt,
+                    user_payload=user_payload,
+                    task=task,
+                    response_schema=response_schema,
+                )
+            except Exception:
+                pass
         result, _ = self._complete_json_request(
             system_prompt=system_prompt,
             prompt_key=prompt_key,
@@ -912,6 +942,7 @@ class OpenAICompatibleLLMClient:
         )
         content = _extract_message_content(response, self.provider_capabilities)
         audio = _extract_response_audio(response)
+        self._publish_latest_api_b_thinking(content, "")
         return unwrap_protocol_response(_extract_json_object(content), task=task), audio
 
     def complete_json_stream(
@@ -938,6 +969,8 @@ class OpenAICompatibleLLMClient:
         stream_payload["stream"] = True
         stream_payload.setdefault("stream_options", {"include_usage": True})
         content_parts: list[str] = []
+        streamed_content = ""
+        latest_thinking = ""
         for chunk in self.stream_transport(
             self.provider_capabilities.build_url(self.base_url),
             {
@@ -952,12 +985,37 @@ class OpenAICompatibleLLMClient:
             content_delta, reasoning_delta = _extract_stream_chunk_text(chunk)
             if content_delta:
                 content_parts.append(content_delta)
+                streamed_content += content_delta
                 if on_content is not None:
                     on_content(content_delta)
+                latest_thinking = self._publish_latest_api_b_thinking(
+                    streamed_content,
+                    latest_thinking,
+                )
             if reasoning_delta and on_reasoning is not None:
                 on_reasoning(reasoning_delta)
         content = "".join(content_parts)
         return unwrap_protocol_response(_extract_json_object(content), task=task)
+
+    def _publish_latest_api_b_thinking(
+        self,
+        content: str,
+        previous: str,
+    ) -> str:
+        if not self.api_b_thinking_enabled:
+            return previous
+        latest = latest_think_tag_text(content)
+        if not latest or latest == previous:
+            return previous
+        try:
+            from .host_integration import get_mem_host_integration
+
+            sink = get_mem_host_integration().api_b_thinking_sink
+            if sink is not None:
+                sink(latest)
+        except Exception:
+            pass
+        return latest
 
     def _build_json_request_payload(
         self,

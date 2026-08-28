@@ -425,37 +425,42 @@ body[data-exec-window="false"] .floor {
 .companion-widget-panel.chat-open .companion-chat-content { display: grid; gap: 6px; padding-top: 22px; }
 .companion-think-bubble {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: calc(100% + 8px);
-  z-index: 11;
-  max-height: 96px;
+  left: 50%;
+  bottom: calc(100% - 8px);
+  z-index: 15;
+  width: min(320px, calc(100vw - 32px));
+  max-height: 88px;
   overflow: hidden;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: 1px solid rgba(226,176,74,.34);
   border-radius: 8px;
   background: rgba(255,250,240,.97);
   box-shadow: 0 8px 22px rgba(20,36,52,.2);
   color: #2a1d18;
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.35;
   overflow-wrap: anywhere;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
   opacity: 1;
   transition: opacity .25s ease, transform .25s ease;
 }
-.companion-think-bubble[hidden] { display: block; pointer-events: none; opacity: 0; transform: translateY(6px); }
+.companion-think-bubble[hidden] { display: block; pointer-events: none; opacity: 0; transform: translate(-50%, 6px); }
 .companion-think-bubble::after {
   content: "";
   position: absolute;
-  left: 28px;
+  left: 50%;
   bottom: -6px;
   width: 10px;
   height: 10px;
   background: rgba(255,250,240,.97);
   border-right: 1px solid rgba(226,176,74,.34);
   border-bottom: 1px solid rgba(226,176,74,.34);
-  transform: rotate(45deg);
+  transform: translateX(-50%) rotate(45deg);
+}
+.companion-think-bubble span {
+  display: block;
+  max-height: 74px;
+  overflow: hidden;
 }
 .sofa-shadow {
   position: absolute; left: 8px; right: 8px; bottom: -8px; height: 16px;
@@ -4338,9 +4343,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 沙发 + 日常辅助聊天组件 -->
     <div class="companion-widget" data-companion-widget hidden>
-      <div class="companion-think-bubble" data-companion-think-bubble aria-live="polite" hidden>
-        <span data-companion-think-text></span>
-      </div>
       <div class="companion-chat companion-widget-panel empty" id="companionChatPanel" data-companion-chat aria-live="polite">
         <div class="companion-chat-content" id="companionChatContent">
           <div class="companion-chat-line user" data-chat-user-line>
@@ -4457,6 +4459,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 角色: 西子(长发女) -->
     <section class="xizi" data-companion-launcher aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天" title="打开辅助聊天">
+      <div class="companion-think-bubble" data-companion-think-bubble aria-live="polite" hidden>
+        <span data-companion-think-text></span>
+      </div>
       <div class="xz-hair-back"></div>
       <div class="xz-hair"></div>
       <div class="xz-bangs"></div>
@@ -4479,6 +4484,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
     <!-- 角色: 星子(短发男) -->
     <section class="xingzi" data-companion-launcher aria-controls="companionChatContent" aria-expanded="false" aria-label="打开辅助聊天" title="打开辅助聊天">
+      <div class="companion-think-bubble" data-companion-think-bubble aria-live="polite" hidden>
+        <span data-companion-think-text></span>
+      </div>
       <div class="xs-hair-back"></div>
       <div class="xs-hair"></div>
       <div class="xs-bangs"></div>
@@ -5048,8 +5056,8 @@ const els = {
   companionInputs: $$('[data-companion-input]'),
   companionSends: $$('[data-companion-send]'),
   companionStatuses: $$('[data-chat-status]'),
-  companionThinkBubble: $('[data-companion-think-bubble]'),
-  companionThinkText: $('[data-companion-think-text]'),
+  companionThinkBubbles: $$('[data-companion-think-bubble]'),
+  companionThinkTexts: $$('[data-companion-think-text]'),
   windowMailEntry: $('[data-scene-entry="mail"].window'),
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
@@ -7922,10 +7930,7 @@ function renderCompanionChat(state) {
 
   if (!daily) {
     companionChatOpen = false;
-    hideCompanionThinkBubble();
     els.companionChats.forEach(chat => { chat.classList.remove('chat-open'); });
-  } else {
-    renderCompanionThink(dialogue);
   }
   const activeChat = activeCompanionChat();
   els.companionChats.forEach(chat => {
@@ -8002,35 +8007,44 @@ function activeCompanionStatus() {
   return chat ? $('[data-chat-status]', chat) : null;
 }
 
-function extractLatestThinkText(source) {
-  const text = String(source || '');
-  if (!text) return '';
-  let latest = '';
-  const completeTag = /<think\b[^>]*>([\s\S]*?)<\/think\s*>/gi;
-  let match = null;
-  while ((match = completeTag.exec(text)) !== null) {
-    latest = String(match[1] || '').trim();
-  }
-  if (latest) return latest;
-  const openAt = text.toLowerCase().lastIndexOf('<think');
-  if (openAt < 0) return '';
-  const close = text.indexOf('>', openAt);
-  if (close < 0) return '';
-  return text.slice(close + 1).replace(/<\/think\s*>/gi, '').trim();
-}
-
 function hideCompanionThinkBubble() {
   if (companionThinkHideTimer) {
     clearTimeout(companionThinkHideTimer);
     companionThinkHideTimer = null;
   }
-  if (els.companionThinkBubble) els.companionThinkBubble.hidden = true;
-  if (els.companionThinkText) els.companionThinkText.textContent = '';
+  els.companionThinkBubbles.forEach(bubble => { bubble.hidden = true; });
+  els.companionThinkTexts.forEach(node => {
+    node.textContent = '';
+    node.title = '';
+  });
+}
+
+function activeCompanionThinkNodes() {
+  const activeCharacter = String((els.body && els.body.dataset.character) || 'xizi');
+  const character = activeCharacter === 'xingzi'
+    ? $('.xingzi[data-companion-launcher]')
+    : $('.xizi[data-companion-launcher]');
+  if (!character) return [];
+  return [
+    $('[data-companion-think-bubble]', character),
+    $('[data-companion-think-text]', character),
+  ];
 }
 
 function showCompanionThinkBubble(text, key) {
-  if (!els.companionThinkBubble || !els.companionThinkText || !text) return;
-  if (key && key === lastCompanionThinkKey) return;
+  if (!text) return;
+  const [bubble, node] = activeCompanionThinkNodes();
+  if (!bubble || !node) return;
+  const sameThinking = key && key === lastCompanionThinkKey;
+  if (sameThinking) {
+    els.companionThinkBubbles.forEach(item => { item.hidden = item !== bubble; });
+    els.companionThinkTexts.forEach(item => {
+      item.textContent = item === node ? text.substring(0, 240) : '';
+      item.title = item === node ? text : '';
+    });
+    bubble.hidden = false;
+    return;
+  }
   if (
     text === lastCompanionThinkText
     && Date.now() - lastCompanionThinkShownAt < 3000
@@ -8038,20 +8052,25 @@ function showCompanionThinkBubble(text, key) {
   lastCompanionThinkKey = key || text;
   lastCompanionThinkText = text;
   lastCompanionThinkShownAt = Date.now();
-  els.companionThinkText.textContent = text.substring(0, 360);
-  els.companionThinkText.title = text;
-  els.companionThinkBubble.hidden = false;
+  const preview = text.substring(0, 240);
+  els.companionThinkBubbles.forEach(item => { item.hidden = item !== bubble; });
+  els.companionThinkTexts.forEach(item => {
+    item.textContent = item === node ? preview : '';
+    item.title = item === node ? text : '';
+  });
+  bubble.hidden = false;
   if (companionThinkHideTimer) clearTimeout(companionThinkHideTimer);
   companionThinkHideTimer = setTimeout(hideCompanionThinkBubble, 3000);
 }
 
-function renderCompanionThink(dialogue) {
-  const source = String((dialogue || {}).reply_text || '');
-  const text = extractLatestThinkText(source);
+function renderApiBThinking(state) {
+  const thinking = (state || {}).api_b_thinking || {};
+  const text = String(thinking.text || '').trim();
   if (!text) return;
   const key = [
-    String((dialogue || {}).session_id || ''),
-    String((dialogue || {}).recorded_at || ''),
+    'api-b',
+    String(thinking.revision || ''),
+    String(thinking.updated_at || ''),
     text,
   ].join('|');
   showCompanionThinkBubble(text, key);
@@ -9609,6 +9628,9 @@ function applyState(state) {
   if (els.activeChar !== newChar) {
     els.activeChar = newChar;
     els.body.dataset.character = newChar;
+    if ((lastState || {}).api_b_thinking) {
+      renderApiBThinking(lastState);
+    }
   }
 
   const action = SCENE_TO_ACTION[scene] || 'rest';
@@ -9617,6 +9639,7 @@ function applyState(state) {
   updateDockCharStrip(state);
   updateSceneMiniTitle(state);
   renderCompanionChat(state);
+  renderApiBThinking(state);
 
   // 渲染已打开的面板
   if (panelOpen === 'chain') renderChainPanel(state);
@@ -9702,6 +9725,11 @@ if ('EventSource' in window) {
   const voiceLevels = new EventSource('/ui/voice-levels');
   voiceLevels.addEventListener('level', ev => {
     applyVoiceRealtime(JSON.parse(ev.data));
+  });
+  const apiBThinking = new EventSource('/ui/api-b-thinking-events');
+  apiBThinking.addEventListener('think', ev => {
+    try { renderApiBThinking({api_b_thinking: JSON.parse(ev.data)}); }
+    catch (_error) {}
   });
 } else {
   startFallback();

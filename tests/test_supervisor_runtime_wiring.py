@@ -966,9 +966,9 @@ def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
     assert 'data-chat-reply' in UI_HTML
     assert 'data-companion-think-bubble' in UI_HTML
     assert 'data-companion-think-text' in UI_HTML
-    assert 'function extractLatestThinkText' in UI_HTML
-    assert 'const completeTag = /<think\\b[^>]*>([\\s\\S]*?)<\\/think\\s*>/gi' in UI_HTML
-    assert 'renderCompanionThink(dialogue)' in UI_HTML
+    assert 'function renderApiBThinking' in UI_HTML
+    assert "/ui/api-b-thinking-events" in UI_HTML
+    assert "api_b_thinking" in UI_HTML
     assert 'setTimeout(hideCompanionThinkBubble, 3000)' in UI_HTML
     assert "fetch('/companion/message/stream'" in UI_HTML
     assert 'readCompanionMessageStream(response)' in UI_HTML
@@ -1273,6 +1273,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui" in route_paths
     assert "/ui/state" in route_paths
     assert "/ui/events" in route_paths
+    assert "/ui/api-b-thinking-events" in route_paths
     assert "/ui/voice-levels" in route_paths
     assert "/ui/identity/archive" in route_paths
     assert "/ui/identity/turns" in route_paths
@@ -3645,6 +3646,22 @@ async def test_companion_message_stream_emits_latest_think_updates_and_result(tm
     assert '"text":"再确认用户目标"' in response.text
     assert "event: result" in response.text
     assert '"reply_text":"已确认。"' in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_exposes_global_api_b_thinking_sink(tmp_path):
+    from memai.host_integration import get_mem_host_integration
+
+    supervisor = _make_supervisor(tmp_path)
+    sink = get_mem_host_integration().api_b_thinking_sink
+    assert sink is not None
+
+    sink("正在评估 API-B 判断在途任务")
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["api_b_thinking"]["text"] == "正在评估 API-B 判断在途任务"
+    assert state["api_b_thinking"]["revision"] >= 1
 
 
 @pytest.mark.asyncio

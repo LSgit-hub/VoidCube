@@ -271,8 +271,12 @@ def resolve_mem_llm(role: str = "default") -> MemLLMResolution:
         # to pay for the openai/httpx import chain.
         from memai.llm_client import OpenAICompatibleLLMClient
 
+        host = get_mem_host_integration()
         client = OpenAICompatibleLLMClient(
-            model=model, api_key=api_key, base_url=base_url
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            api_b_thinking_enabled=host.api_b_thinking_sink is not None,
         )
         logger.debug(
             "Mem LLM client resolved via %s (role=%s, model=%s)",
