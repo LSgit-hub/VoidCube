@@ -17,10 +17,7 @@ from .ui_projection import (
     project_observation_board,
     project_recent_autonomous_activity,
 )
-from .ui_state_projection import (
-    project_supervisor_scene,
-    project_ui_metrics,
-)
+from .ui_state_projection import project_supervisor_scene_state, project_ui_metrics
 
 
 JsonDict = Dict[str, Any]
@@ -264,16 +261,18 @@ async def build_supervisor_ui_state(
         body_status=body_status,
         error_count=error_count,
     )
-    scene, title, summary = project_supervisor_scene(
-        autonomous_observation=autonomous_observation,
-        observation_input_available=observation_input_available,
-        error_count=error_count,
-        memory_active=tier1_stats.get("memory_active", False),
-    )
     stellar_mode = context.stellar_mode_status()
     voice_status = context.voice_status()
+    scene_projection = dict(
+        project_supervisor_scene_state(
+            autonomous_observation=autonomous_observation,
+            observation_input_available=observation_input_available,
+            error_count=error_count,
+            memory_active=tier1_stats.get("memory_active", False),
+            mode=str(stellar_mode.get("mode") or ""),
+        )
+    )
     if stellar_mode.get("mode") == "daily_companion":
-        scene = "idle"
         title = "日常陪伴中"
         latest_dialogue = dict(stellar_mode.get("latest_companion_dialogue") or {})
         latest_observation = dict(stellar_mode.get("latest_companion_observation") or {})
@@ -285,6 +284,18 @@ async def build_supervisor_ui_state(
             summary = "已理解当前任务，在确有帮助前保持安静。"
         else:
             summary = "正在安静陪伴并观察 VoidCube 内部事件。"
+        scene_projection.update(
+            {
+                "scene": "idle",
+                "room_location": "sofa",
+                "action": "rest",
+                "title": title,
+                "summary": summary,
+                "stage": "companion",
+                "task_id": "",
+                "mode": "daily_companion",
+            }
+        )
 
     cognition_snapshot = _normalize_loaded_cognition_state(
         context.load_cognition_state()
@@ -361,9 +372,14 @@ async def build_supervisor_ui_state(
         "status": "ok",
         "stellar_mode": stellar_mode,
         "voice": voice_status,
-        "scene": scene,
-        "title": title,
-        "summary": summary,
+        "scene": scene_projection["scene"],
+        "title": scene_projection["title"],
+        "summary": scene_projection["summary"],
+        "room_location": scene_projection["room_location"],
+        "scene_action": scene_projection["action"],
+        "scene_stage": scene_projection["stage"],
+        "scene_task_id": scene_projection["task_id"],
+        "scene_mode": scene_projection["mode"],
         "generated_at": datetime.utcnow().isoformat(),
         "autonomous_observation": autonomous_observation,
         "mem_usage": load_ui_memory_token_usage(),

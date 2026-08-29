@@ -111,6 +111,7 @@ def loop_stage_status_label(status: str) -> str:
         "active": "当前在途",
         "ready": "已观察到",
         "stale": "执行器失联",
+        "returned": "已回传星子",
         "idle": "等待中",
     }
     return mapping.get(str(status or "").strip().lower(), "等待中")

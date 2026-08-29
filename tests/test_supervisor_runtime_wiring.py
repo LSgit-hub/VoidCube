@@ -59,6 +59,7 @@ from voidcube.systems.supervisor.ui_trace_projection import (
 )
 from voidcube.systems.supervisor.ui_state_projection import (
     project_supervisor_scene,
+    project_supervisor_scene_state,
     project_ui_metrics,
 )
 UI_HTML = load_supervisor_ui_html()
@@ -2785,8 +2786,12 @@ async def test_supervisor_room_state_maps_running_employee_task_to_handoff_scene
     state = await supervisor._ui_runtime.get_state()
 
     assert state["scene"] == "handoff"
-    assert "自主交接中" in state["title"]
-    assert "已交给 员工代理执行面处理" in state["summary"]
+    assert "正在派发员工任务" in state["title"]
+    assert "正在由员工代理执行" in state["summary"]
+    assert state["room_location"] == "computer_desk"
+    assert state["scene_action"] == "work"
+    assert state["scene_stage"] == "running"
+    assert state["scene_task_id"] == task_id
 
 
 @pytest.mark.asyncio
@@ -3269,8 +3274,17 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
 async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     with patch(
-        "voidcube.systems.supervisor.ui_state_orchestration.project_supervisor_scene",
-        return_value=("planning", "Auto judgement", "Auto work is active."),
+        "voidcube.systems.supervisor.ui_state_orchestration.project_supervisor_scene_state",
+        return_value={
+            "scene": "planning",
+            "room_location": "writing_desk",
+            "action": "write",
+            "title": "Auto judgement",
+            "summary": "Auto work is active.",
+            "stage": "planning",
+            "task_id": "",
+            "mode": "auto_evolution",
+        },
     ):
         daily = await supervisor._ui_runtime.get_state()
 
@@ -3674,11 +3688,95 @@ async def test_supervisor_ui_exposes_global_api_b_thinking_sink(tmp_path):
     sink = get_mem_host_integration().api_b_thinking_sink
     assert sink is not None
 
+    initial_state = await supervisor._ui_runtime.get_state()
+    supervisor._ui_runtime.set_api_b_thinking_context(
+        scene=initial_state["scene"],
+        stage=initial_state["scene_stage"],
+        task_id=initial_state["scene_task_id"],
+        mode=initial_state["scene_mode"],
+    )
     sink("正在评估 API-B 判断在途任务")
     state = await supervisor._ui_runtime.get_state()
 
     assert state["api_b_thinking"]["text"] == "正在评估 API-B 判断在途任务"
     assert state["api_b_thinking"]["revision"] >= 1
+    assert state["api_b_thinking"]["scene"] == initial_state["scene"]
+    assert state["api_b_thinking"]["stage"] == initial_state["scene_stage"]
+    assert state["api_b_thinking"]["task_id"] == initial_state["scene_task_id"]
+    assert state["api_b_thinking"]["mode"] == initial_state["scene_mode"]
+
+
+@pytest.mark.unit
+def test_supervisor_ui_scopes_an_early_thinking_event_when_scene_is_first_loaded(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    supervisor._ui_runtime.record_api_b_thinking("早到达的规划进展")
+    supervisor._ui_runtime.set_api_b_thinking_context(
+        scene="planning",
+        stage="planning",
+        task_id="early-task",
+        mode="auto_evolution",
+    )
+
+    thinking = supervisor._ui_runtime.current_api_b_thinking()
+
+    assert thinking["text"] == ""
+    assert thinking["scene"] == "planning"
+    assert thinking["stage"] == "planning"
+    assert thinking["task_id"] == "early-task"
+    assert thinking["mode"] == "auto_evolution"
+    assert thinking["scene_state_revision"] >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_state_and_thinking_share_scene_revision(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    runtime = supervisor._ui_runtime
+
+    state = await runtime.get_state()
+    runtime.record_api_b_thinking("正在陪伴模式中处理当前对话")
+    refreshed = await runtime.get_state()
+
+    assert refreshed["scene_state_revision"] == state["scene_state_revision"]
+    assert refreshed["api_b_thinking"]["scene_state_revision"] == (
+        refreshed["scene_state_revision"]
+    )
+    assert refreshed["api_b_thinking"]["scene"] == refreshed["scene"]
+    assert refreshed["api_b_thinking"]["stage"] == refreshed["scene_stage"]
+
+
+@pytest.mark.unit
+def test_supervisor_ui_clears_thinking_when_scene_state_revision_changes(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    runtime = supervisor._ui_runtime
+
+    runtime.set_api_b_thinking_context(
+        scene="planning",
+        stage="planning",
+        task_id="task-1",
+        mode="auto_evolution",
+    )
+    runtime.record_api_b_thinking("正在规划任务")
+    first = runtime.current_api_b_thinking()
+
+    runtime.set_api_b_thinking_context(
+        scene="handoff",
+        stage="dispatched",
+        task_id="task-1",
+        mode="auto_evolution",
+    )
+    second = runtime.current_api_b_thinking()
+
+    assert second["text"] == ""
+    assert second["scene"] == "handoff"
+    assert second["stage"] == "dispatched"
+    assert second["scene_state_revision"] > first["scene_state_revision"]
+
+    runtime.record_api_b_thinking("正在等待员工接手")
+    current = runtime.current_api_b_thinking()
+    assert current["text"] == "正在等待员工接手"
+    assert current["scene_state_revision"] == second["scene_state_revision"]
 
 
 @pytest.mark.asyncio

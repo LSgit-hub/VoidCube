@@ -795,7 +795,7 @@ body[data-exec-window="false"] .floor {
   will-change: transform, filter;
 }
 body[data-action="work"] .monitor-cursor,
-body[data-scene="drive"] .monitor-cursor {
+body[data-scene="handoff"] .monitor-cursor {
   animation: cursor-blink 1.1s steps(2) infinite;
 }
 .desk-write[data-scene-entry] { cursor: pointer; }
@@ -1006,7 +1006,7 @@ body[data-scene="maintenance"] .plant-corner .leaves {
 }
 @media (prefers-reduced-motion: reduce) {
   body[data-action="work"] .monitor-cursor,
-  body[data-scene="drive"] .monitor-cursor,
+  body[data-scene="handoff"] .monitor-cursor,
   body[data-scene="planning"] .dw-paper,
   body[data-scene="memory"] .plant-corner .leaves,
   body[data-scene="maintenance"] .plant-corner .leaves { animation: none; }
@@ -5307,7 +5307,7 @@ const GLYPHS = {
   maintenance: '¶', handoff: '⟩',
 };
 const SCENE_ICONS = {
-  idle: '🛋', planning: '💻', drive: '📚', memory: '🧠',
+  idle: '🛋', planning: '📝', drive: '📝', memory: '🧠',
   maintenance: '🔧', handoff: '✍️',
 };
 
@@ -8197,11 +8197,41 @@ function showCompanionThinkBubble(text, key) {
 function renderApiBThinking(state) {
   const thinking = (state || {}).api_b_thinking || {};
   const text = String(thinking.text || '').trim();
-  if (!text) return;
+  if (!text) {
+    hideCompanionThinkBubble();
+    return;
+  }
+  const current = lastState || {};
+  const thinkingScene = String(thinking.scene || '').trim();
+  const currentScene = String(current.scene || '').trim();
+  const thinkingTaskId = String(thinking.task_id || '').trim();
+  const currentTaskId = String(current.scene_task_id || '').trim();
+  const thinkingMode = String(thinking.mode || '').trim();
+  const currentMode = String(
+    current.scene_mode || ((current.stellar_mode || {}).mode || '')
+  ).trim();
+  const thinkingSceneRevision = Number(thinking.scene_state_revision || 0);
+  const currentSceneRevision = Number(current.scene_state_revision || 0);
+  if (
+    (thinkingScene && currentScene && thinkingScene !== currentScene)
+    || (thinkingTaskId && currentTaskId && thinkingTaskId !== currentTaskId)
+    || (thinkingMode && currentMode && thinkingMode !== currentMode)
+    || (
+      thinkingSceneRevision
+      && currentSceneRevision
+      && thinkingSceneRevision !== currentSceneRevision
+    )
+  ) {
+    hideCompanionThinkBubble();
+    return;
+  }
   const key = [
     'api-b',
     String(thinking.revision || ''),
     String(thinking.updated_at || ''),
+    thinkingScene,
+    String(thinking.stage || ''),
+    thinkingTaskId,
     text,
   ].join('|');
   showCompanionThinkBubble(text, key);
@@ -8237,10 +8267,7 @@ async function readCompanionMessageStream(response) {
       buffer = buffer.slice(boundary + 2);
       const event = parseCompanionStreamEvent(block);
       if (event && event.eventName === 'think') {
-        showCompanionThinkBubble(
-          String(event.payload.text || ''),
-          'stream|' + String(event.payload.text || '')
-        );
+        renderApiBThinking({api_b_thinking: event.payload || {}});
       } else if (event && event.eventName === 'result') {
         result = event.payload || {};
       } else if (event && event.eventName === 'error') {
@@ -9776,6 +9803,15 @@ async function verifyAccount(id) {
 
 /* ── 应用状态(主入口) ── */
 function applyState(state) {
+  const incomingStateRevision = Number((state || {}).ui_state_revision || 0);
+  const currentStateRevision = Number(lastState && lastState.ui_state_revision || 0);
+  if (
+    incomingStateRevision
+    && currentStateRevision
+    && incomingStateRevision < currentStateRevision
+  ) {
+    return;
+  }
   lastState = state;
   markConnection('connected');
 
@@ -9790,7 +9826,12 @@ function applyState(state) {
 
   const scene = state.scene || 'idle';
   const prevScene = els.body.dataset.scene;
+  const prevStage = els.body.dataset.sceneStage || '';
+  const prevTaskId = els.body.dataset.sceneTaskId || '';
   els.body.dataset.scene = scene;
+  els.body.dataset.sceneStage = String(state.scene_stage || '');
+  els.body.dataset.sceneTaskId = String(state.scene_task_id || '');
+  els.body.dataset.roomLocation = String(state.room_location || '');
   els.glyph.textContent = GLYPHS[scene] || '·';
   if (els.glyphXingzi) els.glyphXingzi.textContent = GLYPHS[scene] || '·';
   els.body.dataset.hasErrors = ((state.error_count || 0) > 0) ? 'true' : 'false';
@@ -9808,12 +9849,19 @@ function applyState(state) {
     }
   }
 
-  const action = SCENE_TO_ACTION[scene] || 'rest';
+  const action = String(state.scene_action || SCENE_TO_ACTION[scene] || 'rest');
   setAction(action, true);
 
   updateDockCharStrip(state);
   updateSceneMiniTitle(state);
   renderCompanionChat(state);
+  if (
+    scene !== prevScene
+    || els.body.dataset.sceneStage !== prevStage
+    || els.body.dataset.sceneTaskId !== prevTaskId
+  ) {
+    hideCompanionThinkBubble();
+  }
   renderApiBThinking(state);
 
   // 渲染已打开的面板

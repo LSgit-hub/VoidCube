@@ -524,6 +524,7 @@ class Supervisor(
                         {
                             "text": think_text,
                             "sequence": think_sequence["value"],
+                            **self._ui_runtime.current_api_b_thinking_context(),
                         },
                     ),
                 )

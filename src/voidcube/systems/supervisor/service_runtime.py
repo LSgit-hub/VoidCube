@@ -648,7 +648,9 @@ class ServiceRuntimeMixin:
             )
             return disposition
 
-        if bool(dict(getattr(task, "metadata", {}) or {}).get("assist_mode")):
+        # Result handling follows the mode active when the result is
+        # recovered, not a stale mode hint copied into task metadata.
+        if self._service_runtime.stellar_mode == StellarMode.DAILY_COMPANION:
             result_text = str(
                 result_context.get("result_summary")
                 or result_context.get("employee_final_response")

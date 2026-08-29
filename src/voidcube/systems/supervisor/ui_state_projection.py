@@ -12,6 +12,25 @@ from .ui_projection import (
 )
 
 
+SCENE_ROOM_LOCATIONS = {
+    "idle": "sofa",
+    "planning": "writing_desk",
+    "drive": "writing_desk",
+    "memory": "bookshelf",
+    "maintenance": "bookshelf",
+    "handoff": "computer_desk",
+}
+
+SCENE_ACTIONS = {
+    "idle": "rest",
+    "planning": "write",
+    "drive": "write",
+    "memory": "organize",
+    "maintenance": "organize",
+    "handoff": "work",
+}
+
+
 def format_slot_overview(body_status: dict[str, Any]) -> str:
     active_slot = str(body_status.get("active_slot") or "").strip()
     shell_slot = str(body_status.get("shell_slot") or "").strip()
@@ -78,13 +97,41 @@ def project_ui_metrics(
     }
 
 
-def project_supervisor_scene(
+def _employee_result_disposition(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(task.get("metadata") or {})
+    return dict(metadata.get("employee_result_disposition") or {})
+
+
+def _scene_projection(
+    *,
+    scene: str,
+    title: str,
+    summary: str,
+    stage: str,
+    task_id: str = "",
+    mode: str = "",
+) -> dict[str, str]:
+    normalized_scene = str(scene or "idle").strip().lower() or "idle"
+    return {
+        "scene": normalized_scene,
+        "room_location": SCENE_ROOM_LOCATIONS.get(normalized_scene, "sofa"),
+        "action": SCENE_ACTIONS.get(normalized_scene, "rest"),
+        "title": str(title or "").strip(),
+        "summary": str(summary or "").strip(),
+        "stage": str(stage or "idle").strip().lower() or "idle",
+        "task_id": str(task_id or "").strip(),
+        "mode": str(mode or "").strip().lower(),
+    }
+
+
+def project_supervisor_scene_state(
     *,
     autonomous_observation: dict[str, Any],
     observation_input_available: bool,
     error_count: int = 0,
     memory_active: bool = False,
-) -> tuple[str, str, str]:
+    mode: str = "",
+) -> dict[str, str]:
     """Map an observation snapshot to a legal Supervisor scene."""
     error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
     board = dict(autonomous_observation.get("board") or {})
@@ -118,12 +165,47 @@ def project_supervisor_scene(
     employee_stage = observation_loop_stage(autonomous_observation, "employee_execution")
     employee_focus = dict(employee_stage.get("focus_task") or {})
     employee_status = str(employee_stage.get("status") or "").strip().lower()
+    employee_disposition = _employee_result_disposition(employee_focus)
+    employee_result_status = str(
+        employee_disposition.get("status") or ""
+    ).strip().lower()
+    employee_task_id = str(employee_focus.get("task_id") or "").strip()
 
-    if employee_status == "active" and employee_focus:
-        return (
-            "handoff",
-            f"自主交接中{error_note}",
-            f"「{employee_focus.get('title', '自主链路项')}」已交给 员工代理执行面处理，结果完成后先回传星子。",
+    if employee_status in {"active", "ready", "stale"} and employee_focus:
+        if employee_status == "active":
+            return _scene_projection(
+                scene="handoff",
+                title=f"正在派发员工任务{error_note}",
+                summary=(
+                    f"「{employee_focus.get('title', '自主链路项')}」正在由员工代理执行，"
+                    "完成后先回传星子。"
+                ),
+                stage="running",
+                task_id=employee_task_id,
+                mode=mode,
+            )
+        if employee_status == "stale":
+            return _scene_projection(
+                scene="handoff",
+                title=f"员工任务等待恢复{error_note}",
+                summary=(
+                    f"「{employee_focus.get('title', '自主链路项')}」已经派发，"
+                    "当前等待员工执行器恢复。"
+                ),
+                stage="dispatched",
+                task_id=employee_task_id,
+                mode=mode,
+            )
+        return _scene_projection(
+            scene="handoff",
+            title=f"正在派发员工任务{error_note}",
+            summary=(
+                f"「{employee_focus.get('title', '自主链路项')}」已经派发，"
+                "等待员工代理接手。"
+            ),
+            stage="dispatched",
+            task_id=employee_task_id,
+            mode=mode,
         )
 
     api_b_stage_status = str(api_b_stage.get("status") or "").strip().lower()
@@ -134,27 +216,28 @@ def project_supervisor_scene(
     api_b_focus_family = str(
         api_b_focus.get("task_family") or judgement_focus_family
     ).strip().lower()
-    if api_b_stage_status == "active" and api_b_focus:
-        if "memory" in api_b_focus_family:
-            return (
-                "maintenance",
-                f"正在整理记忆{error_note}",
-                f"「{api_b_focus_title}」正在由 Supervisor 维护记忆连续性。",
-            )
-        return (
-            "planning",
-            f"正在安排判断事项{error_note}",
-            f"「{api_b_focus_title}」正处在 API-B 判断过程中。",
+
+    if employee_status == "returned" and employee_focus:
+        return _scene_projection(
+            scene="planning",
+            title={
+                "returned_to_xingzi": "正在回收员工结果",
+                "awaiting_user_report": "等待向用户回报",
+                "reported_to_user": "已向用户回报",
+                "awaiting_mem_review": "等待星子判断",
+                "written_to_mem": "星子已处理 Mem",
+                "mem_write_failed": "Mem 处理失败",
+            }.get(employee_result_status, "正在回收员工结果"),
+            summary=(
+                f"「{employee_focus.get('title', '自主链路项')}」的执行结果已经回到星子，"
+                f"当前阶段为 {employee_result_status or 'returned_to_xingzi'}。"
+            ),
+            stage=employee_result_status or "returned_to_xingzi",
+            task_id=employee_task_id,
+            mode=mode,
         )
 
-    if memory_active and not employee_focus:
-        return (
-            "memory",
-            f"正在整理记忆{error_note}",
-            "记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
-        )
-
-    if candidate_count and candidate_focus:
+    if candidate_count and candidate_focus and not judgement_count:
         metadata = dict(candidate_focus.get("metadata") or {})
         value_tags = ", ".join(
             metadata.get("core_values") or candidate_focus.get("value_tags") or []
@@ -162,26 +245,94 @@ def project_supervisor_scene(
         utility_pct = int(
             (metadata.get("utility") or candidate_focus.get("utility") or 0) * 100
         )
-        return (
-            "drive",
-            f"发现值得优先处理的事{error_note}",
-            f"「{candidate_focus.get('title', '链路项')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待 API-B 判断。",
+        return _scene_projection(
+            scene="planning",
+            title=f"正在规划任务{error_note}",
+            summary=(
+                f"「{candidate_focus.get('title', '链路项')}」从内生驱动中形成候选"
+                f" [{value_tags}]，价值度 {utility_pct}%，等待 API-B 判断。"
+            ),
+            stage="candidate",
+            task_id=str(candidate_focus.get("task_id") or ""),
+            mode=mode,
+        )
+
+    if api_b_stage_status == "active" and api_b_focus:
+        if "memory" in api_b_focus_family:
+            return _scene_projection(
+                scene="maintenance",
+                title=f"正在整理记忆{error_note}",
+                summary=f"「{api_b_focus_title}」正在由 Supervisor 维护记忆连续性。",
+                stage="memory_maintenance",
+                task_id=str(api_b_focus.get("task_id") or ""),
+                mode=mode,
+            )
+        return _scene_projection(
+            scene="planning",
+            title=f"正在规划任务{error_note}",
+            summary=f"「{api_b_focus_title}」正处在 API-B 规划判断过程中。",
+            stage="planning",
+            task_id=str(api_b_focus.get("task_id") or ""),
+            mode=mode,
+        )
+
+    if memory_active and not employee_focus:
+        return _scene_projection(
+            scene="memory",
+            title=f"正在整理记忆{error_note}",
+            summary="记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
+            stage="memory_maintenance",
+            mode=mode,
         )
 
     if judgement_count and focus_stage_key == "api_b_judgement":
         if "memory" in focus_task_family or "memory" in judgement_focus_family:
             title = judgement_focus_title or focus_title
-            return (
-                "maintenance",
-                f"正在整理记忆{error_note}",
-                f"API-B 正在整理「{title}」。",
+            return _scene_projection(
+                scene="maintenance",
+                title=f"正在整理记忆{error_note}",
+                summary=f"API-B 正在整理「{title}」。",
+                stage="memory_maintenance",
+                task_id=str(judgement_focus.get("task_id") or ""),
+                mode=mode,
             )
-        return (
-            "planning",
-            f"正在安排判断事项{error_note}",
-            f"API-B 正在判断 {judgement_count} 个链路项。",
+        return _scene_projection(
+            scene="planning",
+            title=f"正在规划任务{error_note}",
+            summary=f"API-B 正在规划判断 {judgement_count} 个链路项。",
+            stage="planning",
+            task_id=str(judgement_focus.get("task_id") or ""),
+            mode=mode,
         )
 
     if not observation_input_available:
-        return "idle", "望着窗外", "网关暂不可用，房间先显示本地状态。"
-    return "idle", f"在窗边休息{error_note}", "当前没有新的自主动作。"
+        return _scene_projection(
+            scene="idle",
+            title="望着窗外",
+            summary="网关暂不可用，房间先显示本地状态。",
+            stage="idle",
+            mode=mode,
+        )
+    return _scene_projection(
+        scene="idle",
+        title=f"在窗边休息{error_note}",
+        summary="当前没有新的自主动作。",
+        stage="idle",
+        mode=mode,
+    )
+
+
+def project_supervisor_scene(
+    *,
+    autonomous_observation: dict[str, Any],
+    observation_input_available: bool,
+    error_count: int = 0,
+    memory_active: bool = False,
+) -> tuple[str, str, str]:
+    projected = project_supervisor_scene_state(
+        autonomous_observation=autonomous_observation,
+        observation_input_available=observation_input_available,
+        error_count=error_count,
+        memory_active=memory_active,
+    )
+    return projected["scene"], projected["title"], projected["summary"]

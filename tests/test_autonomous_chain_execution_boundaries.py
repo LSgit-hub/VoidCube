@@ -308,6 +308,45 @@ async def test_employee_result_recovery_routes_auto_result_through_mem_review():
 
 
 @pytest.mark.asyncio
+async def test_employee_result_recovery_uses_current_mode_over_stale_task_hint():
+    from voidcube.systems.supervisor.service_runtime import (
+        ServiceRuntimeMixin,
+        ServiceRuntimeState,
+        StellarMode,
+    )
+
+    task = SimpleNamespace(
+        task_id="mode-switch-task",
+        title="模式切换任务",
+        source="companion",
+        status="completed",
+        metadata={"assist_mode": True},
+    )
+    task_state = SimpleNamespace(
+        update_metadata=Mock(side_effect=lambda task_id, metadata: task)
+    )
+    promotion = AsyncMock(
+        return_value={"status": "recorded_only", "source_memory_id": "mem-2"}
+    )
+
+    class Host(ServiceRuntimeMixin):
+        _service_runtime = ServiceRuntimeState(stellar_mode=StellarMode.AUTO_EVOLUTION)
+        _autonomous_task_state = task_state
+        _autonomous_task_memory_promotion_service = SimpleNamespace(
+            propose=promotion
+        )
+
+    result = await Host()._handle_employee_result(
+        task,
+        {"employee_run_id": "run-2", "result_summary": "已完成"},
+        "completed",
+    )
+
+    assert result["status"] == "written_to_mem"
+    promotion.assert_awaited_once_with(task)
+
+
+@pytest.mark.asyncio
 async def test_recurring_assist_schedule_rotates_canonical_task(tmp_path):
     chain_store = AutonomousChainStore(tmp_path / "chain.json")
     scheduled_store = ScheduledTaskStore(tmp_path / "scheduled.db")

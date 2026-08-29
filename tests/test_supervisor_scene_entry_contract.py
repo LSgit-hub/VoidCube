@@ -42,6 +42,36 @@ def test_autonomous_task_drawer_explicitly_excludes_schedules():
     assert "board.autonomous_history" in drawer_source
 
 
+def test_room_scene_projection_uses_backend_stage_context():
+    assert "scene_stage" in HTML
+    assert "scene_task_id" in HTML
+    assert "room_location" in HTML
+    assert "scene_action" in HTML
+    assert "planning: '📝'" in HTML
+    assert "drive: '📝'" in HTML
+    assert "body[data-scene=\"drive\"] .monitor-cursor" not in HTML
+
+
+def test_thinking_bubble_clears_and_rejects_stale_scene_context():
+    start = HTML.index("function renderApiBThinking")
+    end = HTML.index("function parseCompanionStreamEvent", start)
+    thinking_source = HTML[start:end]
+    assert "hideCompanionThinkBubble();" in thinking_source
+    assert "thinking.scene" in thinking_source
+    assert "thinking.stage" in thinking_source
+    assert "thinking.task_id" in thinking_source
+    assert "thinking.scene_state_revision" in thinking_source
+    assert "current.scene_state_revision" in thinking_source
+
+
+def test_state_application_rejects_older_ui_state_revision():
+    start = HTML.index("function applyState")
+    end = HTML.index("function setAction", start)
+    apply_source = HTML[start:end]
+    assert "ui_state_revision" in apply_source
+    assert "incomingStateRevision < currentStateRevision" in apply_source
+
+
 def test_xingzi_direct_text_chat_uses_companion_boundary():
     assert 'class="companion-widget" data-companion-widget' in HTML
     assert '<section class="xizi" data-companion-launcher' in HTML

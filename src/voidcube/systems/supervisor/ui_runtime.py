@@ -82,6 +82,7 @@ from .ui_state_orchestration import (
     SupervisorUIStateContext,
     build_supervisor_ui_state,
 )
+from .ui_state_projection import SCENE_ACTIONS, SCENE_ROOM_LOCATIONS
 from .ui_stream_adapters import (
     control_media_request,
     enqueue_media_request,
@@ -176,6 +177,30 @@ class SupervisorUIRuntime:
         self._api_b_thinking_lock = threading.Lock()
         self.api_b_thinking: JsonDict = {}
         self.api_b_thinking_revision = 0
+        self.api_b_thinking_context: JsonDict = {
+            "scene": "idle",
+            "stage": "companion",
+            "task_id": "",
+            "mode": "daily_companion",
+            "scene_state_revision": 0,
+            "ui_state_revision": 0,
+            "ui_phase_revision": 0,
+        }
+        self.ui_state_revision = 0
+        self.scene_state_revision = 0
+        self.ui_phase_revision = 0
+        self.ui_phase: JsonDict = {
+            "scene": "idle",
+            "room_location": "sofa",
+            "action": "rest",
+            "stage": "companion",
+            "task_id": "",
+            "mode": "daily_companion",
+            "summary": "",
+            "source_event": "startup",
+            "updated_at": "",
+            "ui_phase_revision": 0,
+        }
 
     def _media_context(self) -> SupervisorUIMediaStateContext:
         return SupervisorUIMediaStateContext(
@@ -209,6 +234,162 @@ class SupervisorUIRuntime:
     def list_deliveries(self) -> list[JsonDict]:
         return [dict(item) for item in self.delivery_items]
 
+    def current_ui_phase(self) -> JsonDict:
+        with self._api_b_thinking_lock:
+            return dict(self.ui_phase)
+
+    def publish_ui_phase(
+        self,
+        *,
+        scene: str,
+        stage: str,
+        task_id: str = "",
+        mode: str = "",
+        summary: str = "",
+        source_event: str = "",
+        thinking_text: str = "",
+    ) -> JsonDict:
+        """Publish one authoritative phase for both the room and Think."""
+        normalized_scene = str(scene or "idle").strip().lower() or "idle"
+        normalized_stage = str(stage or "idle").strip().lower() or "idle"
+        normalized_mode = str(mode or "").strip().lower()
+        normalized_task_id = str(task_id or "").strip()
+        normalized_summary = str(summary or "").strip()[:500]
+        normalized_source_event = str(source_event or "").strip()[:120]
+        with self._api_b_thinking_lock:
+            self.ui_phase_revision += 1
+            self.scene_state_revision += 1
+            phase = {
+                "scene": normalized_scene,
+                "room_location": SCENE_ROOM_LOCATIONS.get(
+                    normalized_scene,
+                    "sofa",
+                ),
+                "action": SCENE_ACTIONS.get(normalized_scene, "rest"),
+                "stage": normalized_stage,
+                "task_id": normalized_task_id,
+                "mode": normalized_mode,
+                "summary": normalized_summary,
+                "source_event": normalized_source_event,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "ui_phase_revision": self.ui_phase_revision,
+            }
+            context = {
+                "scene": normalized_scene,
+                "stage": normalized_stage,
+                "task_id": normalized_task_id,
+                "mode": normalized_mode,
+                "scene_state_revision": self.scene_state_revision,
+                "ui_state_revision": self.ui_state_revision,
+                "ui_phase_revision": self.ui_phase_revision,
+            }
+            self.api_b_thinking_context = context
+            self.api_b_thinking_revision += 1
+            self.api_b_thinking = {
+                "text": "",
+                "revision": self.api_b_thinking_revision,
+                **context,
+            }
+            self.ui_phase = phase
+            cleaned_thinking = str(thinking_text or "").strip()
+            if cleaned_thinking:
+                self.api_b_thinking_revision += 1
+                self.api_b_thinking = {
+                    "text": cleaned_thinking[:600],
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "revision": self.api_b_thinking_revision,
+                    **context,
+                }
+            return dict(phase)
+
+    def set_api_b_thinking_context(
+        self,
+        *,
+        scene: str,
+        stage: str,
+        task_id: str = "",
+        mode: str = "",
+    ) -> None:
+        with self._api_b_thinking_lock:
+            context = {
+                "scene": str(scene or "").strip().lower(),
+                "stage": str(stage or "").strip().lower(),
+                "task_id": str(task_id or "").strip(),
+                "mode": str(mode or "").strip().lower(),
+            }
+            previous = {
+                key: str(self.api_b_thinking_context.get(key) or "").strip()
+                for key in ("scene", "stage", "task_id", "mode")
+            }
+            semantic_context = {
+                key: str(context.get(key) or "").strip()
+                for key in ("scene", "stage", "task_id", "mode")
+            }
+            if semantic_context != previous:
+                self.scene_state_revision += 1
+                self.api_b_thinking_revision += 1
+                self.api_b_thinking = {
+                    "text": "",
+                    "revision": self.api_b_thinking_revision,
+                }
+            context["scene_state_revision"] = self.scene_state_revision
+            context["ui_state_revision"] = self.ui_state_revision
+            context["ui_phase_revision"] = self.ui_phase_revision
+            self.api_b_thinking_context = context
+
+    def current_api_b_thinking_context(self) -> JsonDict:
+        with self._api_b_thinking_lock:
+            return dict(self.api_b_thinking_context)
+
+    def _publish_scene_state_context(self, state: JsonDict) -> None:
+        """Publish one coherent scene context before exposing its Think payload."""
+        with self._api_b_thinking_lock:
+            self.ui_state_revision += 1
+            phase = dict(self.ui_phase)
+            phase_revision = int(phase.get("ui_phase_revision") or 0)
+            if phase_revision:
+                state.update(
+                    {
+                        "scene": phase["scene"],
+                        "title": state.get("title") or "",
+                        "summary": phase.get("summary") or state.get("summary") or "",
+                        "room_location": phase["room_location"],
+                        "scene_action": phase["action"],
+                        "scene_stage": phase["stage"],
+                        "scene_task_id": phase["task_id"],
+                        "scene_mode": phase["mode"],
+                        "ui_phase": phase,
+                    }
+                )
+            context = {
+                "scene": str(state.get("scene") or "idle").strip().lower(),
+                "stage": str(state.get("scene_stage") or "idle").strip().lower(),
+                "task_id": str(state.get("scene_task_id") or "").strip(),
+                "mode": str(state.get("scene_mode") or "").strip().lower(),
+            }
+            previous = {
+                key: str(self.api_b_thinking_context.get(key) or "").strip()
+                for key in ("scene", "stage", "task_id", "mode")
+            }
+            if context != previous:
+                self.scene_state_revision += 1
+                self.api_b_thinking_revision += 1
+                self.api_b_thinking = {
+                    "text": "",
+                    "revision": self.api_b_thinking_revision,
+                }
+            context.update(
+                {
+                    "scene_state_revision": self.scene_state_revision,
+                    "ui_state_revision": self.ui_state_revision,
+                    "ui_phase_revision": self.ui_phase_revision,
+                }
+            )
+            self.api_b_thinking_context = context
+            state["ui_state_revision"] = self.ui_state_revision
+            state["scene_state_revision"] = self.scene_state_revision
+            state["ui_phase"] = dict(self.ui_phase)
+
     def record_api_b_thinking(self, text: str) -> None:
         cleaned = str(text or "").strip()
         if not cleaned:
@@ -219,6 +400,7 @@ class SupervisorUIRuntime:
                 "text": cleaned[:600],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "revision": self.api_b_thinking_revision,
+                **self.api_b_thinking_context,
             }
 
     def current_api_b_thinking(self) -> JsonDict:
@@ -226,7 +408,19 @@ class SupervisorUIRuntime:
             snapshot = dict(self.api_b_thinking)
             revision = self.api_b_thinking_revision
         if not snapshot:
-            return {"text": "", "revision": revision}
+            return {
+                "text": "",
+                "revision": revision,
+                **self.api_b_thinking_context,
+            }
+        with self._api_b_thinking_lock:
+            current_scene_revision = self.scene_state_revision
+        if int(snapshot.get("scene_state_revision") or 0) != current_scene_revision:
+            return {
+                "text": "",
+                "revision": revision,
+                **self.api_b_thinking_context,
+            }
         updated_at = str(snapshot.get("updated_at") or "")
         try:
             updated = datetime.fromisoformat(updated_at)
@@ -236,7 +430,22 @@ class SupervisorUIRuntime:
         except ValueError:
             age_seconds = 0.0
         if age_seconds > 3.5:
-            return {"text": "", "revision": revision}
+            with self._api_b_thinking_lock:
+                if self.api_b_thinking and int(
+                    self.api_b_thinking.get("revision") or 0
+                ) == revision:
+                    self.api_b_thinking_revision += 1
+                    self.api_b_thinking = {
+                        "text": "",
+                        "revision": self.api_b_thinking_revision,
+                        **self.api_b_thinking_context,
+                    }
+                    revision = self.api_b_thinking_revision
+            return {
+                "text": "",
+                "revision": revision,
+                **self.api_b_thinking_context,
+            }
         return snapshot
 
     async def get_api_b_thinking_events(self, request: Request) -> StreamingResponse:
@@ -721,7 +930,6 @@ class SupervisorUIRuntime:
         )
 
     async def get_state(self) -> JsonDict:
-        api_b_thinking = self.current_api_b_thinking()
         state = await build_supervisor_ui_state(
             context=SupervisorUIStateContext(
                 runtime_config=self.ports.load_runtime_config(),
@@ -742,7 +950,8 @@ class SupervisorUIRuntime:
             )
         )
         state["accounts_revision"] = self.accounts_revision
-        state["api_b_thinking"] = api_b_thinking
+        self._publish_scene_state_context(state)
+        state["api_b_thinking"] = self.current_api_b_thinking()
         return state
 
     async def load_recent_trace_details(

@@ -68,6 +68,25 @@ def project_autonomous_observation(
         for task in employee_lane_source
         if observation_status_value(task) == "running"
     ]
+    employee_result_statuses = {
+        "returned_to_xingzi",
+        "awaiting_user_report",
+        "reported_to_user",
+        "awaiting_mem_review",
+        "written_to_mem",
+        "mem_write_failed",
+    }
+    employee_result_source = [
+        task
+        for task in employee_lane_family_sorted
+        if str(
+            dict(task.get("metadata") or {})
+            .get("employee_result_disposition", {})
+            .get("status")
+            or ""
+        ).strip().lower()
+        in employee_result_statuses
+    ]
     employee_pre_dispatch_source = [
         task
         for task in employee_lane_family_sorted
@@ -95,6 +114,9 @@ def project_autonomous_observation(
 
     api_b_focus_task = pick_active(supervisor_sorted)
     employee_running_task = pick_active(employee_running_source)
+    employee_result_focus = (
+        employee_result_source[0] if employee_result_source else None
+    )
 
     api_b_judgement_cards = [
         build_observation_card(
@@ -246,6 +268,18 @@ def project_autonomous_observation(
     elif employee_dispatch_items:
         employee_status = "ready"
         employee_summary = f"API-B 已转交 {len(employee_dispatch_items)} 个链路项，等待 员工代理接手"
+    elif employee_result_focus:
+        employee_status = "returned"
+        result_status = str(
+            dict(employee_result_focus.get("metadata") or {})
+            .get("employee_result_disposition", {})
+            .get("status")
+            or "returned_to_xingzi"
+        ).strip().lower()
+        employee_summary = (
+            f"{str(employee_result_focus.get('title') or '自主链路项').strip()} "
+            f"已回到星子，当前阶段为 {result_status}"
+        )
     elif employee_pre_dispatch_cards:
         employee_status = "idle"
         employee_summary = f"{len(employee_pre_dispatch_cards)} 个链路项仍由 API-B 判断"
@@ -293,6 +327,28 @@ def project_autonomous_observation(
         employee_chain_reason = "链路: API-B 已转交，可由 员工代理接手"
         employee_activity_text = "执行流: 员工代理接手后执行，结果回传星子"
         employee_reason_style = "warn"
+    elif employee_result_focus:
+        result_status = str(
+            dict(employee_result_focus.get("metadata") or {})
+            .get("employee_result_disposition", {})
+            .get("status")
+            or "returned_to_xingzi"
+        ).strip().lower()
+        employee_stage_label = {
+            "returned_to_xingzi": "已回传星子",
+            "awaiting_user_report": "待向用户回报",
+            "reported_to_user": "已向用户回报",
+            "awaiting_mem_review": "待星子判断",
+            "written_to_mem": "已写入 Mem",
+            "mem_write_failed": "Mem 写入失败",
+        }.get(result_status, "已回传星子")
+        employee_chain_reason = "链路: 员工结果已回传，当前由星子继续处理"
+        employee_activity_text = (
+            "执行流: 员工只负责执行，结果已经交还星子"
+        )
+        employee_reason_style = (
+            "error" if result_status == "mem_write_failed" else "info"
+        )
     elif deferred_employee_pre_dispatch:
         employee_chain_reason = "链路: 当前学习链路项仍由 API-B 判断"
         employee_activity_text = "执行流: API-B 先补判断，再决定是否交给 员工代理"
@@ -325,6 +381,7 @@ def project_autonomous_observation(
     employee_current = build_observation_card(
         employee_running_task
         or employee_dispatch_focus
+        or employee_result_focus
         or {"title": "员工代理执行"},
         lane="agent",
         display_status=loop_stage_status_label(employee_status),
@@ -334,6 +391,7 @@ def project_autonomous_observation(
         title_override=(
             str((employee_running_task or {}).get("title") or "").strip()
             or str((employee_dispatch_focus or {}).get("title") or "").strip()
+            or str((employee_result_focus or {}).get("title") or "").strip()
             or "员工代理执行"
         ),
     )
@@ -567,7 +625,11 @@ def project_autonomous_observation(
             "reason_style": employee_reason_style,
             "read_rule": "这里只看 员工代理 对 API-B 可见的接手与执行状态。",
             "transition_hint": "执行完成后先把结果返回星子，再由星子按模式处理。",
-            "focus_task": employee_active_task or employee_dispatch_focus,
+            "focus_task": (
+                employee_active_task
+                or employee_dispatch_focus
+                or employee_result_focus
+            ),
         },
         {
             "key": "mem_writeback",

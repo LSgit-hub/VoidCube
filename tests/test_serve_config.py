@@ -279,6 +279,31 @@ def test_start_service_adopts_existing_voidcube_process_when_pid_file_is_missing
     assert pid_file.read_text(encoding="utf-8") == "8924"
 
 
+def test_process_belongs_to_runtime_accepts_direct_same_checkout_launch(
+    monkeypatch,
+):
+    from pathlib import Path
+
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    checkout = Path(serve.__file__).resolve().parents[4]
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda pid: SimpleNamespace(
+                cmdline=lambda: [
+                    str(checkout / ".venv" / "Scripts" / "python.exe"),
+                    "-m",
+                    "voidcube.systems.supervisor.supervisor",
+                ]
+            )
+        ),
+    )
+
+    assert serve._process_belongs_to_runtime(17704) is True
+
+
 def test_status_all_uses_healthy_port_owner_when_pid_file_is_stale(
     monkeypatch,
     tmp_path,

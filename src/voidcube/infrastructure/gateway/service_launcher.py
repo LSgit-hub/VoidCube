@@ -321,7 +321,9 @@ def _process_belongs_to_runtime(pid: int) -> bool:
 
     Service subprocesses embed their log path in the generated command line.
     Using that path as the ownership marker prevents one checkout or isolated
-    test home from adopting or terminating another runtime's process.
+    test home from adopting or terminating another runtime's process. A
+    directly launched service from this checkout has no generated log marker,
+    so the checkout path is also accepted as its runtime identity.
     """
     try:
         import psutil
@@ -334,7 +336,10 @@ def _process_belongs_to_runtime(pid: int) -> bool:
         os.path.normcase(runtime_path),
         os.path.normcase(json.dumps(runtime_path)[1:-1]),
     }
-    return any(marker in command_line for marker in runtime_markers)
+    if any(marker in command_line for marker in runtime_markers):
+        return True
+    checkout_root = os.path.normcase(str(Path(__file__).resolve().parents[4]))
+    return checkout_root in command_line
 
 
 def _health_endpoint_is_service(
