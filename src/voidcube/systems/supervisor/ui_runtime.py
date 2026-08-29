@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import threading
 from collections import deque
 from collections.abc import Callable, Collection

@@ -4486,7 +4486,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
 
     <!-- 装饰: 盆栽 + 落地灯 -->
-    <div class="plant plant-corner" role="button" tabindex="0" data-scene-entry="memory-flow" aria-label="Mem 记忆传输与写回" title="Mem 记忆传输与写回">
+    <div class="plant plant-corner" role="button" tabindex="0" data-scene-entry="memory-structure" aria-label="Mem 结构与统计" title="Mem 结构与统计">
       <div class="leaves">
         <div class="leaf"></div><div class="leaf"></div><div class="leaf"></div>
         <div class="leaf"></div><div class="leaf"></div>
@@ -5299,7 +5299,7 @@ if (els.reminderPolicyForm) {
 
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
-  idle: 'rest', planning: 'write', drive: 'work',
+  idle: 'rest', planning: 'write', drive: 'write',
   memory: 'organize', maintenance: 'organize', handoff: 'work', body_switch: 'work',
 };
 const GLYPHS = {
@@ -5321,10 +5321,10 @@ function taskLane(t) {
 }
 function typeLabel(t) {
   const observationRole = String(t.observation_role || '').trim();
-  if (observationRole === 'mem_writeback') return 'Mem 写回';
+  if (observationRole === 'mem_writeback') return '星子 Mem 处理';
   if (observationRole === 'api_b_reread') return '再次判断';
   if (observationRole === 'api_b_judgement') return 'API-B 判断';
-  if (observationRole === 'employee_execution') return '员工执行回报';
+  if (observationRole === 'employee_execution') return '员工执行与回传';
   if (observationRole === 'candidate') return '候选形成';
   const identity = t.task_identity || {};
   const displayLabel = String(identity.display_label || '').trim();
@@ -5504,12 +5504,17 @@ function renderScheduledTasks() {
     const status = String(task.status || 'active');
     const nextAt = task.next_run_at ? new Date(task.next_run_at).getTime() : NaN;
     const due = status === 'active' && Number.isFinite(nextAt) && nextAt <= Date.now();
-    const source = task.created_by === 'api_b' ? '星子' : '主 CLI';
+    const source = 'API-A 用户';
+    const action = status === 'active' ? 'pause' : status === 'paused' ? 'resume' : '';
     return '<div class="schedule-item">' +
       '<div class="schedule-item-head"><div class="schedule-item-title">' + esc(task.title || '未命名任务') + '</div>' +
       '<div class="schedule-item-status ' + esc(due ? 'due' : status) + '">' + esc(due ? '等待主 CLI' : (statusLabels[status] || status)) + '</div></div>' +
       '<div class="schedule-item-time">' + esc(scheduledTaskTime(task)) + ' · ' + esc(source) + '</div>' +
       '<div class="schedule-item-instruction">' + esc(String(task.instruction || '').substring(0, 260)) + '</div>' +
+      '<div class="schedule-item-actions">' +
+        (action ? '<button type="button" class="drill-link" data-schedule-action="' + action + '" data-schedule-id="' + esc(task.schedule_id || '') + '">' + (action === 'pause' ? '暂停' : '恢复') + '</button>' : '') +
+        '<button type="button" class="drill-link" data-schedule-action="delete" data-schedule-id="' + esc(task.schedule_id || '') + '">删除</button>' +
+      '</div>' +
       '</div>';
   }).join('');
   els.panelSchedulesBody.innerHTML =
@@ -5521,13 +5526,28 @@ async function loadScheduledTasks() {
   if (scheduledTaskLoading) return;
   scheduledTaskLoading = true;
   try {
-    const response = await fetch('/scheduled-tasks?include_completed=true', {cache:'no-store'});
+    const response = await fetch('/scheduled-tasks?include_completed=true&scope=api_a_user', {cache:'no-store'});
     if (!response.ok) throw new Error('HTTP ' + response.status);
     scheduledTaskSnapshot = await response.json();
   } catch (error) {
     scheduledTaskSnapshot = null;
   } finally {
     scheduledTaskLoading = false;
+    renderScheduledTasks();
+  }
+}
+async function applyScheduledTaskAction(action, scheduleId) {
+  const id = String(scheduleId || '').trim();
+  if (!id) return;
+  const method = action === 'delete' ? 'DELETE' : 'POST';
+  const path = action === 'delete' ? '/scheduled-tasks/' + encodeURIComponent(id) :
+    '/scheduled-tasks/' + encodeURIComponent(id) + '/' + action;
+  try {
+    const response = await fetch(path, {method, headers: {'Content-Type': 'application/json'}});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    await loadScheduledTasks();
+  } catch (error) {
+    scheduledTaskSnapshot = null;
     renderScheduledTasks();
   }
 }
@@ -5607,7 +5627,7 @@ const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
   provenance: { icon: '🔎', title: '判断依据' },
   health:     { icon: '💗', title: '替身与记忆' },
-  memory_flow: { icon: '🌿', title: 'Mem 传输与写回' },
+  memory_structure: { icon: '🌿', title: 'Mem 结构与统计' },
   employee_runs: { icon: '💻', title: '员工代理执行详情' },
   autonomous_tasks: { icon: '📄', title: '星子自主任务安排' },
   body_tree:  { icon: '🌲', title: '替身结构图' },
@@ -5630,6 +5650,8 @@ function openDrawer(type, context) {
   if (type === 'identity') {
     loadIdentityArchive();
     loadIdentityTurns();
+  } else if (type === 'memory_structure') {
+    loadIdentityArchive();
   } else if (type === 'mail') {
     void loadMailConfig().then(() => loadMailMessages());
   }
@@ -5649,7 +5671,7 @@ function renderDrawer() {
   if (drawerOpen === 'autonomous') renderAutonomousDrawer(state);
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
-  else if (drawerOpen === 'memory_flow') renderMemoryFlowDrawer(state);
+  else if (drawerOpen === 'memory_structure') renderMemoryStructureDrawer(state);
   else if (drawerOpen === 'employee_runs') renderEmployeeRunsDrawer(state);
   else if (drawerOpen === 'autonomous_tasks') renderAutonomousTasksDrawer(state);
   else if (drawerOpen === 'body_tree') renderBodyTreeDrawer(state);
@@ -5758,9 +5780,9 @@ document.addEventListener('click', e => {
   if (more && drawerOpen) {
     e.stopPropagation();
     const key = String(more.dataset.drawerMore || '');
-    const limits = {memory_flow: 'memoryLimit', employee_runs: 'employeeLimit', autonomous_tasks: 'taskLimit'};
+    const limits = {memory_structure: 'memoryLimit', employee_runs: 'employeeLimit', autonomous_tasks: 'taskLimit'};
     if (limits[key]) {
-      drawerContext[limits[key]] = (Number(drawerContext[limits[key]]) || (key === 'employee_runs' ? 8 : key === 'memory_flow' ? 6 : 10)) + 10;
+      drawerContext[limits[key]] = (Number(drawerContext[limits[key]]) || (key === 'employee_runs' ? 8 : key === 'memory_structure' ? 6 : 10)) + 10;
       renderDrawer();
     }
     return;
@@ -5808,14 +5830,30 @@ document.addEventListener('submit', e => {
   sendMailDraft();
 });
 document.addEventListener('click', e => {
+  const scheduleAction = e.target.closest('[data-schedule-action]');
+  if (scheduleAction) {
+    e.stopPropagation();
+    void applyScheduledTaskAction(
+      scheduleAction.dataset.scheduleAction,
+      scheduleAction.dataset.scheduleId,
+    );
+    return;
+  }
+  const taskTab = e.target.closest('[data-task-tab]');
+  if (taskTab && drawerOpen === 'autonomous_tasks') {
+    e.stopPropagation();
+    drawerContext.taskTab = taskTab.dataset.taskTab || 'planning';
+    renderDrawer();
+    return;
+  }
   const trigger = e.target.closest('[data-scene-entry]');
   if (!trigger) return;
   e.stopPropagation();
   const target = String(trigger.dataset.sceneEntry || '').trim();
   if (target === 'api-a-schedules') {
     openPanel('schedules');
-  } else if (target === 'memory-flow') {
-    openDrawer('memory_flow');
+  } else if (target === 'memory-structure') {
+    openDrawer('memory_structure');
   } else if (target === 'employee-runs') {
     openDrawer('employee_runs');
   } else if (target === 'autonomous-tasks') {
@@ -6728,12 +6766,22 @@ function renderHealthDrawer(state) {
 function renderProjectionCard(item, emptyText) {
   if (!item || typeof item !== 'object') return '<div class="drawer-sub">' + esc(emptyText) + '</div>';
   const title = esc(item.title || '未命名链路项');
-  const status = esc(item.status_label || item.display_status || statusLabel(item.status));
+  const lifecycleLabels = {
+    candidate: '候选形成', planning: '规划中', approved: '已批准',
+    dispatched: '已派发', running: '执行中', returned_to_xingzi: '已回传星子',
+    awaiting_user_report: '待向用户回报', reported_to_user: '已向用户回报',
+    awaiting_mem_review: '待星子判断', written_to_mem: '已写入 Mem',
+    mem_write_failed: 'Mem 写入失败', completed: '已完成',
+    failed: '执行失败', cancelled: '已取消',
+  };
+  const lifecycle = String(item.lifecycle_status || '').trim().toLowerCase();
+  const status = esc(lifecycleLabels[lifecycle] || item.status_label || item.display_status || statusLabel(item.status));
   const summary = esc(item.summary || item.observation_card_subtitle || '暂无摘要');
   const taskId = String(item.task_id || '').trim();
   return '<div class="drawer-section">' +
     '<div class="health-row"><span>' + title + '</span><span class="hr-val">' + status + '</span></div>' +
     '<div class="drawer-sub mt-6">' + summary + '</div>' +
+    (item.employee_result_returned ? '<div class="drawer-sub mt-5 ok">✓ 结果已回传星子</div>' : '') +
     (taskId ? '<div class="drawer-sub mt-5">任务 ID · ' + esc(taskId) + '</div>' : '') +
     '</div>';
 }
@@ -6747,7 +6795,7 @@ function formatDetailTime(value) {
   });
 }
 
-function renderEmployeeRunCard(item, memWritebacks) {
+function renderEmployeeRunCard(item) {
   const row = item && typeof item === 'object' ? item : {};
   const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
   const taskId = String(row.task_id || '').trim();
@@ -6761,12 +6809,17 @@ function renderEmployeeRunCard(item, memWritebacks) {
   const heartbeat = formatDetailTime(row.heartbeat_at || metadata.heartbeat_at);
   const result = String(row.result_summary || row.result || '').trim();
   const error = String(row.error || '').trim();
-  const writebackStatus = String(row.writeback_status || '').trim().toLowerCase();
-  const writeback = writebackStatus === 'completed' || memWritebacks.some(writeback => {
-    const id = String(writeback.task_id || '').trim();
-    return id && (id === taskId || id === employeeTaskId);
-  });
-  const writebackFailed = writebackStatus === 'failed';
+  const disposition = row.employee_result_disposition && typeof row.employee_result_disposition === 'object'
+    ? row.employee_result_disposition
+    : (metadata.employee_result_disposition && typeof metadata.employee_result_disposition === 'object'
+      ? metadata.employee_result_disposition : {});
+  const resultStatus = String(
+    row.employee_result_status || disposition.status || 'not_returned'
+  ).trim().toLowerCase();
+  const mode = String(disposition.mode || row.mode || '').trim().toLowerCase();
+  const resultReturned = Boolean(
+    row.result_returned_to_xingzi || disposition.returned_at || metadata.employee_execution_result
+  );
   const details = [];
   if (employeeTaskId) details.push('员工任务 ' + esc(employeeTaskId));
   if (provider || model) details.push('模型 ' + esc([provider, model].filter(Boolean).join(' / ')));
@@ -6777,36 +6830,47 @@ function renderEmployeeRunCard(item, memWritebacks) {
       esc(row.status_label || row.display_status || statusLabel(row.status)) + '</span></div>' +
     '<div class="drawer-sub mt-6">' + esc(row.summary || '暂无执行摘要') + '</div>' +
     (details.length ? '<div class="drawer-sub mt-5">' + details.join(' · ') + '</div>' : '') +
-    '<div class="drawer-sub mt-5 ' + (writebackFailed ? 'warn' : writeback ? 'ok' : 'muted') + '">' +
-      (writebackFailed ? '⚠ Mem 写回失败或未完成' : writeback ? '✓ 已发现对应 Mem 写回' : '○ Mem 写回待确认') + '</div>' +
+    '<div class="drawer-sub mt-5 ' + (resultStatus === 'mem_write_failed' ? 'warn' : resultReturned ? 'ok' : 'muted') + '">' +
+      (resultReturned ? '✓ 执行结果已回传星子' : '○ 等待员工结果回传星子') + '</div>' +
+    '<div class="drawer-sub mt-5 ' + (resultStatus === 'mem_write_failed' ? 'warn' : resultStatus === 'written_to_mem' || resultStatus === 'reported_to_user' ? 'ok' : 'muted') + '">' +
+      (mode === 'daily_companion'
+        ? (resultStatus === 'reported_to_user' ? '✓ 已向用户回报' : '○ 待向用户回报')
+        : resultStatus === 'written_to_mem' ? '✓ 星子已写入 Mem'
+        : resultStatus === 'mem_write_failed' ? '⚠ Mem 写入失败'
+        : resultStatus === 'awaiting_mem_review' ? '○ 待星子判断'
+        : '○ 等待星子处理') + '</div>' +
     (result ? '<div class="drawer-sub mt-5">结果 · ' + esc(result.substring(0, 240)) + '</div>' : '') +
     (error ? '<div class="drawer-sub mt-5 warn">异常 · ' + esc(error.substring(0, 180)) + '</div>' : '') +
     '</div>';
 }
 
-function renderMemoryFlowDrawer(state) {
+function renderMemoryStructureDrawer(state) {
   const ts = state.tier1_stats || {};
-  const transport = (ts.transport_outboxes && typeof ts.transport_outboxes === 'object')
-    ? ts.transport_outboxes : {};
   const board = (((state.autonomous_observation || {}).board) || {});
-  const writebacks = Array.isArray(board.mem_writeback) ? board.mem_writeback : [];
-  const limit = Math.max(1, Number(drawerContext.memoryLimit) || 6);
-  const status = transport.status === 'healthy' ? '正常' :
-    (transport.status === 'degraded' ? '需要处理' : '等待数据');
+  const structure = (state.memory_structure && typeof state.memory_structure === 'object')
+    ? state.memory_structure : {};
+  const archive = identityArchive && typeof identityArchive === 'object' ? identityArchive : {};
+  const layers = archive.layers && typeof archive.layers === 'object' ? archive.layers : archive;
+  const counts = [
+    ['普通记忆', structure.ordinary_memory ?? ts.total_turns],
+    ['活跃会话记忆', structure.active_session_memory ?? ts.active_turns],
+    ['已压缩记忆', structure.compressed_memory ?? ts.compressed_turns ?? ts.tier2?.total_compressed],
+    ['事件记忆', structure.event_memory ?? ts.events],
+    ['场景记忆', structure.scene_memory ?? ts.scenes],
+    ['阶段 / 弧线记忆', structure.arc_memory ?? ts.arcs],
+    ['身份档案', structure.identity_archive ?? (Array.isArray(layers.anchors) ? layers.anchors.length : ts.identity_archive)],
+    ['自身经历档案', structure.self_experiences ?? (Array.isArray(layers.self_experiences) ? layers.self_experiences.length : ts.self_experiences)],
+    ['治理历史', structure.governance_history ?? (Array.isArray(layers.governance_history) ? layers.governance_history.length : ts.governance_history)],
+    ['自进化档案', structure.autonomous_history ?? (Array.isArray(board.autonomous_history) ? board.autonomous_history.length : 0)],
+  ];
   els.drawerBody.innerHTML =
-    '<div class="drawer-sub">这里仅展示 Mem 传输、写回和回流，不展示员工执行日志。</div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">传输总览</div>' +
-    '<div class="health-row"><span>传输状态</span><span class="hr-val">' + esc(status) + '</span></div>' +
-    '<div class="health-row"><span>等待写入 / 正在写入</span><span class="hr-val">' +
-      esc(transport.pending_count == null ? '—' : transport.pending_count) + ' / ' +
-      esc(transport.inflight_count == null ? '—' : transport.inflight_count) + '</span></div>' +
-    '<div class="health-row"><span>多次失败、暂未写入</span><span class="hr-val">' +
-      esc(transport.dead_letter_count == null ? '—' : transport.dead_letter_count) + '</span></div></div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">最近 Mem 写回</div>' +
-    (writebacks.length ? writebacks.slice(0, limit).map(item => renderProjectionCard(item, '')).join('') :
-      '<div class="drawer-sub">尚未观察到新的 Mem 写回记录。</div>') +
-    (writebacks.length > limit ? '<button type="button" class="drill-link" data-drawer-more="memory_flow">显示更多写回</button>' : '') +
-    '</div>';
+    '<div class="drawer-sub">这里只展示 Mem 的分类结构和当前数量；员工执行与结果回传请查看电脑桌。</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">Mem 分类统计</div>' +
+    counts.map(([label, value]) =>
+      '<div class="health-row"><span>' + esc(label) + '</span><span class="hr-val">' +
+      esc(value == null ? '—' : String(value) + ' 条') + '</span></div>'
+    ).join('') + '</div>' +
+    '<div class="drawer-sub">自进化档案统计自治任务历史；Mem 只记录星子处理后的结果。</div>';
 }
 
 function renderEmployeeRunsDrawer(state) {
@@ -6814,20 +6878,19 @@ function renderEmployeeRunsDrawer(state) {
   const board = observation.board || {};
   const runtime = observation.runtime || {};
   const runs = Array.isArray(board.employee_runs) ? board.employee_runs : [];
-  const writebacks = Array.isArray(board.mem_writeback) ? board.mem_writeback : [];
   const limit = Math.max(1, Number(drawerContext.employeeLimit) || 8);
   const executor = (state.activity || {}).active_cli_executor || runtime.active_cli_executor || {};
   const executorState = executor.is_stale || executor.lease_status === 'stale' ? '执行器失联' :
     (executor.agent_lane ? '执行器在线' : '等待执行器');
   els.drawerBody.innerHTML =
-    '<div class="drawer-sub">这里展示 Auto 自主链路的员工派工、执行状态和结果；完成结果会回写 Mem。</div>' +
+    '<div class="drawer-sub">这里展示员工派工、执行状态、结果回传星子以及星子后续处理状态。</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">执行器</div>' +
     '<div class="health-row"><span>状态</span><span class="hr-val">' + esc(executorState) + '</span></div>' +
     '<div class="health-row"><span>员工派工 / 执行中</span><span class="hr-val">' +
       esc(((observation.counts || {}).employee_dispatch) || 0) + ' / ' +
       esc(((observation.counts || {}).employee_running) || 0) + '</span></div></div>' +
     '<div class="drawer-section"><div class="drawer-section-label">任务运行</div>' +
-    (runs.length ? runs.slice(0, limit).map(item => renderEmployeeRunCard(item, writebacks)).join('') :
+    (runs.length ? runs.slice(0, limit).map(item => renderEmployeeRunCard(item)).join('') :
       '<div class="drawer-sub">当前没有员工代理执行项。</div>') +
     (runs.length > limit ? '<button type="button" class="drill-link" data-drawer-more="employee_runs">显示更多执行记录</button>' : '') +
     '</div>';
@@ -6836,15 +6899,23 @@ function renderEmployeeRunsDrawer(state) {
 function renderAutonomousTasksDrawer(state) {
   const observation = state.autonomous_observation || {};
   const board = observation.board || {};
-  const tasks = Array.isArray(board.autonomous_tasks) ? board.autonomous_tasks : [];
+  const planningTasks = Array.isArray(board.planning_tasks) ? board.planning_tasks : [];
+  const historyTasks = Array.isArray(board.autonomous_history) ? board.autonomous_history : [];
+  const activeTab = drawerContext.taskTab === 'history' ? 'history' : 'planning';
+  const tasks = activeTab === 'history' ? historyTasks : planningTasks;
   const limit = Math.max(1, Number(drawerContext.taskLimit) || 10);
   const mode = String(((state.stellar_mode || {}).mode) || '').trim().toLowerCase();
   const modeLabel = mode === 'auto_evolution' ? 'Auto 自主链路' : '当前模式 · ' + (mode || '观测');
   els.drawerBody.innerHTML =
-    '<div class="drawer-sub">' + esc(modeLabel) + '。这里只展示星子安排的自主任务，不展示 API-A 定时任务。</div>' +
-    '<div class="drawer-section"><div class="drawer-section-label">自主任务安排</div>' +
+    '<div class="drawer-sub">' + esc(modeLabel) + '。这里只展示内生驱动与自治任务，不展示 API-A 定时任务。</div>' +
+    '<div class="drawer-tabs">' +
+      '<button type="button" class="drill-link ' + (activeTab === 'planning' ? 'active' : '') + '" data-task-tab="planning">候选任务</button>' +
+      '<button type="button" class="drill-link ' + (activeTab === 'history' ? 'active' : '') + '" data-task-tab="history">自治状态与历史</button>' +
+    '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">' +
+      (activeTab === 'history' ? '自治状态与历史' : '候选任务') + '</div>' +
     (tasks.length ? tasks.slice(0, limit).map(item => renderProjectionCard(item, '')).join('') :
-      '<div class="drawer-sub">当前没有候选、判断中或待员工接手的自主任务。</div>') +
+      '<div class="drawer-sub">' + (activeTab === 'history' ? '当前没有自治任务状态或历史。' : '当前没有内生驱动候选任务。') + '</div>') +
     (tasks.length > limit ? '<button type="button" class="drill-link" data-drawer-more="autonomous_tasks">显示更多任务</button>' : '') +
     '</div>';
 }
@@ -7300,7 +7371,7 @@ function observationRoleStageLabel(task) {
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
     employee_execution: '员工代理派工 / 执行观测阶段',
-    mem_writeback: 'Mem 写回阶段',
+    mem_writeback: '星子 Mem 处理阶段',
     api_b_reread: 'API-B 再读取阶段',
     candidate: '候选形成阶段',
   };
@@ -7348,7 +7419,7 @@ function buildObservationCard(task, options) {
     laneTag.textContent = '员工回报';
   } else if (lane === 'mem') {
     laneTag.className = 'game-card-tag truthfulness';
-    laneTag.textContent = 'Mem 写回';
+    laneTag.textContent = '星子 Mem 处理';
   } else {
     laneTag.className = 'game-card-tag memory';
     laneTag.textContent = 'API-B 判断';

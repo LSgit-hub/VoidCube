@@ -17,7 +17,7 @@ test('scene objects route to their owning desktop panels', async () => {
 
     await page.locator('.plant-corner').click()
     await expect(page.locator('#detailDrawer')).toHaveClass(/open/)
-    await expect(page.locator('#detailDrawerTitle')).toContainText('Mem 传输与写回')
+    await expect(page.locator('#detailDrawerTitle')).toContainText('Mem 结构与统计')
     await expect(page.locator('#detailDrawerClose')).toBeFocused()
     await page.locator('#detailDrawerClose').press('Escape')
     await expect(page.locator('#detailDrawer')).not.toHaveClass(/open/)

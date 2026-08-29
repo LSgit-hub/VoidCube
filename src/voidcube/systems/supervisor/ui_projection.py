@@ -119,7 +119,7 @@ def project_recent_autonomous_activity(
             "kind": "unavailable",
             "phase_label": "最近自主动作",
             "title": "最近暂无自主链路动作",
-            "summary": "等待新的候选、回报或 Mem 回流。",
+            "summary": "等待新的候选、员工结果回传或星子处理。",
             "source_label": "API-B",
             "tone": "info",
         }
@@ -146,13 +146,13 @@ def project_recent_autonomous_activity(
     )
     source_label = activity_source_label(metadata.get("source_service"))
     if kind == "autonomous_chain_execute":
-        summary = f"{source_label} 已向 API-B 回报 {label or '自主链路项'} 的执行进展。"
+        summary = f"{source_label} 已向星子回传 {label or '自主链路项'} 的执行进展。"
     elif kind == "autonomous_chain_plan":
         summary = f"API-B 已更新 {label or '自主链路项'} 的判断，并决定是否转交 员工代理。"
     elif kind == "self_learning":
         summary = f"员工代理执行面正在围绕 {label or '自主学习'} 回传学习进展，供 API-B 后续吸收。"
     elif kind == "memory_write_failure":
-        summary = "最近一次 Mem 写回回流出现异常，当前闭环需要补偿或重试。"
+        summary = "最近一次星子 Mem 处理出现异常，当前闭环需要补偿或重试。"
     else:
         summary = f"{source_label} 最近记下了一次会影响自主闭环下一跳的动作。"
 
@@ -222,7 +222,7 @@ def project_observation_board(
                 "key": "employee_flow_hold",
                 "tone": "info",
                 "title": "员工代理执行中",
-                "text": f"还有 {running_count} 个执行中链路项，写回后会回到这里。",
+                "text": f"还有 {running_count} 个执行中链路项，完成后会先回传星子。",
             }
         )
     board["observation_notes"] = notes

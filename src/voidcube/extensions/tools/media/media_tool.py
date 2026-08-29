@@ -149,7 +149,7 @@ def media_display(
 ) -> str:
     """将 Assist 模式的产物或远程内容推送到 VoidCube 交付面板。
 
-    Auto 员工的研究、自学习和自改进结果必须回写 canonical task/Mem，
+    Auto 员工的研究、自学习和自改进结果必须先返回 Supervisor 回收处理，
     不得把内部结果投影到面向用户的交付面板。
 
     本地文件会先复制到 Supervisor 管理的只读产物仓库，不会向浏览器暴露
@@ -194,7 +194,7 @@ def media_display(
             {
                 "status": "error",
                 "error": "autonomous_employee_delivery_forbidden",
-                "message": "Auto 员工结果必须回写 Mem，不得进入交付面板。",
+                "message": "AUTO 员工结果必须先返回星子处理，不得直接进入交付面板。",
             },
             ensure_ascii=False,
         )
@@ -310,7 +310,7 @@ MEDIA_DISPLAY_SCHEMA = {
     "name": "media_display",
     "description": (
         "向日常 Assist 模式的用户交付面板推送内容。"
-        "Auto 员工的研究、自学习和自改进结果必须回写 Mem，不得调用本工具。"
+        "Auto 员工的研究、自学习和自改进结果必须先返回星子判断，不得调用本工具。"
         "本地产物优先传 file_path，工具会安全上传并自动识别类型；"
         "HTML 报告传 content+type='html'；远程网页或媒体传 url。"
         "交付历史独立于播放器队列。"

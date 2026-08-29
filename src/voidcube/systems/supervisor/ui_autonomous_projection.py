@@ -198,7 +198,13 @@ def project_autonomous_observation(
     completed_tasks = [
         task
         for task in (history_tasks or all_tasks)
-        if str(task.get("status") or "").strip().lower() in {"completed", "failed"}
+        if str(
+            dict(task.get("metadata") or {})
+            .get("employee_result_disposition", {})
+            .get("status")
+            or ""
+        ).strip().lower()
+        == "written_to_mem"
     ]
     recent_writebacks = [
         build_autonomous_writeback_summary(task)
@@ -249,10 +255,10 @@ def project_autonomous_observation(
 
     if recent_writebacks:
         writeback_status = "ready"
-        writeback_summary = f"{recent_writebacks[0]['title']} 的执行结果已回流到 Mem"
+        writeback_summary = f"{recent_writebacks[0]['title']} 已由星子写入 Mem"
     else:
         writeback_status = "idle"
-        writeback_summary = "暂无新的 Mem 回流"
+        writeback_summary = "暂无新的星子 Mem 写入"
 
     if recent_writebacks and (candidates or api_b_judgement_cards):
         reread_status = "active"
@@ -271,7 +277,7 @@ def project_autonomous_observation(
     if employee_running_task:
         employee_stage_label = "执行中"
         employee_chain_reason = "链路: 员工代理正在执行并回报进展"
-        employee_activity_text = "执行流: 完成后写回 Mem"
+        employee_activity_text = "执行流: 完成后先回传星子"
         employee_reason_style = "info"
     elif employee_dispatch_items and employee_executor_stale:
         employee_stage_label = "执行器失联"
@@ -279,13 +285,13 @@ def project_autonomous_observation(
             "链路: API-B 已转交，但 CLI 员工执行器没有有效心跳"
         )
         employee_activity_text = (
-            "执行流: 重启 CLI 员工执行器后才会认领，结果仍写回 Mem"
+            "执行流: 重启 CLI 员工执行器后才会认领，结果先回传星子"
         )
         employee_reason_style = "error"
     elif employee_dispatch_items:
         employee_stage_label = "待接手"
         employee_chain_reason = "链路: API-B 已转交，可由 员工代理接手"
-        employee_activity_text = "执行流: 员工代理接手后执行，结果写回 Mem"
+        employee_activity_text = "执行流: 员工代理接手后执行，结果回传星子"
         employee_reason_style = "warn"
     elif deferred_employee_pre_dispatch:
         employee_chain_reason = "链路: 当前学习链路项仍由 API-B 判断"
@@ -433,28 +439,28 @@ def project_autonomous_observation(
             footer_label="查看执行最近状态",
             drill_label="查看执行详情",
             read_rule="这里只看 API-B 已转交、等待 员工代理接手的项；执行中看上方阶段。",
-            next_step="员工代理接手后执行，结果回流到 Mem。",
+            next_step="员工代理接手后执行，结果回传星子。",
         ),
         build_observation_group(
             key="mem_recent",
-            label="写回回流",
-            empty_text="尚未观察到新的 Mem 写回记录",
+            label="星子 Mem 处理",
+            empty_text="尚未观察到星子写入 Mem 的记录",
             items=recent_writeback_cards[:4],
             emphasis="mem",
             source_label="Mem",
-            stage_label="写回回流",
-            summary="最近返回到 Memory 侧的执行结果与维护受理状态。",
+            stage_label="星子处理",
+            summary="这里只展示星子判断后实际写入 Mem 的结果。",
             order=3,
             segment_kind="mem_writeback",
             decor_cls="mem",
             decor_icon="💾",
-            item_label="回流结果",
+            item_label="星子写入",
             event_label="动作",
             trace_label="回合",
-            footer_label="查看回流最近状态",
-            drill_label="查看回流详情",
-            read_rule="这里只看回流结果。",
-            next_step="这些回流结果会被 API-B 再读取，决定下一轮是否形成新候选。",
+            footer_label="查看 Mem 写入状态",
+            drill_label="查看 Mem 写入详情",
+            read_rule="这里只看星子实际写入 Mem 的结果。",
+            next_step="这些记忆可供后续 API-B 再读取。",
         ),
     ]
     chain_segments = project_chain_segment_activity(
@@ -501,7 +507,7 @@ def project_autonomous_observation(
     board = {
         "headline": "API-B 主视角自主闭环总览",
         "summary": (
-            "Web 小屋只看 API-B 判断、员工回报、Mem 回流与再读取；用户链路只作软感知。"
+            "Web 小屋只看 API-B 规划、员工结果回传、星子处理与自治历史；用户链路只作软感知。"
         ),
         "primary_focus": {
             "title": str((focus_card or {}).get("title") or "自主闭环当前落点").strip(),
@@ -546,7 +552,7 @@ def project_autonomous_observation(
         {
             "key": "employee_execution",
             "label": "员工代理执行",
-            "observation_stage_label": "员工代理派工 / 执行观测阶段",
+            "observation_stage_label": "员工代理派工、执行与结果回传阶段",
             "source_label": "员工代理",
             "lane": "agent",
             "observation_role": "employee_execution",
@@ -560,13 +566,13 @@ def project_autonomous_observation(
             "activity_text": employee_activity_text,
             "reason_style": employee_reason_style,
             "read_rule": "这里只看 员工代理 对 API-B 可见的接手与执行状态。",
-            "transition_hint": "执行完成后会把结果写回 Mem，形成回流证据。",
+            "transition_hint": "执行完成后先把结果返回星子，再由星子按模式处理。",
             "focus_task": employee_active_task or employee_dispatch_focus,
         },
         {
             "key": "mem_writeback",
-            "label": "Mem 写回",
-            "observation_stage_label": "Mem 写回阶段",
+            "label": "星子 Mem 处理",
+            "observation_stage_label": "星子判断与 Mem 处理阶段",
             "source_label": "Mem",
             "lane": "mem",
             "observation_role": "mem_writeback",
@@ -575,8 +581,8 @@ def project_autonomous_observation(
             "rail_note": writeback_summary,
             "is_focus": focus_role == "mem_writeback",
             "summary": writeback_summary,
-            "read_rule": "这里看刚回流到 Mem 的结果。",
-            "transition_hint": "这些回流结果会供下一轮 API-B 再读取。",
+            "read_rule": "这里看星子判断后实际写入 Mem 的结果。",
+            "transition_hint": "写入结果可供下一轮 API-B 再读取。",
             "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
         },
         {
@@ -621,7 +627,7 @@ def project_autonomous_observation(
         for stage in loop_stages
     ]
     boundary_note = (
-        "自主链路闭环只展示 API-B 判断、员工代理执行、Mem 写回回流和 API-B 再读取；"
+        "自主链路闭环只展示 API-B 判断、员工代理执行与结果回传、星子处理和自治历史；"
         "用户链路只作让路软感知，不展示聊天内容。"
     )
 
@@ -646,20 +652,46 @@ def project_autonomous_observation(
             result.append(dict(item))
         return result
 
-    board["autonomous_tasks"] = unique_cards(
-        [*candidates, *api_b_judgement_cards, *employee_lane_items]
+    planning_tasks = unique_cards([*candidates, *api_b_judgement_cards])
+    autonomous_history = unique_cards(
+        [
+            build_observation_card(
+                task,
+                lane="supervisor",
+                observation_role="autonomous_history",
+            )
+            for task in (history_tasks or all_tasks)
+            if isinstance(task, dict)
+        ]
     )
-    board["employee_runs"] = unique_cards(
-        [*employee_lane_items]
-    )
+    for item in autonomous_history:
+        metadata = dict(item.get("metadata") or {})
+        disposition = dict(
+            metadata.get("employee_result_disposition")
+            or {}
+        )
+        canonical_status = str(item.get("status") or "").strip().lower()
+        lifecycle_status = str(disposition.get("status") or "").strip().lower()
+        if not lifecycle_status:
+            lifecycle_status = (
+                "dispatched"
+                if metadata.get("employee_assignment")
+                and canonical_status in {"approved", "retry"}
+                else canonical_status or "unknown"
+            )
+        item["lifecycle_status"] = str(
+            lifecycle_status
+        ).strip().lower()
+        item["employee_result_returned"] = bool(
+            disposition.get("returned_at")
+            or metadata.get("employee_execution_result")
+        )
+    board["planning_tasks"] = planning_tasks
+    board["autonomous_history"] = autonomous_history
+    board["employee_runs"] = unique_cards([*employee_lane_items])
     board["mem_writeback"] = unique_cards(
         [*recent_writeback_cards]
     )
-    writeback_by_task_id = {
-        str(item.get("task_id") or "").strip(): item
-        for item in board["mem_writeback"]
-        if str(item.get("task_id") or "").strip()
-    }
     for item in board["mem_writeback"]:
         item["source_task_id"] = str(
             item.get("source_task_id") or item.get("task_id") or ""
@@ -670,15 +702,20 @@ def project_autonomous_observation(
             else "completed"
         )
     for item in board["employee_runs"]:
-        writeback = writeback_by_task_id.get(str(item.get("task_id") or "").strip())
-        item["writeback_status"] = (
-            str(writeback.get("writeback_status") or "completed")
-            if writeback
-            else "pending"
+        disposition = dict(
+            dict(item.get("metadata") or {}).get("employee_result_disposition")
+            or {}
+        )
+        item["employee_result_status"] = str(
+            disposition.get("status") or "not_returned"
+        ).strip().lower()
+        item["result_returned_to_xingzi"] = bool(
+            disposition.get("returned_at")
+            or dict(item.get("metadata") or {}).get("employee_execution_result")
         )
 
     return {
-        "read_model_version": 14,
+        "read_model_version": 15,
         "mode": {
             "label": "观测模式",
             "scope": "api_b_autonomous_chain_only",
@@ -687,7 +724,7 @@ def project_autonomous_observation(
         "runtime": {},
         "chain": {
             "headline": "自主闭环分段观察",
-            "summary": "这里按候选形成、API-B 判断在途、员工代理接手与执行、Mem 回流来看这一条自主链路。",
+            "summary": "这里按候选形成、API-B 判断、员工执行回传和星子处理来看这一条自主链路。",
             "segments": chain_segments,
         },
         "board": board,
@@ -710,7 +747,11 @@ def build_autonomous_writeback_summary(
     task: Dict[str, Any],
 ) -> Dict[str, Any]:
     metadata = dict(task.get("metadata") or {})
-    execution_result = dict(metadata.get("execution_result") or {})
+    execution_result = dict(
+        metadata.get("employee_execution_result")
+        or metadata.get("execution_result")
+        or {}
+    )
     summary = (
         execution_result.get("outcome_summary")
         or execution_result.get("summary")
@@ -720,11 +761,7 @@ def build_autonomous_writeback_summary(
         or ""
     )
     display_status = observation_display_status(task)
-    observation_role = (
-        "memory_maintenance_receipt"
-        if memory_maintenance_handoff_status(task)
-        else "mem_writeback"
-    )
+    observation_role = "mem_writeback"
     return {
         "task_id": task.get("task_id"),
         "source_task_id": task.get("task_id"),
@@ -735,9 +772,5 @@ def build_autonomous_writeback_summary(
         "display_status": display_status,
         "observation_role": observation_role,
         "summary": str(summary).strip()[:120],
-        "writeback_status": (
-            "failed"
-            if str(task.get("status") or "").strip().lower() == "failed"
-            else "completed"
-        ),
+        "writeback_status": "completed",
     }

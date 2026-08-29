@@ -38,10 +38,6 @@ async def test_review_service_runs_through_explicit_ports(tmp_path) -> None:
         assert drive_input["decisions"]["eligible_for_execution"] is False
         return {}
 
-    async def promote(task):
-        del task
-        return None
-
     async def touch_activity(kind, *, metadata):
         assert kind == "autonomous_chain_plan"
         assert metadata["action"] == "review"
@@ -54,7 +50,6 @@ async def test_review_service_runs_through_explicit_ports(tmp_path) -> None:
         resolve_drive_input=resolve_drive_input,
         auto_decision=lambda task, drive_input: ("deferred", "busy"),
         normalize_context=lambda **kwargs: dict(kwargs),
-        propose_memory_promotion=promote,
         build_response_fields=lambda **kwargs: {"drive_input": kwargs["drive_input"]},
         serialize_task=lambda task: task.model_dump(mode="json"),
         build_activity_metadata=lambda tasks, *, action, extra: {

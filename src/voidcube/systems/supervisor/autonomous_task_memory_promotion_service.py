@@ -72,7 +72,16 @@ class AutonomousTaskMemoryPromotionService:
         )
         governance_ref = f"autonomous-chain:{task.task_id}:decision:{decision_id}"
         conclusion = ""
+        employee_result = dict(metadata.get("employee_execution_result") or {})
+        conclusion = str(
+            employee_result.get("employee_final_response")
+            or employee_result.get("result_summary")
+            or employee_result.get("summary")
+            or ""
+        ).strip()
         for decision in reversed(task.decision_history):
+            if conclusion:
+                break
             context = dict(decision.context or {})
             conclusion = str(
                 context.get("employee_final_response") or ""

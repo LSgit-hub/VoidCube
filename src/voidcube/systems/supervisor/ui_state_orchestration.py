@@ -190,6 +190,28 @@ def _project_lm_input(snapshot: JsonDict) -> JsonDict:
     return lm_input
 
 
+def _project_memory_structure(
+    tier1_stats: JsonDict,
+    autonomous_observation: JsonDict,
+) -> JsonDict:
+    tier1 = dict(tier1_stats.get("tier1") or {})
+    tier2 = dict(tier1_stats.get("tier2") or {})
+    identity = dict(tier1_stats.get("identity_archive") or {})
+    board = dict(autonomous_observation.get("board") or {})
+    return {
+        "ordinary_memory": tier1.get("total_turns"),
+        "active_session_memory": tier1.get("active_turns"),
+        "compressed_memory": tier1.get("compressed_turns", tier2.get("total_compressed")),
+        "event_memory": tier2.get("events"),
+        "scene_memory": tier2.get("scenes"),
+        "arc_memory": tier2.get("arcs"),
+        "identity_archive": identity.get("anchors"),
+        "self_experiences": identity.get("self_experiences"),
+        "governance_history": identity.get("governance_history"),
+        "autonomous_history": len(list(board.get("autonomous_history") or [])),
+    }
+
+
 async def build_supervisor_ui_state(
     *,
     context: SupervisorUIStateContext,
@@ -301,6 +323,10 @@ async def build_supervisor_ui_state(
         autonomous_observation,
         recent_activity=recent_autonomous_activity,
     )
+    memory_structure = _project_memory_structure(
+        tier1_stats,
+        autonomous_observation,
+    )
     try:
         employee_context = dict(context.load_employee_execution_context() or {})
     except Exception:
@@ -342,6 +368,7 @@ async def build_supervisor_ui_state(
         "autonomous_observation": autonomous_observation,
         "mem_usage": load_ui_memory_token_usage(),
         "tier1_stats": tier1_stats,
+        "memory_structure": memory_structure,
         "body_status": body_status,
         "error_count": error_count,
         "timeline": observation_timeline[:10],

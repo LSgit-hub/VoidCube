@@ -334,7 +334,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             review_body_improvement=lambda report: supervisor._body_improvement_review_service.review(
                 report
             ),
-            promote_memory=supervisor._autonomous_task_memory_promotion_service.propose,
+            on_employee_result=supervisor._handle_employee_result,
         )
     )
     supervisor._schedule_allocator = ScheduleAllocator(
@@ -475,7 +475,6 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         resolve_drive_input=supervisor._resolve_runtime_drive_input_request,
         auto_decision=autonomous_task_auto_decision,
         normalize_context=supervisor._normalize_runtime_decision_context,
-        propose_memory_promotion=supervisor._autonomous_task_memory_promotion_service.propose,
         build_response_fields=supervisor._build_drive_input_response_fields,
         serialize_task=supervisor._autonomous_chain_planning_service.serialize_task,
         build_activity_metadata=supervisor._build_autonomous_chain_activity_metadata,

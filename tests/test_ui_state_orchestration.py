@@ -157,4 +157,5 @@ async def test_ui_state_enriches_auto_employee_cards_with_run_details(monkeypatc
     assert run["execution_provider"] == "research-provider"
     assert run["execution_model"] == "research-model"
     assert run["result_summary"] == "已完成研究并提交回写"
-    assert run["writeback_status"] == "pending"
+    assert run["employee_result_status"] == "not_returned"
+    assert run["result_returned_to_xingzi"] is False

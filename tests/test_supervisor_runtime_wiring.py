@@ -107,7 +107,7 @@ def test_ui_projection_primitives_use_explicit_snapshots_only():
     assert activity["source_label"] == "员工代理执行面"
     assert project_observation_board(
         observation, recent_activity=activity
-    )["observation_notes"][0]["text"] == "还有 2 个执行中链路项，写回后会回到这里。"
+    )["observation_notes"][0]["text"] == "还有 2 个执行中链路项，完成后会先回传星子。"
     assert observation_group(observation, "api_b_judgement")["count"] == 1
     assert observation_loop_stage(observation, "employee_execution")["status_label"] == "执行中"
 
@@ -180,7 +180,7 @@ def test_ui_observation_card_projections_use_explicit_snapshots_only():
     stage = project_observation_stage_card(
         {
             "key": "employee_execution",
-            "label": "员工执行回报",
+            "label": "员工执行与回传",
             "status": "running",
             "focus_task": {"title": "执行中任务", "status": "running"},
         }
@@ -188,7 +188,7 @@ def test_ui_observation_card_projections_use_explicit_snapshots_only():
 
     assert card is not None
     assert card["display_status"] == "已转交"
-    assert card["observation_type_label"] == "员工执行回报"
+    assert card["observation_type_label"] == "员工执行与回传"
     assert "监督者已裁定: 转交" in card["judgement_hint"]
     assert stage["display_status"] == "执行中"
     assert stage["lane"] == "supervisor"
@@ -307,7 +307,10 @@ def test_autonomous_observation_projection_uses_explicit_task_snapshots_only():
                 "title": "已完成学习",
                 "governance_task_type": "self_learning",
                 "status": "completed",
-                "metadata": {"execution_result": {"summary": "已写回"}},
+                "metadata": {
+                    "execution_result": {"summary": "已完成"},
+                    "employee_result_disposition": {"status": "written_to_mem"},
+                },
             }
         ],
         timeline=[],
@@ -357,12 +360,9 @@ def test_memory_maintenance_writeback_distinguishes_handoff_from_completion(
         history_tasks=[task],
         timeline=[],
     )
-    writeback = _observation_section(observation, "mem_recent")["items"][0]
-
     assert observation_display_status(task) == display_status
-    assert writeback["status"] == "completed"
-    assert writeback["display_status"] == display_status
-    assert writeback["observation_type_label"] == "Memory 受理回执"
+    assert _observation_section(observation, "mem_recent")["items"] == []
+    assert observation["board"]["autonomous_history"][0]["lifecycle_status"] == "completed"
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
@@ -916,7 +916,7 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'position: absolute;' in UI_HTML
     assert 'class="dock-sep media-sep"' in UI_HTML
     assert 'data-panel="schedules"' in UI_HTML
-    assert "fetch('/scheduled-tasks?include_completed=true'" in UI_HTML
+    assert "fetch('/scheduled-tasks?include_completed=true&scope=api_a_user'" in UI_HTML
     assert "openPanel('schedules')" in UI_HTML
     assert 'chain-stage-rail' in UI_HTML
     assert '判断参考' in UI_HTML
@@ -979,7 +979,7 @@ def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
     assert "SCENE_TO_ACTION" in UI_HTML
     assert "idle: 'rest'" in UI_HTML
     assert "planning: 'write'" in UI_HTML
-    assert "drive: 'work'" in UI_HTML
+    assert "drive: 'write'" in UI_HTML
     assert "memory: 'organize'" in UI_HTML
     assert "maintenance: 'organize'" in UI_HTML
     assert "handoff: 'work'" in UI_HTML
@@ -2545,7 +2545,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 14
+    assert observation["read_model_version"] == 15
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
@@ -2558,7 +2558,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert "protocol_notes" not in observation["board"]
     assert "boundary_note" not in observation["board"]
     assert observation["loop"]["boundary"] == (
-        "自主链路闭环只展示 API-B 判断、员工代理执行、Mem 写回回流和 API-B 再读取；"
+        "自主链路闭环只展示 API-B 判断、员工代理执行与结果回传、星子处理和自治历史；"
         "用户链路只作让路软感知，不展示聊天内容。"
     )
     assert "metric_cards" not in observation["board"]
@@ -2652,8 +2652,8 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert [card["observation_role"] for card in observation["loop"]["stage_cards"]] == loop_stage_keys
     assert [card["observation_stage_label"] for card in observation["loop"]["stage_cards"]] == [
         "API-B 判断阶段",
-        "员工代理派工 / 执行观测阶段",
-        "Mem 写回阶段",
+        "员工代理派工、执行与结果回传阶段",
+        "星子判断与 Mem 处理阶段",
         "API-B 再读取阶段",
     ]
     assert [entry["key"] for entry in observation["loop"]["rail_entries"]] == loop_stage_keys
@@ -2748,7 +2748,7 @@ async def test_supervisor_room_state_keeps_running_employee_task_out_of_ready_se
     assert observation["runtime"]["employee_running_count"] == 1
     assert any(
         note.get("title") == "员工代理执行中"
-        and "写回后会回到这里" in str(note.get("text") or "")
+        and "完成后会先回传星子" in str(note.get("text") or "")
         for note in notes
     )
 
@@ -2927,8 +2927,7 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
     writebacks = _observation_section(observation, "mem_recent")
 
     assert candidates["items"] == []
-    assert writebacks["items"][0]["task_id"] == task_id
-    assert writebacks["items"][0]["status"] == "completed"
+    assert writebacks["items"] == []
 
 
 def test_latest_drive_candidate_snapshot_stops_at_newer_idle_event(tmp_path):
@@ -2982,6 +2981,18 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
         task_id,
         status="completed",
         reason="已完成的自主学习写回。",
+    )
+    supervisor._autonomous_task_state.update_metadata(
+        task_id,
+        metadata={
+            "employee_execution_result": {
+                "result_summary": "Summarized learning result for Mem writeback.",
+            },
+            "employee_result_disposition": {
+                "status": "written_to_mem",
+                "returned_at": "2026-08-29T00:00:00+00:00",
+            },
+        },
     )
 
     state = await supervisor._ui_runtime.get_state()
@@ -3198,7 +3209,7 @@ async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_r
     assert recent["kind"] == "autonomous_chain_execute"
     assert recent["phase_label"] == "执行回报"
     assert recent["title"] == "替身切换验收 (身体切换)"
-    assert recent["summary"] == "员工代理执行面 已向 API-B 回报 身体切换 的执行进展。"
+    assert recent["summary"] == "员工代理执行面 已向星子回传 身体切换 的执行进展。"
     assert recent["source_label"] == "员工代理执行面"
     assert recent["tone"] == "accent"
     assert observation["board"]["hero_summary"] == observation["board"]["summary"]
@@ -4369,13 +4380,6 @@ async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_
         supervisor._touch_gateway_activity
     )
 
-    async def no_memory_promotion(task):
-        del task
-        return None
-
-    supervisor._autonomous_task_review_service._propose_memory_promotion = (  # type: ignore[method-assign]
-        no_memory_promotion
-    )
     task = supervisor._autonomous_task_state.create_task(
         title="Research a web-backed improvement",
         summary="Collect primary-source evidence.",
@@ -4421,7 +4425,7 @@ async def test_completed_autonomous_learning_persists_deterministic_quality(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_governor_approved_verified_conclusion_creates_consent_candidate(
+async def test_governor_approved_verified_conclusion_waits_for_employee_result(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -4460,38 +4464,11 @@ async def test_governor_approved_verified_conclusion_creates_consent_candidate(
         },
     )
 
-    assert decided["memory_promotion_candidate"] == {
-        "status": "awaiting_user_consent",
-        "candidate_id": "promotion-candidate-conclusion",
-        "source_memory_id": "durable-evolution-conclusion",
-    }
-    assert calls[0]["client_kwargs"] == {
-        "memory_actor": "stellar_auto",
-        "memory_domain": "evolution",
-        "owner_id": "local-user",
-        "workspace_id": "VoidCube",
-        "timeout_seconds": 8,
-    }
-    assert calls[0]["method"] == "POST"
-    assert calls[0]["path"] == "/remember"
-    assert calls[0]["payload"]["memory_domain"] == "evolution"
-    assert calls[1]["client_kwargs"] == {
-        "memory_actor": "governor",
-        "memory_domain": "evolution",
-        "owner_id": "local-user",
-        "workspace_id": "VoidCube",
-        "timeout_seconds": 8,
-    }
-    assert calls[1]["method"] == "POST"
-    assert calls[1]["path"] == "/promotion-candidates"
-    assert calls[1]["payload"]["source_domain"] == "evolution"
-    assert calls[1]["payload"]["target_domain"] == "companion"
+    assert "memory_promotion_candidate" not in decided
+    assert calls == []
     stored = supervisor._autonomous_chain_store.get_task(task_id)
     assert stored is not None
-    assert (
-        stored.metadata["memory_promotion_candidate_id"]
-        == "promotion-candidate-conclusion"
-    )
+    assert "memory_promotion_candidate_id" not in stored.metadata
 
 
 @pytest.mark.unit

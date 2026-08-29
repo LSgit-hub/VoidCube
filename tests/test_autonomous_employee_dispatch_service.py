@@ -121,7 +121,7 @@ async def test_reconcile_projects_employee_run_back_to_task():
 
 
 @pytest.mark.asyncio
-async def test_reconcile_promotes_auto_employee_result_to_memory_without_delivery_panel():
+async def test_reconcile_returns_auto_employee_result_to_supervisor_without_memory_access():
     task = _task(status="approved")
     state = SimpleNamespace(
         update_status=Mock(return_value=SimpleNamespace(task_id="task-1", status="completed")),
@@ -149,7 +149,7 @@ async def test_reconcile_promotes_auto_employee_result_to_memory_without_deliver
             ]
         ),
     )
-    promote_memory = AsyncMock(return_value={"status": "recorded_only"})
+    on_employee_result = AsyncMock()
     service = AutonomousEmployeeDispatchService(
         task_state=state,
         task_store=SimpleNamespace(
@@ -164,15 +164,17 @@ async def test_reconcile_promotes_auto_employee_result_to_memory_without_deliver
         resolve_worker_role=lambda role: f"{role}-employee",
         touch_gateway_activity=AsyncMock(),
         record_ui_activity=Mock(),
-        promote_memory=promote_memory,
+        on_employee_result=on_employee_result,
     )
 
     updates = await service.reconcile()
 
     assert updates == [{"task_id": "task-1", "status": "completed"}]
-    promote_memory.assert_awaited_once()
-    promoted_task = promote_memory.await_args.args[0]
-    assert promoted_task.status == "completed"
+    on_employee_result.assert_awaited_once()
+    returned_task, result_context, final_status = on_employee_result.await_args.args
+    assert returned_task.status == "completed"
+    assert final_status == "completed"
+    assert result_context["result_summary"] == "Primary-source conclusion."
     assert state.update_status.call_args.kwargs["context"]["employee_final_response"] == (
         "Primary-source conclusion."
     )

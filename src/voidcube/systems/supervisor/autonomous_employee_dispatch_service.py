@@ -18,7 +18,7 @@ logger = logging.getLogger("supervisor")
 
 
 class AutonomousEmployeeDispatchService:
-    """Own the canonical API-B -> employee queue -> writeback lifecycle."""
+    """Own employee dispatch and return results to the Supervisor."""
 
     def __init__(
         self,
@@ -31,7 +31,10 @@ class AutonomousEmployeeDispatchService:
         touch_gateway_activity: Callable[..., Any],
         record_ui_activity: Callable[..., Any],
         review_body_improvement: Callable[[Dict[str, Any]], Any] | None = None,
-        promote_memory: Callable[[AutonomousChainTask], Any] | None = None,
+        on_employee_result: Callable[
+            [AutonomousChainTask, Dict[str, Any], str], Any
+        ]
+        | None = None,
     ) -> None:
         self._task_state = task_state
         self._task_store = task_store
@@ -41,7 +44,7 @@ class AutonomousEmployeeDispatchService:
         self._touch_gateway_activity = touch_gateway_activity
         self._record_ui_activity = record_ui_activity
         self._review_body_improvement = review_body_improvement
-        self._promote_memory = promote_memory
+        self._on_employee_result = on_employee_result
 
     @staticmethod
     def _parse_result_payload(result_summary: str) -> Dict[str, Any] | None:
@@ -320,7 +323,7 @@ class AutonomousEmployeeDispatchService:
                     task.task_id,
                     status="running",
                     actor="employee_dispatch_recovery",
-                    reason="历史员工结果已存在，恢复合法执行状态后继续回写。",
+                    reason="历史员工结果已存在，恢复合法执行状态后继续回收。",
                     context=self._result_context(schedule, run),
                     event_type="employee_execution_recovery",
                 )
@@ -345,9 +348,17 @@ class AutonomousEmployeeDispatchService:
                 result_context["employee_final_response"] = result_summary[:4000]
             if success and not evidence_validation.get("ok"):
                 success = False
+            final_status = "completed" if success else "failed"
             metadata: Dict[str, Any] = {
                 "employee_execution_result": result_context,
                 "completed_at": str(run.get("completed_at") or ""),
+                "employee_result_disposition": {
+                    "status": "returned_to_xingzi",
+                    "returned_at": datetime.now(timezone.utc).isoformat(),
+                    "employee_task_id": str(schedule.get("schedule_id") or ""),
+                    "employee_run_id": str(run.get("run_id") or ""),
+                    "final_status": final_status,
+                },
             }
             if success and self._task_profile_policy.runtime_family(task) == "self_learning":
                 assessment = assess_autonomous_learning_quality(
@@ -357,7 +368,6 @@ class AutonomousEmployeeDispatchService:
                 metadata["quality_score"] = assessment["score"]
                 metadata["learning_quality_assessment"] = assessment
             self._task_state.update_metadata(task.task_id, metadata=metadata)
-            final_status = "completed" if success else "failed"
             reason = (
                 "员工代理已完成 API-B 派发的任务。"
                 if success
@@ -397,7 +407,7 @@ class AutonomousEmployeeDispatchService:
                                 expected_generation=lease.generation,
                                 expected_attempt_id=str(lease.attempt_id),
                                 expected_heartbeat_at=current_lease.heartbeat_at,
-                                reason="员工结果回写时 autonomous execution lease 已过期。",
+                                reason="员工结果回收时 autonomous execution lease 已过期。",
                             )
                         except StaleExecutionLeaseError:
                             updated = self._task_store.get_task(task.task_id) or current
@@ -412,22 +422,18 @@ class AutonomousEmployeeDispatchService:
                     context=result_context,
                     event_type=f"employee_execution_{final_status}",
                 )
-            if final_status == "completed" and self._promote_memory is not None:
+            if self._on_employee_result is not None:
                 try:
-                    promotion = self._promote_memory(updated)
-                    if inspect.isawaitable(promotion):
-                        await promotion
-                    if isinstance(promotion, dict) and promotion.get("status") == "deferred":
-                        logger.warning(
-                            "Auto employee result reconciled but Mem promotion deferred for %s: %s",
-                            task.task_id,
-                            promotion.get("reason") or "unknown_reason",
-                        )
+                    callback_result = self._on_employee_result(
+                        updated,
+                        result_context,
+                        final_status,
+                    )
+                    if inspect.isawaitable(callback_result):
+                        await callback_result
                 except Exception as exc:
-                    # Mem availability must not turn an already reconciled
-                    # employee result into a second execution attempt.
                     logger.warning(
-                        "Auto employee result reconciled but Mem promotion failed for %s: %s",
+                        "Employee result was returned but Supervisor handling failed for %s: %s",
                         task.task_id,
                         exc,
                     )

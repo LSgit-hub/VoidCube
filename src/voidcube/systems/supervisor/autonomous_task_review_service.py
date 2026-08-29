@@ -25,7 +25,6 @@ from .task_profile_policy import TaskProfilePolicy
 ResolveDriveInput = Callable[..., Awaitable[Dict[str, Any]]]
 ReviewAdviser = Callable[..., Awaitable[Dict[str, Dict[str, Any]]]]
 AutoDecision = Callable[[AutonomousChainTask, Dict[str, Any]], tuple[str, str]]
-MemoryPromotion = Callable[[AutonomousChainTask], Awaitable[Optional[Dict[str, Any]]]]
 NormalizeContext = Callable[..., Dict[str, Any]]
 SerializeTask = Callable[[AutonomousChainTask], Dict[str, Any]]
 BuildActivityMetadata = Callable[..., Dict[str, Any]]
@@ -46,7 +45,6 @@ class AutonomousTaskReviewService:
         resolve_drive_input: ResolveDriveInput,
         auto_decision: AutoDecision,
         normalize_context: NormalizeContext,
-        propose_memory_promotion: MemoryPromotion,
         build_response_fields: Callable[..., Dict[str, Any]],
         serialize_task: SerializeTask,
         build_activity_metadata: BuildActivityMetadata,
@@ -64,7 +62,6 @@ class AutonomousTaskReviewService:
         self._resolve_drive_input = resolve_drive_input
         self._auto_decision = auto_decision
         self._normalize_context = normalize_context
-        self._propose_memory_promotion = propose_memory_promotion
         self._build_response_fields = build_response_fields
         self._serialize_task = serialize_task
         self._build_activity_metadata = build_activity_metadata
@@ -228,10 +225,6 @@ class AutonomousTaskReviewService:
                 metadata=decision_metadata,
             )
 
-        promotion_candidate = None
-        if normalized in {"approved", "running", "completed"}:
-            promotion_candidate = await self._propose_memory_promotion(updated_task)
-
         activity_metadata = self._build_activity_metadata(
             [updated_task],
             action="decision",
@@ -252,8 +245,6 @@ class AutonomousTaskReviewService:
             "status": normalized,
             "task": self._serialize_task(updated_task),
         }
-        if promotion_candidate is not None:
-            response["memory_promotion_candidate"] = promotion_candidate
         return response
 
     async def review(
@@ -455,8 +446,6 @@ class AutonomousTaskReviewService:
                 execution_request=execution_request,
                 event_type="review",
             )
-            if target_status == "approved":
-                await self._propose_memory_promotion(updated)
             reviewed.append(updated)
             reviewed_statuses.append(updated.status)
             updated_schedule_token = self._schedule_allocator.task_schedule_token(updated)

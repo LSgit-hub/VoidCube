@@ -29,7 +29,7 @@ def test_auto_delivery_is_rejected_at_http_boundary(field, value):
         normalize_delivery_body(_body(**{field: value}))
 
     assert error.value.status_code == 403
-    assert "回写 Mem" in str(error.value.detail)
+    assert "返回星子处理" in str(error.value.detail)
 
 
 def test_assist_delivery_keeps_source_audit_fields():

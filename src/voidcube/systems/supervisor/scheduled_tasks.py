@@ -1113,14 +1113,28 @@ class ScheduledTaskRuntimeMixin:
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def _scheduled_task_snapshot(self, *, include_completed: bool = True) -> Dict[str, Any]:
+    def _scheduled_task_snapshot(
+        self,
+        *,
+        include_completed: bool = True,
+        scope: str = "all",
+    ) -> Dict[str, Any]:
         now = _utc_now()
         all_tasks = self._scheduled_task_store.list(include_completed=True)
+        normalized_scope = str(scope or "all").strip().lower()
+        if normalized_scope not in {"all", "api_a_user"}:
+            raise ValueError("scope must be all or api_a_user")
         hidden_schedule_ids = {
             str(task.get("schedule_id") or "")
             for task in all_tasks
             if task.get("requested_via") in INTERNAL_SCHEDULE_REQUEST_SOURCES
         }
+        if normalized_scope == "api_a_user":
+            hidden_schedule_ids.update(
+                str(task.get("schedule_id") or "")
+                for task in all_tasks
+                if str(task.get("created_by") or "").strip().lower() == "api_b"
+            )
         tasks = [
             task
             for task in all_tasks
@@ -1175,8 +1189,15 @@ class ScheduledTaskRuntimeMixin:
             "generated_at": _iso_utc(now),
         }
 
-    async def list_scheduled_tasks(self, include_completed: bool = True) -> Dict[str, Any]:
-        return self._scheduled_task_snapshot(include_completed=include_completed)
+    async def list_scheduled_tasks(
+        self,
+        include_completed: bool = True,
+        scope: str = "all",
+    ) -> Dict[str, Any]:
+        return self._scheduled_task_snapshot(
+            include_completed=include_completed,
+            scope=scope,
+        )
 
     async def create_scheduled_task(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "created", "task": self._scheduled_store_call("create", request)}

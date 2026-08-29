@@ -102,15 +102,16 @@ def normalize_delivery_body(body: Any) -> JsonDict:
     mode = str(body.get("mode") or body.get("stellar_mode") or "").strip().lower()
     requested_via = str(body.get("requested_via") or "").strip().lower()
     source_kind = str(body.get("source_kind") or body.get("source_lane") or "").strip().lower()
+    autonomous_task_id = str(body.get("autonomous_task_id") or "").strip()
     if (
         mode in AUTONOMOUS_DELIVERY_MODES
         or requested_via in AUTONOMOUS_DELIVERY_SOURCES
         or source_kind in AUTONOMOUS_DELIVERY_SOURCES
-        or str(body.get("autonomous_task_id") or "").strip()
+        or (autonomous_task_id and mode != "daily_companion")
     ):
         raise HTTPException(
             status_code=403,
-            detail="Auto 员工结果必须回写 Mem，不得进入交付面板",
+            detail="AUTO 员工结果必须先返回星子处理，再由星子判断并写入 Mem，不得直接进入交付面板",
         )
     if requested_type not in VALID_DELIVERY_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的交付类型: {requested_type}")

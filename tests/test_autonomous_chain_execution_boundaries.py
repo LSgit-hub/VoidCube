@@ -53,6 +53,38 @@ def test_claim_can_exclude_auto_work_without_blocking_assist_work(tmp_path):
     assert claim["task"]["schedule_id"] == assist["schedule_id"]
 
 
+def test_api_a_schedule_snapshot_excludes_api_b_and_employee_work(tmp_path):
+    now = datetime(2026, 8, 21, tzinfo=timezone.utc)
+    store = ScheduledTaskStore(tmp_path / "scheduled.db")
+    api_a = _task(
+        store,
+        now,
+        created_by="api_a",
+        requested_via="cli",
+        title="用户定时任务",
+    )
+    _task(store, now, title="员工派工")
+    _task(
+        store,
+        now,
+        created_by="api_b",
+        requested_via="companion_delegate",
+        title="辅助模式定时任务",
+    )
+
+    class Host(ScheduledTaskRuntimeMixin):
+        _scheduled_task_store = store
+
+    snapshot = Host()._scheduled_task_snapshot(
+        include_completed=True,
+        scope="api_a_user",
+    )
+
+    assert [task["schedule_id"] for task in snapshot["tasks"]] == [
+        api_a["schedule_id"]
+    ]
+
+
 def test_companion_execution_context_reports_waiting_executor():
     from voidcube.systems.supervisor.service_runtime import ServiceRuntimeMixin
 
@@ -196,6 +228,83 @@ async def test_assist_api_b_to_employee_finish_and_reconcile(tmp_path):
 
     assert updates == [{"task_id": canonical.task_id, "status": "completed"}]
     assert chain_store.get_task(canonical.task_id).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_employee_result_recovery_routes_assist_result_to_user_without_mem():
+    from voidcube.systems.supervisor.service_runtime import (
+        ServiceRuntimeMixin,
+        ServiceRuntimeState,
+        StellarMode,
+    )
+
+    task = SimpleNamespace(
+        task_id="assist-task",
+        title="辅助任务",
+        source="companion",
+        status="completed",
+        metadata={"assist_mode": True},
+    )
+    task_state = SimpleNamespace(
+        update_metadata=Mock(side_effect=lambda task_id, metadata: task)
+    )
+
+    class Host(ServiceRuntimeMixin):
+        _service_runtime = ServiceRuntimeState(stellar_mode=StellarMode.DAILY_COMPANION)
+        _autonomous_task_state = task_state
+        _autonomous_task_memory_promotion_service = SimpleNamespace(
+            propose=AsyncMock()
+        )
+
+    host = Host()
+    result = await host._handle_employee_result(
+        task,
+        {"employee_run_id": "run-1", "result_summary": "已完成"},
+        "completed",
+    )
+
+    assert result["status"] == "awaiting_user_report"
+    assert host._service_runtime.pending_proactive_reminder["task_id"] == "assist-task"
+    host._autonomous_task_memory_promotion_service.propose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_employee_result_recovery_routes_auto_result_through_mem_review():
+    from voidcube.systems.supervisor.service_runtime import (
+        ServiceRuntimeMixin,
+        ServiceRuntimeState,
+        StellarMode,
+    )
+
+    task = SimpleNamespace(
+        task_id="auto-task",
+        title="自治任务",
+        source="self_learning",
+        status="completed",
+        metadata={},
+    )
+    task_state = SimpleNamespace(
+        update_metadata=Mock(side_effect=lambda task_id, metadata: task)
+    )
+    promotion = AsyncMock(
+        return_value={"status": "recorded_only", "source_memory_id": "mem-1"}
+    )
+
+    class Host(ServiceRuntimeMixin):
+        _service_runtime = ServiceRuntimeState(stellar_mode=StellarMode.AUTO_EVOLUTION)
+        _autonomous_task_state = task_state
+        _autonomous_task_memory_promotion_service = SimpleNamespace(
+            propose=promotion
+        )
+
+    result = await Host()._handle_employee_result(
+        task,
+        {"employee_run_id": "run-1", "result_summary": "已完成"},
+        "completed",
+    )
+
+    assert result["status"] == "written_to_mem"
+    promotion.assert_awaited_once_with(task)
 
 
 @pytest.mark.asyncio

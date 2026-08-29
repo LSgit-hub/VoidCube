@@ -265,7 +265,7 @@ def build_autonomous_execution_panel_rows(
     elif focus_stage == "local_claimed_active":
         status_label = "执行中"
     elif focus_stage == "local_claimed_waiting_writeback":
-        status_label = "等待回写"
+        status_label = "等待回传星子"
     elif focus_stage == "local_claimed_waiting_first_turn":
         status_label = "待起跑"
     elif state_ports.agent_running():

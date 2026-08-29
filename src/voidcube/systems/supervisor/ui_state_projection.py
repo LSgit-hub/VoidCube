@@ -123,7 +123,7 @@ def project_supervisor_scene(
         return (
             "handoff",
             f"自主交接中{error_note}",
-            f"「{employee_focus.get('title', '自主链路项')}」已交给 员工代理执行面处理，结果将写回 Mem 供下一轮监督者判断。",
+            f"「{employee_focus.get('title', '自主链路项')}」已交给 员工代理执行面处理，结果完成后先回传星子。",
         )
 
     api_b_stage_status = str(api_b_stage.get("status") or "").strip().lower()

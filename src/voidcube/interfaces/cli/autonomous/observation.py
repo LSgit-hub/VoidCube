@@ -220,7 +220,7 @@ def supervisor_employee_execution_hint(supervisor_state: Dict[str, Any]) -> Dict
             "focus_task": approved_focus,
             "status_label": "API-B 已转交",
             "chain_reason": "链路: API-B 已转交，可由 员工代理执行面接手",
-            "activity_text": "执行流: 员工代理认领后执行，结果写回 Mem",
+            "activity_text": "执行流: 员工代理认领后执行，结果先回传星子",
             "reason_style": "warn",
         }
     elif deferred_judgement:

@@ -14,7 +14,17 @@ from .ui_projection import runtime_activity_label
 def is_employee_lane_family_task(task: Dict[str, Any]) -> bool:
     governance = str(task.get("governance_task_type") or "").strip().lower()
     execution_kind = str(task.get("execution_kind") or "").strip().lower()
-    return governance == "self_learning" or execution_kind == "body_improvement"
+    if governance == "self_learning" or execution_kind == "body_improvement":
+        return True
+    metadata = dict(task.get("metadata") or {})
+    return bool(
+        metadata.get("assist_mode")
+        and (
+            metadata.get("employee_assignment")
+            or metadata.get("employee_execution_result")
+            or metadata.get("employee_result_disposition")
+        )
+    )
 
 def normalize_observation_status(status: Any) -> str:
     return normalize_autonomous_status(status)
@@ -23,11 +33,16 @@ def observation_status_value(task: Dict[str, Any]) -> str:
     return normalize_observation_status(task.get("status"))
 
 def is_employee_execution_lane_task(task: Dict[str, Any]) -> bool:
-    return is_employee_lane_family_task(task) and observation_status_value(task) in {
-        "approved",
-        "running",
-        "retry",
-    }
+    if not is_employee_lane_family_task(task):
+        return False
+    if observation_status_value(task) in {"approved", "running", "retry"}:
+        return True
+    metadata = dict(task.get("metadata") or {})
+    return bool(
+        metadata.get("employee_assignment")
+        or metadata.get("employee_execution_result")
+        or metadata.get("employee_result_disposition")
+    )
 
 def chain_projection_phase_rank(task: Dict[str, Any]) -> int:
     status = observation_status_value(task)
@@ -106,11 +121,11 @@ def observation_role_tag(task: Dict[str, Any]) -> str:
 def observation_task_type_label(task: Dict[str, Any]) -> str:
     observation_role = str(task.get("observation_role") or "").strip()
     mapping = {
-        "mem_writeback": "Mem 写回",
+        "mem_writeback": "星子 Mem 处理",
         "memory_maintenance_receipt": "Memory 受理回执",
         "api_b_reread": "再次判断",
         "api_b_judgement": "API-B 判断",
-        "employee_execution": "员工执行回报",
+        "employee_execution": "员工执行与回传",
         "candidate": "候选形成",
     }
     if observation_role in mapping:
