@@ -430,6 +430,29 @@ def _service_health_check(svc: ServiceInfo) -> bool:
         return _health_check(svc.port)
 
 
+def _live_service_pid(svc: ServiceInfo) -> tuple[Optional[int], bool]:
+    """Resolve a service PID from its record, then from its healthy port owner.
+
+    A manually foreground-started service, or a service whose launcher PID
+    record became stale after a wrapper process exited, can still own the
+    service port.  The desktop status view must report that service as live
+    instead of trusting the PID file alone.
+    """
+    recorded_pid = _read_pid(svc.pid_file)
+    if recorded_pid is not None and _pid_alive(recorded_pid):
+        return recorded_pid, True
+
+    owner_pid = _port_owner_pid(svc.port)
+    if owner_pid is None or not _pid_alive(owner_pid):
+        return recorded_pid, False
+    if not (
+        _process_is_service(owner_pid, svc.name)
+        or _health_endpoint_is_service(svc.port, svc.name, svc.health_path)
+    ):
+        return recorded_pid, False
+    return owner_pid, True
+
+
 # ── Service management ────────────────────────────────────────────────
 
 # Track foreground threads for clean shutdown
@@ -829,8 +852,7 @@ def status_all() -> Dict[str, Any]:
     register_plugin_services(force=True)
     result: Dict[str, Any] = {}
     for name, svc in SERVICES.items():
-        pid = _read_pid(svc.pid_file)
-        alive = pid is not None and _pid_alive(pid)
+        pid, alive = _live_service_pid(svc)
         healthy = _service_health_check(svc) if alive else False
         result[name] = {
             "name": name,
