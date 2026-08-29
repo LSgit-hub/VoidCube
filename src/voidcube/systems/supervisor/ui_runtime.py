@@ -196,6 +196,7 @@ class SupervisorUIRuntime:
             "stage": "companion",
             "task_id": "",
             "mode": "daily_companion",
+            "title": "日常陪伴中",
             "summary": "",
             "source_event": "startup",
             "updated_at": "",
@@ -245,6 +246,7 @@ class SupervisorUIRuntime:
         stage: str,
         task_id: str = "",
         mode: str = "",
+        title: str = "",
         summary: str = "",
         source_event: str = "",
         thinking_text: str = "",
@@ -254,6 +256,7 @@ class SupervisorUIRuntime:
         normalized_stage = str(stage or "idle").strip().lower() or "idle"
         normalized_mode = str(mode or "").strip().lower()
         normalized_task_id = str(task_id or "").strip()
+        normalized_title = str(title or "").strip()[:200]
         normalized_summary = str(summary or "").strip()[:500]
         normalized_source_event = str(source_event or "").strip()[:120]
         with self._api_b_thinking_lock:
@@ -269,6 +272,7 @@ class SupervisorUIRuntime:
                 "stage": normalized_stage,
                 "task_id": normalized_task_id,
                 "mode": normalized_mode,
+                "title": normalized_title,
                 "summary": normalized_summary,
                 "source_event": normalized_source_event,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -301,6 +305,101 @@ class SupervisorUIRuntime:
                     **context,
                 }
             return dict(phase)
+
+    def _publish_activity_phase(
+        self,
+        *,
+        event_type: str,
+        scene: str,
+        summary: str,
+        metadata: JsonDict,
+    ) -> None:
+        """Translate legacy activity records into a live UI phase."""
+        normalized_event = str(event_type or "").strip().lower()
+        phase = {
+            "scene": scene,
+            "stage": "",
+            "task_id": str(metadata.get("task_id") or "").strip(),
+            "title": "",
+            "summary": summary,
+            "thinking_text": "",
+        }
+        if normalized_event == "endogenous_drive_idle":
+            phase.update(
+                scene="idle",
+                stage="idle",
+                title="当前没有新的自主动作",
+                thinking_text="本轮内生驱动没有形成新的候选任务。",
+            )
+        elif normalized_event == "endogenous_drive_evaluated":
+            candidates = metadata.get("candidates")
+            first = (
+                dict(candidates[0])
+                if isinstance(candidates, list)
+                and candidates
+                and isinstance(candidates[0], dict)
+                else {}
+            )
+            phase.update(
+                scene="planning",
+                stage="candidate",
+                task_id=str(
+                    first.get("task_id")
+                    or metadata.get("task_id")
+                    or ""
+                ).strip(),
+                title="正在规划任务",
+                thinking_text="内生驱动已形成候选，星子正在整理候选任务。",
+            )
+        elif normalized_event in {
+            "endogenous_drive_planned",
+            "tasks_planned",
+            "task_decided",
+            "tasks_reviewed",
+            }:
+            task_ids = metadata.get("task_ids")
+            phase.update(
+                scene="planning",
+                stage="planning",
+                task_id=str(
+                    phase["task_id"]
+                    or (
+                        task_ids[0]
+                        if isinstance(task_ids, list) and task_ids
+                        else ""
+                    )
+                    or ""
+                ).strip(),
+                title="正在规划任务",
+                thinking_text="星子正在规划并整理自治任务。",
+            )
+        elif normalized_event == "employee_task_dispatched":
+            phase.update(
+                scene="handoff",
+                stage="dispatched",
+                title="正在派发员工任务",
+                thinking_text="星子已完成任务判断，正在把工作交给员工代理。",
+            )
+        else:
+            return
+
+        try:
+            mode = str(self.ports.stellar_mode_status().get("mode") or "").strip().lower()
+        except Exception:
+            mode = ""
+        if mode == "daily_companion" and phase["scene"] != "idle":
+            phase["scene"] = "idle"
+            phase["title"] = "日常陪伴中"
+        self.publish_ui_phase(
+            scene=phase["scene"],
+            stage=phase["stage"],
+            task_id=phase["task_id"],
+            mode=mode,
+            title=phase["title"],
+            summary=summary,
+            source_event=normalized_event,
+            thinking_text=phase["thinking_text"],
+        )
 
     def set_api_b_thinking_context(
         self,
@@ -345,13 +444,13 @@ class SupervisorUIRuntime:
         """Publish one coherent scene context before exposing its Think payload."""
         with self._api_b_thinking_lock:
             self.ui_state_revision += 1
-            phase = dict(self.ui_phase)
+            phase = dict(state.get("ui_phase") or {})
             phase_revision = int(phase.get("ui_phase_revision") or 0)
             if phase_revision:
                 state.update(
                     {
                         "scene": phase["scene"],
-                        "title": state.get("title") or "",
+                        "title": phase.get("title") or state.get("title") or "",
                         "summary": phase.get("summary") or state.get("summary") or "",
                         "room_location": phase["room_location"],
                         "scene_action": phase["action"],
@@ -388,7 +487,7 @@ class SupervisorUIRuntime:
             self.api_b_thinking_context = context
             state["ui_state_revision"] = self.ui_state_revision
             state["scene_state_revision"] = self.scene_state_revision
-            state["ui_phase"] = dict(self.ui_phase)
+            state["ui_phase"] = phase if phase_revision else {}
 
     def record_api_b_thinking(self, text: str) -> None:
         cleaned = str(text or "").strip()
@@ -545,7 +644,7 @@ class SupervisorUIRuntime:
         summary: str = "",
         metadata: JsonDict | None = None,
     ) -> JsonDict:
-        return record_supervisor_ui_activity(
+        event = record_supervisor_ui_activity(
             context=SupervisorUIActivityContext(
                 activity_path=self.activity_path,
                 events=self.events,
@@ -557,6 +656,13 @@ class SupervisorUIRuntime:
             summary=summary,
             metadata=metadata,
         )
+        self._publish_activity_phase(
+            event_type=event_type,
+            scene=scene,
+            summary=summary,
+            metadata=dict(metadata or {}),
+        )
+        return event
 
     def recent_activity(self, limit: int = 20) -> List[JsonDict]:
         return recent_supervisor_ui_activity(events=self.events, limit=limit)
@@ -947,6 +1053,7 @@ class SupervisorUIRuntime:
                 current_media=lambda: self.current_media,
                 media_queue_length=self.media_queue_length,
                 load_employee_execution_context=self.ports.load_employee_execution_context,
+                current_ui_phase=self.current_ui_phase,
             )
         )
         state["accounts_revision"] = self.accounts_revision

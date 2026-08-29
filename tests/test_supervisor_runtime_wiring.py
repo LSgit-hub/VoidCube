@@ -2796,6 +2796,34 @@ async def test_supervisor_room_state_maps_running_employee_task_to_handoff_scene
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_activity_event_publishes_authoritative_phase_for_scene_and_think(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+
+    supervisor._ui_runtime.record_activity(
+        "tasks_planned",
+        scene="planning",
+        summary="内生驱动已形成候选任务。",
+        metadata={"task_ids": ["drive-task-1"]},
+    )
+
+    phase = supervisor._ui_runtime.current_ui_phase()
+    state = await supervisor._ui_runtime.get_state()
+
+    assert phase["scene"] == "planning"
+    assert phase["stage"] == "planning"
+    assert phase["task_id"] == "drive-task-1"
+    assert state["scene"] == "planning"
+    assert state["scene_task_id"] == "drive-task-1"
+    assert state["api_b_thinking"]["scene"] == "planning"
+    assert state["api_b_thinking"]["task_id"] == "drive-task-1"
+    assert state["api_b_thinking"]["ui_phase_revision"] == phase["ui_phase_revision"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]

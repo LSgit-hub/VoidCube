@@ -55,7 +55,7 @@ class AutonomousTaskStateService:
         metadata: Optional[Dict[str, Any]] = None,
         execution_request: Optional[AutonomousChainExecutionRequest] = None,
     ) -> AutonomousChainTask:
-        return self._store.update_metadata(
+        task = self._store.update_metadata(
             task_id,
             metadata=metadata,
             execution_request=execution_request,
@@ -64,6 +64,8 @@ class AutonomousTaskStateService:
                 transition_kind="metadata",
             ),
         )
+        self._notify_status(task, "metadata_update")
+        return task
 
     def update_priority(
         self,

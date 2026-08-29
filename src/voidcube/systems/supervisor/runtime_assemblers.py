@@ -216,6 +216,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         event_type: str,
     ) -> None:
         supervisor._record_endogenous_drive_outcome(task, event_type=event_type)
+        supervisor._publish_ui_phase_for_task(task, event_type=event_type)
 
     supervisor._autonomous_task_state = AutonomousTaskStateService(
         store=supervisor._autonomous_chain_store,

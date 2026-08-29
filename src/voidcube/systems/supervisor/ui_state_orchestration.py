@@ -42,6 +42,7 @@ class SupervisorUIStateContext:
     current_media: Callable[[], Any]
     media_queue_length: Callable[[], int] = lambda: 0
     load_employee_execution_context: Callable[[], JsonDict] = lambda: {}
+    current_ui_phase: Callable[[], JsonDict] = lambda: {}
 
 
 def load_ui_memory_token_usage() -> JsonDict:
@@ -209,6 +210,73 @@ def _project_memory_structure(
     }
 
 
+def _published_phase_matches_snapshot(
+    phase: JsonDict,
+    chain_projection: list[JsonDict],
+    *,
+    mode: str,
+) -> bool:
+    """Reject a phase that was superseded by a newer task snapshot."""
+    phase_mode = str(phase.get("mode") or "").strip().lower()
+    if phase_mode and phase_mode != mode:
+        return False
+    if mode == "daily_companion":
+        return str(phase.get("scene") or "idle").strip().lower() == "idle"
+    task_id = str(phase.get("task_id") or "").strip()
+    if not task_id:
+        return True
+    task = next(
+        (
+            item
+            for item in chain_projection
+            if str(item.get("task_id") or "").strip() == task_id
+        ),
+        None,
+    )
+    # An activity event may arrive just before its canonical task commit.
+    if task is None:
+        return True
+
+    metadata = dict(task.get("metadata") or {})
+    disposition = dict(metadata.get("employee_result_disposition") or {})
+    disposition_status = str(disposition.get("status") or "").strip().lower()
+    canonical_status = str(task.get("status") or "").strip().lower()
+    family_values = {
+        str(value or "").strip().lower()
+        for value in (
+            task.get("governance_task_type"),
+            task.get("task_family"),
+            task.get("execution_kind"),
+            metadata.get("governance_task_type"),
+            metadata.get("task_family"),
+            metadata.get("execution_kind"),
+        )
+    }
+    if disposition_status in {"awaiting_user_report", "reported_to_user"}:
+        expected_scene = "idle" if mode == "daily_companion" else "planning"
+    elif disposition_status in {"returned_to_xingzi", "awaiting_mem_review"}:
+        expected_scene = "planning"
+    elif "memory_maintenance" in family_values or any(
+        "memory" in value for value in family_values
+    ):
+        expected_scene = "maintenance"
+    elif canonical_status in {"approved", "running", "reconciling", "retry"} or (
+        metadata.get("employee_assignment")
+        and canonical_status not in {"planned", "deferred", "awaiting_review"}
+    ):
+        expected_scene = "handoff"
+    elif canonical_status in {
+        "planned",
+        "deferred",
+        "awaiting_review",
+        "paused",
+    }:
+        expected_scene = "planning"
+    else:
+        expected_scene = "idle"
+    return str(phase.get("scene") or "idle").strip().lower() == expected_scene
+
+
 async def build_supervisor_ui_state(
     *,
     context: SupervisorUIStateContext,
@@ -296,6 +364,43 @@ async def build_supervisor_ui_state(
                 "mode": "daily_companion",
             }
         )
+    published_phase = dict(context.current_ui_phase() or {})
+    published_phase_is_current = (
+        int(published_phase.get("ui_phase_revision") or 0) > 0
+        and _published_phase_matches_snapshot(
+            published_phase,
+            chain_projection,
+            mode=str(stellar_mode.get("mode") or "").strip().lower(),
+        )
+    )
+    if published_phase_is_current:
+        phase_mode = str(published_phase.get("mode") or "").strip().lower()
+        current_mode = str(stellar_mode.get("mode") or "").strip().lower()
+        if not phase_mode or phase_mode == current_mode:
+            scene_projection.update(
+                {
+                    "scene": str(published_phase.get("scene") or "idle"),
+                    "room_location": str(
+                        published_phase.get("room_location") or "sofa"
+                    ),
+                    "action": str(published_phase.get("action") or "rest"),
+                    "title": str(
+                        published_phase.get("title")
+                        or scene_projection.get("title")
+                        or ""
+                    ),
+                    "summary": str(
+                        published_phase.get("summary")
+                        or scene_projection.get("summary")
+                        or ""
+                    ),
+                    "stage": str(
+                        published_phase.get("stage") or "idle"
+                    ).strip().lower(),
+                    "task_id": str(published_phase.get("task_id") or ""),
+                    "mode": phase_mode or current_mode,
+                }
+            )
 
     cognition_snapshot = _normalize_loaded_cognition_state(
         context.load_cognition_state()
@@ -380,6 +485,7 @@ async def build_supervisor_ui_state(
         "scene_stage": scene_projection["stage"],
         "scene_task_id": scene_projection["task_id"],
         "scene_mode": scene_projection["mode"],
+        "ui_phase": dict(published_phase if published_phase_is_current else {}),
         "generated_at": datetime.utcnow().isoformat(),
         "autonomous_observation": autonomous_observation,
         "mem_usage": load_ui_memory_token_usage(),

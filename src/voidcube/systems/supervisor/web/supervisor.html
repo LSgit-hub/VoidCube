@@ -5203,6 +5203,7 @@ let connectionState = 'connecting';
 let lastSyncAt = 0;
 let lastSyncTimer = null;
 let lastState = null;
+let lastUiPhaseRevision = 0;
 function currentStellarMode() {
   return String(((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
 }
@@ -8196,7 +8197,10 @@ function showCompanionThinkBubble(text, key) {
 
 function renderApiBThinking(state) {
   const thinking = (state || {}).api_b_thinking || {};
-  const text = String(thinking.text || '').trim();
+  const phase = (state || {}).ui_phase || {};
+  const thinkingText = String(thinking.text || '').trim();
+  const phaseText = String(phase.summary || '').trim();
+  const text = thinkingText || phaseText;
   if (!text) {
     hideCompanionThinkBubble();
     return;
@@ -8210,12 +8214,23 @@ function renderApiBThinking(state) {
   const currentMode = String(
     current.scene_mode || ((current.stellar_mode || {}).mode || '')
   ).trim();
+  const thinkingPhaseRevision = Number(thinking.ui_phase_revision || 0);
+  const currentPhaseRevision = Number(
+    (current.ui_phase || {}).ui_phase_revision
+      || current.ui_phase_revision
+      || 0
+  );
   const thinkingSceneRevision = Number(thinking.scene_state_revision || 0);
   const currentSceneRevision = Number(current.scene_state_revision || 0);
   if (
     (thinkingScene && currentScene && thinkingScene !== currentScene)
     || (thinkingTaskId && currentTaskId && thinkingTaskId !== currentTaskId)
     || (thinkingMode && currentMode && thinkingMode !== currentMode)
+    || (
+      thinkingPhaseRevision
+      && currentPhaseRevision
+      && thinkingPhaseRevision !== currentPhaseRevision
+    )
     || (
       thinkingSceneRevision
       && currentSceneRevision
@@ -8232,6 +8247,7 @@ function renderApiBThinking(state) {
     thinkingScene,
     String(thinking.stage || ''),
     thinkingTaskId,
+    String(thinkingPhaseRevision || currentPhaseRevision || ''),
     text,
   ].join('|');
   showCompanionThinkBubble(text, key);
@@ -9805,6 +9821,16 @@ async function verifyAccount(id) {
 function applyState(state) {
   const incomingStateRevision = Number((state || {}).ui_state_revision || 0);
   const currentStateRevision = Number(lastState && lastState.ui_state_revision || 0);
+  const incomingPhaseRevision = Number(
+    ((state || {}).ui_phase || {}).ui_phase_revision
+      || (state || {}).ui_phase_revision
+      || 0
+  );
+  const currentPhaseRevision = Number(
+    (lastState && (lastState.ui_phase || {}).ui_phase_revision)
+      || lastUiPhaseRevision
+      || 0
+  );
   if (
     incomingStateRevision
     && currentStateRevision
@@ -9812,7 +9838,15 @@ function applyState(state) {
   ) {
     return;
   }
+  if (
+    incomingPhaseRevision
+    && currentPhaseRevision
+    && incomingPhaseRevision < currentPhaseRevision
+  ) {
+    return;
+  }
   lastState = state;
+  lastUiPhaseRevision = Math.max(lastUiPhaseRevision, incomingPhaseRevision);
   markConnection('connected');
 
   // 账号变更 → 通知 Electron 刷新 cookie

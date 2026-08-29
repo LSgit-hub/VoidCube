@@ -612,6 +612,201 @@ class ServiceRuntimeMixin:
             "attempts": 0,
         }
 
+    def _publish_ui_phase_for_task(
+        self,
+        task: Any,
+        *,
+        event_type: str = "",
+    ) -> None:
+        """Expose the authoritative task phase to the room and Think sink."""
+        ui_runtime = getattr(self, "_ui_runtime", None)
+        if ui_runtime is None:
+            return
+
+        mode = self._service_runtime.stellar_mode.value
+        task_id = str(getattr(task, "task_id", "") or "").strip()
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        disposition = dict(metadata.get("employee_result_disposition") or {})
+        disposition_status = str(disposition.get("status") or "").strip().lower()
+        canonical_status = str(getattr(task, "status", "") or "").strip().lower()
+        task_title = str(getattr(task, "title", "") or "自主任务").strip()[:160]
+
+        def publish_phase(**payload: Any) -> None:
+            if mode == StellarMode.DAILY_COMPANION.value:
+                payload["scene"] = "idle"
+                payload["title"] = "日常陪伴中"
+            ui_runtime.publish_ui_phase(**payload)
+
+        # Terminal results belong to history. They must not keep the room
+        # parked on a completed task when another task is not active.
+        terminal_dispositions = {
+            "reported_to_user",
+            "written_to_mem",
+            "mem_write_failed",
+            "failed",
+        }
+        result_is_still_in_xingzi = disposition_status in {
+            "returned_to_xingzi",
+            "awaiting_user_report",
+            "awaiting_mem_review",
+        }
+        if disposition_status in terminal_dispositions or (
+            canonical_status in {"completed", "failed", "cancelled"}
+            and not result_is_still_in_xingzi
+        ):
+            live_tasks = []
+            store = getattr(self, "_autonomous_chain_store", None)
+            if store is not None:
+                try:
+                    live_tasks = [
+                        candidate
+                        for candidate in store.list_tasks()
+                        if str(getattr(candidate, "status", "") or "").strip().lower()
+                        not in {"completed", "failed", "cancelled"}
+                    ]
+                except Exception:
+                    live_tasks = []
+            if live_tasks:
+                task = max(
+                    live_tasks,
+                    key=lambda candidate: str(
+                        getattr(candidate, "updated_at", "")
+                        or getattr(candidate, "created_at", "")
+                    ),
+                )
+                task_id = str(getattr(task, "task_id", "") or "").strip()
+                metadata = dict(getattr(task, "metadata", {}) or {})
+                disposition = dict(
+                    metadata.get("employee_result_disposition") or {}
+                )
+                disposition_status = str(
+                    disposition.get("status") or ""
+                ).strip().lower()
+                canonical_status = str(
+                    getattr(task, "status", "") or ""
+                ).strip().lower()
+                task_title = str(
+                    getattr(task, "title", "") or "自主任务"
+                ).strip()[:160]
+            else:
+                publish_phase(
+                    scene="idle",
+                    stage="idle",
+                    mode=mode,
+                    title="日常陪伴中"
+                    if mode == StellarMode.DAILY_COMPANION.value
+                    else "当前没有新的自主动作",
+                    summary="任务已完成回收，当前没有新的在途任务。",
+                    source_event=str(event_type or "task_terminal"),
+                    thinking_text="当前没有新的在途任务。",
+                )
+                return
+
+        task_family = {
+            str(value or "").strip().lower()
+            for value in (
+                getattr(task, "governance_task_type", ""),
+                getattr(task, "task_family", ""),
+                getattr(task, "execution_kind", ""),
+                metadata.get("governance_task_type"),
+                metadata.get("task_family"),
+                metadata.get("execution_kind"),
+            )
+        }
+        if "memory_maintenance" in task_family and not disposition_status:
+            publish_phase(
+                scene="maintenance",
+                stage="memory_maintenance",
+                task_id=task_id,
+                mode=mode,
+                title="正在整理记忆",
+                summary=f"星子正在维护「{task_title}」的 Mem 连续性。",
+                source_event=str(event_type or "memory_maintenance"),
+                thinking_text="星子正在整理压缩周期节点记忆并维护身份档案。",
+            )
+            return
+
+        if disposition_status:
+            if mode == StellarMode.DAILY_COMPANION.value:
+                if disposition_status == "awaiting_user_report":
+                    title = "等待向用户回报"
+                    thinking = "员工结果已回到星子，星子正在整理用户可理解的回报。"
+                else:
+                    title = "日常陪伴中"
+                    thinking = "员工结果已由星子完成用户侧处理。"
+                publish_phase(
+                    scene="idle",
+                    stage=disposition_status,
+                    task_id=task_id,
+                    mode=mode,
+                    title=title,
+                    summary=f"「{task_title}」的结果已回到星子。",
+                    source_event=str(event_type or "employee_result"),
+                    thinking_text=thinking,
+                )
+                return
+            if disposition_status in {
+                "returned_to_xingzi",
+                "awaiting_mem_review",
+            }:
+                publish_phase(
+                    scene="planning",
+                    stage=disposition_status,
+                    task_id=task_id,
+                    mode=mode,
+                    title=(
+                        "正在回收员工结果"
+                        if disposition_status == "returned_to_xingzi"
+                        else "等待星子判断"
+                    ),
+                    summary=f"「{task_title}」的执行结果已经回到星子。",
+                    source_event=str(event_type or "employee_result"),
+                    thinking_text=(
+                        "员工结果已回传星子，星子正在进行任务回收。"
+                        if disposition_status == "returned_to_xingzi"
+                        else "星子正在判断员工结果是否写入 Mem。"
+                    ),
+                )
+                return
+
+        if canonical_status in {
+            "approved",
+            "running",
+            "reconciling",
+            "retry",
+        } or metadata.get("employee_assignment"):
+            stage = "running" if canonical_status == "running" else "dispatched"
+            publish_phase(
+                scene="handoff",
+                stage=stage,
+                task_id=task_id,
+                mode=mode,
+                title="正在派发员工任务",
+                summary=(
+                    f"星子正在向员工代理交接「{task_title}」。"
+                    if stage == "dispatched"
+                    else f"员工代理正在执行「{task_title}」，结果将先回传星子。"
+                ),
+                source_event=str(event_type or "employee_dispatch"),
+                thinking_text=(
+                    "星子正在向员工代理分配任务。"
+                    if stage == "dispatched"
+                    else "员工代理正在执行，完成后先把结果交回星子。"
+                ),
+            )
+            return
+
+        publish_phase(
+            scene="planning",
+            stage="planning" if canonical_status else "candidate",
+            task_id=task_id,
+            mode=mode,
+            title="正在规划任务",
+            summary=f"星子正在规划「{task_title}」。",
+            source_event=str(event_type or "task_planning"),
+            thinking_text="内生驱动已形成任务，星子正在规划执行路径。",
+        )
+
     async def _handle_employee_result(
         self,
         task: Any,

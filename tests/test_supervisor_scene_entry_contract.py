@@ -62,6 +62,8 @@ def test_thinking_bubble_clears_and_rejects_stale_scene_context():
     assert "thinking.task_id" in thinking_source
     assert "thinking.scene_state_revision" in thinking_source
     assert "current.scene_state_revision" in thinking_source
+    assert "phase.summary" in thinking_source
+    assert "thinking.ui_phase_revision" in thinking_source
 
 
 def test_state_application_rejects_older_ui_state_revision():
@@ -70,6 +72,7 @@ def test_state_application_rejects_older_ui_state_revision():
     apply_source = HTML[start:end]
     assert "ui_state_revision" in apply_source
     assert "incomingStateRevision < currentStateRevision" in apply_source
+    assert "incomingPhaseRevision < currentPhaseRevision" in apply_source
 
 
 def test_xingzi_direct_text_chat_uses_companion_boundary():

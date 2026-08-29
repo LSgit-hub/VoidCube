@@ -159,3 +159,60 @@ async def test_ui_state_enriches_auto_employee_cards_with_run_details(monkeypatc
     assert run["result_summary"] == "已完成研究并提交回写"
     assert run["employee_result_status"] == "not_returned"
     assert run["result_returned_to_xingzi"] is False
+
+
+@pytest.mark.asyncio
+async def test_ui_state_prefers_authoritative_published_phase_over_snapshot_guess(
+    monkeypatch,
+):
+    import voidcube.systems.supervisor.ui_state_orchestration as owner
+
+    monkeypatch.setattr(owner, "load_ui_memory_token_usage", lambda: {})
+
+    async def load_observation_input_snapshot():
+        return ({"activity": {"counts": {}}}, True)
+
+    async def load_memory_stats():
+        return {"memory_active": False}
+
+    async def load_timeline(*, limit):
+        return []
+
+    context = SupervisorUIStateContext(
+        runtime_config=SimpleNamespace(
+            endogenous_drive_lm_task_generation_enabled=False
+        ),
+        list_chain_projection_tasks=lambda: [],
+        serialize_chain_task=lambda task: dict(task),
+        latest_drive_candidates=lambda: [],
+        load_observation_input_snapshot=load_observation_input_snapshot,
+        load_memory_stats=load_memory_stats,
+        load_observation_timeline=load_timeline,
+        load_body_status=lambda chain: {},
+        attach_trace_details=lambda observation: observation,
+        load_cognition_state=lambda: {},
+        stellar_mode_status=lambda: {"mode": "auto_evolution"},
+        voice_status=lambda: {"active": False},
+        current_media=lambda: None,
+        current_ui_phase=lambda: {
+            "scene": "handoff",
+            "room_location": "computer_desk",
+            "action": "work",
+            "stage": "running",
+            "task_id": "task-live",
+            "mode": "auto_evolution",
+            "title": "星子正在派发员工任务",
+            "summary": "任务阶段由统一后端事件发布。",
+            "ui_phase_revision": 7,
+        },
+    )
+
+    state = await build_supervisor_ui_state(context=context)
+
+    assert state["scene"] == "handoff"
+    assert state["room_location"] == "computer_desk"
+    assert state["scene_action"] == "work"
+    assert state["scene_stage"] == "running"
+    assert state["scene_task_id"] == "task-live"
+    assert state["title"] == "星子正在派发员工任务"
+    assert state["ui_phase"]["ui_phase_revision"] == 7

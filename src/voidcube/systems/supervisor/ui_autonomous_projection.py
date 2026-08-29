@@ -71,10 +71,7 @@ def project_autonomous_observation(
     employee_result_statuses = {
         "returned_to_xingzi",
         "awaiting_user_report",
-        "reported_to_user",
         "awaiting_mem_review",
-        "written_to_mem",
-        "mem_write_failed",
     }
     employee_result_source = [
         task
@@ -87,6 +84,12 @@ def project_autonomous_observation(
         ).strip().lower()
         in employee_result_statuses
     ]
+    employee_result_source.sort(
+        key=lambda task: str(
+            task.get("updated_at") or task.get("created_at") or ""
+        ),
+        reverse=True,
+    )
     employee_pre_dispatch_source = [
         task
         for task in employee_lane_family_sorted
@@ -103,13 +106,23 @@ def project_autonomous_observation(
             if observation_status_value(row) == "running"
         ]
         if running:
-            return sorted(running, key=chain_projection_order_key)[0]
+            return max(
+                running,
+                key=lambda row: str(
+                    row.get("updated_at") or row.get("created_at") or ""
+                ),
+            )
         approved = [
             row for row in rows
             if observation_status_value(row) == "approved"
         ]
         if approved:
-            return sorted(approved, key=chain_projection_order_key)[0]
+            return max(
+                approved,
+                key=lambda row: str(
+                    row.get("updated_at") or row.get("created_at") or ""
+                ),
+            )
         return None
 
     api_b_focus_task = pick_active(supervisor_sorted)
@@ -217,7 +230,8 @@ def project_autonomous_observation(
         for task in employee_pre_dispatch_cards
         if str(task.get("status") or "").strip().lower() == "deferred"
     ]
-    completed_tasks = [
+    completed_tasks = sorted(
+        [
         task
         for task in (history_tasks or all_tasks)
         if str(
@@ -227,7 +241,12 @@ def project_autonomous_observation(
             or ""
         ).strip().lower()
         == "written_to_mem"
-    ]
+        ],
+        key=lambda task: str(
+            task.get("updated_at") or task.get("created_at") or ""
+        ),
+        reverse=True,
+    )
     recent_writebacks = [
         build_autonomous_writeback_summary(task)
         for task in completed_tasks[:3]
