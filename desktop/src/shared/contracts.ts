@@ -132,5 +132,7 @@ export interface VoidCubeDesktopApi {
   }
   cookiesRefresh: () => Promise<{ ok: boolean }>
   clipboardReadText: () => Promise<{ ok: boolean; text?: string; error?: string }>
+  clipboardHasImage: () => Promise<{ ok: boolean; hasImage?: boolean; error?: string }>
+  clipboardWriteText: (text: string) => Promise<{ ok: boolean; error?: string }>
   platformLogin: (platform: string) => Promise<PlatformLoginResult>
 }

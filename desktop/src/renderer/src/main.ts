@@ -2,6 +2,7 @@ import {
   Box,
   Check,
   ChevronDown,
+  Copy,
   createIcons,
   ExternalLink,
   FolderGit2,
@@ -54,6 +55,7 @@ const closePluginViewButton = requiredElement<HTMLButtonElement>('close-plugin-v
 const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
+const copyTerminalButton = requiredElement<HTMLButtonElement>('copy-terminal')
 const executionContext = requiredElement<HTMLElement>('execution-context')
 const executionSelector = requiredElement<HTMLDetailsElement>('execution-selector')
 const executionSelectorSummary = requiredElement<HTMLElement>('execution-selector-summary')
@@ -88,6 +90,7 @@ createIcons({
     Box,
     Check,
     ChevronDown,
+    Copy,
     PanelTop,
     FolderGit2,
     Monitor,
@@ -151,9 +154,22 @@ terminal.loadAddon(unicode11Addon)
 terminal.unicode.activeVersion = '11'
 terminal.open(terminalHost)
 terminal.attachCustomKeyEventHandler((event) => {
-  const isPasteShortcut = event.type === 'keydown'
-    && event.ctrlKey
-    && event.key.toLowerCase() === 'v'
+  if (event.type !== 'keydown') return true
+
+  const isCtrlOrMeta = event.ctrlKey || event.metaKey
+  const key = event.key.toLowerCase()
+  const hasSelection = terminal.hasSelection()
+
+  if (isCtrlOrMeta && key === 'c' && hasSelection) {
+    event.preventDefault()
+    void copySelectedTerminalText()
+    return false
+  }
+
+  const isPasteShortcut = (
+    (isCtrlOrMeta && key === 'v') ||
+    (event.shiftKey && key === 'insert')
+  )
   if (!isPasteShortcut) return true
 
   event.preventDefault()
@@ -211,7 +227,29 @@ function showTerminalError(message: string): void {
   terminalError.hidden = false
 }
 
+function syncCopyButtonState(): void {
+  copyTerminalButton.disabled = !terminal.hasSelection()
+}
+
+async function copySelectedTerminalText(): Promise<void> {
+  const selection = terminal.getSelection()
+  if (!selection) return
+  const result = await api.clipboardWriteText(selection).catch((error: unknown) => ({
+    ok: false,
+    error: error instanceof Error ? error.message : String(error)
+  }))
+  if (!result.ok) showTerminalError(result.error || '无法复制所选文本')
+}
+
 async function pasteClipboardIntoTerminal(): Promise<void> {
+  const hasImage = await api.clipboardHasImage().catch((error: unknown) => ({
+    ok: false,
+    error: error instanceof Error ? error.message : String(error)
+  }))
+  if (hasImage.ok && 'hasImage' in hasImage && hasImage.hasImage) {
+    api.terminal.write('/paste\r')
+    return
+  }
   const result: { ok: boolean; text?: string; error?: string } = await api.clipboardReadText().catch((error: unknown) => ({
     ok: false,
     error: error instanceof Error ? error.message : String(error)
@@ -850,6 +888,7 @@ function endSplitDrag(event: PointerEvent): void {
 terminal.onData((data) => api.terminal.write(data))
 const disposeTerminalData = api.terminal.onData((data) => terminal.write(data))
 const disposeTerminalState = api.terminal.onState(applyTerminalState)
+const disposeTerminalSelection = terminal.onSelectionChange(syncCopyButtonState)
 const resizeObserver = new ResizeObserver(() => requestAnimationFrame(fitTerminal))
 resizeObserver.observe(terminalHost)
 
@@ -867,6 +906,7 @@ retryMonitor.addEventListener('click', () => void connectMonitor(true))
 closePluginViewButton.addEventListener('click', closePluginView)
 requiredElement<HTMLButtonElement>('restart-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.restart()))
 requiredElement<HTMLButtonElement>('retry-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.start()))
+copyTerminalButton.addEventListener('click', () => void copySelectedTerminalText())
 requiredElement<HTMLButtonElement>('minimize-window').addEventListener('click', () => api.window.minimize())
 requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () => api.window.close())
 requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
@@ -927,6 +967,7 @@ window.addEventListener('beforeunload', () => {
   resizeObserver.disconnect()
   disposeTerminalData()
   disposeTerminalState()
+  disposeTerminalSelection.dispose()
 })
 
 // 监听 Supervisor iframe 的 postMessage（账号中心 cookie 刷新等）
@@ -955,6 +996,7 @@ window.addEventListener('message', (event) => {
 async function startDesktop(): Promise<void> {
   setLayoutMode(layoutMode)
   setSplitPercent(splitPercent)
+  syncCopyButtonState()
   await runServiceAction('start')
   applyTerminalState(await api.terminal.start())
   scheduleServicePoll()

@@ -20,6 +20,20 @@ function projectPython(projectRoot: string): string {
   return python
 }
 
+function commandExists(command: string): boolean {
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+test.skip(
+  !commandExists('podman') || !commandExists('tirith'),
+  'Podman and Tirith are required for the desktop smoke test'
+)
+
 test('opens the supervisor and a real VoidCube PTY', async () => {
   const projectRoot = resolve(process.cwd(), '..')
   const env = Object.fromEntries(
@@ -39,7 +53,10 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     cwd: process.cwd(),
     env
   })
-  const originalClipboard = await application.evaluate(({ clipboard }) => clipboard.readText())
+  const originalClipboard = await application.evaluate(({ clipboard }) => ({
+    text: clipboard.readText(),
+    image: clipboard.readImage().isEmpty() ? '' : clipboard.readImage().toDataURL()
+  }))
 
   try {
     const window = await application.firstWindow()
@@ -72,6 +89,28 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await window.keyboard.press('Control+V')
     await expect.poll(async () => window.locator('.xterm-rows').textContent()).toContain('/help')
     await window.keyboard.press('Enter')
+
+    await application.evaluate(({ clipboard, nativeImage }, dataUrl: string) => {
+      clipboard.write({
+        image: nativeImage.createFromDataURL(dataUrl)
+      })
+    }, 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7b9pQAAAAASUVORK5CYII=')
+    await window.locator('#terminal').click()
+    await window.keyboard.press('Control+V')
+    await expect.poll(async () => window.locator('.xterm-rows').textContent()).toContain('Image #1 attached from clipboard')
+
+    const attachedRow = window.locator('.xterm-rows > div').filter({ hasText: 'Image #1 attached from clipboard' }).last()
+    await expect(attachedRow).toBeVisible()
+    const attachedRowBox = await attachedRow.boundingBox()
+    if (!attachedRowBox) throw new Error('Terminal attachment row is unavailable')
+    const y = attachedRowBox.y + attachedRowBox.height / 2
+    await window.mouse.move(attachedRowBox.x + 8, y)
+    await window.mouse.down()
+    await window.mouse.move(attachedRowBox.x + attachedRowBox.width - 8, y)
+    await window.mouse.up()
+    await window.keyboard.press('Control+Shift+C')
+    await expect.poll(async () => application.evaluate(({ clipboard }) => clipboard.readText()))
+      .toContain('Image #1 attached from clipboard')
 
     await application.evaluate(({ BrowserWindow }) => {
       const activeWindow = BrowserWindow.getAllWindows()[0]
@@ -185,7 +224,16 @@ test('opens the supervisor and a real VoidCube PTY', async () => {
     await window.screenshot({ path: 'test-results/voidcube-desktop.png' })
     expect(pageErrors).toEqual([])
   } finally {
-    await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), originalClipboard)
+    await application.evaluate(({ clipboard, nativeImage }, original) => {
+      if (original.image) {
+        clipboard.write({
+          text: original.text,
+          image: nativeImage.createFromDataURL(original.image)
+        })
+        return
+      }
+      clipboard.writeText(original.text)
+    }, originalClipboard)
     await application.close()
   }
 

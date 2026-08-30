@@ -61,6 +61,10 @@ const api: VoidCubeDesktopApi = {
     ipcRenderer.invoke('cookies:refresh') as Promise<{ ok: boolean }>,
   clipboardReadText: () =>
     ipcRenderer.invoke('clipboard:read-text') as Promise<{ ok: boolean; text?: string; error?: string }>,
+  clipboardHasImage: () =>
+    ipcRenderer.invoke('clipboard:has-image') as Promise<{ ok: boolean; hasImage?: boolean; error?: string }>,
+  clipboardWriteText: (text: string) =>
+    ipcRenderer.invoke('clipboard:write-text', text) as Promise<{ ok: boolean; error?: string }>,
   platformLogin: (platform) =>
     ipcRenderer.invoke('accounts:platform-login', platform)
 }

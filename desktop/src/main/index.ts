@@ -164,6 +164,22 @@ function registerIpc(): void {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+  ipcMain.handle('clipboard:has-image', () => {
+    try {
+      return { ok: true, hasImage: !clipboard.readImage().isEmpty() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('clipboard:write-text', (_event, text: unknown) => {
+    if (typeof text !== 'string') return { ok: false, error: 'Invalid clipboard text' }
+    try {
+      clipboard.writeText(text)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
   ipcMain.handle('accounts:platform-login', (_event, platform: unknown) => {
     if (!mainWindow) return { ok: false, error: '桌面窗口不可用' }
     if (typeof platform !== 'string') return { ok: false, error: '平台参数无效' }
