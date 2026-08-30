@@ -65,6 +65,36 @@ def test_initialize_layout_bootstraps_dual_slots(tmp_path):
 
 
 @pytest.mark.unit
+def test_registry_manager_reuses_cached_registry_and_slot_meta_reads(tmp_path, monkeypatch):
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
+    manager.initialize_layout()
+
+    reads = {"registry": 0, "slot": 0}
+    original_read_text = Path.read_text
+    slot_a_path = manager.slot_meta_path("slot-A")
+    manager._registry_cache = None
+    manager._slot_meta_cache.clear()
+
+    def tracked_read_text(self, *args, **kwargs):
+        if self == manager.registry_path:
+            reads["registry"] += 1
+        if self == slot_a_path:
+            reads["slot"] += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracked_read_text, raising=False)
+
+    registry_first = manager.load_registry()
+    registry_second = manager.load_registry()
+    slot_first = manager.load_slot_meta("slot-A")
+    slot_second = manager.load_slot_meta("slot-A")
+
+    assert reads == {"registry": 1, "slot": 1}
+    assert registry_first == registry_second
+    assert slot_first == slot_second
+
+
+@pytest.mark.unit
 def test_inspect_layout_reads_head_change_audit_without_writing_or_reverting(tmp_path):
     source_root = tmp_path / "source"
     state_root = tmp_path / "state"
@@ -93,6 +123,53 @@ def test_inspect_layout_reads_head_change_audit_without_writing_or_reverting(tmp
         ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
         capture_output=True, text=True,
     ).stdout.strip() == head_before
+
+
+@pytest.mark.unit
+def test_head_change_audit_cache_reuses_parsed_events(tmp_path, monkeypatch):
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
+    manager.initialize_layout()
+
+    audit_events = [
+        {
+            "event_id": "body-head-a",
+            "event_type": "body_head_changed",
+            "slot_id": "slot-B",
+            "before_commit": "aaaa",
+            "after_commit": "bbbb",
+        },
+        {
+            "event_id": "body-head-b",
+            "event_type": "body_head_changed",
+            "slot_id": "slot-A",
+            "before_commit": "cccc",
+            "after_commit": "dddd",
+        },
+    ]
+    manager.head_change_audit_path.write_text(
+        "\n".join(json.dumps(event) for event in audit_events) + "\n",
+        encoding="utf-8",
+    )
+    manager._head_change_audit_cache = None
+
+    reads = {"audit": 0}
+    original_read_text = Path.read_text
+
+    def tracked_read_text(self, *args, **kwargs):
+        if self == manager.head_change_audit_path:
+            reads["audit"] += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracked_read_text, raising=False)
+
+    first = manager.list_head_change_events(limit=1)
+    second = manager.list_head_change_events(slot_id="slot-A", limit=1)
+    report = manager._head_change_audit_report()
+
+    assert reads["audit"] == 1
+    assert first[0]["slot_id"] == "slot-A"
+    assert second[0]["slot_id"] == "slot-A"
+    assert report["events"][0]["slot_id"] == "slot-A"
 
 
 @pytest.mark.unit

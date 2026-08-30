@@ -367,10 +367,15 @@ async def build_supervisor_ui_state(
     observation_input_snapshot, observation_input_available = (
         observation_input_snapshot_with_status
     )
+    body_status_task = asyncio.to_thread(context.load_body_status, chain_projection)
+    cognition_snapshot_task = asyncio.to_thread(context.load_cognition_state)
+    employee_context_task = asyncio.to_thread(
+        context.load_employee_execution_context
+    )
+    current_ui_phase_task = asyncio.to_thread(context.current_ui_phase)
     activity = dict(observation_input_snapshot.get("activity") or {})
     counts = dict(activity.get("counts") or {})
     error_count = int(counts.get("error_count") or 0)
-    body_status = context.load_body_status(chain_projection)
 
     autonomous_observation = project_autonomous_observation(
         chain_projection,
@@ -386,6 +391,7 @@ async def build_supervisor_ui_state(
         )
     except Exception:
         pass
+    body_status = dict(await body_status_task or {})
     metrics = project_ui_metrics(
         chain_projection,
         autonomous_observation=autonomous_observation,
@@ -427,7 +433,13 @@ async def build_supervisor_ui_state(
                 "mode": "daily_companion",
             }
         )
-    published_phase = dict(context.current_ui_phase() or {})
+    cognition_snapshot_raw, employee_context, published_phase = await asyncio.gather(
+        cognition_snapshot_task,
+        employee_context_task,
+        current_ui_phase_task,
+    )
+    cognition_snapshot = _normalize_loaded_cognition_state(cognition_snapshot_raw)
+    published_phase = dict(published_phase or {})
     published_phase_is_current = (
         int(published_phase.get("ui_phase_revision") or 0) > 0
         and _published_phase_matches_snapshot(
@@ -465,9 +477,6 @@ async def build_supervisor_ui_state(
                 }
             )
 
-    cognition_snapshot = _normalize_loaded_cognition_state(
-        context.load_cognition_state()
-    )
     lm_input = {
         "generation_enabled": bool(
             getattr(
@@ -507,7 +516,7 @@ async def build_supervisor_ui_state(
         autonomous_observation,
     )
     try:
-        employee_context = dict(context.load_employee_execution_context() or {})
+        employee_context = dict(employee_context or {})
     except Exception:
         employee_context = {}
     employee_runs = [

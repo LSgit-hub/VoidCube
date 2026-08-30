@@ -82,16 +82,21 @@ async def load_recent_trace_details(
         if len(normalized) >= max(int(limit), 1):
             break
 
+    records = collect_ui_trace_records(
+        context=context,
+        limit=max(int(limit), 1) * 200,
+    )
+    records_by_trace: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        trace_id = str(record.get("trace_id") or "").strip()
+        if not trace_id:
+            continue
+        records_by_trace.setdefault(trace_id, []).append(record)
+
     async def _load(trace_id: str) -> tuple[str, JsonDict]:
-        records = collect_ui_trace_records(
-            context=context,
-            trace_id=trace_id,
-            limit=200,
-        )
-        summary = context.summarize_single_trace(trace_id, records)
-        timeline = [
-            dict(event) for event in context.build_trace_timeline(records)
-        ]
+        trace_records = records_by_trace.get(trace_id, [])
+        summary = context.summarize_single_trace(trace_id, trace_records)
+        timeline = [dict(event) for event in context.build_trace_timeline(trace_records)]
         return trace_id, project_trace_detail(
             trace_id=trace_id,
             summary=summary,

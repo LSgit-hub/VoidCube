@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -103,6 +104,13 @@ from .ui_trace_adapters import (
 JsonDict = Dict[str, Any]
 logger = logging.getLogger("supervisor")
 
+_BODY_STATUS_CACHE_SECONDS = 5.0
+_OBSERVATION_INPUT_CACHE_SECONDS = 2.0
+_MEMORY_STATS_CACHE_SECONDS = 3.0
+_OBSERVATION_TIMELINE_CACHE_SECONDS = 3.0
+_STELLAR_MODE_STATUS_CACHE_SECONDS = 1.0
+_VOICE_STATUS_CACHE_SECONDS = 1.0
+
 
 @dataclass(frozen=True, slots=True)
 class SupervisorUIRuntimePorts:
@@ -151,6 +159,13 @@ class SupervisorUIRuntime:
         )
         self.observation_input_cache: JsonDict = {}
         self.memory_stats_cache: JsonDict = {}
+        self.observation_input_live_cache: tuple[float, JsonDict, bool] | None = None
+        self.memory_stats_live_cache: tuple[float, JsonDict] | None = None
+        self.stellar_mode_status_cache: tuple[float, JsonDict] | None = None
+        self.voice_status_cache: tuple[float, JsonDict] | None = None
+        self.body_status_cache: JsonDict | None = None
+        self.body_status_cached_at = 0.0
+        self.observation_timeline_cache: dict[int, tuple[float, list[JsonDict]]] = {}
         self.current_media: JsonDict | None = None
         self.media_queue: deque[JsonDict] = deque()
         self.media_revision = 0
@@ -385,7 +400,7 @@ class SupervisorUIRuntime:
             return
 
         try:
-            mode = str(self.ports.stellar_mode_status().get("mode") or "").strip().lower()
+            mode = str(self._stellar_mode_status().get("mode") or "").strip().lower()
         except Exception:
             mode = ""
         if mode == "daily_companion" and phase["scene"] != "idle":
@@ -957,7 +972,11 @@ class SupervisorUIRuntime:
         *,
         timeout_seconds: float = 0.8,
     ) -> tuple[JsonDict, bool]:
-        return await load_observation_input_snapshot(
+        now = time.monotonic()
+        cached = self.observation_input_live_cache
+        if cached is not None and now - cached[0] < _OBSERVATION_INPUT_CACHE_SECONDS:
+            return dict(cached[1]), cached[2]
+        snapshot, available = await load_observation_input_snapshot(
             context=SupervisorUIObservationSnapshotContext(
                 load_runtime_observation_input=self.ports.load_runtime_observation_input,
                 default_snapshot=default_observation_input_snapshot,
@@ -970,13 +989,19 @@ class SupervisorUIRuntime:
             ),
             timeout_seconds=timeout_seconds,
         )
+        self.observation_input_live_cache = (time.monotonic(), dict(snapshot), available)
+        return snapshot, available
 
     async def _load_memory_stats(
         self,
         *,
         timeout_seconds: float = 0.8,
     ) -> JsonDict:
-        return await load_memory_stats(
+        now = time.monotonic()
+        cached = self.memory_stats_live_cache
+        if cached is not None and now - cached[0] < _MEMORY_STATS_CACHE_SECONDS:
+            return dict(cached[1])
+        stats = await load_memory_stats(
             context=SupervisorUIMemorySnapshotContext(
                 fetch_tier1_stats=self._fetch_tier1_stats,
                 get_cached_snapshot=lambda: dict(self.memory_stats_cache),
@@ -988,15 +1013,42 @@ class SupervisorUIRuntime:
             ),
             timeout_seconds=timeout_seconds,
         )
+        self.memory_stats_live_cache = (time.monotonic(), dict(stats))
+        return stats
+
+    def _stellar_mode_status(self) -> JsonDict:
+        now = time.monotonic()
+        cached = self.stellar_mode_status_cache
+        if cached is not None and now - cached[0] < _STELLAR_MODE_STATUS_CACHE_SECONDS:
+            return dict(cached[1])
+        status = dict(self.ports.stellar_mode_status() or {})
+        self.stellar_mode_status_cache = (time.monotonic(), dict(status))
+        return status
+
+    def _voice_status(self) -> JsonDict:
+        now = time.monotonic()
+        cached = self.voice_status_cache
+        if cached is not None and now - cached[0] < _VOICE_STATUS_CACHE_SECONDS:
+            return dict(cached[1])
+        status = dict(self.ports.voice_status() or {})
+        self.voice_status_cache = (time.monotonic(), dict(status))
+        return status
 
     def _load_body_status(self, chain_history: List[JsonDict]) -> JsonDict:
-        return load_body_status(
+        now = time.monotonic()
+        cached = self.body_status_cache
+        if cached is not None and now - self.body_status_cached_at < _BODY_STATUS_CACHE_SECONDS:
+            return dict(cached)
+        status = load_body_status(
             context=SupervisorUIBodyStatusContext(
                 inspect_layout=self.ports.inspect_body_layout,
                 load_slot_meta=self.ports.load_body_slot_meta,
             ),
             chain_history_projection=chain_history,
         )
+        self.body_status_cache = dict(status)
+        self.body_status_cached_at = now
+        return status
 
     async def _load_observation_timeline(self, *, limit: int = 12) -> List[JsonDict]:
         try:
@@ -1034,10 +1086,20 @@ class SupervisorUIRuntime:
         *,
         limit: int = 12,
     ) -> List[JsonDict]:
-        return recent_local_supervisor_observation_timeline(
+        bounded_limit = max(int(limit), 0)
+        now = time.monotonic()
+        cached = self.observation_timeline_cache.get(bounded_limit)
+        if cached is not None and now - cached[0] < _OBSERVATION_TIMELINE_CACHE_SECONDS:
+            return [dict(event) for event in cached[1]]
+        timeline = recent_local_supervisor_observation_timeline(
             context=self._trace_context(),
-            limit=limit,
+            limit=bounded_limit,
         )
+        self.observation_timeline_cache[bounded_limit] = (
+            now,
+            [dict(event) for event in timeline],
+        )
+        return timeline
 
     async def get_state(self) -> JsonDict:
         state = await build_supervisor_ui_state(
@@ -1052,8 +1114,8 @@ class SupervisorUIRuntime:
                 load_body_status=self._load_body_status,
                 attach_trace_details=self.attach_recent_trace_details,
                 load_cognition_state=self.ports.load_cognition_state,
-                stellar_mode_status=self.ports.stellar_mode_status,
-                voice_status=self.ports.voice_status,
+                stellar_mode_status=self._stellar_mode_status,
+                voice_status=self._voice_status,
                 current_media=lambda: self.current_media,
                 media_queue_length=self.media_queue_length,
                 load_employee_execution_context=self.ports.load_employee_execution_context,

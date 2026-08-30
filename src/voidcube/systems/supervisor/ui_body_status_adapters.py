@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
@@ -65,24 +66,43 @@ def load_body_status(
 
     slot_metas: Dict[str, JsonDict] = {}
     top_level_entries_by_slot: Dict[str, List[str]] = {}
-    for slot_id in list(registry.get("slot_ids") or []):
+    slot_ids = [
+        candidate
+        for candidate in (
+            str(slot_id or "").strip()
+            for slot_id in list(registry.get("slot_ids") or [])
+        )
+        if candidate
+    ]
+
+    def _load_slot_projection(slot_id: str) -> tuple[str, JsonDict | None, JsonDict | None, List[str]]:
         try:
             meta = context.load_slot_meta(slot_id).model_dump(mode="json")
         except Exception:
-            continue
-        slot_metas[slot_id] = meta
+            return slot_id, None, None, []
         worktree_path = str(meta.get("worktree_path") or "").strip()
-        meta["body_readiness"] = inspect_body_execution_readiness(
+        readiness = inspect_body_execution_readiness(
             slot_id=slot_id,
             worktree_path=worktree_path,
             expected_body_state=meta.get("body_state"),
         )
-        if not worktree_path:
-            continue
-        try:
-            top_level_entries_by_slot[slot_id] = _load_worktree_root_nodes(worktree_path)
-        except Exception:
-            continue
+        roots: List[str] = []
+        if worktree_path:
+            try:
+                roots = _load_worktree_root_nodes(worktree_path)
+            except Exception:
+                roots = []
+        return slot_id, meta, readiness, roots
+
+    max_workers = min(len(slot_ids), 4) or 1
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for slot_id, meta, readiness, roots in pool.map(_load_slot_projection, slot_ids):
+            if not meta:
+                continue
+            slot_metas[slot_id] = meta
+            meta["body_readiness"] = readiness
+            if roots:
+                top_level_entries_by_slot[slot_id] = roots
 
     status["slot_cards"] = project_body_slot_cards(
         registry=registry,

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Optional
@@ -178,6 +179,16 @@ class BodyRegistryManager:
         self.slots_root = self.state_root / "slots"
         self.registry_path = self.state_root / "registry.json"
         self.head_change_audit_path = self.state_root / "body-head-changes.jsonl"
+        self._registry_cache: tuple[int, BodyRegistry] | None = None
+        self._slot_meta_cache: dict[str, tuple[int, BodySlotMeta]] = {}
+        self._head_change_audit_cache: tuple[int | None, list[dict[str, Any]]] | None = None
+
+    @staticmethod
+    def _path_mtime_ns(path: Path) -> int | None:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
 
     def initialize_layout(self) -> BodyRegistry:
         """Create independent child-agent slot directories and a default registry."""
@@ -275,6 +286,7 @@ class BodyRegistryManager:
                 "violations": violations,
             }
 
+        head_change_events = self._load_head_change_events()
         configured_slots = list(self.slot_ids)
         if registry.slot_ids != configured_slots:
             add_violation(
@@ -411,6 +423,11 @@ class BodyRegistryManager:
                                 f"Slot {slot_id} has uncommitted or untracked Git changes.",
                                 slot_id=slot_id,
                             )
+            slot_head_change_events = [
+                dict(event)
+                for event in head_change_events
+                if event.get("slot_id") == slot_id
+            ][:5]
             slot_reports[slot_id] = {
                 "role": role,
                 "body_state": meta.body_state,
@@ -421,10 +438,7 @@ class BodyRegistryManager:
                 "source_commit": meta.source_commit,
                 "active_commit": meta.active_commit,
                 "candidate_commit": meta.candidate_commit,
-                "head_change_audit": self.list_head_change_events(
-                    slot_id=slot_id,
-                    limit=5,
-                ),
+                "head_change_audit": slot_head_change_events,
                 "git": git_report,
             }
 
@@ -474,7 +488,10 @@ class BodyRegistryManager:
             "registry": registry.model_dump(mode="json"),
             "slots": slot_reports,
             "active_pointer": pointer_report,
-            "head_change_audit": self._head_change_audit_report(),
+            "head_change_audit": {
+                "path": str(self.head_change_audit_path.resolve()),
+                "events": [dict(event) for event in head_change_events[:10]],
+            },
             "violations": violations,
         }
 
@@ -488,34 +505,15 @@ class BodyRegistryManager:
         if slot_id is not None:
             self._validate_slot_id(slot_id)
         bounded_limit = max(1, min(int(limit), HEAD_CHANGE_AUDIT_LIMIT))
-        if not self.head_change_audit_path.is_file():
-            return []
-
-        events: list[dict[str, Any]] = []
-        try:
-            lines = self.head_change_audit_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return []
-        for line in reversed(lines):
-            try:
-                event = json.loads(line)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(event, dict):
-                continue
-            if event.get("event_type") != HEAD_CHANGE_AUDIT_EVENT_TYPE:
-                continue
-            if slot_id is not None and event.get("slot_id") != slot_id:
-                continue
-            events.append(event)
-            if len(events) >= bounded_limit:
-                break
-        return events
+        events = self._load_head_change_events()
+        if slot_id is not None:
+            events = [event for event in events if event.get("slot_id") == slot_id]
+        return [dict(event) for event in events[:bounded_limit]]
 
     def _head_change_audit_report(self) -> dict[str, Any]:
         return {
             "path": str(self.head_change_audit_path.resolve()),
-            "events": self.list_head_change_events(limit=10),
+            "events": [dict(event) for event in self._load_head_change_events()[:10]],
         }
 
     def _head_change_event_exists(
@@ -543,6 +541,33 @@ class BodyRegistryManager:
                 continue
             return True
         return False
+
+    def _load_head_change_events(self) -> list[dict[str, Any]]:
+        mtime_ns = self._path_mtime_ns(self.head_change_audit_path)
+        cached = self._head_change_audit_cache
+        if cached is not None and cached[0] == mtime_ns:
+            return [deepcopy(event) for event in cached[1]]
+        if mtime_ns is None and not self.head_change_audit_path.is_file():
+            self._head_change_audit_cache = (None, [])
+            return []
+
+        events: list[dict[str, Any]] = []
+        try:
+            lines = self.head_change_audit_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        for line in reversed(lines):
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("event_type") != HEAD_CHANGE_AUDIT_EVENT_TYPE:
+                continue
+            events.append(event)
+        self._head_change_audit_cache = (mtime_ns, [deepcopy(event) for event in events])
+        return [deepcopy(event) for event in events]
 
     def _record_head_change(
         self,
@@ -604,22 +629,39 @@ class BodyRegistryManager:
     def load_registry(self) -> BodyRegistry:
         if not self.registry_path.exists():
             raise FileNotFoundError(f"Body registry not found: {self.registry_path}")
+        mtime_ns = self._path_mtime_ns(self.registry_path)
+        cached = self._registry_cache
+        if mtime_ns is not None and cached is not None and cached[0] == mtime_ns:
+            return cached[1].model_copy(deep=True)
         data = json.loads(self.registry_path.read_text(encoding="utf-8"))
-        return BodyRegistry.model_validate(data)
+        registry = BodyRegistry.model_validate(data)
+        if mtime_ns is not None:
+            self._registry_cache = (mtime_ns, registry.model_copy(deep=True))
+        return registry
 
     def save_registry(self, registry: BodyRegistry) -> None:
         atomic_json_write(
             self.registry_path,
             registry.model_dump(mode="json"),
         )
+        mtime_ns = self._path_mtime_ns(self.registry_path)
+        if mtime_ns is not None:
+            self._registry_cache = (mtime_ns, registry.model_copy(deep=True))
 
     def load_slot_meta(self, slot_id: str) -> BodySlotMeta:
         self._validate_slot_id(slot_id)
         meta_path = self.slot_meta_path(slot_id)
         if not meta_path.exists():
             raise FileNotFoundError(f"Slot metadata not found: {meta_path}")
+        mtime_ns = self._path_mtime_ns(meta_path)
+        cached = self._slot_meta_cache.get(slot_id)
+        if mtime_ns is not None and cached is not None and cached[0] == mtime_ns:
+            return cached[1].model_copy(deep=True)
         data = json.loads(meta_path.read_text(encoding="utf-8"))
-        return BodySlotMeta.model_validate(data)
+        meta = BodySlotMeta.model_validate(data)
+        if mtime_ns is not None:
+            self._slot_meta_cache[slot_id] = (mtime_ns, meta.model_copy(deep=True))
+        return meta
 
     def save_slot_meta(self, meta: BodySlotMeta) -> None:
         self._validate_slot_id(meta.slot_id)
@@ -627,6 +669,10 @@ class BodyRegistryManager:
             self.slot_meta_path(meta.slot_id),
             meta.model_dump(mode="json"),
         )
+        meta_path = self.slot_meta_path(meta.slot_id)
+        mtime_ns = self._path_mtime_ns(meta_path)
+        if mtime_ns is not None:
+            self._slot_meta_cache[meta.slot_id] = (mtime_ns, meta.model_copy(deep=True))
 
     def mark_candidate(
         self,

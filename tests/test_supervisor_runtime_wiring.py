@@ -4387,6 +4387,149 @@ async def test_stellar_mode_status_route_exposes_canonical_default(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_ui_body_status_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    calls = 0
+
+    def inspect_layout():
+        nonlocal calls
+        calls += 1
+        return {"registry": {}, "healthy": True, "violations": []}
+
+    object.__setattr__(supervisor._ui_runtime.ports, "inspect_body_layout", inspect_layout)
+
+    first = supervisor._ui_runtime._load_body_status([])
+    second = supervisor._ui_runtime._load_body_status([{"task_id": "later"}])
+
+    assert first["slot_cards"] == []
+    assert second["slot_cards"] == []
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ui_observation_timeline_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    calls = 0
+
+    def load_timeline(*, context, limit):
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "trace_id": f"trace-{calls}",
+                "recorded_at": "2026-08-30T00:00:00+00:00",
+                "summary": "cached timeline",
+            }
+        ]
+
+    with patch(
+        "voidcube.systems.supervisor.ui_runtime.recent_local_supervisor_observation_timeline",
+        side_effect=load_timeline,
+    ):
+        first = supervisor._ui_runtime.recent_local_observation_timeline(limit=12)
+        second = supervisor._ui_runtime.recent_local_observation_timeline(limit=12)
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ui_observation_input_snapshot_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    mocked_loader = AsyncMock(
+        return_value=(
+            {
+                "activity": {},
+                "user_chain_signal": {"scope": "soft_signal_only"},
+                "snapshot_source": "live",
+            },
+            True,
+        )
+    )
+
+    with patch(
+        "voidcube.systems.supervisor.ui_runtime.load_observation_input_snapshot",
+        mocked_loader,
+    ):
+        first = await supervisor._ui_runtime._load_observation_input_snapshot()
+        second = await supervisor._ui_runtime._load_observation_input_snapshot()
+
+    assert mocked_loader.await_count == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_ui_memory_stats_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    mocked_loader = AsyncMock(
+        return_value={
+            "memory_active": True,
+            "turn_count": 9,
+            "snapshot_source": "live",
+        }
+    )
+
+    with patch(
+        "voidcube.systems.supervisor.ui_runtime.load_memory_stats",
+        mocked_loader,
+    ):
+        first = await supervisor._ui_runtime._load_memory_stats()
+        second = await supervisor._ui_runtime._load_memory_stats()
+
+    assert mocked_loader.await_count == 1
+    assert first == second
+
+
+@pytest.mark.unit
+def test_ui_stellar_mode_status_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    calls = 0
+
+    def stellar_mode_status():
+        nonlocal calls
+        calls += 1
+        return {
+            "mode": "daily_companion",
+            "autonomous_chain_gate_active": False,
+        }
+
+    object.__setattr__(supervisor._ui_runtime.ports, "stellar_mode_status", stellar_mode_status)
+
+    first = supervisor._ui_runtime._stellar_mode_status()
+    second = supervisor._ui_runtime._stellar_mode_status()
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.unit
+def test_ui_voice_status_loader_reuses_short_cache(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    calls = 0
+
+    def voice_status():
+        nonlocal calls
+        calls += 1
+        return {
+            "active": True,
+            "continuous_active": False,
+            "audio_level": 0.25,
+        }
+
+    object.__setattr__(supervisor._ui_runtime.ports, "voice_status", voice_status)
+
+    first = supervisor._ui_runtime._voice_status()
+    second = supervisor._ui_runtime._voice_status()
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_autonomous_chain_deactivate_closes_running_tasks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor._autonomous_chain_planning_service.plan(
