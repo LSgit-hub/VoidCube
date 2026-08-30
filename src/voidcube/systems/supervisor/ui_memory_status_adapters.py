@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
@@ -73,30 +74,24 @@ async def fetch_tier1_stats(
                     "memory_active": False,
                 }
 
-            stats_data: Dict[str, Any] = {}
-            rules_data: Dict[str, Any] = {}
-            health_data: Dict[str, Any] = {}
-            async with session.get(
-                f"{memory_url}/tier1/stats",
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as response:
-                if response.status == 200:
-                    stats_data = await response.json()
-            async with session.get(
-                f"{memory_url}/compressed/rules-status",
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as response:
-                if response.status == 200:
-                    rules_data = await response.json()
-            try:
-                async with session.get(
-                    f"{memory_url}/health",
-                    timeout=aiohttp.ClientTimeout(total=3),
-                ) as response:
-                    if response.status == 200:
-                        health_data = await response.json()
-            except Exception:
-                health_data = {}
+            async def load_json(path: str) -> Dict[str, Any]:
+                try:
+                    async with session.get(
+                        f"{memory_url}{path}",
+                        timeout=aiohttp.ClientTimeout(total=3),
+                    ) as response:
+                        if response.status == 200:
+                            payload = await response.json()
+                            return dict(payload) if isinstance(payload, dict) else {}
+                except Exception:
+                    return {}
+                return {}
+
+            stats_data, rules_data, health_data = await asyncio.gather(
+                load_json("/tier1/stats"),
+                load_json("/compressed/rules-status"),
+                load_json("/health"),
+            )
 
             result = dict(stats_data)
             result["rules"] = rules_data.get("rules", {})
@@ -108,6 +103,16 @@ async def fetch_tier1_stats(
             result["maintenance_run"] = dict(
                 rules_data.get("maintenance_run") or {}
             )
+            maintenance = dict(health_data.get("maintenance") or {})
+            tier2_bridge = dict(maintenance.get("tier2_bridge") or {})
+            eligible_candidate_count = tier2_bridge.get("eligible_candidate_count")
+            if eligible_candidate_count is not None:
+                try:
+                    result["pending_compression_count"] = max(
+                        0, int(eligible_candidate_count)
+                    )
+                except Exception:
+                    pass
             if "turn_count" not in result:
                 for source in (health_data, stats_data, rules_data):
                     if isinstance(source, dict) and "turn_count" in source:

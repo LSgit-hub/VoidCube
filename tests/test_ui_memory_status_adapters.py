@@ -54,6 +54,11 @@ async def test_memory_status_owner_projects_gateway_and_rules_health(monkeypatch
             if url.endswith("/health"):
                 return _Response(
                     {
+                        "maintenance": {
+                            "tier2_bridge": {
+                                "eligible_candidate_count": 7,
+                            }
+                        },
                         "transport_outboxes": {
                             "status": "healthy",
                             "outboxes": {
@@ -95,6 +100,7 @@ async def test_memory_status_owner_projects_gateway_and_rules_health(monkeypatch
     assert stats["rules"] == {"tier1_decay": {"run_count": 1}}
     assert stats["llm_healthy"] is True
     assert stats["memory_active"] is True
+    assert stats["pending_compression_count"] == 7
     assert stats["maintenance_run"] == {
         "run_id": "maintenance-1",
         "status": "running",

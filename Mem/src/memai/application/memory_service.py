@@ -695,6 +695,8 @@ class MemoryApplicationService:
         self._tier2_bridge_last_failure_reason: str | None = None
         self._tier2_bridge_last_succeeded_at: str | None = None
         self._tier2_bridge_last_trigger_reason: str | None = None
+        self._tier2_candidate_health_snapshot_cache_revision = -1
+        self._tier2_candidate_health_snapshot_cache: Dict[str, Any] | None = None
         self._maintenance_run_status: Dict[str, Any] = {
             "run_id": None,
             "status": "idle",
@@ -2478,6 +2480,14 @@ class MemoryApplicationService:
         )
 
     def _tier2_candidate_health_snapshot(self) -> Dict[str, Any]:
+        current_revision = getattr(self._repository, "commit_revision", 0)
+        cached = self._tier2_candidate_health_snapshot_cache
+        if (
+            cached is not None
+            and self._tier2_candidate_health_snapshot_cache_revision == current_revision
+        ):
+            return dict(cached)
+
         def read(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
             scopes = conn.execute(
                 "SELECT DISTINCT memory_domain, owner_id, workspace_id FROM turns "
@@ -2513,11 +2523,14 @@ class MemoryApplicationService:
                 0.0,
                 (datetime.now(timezone.utc) - oldest_time).total_seconds(),
             )
-        return {
+        snapshot = {
             "eligible_candidate_count": eligible_count,
             "oldest_candidate_at": oldest_at,
             "oldest_candidate_age_seconds": round(oldest_age_seconds, 3),
         }
+        self._tier2_candidate_health_snapshot_cache_revision = current_revision
+        self._tier2_candidate_health_snapshot_cache = dict(snapshot)
+        return snapshot
 
     def _tier2_pressure_trigger_reason(self, snapshot: Dict[str, Any]) -> str | None:
         if snapshot["eligible_candidate_count"] >= self.config.tier2_trigger_candidate_count:

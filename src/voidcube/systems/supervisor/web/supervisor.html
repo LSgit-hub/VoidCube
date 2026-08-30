@@ -6852,10 +6852,12 @@ function renderMemoryStructureDrawer(state) {
     ? state.memory_structure : {};
   const archive = identityArchive && typeof identityArchive === 'object' ? identityArchive : {};
   const layers = archive.layers && typeof archive.layers === 'object' ? archive.layers : archive;
+  const pendingCompressionCount = ts.pending_compression_count ?? ts.maintenance?.tier2_bridge?.eligible_candidate_count;
   const counts = [
     ['普通记忆', structure.ordinary_memory ?? ts.total_turns],
     ['活跃会话记忆', structure.active_session_memory ?? ts.active_turns],
     ['已压缩记忆', structure.compressed_memory ?? ts.compressed_turns ?? ts.tier2?.total_compressed],
+    ['待压缩条数', pendingCompressionCount],
     ['事件记忆', structure.event_memory ?? ts.events],
     ['场景记忆', structure.scene_memory ?? ts.scenes],
     ['阶段 / 弧线记忆', structure.arc_memory ?? ts.arcs],
@@ -6865,7 +6867,7 @@ function renderMemoryStructureDrawer(state) {
     ['自进化档案', structure.autonomous_history ?? (Array.isArray(board.autonomous_history) ? board.autonomous_history.length : 0)],
   ];
   els.drawerBody.innerHTML =
-    '<div class="drawer-sub">这里只展示 Mem 的分类结构和当前数量；员工执行与结果回传请查看电脑桌。</div>' +
+    '<div class="drawer-sub">这里只展示 Mem 的分类结构、当前数量与待压缩条数；员工执行与结果回传请查看电脑桌。</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">Mem 分类统计</div>' +
     counts.map(([label, value]) =>
       '<div class="health-row"><span>' + esc(label) + '</span><span class="hr-val">' +

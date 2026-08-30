@@ -40,7 +40,7 @@ _NON_EVALUATION_TURN_SQL = (
 )
 _RETRY_ELIGIBLE_TURN_SQL = (
     "compression_retry_count < ? AND "
-    "(compression_retry_after IS NULL OR compression_retry_after <= ?)"
+    "(compression_retry_after IS NULL OR julianday(compression_retry_after) <= julianday(?))"
 )
 
 
@@ -480,7 +480,8 @@ class Tier1ToTier2Bridge:
 
     def select_candidate_turns(self, *, force_oldest: bool = False) -> CandidateBatch:
         """Select one deterministic candidate batch and report fallback semantics."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
+        current_time = datetime.now().astimezone()
+        cutoff = (current_time - timedelta(days=self.retention_days)).isoformat()
         def read(conn):
             base_conditions = [
                 "compression_status IN ('pending', 'retry_wait')",
@@ -490,7 +491,7 @@ class Tier1ToTier2Bridge:
             ]
             base_params: list[Any] = [
                 _MAX_QUALITY_RETRIES,
-                datetime.now(timezone.utc).isoformat(),
+                current_time.isoformat(),
                 self.memory_domain,
             ]
             if self.owner_id is not None:
@@ -499,7 +500,7 @@ class Tier1ToTier2Bridge:
             if self.workspace_id is not None:
                 base_conditions.append("workspace_id = ?")
                 base_params.append(self.workspace_id)
-            time_clause = [] if force_oldest else ["timestamp < ?"]
+            time_clause = [] if force_oldest else ["julianday(timestamp) < julianday(?)"]
             time_params: list[Any] = [] if force_oldest else [cutoff]
             eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
             eligible_params = [*time_params, *base_params, self.min_relevance]
@@ -508,7 +509,7 @@ class Tier1ToTier2Bridge:
                 "owner_id, workspace_id "
                 ", memory_domain FROM turns WHERE "
                 + " AND ".join(eligible_conditions)
-                + " ORDER BY timestamp ASC LIMIT ?",
+                + " ORDER BY julianday(timestamp) ASC LIMIT ?",
                 [*eligible_params, self.batch_size],
             ).fetchall()
             low_relevance_fallback = False
@@ -518,7 +519,7 @@ class Tier1ToTier2Bridge:
                     "owner_id, workspace_id "
                     ", memory_domain FROM turns WHERE "
                     + " AND ".join([*time_clause, *base_conditions])
-                    + " ORDER BY timestamp ASC LIMIT ?",
+                    + " ORDER BY julianday(timestamp) ASC LIMIT ?",
                     [*time_params, *base_params, self.batch_size],
                 ).fetchall()
                 low_relevance_fallback = bool(rows)
@@ -574,32 +575,51 @@ class Tier1ToTier2Bridge:
 
     def candidate_health_snapshot(self) -> Dict[str, Any]:
         """Describe the exact candidate set the bridge can select right now."""
-        current_time = datetime.now(timezone.utc)
+        current_time = datetime.now().astimezone()
         now = current_time.isoformat()
         cutoff = (current_time - timedelta(days=self.retention_days)).isoformat()
         def read(conn):
             retry_params: list[Any] = [_MAX_QUALITY_RETRIES, now]
             row = conn.execute(
-                "SELECT COUNT(*), MIN(timestamp) FROM turns "
-                "WHERE timestamp < ? AND compression_status IN ('pending', 'retry_wait') "
+                "SELECT COUNT(*) FROM turns "
+                "WHERE julianday(timestamp) < julianday(?) AND compression_status IN ('pending', 'retry_wait') "
                 "AND " + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
                 + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
                 [cutoff, *retry_params, self.memory_domain, *self._scope_params()],
             ).fetchone()
-            count, oldest_at = int(row[0]), row[1]
+            count = int(row[0])
+            oldest_at = None
             force_oldest = False
             if count == 0:
                 total = self._active_turn_count(conn=conn)
                 if total >= self.max_turns:
                     force_oldest = True
                     row = conn.execute(
-                        "SELECT COUNT(*), MIN(timestamp) FROM turns "
+                        "SELECT COUNT(*) FROM turns "
                         "WHERE compression_status IN ('pending', 'retry_wait') AND "
                         + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
                         + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix(),
                         [*retry_params, self.memory_domain, *self._scope_params()],
                     ).fetchone()
-                    count, oldest_at = int(row[0]), row[1]
+                    count = int(row[0])
+            if count > 0:
+                oldest_row = conn.execute(
+                    "SELECT timestamp FROM turns "
+                    "WHERE "
+                    + (
+                        "julianday(timestamp) < julianday(?) AND "
+                        if not force_oldest
+                        else ""
+                    )
+                    + "compression_status IN ('pending', 'retry_wait') AND "
+                    + _RETRY_ELIGIBLE_TURN_SQL + " AND memory_domain = ? AND "
+                    + _NON_EVALUATION_TURN_SQL + self._scope_sql_suffix()
+                    + " ORDER BY julianday(timestamp) ASC LIMIT 1",
+                    ([cutoff] if not force_oldest else [])
+                    + retry_params
+                    + [self.memory_domain, *self._scope_params()],
+                ).fetchone()
+                oldest_at = oldest_row[0] if oldest_row else None
             return count, oldest_at, force_oldest
 
         count, oldest_at, force_oldest = self._execute_read(read)
@@ -984,7 +1004,8 @@ class Tier1ToTier2Bridge:
                 else:
                     state = "retry_wait"
                     retry_after = (
-                        datetime.now(timezone.utc) + timedelta(hours=2 ** (retry_count - 1))
+                        datetime.now().astimezone()
+                        + timedelta(hours=2 ** (retry_count - 1))
                     ).isoformat()
                 conn.execute(
                     "UPDATE turns SET compression_retry_count = ?, "

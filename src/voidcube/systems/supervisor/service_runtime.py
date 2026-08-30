@@ -33,6 +33,8 @@ _THINK_TAG_RE = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 
+_MEMORY_MAINTENANCE_PRIORITY_COOLDOWN_SECONDS = 900
+
 
 class StellarMode(str, Enum):
     DAILY_COMPANION = "daily_companion"
@@ -109,6 +111,7 @@ class ServiceRuntimeState:
     latest_companion_observation: Dict[str, Any] = field(default_factory=dict)
     last_companion_evidence_key: str = ""
     latest_companion_dialogue: Dict[str, Any] = field(default_factory=dict)
+    last_memory_maintenance_trigger_at: Optional[datetime] = None
     last_proactive_reminder_at: Optional[datetime] = None
     last_proactive_reminder_evidence_key: str = ""
     pending_proactive_reminder: Dict[str, Any] = field(default_factory=dict)
@@ -539,6 +542,9 @@ class ServiceRuntimeMixin:
         }
         evidence = self._extract_daily_companion_evidence(observation_input)
         snapshot["evidence"] = evidence
+        memory_priority = await self._prioritize_memory_maintenance(now=now)
+        if memory_priority.get("status") != "skipped":
+            snapshot["memory_maintenance_priority"] = memory_priority
         if evidence["user_goal"] and not evidence["agent_activity"]:
             snapshot.update(
                 {
@@ -571,6 +577,95 @@ class ServiceRuntimeMixin:
         snapshot["reminder_delivery"] = await self._deliver_pending_proactive_reminder(now=now)
         self._service_runtime.latest_companion_observation = snapshot
         return snapshot
+
+    async def _fetch_memory_maintenance_health_snapshot(self) -> Dict[str, Any]:
+        """Read Memory health so daily companion can prioritize compression backlog."""
+        try:
+            payload = await self._memory_client(
+                memory_actor="stellar_auto",
+                memory_domain="evolution",
+                timeout_seconds=3,
+            ).request_json("GET", "/health")
+            return dict(payload) if isinstance(payload, dict) else {}
+        except Exception as exc:
+            return {"status": "unavailable", "error": type(exc).__name__}
+
+    async def _prioritize_memory_maintenance(self, *, now: datetime) -> Dict[str, Any]:
+        runtime = self._service_runtime
+        if runtime.stellar_mode != StellarMode.DAILY_COMPANION:
+            return {
+                "status": "skipped",
+                "reason": "mode_not_daily_companion",
+            }
+
+        last_trigger = runtime.last_memory_maintenance_trigger_at
+        if last_trigger is not None:
+            elapsed = (now - last_trigger).total_seconds()
+            if elapsed < _MEMORY_MAINTENANCE_PRIORITY_COOLDOWN_SECONDS:
+                return {
+                    "status": "skipped",
+                    "reason": "cooldown",
+                    "retry_after_seconds": max(
+                        0,
+                        int(
+                            _MEMORY_MAINTENANCE_PRIORITY_COOLDOWN_SECONDS
+                            - elapsed
+                        ),
+                    ),
+                }
+
+        health = await self._fetch_memory_maintenance_health_snapshot()
+        maintenance = dict(health.get("maintenance") or {})
+        requested_run = dict(maintenance.get("requested_run") or {})
+        run_status = str(requested_run.get("status") or "").strip().lower()
+        if run_status in {"accepted", "running", "in_progress"}:
+            return {
+                "status": "skipped",
+                "reason": "memory_maintenance_in_progress",
+                "maintenance_run_status": run_status,
+            }
+
+        bridge = dict(maintenance.get("tier2_bridge") or {})
+        eligible_count = int(bridge.get("eligible_candidate_count") or 0)
+        if eligible_count <= 0:
+            return {
+                "status": "skipped",
+                "reason": "no_memory_backlog",
+                "eligible_candidate_count": eligible_count,
+                "maintenance_run_status": run_status or None,
+            }
+
+        execution_facade = getattr(self, "_execution_facade", None)
+        maintenance_executor = getattr(execution_facade, "memory_maintenance", None)
+        if maintenance_executor is None:
+            return {
+                "status": "error",
+                "reason": "memory_executor_unavailable",
+                "eligible_candidate_count": eligible_count,
+            }
+
+        try:
+            compression_result = await maintenance_executor.trigger_memory_compression(
+                {
+                    "priority": "assistant_mode_backlog",
+                    "source": "daily_companion",
+                    "eligible_candidate_count": eligible_count,
+                }
+            )
+        except Exception as exc:
+            return {
+                "status": "error",
+                "reason": type(exc).__name__,
+                "eligible_candidate_count": eligible_count,
+            }
+
+        runtime.last_memory_maintenance_trigger_at = now
+        return {
+            "status": "triggered",
+            "eligible_candidate_count": eligible_count,
+            "bridge_state": str(bridge.get("state") or ""),
+            "compression_result": compression_result,
+        }
 
     def _queue_proactive_reminder(
         self,

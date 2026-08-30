@@ -3537,6 +3537,42 @@ async def test_daily_companion_calls_api_b_only_for_changed_complete_evidence(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_daily_companion_prioritizes_memory_compression_backlog(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_observation_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "ok",
+            "observation_input": {
+                "activity": {"active_sessions": 1},
+                "user_chain_signal": {"is_quiet": False},
+            },
+        }
+    )
+    supervisor._fetch_memory_maintenance_health_snapshot = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "maintenance": {
+                "requested_run": {"status": "completed"},
+                "tier2_bridge": {
+                    "state": "idle",
+                    "eligible_candidate_count": 257,
+                },
+            }
+        }
+    )
+    supervisor._execution_facade.memory_maintenance.trigger_memory_compression = AsyncMock(  # type: ignore[method-assign]
+        return_value={"status": "compressed"}
+    )
+
+    snapshot = await supervisor._run_daily_companion_observation_cycle()
+
+    priority = snapshot["memory_maintenance_priority"]
+    assert priority["status"] == "triggered"
+    assert priority["eligible_candidate_count"] == 257
+    supervisor._execution_facade.memory_maintenance.trigger_memory_compression.assert_awaited_once()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_companion_model_stream_forwards_only_think_tag_content(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     updates: list[str] = []

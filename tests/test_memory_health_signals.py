@@ -1429,6 +1429,52 @@ async def test_tier2_bridge_counts_only_retry_eligible_candidates(tmp_path):
     assert [turn["text"] for turn in bridge.find_candidate_turns()] == ["eligible"]
 
 
+@pytest.mark.asyncio
+async def test_tier2_candidate_health_snapshot_reuses_commit_revision_cache(
+    tmp_path, monkeypatch
+):
+    service = _make_service(tmp_path)
+    await service.create_session(SessionCreate(session_id="cached-health", metadata={}))
+    await service.add_turn(
+        "cached-health",
+        TurnCreate(speaker="user", text="cached turn", metadata={}),
+    )
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET timestamp = ? WHERE session_id = ?",
+            (old_timestamp, "cached-health"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    calls = 0
+
+    def fake_candidate_health_snapshot(self):
+        nonlocal calls
+        calls += 1
+        return {
+            "eligible_count": 1,
+            "oldest_candidate_at": old_timestamp,
+            "oldest_candidate_age_seconds": 8 * 24 * 3600,
+        }
+
+    monkeypatch.setattr(
+        bridge_module.Tier1ToTier2Bridge,
+        "candidate_health_snapshot",
+        fake_candidate_health_snapshot,
+    )
+
+    first = service._tier2_candidate_health_snapshot()
+    second = service._tier2_candidate_health_snapshot()
+
+    assert first["eligible_candidate_count"] == 1
+    assert second["eligible_candidate_count"] == 1
+    assert calls == 1
+
+
 def test_tier2_pressure_trigger_uses_count_then_oldest_age(tmp_path):
     config = MemoryServiceConfig(
         db_path=str(tmp_path / "mem.db"),
