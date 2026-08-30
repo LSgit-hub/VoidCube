@@ -839,7 +839,7 @@ async def test_supervisor_gateway_verification_isolates_single_request_failure(
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def get(self, url, *, timeout):
+        def get(self, url, *, headers=None, timeout):
             service_id = url.rsplit("/", 1)[-1]
             requested_ids.append((service_id, timeout))
             if service_id == "executor-service":

@@ -52,10 +52,12 @@ async def fetch_tier1_stats(
 
     try:
         import aiohttp
+        from ...infrastructure.gateway.presence import gateway_auth_headers
 
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{context.gateway_url}/admin/services",
+                headers=gateway_auth_headers(),
                 timeout=aiohttp.ClientTimeout(total=3),
             ) as response:
                 if response.status != 200:

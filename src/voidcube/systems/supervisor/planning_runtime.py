@@ -1228,7 +1228,10 @@ class PlanningRuntimeMixin:
             try:
                 timeout = aiohttp.ClientTimeout(total=10)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
+                    async with session.get(
+                        url,
+                        headers=self._gateway_registration_headers(),
+                    ) as response:
                         if response.status != 200:
                             raise HTTPException(
                                 status_code=503,
@@ -1377,7 +1380,12 @@ class PlanningRuntimeMixin:
                     "source_service": source_service,
                     "metadata": dict(metadata or {}),
                 }
-                async with session.post(url, json=payload, timeout=10) as response:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers=self._gateway_registration_headers(),
+                    timeout=10,
+                ) as response:
                     if response.status != 200:
                         logger.debug(
                             "Gateway activity touch ignored with status %s for kind %s",

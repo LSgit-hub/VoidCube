@@ -104,6 +104,7 @@ def _print_three_segment_scene_bar() -> None:
     import urllib.request
 
     from ...infrastructure.gateway.executor import default_gateway_url
+    from ...infrastructure.gateway.presence import gateway_auth_headers
 
     gateway_base = default_gateway_url()
     # /admin/scenes is a GET endpoint; pass refresh=true via the query string
@@ -111,7 +112,11 @@ def _print_three_segment_scene_bar() -> None:
     url = f"{gateway_base}/admin/scenes?refresh=true"
     payload: Dict[str, Any] = {}
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(
+            url,
+            headers=gateway_auth_headers(),
+            method="GET",
+        )
         with urllib.request.urlopen(req, timeout=2) as resp:
             if resp.status == 200:
                 payload = json.loads(resp.read().decode("utf-8"))

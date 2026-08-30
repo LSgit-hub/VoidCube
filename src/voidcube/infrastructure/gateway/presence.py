@@ -26,6 +26,21 @@ def default_gateway_url() -> str:
         return DEFAULT_GATEWAY_URL
 
 
+def gateway_auth_headers(auth_token: str = "") -> dict[str, str]:
+    """Return the configured Gateway control-plane authentication headers."""
+    token = str(auth_token or "").strip() or str(
+        os.getenv("GATEWAY_AUTH_TOKEN") or ""
+    ).strip()
+    if not token:
+        try:
+            from ..config.system import get_config
+
+            token = str(get_config().gateway.auth_token or "").strip()
+        except Exception:
+            token = ""
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayPresenceClient:
     """Best-effort client for session registration and scene reporting."""
@@ -145,7 +160,7 @@ class GatewayPresenceClient:
                 "metadata": metadata,
             },
             timeout=3,
-            include_auth=False,
+            include_auth=True,
             opener=opener,
         )
 
@@ -159,9 +174,8 @@ class GatewayPresenceClient:
         opener: Callable[..., Any] | None,
     ) -> bool:
         headers = {"Content-Type": "application/json"}
-        token = self.auth_token.strip() or str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
-        if include_auth and token:
-            headers["Authorization"] = f"Bearer {token}"
+        if include_auth:
+            headers.update(gateway_auth_headers(self.auth_token))
         request = Request(
             f"{self.url}/{path.lstrip('/')}",
             data=json.dumps(dict(payload)).encode(),

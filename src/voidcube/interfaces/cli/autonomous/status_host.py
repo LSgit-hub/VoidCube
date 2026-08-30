@@ -6,6 +6,7 @@ import time
 import urllib.request
 
 from ....infrastructure.gateway.executor import default_gateway_url
+from ....infrastructure.gateway.presence import gateway_auth_headers
 from typing import Any, Dict
 
 from .observation import format_supervisor_status_snapshot
@@ -174,7 +175,10 @@ def refresh_autonomous_gateway_status(host: Any) -> None:
 
     def _do_fetch() -> None:
         try:
-            req = urllib.request.Request(f"{default_gateway_url()}/admin/body/status")
+            req = urllib.request.Request(
+                f"{default_gateway_url()}/admin/body/status",
+                headers=gateway_auth_headers(),
+            )
             with urllib.request.urlopen(req, timeout=2) as resp:
                 host._autonomous_gateway_status_cache = json.loads(resp.read().decode("utf-8"))
         except Exception:
@@ -190,7 +194,11 @@ def _fetch_gateway_autonomous_execute_snapshot_now(host: Any) -> Dict[str, Any]:
     gateway_base = default_gateway_url()
 
     try:
-        activity = json.loads(urllib.request.urlopen(f"{gateway_base}/admin/activity", timeout=5).read())
+        request = urllib.request.Request(
+            f"{gateway_base}/admin/activity",
+            headers=gateway_auth_headers(),
+        )
+        activity = json.loads(urllib.request.urlopen(request, timeout=5).read())
     except Exception:
         return {}
 

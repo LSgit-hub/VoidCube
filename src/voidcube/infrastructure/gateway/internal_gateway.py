@@ -277,7 +277,19 @@ class InternalGateway:
             return token.strip()
         return ""
 
-    def _authorize_registration(self, request: Request) -> None:
+    @staticmethod
+    def _requires_gateway_auth(path: str) -> bool:
+        normalized = "/" + str(path or "").lstrip("/")
+        return (
+            normalized == "/register"
+            or normalized.startswith("/admin/")
+            or normalized.startswith("/health/")
+            or normalized == "/v1/sessions"
+            or normalized.startswith("/v1/sessions/")
+            or normalized == "/v1/body/improvement-report"
+        )
+
+    def _authorize_gateway_request(self, request: Request) -> None:
         expected = str(self.config.auth_token or "").strip()
         if not expected:
             return
@@ -288,7 +300,7 @@ class InternalGateway:
         if not supplied or not hmac.compare_digest(supplied, expected):
             raise HTTPException(
                 status_code=401,
-                detail="Gateway registration authentication failed",
+                detail="Gateway authentication failed",
             )
 
     @staticmethod
@@ -412,6 +424,19 @@ class InternalGateway:
         return body, query_params
 
     def _setup_routes(self):
+        @self.app.middleware("http")
+        async def enforce_gateway_control_auth(request: Request, call_next):
+            if self._requires_gateway_auth(request.url.path):
+                try:
+                    self._authorize_gateway_request(request)
+                except HTTPException as exc:
+                    return JSONResponse(
+                        {"detail": exc.detail},
+                        status_code=exc.status_code,
+                        headers=exc.headers,
+                    )
+            return await call_next(request)
+
         self.app.add_api_route("/", self.health_check, methods=["GET"])
         self.app.add_api_route("/api/{path:path}", self.route_request, methods=["GET", "POST", "PUT", "DELETE"])
         
@@ -1260,7 +1285,6 @@ class InternalGateway:
 
     async def register_session(self, request: Request):
         try:
-            self._authorize_registration(request)
             payload = SessionRegisterRequest.model_validate(await request.json())
             existing = dict(self._agent_session_cache.get(payload.session_id) or {})
             existing_owner = existing.get("owner_id")
@@ -1321,7 +1345,6 @@ class InternalGateway:
 
     async def register_service(self, request: Request):
         try:
-            self._authorize_registration(request)
             data = await request.json()
             service_id = str(data.get("service_id") or uuid.uuid4()).strip()
             service_name = str(data.get("service_name") or "").strip()
@@ -1885,7 +1908,10 @@ class InternalGateway:
                 write_id = str(item["write_id"])
                 try:
                     await self._deliver_memory_outbox_item(item)
-                    self._memory_outbox.mark_delivered(write_id)
+                    self._memory_outbox.mark_delivered(
+                        write_id,
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1894,6 +1920,7 @@ class InternalGateway:
                         write_id,
                         attempts=attempts,
                         error=f"{type(exc).__name__}: {exc}",
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
                     )
                     self._touch_activity(
                         "memory_write_failure",

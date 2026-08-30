@@ -15,6 +15,7 @@ from memai.repository.sqlite import open_memory_sqlite
 from memai.repository.sqlite_repository import (
     MemoryWriteReceiptConflict,
     SQLiteMemoryRepository,
+    _STOP,
 )
 from memai.repository.sqlite_repository import MemoryWriteBackpressure
 from memai.transport.http_adapter import MEMORY_HTTP_ROUTES, build_memory_http_app
@@ -263,6 +264,35 @@ def test_memory_http_adapter_binds_token_to_actor_and_preserves_health_probe():
         ).status_code == 200
 
 
+def test_memory_http_adapter_single_token_is_bound_to_configured_actor():
+    handlers = {
+        route.handler: (lambda: {"status": "ok"})
+        for route in MEMORY_HTTP_ROUTES
+    }
+    app = build_memory_http_app(
+        handlers,
+        lifespan=lambda _app: _null_lifespan(),
+        service_token="shared-token",
+        service_actor="api_a",
+    )
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        common = {"Authorization": "Bearer shared-token"}
+        assert client.get(
+            "/mem/usage",
+            headers={**common, "X-VoidCube-Memory-Actor": "api_a"},
+        ).status_code == 200
+        assert client.get(
+            "/mem/usage",
+            headers={**common, "X-VoidCube-Memory-Actor": "governor"},
+        ).status_code == 401
+        assert client.get(
+            "/mem/usage",
+            headers={**common, "X-VoidCube-Memory-Actor": "memory_maintenance"},
+        ).status_code == 401
+
+
 def test_memory_service_rejects_non_loopback_bindings_and_assignment():
     with pytest.raises(ValueError, match="loopback"):
         MemoryServiceConfig(host="0.0.0.0")
@@ -419,6 +449,67 @@ def test_sqlite_repository_reports_backpressure_for_full_queue(tmp_path: Path):
     repository.close()
 
 
+def test_sqlite_repository_close_waits_for_inflight_enqueue_before_stop(tmp_path: Path, monkeypatch):
+    repository = SQLiteMemoryRepository(
+        tmp_path / "memory.db",
+        write_queue_max_size=1,
+        write_batch_size=1,
+        write_enqueue_timeout_ms=1000,
+    )
+    repository.initialize()
+
+    request_started = threading.Event()
+    release_request = threading.Event()
+    stop_requested = threading.Event()
+    request_finished = threading.Event()
+    result: dict[str, object] = {}
+
+    original_put = repository._write_queue.put
+
+    def wrapped_put(item, block=True, timeout=None):
+        if item is _STOP:
+            stop_requested.set()
+            return original_put(item, block=block, timeout=timeout)
+        request_started.set()
+        assert release_request.wait(timeout=3)
+        return original_put(item, block=block, timeout=timeout)
+
+    monkeypatch.setattr(repository._write_queue, "put", wrapped_put)
+
+    def run_write():
+        try:
+            result["value"] = repository.execute_write(lambda conn: "queued")
+        except Exception as exc:  # pragma: no cover - diagnostic fallback
+            result["error"] = exc
+        finally:
+            request_finished.set()
+
+    writer = threading.Thread(target=run_write)
+    writer.start()
+    assert request_started.wait(timeout=2)
+
+    close_done = threading.Event()
+
+    def run_close():
+        repository.close(timeout=0.5)
+        close_done.set()
+
+    closer = threading.Thread(target=run_close)
+    closer.start()
+    time.sleep(0.05)
+    assert stop_requested.is_set() is False
+    assert close_done.is_set() is False
+
+    release_request.set()
+    assert request_finished.wait(timeout=3)
+    assert close_done.wait(timeout=3)
+    writer.join(timeout=3)
+    closer.join(timeout=3)
+
+    assert stop_requested.is_set()
+    assert result["value"] == "queued"
+
+
 def test_sqlite_repository_concurrent_idempotent_retries_commit_once(tmp_path: Path):
     repository = SQLiteMemoryRepository(
         tmp_path / "memory.db",
@@ -528,6 +619,9 @@ async def test_memory_outbox_retry_after_commit_is_deduplicated(tmp_path: Path):
         ).fetchone()[0]
     )
     assert count == 2
-    reopened_outbox.mark_delivered(retry["write_id"])
+    reopened_outbox.mark_delivered(
+        retry["write_id"],
+        lease_token=retry["_outbox_lease_token"],
+    )
     assert reopened_outbox.pending_count() == 0
     restarted._repository.close()

@@ -609,11 +609,17 @@ class MemMemoryProvider(MemoryProvider):
                     and self._outbox is not None
                     and self._outbox.has_blocking_writes_before(write_id)
                 ):
-                    self._outbox.defer(write_id)
+                    self._outbox.defer(
+                        write_id,
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
+                    )
                     continue
                 self._deliver_outbox_item(item)
                 if self._outbox is not None:
-                    self._outbox.mark_delivered(write_id)
+                    self._outbox.mark_delivered(
+                        write_id,
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
+                    )
             except Exception as exc:
                 logger.warning("Memory Service outbox delivery failed: %s", exc)
                 if self._outbox is not None:
@@ -622,6 +628,7 @@ class MemMemoryProvider(MemoryProvider):
                         str(item["write_id"]),
                         attempts=attempts,
                         error=f"{type(exc).__name__}: {exc}",
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
                     )
             self._report_outbox_health_if_due(force=True)
 

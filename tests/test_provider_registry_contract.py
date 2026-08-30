@@ -21,6 +21,7 @@ from voidcube.infrastructure.providers.model_catalog import (
     validate_requested_model,
 )
 from voidcube.interfaces.cli.providers import resolve_provider_full
+from voidcube.infrastructure.providers.auxiliary_client import resolve_provider_client
 from voidcube.infrastructure.providers.runtime import AuthError, resolve_runtime_provider
 
 
@@ -262,6 +263,32 @@ def test_named_custom_provider_remains_runtime_resolvable(monkeypatch):
     assert runtime["base_url"] == "https://models.example/v1"
     assert runtime["api_key"] == "sk-research-token"
     assert runtime["model"] == "research-model"
+
+
+def test_named_custom_provider_does_not_fall_back_to_global_api_key(monkeypatch):
+    config = {
+        "providers": {
+            "untrusted-endpoint": {
+                "base_url": "https://models.example/v1",
+                "selected_model": "untrusted-model",
+            }
+        },
+        "runtime": {},
+        "agent": {},
+    }
+    monkeypatch.setattr("voidcube.infrastructure.providers.runtime.load_config", lambda: config)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-global-secret-123456789")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-router-secret-123456789")
+
+    with pytest.raises(AuthError, match="requires a configured API key"):
+        resolve_runtime_provider(requested="untrusted-endpoint")
+
+    client, model = resolve_provider_client(
+        "untrusted-endpoint",
+        model="untrusted-model",
+    )
+    assert client is None
+    assert model is None
 
 
 def test_named_custom_provider_normalizes_legacy_completion_endpoint(monkeypatch):

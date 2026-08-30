@@ -143,6 +143,13 @@ class ServiceRuntimeMixin:
     @staticmethod
     def _gateway_registration_headers() -> Dict[str, str]:
         token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
+        if not token:
+            try:
+                from ...infrastructure.config.system import get_config
+
+                token = str(get_config().gateway.auth_token or "").strip()
+            except Exception:
+                token = ""
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def _memory_client(
@@ -382,6 +389,7 @@ class ServiceRuntimeMixin:
                     try:
                         async with session.get(
                             f"{gateway_address}/admin/services/{service_id}",
+                            headers=self._gateway_registration_headers(),
                             timeout=5,
                         ) as response:
                             if response.status != 200:
@@ -1475,7 +1483,10 @@ class ServiceRuntimeMixin:
                 write_id = str(item["write_id"])
                 try:
                     await self._deliver_companion_memory_write(item)
-                    self._companion_memory_outbox.mark_delivered(write_id)
+                    self._companion_memory_outbox.mark_delivered(
+                        write_id,
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1484,6 +1495,7 @@ class ServiceRuntimeMixin:
                         write_id,
                         attempts=attempts,
                         error=f"{type(exc).__name__}: {exc}",
+                        lease_token=str(item.get("_outbox_lease_token") or "") or None,
                     )
                     logger.warning(
                         "Companion memory outbox delivery failed (attempt %d): %s",
@@ -2576,6 +2588,7 @@ class ServiceRuntimeMixin:
                 async with session.post(
                     gateway_url,
                     json={"active": active},
+                    headers=self._gateway_registration_headers(),
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status != 200:

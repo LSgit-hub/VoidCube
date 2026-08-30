@@ -501,9 +501,9 @@ def test_memory_outbox_survives_reopen_until_delivery(tmp_path):
 
     reopened = MemoryWriteOutbox(path)
     assert reopened.pending_count() == 1
-    assert reopened.next_due()["write_id"] == "write-1"
-
-    reopened.mark_delivered("write-1")
+    due = reopened.next_due()
+    assert due["write_id"] == "write-1"
+    reopened.mark_delivered("write-1", lease_token=due["_outbox_lease_token"])
     assert MemoryWriteOutbox(path).pending_count() == 0
 
 
@@ -562,15 +562,64 @@ def test_memory_outbox_lease_prevents_duplicate_cross_process_delivery(
         }
     )
 
-    assert first.next_due()["write_id"] == "leased-write"
+    first_claim = first.next_due()
+    assert first_claim["write_id"] == "leased-write"
     assert second.next_due() is None
     assert first.health_snapshot()["inflight_count"] == 1
 
     clock["now"] += 6.0
-    assert second.next_due()["write_id"] == "leased-write"
-    first.mark_delivered("leased-write")
+    second_claim = second.next_due()
+    assert second_claim["write_id"] == "leased-write"
+    first.mark_delivered(
+        "leased-write",
+        lease_token=first_claim["_outbox_lease_token"],
+    )
     assert second.pending_count() == 1
-    second.mark_delivered("leased-write")
+    second.mark_delivered(
+        "leased-write",
+        lease_token=second_claim["_outbox_lease_token"],
+    )
+    assert second.pending_count() == 0
+
+
+@pytest.mark.unit
+def test_memory_outbox_stale_settle_token_cannot_delete_reclaimed_row(
+    monkeypatch,
+    tmp_path,
+):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        "plugins.memory.mem.outbox.time.time",
+        lambda: clock["now"],
+    )
+    path = tmp_path / "outbox.sqlite3"
+    first = MemoryWriteOutbox(path, lease_seconds=5)
+    second = MemoryWriteOutbox(path, lease_seconds=5)
+    first.enqueue(
+        {
+            "write_id": "stale-write",
+            "session_id": "session-1",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    first_claim = first.next_due()
+    assert first_claim["write_id"] == "stale-write"
+    clock["now"] += 6.0
+    second_claim = second.next_due()
+    assert second_claim["write_id"] == "stale-write"
+
+    first.mark_delivered(
+        "stale-write",
+        lease_token=first_claim["_outbox_lease_token"],
+    )
+    assert second.pending_count() == 1
+
+    second.mark_delivered(
+        "stale-write",
+        lease_token=second_claim["_outbox_lease_token"],
+    )
     assert second.pending_count() == 0
 
 
@@ -656,7 +705,12 @@ def test_memory_outbox_dead_letter_does_not_block_later_ordered_write(
 
     claimed = outbox.next_due()
     assert claimed["write_id"] == "write-dead"
-    outbox.mark_failed("write-dead", attempts=1, error="gateway unavailable")
+    outbox.mark_failed(
+        "write-dead",
+        attempts=1,
+        error="gateway unavailable",
+        lease_token=claimed["_outbox_lease_token"],
+    )
 
     assert outbox.has_blocking_writes_before("write-close") is False
     next_item = outbox.next_due()
@@ -764,6 +818,7 @@ def test_mem_provider_shutdown_preserves_delayed_retry_without_forcing_it(tmp_pa
         "shutdown-retry",
         attempts=1,
         error="service unavailable",
+        lease_token=claimed["_outbox_lease_token"] if claimed else None,
     )
     assert claimed is not None
     assert provider._outbox.drainable_count() == 0

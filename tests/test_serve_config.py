@@ -337,6 +337,36 @@ def test_status_all_uses_healthy_port_owner_when_pid_file_is_stale(
     assert result["supervisor"]["healthy"] is True
 
 
+def test_ensure_running_rejects_unknown_process_that_only_answers_http_200(
+    monkeypatch,
+    tmp_path,
+):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["supervisor"]
+    monkeypatch.setattr(service, "pid_file", str(tmp_path / "supervisor.pid"))
+    monkeypatch.setattr(service, "log_file", str(tmp_path / "supervisor.log"))
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_read_pid", lambda path: None)
+    monkeypatch.setattr(serve, "_port_listening", lambda port: True)
+    monkeypatch.setattr(serve, "_port_owner_pid", lambda port: 7788)
+    monkeypatch.setattr(serve, "_process_belongs_to_runtime", lambda pid: False)
+    monkeypatch.setattr(
+        serve,
+        "_health_endpoint_is_service",
+        lambda port, name, health_path=None: True,
+    )
+    monkeypatch.setattr(serve, "_service_health_check", lambda svc: True)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert result["supervisor"]["running"] is False
+    assert result["supervisor"]["healthy"] is False
+    assert result["supervisor"]["pid"] is None
+
+
 def test_port_owner_pid_uses_windows_netstat_without_psutil(monkeypatch):
     from voidcube.infrastructure.gateway import service_launcher as serve
 

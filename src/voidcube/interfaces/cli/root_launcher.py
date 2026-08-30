@@ -119,9 +119,12 @@ def _auto_start_daemons() -> None:
         return
 
     print("\n  Auto-starting VoidCube daemons (Gateway -> Memory -> Supervisor)...\n")
-    ensure_running(silent=False)
+    result = ensure_running(silent=False)
     print()
-    os.environ["VOIDCUBE_DAEMONS_STARTED"] = "1"
+    if any(bool(info.get("started")) for info in result.values()):
+        os.environ["VOIDCUBE_DAEMONS_STARTED"] = "1"
+    else:
+        os.environ.pop("VOIDCUBE_DAEMONS_STARTED", None)
 
 
 def main(

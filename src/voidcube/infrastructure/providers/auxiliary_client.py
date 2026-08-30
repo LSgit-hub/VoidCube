@@ -41,6 +41,7 @@ from urllib.parse import urlparse
 from openai import OpenAI
 
 from .credential_pool import load_pool
+from .auth import AuthError
 try:
     from voidcube.infrastructure.llm.request import ChatRequestConfig, build_chat_completion_kwargs
 except (ModuleNotFoundError, ImportError):
@@ -740,14 +741,17 @@ def resolve_provider_client(
 
     # ── Named custom providers (config.yaml providers map) ───
     try:
-        from .runtime import _get_named_custom_provider
-        custom_entry = _get_named_custom_provider(provider)
-        if custom_entry:
-            custom_base = custom_entry.get("base_url", "").strip()
-            custom_key = custom_entry.get("api_key", "").strip() or "no-key-required"
+        from .runtime import _resolve_named_custom_runtime
+        custom_runtime = _resolve_named_custom_runtime(
+            requested_provider=provider,
+        )
+        if custom_runtime:
+            custom_base = str(custom_runtime.get("base_url") or "").strip()
+            custom_key = str(custom_runtime.get("api_key") or "").strip()
             if custom_base:
                 final_model = _normalize_resolved_model(
                     model
+                    or custom_runtime.get("model")
                     or _read_main_model()
                     or _first_live_model(custom_key, custom_base),
                     provider,
@@ -768,6 +772,9 @@ def resolve_provider_client(
                 "resolve_provider_client: named custom provider %r has no base_url",
                 provider)
             return None, None
+    except AuthError as exc:
+        logger.warning("resolve_provider_client: %s", exc)
+        return None, None
     except ImportError:
         pass
 

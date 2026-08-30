@@ -24,6 +24,7 @@ class TurnExecutionResult:
     """Result of the threaded model turn."""
 
     result: Mapping[str, Any] | None
+    error: BaseException | None = None
 
 
 class TurnExecutionRuntime:
@@ -36,10 +37,13 @@ class TurnExecutionRuntime:
         self,
         run_agent: Callable[[], Mapping[str, Any] | None],
     ) -> TurnExecutionResult:
-        result_holder: dict[str, Mapping[str, Any] | None] = {"result": None}
+        result_holder: dict[str, Any] = {"result": None, "error": None}
 
         def run_agent_thread() -> None:
-            result_holder["result"] = run_agent()
+            try:
+                result_holder["result"] = run_agent()
+            except BaseException as exc:
+                result_holder["error"] = exc
 
         agent_thread = self.ports.thread_factory(
             target=run_agent_thread,
@@ -51,8 +55,11 @@ class TurnExecutionRuntime:
             agent_thread.join(0.1)
 
         agent_thread.join()
+        error = result_holder["error"]
         self.ports.cleanup_async_clients()
         self.ports.flush_stream()
         self.ports.flush_output()
         self.ports.sleep(0.15)
+        if error is not None:
+            raise error
         return TurnExecutionResult(result=result_holder["result"])

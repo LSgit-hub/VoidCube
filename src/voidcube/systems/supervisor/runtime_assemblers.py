@@ -256,6 +256,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         async with aiohttp.ClientSession() as session:
             await session.post(
                 f"{execution_config.gateway_address}/admin/activity/clear",
+                headers=supervisor._gateway_registration_headers(),
                 timeout=aiohttp.ClientTimeout(total=5),
             )
 

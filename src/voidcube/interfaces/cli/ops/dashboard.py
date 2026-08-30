@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from ..autonomous.observation import supervisor_employee_execution_hint
 from ....infrastructure.gateway.executor import default_gateway_url
+from ....infrastructure.gateway.presence import gateway_auth_headers
 
 
 # ── Configuration ──────────────────────────────────────────────────────
@@ -52,10 +53,15 @@ SCENE_LABEL: Dict[str, str] = {
 
 # ── HTTP helpers ───────────────────────────────────────────────────────
 
-def _get_json(url: str, timeout: float = REQUEST_TIMEOUT) -> Optional[Dict[str, Any]]:
+def _get_json(
+    url: str,
+    timeout: float = REQUEST_TIMEOUT,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+) -> Optional[Dict[str, Any]]:
     """GET a JSON endpoint.  Returns None on any error."""
     try:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers=headers or {})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
                 return json.loads(resp.read().decode())
@@ -73,7 +79,10 @@ def fetch_supervisor_state() -> Dict[str, Any]:
 
 def fetch_gateway_scenes() -> Dict[str, Any]:
     """Return gateway scene projections."""
-    return _get_json(f"{_gateway_url()}/admin/scenes") or {}
+    return _get_json(
+        f"{_gateway_url()}/admin/scenes",
+        headers=gateway_auth_headers(),
+    ) or {}
 
 
 def fetch_gateway_status() -> Dict[str, Any]:

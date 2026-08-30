@@ -39,7 +39,7 @@ async def test_memory_status_owner_projects_gateway_and_rules_health(monkeypatch
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def get(self, url, *, timeout=None):
+        def get(self, url, *, headers=None, timeout=None):
             requests.append((url, timeout))
             if url.endswith("/admin/services"):
                 return _Response(
@@ -120,7 +120,7 @@ async def test_memory_status_owner_reports_registry_and_transport_failures(monke
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        def get(self, url, *, timeout=None):
+        def get(self, url, *, headers=None, timeout=None):
             return _Response({"services": {}})
 
     monkeypatch.setitem(

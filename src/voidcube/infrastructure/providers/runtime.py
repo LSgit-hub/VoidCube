@@ -274,15 +274,6 @@ def _resolve_named_custom_runtime(
     ]
     api_key = next((candidate for candidate in api_key_candidates if has_usable_secret(candidate)), "")
     auth_mode = str(custom_provider.get("auth_mode") or "").strip().lower()
-    if not api_key and not api_key_env and not auth_mode:
-        api_key = next(
-            (
-                candidate
-                for candidate in (env_str("OPENAI_API_KEY"), env_str("OPENROUTER_API_KEY"))
-                if has_usable_secret(candidate)
-            ),
-            "",
-        )
     if not api_key and auth_mode != "none":
         source = api_key_env or "a configured API key"
         raise AuthError(

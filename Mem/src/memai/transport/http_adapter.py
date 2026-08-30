@@ -11,7 +11,6 @@ import secrets
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from memai.domain.domain import MemoryActor
 
 
 HttpHandler = Callable[..., object]
@@ -144,8 +143,7 @@ def build_memory_http_app(
     if configured_token:
         if not configured_actor:
             raise ValueError("Memory service_actor is required when service_token is set")
-        for actor in MemoryActor:
-            actor_tokens.setdefault(actor.value, configured_token)
+        actor_tokens.setdefault(configured_actor, configured_token)
 
     @app.middleware("http")
     async def enforce_local_identity(request: Request, call_next):

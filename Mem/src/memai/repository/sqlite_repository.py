@@ -159,8 +159,11 @@ class SQLiteMemoryRepository(MemoryRepository):
             maxsize=self._write_queue_max_size
         )
         self._writer_lock = threading.Lock()
+        self._writer_state_changed = threading.Condition(self._writer_lock)
         self._writer_started = False
         self._writer_thread: threading.Thread | None = None
+        self._closing = False
+        self._active_enqueues = 0
         self._closed = False
         self._commit_revision = 0
         self._stats_lock = threading.Lock()
@@ -240,7 +243,7 @@ class SQLiteMemoryRepository(MemoryRepository):
 
     def _ensure_writer(self) -> None:
         with self._writer_lock:
-            if self._closed:
+            if self._closed or self._closing:
                 raise RuntimeError("Memory repository is closed")
             if self._writer_started:
                 return
@@ -255,27 +258,44 @@ class SQLiteMemoryRepository(MemoryRepository):
     def _enqueue_write(
         self, operation: Callable[[sqlite3.Connection], T]
     ) -> _WriteRequest:
-        self._ensure_writer()
-        request = _WriteRequest(operation=operation)
         try:
-            if self._write_enqueue_timeout_seconds > 0:
-                self._write_queue.put(
-                    request, block=True, timeout=self._write_enqueue_timeout_seconds
-                )
-            else:
-                self._write_queue.put_nowait(request)
-        except queue.Full as exc:
+            with self._writer_state_changed:
+                if self._closed or self._closing:
+                    raise RuntimeError("Memory repository is closed")
+                if not self._writer_started:
+                    self._writer_started = True
+                    self._writer_thread = threading.Thread(
+                        target=self._writer_loop,
+                        name="voidcube-memory-writer",
+                        daemon=True,
+                    )
+                    self._writer_thread.start()
+                self._active_enqueues += 1
+            request = _WriteRequest(operation=operation)
+            try:
+                if self._write_enqueue_timeout_seconds > 0:
+                    self._write_queue.put(
+                        request, block=True, timeout=self._write_enqueue_timeout_seconds
+                    )
+                else:
+                    self._write_queue.put_nowait(request)
+            except queue.Full as exc:
+                with self._stats_lock:
+                    self.write_queue_backpressure += 1
+                raise MemoryWriteBackpressure(
+                    "Memory write queue is full; retry after backpressure"
+                ) from exc
             with self._stats_lock:
-                self.write_queue_backpressure += 1
-            raise MemoryWriteBackpressure(
-                "Memory write queue is full; retry after backpressure"
-            ) from exc
-        with self._stats_lock:
-            self.write_queue_enqueued += 1
-            self.write_queue_max_depth = max(
-                self.write_queue_max_depth, self._write_queue.qsize()
-            )
-        return request
+                self.write_queue_enqueued += 1
+                self.write_queue_max_depth = max(
+                    self.write_queue_max_depth, self._write_queue.qsize()
+                )
+            return request
+        finally:
+            with self._writer_state_changed:
+                self._active_enqueues = max(0, self._active_enqueues - 1)
+                if self._closing and self._active_enqueues == 0:
+                    self._writer_state_changed.notify_all()
 
     def execute_write(self, operation: Callable[[sqlite3.Connection], T]) -> T:
         """Queue one callback and wait until its transaction is committed."""
@@ -527,18 +547,32 @@ class SQLiteMemoryRepository(MemoryRepository):
                 self._write_queue.task_done()
 
     def close(self, *, timeout: float = 5.0) -> None:
-        with self._writer_lock:
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        with self._writer_state_changed:
             if self._closed:
                 return
-            self._closed = True
+            self._closing = True
             thread = self._writer_thread
             if not self._writer_started:
+                self._closed = True
+                self._closing = False
                 return
-            try:
-                self._write_queue.put(_STOP, timeout=max(0.1, float(timeout)))
-            except queue.Full:
-                logger.warning("Memory writer queue did not accept shutdown marker")
-                return
+            while self._active_enqueues > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "Memory repository close timed out waiting for active writes"
+                    )
+                    return
+                self._writer_state_changed.wait(timeout=remaining)
+        try:
+            self._write_queue.put(_STOP, timeout=max(0.1, float(timeout)))
+        except queue.Full:
+            logger.warning("Memory writer queue did not accept shutdown marker")
+            return
+        with self._writer_state_changed:
+            self._closed = True
+            self._closing = False
         if thread is not None:
             thread.join(timeout=max(0.1, float(timeout)))
 

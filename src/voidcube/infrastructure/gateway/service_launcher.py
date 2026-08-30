@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config.runtime_paths import get_VoidCube_home
+from .presence import gateway_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -998,7 +999,11 @@ def _gateway_has_service_type(service_type: str) -> bool:
     try:
         import urllib.request
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{GATEWAY_PORT}/admin/services", timeout=3) as resp:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{GATEWAY_PORT}/admin/services",
+            headers=gateway_auth_headers(),
+        )
+        with urllib.request.urlopen(request, timeout=3) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return False
@@ -1131,11 +1136,14 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         proc = start_service(name, foreground=False)
 
         if proc is None:
-            # start_service returned None — could be port-occupied by unknown
-            # process, or already-running detected late.
-            healthy = _service_health_check(svc)
             pid = _read_pid(svc.pid_file)
-            result[name] = {"running": healthy, "healthy": healthy, "pid": pid, "started": False}
+            running = bool(
+                pid is not None
+                and _pid_alive(pid)
+                and _process_belongs_to_runtime(pid)
+            )
+            healthy = running and _service_health_check(svc)
+            result[name] = {"running": running, "healthy": healthy, "pid": pid, "started": False}
             if not silent:
                 tag = "✓" if healthy else "⚠"
                 _safe_print(f"     {tag} port {svc.port} reachable (reusing existing service)" if healthy

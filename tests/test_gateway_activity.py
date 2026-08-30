@@ -33,7 +33,10 @@ async def test_autonomous_tier1_finding_uses_durable_gateway_outbox(tmp_path):
     assert item["memory_actor"] == "api_a"
     assert item["memory_domain"] == "agent_interaction"
     assert item["metadata"]["turn_dedup_key"] == item["write_id"]
-    gateway._memory_outbox.mark_delivered(item["write_id"])
+    gateway._memory_outbox.mark_delivered(
+        item["write_id"],
+        lease_token=item["_outbox_lease_token"],
+    )
     assert gateway._memory_outbox.pending_count() == 0
 
 
@@ -849,6 +852,35 @@ def test_gateway_registration_requires_root_token_when_configured():
     )
     assert response.status_code == 201
     assert response.json()["service_token"]
+
+
+def test_gateway_control_plane_requires_root_token_when_configured():
+    gateway = InternalGateway(GatewayConfig(auth_token="root-secret"))
+    client = TestClient(gateway.app)
+
+    assert client.get("/").status_code == 200
+    protected_requests = [
+        ("GET", "/admin/services"),
+        ("GET", "/admin/routes"),
+        ("POST", "/admin/autonomous-chain-gate"),
+        ("POST", "/health/missing-service"),
+        ("GET", "/v1/sessions/missing-session"),
+        ("POST", "/v1/body/improvement-report"),
+    ]
+    for method, path in protected_requests:
+        response = client.request(method, path, json={})
+        assert response.status_code == 401, (method, path, response.text)
+
+    bad_headers = {"Authorization": "Bearer wrong-secret"}
+    assert client.get("/admin/services", headers=bad_headers).status_code == 401
+
+    root_headers = {"Authorization": "Bearer root-secret"}
+    assert client.get("/admin/services", headers=root_headers).status_code == 200
+    assert client.post(
+        "/admin/autonomous-chain-gate",
+        headers=root_headers,
+        json={"active": True},
+    ).status_code == 200
 
 
 def test_gateway_records_tier1_turn_in_durable_outbox(monkeypatch, tmp_path):

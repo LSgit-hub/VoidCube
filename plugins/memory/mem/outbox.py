@@ -174,7 +174,7 @@ class MemoryWriteOutbox:
                     "write_id TEXT PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
                     "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT, created_at REAL NOT NULL, "
                     "status TEXT NOT NULL DEFAULT 'pending', dead_letter_at REAL, "
-                    "lease_owner TEXT, lease_until REAL, first_failed_at REAL)"
+                    "lease_owner TEXT, lease_until REAL, lease_token TEXT, first_failed_at REAL)"
                 )
                 columns = {
                     str(row[1])
@@ -189,6 +189,7 @@ class MemoryWriteOutbox:
                 _ensure_column(conn, columns, "dead_letter_at", "REAL")
                 _ensure_column(conn, columns, "lease_owner", "TEXT")
                 _ensure_column(conn, columns, "lease_until", "REAL")
+                _ensure_column(conn, columns, "lease_token", "TEXT")
                 _ensure_column(conn, columns, "first_failed_at", "REAL")
                 conn.execute("DROP INDEX IF EXISTS idx_pending_writes_due")
                 conn.execute(
@@ -241,7 +242,8 @@ class MemoryWriteOutbox:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE pending_writes SET status = 'pending', lease_owner = NULL, "
-                    "lease_until = NULL WHERE status = 'inflight' AND lease_until <= ?",
+                    "lease_until = NULL, lease_token = NULL "
+                    "WHERE status = 'inflight' AND lease_until <= ?",
                     (now,),
                 )
                 row = conn.execute(
@@ -251,15 +253,19 @@ class MemoryWriteOutbox:
                     (now,),
                 ).fetchone()
                 if row:
+                    lease_token = uuid.uuid4().hex
                     conn.execute(
                         "UPDATE pending_writes SET status = 'inflight', lease_owner = ?, "
-                        "lease_until = ? WHERE write_id = ? AND status = 'pending'",
+                        "lease_until = ?, lease_token = ? WHERE write_id = ? AND status = 'pending'",
                         (
                             self._worker_id,
                             now + self.lease_seconds,
+                            lease_token,
                             str(row[0]),
                         ),
                     )
+                else:
+                    lease_token = ""
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -268,16 +274,23 @@ class MemoryWriteOutbox:
             return None
         payload = json.loads(row[1])
         payload["_outbox_attempts"] = int(row[2])
+        payload["_outbox_lease_token"] = lease_token
         return payload
 
-    def mark_delivered(self, write_id: str) -> None:
+    def mark_delivered(self, write_id: str, *, lease_token: str | None = None) -> None:
         with closing(self._connect()) as conn:
             with conn:
-                deleted = conn.execute(
-                    "DELETE FROM pending_writes WHERE write_id = ? AND "
-                    "(status = 'pending' OR lease_owner = ?)",
-                    (write_id, self._worker_id),
-                )
+                if lease_token:
+                    deleted = conn.execute(
+                        "DELETE FROM pending_writes WHERE write_id = ? AND lease_token = ?",
+                        (write_id, lease_token),
+                    )
+                else:
+                    deleted = conn.execute(
+                        "DELETE FROM pending_writes WHERE write_id = ? AND "
+                        "(status = 'pending' OR lease_owner = ?)",
+                        (write_id, self._worker_id),
+                    )
                 if deleted.rowcount:
                     conn.execute(
                         "INSERT INTO outbox_state(key, value) VALUES ('last_success_at', ?) "
@@ -285,7 +298,14 @@ class MemoryWriteOutbox:
                         (str(time.time()),),
                     )
 
-    def mark_failed(self, write_id: str, *, attempts: int, error: str) -> None:
+    def mark_failed(
+        self,
+        write_id: str,
+        *,
+        attempts: int,
+        error: str,
+        lease_token: str | None = None,
+    ) -> None:
         now = time.time()
         delay = min(
             self.retry_max_seconds,
@@ -295,37 +315,73 @@ class MemoryWriteOutbox:
         dead_letter_at = now if status == "dead_letter" else None
         with closing(self._connect()) as conn:
             with conn:
-                conn.execute(
-                    "UPDATE pending_writes SET attempts = ?, next_attempt_at = ?, last_error = ?, "
-                    "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL, "
-                    "first_failed_at = COALESCE(first_failed_at, ?) "
-                    "WHERE write_id = ? AND (status = 'pending' OR lease_owner = ?)",
-                    (
-                        attempts,
-                        now + delay,
-                        error[:500],
-                        status,
-                        dead_letter_at,
-                        now,
-                        write_id,
-                        self._worker_id,
-                    ),
-                )
+                if lease_token:
+                    conn.execute(
+                        "UPDATE pending_writes SET attempts = ?, next_attempt_at = ?, last_error = ?, "
+                        "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL, "
+                        "lease_token = NULL, first_failed_at = COALESCE(first_failed_at, ?) "
+                        "WHERE write_id = ? AND lease_token = ?",
+                        (
+                            attempts,
+                            now + delay,
+                            error[:500],
+                            status,
+                            dead_letter_at,
+                            now,
+                            write_id,
+                            lease_token,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE pending_writes SET attempts = ?, next_attempt_at = ?, last_error = ?, "
+                        "status = ?, dead_letter_at = ?, lease_owner = NULL, lease_until = NULL, "
+                        "lease_token = NULL, first_failed_at = COALESCE(first_failed_at, ?) "
+                        "WHERE write_id = ? AND (status = 'pending' OR lease_owner = ?)",
+                        (
+                            attempts,
+                            now + delay,
+                            error[:500],
+                            status,
+                            dead_letter_at,
+                            now,
+                            write_id,
+                            self._worker_id,
+                        ),
+                    )
 
-    def defer(self, write_id: str, *, delay_seconds: float = 1.0) -> None:
+    def defer(
+        self,
+        write_id: str,
+        *,
+        delay_seconds: float = 1.0,
+        lease_token: str | None = None,
+    ) -> None:
         """Release a claimed item without counting a transport failure."""
         with closing(self._connect()) as conn:
             with conn:
-                conn.execute(
-                    "UPDATE pending_writes SET status = 'pending', next_attempt_at = ?, "
-                    "lease_owner = NULL, lease_until = NULL WHERE write_id = ? "
-                    "AND lease_owner = ?",
-                    (
-                        time.time() + max(0.001, float(delay_seconds)),
-                        write_id,
-                        self._worker_id,
-                    ),
-                )
+                if lease_token:
+                    conn.execute(
+                        "UPDATE pending_writes SET status = 'pending', next_attempt_at = ?, "
+                        "lease_owner = NULL, lease_until = NULL, lease_token = NULL WHERE write_id = ? "
+                        "AND lease_token = ?",
+                        (
+                            time.time() + max(0.001, float(delay_seconds)),
+                            write_id,
+                            lease_token,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE pending_writes SET status = 'pending', next_attempt_at = ?, "
+                        "lease_owner = NULL, lease_until = NULL, lease_token = NULL WHERE write_id = ? "
+                        "AND lease_owner = ?",
+                        (
+                            time.time() + max(0.001, float(delay_seconds)),
+                            write_id,
+                            self._worker_id,
+                        ),
+                    )
 
     def has_blocking_writes_before(self, write_id: str) -> bool:
         """Return whether an older active write must precede this item.
@@ -424,7 +480,7 @@ class MemoryWriteOutbox:
                 cursor = conn.execute(
                     "UPDATE pending_writes SET status = 'pending', attempts = 0, "
                     "next_attempt_at = 0, last_error = NULL, dead_letter_at = NULL, "
-                    "lease_owner = NULL, lease_until = NULL, first_failed_at = NULL "
+                    "lease_owner = NULL, lease_until = NULL, lease_token = NULL, first_failed_at = NULL "
                     "WHERE write_id = ? AND status = 'dead_letter'",
                     (write_id,),
                 )
