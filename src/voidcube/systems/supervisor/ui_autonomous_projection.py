@@ -315,13 +315,13 @@ def project_autonomous_observation(
 
     if recent_writebacks and (candidates or api_b_judgement_cards):
         reread_status = "active"
-        reread_summary = "API-B 正结合最新 Mem 回流与在途链路项推进下一轮判断"
+        reread_summary = "API-B 正读取最新 Mem 回流，并核对在途链路项。"
     elif recent_writebacks:
         reread_status = "ready"
         reread_summary = "最新 Mem 回流已可供 API-B 再读取"
     else:
         reread_status = "idle"
-        reread_summary = "暂无可再读回流"
+        reread_summary = "暂无可再读 Mem 回流"
 
     employee_stage_label = "未进入"
     employee_chain_reason = "链路: 当前没有 员工代理执行项"
@@ -679,7 +679,7 @@ def project_autonomous_observation(
             "is_focus": focus_role == "api_b_reread",
             "summary": reread_summary,
             "read_rule": "这里看 API-B 再读取回流。",
-            "transition_hint": "再读取后会回到候选形成，或在本轮收束闭环。",
+            "transition_hint": "再读取后会回到候选形成，或收束当前闭环。",
             "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
         },
     ]
@@ -828,6 +828,8 @@ def build_autonomous_writeback_summary(
     task: Dict[str, Any],
 ) -> Dict[str, Any]:
     metadata = dict(task.get("metadata") or {})
+    task_status = str(task.get("status") or "").strip().lower()
+    disposition = dict(metadata.get("employee_result_disposition") or {})
     execution_result = dict(
         metadata.get("employee_execution_result")
         or metadata.get("execution_result")
@@ -842,6 +844,12 @@ def build_autonomous_writeback_summary(
         or ""
     )
     display_status = observation_display_status(task)
+    writeback_status = (
+        "failed"
+        if task_status in {"failed", "mem_write_failed"}
+        or str(disposition.get("status") or "").strip().lower() == "mem_write_failed"
+        else "completed"
+    )
     observation_role = "mem_writeback"
     return {
         "task_id": task.get("task_id"),
@@ -853,5 +861,5 @@ def build_autonomous_writeback_summary(
         "display_status": display_status,
         "observation_role": observation_role,
         "summary": str(summary).strip()[:120],
-        "writeback_status": "completed",
+        "writeback_status": writeback_status,
     }

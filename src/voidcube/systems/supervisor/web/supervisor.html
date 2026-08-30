@@ -5323,9 +5323,9 @@ function taskLane(t) {
 function typeLabel(t) {
   const observationRole = String(t.observation_role || '').trim();
   if (observationRole === 'mem_writeback') return '星子 Mem 处理';
-  if (observationRole === 'api_b_reread') return '再次判断';
+  if (observationRole === 'api_b_reread') return 'API-B 再读取';
   if (observationRole === 'api_b_judgement') return 'API-B 判断';
-  if (observationRole === 'employee_execution') return '员工执行与回传';
+  if (observationRole === 'employee_execution') return '员工代理派工、执行与结果回传';
   if (observationRole === 'candidate') return '候选形成';
   const identity = t.task_identity || {};
   const displayLabel = String(identity.display_label || '').trim();
@@ -7371,7 +7371,7 @@ function observationRoleStageLabel(task) {
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
-    employee_execution: '员工代理派工 / 执行观测阶段',
+    employee_execution: '员工代理派工、执行与结果回传阶段',
     mem_writeback: '星子 Mem 处理阶段',
     api_b_reread: 'API-B 再读取阶段',
     candidate: '候选形成阶段',
@@ -8197,10 +8197,8 @@ function showCompanionThinkBubble(text, key) {
 
 function renderApiBThinking(state) {
   const thinking = (state || {}).api_b_thinking || {};
-  const phase = (state || {}).ui_phase || {};
   const thinkingText = String(thinking.text || '').trim();
-  const phaseText = String(phase.summary || '').trim();
-  const text = thinkingText || phaseText;
+  const text = thinkingText;
   if (!text) {
     hideCompanionThinkBubble();
     return;

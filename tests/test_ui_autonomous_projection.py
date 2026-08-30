@@ -1,4 +1,5 @@
 from voidcube.systems.supervisor.ui_autonomous_projection import (
+    build_autonomous_writeback_summary,
     project_autonomous_observation,
 )
 from voidcube.systems.supervisor.ui_state_projection import (
@@ -65,6 +66,65 @@ def test_completed_employee_run_exposes_writeback_contract_fields():
     assert writeback["writeback_status"] == "completed"
 
 
+def test_failed_employee_run_exposes_failed_writeback_status():
+    writeback = build_autonomous_writeback_summary(
+        {
+            "task_id": "auto-task-2",
+            "title": "失败写回任务",
+            "governance_task_type": "self_learning",
+            "status": "failed",
+            "metadata": {
+                "employee_execution_result": {"result_summary": "未能完成"},
+                "employee_result_disposition": {
+                    "status": "mem_write_failed",
+                    "returned_at": "2026-08-29T00:00:00+00:00",
+                },
+            },
+        }
+    )
+
+    assert writeback["source_task_id"] == "auto-task-2"
+    assert writeback["writeback_status"] == "failed"
+
+
+def test_api_b_reread_summary_stays_focused_on_mem_replay():
+    observation = project_autonomous_observation(
+        [],
+        drive_candidates=[
+            {
+                "task_id": "candidate-1",
+                "title": "内生候选",
+                "metadata": {"utility": 0.8},
+            }
+        ],
+        history_tasks=[
+            {
+                "task_id": "writeback-1",
+                "title": "已完成写回",
+                "governance_task_type": "self_learning",
+                "status": "completed",
+                "metadata": {
+                    "employee_result_disposition": {
+                        "status": "written_to_mem",
+                        "returned_at": "2026-08-29T00:00:00+00:00",
+                    },
+                    "execution_result": {"summary": "已写入"},
+                },
+            }
+        ],
+        timeline=[],
+    )
+
+    reread = next(
+        card
+        for card in observation["loop"]["stage_cards"]
+        if card["stage_key"] == "api_b_reread"
+    )
+
+    assert "判断" not in reread["card_subtitle"]
+    assert "Mem 回流" in reread["card_subtitle"] or "再读取" in reread["card_subtitle"]
+
+
 def test_candidate_and_planning_use_the_writing_desk_location():
     observation = project_autonomous_observation(
         [],
@@ -118,6 +178,35 @@ def test_employee_dispatch_and_execution_use_the_computer_desk_location():
     assert running["stage"] == "running"
 
 
+def test_employee_dispatch_and_execution_stay_on_sofa_in_daily_companion():
+    observation = project_autonomous_observation(
+        [
+            {
+                "task_id": "ready-2",
+                "title": "待接手任务",
+                "governance_task_type": "self_learning",
+                "status": "approved",
+                "metadata": {"employee_assignment": {"employee_task_id": "run-5"}},
+            }
+        ],
+        drive_candidates=[],
+        history_tasks=[],
+        timeline=[],
+    )
+
+    scene = project_supervisor_scene_state(
+        autonomous_observation=observation,
+        observation_input_available=True,
+        mode="daily_companion",
+    )
+
+    assert scene["scene"] == "idle"
+    assert scene["room_location"] == "sofa"
+    assert scene["action"] == "rest"
+    assert scene["stage"] == "dispatched"
+    assert scene["task_id"] == "ready-2"
+
+
 def test_returned_employee_result_returns_to_the_writing_desk():
     scene = _scene_for_task(
         {
@@ -139,3 +228,38 @@ def test_returned_employee_result_returns_to_the_writing_desk():
     assert scene["room_location"] == "writing_desk"
     assert scene["stage"] == "awaiting_mem_review"
     assert scene["task_id"] == "returned-1"
+
+
+def test_returned_employee_result_stays_on_sofa_in_daily_companion():
+    observation = project_autonomous_observation(
+        [
+            {
+                "task_id": "returned-2",
+                "title": "已回传任务",
+                "governance_task_type": "self_learning",
+                "status": "completed",
+                "metadata": {
+                    "employee_assignment": {"employee_task_id": "run-4"},
+                    "employee_result_disposition": {
+                        "status": "awaiting_user_report",
+                        "returned_at": "2026-08-29T00:00:00+00:00",
+                    },
+                },
+            }
+        ],
+        drive_candidates=[],
+        history_tasks=[],
+        timeline=[],
+    )
+
+    scene = project_supervisor_scene_state(
+        autonomous_observation=observation,
+        observation_input_available=True,
+        mode="daily_companion",
+    )
+
+    assert scene["scene"] == "idle"
+    assert scene["room_location"] == "sofa"
+    assert scene["action"] == "rest"
+    assert scene["stage"] == "awaiting_user_report"
+    assert scene["task_id"] == "returned-2"

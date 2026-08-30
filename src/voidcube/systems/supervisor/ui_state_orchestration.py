@@ -192,21 +192,73 @@ def _project_memory_structure(
     tier1_stats: JsonDict,
     autonomous_observation: JsonDict,
 ) -> JsonDict:
+    def count_or_zero(*values: Any) -> int:
+        for value in values:
+            if value is None:
+                continue
+            try:
+                return max(0, int(value))
+            except Exception:
+                continue
+        return 0
+
+    structure = dict(tier1_stats.get("structure") or {})
     tier1 = dict(tier1_stats.get("tier1") or {})
     tier2 = dict(tier1_stats.get("tier2") or {})
     identity = dict(tier1_stats.get("identity_archive") or {})
     board = dict(autonomous_observation.get("board") or {})
     return {
-        "ordinary_memory": tier1.get("total_turns"),
-        "active_session_memory": tier1.get("active_turns"),
-        "compressed_memory": tier1.get("compressed_turns", tier2.get("total_compressed")),
-        "event_memory": tier2.get("events"),
-        "scene_memory": tier2.get("scenes"),
-        "arc_memory": tier2.get("arcs"),
-        "identity_archive": identity.get("anchors"),
-        "self_experiences": identity.get("self_experiences"),
-        "governance_history": identity.get("governance_history"),
-        "autonomous_history": len(list(board.get("autonomous_history") or [])),
+        "ordinary_memory": count_or_zero(
+            structure.get("ordinary_memory"),
+            tier1.get("total_turns"),
+            tier1_stats.get("total_turns"),
+        ),
+        "active_session_memory": count_or_zero(
+            structure.get("active_session_memory"),
+            tier1.get("active_turns"),
+            tier1_stats.get("active_turns"),
+        ),
+        "compressed_memory": count_or_zero(
+            structure.get("compressed_memory"),
+            tier1.get("compressed_turns"),
+            tier2.get("total_compressed"),
+            tier1_stats.get("compressed_turns"),
+        ),
+        "event_memory": count_or_zero(
+            structure.get("event_memory"),
+            tier2.get("events"),
+            tier1_stats.get("events"),
+        ),
+        "scene_memory": count_or_zero(
+            structure.get("scene_memory"),
+            tier2.get("scenes"),
+            tier1_stats.get("scenes"),
+        ),
+        "arc_memory": count_or_zero(
+            structure.get("arc_memory"),
+            tier2.get("arcs"),
+            tier1_stats.get("arcs"),
+        ),
+        "identity_archive": count_or_zero(
+            structure.get("identity_archive"),
+            identity.get("anchors"),
+            tier1_stats.get("identity_archive"),
+        ),
+        "self_experiences": count_or_zero(
+            structure.get("self_experiences"),
+            identity.get("self_experiences"),
+            tier1_stats.get("self_experiences"),
+        ),
+        "governance_history": count_or_zero(
+            structure.get("governance_history"),
+            identity.get("governance_history"),
+            tier1_stats.get("governance_history"),
+        ),
+        "autonomous_history": count_or_zero(
+            structure.get("autonomous_history"),
+            len(list(board.get("autonomous_history") or [])),
+            tier1_stats.get("autonomous_history"),
+        ),
     }
 
 
@@ -252,10 +304,21 @@ def _published_phase_matches_snapshot(
             metadata.get("execution_kind"),
         )
     }
-    if disposition_status in {"awaiting_user_report", "reported_to_user"}:
-        expected_scene = "idle" if mode == "daily_companion" else "planning"
-    elif disposition_status in {"returned_to_xingzi", "awaiting_mem_review"}:
-        expected_scene = "planning"
+    if disposition_status in {
+        "active",
+        "ready",
+        "stale",
+        "returned_to_xingzi",
+        "awaiting_user_report",
+        "reported_to_user",
+        "awaiting_mem_review",
+        "written_to_mem",
+        "mem_write_failed",
+    }:
+        if disposition_status in {"active", "ready", "stale"}:
+            expected_scene = "idle" if mode == "daily_companion" else "handoff"
+        else:
+            expected_scene = "idle" if mode == "daily_companion" else "planning"
     elif "memory_maintenance" in family_values or any(
         "memory" in value for value in family_values
     ):

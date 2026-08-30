@@ -83,6 +83,7 @@ from .ui_state_orchestration import (
     build_supervisor_ui_state,
 )
 from .ui_state_projection import SCENE_ACTIONS, SCENE_ROOM_LOCATIONS
+from .service_runtime import latest_think_tag_text
 from .ui_stream_adapters import (
     control_media_request,
     enqueue_media_request,
@@ -493,6 +494,9 @@ class SupervisorUIRuntime:
         cleaned = str(text or "").strip()
         if not cleaned:
             return
+        think_text = latest_think_tag_text(cleaned)
+        if think_text:
+            cleaned = think_text
         with self._api_b_thinking_lock:
             self.api_b_thinking_revision += 1
             self.api_b_thinking = {

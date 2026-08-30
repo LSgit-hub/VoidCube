@@ -4093,9 +4093,50 @@ class MemoryApplicationService:
                 f"AND {visible_clause}",
                 visible,
             ).fetchone()[0]
-            return locals()
+            identity_anchors = conn.execute(
+                "SELECT COUNT(*) FROM compressed_memories "
+                "WHERE memory_id LIKE 'identity-founding-%'"
+            ).fetchone()[0]
+            identity_self_experiences = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE status = 'active' "
+                f"AND hidden = 0 AND identity_layer = 'self_experience' "
+                f"AND {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            identity_governance_history = conn.execute(
+                f"SELECT COUNT(*) FROM compressed_memories WHERE status = 'active' "
+                f"AND hidden = 0 AND identity_layer = 'governance_history' "
+                f"AND {visible_clause}",
+                visible,
+            ).fetchone()[0]
+            return {
+                "total_turns": total_turns,
+                "active_turns": active_turns,
+                "compressed_turns": compressed_turns,
+                "archived_turns": archived_turns,
+                "total_sessions": total_sessions,
+                "oldest": oldest,
+                "compressed_total": compressed_total,
+                "compressed_events": compressed_events,
+                "compressed_scenes": compressed_scenes,
+                "compressed_arcs": compressed_arcs,
+                "identity_anchors": identity_anchors,
+                "identity_self_experiences": identity_self_experiences,
+                "identity_governance_history": identity_governance_history,
+            }
 
         stats = self._repository_read(read)
+        structure = {
+            "ordinary_memory": stats["total_turns"],
+            "active_session_memory": stats["active_turns"],
+            "compressed_memory": stats["compressed_turns"],
+            "event_memory": stats["compressed_events"],
+            "scene_memory": stats["compressed_scenes"],
+            "arc_memory": stats["compressed_arcs"],
+            "identity_archive": stats["identity_anchors"],
+            "self_experiences": stats["identity_self_experiences"],
+            "governance_history": stats["identity_governance_history"],
+        }
         return {
             "tier1": {
                 "total_turns": stats["total_turns"],
@@ -4113,6 +4154,12 @@ class MemoryApplicationService:
                 "scenes": stats["compressed_scenes"],
                 "arcs": stats["compressed_arcs"],
             },
+            "identity_archive": {
+                "anchors": stats["identity_anchors"],
+                "self_experiences": stats["identity_self_experiences"],
+                "governance_history": stats["identity_governance_history"],
+            },
+            "structure": structure,
         }
 
     # ── Compressed Memories Query ─────────────────────────────────

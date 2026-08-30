@@ -216,3 +216,116 @@ async def test_ui_state_prefers_authoritative_published_phase_over_snapshot_gues
     assert state["scene_task_id"] == "task-live"
     assert state["title"] == "星子正在派发员工任务"
     assert state["ui_phase"]["ui_phase_revision"] == 7
+
+
+@pytest.mark.asyncio
+async def test_ui_state_zero_fills_missing_memory_structure_counts(monkeypatch):
+    import voidcube.systems.supervisor.ui_state_orchestration as owner
+
+    monkeypatch.setattr(owner, "load_ui_memory_token_usage", lambda: {})
+
+    async def load_observation_input_snapshot():
+        return ({"activity": {"counts": {}}}, True)
+
+    async def load_memory_stats():
+        return {"memory_active": True}
+
+    async def load_timeline(*, limit):
+        return []
+
+    context = SupervisorUIStateContext(
+        runtime_config=SimpleNamespace(
+            endogenous_drive_lm_task_generation_enabled=False
+        ),
+        list_chain_projection_tasks=lambda: [],
+        serialize_chain_task=lambda task: dict(task),
+        latest_drive_candidates=lambda: [],
+        load_observation_input_snapshot=load_observation_input_snapshot,
+        load_memory_stats=load_memory_stats,
+        load_observation_timeline=load_timeline,
+        load_body_status=lambda chain: {},
+        attach_trace_details=lambda observation: observation,
+        load_cognition_state=lambda: {},
+        stellar_mode_status=lambda: {"mode": "idle"},
+        voice_status=lambda: {"active": False},
+        current_media=lambda: None,
+    )
+
+    state = await build_supervisor_ui_state(context=context)
+
+    assert state["memory_structure"] == {
+        "ordinary_memory": 0,
+        "active_session_memory": 0,
+        "compressed_memory": 0,
+        "event_memory": 0,
+        "scene_memory": 0,
+        "arc_memory": 0,
+        "identity_archive": 0,
+        "self_experiences": 0,
+        "governance_history": 0,
+        "autonomous_history": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ui_state_keeps_daily_companion_on_sofa_during_employee_execution(
+    monkeypatch,
+):
+    import voidcube.systems.supervisor.ui_state_orchestration as owner
+
+    monkeypatch.setattr(owner, "load_ui_memory_token_usage", lambda: {})
+
+    async def load_observation_input_snapshot():
+        return ({"activity": {"counts": {}}}, True)
+
+    async def load_memory_stats():
+        return {"memory_active": False}
+
+    async def load_timeline(*, limit):
+        return []
+
+    context = SupervisorUIStateContext(
+        runtime_config=SimpleNamespace(
+            endogenous_drive_lm_task_generation_enabled=False
+        ),
+        list_chain_projection_tasks=lambda: [
+            {
+                "task_id": "employee-live-1",
+                "title": "执行中任务",
+                "governance_task_type": "self_learning",
+                "status": "running",
+                "metadata": {"employee_assignment": {"employee_task_id": "run-1"}},
+            }
+        ],
+        serialize_chain_task=lambda task: dict(task),
+        latest_drive_candidates=lambda: [],
+        load_observation_input_snapshot=load_observation_input_snapshot,
+        load_memory_stats=load_memory_stats,
+        load_observation_timeline=load_timeline,
+        load_body_status=lambda chain: {},
+        attach_trace_details=lambda observation: observation,
+        load_cognition_state=lambda: {},
+        stellar_mode_status=lambda: {"mode": "daily_companion"},
+        voice_status=lambda: {"active": False},
+        current_media=lambda: None,
+        current_ui_phase=lambda: {
+            "scene": "idle",
+            "room_location": "sofa",
+            "action": "rest",
+            "stage": "running",
+            "task_id": "employee-live-1",
+            "mode": "daily_companion",
+            "title": "日常陪伴中",
+            "summary": "员工代理正在执行，星子仍保持日常陪伴状态。",
+            "ui_phase_revision": 3,
+        },
+    )
+
+    state = await build_supervisor_ui_state(context=context)
+
+    assert state["scene"] == "idle"
+    assert state["room_location"] == "sofa"
+    assert state["scene_action"] == "rest"
+    assert state["scene_stage"] == "running"
+    assert state["scene_task_id"] == "employee-live-1"
+    assert state["ui_phase"]["scene"] == "idle"

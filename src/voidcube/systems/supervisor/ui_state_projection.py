@@ -172,6 +172,28 @@ def project_supervisor_scene_state(
     employee_task_id = str(employee_focus.get("task_id") or "").strip()
 
     if employee_status in {"active", "ready", "stale"} and employee_focus:
+        if mode == "daily_companion":
+            return _scene_projection(
+                scene="idle",
+                title="日常陪伴中",
+                summary={
+                    "active": (
+                        f"「{employee_focus.get('title', '自主链路项')}」正在由员工代理执行，"
+                        "星子仍保持日常陪伴。"
+                    ),
+                    "stale": (
+                        f"「{employee_focus.get('title', '自主链路项')}」在等待员工执行器恢复，"
+                        "星子仍保持日常陪伴。"
+                    ),
+                }.get(
+                    employee_status,
+                    f"「{employee_focus.get('title', '自主链路项')}」已转交员工代理，"
+                    "星子仍保持日常陪伴。",
+                ),
+                stage="running" if employee_status == "active" else "dispatched",
+                task_id=employee_task_id,
+                mode=mode,
+            )
         if employee_status == "active":
             return _scene_projection(
                 scene="handoff",
@@ -218,6 +240,21 @@ def project_supervisor_scene_state(
     ).strip().lower()
 
     if employee_status == "returned" and employee_focus:
+        if mode == "daily_companion":
+            return _scene_projection(
+                scene="idle",
+                title={
+                    "awaiting_user_report": "等待向用户回报",
+                    "reported_to_user": "已向用户回报",
+                }.get(employee_result_status, "日常陪伴中"),
+                summary=(
+                    f"「{employee_focus.get('title', '自主链路项')}」的执行结果已经回到星子，"
+                    "当前仍保持日常陪伴状态。"
+                ),
+                stage=employee_result_status or "returned_to_xingzi",
+                task_id=employee_task_id,
+                mode=mode,
+            )
         return _scene_projection(
             scene="planning",
             title={

@@ -181,7 +181,7 @@ def test_ui_observation_card_projections_use_explicit_snapshots_only():
     stage = project_observation_stage_card(
         {
             "key": "employee_execution",
-            "label": "员工执行与回传",
+            "label": "员工代理派工、执行与结果回传",
             "status": "running",
             "focus_task": {"title": "执行中任务", "status": "running"},
         }
@@ -189,7 +189,7 @@ def test_ui_observation_card_projections_use_explicit_snapshots_only():
 
     assert card is not None
     assert card["display_status"] == "已转交"
-    assert card["observation_type_label"] == "员工执行与回传"
+    assert card["observation_type_label"] == "员工代理派工、执行与结果回传"
     assert "监督者已裁定: 转交" in card["judgement_hint"]
     assert stage["display_status"] == "执行中"
     assert stage["lane"] == "supervisor"
@@ -2824,6 +2824,28 @@ async def test_supervisor_activity_event_publishes_authoritative_phase_for_scene
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_phase_summary_stays_out_of_think_payload(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+
+    supervisor._ui_runtime.publish_ui_phase(
+        scene="planning",
+        stage="planning",
+        task_id="phase-task-1",
+        mode="auto_evolution",
+        title="正在规划任务",
+        summary="左上角摘要应该留在 phase。",
+        source_event="tasks_planned",
+    )
+
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["ui_phase"]["summary"] == "左上角摘要应该留在 phase。"
+    assert state["api_b_thinking"]["text"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
@@ -3732,6 +3754,28 @@ async def test_supervisor_ui_exposes_global_api_b_thinking_sink(tmp_path):
     assert state["api_b_thinking"]["stage"] == initial_state["scene_stage"]
     assert state["api_b_thinking"]["task_id"] == initial_state["scene_task_id"]
     assert state["api_b_thinking"]["mode"] == initial_state["scene_mode"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_thinking_sink_extracts_think_tag_content(tmp_path):
+    from memai.host_integration import get_mem_host_integration
+
+    supervisor = _make_supervisor(tmp_path)
+    sink = get_mem_host_integration().api_b_thinking_sink
+    assert sink is not None
+
+    initial_state = await supervisor._ui_runtime.get_state()
+    supervisor._ui_runtime.set_api_b_thinking_context(
+        scene=initial_state["scene"],
+        stage=initial_state["scene_stage"],
+        task_id=initial_state["scene_task_id"],
+        mode=initial_state["scene_mode"],
+    )
+    sink("<think>先检查上下文</think>最终答案")
+    state = await supervisor._ui_runtime.get_state()
+
+    assert state["api_b_thinking"]["text"] == "先检查上下文"
 
 
 @pytest.mark.unit

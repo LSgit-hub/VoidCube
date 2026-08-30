@@ -124,9 +124,9 @@ def observation_task_type_label(task: Dict[str, Any]) -> str:
     mapping = {
         "mem_writeback": "星子 Mem 处理",
         "memory_maintenance_receipt": "Memory 受理回执",
-        "api_b_reread": "再次判断",
+        "api_b_reread": "API-B 再读取",
         "api_b_judgement": "API-B 判断",
-        "employee_execution": "员工执行与回传",
+        "employee_execution": "员工代理派工、执行与结果回传",
         "candidate": "候选形成",
     }
     if observation_role in mapping:
@@ -303,9 +303,9 @@ def observation_stage_subtitle(stage: Dict[str, Any]) -> str:
             if str(stage.get("transition_hint") or "").strip()
             else ""
         ),
-        str(stage.get("summary") or "").strip()[:100],
     ]
-    return " · ".join([part for part in parts if part])[:200] or "自主闭环阶段观察"
+    subtitle = " · ".join([part for part in parts if part])[:200]
+    return subtitle or str(stage.get("summary") or "").strip()[:100] or "自主闭环阶段观察"
 
 def project_observation_stage_card(
     stage: Optional[Dict[str, Any]],

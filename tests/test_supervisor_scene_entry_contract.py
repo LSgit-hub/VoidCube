@@ -29,6 +29,9 @@ def test_scene_entry_labels_are_accessible_and_point_to_expected_drawers():
     assert "loadMailConfig()" in HTML
     assert "loadMailMessages()" in HTML
     assert '<span class="pt-icon">◷</span>API-A 定时任务' in HTML
+    assert "if (observationRole === 'api_b_reread') return 'API-B 再读取';" in HTML
+    assert "if (observationRole === 'employee_execution') return '员工代理派工、执行与结果回传';" in HTML
+    assert "employee_execution: '员工代理派工、执行与结果回传阶段'," in HTML
     assert 'data-settings-view="mail"' in HTML
     assert 'data-mail-compose' in HTML
 
@@ -62,7 +65,9 @@ def test_thinking_bubble_clears_and_rejects_stale_scene_context():
     assert "thinking.task_id" in thinking_source
     assert "thinking.scene_state_revision" in thinking_source
     assert "current.scene_state_revision" in thinking_source
-    assert "phase.summary" in thinking_source
+    assert "phase.summary" not in thinking_source
+    assert "thinkingText || phaseText" not in thinking_source
+    assert "const text = thinkingText;" in thinking_source
     assert "thinking.ui_phase_revision" in thinking_source
 
 

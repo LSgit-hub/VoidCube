@@ -1910,6 +1910,9 @@ async def test_all_direct_memory_reads_and_mutations_enforce_scope(tmp_path):
     }
     assert trace["compressed_memories"] == []
     assert stats["tier1"]["total_turns"] == 1
+    assert stats["structure"]["ordinary_memory"] == 1
+    assert stats["structure"]["compressed_memory"] == stats["tier1"]["compressed_turns"]
+    assert stats["structure"]["identity_archive"] == stats["identity_archive"]["anchors"]
 
     with pytest.raises(HTTPException, match="Session not found"):
         await service.get_session(
@@ -1923,6 +1926,25 @@ async def test_all_direct_memory_reads_and_mutations_enforce_scope(tmp_path):
             owner_id="owner-a",
             workspace_id="workspace-a",
         )
+
+
+@pytest.mark.asyncio
+async def test_tier1_stats_exposes_zero_filled_structure_counts(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+
+    stats = await service.tier1_stats()
+
+    assert stats["tier1"]["total_turns"] == 0
+    assert stats["tier1"]["active_turns"] == 0
+    assert stats["tier1"]["compressed_turns"] == 0
+    assert stats["tier2"]["events"] >= 0
+    assert stats["structure"]["ordinary_memory"] == 0
+    assert stats["structure"]["active_session_memory"] == 0
+    assert stats["structure"]["compressed_memory"] == 0
+    assert stats["structure"]["event_memory"] == stats["tier2"]["events"]
+    assert stats["structure"]["scene_memory"] == stats["tier2"]["scenes"]
+    assert stats["structure"]["arc_memory"] == stats["tier2"]["arcs"]
+    assert stats["structure"]["identity_archive"] == stats["identity_archive"]["anchors"]
     with pytest.raises(HTTPException, match="Compressed memory not found"):
         await service.get_compressed(
             "compressed-owner-b",
