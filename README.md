@@ -1,6 +1,7 @@
 # VoidCube
 
-VoidCube 是一个本地运行的 Python 智能体系统：API-A Agent 负责 CLI 对话；Supervisor、Memory/MemAI 与 API-B 共同承载“星子”这一监督与伴侣人格。API-B 获准的后台任务统一派给配置好的员工代理执行并回写结果，不再调用 API-A 自主认领通道。
+VoidCube 是一个本地运行的 Python 智能体系统：API-A Agent 负责 CLI 对话；Supervisor、Memory/MemAI 与 API-B 共同承载“星子”这一监督与伴侣人格。API-B 获准的后台任务统一派给配置好的员工代理执行并回写结果，不影响 API-B Agent用户通道。
+<img width="1138" height="737" alt="屏幕截图 2026-08-31 125607" src="https://github.com/user-attachments/assets/b5b6046c-6964-4a71-ad71-296b9a2f91b2" />
 
 ## 当前运行模型
 
