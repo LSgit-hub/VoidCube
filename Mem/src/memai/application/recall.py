@@ -495,6 +495,22 @@ def recall_memories(
     candidates: list[dict[str, Any]] = []
     if (
         include_tier2
+        and plan.temporal_intent == "explicit"
+        and not plan.immediate_recency
+    ):
+        candidates.extend(
+            _time_summary_candidates(
+                conn,
+                plan,
+                bounded_candidates,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                source_domains=source_domains,
+                semantic_matches=semantic_matches,
+            )
+        )
+    if (
+        include_tier2
         and plan.intent != "recent_conversation"
         and not plan.immediate_recency
     ):
@@ -630,6 +646,133 @@ def recall_memories(
             or len(selected) < len(ranked)
         ),
     }
+
+
+def _time_summary_candidates(
+    conn: sqlite3.Connection,
+    plan: RecallPlan,
+    candidate_limit: int,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    source_domains: Sequence[str],
+    semantic_matches: dict[tuple[str, str], float],
+) -> list[dict[str, Any]]:
+    """Recall the current calendar index for explicit time-window queries."""
+    if plan.temporal_intent != "explicit" or not plan.timespan_start and not plan.timespan_end:
+        return []
+    domains = tuple(dict.fromkeys(str(item) for item in source_domains))
+    if not domains:
+        return []
+    clauses = [
+        "status = 'active'",
+        "((owner_id = ? AND workspace_id = ?) OR "
+        "(owner_id = ? AND workspace_id = ?))",
+    ]
+    params: list[Any] = [
+        owner_id,
+        workspace_id,
+        GLOBAL_SCOPE_ID,
+        GLOBAL_SCOPE_ID,
+    ]
+    domain_placeholders = ",".join("?" for _ in domains)
+    clauses.append(f"memory_domain IN ({domain_placeholders})")
+    params.extend(domains)
+    if plan.as_of:
+        clauses[0] = (
+            "created_at <= ? AND NOT EXISTS ("
+            "SELECT 1 FROM time_summaries successor "
+            "WHERE successor.supersedes_summary_id = time_summaries.summary_id "
+            "AND successor.created_at <= ?)"
+        )
+        params[0:0] = [plan.as_of, plan.as_of]
+    # Keep all versions in the bounded time window. A superseded version may
+    # match the query text while its active successor has revised wording.
+    if plan.timespan_start:
+        clauses.append("period_end > ?")
+        params.append(plan.timespan_start)
+    if plan.timespan_end:
+        clauses.append("period_start < ?")
+        params.append(plan.timespan_end)
+    params.append(min(candidate_limit * 2, 1000))
+    rows = conn.execute(
+        "SELECT summary_id, summary_type, bucket_key, period_start, period_end, "
+        "title, summary, outcomes, open_questions, source_count, source_hash, "
+        "content_hash, version, memory_domain FROM time_summaries WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY period_start DESC, version DESC LIMIT ?",
+        params,
+    ).fetchall()
+
+    normalized = plan.normalized_query
+    preferred_type = None
+    if any(marker in normalized for marker in ("本周", "这周", "上周", "this week", "last week")):
+        preferred_type = "week"
+    elif any(marker in normalized for marker in ("本月", "这个月", "上个月", "上月", "this month", "last month")):
+        preferred_type = "month"
+    elif re.search(r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}", normalized) or any(
+        marker in normalized for marker in ("今天", "昨天", "today", "yesterday")
+    ):
+        preferred_type = "day"
+    elif plan.timespan_start and plan.timespan_end:
+        try:
+            span_days = (
+                datetime.fromisoformat(plan.timespan_end)
+                - datetime.fromisoformat(plan.timespan_start)
+            ).total_seconds() / 86400.0
+        except ValueError:
+            span_days = 0.0
+        preferred_type = "day" if span_days <= 2 else "week" if span_days <= 8 else "month"
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        outcomes = _json_list(row[7])
+        open_questions = _json_list(row[8])
+        searchable_text = " ".join([str(row[5] or ""), str(row[6] or ""), *outcomes, *open_questions])
+        lexical, matched = _lexical_score(plan, searchable_text)
+        semantic = float(semantic_matches.get(("time_summary", str(row[0])), 0.0))
+        query_relevance = _query_relevance_score(lexical, semantic)
+        temporal_fit = _temporal_fit_score(
+            row[3], row[4], plan.timespan_start, plan.timespan_end
+        )
+        type_fit = (
+            1.0 if preferred_type is None or str(row[1]) == preferred_type else 0.25
+        )
+        score = bounded_weighted_score(
+            (type_fit, 0.45),
+            (temporal_fit, 0.35),
+            (query_relevance, 0.20),
+        )
+        results.append(
+            {
+                "id": row[0],
+                "tier": "time_index",
+                "memory_type": row[1],
+                "title": row[5],
+                "summary": row[6],
+                "timespan_start": row[3],
+                "timespan_end": row[4],
+                "source_count": int(row[9] or 0),
+                "source_hash": row[10],
+                "content_hash": row[11],
+                "version": int(row[12] or 0),
+                "memory_domain": row[13],
+                "outcomes": outcomes,
+                "open_questions": open_questions,
+                "raw_score": round(score, 6),
+                "normalized_score": round(min(score, 1.0), 6),
+                "score": round(min(score, 1.0), 6),
+                "matched_terms": matched,
+                "signals": {
+                    "lexical": round(lexical, 6),
+                    "semantic": round(semantic, 6),
+                    "query_relevance": round(query_relevance, 6),
+                    "temporal_fit": round(temporal_fit, 6),
+                    "type_fit": type_fit,
+                },
+            }
+        )
+    return results
 
 
 def merge_recall_results(
@@ -2080,7 +2223,14 @@ def _structural_rank(item: Mapping[str, Any]) -> int:
     (all four levels score >= 1 vs 0 for raw records).
     """
     memory_type = str(item.get("memory_type") or "")
-    return {"epoch": 4, "arc": 3, "scene": 2, "event": 1}.get(memory_type, 0)
+    return {
+        "month": 6,
+        "week": 5,
+        "epoch": 4,
+        "arc": 3,
+        "scene": 2,
+        "event": 1,
+    }.get(memory_type, 0)
 
 
 def _apply_context_budget(

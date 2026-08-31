@@ -74,7 +74,7 @@ def _load_security_config() -> dict:
         "tirith_enabled": True,
         "tirith_path": "tirith",
         "tirith_timeout": 5,
-        "tirith_fail_open": True,
+        "tirith_fail_open": False,
     }
     try:
         from ..config.configuration import load_config

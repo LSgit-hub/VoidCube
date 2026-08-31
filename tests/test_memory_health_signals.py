@@ -102,15 +102,11 @@ async def test_scheduled_lifecycle_cadence_persists_across_restarts(
     tmp_path, monkeypatch
 ):
     first = _make_service(tmp_path)
-    calls = 0
-
     async def no_op():
         return 0
 
     async def lifecycle():
-        nonlocal calls
-        calls += 1
-        return {"escalated": 0, "purged": 0}
+        pytest.fail("automatic lifecycle escalation must remain disabled")
 
     for service in (first,):
         monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
@@ -120,8 +116,7 @@ async def test_scheduled_lifecycle_cadence_persists_across_restarts(
         monkeypatch.setattr(service, "_purge_expired_memories", no_op)
 
     initial = await first._run_all_rules_internal(respect_cadence=True)
-    assert initial["lifecycle_escalation"] == {"escalated": 0, "purged": 0}
-    assert calls == 1
+    assert initial["lifecycle_escalation"]["skipped"] == "disabled"
 
     restarted = _make_service(tmp_path)
     monkeypatch.setattr(restarted, "_identity_experience_cycle", no_op)
@@ -131,28 +126,23 @@ async def test_scheduled_lifecycle_cadence_persists_across_restarts(
     monkeypatch.setattr(restarted, "_purge_expired_memories", no_op)
 
     throttled = await restarted._run_all_rules_internal(respect_cadence=True)
-    assert throttled["lifecycle_escalation"]["skipped"] == "cadence"
-    assert throttled["lifecycle_escalation"]["next_due_at"]
-    assert calls == 1
+    assert throttled["lifecycle_escalation"]["skipped"] == "disabled"
     assert get_rule_state(
         restarted._db_path, "lifecycle_escalation"
-    )["last_succeeded_at"]
+    )["last_succeeded_at"] is None
 
 
 @pytest.mark.asyncio
-async def test_failed_scheduled_lifecycle_is_retried_before_next_week(
+async def test_disabled_scheduled_lifecycle_does_not_call_legacy_escalation(
     tmp_path, monkeypatch
 ):
     service = _make_service(tmp_path)
-    calls = 0
 
     async def no_op():
         return 0
 
     async def failing_lifecycle():
-        nonlocal calls
-        calls += 1
-        raise RuntimeError("temporary lifecycle failure")
+        pytest.fail("automatic lifecycle escalation must remain disabled")
 
     monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
     monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
@@ -163,12 +153,26 @@ async def test_failed_scheduled_lifecycle_is_retried_before_next_week(
     first = await service._run_all_rules_internal(respect_cadence=True)
     second = await service._run_all_rules_internal(respect_cadence=True)
 
-    assert first["lifecycle_escalation"]["error"] == "temporary lifecycle failure"
-    assert second["lifecycle_escalation"]["error"] == "temporary lifecycle failure"
-    assert calls == 2
+    assert first["lifecycle_escalation"]["skipped"] == "disabled"
+    assert second["lifecycle_escalation"]["skipped"] == "disabled"
     state = get_rule_state(service._db_path, "lifecycle_escalation")
     assert state["last_succeeded_at"] is None
-    assert state["last_error"] == "temporary lifecycle failure"
+    assert state["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_trigger_lifecycle_does_not_escalate_by_default(tmp_path, monkeypatch):
+    service = _make_service(tmp_path)
+
+    async def fail_escalation():
+        pytest.fail("manual lifecycle escalation must be explicitly disabled")
+
+    monkeypatch.setattr(service, "_apply_compression_lifecycle", fail_escalation)
+    result = await service.trigger_lifecycle()
+
+    assert result["status"] == "ok"
+    assert "escalation" not in result
+    assert result["purge"] == {"deleted": 0}
 
 
 @pytest.mark.asyncio
@@ -211,7 +215,7 @@ async def test_public_maintenance_request_shares_background_rule_cadence(
     assert rules["identity_experience"] == {"skipped": "cadence"}
     assert rules["tier1_decay"] == {"skipped": "cadence"}
     assert rules["tier2_bridge"] == {"skipped": "cadence"}
-    assert rules["lifecycle_escalation"]["skipped"] == "cadence"
+    assert rules["lifecycle_escalation"]["skipped"] == "disabled"
     assert rules["purge_expired"] == {"skipped": "cadence"}
     assert rules["_effective_work"] == 0
 

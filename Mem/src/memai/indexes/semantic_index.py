@@ -350,6 +350,12 @@ class SemanticMemoryIndex:
                 "AND workspace_id = ? AND memory_domain = ? "
                 "AND status = 'active'"
             ),
+            "time_summary": (
+                "SELECT COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
+                "COALESCE(outcomes, '') || ' ' || COALESCE(open_questions, '') "
+                "FROM time_summaries WHERE summary_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ? AND status = 'active'"
+            ),
         }
         query = source_queries.get(source_type)
         if query is None:
@@ -486,7 +492,11 @@ class SemanticMemoryIndex:
                 "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, "
                 "memory_domain, COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || "
                 "' ' || COALESCE(value, '') || ' ' || COALESCE(summary, '') "
-                "FROM profile_memories WHERE status = 'active') "
+                "FROM profile_memories WHERE status = 'active' "
+                "UNION ALL SELECT 'time_summary', summary_id, owner_id, workspace_id, "
+                "memory_domain, COALESCE(title, '') || ' ' || COALESCE(summary, '') || "
+                "' ' || COALESCE(outcomes, '') || ' ' || COALESCE(open_questions, '') "
+                "FROM time_summaries WHERE status = 'active') "
                 "SELECT source_type, memory_id, content FROM source_records "
                 "WHERE ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = ? AND workspace_id = ?)) "
@@ -650,8 +660,14 @@ class SemanticMemoryIndex:
                 "AND hidden = 0 AND COALESCE(identity_layer, '') != 'founding')"
             )
             conn.execute(
-                "DELETE FROM memory_embeddings WHERE source_type = 'profile' "
-                "AND NOT EXISTS (SELECT 1 FROM profile_memories WHERE memory_id = memory_embeddings.memory_id "
+            "DELETE FROM memory_embeddings WHERE source_type = 'profile' "
+            "AND NOT EXISTS (SELECT 1 FROM profile_memories WHERE memory_id = memory_embeddings.memory_id "
+            "AND owner_id = memory_embeddings.owner_id AND workspace_id = memory_embeddings.workspace_id "
+            "AND memory_domain = memory_embeddings.memory_domain AND status = 'active')"
+            )
+            conn.execute(
+                "DELETE FROM memory_embeddings WHERE source_type = 'time_summary' "
+                "AND NOT EXISTS (SELECT 1 FROM time_summaries WHERE summary_id = memory_embeddings.memory_id "
                 "AND owner_id = memory_embeddings.owner_id AND workspace_id = memory_embeddings.workspace_id "
                 "AND memory_domain = memory_embeddings.memory_domain AND status = 'active')"
             )
@@ -681,6 +697,7 @@ class SemanticMemoryIndex:
                         ("memory_embeddings_archive_delete", "turns_archive", "turn_id", "archive"),
                         ("memory_embeddings_compressed_delete", "compressed_memories", "memory_id", "compressed"),
                         ("memory_embeddings_profile_delete", "profile_memories", "memory_id", "profile"),
+                        ("memory_embeddings_time_summary_delete", "time_summaries", "summary_id", "time_summary"),
                     ):
                         conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
                         conn.execute(
@@ -744,6 +761,7 @@ class SemanticMemoryIndex:
                     ("memory_embeddings_archive_delete", "turns_archive", "turn_id", "archive"),
                     ("memory_embeddings_compressed_delete", "compressed_memories", "memory_id", "compressed"),
                     ("memory_embeddings_profile_delete", "profile_memories", "memory_id", "profile"),
+                    ("memory_embeddings_time_summary_delete", "time_summaries", "summary_id", "time_summary"),
                 ):
                     conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
                     conn.execute(
@@ -789,6 +807,14 @@ class SemanticMemoryIndex:
                     "profile_memories",
                     "memory_id",
                     "profile",
+                    "status",
+                    "NEW.status != 'active'",
+                ),
+                (
+                    "memory_embeddings_time_summary_status_delete",
+                    "time_summaries",
+                    "summary_id",
+                    "time_summary",
                     "status",
                     "NEW.status != 'active'",
                 ),
@@ -854,7 +880,11 @@ class SemanticMemoryIndex:
                 "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
                 "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
-                "FROM profile_memories WHERE status = 'active') "
+                "FROM profile_memories WHERE status = 'active' "
+                "UNION ALL SELECT 'time_summary', summary_id, owner_id, workspace_id, "
+                "memory_domain, COALESCE(title, '') || ' ' || COALESCE(summary, '') || "
+                "' ' || COALESCE(outcomes, '') || ' ' || COALESCE(open_questions, '') "
+                "FROM time_summaries WHERE status = 'active') "
                 "SELECT source.source_type, source.memory_id, source.owner_id, "
                 "source.workspace_id, source.memory_domain, source.content FROM source_records AS source "
                 "LEFT JOIN memory_embeddings AS embedding ON "

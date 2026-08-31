@@ -68,6 +68,25 @@ def _all_refs(messages: list[dict]) -> list[dict]:
     ]
 
 
+def test_model_switch_refreshes_context_dependent_budgets():
+    compressor = ContextCompressor(
+        model="large-model",
+        config_context_length=256_000,
+        quiet_mode=True,
+    )
+
+    assert compressor.threshold_tokens == 128_000
+    assert compressor.tail_token_budget == 25_600
+    assert compressor.max_summary_tokens == 12_000
+
+    compressor.update_model("smaller-model", 64_000)
+
+    assert compressor.context_length == 64_000
+    assert compressor.threshold_tokens == 64_000
+    assert compressor.tail_token_budget == 12_800
+    assert compressor.max_summary_tokens == 3_200
+
+
 def test_pruning_large_tool_output_keeps_action_ref_and_readable_pointer():
     compressor = _compressor()
     ref = _ref("act-pruned")

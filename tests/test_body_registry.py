@@ -843,6 +843,53 @@ def test_prepare_slot_workspace_restores_head_and_metadata_when_manifest_write_f
 
 
 @pytest.mark.unit
+def test_prepare_slot_workspace_repairs_registered_worktree_with_git_directory(tmp_path):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    (source_root / "agent.py").write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=source_root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=source_root, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "agent.py"], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "stable"], cwd=source_root, check=True, capture_output=True, text=True)
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+    worktree = Path(manager.load_slot_meta("slot-A").worktree_path)
+    git_marker = worktree / ".git"
+    git_marker.unlink()
+    git_marker.mkdir()
+    (git_marker / "config").write_text("invalid worktree metadata\n", encoding="utf-8")
+    (worktree / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+    prepared = manager.prepare_slot_workspace(
+        "slot-A",
+        source_path=source_root,
+        clear_existing=True,
+    )
+
+    assert (worktree / ".git").is_file()
+    assert not (worktree / "stale.txt").exists()
+    worktree_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert worktree_head == source_head
+    assert prepared.materialized_from == str(source_root.resolve())
+
+
+@pytest.mark.unit
 def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)

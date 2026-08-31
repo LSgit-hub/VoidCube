@@ -9,18 +9,25 @@ from pathlib import Path
 from typing import Any
 
 from memai.domain.time_summary import (
+    CalendarChildSummary,
+    CalendarSnapshotChanged,
     DaySessionSummary,
     DaySnapshotChanged,
     SessionSnapshotChanged,
     SessionTurn,
     TimeSummaryDraft,
+    calendar_source_hash,
     day_bucket_for_timestamp,
     day_period,
     day_source_hash,
     day_source_sort_key,
     json_list,
+    month_bucket_for_timestamp,
+    month_period,
     session_source_hash,
     turn_sort_key,
+    week_bucket_for_timestamp,
+    week_period,
 )
 from memai.repository.contracts import MemoryRepository
 from memai.repository.sqlite import open_memory_sqlite
@@ -112,6 +119,62 @@ def load_day_session_summaries(
     return tuple(sorted(summaries, key=day_source_sort_key))
 
 
+def load_calendar_child_summaries(
+    connection,
+    *,
+    parent_type: str,
+    bucket_key: str,
+    owner_id: str,
+    workspace_id: str,
+    memory_domain: str,
+    timezone_name: str,
+) -> tuple[CalendarChildSummary, ...]:
+    """Load active direct children for one deterministic calendar bucket."""
+    child_type = {"week": "day", "month": "week"}.get(str(parent_type))
+    if child_type is None:
+        raise ValueError("Calendar parent type must be week or month")
+    rows = connection.execute(
+        "SELECT summary_id, bucket_key, period_start, period_end, title, summary, "
+        "outcomes, open_questions, content_hash, version FROM time_summaries "
+        "WHERE summary_type = ? AND status = 'active' AND owner_id = ? "
+        "AND workspace_id = ? AND memory_domain = ?",
+        (child_type, owner_id, workspace_id, memory_domain),
+    ).fetchall()
+    children: list[CalendarChildSummary] = []
+    bucket_for = (
+        week_bucket_for_timestamp if parent_type == "week"
+        else month_bucket_for_timestamp
+    )
+    for row in rows:
+        if bucket_for(str(row[2]), timezone_name=timezone_name) != bucket_key:
+            continue
+        children.append(
+            CalendarChildSummary(
+                summary_id=str(row[0]),
+                bucket_key=str(row[1]),
+                period_start=str(row[2]),
+                period_end=str(row[3]),
+                title=str(row[4]),
+                summary=str(row[5]),
+                outcomes=tuple(json_list(row[6])),
+                open_questions=tuple(json_list(row[7])),
+                content_hash=str(row[8]),
+                version=int(row[9]),
+            )
+        )
+    return tuple(
+        sorted(
+            children,
+            key=lambda item: (
+                item.period_start,
+                item.period_end,
+                item.bucket_key,
+                item.summary_id,
+            ),
+        )
+    )
+
+
 def get_active_session_summary(
     connection,
     *,
@@ -142,6 +205,25 @@ def get_active_day_summary(
         connection,
         summary_type="day",
         bucket_key=day_key,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        memory_domain=memory_domain,
+    )
+
+
+def get_active_calendar_summary(
+    connection,
+    *,
+    summary_type: str,
+    bucket_key: str,
+    owner_id: str,
+    workspace_id: str,
+    memory_domain: str,
+) -> dict[str, Any] | None:
+    return get_active_time_summary(
+        connection,
+        summary_type=summary_type,
+        bucket_key=bucket_key,
         owner_id=owner_id,
         workspace_id=workspace_id,
         memory_domain=memory_domain,
@@ -477,6 +559,201 @@ def persist_day_summary(
         if stored is None:
             raise RuntimeError("Day summary write did not produce an active version")
         return {**stored, "write_status": "created"}
+
+    if connection is not None:
+        return write(connection)
+    return _execute_write(db_path, None, write)
+
+
+def persist_calendar_summary(
+    db_path: str | Path | None,
+    *,
+    summary_type: str,
+    bucket_key: str,
+    owner_id: str,
+    workspace_id: str,
+    memory_domain: str,
+    timezone_name: str,
+    expected_source_hash: str,
+    draft: TimeSummaryDraft,
+    connection=None,
+) -> dict[str, Any]:
+    """Publish one immutable WeekSummary or MonthSummary version."""
+    if summary_type not in {"week", "month"}:
+        raise ValueError("Calendar summary type must be week or month")
+    owns_connection = connection is None
+
+    def write(connection):
+        children = load_calendar_child_summaries(
+            connection,
+            parent_type=summary_type,
+            bucket_key=bucket_key,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+            timezone_name=timezone_name,
+        )
+        if not children:
+            raise ValueError(f"Cannot persist a {summary_type} summary without child summaries")
+        actual_source_hash = calendar_source_hash(children)
+        if actual_source_hash != expected_source_hash:
+            raise CalendarSnapshotChanged(
+                f"{summary_type.capitalize()} child summaries changed during aggregation"
+            )
+        current = get_active_calendar_summary(
+            connection,
+            summary_type=summary_type,
+            bucket_key=bucket_key,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+        )
+        if current and current["source_hash"] == actual_source_hash:
+            if owns_connection:
+                connection.commit()
+            return {**current, "write_status": "current"}
+
+        version = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM time_summaries "
+                "WHERE summary_type = ? AND bucket_key = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ?",
+                (summary_type, bucket_key, owner_id, workspace_id, memory_domain),
+            ).fetchone()[0]
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        previous_id = str(current["summary_id"]) if current else None
+        if previous_id:
+            connection.execute(
+                "UPDATE time_summaries SET status = 'superseded', updated_at = ? "
+                "WHERE summary_id = ?",
+                (now, previous_id),
+            )
+        period_start, period_end = (
+            week_period(bucket_key, timezone_name=timezone_name)
+            if summary_type == "week"
+            else month_period(bucket_key, timezone_name=timezone_name)
+        )
+        summary_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "voidcube-time-summary:"
+                f"{owner_id}:{workspace_id}:{memory_domain}:{summary_type}:"
+                f"{bucket_key}:v{version}:{actual_source_hash}",
+            )
+        )
+        connection.execute(
+            "INSERT INTO time_summaries "
+            "(summary_id, summary_type, owner_id, workspace_id, memory_domain, "
+            "bucket_key, period_start, period_end, timezone, title, summary, outcomes, "
+            "open_questions, source_count, source_hash, content_hash, version, status, "
+            "supersedes_summary_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+            (
+                summary_id,
+                summary_type,
+                owner_id,
+                workspace_id,
+                memory_domain,
+                bucket_key,
+                period_start,
+                period_end,
+                timezone_name,
+                draft.title,
+                draft.summary,
+                json.dumps(draft.outcomes, ensure_ascii=False),
+                json.dumps(draft.open_questions, ensure_ascii=False),
+                len(children),
+                actual_source_hash,
+                draft.content_hash,
+                version,
+                previous_id,
+                now,
+                now,
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO time_summary_links "
+            "(parent_summary_id, child_summary_id, created_at) VALUES (?, ?, ?)",
+            [(summary_id, child.summary_id, now) for child in children],
+        )
+        if owns_connection:
+            connection.commit()
+        stored = get_active_calendar_summary(
+            connection,
+            summary_type=summary_type,
+            bucket_key=bucket_key,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+        )
+        if stored is None:
+            raise RuntimeError(f"{summary_type.capitalize()} summary write did not produce an active version")
+        return {**stored, "write_status": "created"}
+
+    if connection is not None:
+        return write(connection)
+    return _execute_write(db_path, None, write)
+
+
+def supersede_empty_calendar_summary(
+    db_path: str | Path | None,
+    *,
+    summary_type: str,
+    bucket_key: str,
+    owner_id: str,
+    workspace_id: str,
+    memory_domain: str,
+    timezone_name: str,
+    expected_summary_id: str,
+    connection=None,
+) -> dict[str, Any]:
+    """Retire a calendar index after its last active child leaves the bucket."""
+    owns_connection = connection is None
+
+    def write(connection):
+        children = load_calendar_child_summaries(
+            connection,
+            parent_type=summary_type,
+            bucket_key=bucket_key,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+            timezone_name=timezone_name,
+        )
+        if children:
+            raise CalendarSnapshotChanged(
+                f"{summary_type.capitalize()} child summaries appeared before retirement"
+            )
+        current = get_active_calendar_summary(
+            connection,
+            summary_type=summary_type,
+            bucket_key=bucket_key,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            memory_domain=memory_domain,
+        )
+        if current is None:
+            if owns_connection:
+                connection.commit()
+            return {
+                "summary_type": summary_type,
+                "bucket_key": bucket_key,
+                "write_status": "absent",
+            }
+        if current["summary_id"] != expected_summary_id:
+            raise CalendarSnapshotChanged(
+                f"The active {summary_type} summary changed before retirement"
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "UPDATE time_summaries SET status = 'superseded', updated_at = ? "
+            "WHERE summary_id = ?",
+            (now, expected_summary_id),
+        )
+        if owns_connection:
+            connection.commit()
+        return {**current, "status": "superseded", "updated_at": now, "write_status": "emptied"}
 
     if connection is not None:
         return write(connection)

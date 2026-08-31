@@ -227,3 +227,44 @@ def test_tirith_known_unavailable_does_not_spawn(monkeypatch):
         "summary": "tirith unavailable: unsupported_platform",
         "scanner_status": "unavailable",
     }
+
+
+@pytest.mark.unit
+def test_tirith_default_policy_is_fail_closed(monkeypatch):
+    monkeypatch.delenv("TIRITH_FAIL_OPEN", raising=False)
+    monkeypatch.setattr(
+        tirith_security_module,
+        "load_config",
+        lambda: {"security": {"tirith_enabled": True, "tirith_path": "tirith"}},
+        raising=False,
+    )
+    # The helper imports configuration.load_config internally; patch the module
+    # used by that import rather than relying on the host configuration file.
+    import voidcube.infrastructure.config.configuration as configuration_module
+    monkeypatch.setattr(configuration_module, "load_config", lambda: {"security": {}})
+
+    cfg = tirith_security_module._load_security_config()
+
+    assert cfg["tirith_fail_open"] is False
+
+
+@pytest.mark.unit
+def test_tirith_unavailable_blocks_by_default(monkeypatch):
+    monkeypatch.setattr(
+        tirith_security_module,
+        "_load_security_config",
+        lambda: {
+            "tirith_enabled": True,
+            "tirith_path": "tirith",
+            "tirith_timeout": 3,
+            "tirith_fail_open": False,
+        },
+    )
+    monkeypatch.setattr(tirith_security_module, "_resolve_tirith_path", lambda path: path)
+    monkeypatch.setattr(tirith_security_module, "_resolved_path", tirith_security_module._INSTALL_FAILED)
+    monkeypatch.setattr(tirith_security_module, "_install_failure_reason", "unsupported_platform")
+
+    result = tirith_security_module.check_command_security("fetch example")
+
+    assert result["action"] == "block"
+    assert result["scanner_status"] == "unavailable"

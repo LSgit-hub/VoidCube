@@ -28,6 +28,7 @@ from memai.application.recall import (
     build_recall_plan,
     format_recall_context,
     normalize_text,
+    recall_memories,
 )
 from memai.repository.profile_store import upsert_profile_memory
 from memai.application.tier1_to_tier2_bridge import (
@@ -45,6 +46,46 @@ def test_query_relevance_requires_lexical_or_strong_semantic_support():
 
     assert 0.70 * weak_semantic_only + 0.20 < 0.5
     assert 0.70 * combined_support + 0.20 >= 0.5
+
+
+def test_explicit_month_query_recalls_month_time_index(tmp_path):
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO time_summaries "
+            "(summary_id, summary_type, owner_id, workspace_id, memory_domain, "
+            "bucket_key, period_start, period_end, timezone, title, summary, "
+            "source_count, source_hash, content_hash, version, status, created_at, updated_at) "
+            "VALUES ('month-recall', 'month', 'local-user', 'default', "
+            "'agent_interaction', '2026-08', '2026-08-01T00:00:00+08:00', "
+            "'2026-09-01T00:00:00+08:00', 'Asia/Shanghai', '八月工作', "
+            "'完成记忆索引和时间摘要链', 1, 'source', 'content', 1, 'active', "
+            "'2026-09-01T00:05:00+08:00', '2026-09-01T00:05:00+08:00')"
+        )
+        conn.commit()
+        plan = build_recall_plan(
+            "这个月做了什么",
+            now=datetime(2026, 8, 31, 12, tzinfo=timezone(timedelta(hours=8))),
+        )
+        result = recall_memories(
+            conn,
+            plan,
+            limit=5,
+            candidate_limit=20,
+            max_context_chars=3500,
+            min_score=0.5,
+            include_tier1=False,
+            owner_id="local-user",
+            workspace_id="default",
+            now=datetime(2026, 8, 31, 12, tzinfo=timezone(timedelta(hours=8))),
+        )
+    finally:
+        conn.close()
+
+    assert result["results"]
+    assert result["results"][0]["tier"] == "time_index"
+    assert result["results"][0]["memory_type"] == "month"
 
 
 def test_recall_context_redaction_follows_explicit_memory_switch():

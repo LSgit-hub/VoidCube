@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Sequence
@@ -16,6 +17,10 @@ class SessionSnapshotChanged(RuntimeError):
 
 class DaySnapshotChanged(RuntimeError):
     """Raised when session summaries change while a day is being summarized."""
+
+
+class CalendarSnapshotChanged(RuntimeError):
+    """Raised when calendar child summaries change during aggregation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +69,36 @@ class DaySessionSummary:
         return {
             "summary_id": self.summary_id,
             "session_id": self.session_id,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "title": self.title,
+            "summary": self.summary,
+            "outcomes": list(self.outcomes),
+            "open_questions": list(self.open_questions),
+            "content_hash": self.content_hash,
+            "version": self.version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarChildSummary:
+    """A direct child summary used by week and month indexes."""
+
+    summary_id: str
+    bucket_key: str
+    period_start: str
+    period_end: str
+    title: str
+    summary: str
+    outcomes: tuple[str, ...]
+    open_questions: tuple[str, ...]
+    content_hash: str
+    version: int
+
+    def as_prompt_item(self) -> dict[str, Any]:
+        return {
+            "summary_id": self.summary_id,
+            "bucket_key": self.bucket_key,
             "period_start": self.period_start,
             "period_end": self.period_end,
             "title": self.title,
@@ -142,11 +177,23 @@ def normalize_day_summary(payload: Mapping[str, Any]) -> TimeSummaryDraft:
     return normalize_time_summary(payload, summary_type="day")
 
 
+def normalize_week_summary(payload: Mapping[str, Any]) -> TimeSummaryDraft:
+    return normalize_time_summary(payload, summary_type="week")
+
+
+def normalize_month_summary(payload: Mapping[str, Any]) -> TimeSummaryDraft:
+    return normalize_time_summary(payload, summary_type="month")
+
+
 def session_source_hash(turns: Sequence[SessionTurn]) -> str:
     return _sha256(_canonical_json([turn.as_prompt_item() for turn in turns]))
 
 
 def day_source_hash(summaries: Sequence[DaySessionSummary]) -> str:
+    return _sha256(_canonical_json([summary.as_prompt_item() for summary in summaries]))
+
+
+def calendar_source_hash(summaries: Sequence[CalendarChildSummary]) -> str:
     return _sha256(_canonical_json([summary.as_prompt_item() for summary in summaries]))
 
 
@@ -182,6 +229,55 @@ def day_period(day_key: str, *, timezone_name: str) -> tuple[str, str]:
     zone = resolve_time_summary_timezone(timezone_name)
     start = datetime.combine(bucket_date, time.min, tzinfo=zone)
     end = datetime.combine(bucket_date + timedelta(days=1), time.min, tzinfo=zone)
+    return start.isoformat(), end.isoformat()
+
+
+def week_bucket_for_timestamp(timestamp: str, *, timezone_name: str) -> str:
+    local_date = parse_timestamp(timestamp).astimezone(
+        resolve_time_summary_timezone(timezone_name)
+    ).date()
+    iso_year, iso_week, _ = local_date.isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def week_period(week_key: str, *, timezone_name: str) -> tuple[str, str]:
+    match = re.fullmatch(r"(\d{4})-W(\d{2})", str(week_key))
+    if not match:
+        raise ValueError("Week summary bucket must use YYYY-Www")
+    year, week = int(match.group(1)), int(match.group(2))
+    try:
+        monday = date.fromisocalendar(year, week, 1)
+    except ValueError as exc:
+        raise ValueError("Week summary bucket is not a valid ISO week") from exc
+    zone = resolve_time_summary_timezone(timezone_name)
+    start = datetime.combine(monday, time.min, tzinfo=zone)
+    end = start + timedelta(days=7)
+    return start.isoformat(), end.isoformat()
+
+
+def month_bucket_for_timestamp(timestamp: str, *, timezone_name: str) -> str:
+    local_date = parse_timestamp(timestamp).astimezone(
+        resolve_time_summary_timezone(timezone_name)
+    ).date()
+    return f"{local_date.year:04d}-{local_date.month:02d}"
+
+
+def month_period(month_key: str, *, timezone_name: str) -> tuple[str, str]:
+    match = re.fullmatch(r"(\d{4})-(\d{2})", str(month_key))
+    if not match:
+        raise ValueError("Month summary bucket must use YYYY-MM")
+    year, month = int(match.group(1)), int(match.group(2))
+    try:
+        month_start = date(year, month, 1)
+    except ValueError as exc:
+        raise ValueError("Month summary bucket is not a valid calendar month") from exc
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    zone = resolve_time_summary_timezone(timezone_name)
+    start = datetime.combine(month_start, time.min, tzinfo=zone)
+    end = datetime.combine(next_month, time.min, tzinfo=zone)
     return start.isoformat(), end.isoformat()
 
 

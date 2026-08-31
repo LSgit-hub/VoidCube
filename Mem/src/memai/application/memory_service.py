@@ -92,21 +92,33 @@ from memai.application.tier1_to_tier2_bridge import (
     _parse_utc_timestamp,
 )
 from memai.domain.time_summary import (
+    CalendarSnapshotChanged,
     DaySnapshotChanged,
     SessionSnapshotChanged,
+    calendar_source_hash,
     day_bucket_for_timestamp,
     day_source_hash,
+    day_period,
+    month_bucket_for_timestamp,
     normalize_day_summary,
+    normalize_month_summary,
     normalize_session_summary,
+    normalize_week_summary,
     session_source_hash,
+    week_bucket_for_timestamp,
+    week_period,
 )
 from memai.indexes.timeline import (
+    get_active_calendar_summary,
     get_active_day_summary,
     get_active_session_summary,
+    load_calendar_child_summaries,
     load_day_session_summaries,
     load_session_turns,
+    persist_calendar_summary,
     persist_day_summary,
     persist_session_summary,
+    supersede_empty_calendar_summary,
     supersede_empty_day_summary,
 )
 
@@ -219,6 +231,10 @@ class SessionCloseRequest(BaseModel):
 
 class DayAggregateRequest(SessionCloseRequest):
     """Scope and authorization for rebuilding one natural-day index."""
+
+
+class CalendarAggregateRequest(SessionCloseRequest):
+    """Scope and authorization for rebuilding one week or month index."""
 
 
 class TurnCreate(BaseModel):
@@ -659,6 +675,11 @@ def _collect_dependent_memory_ids(
 
 
 class MemoryApplicationService:
+    # Event/Scene/Arc/Epoch are Tier 2 semantic structure.  Their former
+    # age-based successor chain is paused until a separate forgetting policy
+    # is designed and reviewed.
+    _AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED = False
+
     def __init__(
         self,
         config: MemoryServiceConfig = None,
@@ -837,16 +858,18 @@ class MemoryApplicationService:
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
-    # Weight decay by compression level:
-    #   Level 0 (Event,  <30d):   weight = 1.00
-    #   Level 1 (Scene,  <180d):  weight = 0.70
-    #   Level 2 (Arc,    <365d):  weight = 0.40
-    #   Level 3 (Epoch,  <730d):  weight = 0.20
-    #   Level 4 (Final,  >=730d): weight = 0.05 → purge candidate
+    # Weight by lifecycle level. Age thresholds are configured separately:
+    # Event -> Scene (14d), Scene -> Arc (60d), Arc -> Epoch (180d),
+    # Epoch -> Final review (365d), then final review (90d).
+    #   Level 0 (Event): weight = 1.00
+    #   Level 1 (Scene): weight = 0.70
+    #   Level 2 (Arc):   weight = 0.40
+    #   Level 3 (Epoch): weight = 0.20
+    #   Level 4 (Final): weight = 0.05 -> purge review
     _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
-        """Run lifecycle maintenance with model work outside the write lock."""
+        """Legacy explicit escalation path; automatic callers keep it paused."""
         now = datetime.now(timezone.utc)
 
         def read_candidates(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
@@ -1305,6 +1328,8 @@ class MemoryApplicationService:
             "get_session": self.get_session,
             "close_session": self.close_session,
             "aggregate_day": self.aggregate_day,
+            "aggregate_week": self.aggregate_week,
+            "aggregate_month": self.aggregate_month,
             "add_turn": self.add_turn,
             "get_session_turns": self.get_session_turns,
             "add_turn_pair": self.add_turn_pair,
@@ -2008,6 +2033,94 @@ class MemoryApplicationService:
             logger.debug("Day summary cache write failed", exc_info=True)
         return draft
 
+    async def _generate_calendar_summary(
+        self,
+        *,
+        summary_type: str,
+        bucket_key: str,
+        source_hash: str,
+        summaries,
+    ):
+        from memai.repository.llm_cache import (
+            build_cache_key,
+            open_cached_with_repository,
+            store_cached_with_repository,
+        )
+
+        normalizer = (
+            normalize_week_summary
+            if summary_type == "week"
+            else normalize_month_summary
+        )
+        client, model = self._resolve_mem_llm_client(role="summarization")
+        if client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Mem summarization model is unavailable",
+            )
+        task = f"scholar.{summary_type}_summary"
+        cache_key = build_cache_key(task, model, source_hash)
+        cached = open_cached_with_repository(self._repository, cache_key)
+        if isinstance(cached, dict):
+            try:
+                return normalizer(cached)
+            except ValueError:
+                pass
+
+        request_call = partial(
+            client.complete_json,
+            system_prompt=(
+                f"你是长期记忆的{('每周' if summary_type == 'week' else '每月')}目录编目员。"
+                "只依据给定的有序直接子摘要，记录该时间范围内的主要工作、结果和明确"
+                "未决问题。保留子摘要的先后顺序和边界，不绕过直接子级读取更低层内容，"
+                "不要补写输入中没有的事实。输出必须是 JSON。"
+            ),
+            user_payload={
+                "period": bucket_key,
+                "direct_child_summaries": [
+                    summary.as_prompt_item() for summary in summaries
+                ],
+                "required_output": {
+                    "title": "简短时间范围标题",
+                    "summary": "按直接子摘要顺序概括该时间范围的主要工作",
+                    "outcomes": ["已经确认或完成的结果"],
+                    "open_questions": ["时间范围结束时仍未解决的问题"],
+                },
+            },
+            task=task,
+            response_schema=(
+                '{"title":"string","summary":"string",'
+                '"outcomes":["string"],"open_questions":["string"]}'
+            ),
+        )
+        try:
+            payload = await asyncio.to_thread(request_call)
+            draft = normalizer(payload)
+        except Exception as exc:
+            logger.warning(
+                "%s summary generation failed for %s: %s",
+                summary_type.capitalize(), bucket_key, exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"Mem {summary_type} summarization failed",
+            ) from exc
+        try:
+            store_cached_with_repository(
+                self._repository,
+                cache_key=cache_key,
+                task=task,
+                model=model,
+                input_text=source_hash,
+                result=draft.as_dict(),
+            )
+        except Exception:
+            logger.debug(
+                "%s summary cache write failed", summary_type.capitalize(),
+                exc_info=True,
+            )
+        return draft
+
     async def _app_lifespan(self, app: FastAPI):
         """Own Gateway registration and memory maintenance background tasks."""
         del app
@@ -2204,6 +2317,15 @@ class MemoryApplicationService:
             results: Dict[str, Any] = {}
             effective_work = 0
             for rule_name, rule_fn in rules:
+                if (
+                    rule_name == "lifecycle_escalation"
+                    and not self._AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED
+                ):
+                    results[rule_name] = {
+                        "skipped": "disabled",
+                        "reason": "Tier 2 lifecycle escalation is paused",
+                    }
+                    continue
                 if respect_cadence and rule_name != "lifecycle_escalation":
                     last_run = self._last_rule_run_monotonic.get(rule_name)
                     if (
@@ -2354,7 +2476,7 @@ class MemoryApplicationService:
           1. identity_experience — Settle verified experiences and evidence-backed narrative
           2. tier1_decay         — Exponential decay of turn relevance_scores
           3. tier2_bridge        — Feed expired turns into ChroniclePipeline → compressed_memories
-          4. lifecycle_escalation — Escalate ordinary entries through compression levels
+          4. lifecycle_escalation — Paused; no Event/Scene/Arc/Epoch successor compression
           5. purge_expired       — Hard-delete ordinary purged entries past audit retention
         """
         del request
@@ -2417,6 +2539,7 @@ class MemoryApplicationService:
             "compression_interval": self.config.compression_interval,
             "tier1_retention_days": self.config.tier1_retention_days,
             "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
+            "lifecycle_escalation_enabled": self._AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED,
             "lifecycle_state": lifecycle_state,
             "tier2_bridge_last_result": self._last_tier2_bridge_result,
             # P0-4 健康信号: last cycle that performed real write work, and the
@@ -2459,9 +2582,19 @@ class MemoryApplicationService:
                 for error in scope.get("errors", [])
                 if str(error)
             ]
-            self._record_tier2_bridge_failure(
-                errors[0] if errors else str(failed_scopes[0].get("status"))
-            )
+            successful_scopes = int(result.get("successful_scope_count", 0) or 0)
+            if successful_scopes:
+                # 保留拒绝 scope 的可见性，但不要把部分成功记成全局连续失败。
+                self._tier2_bridge_consecutive_failures = 0
+                self._tier2_bridge_last_failure_reason = (
+                    errors[0] if errors else str(failed_scopes[0].get("status"))
+                )
+                self._tier2_bridge_last_succeeded_at = datetime.now(timezone.utc).isoformat()
+                self._tier2_bridge_state = "degraded"
+            else:
+                self._record_tier2_bridge_failure(
+                    errors[0] if errors else str(failed_scopes[0].get("status"))
+                )
         else:
             self._tier2_bridge_consecutive_failures = 0
             self._tier2_bridge_last_failure_reason = None
@@ -3176,6 +3309,7 @@ class MemoryApplicationService:
             timezone_name=self.config.time_summary_timezone,
         )
         day_summary = None
+        affected_week_keys: set[str] = set()
         for affected_day_key in sorted(affected_day_keys):
             refreshed = await self.aggregate_day(
                 affected_day_key,
@@ -3188,12 +3322,76 @@ class MemoryApplicationService:
             )
             if affected_day_key == day_key:
                 day_summary = refreshed
+            period_start = str(refreshed.get("period_start") or "")
+            if not period_start:
+                period_start = day_period(
+                    affected_day_key,
+                    timezone_name=self.config.time_summary_timezone,
+                )[0]
+            affected_week_keys.add(
+                week_bucket_for_timestamp(
+                    period_start,
+                    timezone_name=self.config.time_summary_timezone,
+                )
+            )
         if day_summary is None:
             raise HTTPException(
                 status_code=409,
                 detail="Session summary did not resolve to a day bucket",
             )
-        return {**session_summary, "day_summary": day_summary}
+        week_summary = None
+        month_summary = None
+        target_week_key = week_bucket_for_timestamp(
+            str(day_summary["period_start"]),
+            timezone_name=self.config.time_summary_timezone,
+        )
+        affected_month_keys: set[str] = set()
+        for week_key in sorted(affected_week_keys):
+            refreshed_week = await self.aggregate_week(
+                week_key,
+                CalendarAggregateRequest(
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_actor=request.memory_actor,
+                    memory_domain=request.memory_domain,
+                ),
+            )
+            if week_key == target_week_key:
+                week_summary = refreshed_week
+            period_start = str(refreshed_week.get("period_start") or "")
+            if not period_start:
+                period_start = week_period(
+                    week_key,
+                    timezone_name=self.config.time_summary_timezone,
+                )[0]
+            affected_month_keys.add(
+                month_bucket_for_timestamp(
+                    period_start,
+                    timezone_name=self.config.time_summary_timezone,
+                )
+            )
+        target_month_key = month_bucket_for_timestamp(
+            str(day_summary["period_start"]),
+            timezone_name=self.config.time_summary_timezone,
+        )
+        for month_key in sorted(affected_month_keys):
+            refreshed_month = await self.aggregate_month(
+                month_key,
+                CalendarAggregateRequest(
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_actor=request.memory_actor,
+                    memory_domain=request.memory_domain,
+                ),
+            )
+            if month_key == target_month_key:
+                month_summary = refreshed_month
+        return {
+            **session_summary,
+            "day_summary": day_summary,
+            "week_summary": week_summary,
+            "month_summary": month_summary,
+        }
 
     async def aggregate_day(
         self,
@@ -3291,6 +3489,121 @@ class MemoryApplicationService:
             status_code=409,
             detail="Day kept changing while its summary was generated; retry aggregation",
         )
+
+    async def _aggregate_calendar_period(
+        self,
+        summary_type: str,
+        bucket_key: str,
+        request: CalendarAggregateRequest,
+    ):
+        """Aggregate one week or month from its direct child summaries."""
+        if summary_type not in {"week", "month"}:
+            raise ValueError("Calendar summary type must be week or month")
+        scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor,
+            request.memory_domain,
+        )
+        for _attempt in range(2):
+            def read_snapshot(conn: sqlite3.Connection):
+                try:
+                    children = load_calendar_child_summaries(
+                        conn,
+                        parent_type=summary_type,
+                        bucket_key=bucket_key,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                current = get_active_calendar_summary(
+                    conn,
+                    summary_type=summary_type,
+                    bucket_key=bucket_key,
+                    owner_id=scope.owner_id,
+                    workspace_id=scope.workspace_id,
+                    memory_domain=memory_domain,
+                )
+                expected_summary_id = str(current["summary_id"]) if current else None
+                if not children:
+                    return (), None, expected_summary_id, current
+                source_hash = calendar_source_hash(children)
+                if current and current["source_hash"] == source_hash:
+                    return children, source_hash, None, {**current, "write_status": "current"}
+                return children, source_hash, None, None
+
+            children, source_hash, expected_summary_id, current_summary = self._repository_read(
+                read_snapshot
+            )
+            if current_summary is not None:
+                return current_summary
+
+            if not children:
+                try:
+                    return await self._repository_write_async(
+                        lambda conn: supersede_empty_calendar_summary(
+                            None,
+                            summary_type=summary_type,
+                            bucket_key=bucket_key,
+                            owner_id=scope.owner_id,
+                            workspace_id=scope.workspace_id,
+                            memory_domain=memory_domain,
+                            timezone_name=self.config.time_summary_timezone,
+                            expected_summary_id=expected_summary_id,
+                            connection=conn,
+                        )
+                    )
+                except CalendarSnapshotChanged:
+                    continue
+
+            draft = await self._generate_calendar_summary(
+                summary_type=summary_type,
+                bucket_key=bucket_key,
+                source_hash=source_hash,
+                summaries=children,
+            )
+            try:
+                return await self._repository_write_async(
+                    lambda conn: persist_calendar_summary(
+                        None,
+                        summary_type=summary_type,
+                        bucket_key=bucket_key,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                        timezone_name=self.config.time_summary_timezone,
+                        expected_source_hash=source_hash,
+                        draft=draft,
+                        connection=conn,
+                    )
+                )
+            except CalendarSnapshotChanged:
+                continue
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{summary_type.capitalize()} child summaries kept changing while "
+                "aggregation was generated; retry aggregation"
+            ),
+        )
+
+    async def aggregate_week(
+        self,
+        week_key: str,
+        request: CalendarAggregateRequest,
+    ):
+        """Publish an immutable WeekSummary from active DaySummary children."""
+        return await self._aggregate_calendar_period("week", week_key, request)
+
+    async def aggregate_month(
+        self,
+        month_key: str,
+        request: CalendarAggregateRequest,
+    ):
+        """Publish an immutable MonthSummary from active WeekSummary children."""
+        return await self._aggregate_calendar_period("month", month_key, request)
 
     def _derive_turn_dedup_key(
         self,
@@ -5424,11 +5737,14 @@ class MemoryApplicationService:
         }
 
     async def trigger_lifecycle(self, request: dict = None):
-        """Manually trigger compression lifecycle (escalation + purge)."""
+        """Run the retained purge pass; successor compression is paused."""
         req = request or {}
         result = {}
-        if req.get("escalate", True):
-            result["escalation"] = await self._apply_compression_lifecycle()
+        if req.get("escalate", False):
+            result["escalation"] = {
+                "skipped": "disabled",
+                "reason": "Tier 2 lifecycle escalation is paused",
+            }
         if req.get("purge", True):
             result["purge"] = {"deleted": await self._purge_expired_memories()}
         return {"status": "ok", **result}

@@ -412,6 +412,15 @@ class ContextCompressor(ContextEngine):
             int(context_length * self.threshold_percent),
             MINIMUM_CONTEXT_LENGTH,
         )
+        self._refresh_derived_budgets()
+
+    def _refresh_derived_budgets(self) -> None:
+        """Recalculate budgets that depend on the active model context."""
+        target_tokens = int(self.threshold_tokens * self.summary_target_ratio)
+        self.tail_token_budget = target_tokens
+        self.max_summary_tokens = min(
+            int(self.context_length * 0.05), _SUMMARY_TOKENS_CEILING,
+        )
 
     def __init__(
         self,
@@ -451,12 +460,8 @@ class ContextCompressor(ContextEngine):
         )
         self.compression_count = 0
 
-        # Derive token budgets: ratio is relative to the threshold, not total context
-        target_tokens = int(self.threshold_tokens * self.summary_target_ratio)
-        self.tail_token_budget = target_tokens
-        self.max_summary_tokens = min(
-            int(self.context_length * 0.05), _SUMMARY_TOKENS_CEILING,
-        )
+        # Derive token budgets: ratio is relative to the threshold, not total context.
+        self._refresh_derived_budgets()
 
         if not quiet_mode:
             logger.info(

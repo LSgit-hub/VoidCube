@@ -147,6 +147,42 @@ def test_fts_triggers_track_updates_deletes_and_keep_private_scopes_separate(tmp
         conn.close()
 
 
+def test_fts_indexes_time_summary_versions_with_scope(tmp_path):
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO time_summaries "
+            "(summary_id, summary_type, owner_id, workspace_id, memory_domain, "
+            "bucket_key, period_start, period_end, timezone, title, summary, "
+            "source_count, source_hash, content_hash, version, status, created_at, updated_at) "
+            "VALUES ('week-indexed', 'week', 'owner-a', 'workspace-a', "
+            "'agent_interaction', '2026-W34', '2026-08-17T00:00:00+08:00', "
+            "'2026-08-24T00:00:00+08:00', 'Asia/Shanghai', "
+            "'部署周报', '完成 Zephyr 索引迁移', 1, 'source', 'content', 1, "
+            "'active', '2026-08-24T00:00:00+08:00', '2026-08-24T00:00:00+08:00')"
+        )
+        conn.commit()
+
+        result = search_memory_fts(
+            conn,
+            ["Zephyr", "迁移"],
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+            limit=20,
+        )
+        assert "week-indexed" in result["time_summary"]
+        assert search_memory_fts(
+            conn,
+            ["Zephyr 迁移"],
+            owner_id="owner-b",
+            workspace_id="workspace-b",
+            limit=20,
+        ) == {}
+    finally:
+        conn.close()
+
+
 def test_fts_fallback_matches_two_character_cjk_terms(tmp_path):
     service = _service(tmp_path)
     _insert_turns(service)

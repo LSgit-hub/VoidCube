@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from memai.application.config import MemoryServiceConfig
 from memai.repository.sqlite import open_memory_sqlite
 from memai.application.memory_service import (
+    CalendarAggregateRequest,
     DayAggregateRequest,
     DurableMemoryCreate,
     ForgetRequest,
@@ -24,7 +25,14 @@ from memai.repository.profile_store import revoke_profile_predicates
 from memai.indexes.entity_graph import rebuild_entity_graph, update_entity_graph
 from memai.indexes.lexical_index import search_memory_fts
 from memai.application.recall import build_recall_plan, recall_memories
-from memai.domain.time_summary import day_bucket_for_timestamp, day_period
+from memai.domain.time_summary import (
+    day_bucket_for_timestamp,
+    day_period,
+    month_bucket_for_timestamp,
+    month_period,
+    week_bucket_for_timestamp,
+    week_period,
+)
 
 
 def _profile(memory_id: str, predicate: str, value: str):
@@ -392,6 +400,28 @@ def test_day_bucket_uses_configured_local_midnight():
         "2026-08-17T00:00:00+08:00",
         "2026-08-18T00:00:00+08:00",
     )
+    assert week_bucket_for_timestamp(
+        "2026-08-16T16:00:00+00:00",
+        timezone_name="Asia/Shanghai",
+    ) == "2026-W34"
+    assert week_period(
+        "2026-W34",
+        timezone_name="Asia/Shanghai",
+    ) == (
+        "2026-08-17T00:00:00+08:00",
+        "2026-08-24T00:00:00+08:00",
+    )
+    assert month_bucket_for_timestamp(
+        "2026-08-31T16:00:00+00:00",
+        timezone_name="Asia/Shanghai",
+    ) == "2026-09"
+    assert month_period(
+        "2026-09",
+        timezone_name="Asia/Shanghai",
+    ) == (
+        "2026-09-01T00:00:00+08:00",
+        "2026-10-01T00:00:00+08:00",
+    )
 
 
 @pytest.mark.asyncio
@@ -436,8 +466,13 @@ async def test_session_close_summary_is_idempotent_and_revises_on_new_turn(
     assert first["version"] == second["version"] == 1
     assert first["day_summary"]["write_status"] == "created"
     assert second["day_summary"]["write_status"] == "current"
-    assert client.calls == 2
-    assert client.tasks == ["scholar.session_summary", "scholar.day_summary"]
+    assert client.calls == 4
+    assert client.tasks == [
+        "scholar.session_summary",
+        "scholar.day_summary",
+        "scholar.week_summary",
+        "scholar.month_summary",
+    ]
 
     await service.add_turn(
         "session-close",
@@ -447,7 +482,7 @@ async def test_session_close_summary_is_idempotent_and_revises_on_new_turn(
     assert revised["write_status"] == "created"
     assert revised["version"] == 2
     assert revised["day_summary"]["version"] == 2
-    assert client.calls == 4
+    assert client.calls == 8
 
     conn = open_memory_sqlite(service._db_path)
     try:
@@ -472,6 +507,7 @@ async def test_session_close_summary_is_idempotent_and_revises_on_new_turn(
             "SELECT parent.version, child.version FROM time_summary_links AS link "
             "JOIN time_summaries AS parent ON parent.summary_id = link.parent_summary_id "
             "JOIN time_summaries AS child ON child.summary_id = link.child_summary_id "
+            "WHERE parent.summary_type = 'day' "
             "ORDER BY parent.version"
         ).fetchall()
     finally:
@@ -489,8 +525,8 @@ async def test_session_close_summary_is_idempotent_and_revises_on_new_turn(
             confirmation="FORGET",
         )
     )
-    assert forgotten["deleted_counts"]["time_summaries"] == 4
-    assert forgotten["deleted_counts"]["time_summary_links"] == 2
+    assert forgotten["deleted_counts"]["time_summaries"] == 8
+    assert forgotten["deleted_counts"]["time_summary_links"] == 6
     assert forgotten["deleted_counts"]["session_summary_sources"] == 3
 
     conn = open_memory_sqlite(service._db_path)
@@ -558,6 +594,85 @@ async def test_day_summary_orders_and_links_multiple_session_summaries(
     finally:
         conn.close()
     assert child_ids == [("session-first",), ("session-second",)]
+
+
+@pytest.mark.asyncio
+async def test_week_and_month_summaries_use_direct_children_and_are_idempotent(
+    tmp_path,
+    monkeypatch,
+):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    calls = []
+
+    class _FakeClient:
+        def complete_json(self, **kwargs):
+            calls.append(
+                (
+                    kwargs["task"],
+                    tuple(
+                        item["summary_id"]
+                        for item in kwargs["user_payload"].get(
+                            "direct_child_summaries",
+                            kwargs["user_payload"].get("session_summaries", []),
+                        )
+                    ),
+                )
+            )
+            return {
+                "title": "目录摘要",
+                "summary": "只根据直接子摘要记录时间范围内的工作。",
+                "outcomes": ["目录链已更新"],
+                "open_questions": [],
+            }
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_mem_llm_client",
+        lambda role="default": (_FakeClient(), "test-calendar-model"),
+    )
+    request = SessionCloseRequest()
+    for session_id in ("calendar-first", "calendar-second"):
+        await service.create_session(SessionCreate(session_id=session_id))
+        await service.add_turn(
+            session_id,
+            TurnCreate(speaker="user", text=f"calendar work {session_id}"),
+        )
+        await service.close_session(session_id, request)
+
+    first = await service.close_session(
+        "calendar-first",
+        request,
+    )
+    week_key = first["week_summary"]["bucket_key"]
+    month_key = first["month_summary"]["bucket_key"]
+    week = await service.aggregate_week(week_key, CalendarAggregateRequest())
+    month = await service.aggregate_month(month_key, CalendarAggregateRequest())
+
+    assert week["write_status"] == "current"
+    assert month["write_status"] == "current"
+    assert [task for task, _ in calls].count("scholar.week_summary") == 2
+    assert [task for task, _ in calls].count("scholar.month_summary") == 2
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        links = conn.execute(
+            "SELECT parent.summary_type, child.summary_type "
+            "FROM time_summary_links AS link "
+            "JOIN time_summaries AS parent ON parent.summary_id = link.parent_summary_id "
+            "JOIN time_summaries AS child ON child.summary_id = link.child_summary_id "
+            "WHERE parent.status = 'active' ORDER BY parent.summary_type, child.summary_type"
+        ).fetchall()
+        active = conn.execute(
+            "SELECT summary_type, COUNT(*) FROM time_summaries "
+            "WHERE status = 'active' GROUP BY summary_type ORDER BY summary_type"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert ("day", "session") in links
+    assert ("week", "day") in links
+    assert ("month", "week") in links
+    assert active == [("day", 1), ("month", 1), ("session", 2), ("week", 1)]
 
 
 @pytest.mark.asyncio

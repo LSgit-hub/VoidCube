@@ -38,6 +38,16 @@ MEMORY_HTTP_ROUTES = (
         "aggregate_day",
         ("POST",),
     ),
+    MemoryHttpRoute(
+        "/time-summaries/weeks/{week_key}/aggregate",
+        "aggregate_week",
+        ("POST",),
+    ),
+    MemoryHttpRoute(
+        "/time-summaries/months/{month_key}/aggregate",
+        "aggregate_month",
+        ("POST",),
+    ),
     MemoryHttpRoute("/sessions/{session_id}/turns", "add_turn", ("POST",)),
     MemoryHttpRoute("/sessions/{session_id}/turns", "get_session_turns", ("GET",)),
     MemoryHttpRoute("/turn-pairs", "add_turn_pair", ("POST",)),

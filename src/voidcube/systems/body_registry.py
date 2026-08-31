@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import shutil
 import subprocess
 import tempfile
@@ -2069,7 +2070,17 @@ class BodyRegistryManager:
                 "when the target is already populated."
             )
 
-        if target_registered:
+        quarantined_target: Optional[Path] = None
+        git_marker = target_root / ".git"
+        registered_marker_is_valid = git_marker.is_file()
+        if target_registered and not registered_marker_is_valid:
+            quarantined_target = target_root.with_name(
+                f"{target_root.name}.invalid-{uuid.uuid4().hex}"
+            )
+            target_root.replace(quarantined_target)
+            self._run_git(source_root, ["worktree", "prune"], timeout=15)
+            target_registered = False
+        elif target_registered:
             removed = self._run_git(
                 source_root,
                 ["worktree", "remove", "--force", str(target_root)],
@@ -2083,22 +2094,40 @@ class BodyRegistryManager:
         elif target_root.exists():
             self._clear_directory(target_root)
 
-        self._run_git(source_root, ["worktree", "prune"], timeout=15)
-        added = self._run_git(
-            source_root,
-            ["worktree", "add", "--detach", "--force", str(target_root), source_commit],
-            timeout=60,
-        )
-        if added.returncode != 0:
-            raise ValueError(
-                "Failed to materialize isolated Git worktree: " + added.stderr.strip()
+        try:
+            self._run_git(source_root, ["worktree", "prune"], timeout=15)
+            added = self._run_git(
+                source_root,
+                ["worktree", "add", "--detach", "--force", str(target_root), source_commit],
+                timeout=60,
             )
+            if added.returncode != 0:
+                raise ValueError(
+                    "Failed to materialize isolated Git worktree: " + added.stderr.strip()
+                )
 
-        isolated_top = self._git_top_level_for_path(target_root)
-        if isolated_top != target_root:
-            raise ValueError(
-                f"Materialized slot is not an isolated Git worktree: {target_root}"
-            )
+            isolated_top = self._git_top_level_for_path(target_root)
+            if isolated_top != target_root:
+                raise ValueError(
+                    f"Materialized slot is not an isolated Git worktree: {target_root}"
+                )
+        except Exception:
+            if quarantined_target is not None:
+                if target_root.exists():
+                    registered_now = target_root in self._git_registered_worktrees(source_root)
+                    if registered_now:
+                        self._run_git(
+                            source_root,
+                            ["worktree", "remove", "--force", str(target_root)],
+                            timeout=30,
+                        )
+                    if target_root.exists():
+                        self._remove_path(target_root)
+                quarantined_target.replace(target_root)
+            raise
+        else:
+            if quarantined_target is not None:
+                self._remove_path(quarantined_target)
 
     def _git_registered_worktrees(self, path: Path) -> set[Path]:
         result = self._run_git(path, ["worktree", "list", "--porcelain"], timeout=15)
@@ -2344,10 +2373,22 @@ class BodyRegistryManager:
         if not root.exists():
             return
         for child in root.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+            self._remove_path(child)
+
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        def make_writable_and_retry(function, value, _exc_info):
+            os.chmod(value, stat.S_IWRITE)
+            function(value)
+
+        if path.is_dir():
+            shutil.rmtree(path, onerror=make_writable_and_retry)
+        else:
+            try:
+                path.unlink()
+            except PermissionError:
+                path.chmod(stat.S_IWRITE)
+                path.unlink()
 
     def _clear_worktree_contents(self, root: Path) -> None:
         """Clear a linked worktree checkout while retaining its .git file."""
@@ -2356,10 +2397,7 @@ class BodyRegistryManager:
         for child in root.iterdir():
             if child.name == ".git":
                 continue
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+            self._remove_path(child)
 
     def _should_ignore_materialized_path(self, path: Path, *, target_root: Path) -> bool:
         resolved = path.resolve()

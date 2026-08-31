@@ -33,13 +33,11 @@ def test_maintenance_marks_old_arc_as_dormant_candidate() -> None:
         reference_time=datetime(2026, 3, 22, 0, 0, tzinfo=timezone.utc),
     )
 
-    assert plan.compression_actions
-    assert result.arcs[0].id in plan.dormant_arc_ids or any(
-        action.target_layer == "epoch" for action in plan.compression_actions
-    )
+    assert plan.compression_actions == []
+    assert result.arcs[0].id in plan.dormant_arc_ids
 
 
-def test_apply_maintenance_creates_superseded_and_replacement_units() -> None:
+def test_default_maintenance_does_not_supersede_tier2_units() -> None:
     pipeline = ChroniclePipeline()
     result = pipeline.ingest_dicts(
         [
@@ -62,14 +60,10 @@ def test_apply_maintenance_creates_superseded_and_replacement_units() -> None:
         reference_time=datetime(2026, 3, 22, 0, 0, tzinfo=timezone.utc)
     )
 
-    assert execution.revision_records
-    assert any(scene.status.value == "superseded" for scene in execution.scenes)
-    assert any(arc.status.value == "superseded" for arc in execution.arcs)
-    assert any(
-        scene.supersedes
-        for scene in execution.scenes
-        if scene.status.value != "superseded"
-    )
+    assert execution.revision_records == []
+    assert all(scene.status.value != "superseded" for scene in execution.scenes)
+    assert all(arc.status.value != "superseded" for arc in execution.arcs)
+    assert any(arc.status.value == "dormant" for arc in execution.arcs)
 
 
 def test_revise_memory_creates_explicit_supersession() -> None:

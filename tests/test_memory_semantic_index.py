@@ -100,6 +100,34 @@ def test_semantic_index_excludes_founding_identity(tmp_path):
     assert indexed == 0
 
 
+def test_semantic_index_includes_active_time_summaries(tmp_path):
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO time_summaries "
+            "(summary_id, summary_type, owner_id, workspace_id, memory_domain, "
+            "bucket_key, period_start, period_end, timezone, title, summary, "
+            "source_count, source_hash, content_hash, version, status, created_at, updated_at) "
+            "VALUES ('semantic-month', 'month', 'owner-a', 'workspace-a', "
+            "'agent_interaction', '2026-08', '2026-08-01T00:00:00+08:00', "
+            "'2026-09-01T00:00:00+08:00', 'Asia/Shanghai', 'monthly progress', "
+            "'database migration progress', 1, 'source', 'content', 1, 'active', "
+            "'2026-09-01T00:05:00+08:00', '2026-09-01T00:05:00+08:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    index = _index(service)
+    assert index.index_pending() >= 1
+    assert ("time_summary", "semantic-month") in index.search(
+        "database migration",
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+
+
 def test_semantic_index_primary_key_contains_full_scope(tmp_path):
     service = _service(tmp_path)
     _index(service)

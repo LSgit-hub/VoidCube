@@ -11,7 +11,7 @@ from memai.domain.scope import GLOBAL_SCOPE_ID
 
 logger = logging.getLogger(__name__)
 
-_INDEX_VERSION = "2-domain-isolation"
+_INDEX_VERSION = "3-time-summary"
 
 
 def setup_memory_fts(conn: sqlite3.Connection) -> bool:
@@ -21,6 +21,8 @@ def setup_memory_fts(conn: sqlite3.Connection) -> bool:
         "memory_fts_archive_insert", "memory_fts_archive_update", "memory_fts_archive_delete",
         "memory_fts_compressed_insert", "memory_fts_compressed_update", "memory_fts_compressed_delete",
         "memory_fts_profile_insert", "memory_fts_profile_update", "memory_fts_profile_delete",
+        "memory_fts_time_summary_insert", "memory_fts_time_summary_update",
+        "memory_fts_time_summary_delete",
     )
     existing = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
@@ -121,6 +123,27 @@ def setup_memory_fts(conn: sqlite3.Connection) -> bool:
             "AFTER DELETE ON profile_memories BEGIN DELETE FROM memory_fts "
             "WHERE source_type = 'profile' AND memory_id = OLD.memory_id; END"
         ),
+        "memory_fts_time_summary_insert": (
+            "AFTER INSERT ON time_summaries BEGIN INSERT INTO memory_fts "
+            "(source_type, memory_id, owner_id, workspace_id, memory_domain, content) VALUES "
+            "('time_summary', NEW.summary_id, NEW.owner_id, NEW.workspace_id, "
+            "NEW.memory_domain, NEW.title || ' ' || NEW.summary || ' ' || "
+            "COALESCE(NEW.outcomes, '') || ' ' || COALESCE(NEW.open_questions, '')); END"
+        ),
+        "memory_fts_time_summary_update": (
+            "AFTER UPDATE OF title, summary, outcomes, open_questions, owner_id, "
+            "workspace_id, memory_domain ON time_summaries BEGIN "
+            "DELETE FROM memory_fts WHERE source_type = 'time_summary' "
+            "AND memory_id = OLD.summary_id; "
+            "INSERT INTO memory_fts (source_type, memory_id, owner_id, workspace_id, "
+            "memory_domain, content) VALUES ('time_summary', NEW.summary_id, NEW.owner_id, "
+            "NEW.workspace_id, NEW.memory_domain, NEW.title || ' ' || NEW.summary || ' ' || "
+            "COALESCE(NEW.outcomes, '') || ' ' || COALESCE(NEW.open_questions, '')); END"
+        ),
+        "memory_fts_time_summary_delete": (
+            "AFTER DELETE ON time_summaries BEGIN DELETE FROM memory_fts "
+            "WHERE source_type = 'time_summary' AND memory_id = OLD.summary_id; END"
+        ),
     }
     for name, body in trigger_sql.items():
         conn.execute(f"DROP TRIGGER IF EXISTS {name}")
@@ -157,6 +180,12 @@ def _rebuild_memory_fts(conn: sqlite3.Connection) -> None:
         "SELECT 'profile', memory_id, owner_id, workspace_id, memory_domain, "
         "subject || ' ' || predicate || ' ' || value || ' ' || summary "
         "FROM profile_memories"
+    )
+    conn.execute(
+        "INSERT INTO memory_fts (source_type, memory_id, owner_id, workspace_id, memory_domain, content) "
+        "SELECT 'time_summary', summary_id, owner_id, workspace_id, memory_domain, "
+        "title || ' ' || summary || ' ' || COALESCE(outcomes, '') || ' ' || "
+        "COALESCE(open_questions, '') FROM time_summaries"
     )
     conn.execute(
         "INSERT INTO memory_index_metadata (index_name, version, updated_at) "
