@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout
+from prompt_toolkit.layout import ConditionalContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.containers import Container
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.dimension import Dimension
@@ -89,6 +89,16 @@ class TuiCompositionRuntime:
             voice_status_bar=widgets.voice_status_bar,
             completions_menu=completions_menu,
         )
+        # Floats do not contribute to FloatContainer.preferred_height(). In
+        # inline (non-full-screen) mode that makes a newly opened modal render
+        # only in the rows already available below the cursor. Reserve the
+        # modal viewport in the root layout so the terminal can scroll enough
+        # rows before the float is drawn.
+        modal_height_reserve = ConditionalContainer(
+            Window(height=lambda: _modal_stack_max_height() + 2),
+            filter=Condition(widgets.modal_visible),
+        )
+        children.append(modal_height_reserve)
         modal_stack = HSplit(
             [
                 widget

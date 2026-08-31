@@ -69,20 +69,27 @@ class SizedVt100Output(Vt100_Output):
     布局 preferred_height，模态框 float 会被截断成 2 行白框。
     """
 
-    def __init__(self, stdout: io.StringIO, columns: int = COLS, rows: int = ROWS) -> None:
+    def __init__(
+        self,
+        stdout: io.StringIO,
+        columns: int = COLS,
+        rows: int = ROWS,
+        rows_below_cursor: int | None = None,
+    ) -> None:
         self._size = Size(rows, columns)  # 注意：Size 第一参数是行数
+        self._rows_below_cursor = rows if rows_below_cursor is None else rows_below_cursor
         super().__init__(stdout, self.get_size, enable_cpr=False)
 
     def get_size(self) -> Size:
         return self._size
 
     def get_rows_below_cursor_position(self) -> int:
-        return self._size.rows
+        return self._rows_below_cursor
 
 
-def make_output() -> tuple[SizedVt100Output, io.StringIO]:
+def make_output(rows_below_cursor: int | None = None) -> tuple[SizedVt100Output, io.StringIO]:
     buf = io.StringIO(newline="")
-    return SizedVt100Output(buf), buf
+    return SizedVt100Output(buf, rows_below_cursor=rows_below_cursor), buf
 
 
 def screen_snapshot(buf: io.StringIO) -> list[str]:
@@ -288,7 +295,7 @@ def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.02) -> None
 
 
 @pytest.fixture
-def tui_harness(tmp_path):
+def tui_harness(tmp_path, request):
     """启动完整 TUI 应用（后台线程），提供快照与状态注入接口。
 
     用法：
@@ -297,7 +304,7 @@ def tui_harness(tmp_path):
         harness.pipe.send_text("...")             # 真实按键
         harness.events                            # 扩展点事件记录
     """
-    out, buf = make_output()
+    out, buf = make_output(getattr(request, "param", None))
     holder: dict = {}
     events: list[str] = []
     thread_exc: list[BaseException] = []
@@ -385,6 +392,18 @@ def test_clarify_modal_renders_full_content(tui_harness):
     assert "选择执行路径" in text  # 正文
     assert "❯ 自动执行" in text  # 默认选中第一项
     assert "手动确认" in text  # 第二项（无选中标记）
+
+
+@pytest.mark.parametrize("tui_harness", [3], indirect=True)
+def test_modal_scrolls_inline_renderer_when_cursor_is_near_bottom(tui_harness):
+    """Modal floats must extend the inline renderer past the cursor viewport."""
+    _open_clarify(tui_harness)
+    text = "\n".join(tui_harness.snapshot())
+
+    assert "Voidcube needs your input" in text
+    assert "选择执行路径" in text
+    assert "❯ 自动执行" in text
+    assert "手动确认" in text
 
 
 def test_clarify_arrow_keys_move_selection(tui_harness):

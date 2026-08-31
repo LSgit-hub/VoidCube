@@ -10,7 +10,10 @@ from voidcube.domain.contracts.interaction import (
     ClarificationDecision,
     ClarificationStatus,
 )
-from voidcube.infrastructure.execution.approval import check_all_command_guards
+from voidcube.infrastructure.execution.approval import (
+    check_all_command_guards,
+    check_dangerous_command,
+)
 from voidcube.extensions.tools.clarify_tool import clarify_tool
 
 
@@ -95,3 +98,47 @@ def test_dangerous_command_runs_only_after_explicit_approval() -> None:
     assert result["approval_required"] is True
     assert result["approval_status"] == "approved"
     assert requests[0].command == "rm -rf target"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'rm -rf target'",
+        "echo 'rm -rf target' | cat",
+        "printf 'chmod 777 file'",
+        "git log --format='rmdir old'",
+        "python -c \"print('format')\"",
+        "echo ok > /dev/null",
+        "sudo -u deploy echo 'mkfs.ext4 /dev/sdb'",
+    ],
+)
+def test_command_text_and_arguments_do_not_trigger_dangerous_approval(command: str) -> None:
+    result = check_dangerous_command(command)
+
+    assert result["safe"] is True
+    assert result["requires_approval"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf target",
+        "sudo -u deploy rm --recursive --force target",
+        "echo ok && rm -fr target",
+        "bash -c 'rm -rf target'",
+        "cmd /c del /f target",
+        "rmdir target",
+        "del /f /q target",
+        "format X:",
+        "mkfs.ext4 /dev/sdb",
+        "dd if=/dev/zero of=/dev/sdb",
+        "dd of=/dev/sdb",
+        "chmod 777 target",
+        "echo data > /dev/sdb",
+    ],
+)
+def test_command_parser_still_detects_real_dangerous_operations(command: str) -> None:
+    result = check_dangerous_command(command)
+
+    assert result["safe"] is False
+    assert result["requires_approval"] is True
