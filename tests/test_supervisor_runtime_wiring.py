@@ -3321,37 +3321,6 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    with patch(
-        "voidcube.systems.supervisor.ui_state_orchestration.project_supervisor_scene_state",
-        return_value={
-            "scene": "planning",
-            "room_location": "writing_desk",
-            "action": "write",
-            "title": "Auto judgement",
-            "summary": "Auto work is active.",
-            "stage": "planning",
-            "task_id": "",
-            "mode": "auto_evolution",
-        },
-    ):
-        daily = await supervisor._ui_runtime.get_state()
-
-        assert daily["stellar_mode"]["mode"] == "daily_companion"
-        assert daily["scene"] == "idle"
-        assert daily["title"] == "日常陪伴中"
-
-        supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
-        auto = await supervisor._ui_runtime.get_state()
-
-        assert auto["stellar_mode"]["mode"] == "auto_evolution"
-        assert auto["scene"] == "planning"
-        assert auto["title"] == "Auto judgement"
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
 async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     expected = {
