@@ -235,6 +235,17 @@ class GoalStore:
             (now, project_id),
         )
 
+    @staticmethod
+    def _validate_completion(fields: dict[str, Any]) -> None:
+        """Keep every mutation path honest about completion claims."""
+        if fields["status"] != "completed":
+            return
+        criteria = load_json(fields["acceptance_criteria_json"], [])
+        if float(fields["progress"]) < 1:
+            raise ValueError("completed nodes must have progress=1; use waiting_review until verified")
+        if criteria and not all(isinstance(item, dict) and item.get("met") is True for item in criteria):
+            raise ValueError("completed nodes must satisfy all acceptance criteria")
+
     def _validate_node_fields(self, data: dict[str, Any], *, creating: bool = True) -> dict[str, Any]:
         node_type = _text(data.get("node_type") or data.get("type"), "node_type", required=True)
         if node_type not in NODE_TYPES:
@@ -286,6 +297,7 @@ class GoalStore:
     ) -> dict[str, Any]:
         self._ensure_project(conn, project_id)
         fields = self._validate_node_fields(data, creating=not allow_project)
+        self._validate_completion(fields)
         node_id = node_id or new_id("goal_")
         now = utc_now()
         conn.execute(
@@ -300,7 +312,8 @@ class GoalStore:
             (
                 node_id, project_id, fields["node_type"], fields["title"], fields["description"],
                 fields["status"], fields["progress"], fields["progress_mode"], fields["confidence"],
-                fields["priority"], fields["start_at"], fields["due_at"], fields["completed_at"],
+                fields["priority"], fields["start_at"], fields["due_at"],
+                (fields["completed_at"] or now) if fields["status"] == "completed" else None,
                 fields["acceptance_criteria_json"], fields["owner"], fields["assigned_to"],
                 created_by, now, now,
             ),
@@ -412,10 +425,7 @@ class GoalStore:
             fields = self._validate_node_fields(merged, creating=False)
             if before["node_type"] == "project" and fields["node_type"] != "project":
                 raise ValueError("project root node type cannot change")
-            if fields["status"] == "completed" and fields["progress"] < 1:
-                criteria = load_json(fields["acceptance_criteria_json"], [])
-                if not criteria or not all(isinstance(item, dict) and item.get("met") for item in criteria):
-                    fields["confidence"] = min(float(fields["confidence"]), 0.5)
+            self._validate_completion(fields)
             now = utc_now()
             cursor = conn.execute(
                 """
@@ -429,7 +439,7 @@ class GoalStore:
                     fields["node_type"], fields["title"], fields["description"], fields["status"],
                     fields["progress"], fields["progress_mode"], fields["confidence"], fields["priority"],
                     fields["start_at"], fields["due_at"],
-                    fields["completed_at"] or (now if fields["status"] == "completed" else None),
+                    (fields["completed_at"] or now) if fields["status"] == "completed" else None,
                     fields["acceptance_criteria_json"], fields["owner"], fields["assigned_to"],
                     now, node_id, expected_version,
                 ),
@@ -634,6 +644,7 @@ class GoalStore:
                     if before["version"] != expected:
                         raise GoalConflict("node version conflict", latest=before, expected_version=expected)
                     fields = self._validate_node_fields({**before, **(operation.get("patch") or {})}, creating=False)
+                    self._validate_completion(fields)
                     now = utc_now()
                     cursor = conn.execute(
                         "UPDATE goal_nodes SET node_type=?, title=?, description=?, status=?, progress=?, "
@@ -643,8 +654,10 @@ class GoalStore:
                         (
                             fields["node_type"], fields["title"], fields["description"], fields["status"],
                             fields["progress"], fields["progress_mode"], fields["confidence"], fields["priority"],
-                            fields["start_at"], fields["due_at"], fields["completed_at"], fields["acceptance_criteria_json"],
-                            fields["owner"], fields["assigned_to"], now, node_id, expected,
+                            fields["start_at"], fields["due_at"],
+                            (fields["completed_at"] or now) if fields["status"] == "completed" else None,
+                            fields["acceptance_criteria_json"], fields["owner"], fields["assigned_to"],
+                            now, node_id, expected,
                         ),
                     )
                     if cursor.rowcount != 1:
@@ -994,6 +1007,11 @@ class GoalStore:
             return
         entity_id = event["entity_id"]
         if event["entity_type"] == "node":
+            self._validate_completion({
+                "status": after["status"],
+                "progress": after["progress"],
+                "acceptance_criteria_json": json.dumps(after["acceptance_criteria"], ensure_ascii=False),
+            })
             conn.execute(
                 "UPDATE goal_nodes SET node_type=?, title=?, description=?, status=?, progress=?, "
                 "progress_mode=?, confidence=?, priority=?, start_at=?, due_at=?, completed_at=?, "

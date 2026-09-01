@@ -134,20 +134,83 @@ closure_update
 
 ## 14. 受控遗忘
 
-系统分阶段遗忘。
+系统分阶段遗忘，但自动流程必须先报告、再标记、最后才删除。
 
-### 阶段 1：细节削减
-- 移除冗余且影响较低的事件细节。
+### 14.1 Dormant
 
-### 阶段 2：摘要替代
-- 用场景或脉络摘要替代较旧的聚类。
+`dormant` 是 `Arc` 的活动状态，不是删除状态，也不是新一轮内容压缩。
 
-### 阶段 3：归档退役
-- 对价值很低的材料，仅保留紧凑的历史锚点。
+一条 `Arc` 可以在以下条件下进入休眠候选：
 
-在 v1 中，硬删除应极少使用，并仅限于低价值、非结构性的残余内容。当前自动
-生命周期升级到 `purged` 的路径已暂停；已经处于 `purged` 且超过审计保留期的
-历史记录仍可被清理，用户明确发起的 `forget` 仍然有效。
+- `memory_type = 'arc'`；
+- `status = 'active'`；
+- 以 `max(timespan_end, last_accessed_at, active child timespan_end)` 为活动锚点；
+- 活动锚点超过配置的休眠窗口，当前首版报告默认 30 天；
+- 未被 pin、hide；
+- 不属于 identity/founding 记忆。
+
+休眠脉络仍然可检索，且仍然可以影响历史摘要。`dormant` 不复用 `status`
+字段，而是写入独立的 `activity_state`；默认召回仍能读取休眠 Arc，但会在排序中
+降权。通过 `get_compressed` 或 `search_compressed` 命中休眠 Arc 时，系统会自动唤醒
+为 `active` 并清空休眠原因。
+
+### 14.2 Purge review
+
+服务端接口 `POST /compressed/retention-review` 是只读审查接口，不改写数据库，返回：
+
+- `dormant_candidates`：可考虑休眠的 Arc；
+- `purge_candidates`：可考虑逻辑遗忘的低价值 Event/Scene；
+- `protected`：未入选 purge 的记录及保护原因；
+- `overview`：当前作用域内 compressed memory 类型和状态分布。
+
+自动 purge 候选只覆盖 `compressed_memories` 中的 `event` 和 `scene`，不覆盖：
+
+- `turns` / `turns_archive`；
+- `profile_memories`；
+- `time_summaries` / `time_summary_links` / `session_summary_sources`；
+- `arc` / `epoch`；
+- identity/founding 记忆；
+- pinned 或 hidden 记忆。
+
+Event 候选必须同时满足：
+
+- 活动锚点超过默认 180 天；
+- `importance < 0.35`；
+- `confidence < 0.5`；
+- `event_kind` 不是 `decision/correction/shift/blocker/completion/conflict`；
+- 存在 active Scene 父摘要；
+- 直接 source turns 已归档；
+- 没有 citation、relevant feedback、promotion 引用或待处理 promotion candidate。
+
+Scene 候选必须同时满足：
+
+- 活动锚点超过默认 365 天；
+- `importance < 0.45`；
+- `confidence < 0.5`；
+- 存在 active Arc 父摘要；
+- 没有 citation、relevant feedback、promotion 引用或待处理 promotion candidate。
+
+### 14.3 自动遗忘状态机
+
+自动维护流程使用以下持久状态字段：
+
+```text
+activity_state active|dormant|resolved
+dormant_at
+dormant_reason
+retention_state retained|purge_candidate|purged
+purge_candidate_at
+purge_reason
+purged_at
+```
+
+维护规则每轮重新评估候选：满足 purge 条件的 Event/Scene 会先标记为
+`retention_state = 'purge_candidate'` 并记录原因；候选持续满足条件超过默认 30 天后，
+进入逻辑 `purged`，同时 `status = 'purged'`、`activity_state = 'resolved'`、`weight = 0`。
+
+逻辑 `purged` 后应立即退出默认召回，并清理或重建 FTS、embedding 和实体图引用；
+物理删除仍需保留至少 90 天审计窗口，按 `purged_at` 计时。已经处于 `purged` 且超过
+审计保留期的历史记录会被清理；用户明确发起的 `forget` 仍然有效。
 
 ## 15. 主线保留规则
 

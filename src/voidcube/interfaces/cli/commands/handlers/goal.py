@@ -22,6 +22,8 @@ class GoalCommandPorts:
     reset_agent: Callable[[], None]
     emit: Callable[[str], None]
     translate: Callable[..., str]
+    bind_backend: Callable[[str], Mapping[str, Any] | None] | None = None
+    get_backend_status: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None
 
 
 def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -> None:
@@ -77,7 +79,12 @@ def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -
         return
     if current:
         ports.clear_goal()
-    ports.create_goal(objective)
+    created = ports.create_goal(objective)
+    if ports.bind_backend is not None:
+        binding = ports.bind_backend(objective)
+        if binding:
+            created = dict(created)
+            created.update(binding)
     ports.reset_agent()
     ports.emit(ports.translate("goal_command.created", objective=objective))
     if ports.start_goal is not None:
@@ -90,6 +97,11 @@ def _show_goal(ports: GoalCommandPorts) -> None:
         ports.emit(ports.translate("goal_command.none"))
         return
     status = str(goal.get("status") or "active")
+    if ports.get_backend_status is not None:
+        remote = ports.get_backend_status(goal)
+        if remote:
+            goal = dict(goal)
+            goal.update(remote)
     objective = str(goal.get("objective") or "")
     lines = [
         ports.translate("goal_command.header"),

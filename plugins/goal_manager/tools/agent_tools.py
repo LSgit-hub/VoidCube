@@ -14,6 +14,10 @@ TOOL_NAMES = tuple(SCHEMAS)
 READ_TOOLS = {
     "goal_project_get", "goal_get_context", "goal_graph_query", "goal_next_actions",
 }
+NON_IDEMPOTENT_WRITE_TOOLS = {
+    "goal_project_create", "goal_node_create", "goal_edge_create", "goal_batch_apply",
+    "goal_attach_evidence", "goal_rollback", "goal_redo",
+}
 
 
 def _handle(tool_name: str, args: dict[str, Any], **_kwargs: Any) -> str:
@@ -41,5 +45,7 @@ def register_tools(registry: Any) -> None:
             toolset="goal_manager",
             schema=schema,
             handler=lambda args, _name=name, **kwargs: _handle(_name, args, **kwargs),
-            effect="read_only" if name in READ_TOOLS else "idempotent_write",
+            effect="read_only" if name in READ_TOOLS else (
+                "non_idempotent_write" if name in NON_IDEMPOTENT_WRITE_TOOLS else "idempotent_write"
+            ),
         )

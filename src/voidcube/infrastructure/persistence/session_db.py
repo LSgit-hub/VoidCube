@@ -38,7 +38,7 @@ class SessionSequenceConflictError(RuntimeError):
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -107,6 +107,10 @@ CREATE TABLE IF NOT EXISTS session_goals (
     objective TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     reason TEXT,
+    backend TEXT NOT NULL DEFAULT 'session',
+    project_id TEXT,
+    root_node_id TEXT,
+    backend_status TEXT NOT NULL DEFAULT 'unavailable',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -510,7 +514,23 @@ class SessionDB:
                     )
                 cursor.execute("UPDATE schema_version SET version = 10")
             if current_version < 11:
+                try:
+                    cursor.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
+                except sqlite3.OperationalError:
+                    pass
                 cursor.execute("UPDATE schema_version SET version = 11")
+            if current_version < 12:
+                for name, column_type in (
+                    ("backend", "TEXT NOT NULL DEFAULT 'session'"),
+                    ("project_id", "TEXT"),
+                    ("root_node_id", "TEXT"),
+                    ("backend_status", "TEXT NOT NULL DEFAULT 'unavailable'"),
+                ):
+                    try:
+                        cursor.execute(f'ALTER TABLE session_goals ADD COLUMN "{name}" {column_type}')
+                    except sqlite3.OperationalError:
+                        pass
+                cursor.execute("UPDATE schema_version SET version = 12")
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
         try:
@@ -808,14 +828,18 @@ class SessionDB:
         """Return the one goal owned by a session, if present."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT session_id, objective, status, reason, created_at, updated_at "
+                "SELECT session_id, objective, status, reason, backend, project_id, root_node_id, backend_status, created_at, updated_at "
                 "FROM session_goals WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
         return dict(row) if row else None
 
-    def create_session_goal(self, session_id: str, objective: str) -> Dict[str, Any]:
-        """Create an active goal for a session that does not already have one."""
+    def create_session_goal(
+        self, session_id: str, objective: str, *,
+        backend: str = "session", project_id: str | None = None,
+        root_node_id: str | None = None, backend_status: str = "unavailable",
+    ) -> Dict[str, Any]:
+        """Create an active goal and optionally bind it to an external backend."""
         now = time.time()
 
         def _do(conn):
@@ -825,9 +849,9 @@ class SessionDB:
             )
             conn.execute(
                 "INSERT INTO session_goals "
-                "(session_id, objective, status, reason, created_at, updated_at) "
-                "VALUES (?, ?, 'active', NULL, ?, ?)",
-                (session_id, objective, now, now),
+                "(session_id, objective, status, reason, backend, project_id, root_node_id, backend_status, created_at, updated_at) "
+                "VALUES (?, ?, 'active', NULL, ?, ?, ?, ?, ?, ?)",
+                (session_id, objective, backend, project_id, root_node_id, backend_status, now, now),
             )
 
         self._execute_write(_do)
@@ -852,6 +876,19 @@ class SessionDB:
             )
             return cursor.rowcount
 
+        return bool(self._execute_write(_do))
+
+    def bind_session_goal_backend(
+        self, session_id: str, *, backend: str, project_id: str | None,
+        root_node_id: str | None, backend_status: str,
+    ) -> bool:
+        now = time.time()
+        def _do(conn):
+            cursor = conn.execute(
+                "UPDATE session_goals SET backend = ?, project_id = ?, root_node_id = ?, backend_status = ?, updated_at = ? WHERE session_id = ?",
+                (backend, project_id, root_node_id, backend_status, now, session_id),
+            )
+            return cursor.rowcount
         return bool(self._execute_write(_do))
 
     def clear_session_goal(self, session_id: str) -> bool:

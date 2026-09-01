@@ -86,7 +86,7 @@ from memai.domain.scope import (
     GLOBAL_SCOPE_ID,
     MemoryScope,
 )
-from memai.indexes.semantic_index import SemanticMemoryIndex
+from memai.indexes.semantic_index import SemanticMemoryIndex, _VEC0_TABLE, _vec0_available
 from memai.application.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _parse_utc_timestamp,
@@ -132,7 +132,9 @@ _CMEM_COLUMNS = (
     "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
     "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
     "memory_domain, created_at, lifecycle_retry_count, lifecycle_retry_after, "
-    "lifecycle_last_error, identity_metadata"
+    "lifecycle_last_error, identity_metadata, activity_state, dormant_at, "
+    "dormant_reason, last_reactivated_at, retention_state, purge_candidate_at, "
+    "purge_reason, purged_at"
 )
 
 _IDENTITY_VERIFICATION_METADATA_KEYS = frozenset(
@@ -151,6 +153,35 @@ _IDENTITY_VERIFICATION_METADATA_KEYS = frozenset(
         "evidence_refs",
     }
 )
+
+_RETENTION_PURGE_EVENT_KINDS_PROTECTED = frozenset(
+    {"decision", "correction", "shift", "blocker", "completion", "conflict"}
+)
+
+
+def _parse_review_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _days_between(reference: datetime, value: Any) -> float | None:
+    parsed = _parse_review_datetime(value)
+    if parsed is None:
+        return None
+    return max(0.0, (reference - parsed).total_seconds() / 86400.0)
+
+
+def _latest_review_datetime(*values: Any) -> datetime | None:
+    parsed = [item for item in (_parse_review_datetime(value) for value in values) if item]
+    return max(parsed) if parsed else None
 
 
 def _strip_identity_verification_metadata(value: Any) -> dict[str, Any]:
@@ -330,6 +361,25 @@ class RecallRequest(BaseModel):
     min_revision: Optional[int] = Field(default=None, ge=0)
 
 
+class RetentionReviewRequest(BaseModel):
+    """Read-only dormant/purge candidate review for durable memories."""
+
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    source_domains: List[MemoryDomain] = Field(default_factory=list)
+    reference_time: Optional[str] = None
+    include_protected: bool = True
+    limit: int = Field(default=50, ge=1, le=500)
+    scan_limit: int = Field(default=5000, ge=1, le=50000)
+    dormant_after_days: int = Field(default=30, ge=1, le=3650)
+    purge_event_after_days: int = Field(default=180, ge=1, le=3650)
+    purge_scene_after_days: int = Field(default=365, ge=1, le=3650)
+    purge_event_max_importance: float = Field(default=0.35, ge=0.0, le=1.0)
+    purge_scene_max_importance: float = Field(default=0.45, ge=0.0, le=1.0)
+    purge_max_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class AgentOutboxHealthReport(BaseModel):
     session_id: str = Field(min_length=1, max_length=300)
     outbox_id: str = Field(min_length=1, max_length=128)
@@ -450,6 +500,10 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
             "lifecycle_retry_count": 33, "lifecycle_retry_after": 34,
             "lifecycle_last_error": 35,
             "identity_metadata": 36,
+            "activity_state": 37, "dormant_at": 38,
+            "dormant_reason": 39, "last_reactivated_at": 40,
+            "retention_state": 41, "purge_candidate_at": 42,
+            "purge_reason": 43, "purged_at": 44,
         }
         position = index.get(name)
         return row[position] if position is not None and len(row) > position else default
@@ -494,11 +548,20 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "lifecycle_retry_after": value("lifecycle_retry_after"),
         "lifecycle_last_error": value("lifecycle_last_error"),
         "identity_metadata": json_value("identity_metadata", {}),
+        "activity_state": value("activity_state", "active"),
+        "dormant_at": value("dormant_at"),
+        "dormant_reason": value("dormant_reason"),
+        "last_reactivated_at": value("last_reactivated_at"),
+        "retention_state": value("retention_state", "retained"),
+        "purge_candidate_at": value("purge_candidate_at"),
+        "purge_reason": value("purge_reason"),
+        "purged_at": value("purged_at"),
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
         base_weight=base["weight"],
         event_kind=base["event_kind"],
+        activity_state=base["activity_state"],
         access_count=base["access_count"],
         citation_count=base["citation_count"],
         pinned=base["pinned"],
@@ -1011,6 +1074,8 @@ class MemoryApplicationService:
             )
 
         def write(conn: sqlite3.Connection) -> Dict[str, Any]:
+            from memai.indexes.entity_graph import rebuild_entity_graph
+
             escalated = 0
             purged = 0
             graph_scopes: set[tuple[str, str, str]] = set()
@@ -1032,9 +1097,45 @@ class MemoryApplicationService:
                 if kind == "final_purge":
                     conn.execute(
                         "UPDATE compressed_memories SET status = 'purged', "
-                        "weight = 0.0, compressed_at = ? WHERE memory_id = ? "
+                        "activity_state = 'resolved', retention_state = 'purged', "
+                        "purged_at = COALESCE(purged_at, ?), weight = 0.0, compressed_at = ? WHERE memory_id = ? "
                         "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (now.isoformat(), memory_id, owner_id, workspace_id, memory_domain),
+                        (
+                            now.isoformat(),
+                            now.isoformat(),
+                            memory_id,
+                            owner_id,
+                            workspace_id,
+                            memory_domain,
+                        ),
+                    )
+                    if _vec0_available(conn):
+                        rowids = [
+                            int(row[0])
+                            for row in conn.execute(
+                                "SELECT rowid FROM memory_embeddings WHERE source_type = 'compressed' "
+                                "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                                "AND memory_id = ?",
+                                (owner_id, workspace_id, memory_domain, memory_id),
+                            ).fetchall()
+                        ]
+                        if rowids:
+                            vec_placeholders = ",".join("?" for _ in rowids)
+                            conn.execute(
+                                f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ({vec_placeholders})",
+                                tuple(rowids),
+                            )
+                    conn.execute(
+                        "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                        "AND memory_id = ?",
+                        (owner_id, workspace_id, memory_domain, memory_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM memory_fts WHERE source_type = 'compressed' "
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                        "AND memory_id = ?",
+                        (owner_id, workspace_id, memory_domain, memory_id),
                     )
                     purged += 1
                     graph_scopes.add((owner_id, workspace_id, memory_domain))
@@ -1300,22 +1401,257 @@ class MemoryApplicationService:
         return False
 
     async def _purge_expired_memories(self) -> int:
-        """Hard-delete purged memories older than the audit retention period."""
-        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+        """Advance dormant memories through purge candidacy, purge, and cleanup."""
+        reference = datetime.now(timezone.utc)
+        delete_cutoff = (reference - timedelta(days=self.config.purge_audit_retention_days)).isoformat()
+
         def write(conn: sqlite3.Connection) -> int:
+            from memai.indexes.entity_graph import rebuild_entity_graph
+
+            rows = conn.execute(
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE "
+                "memory_type IN ('event', 'scene') AND status = 'active' AND hidden = 0 "
+                "AND pinned = 0 AND COALESCE(identity_layer, '') = '' "
+                "ORDER BY timespan_end ASC, memory_id ASC LIMIT ?",
+                (5000,),
+            ).fetchall()
+            records = [_cmem_row_to_dict(row) for row in rows]
+            touched = 0
+            purge_targets: dict[tuple[str, str, str], list[str]] = {}
+            affected_graph_scopes: set[tuple[str, str, str]] = set()
+
+            for memory in records:
+                scope = (
+                    str(memory.get("owner_id") or DEFAULT_OWNER_ID),
+                    str(memory.get("workspace_id") or DEFAULT_WORKSPACE_ID),
+                    str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+                )
+                assessment = self._assess_retention_memory(
+                    conn,
+                    memory,
+                    reference=reference,
+                    scope=MemoryScope.create(scope[0], scope[1]),
+                    dormant_after_days=self.config.dormant_arc_after_days,
+                    purge_event_after_days=self.config.purge_event_after_days,
+                    purge_scene_after_days=self.config.purge_scene_after_days,
+                    purge_event_max_importance=self.config.purge_event_max_importance,
+                    purge_scene_max_importance=self.config.purge_scene_max_importance,
+                    purge_max_confidence=self.config.purge_max_confidence,
+                )
+                current_state = str(memory.get("retention_state") or "retained")
+                candidate_at = _parse_review_datetime(memory.get("purge_candidate_at"))
+                candidate_age_days = _days_between(
+                    reference,
+                    candidate_at.isoformat() if candidate_at else None,
+                )
+
+                if assessment["purge_candidate"]:
+                    conn.execute(
+                        "UPDATE compressed_memories SET retention_state = 'purge_candidate', "
+                        "purge_candidate_at = COALESCE(purge_candidate_at, ?), "
+                        "purge_reason = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                        "AND memory_domain = ? AND status = 'active'",
+                        (
+                            reference.isoformat(),
+                            json.dumps(assessment["purge_reasons"], ensure_ascii=False),
+                            memory["memory_id"],
+                            scope[0],
+                            scope[1],
+                            scope[2],
+                        ),
+                    )
+                    touched += 1
+                    if candidate_age_days is not None and candidate_age_days >= self.config.purge_candidate_grace_days:
+                        purge_targets.setdefault(scope, []).append(memory["memory_id"])
+                        affected_graph_scopes.add(scope)
+                    continue
+
+                if current_state == "purge_candidate":
+                    conn.execute(
+                        "UPDATE compressed_memories SET retention_state = 'retained', "
+                        "purge_candidate_at = NULL, purge_reason = NULL "
+                        "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                        "AND status = 'active'",
+                        (memory["memory_id"], scope[0], scope[1], scope[2]),
+                    )
+                    touched += 1
+
+            for scope, memory_ids in purge_targets.items():
+                owner_id, workspace_id, memory_domain = scope
+                placeholders = ",".join("?" for _ in memory_ids)
+                if _vec0_available(conn):
+                    rowids = [
+                        int(row[0])
+                        for row in conn.execute(
+                            "SELECT rowid FROM memory_embeddings WHERE source_type = 'compressed' "
+                            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                            f"AND memory_id IN ({placeholders})",
+                            (owner_id, workspace_id, memory_domain, *memory_ids),
+                        ).fetchall()
+                    ]
+                    if rowids:
+                        vec_placeholders = ",".join("?" for _ in rowids)
+                        conn.execute(
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ({vec_placeholders})",
+                            tuple(rowids),
+                        )
+                conn.execute(
+                    "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
+                    f"AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (owner_id, workspace_id, memory_domain, *memory_ids),
+                )
+                conn.execute(
+                    "DELETE FROM memory_fts WHERE source_type = 'compressed' "
+                    f"AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (owner_id, workspace_id, memory_domain, *memory_ids),
+                )
+                conn.execute(
+                    "UPDATE compressed_memories SET status = 'purged', activity_state = 'resolved', "
+                    "retention_state = 'purged', purged_at = COALESCE(purged_at, ?), "
+                    "weight = 0.0 WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders}) AND status = 'active'",
+                    (reference.isoformat(), owner_id, workspace_id, memory_domain, *memory_ids),
+                )
+                touched += len(memory_ids)
+
+            if affected_graph_scopes:
+                from memai.indexes.entity_graph import rebuild_entity_graph
+
+                for owner_id, workspace_id, memory_domain in sorted(affected_graph_scopes):
+                    rebuild_entity_graph(
+                        conn,
+                        owner_id=owner_id,
+                        workspace_id=workspace_id,
+                        memory_domain=memory_domain,
+                    )
+
+            purged_rows = conn.execute(
+                "SELECT memory_id, owner_id, workspace_id, memory_domain FROM compressed_memories "
+                "WHERE status = 'purged'"
+            ).fetchall()
+            purged_scopes: dict[tuple[str, str, str], list[str]] = {}
+            for memory_id, owner_id, workspace_id, memory_domain in purged_rows:
+                purged_scopes.setdefault(
+                    (str(owner_id), str(workspace_id), str(memory_domain)), []
+                ).append(str(memory_id))
+            for scope, memory_ids in purged_scopes.items():
+                owner_id, workspace_id, memory_domain = scope
+                placeholders = ",".join("?" for _ in memory_ids)
+                if _vec0_available(conn):
+                    rowids = [
+                        int(row[0])
+                        for row in conn.execute(
+                            "SELECT rowid FROM memory_embeddings WHERE source_type = 'compressed' "
+                            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                            f"AND memory_id IN ({placeholders})",
+                            (owner_id, workspace_id, memory_domain, *memory_ids),
+                        ).fetchall()
+                    ]
+                    if rowids:
+                        vec_placeholders = ",".join("?" for _ in rowids)
+                        conn.execute(
+                            f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ({vec_placeholders})",
+                            tuple(rowids),
+                        )
+                conn.execute(
+                    "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
+                    f"AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (owner_id, workspace_id, memory_domain, *memory_ids),
+                )
+                conn.execute(
+                    "DELETE FROM memory_fts WHERE source_type = 'compressed' "
+                    f"AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (owner_id, workspace_id, memory_domain, *memory_ids),
+                )
+                rebuild_entity_graph(
+                    conn,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    memory_domain=memory_domain,
+                )
+
             cursor = conn.execute(
                 "DELETE FROM compressed_memories "
                 "WHERE status = 'purged' AND pinned = 0 "
                 "AND identity_layer IS NULL "
-                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
-                (cutoff,),
+                "AND memory_id NOT LIKE 'identity-founding-%' AND ("
+                "purged_at < ? OR (purged_at IS NULL AND compressed_at < ?))",
+                (delete_cutoff, delete_cutoff),
             )
-            return max(0, int(cursor.rowcount or 0))
+            touched += max(0, int(cursor.rowcount or 0))
+            return touched
 
         deleted = await self._repository_write_async(write)
         if deleted:
-            logger.info("Purged %d expired compressed memories", deleted)
+            logger.info("Advanced purge maintenance across %d memories", deleted)
         return deleted
+
+    async def _refresh_dormant_arcs(self) -> int:
+        """Mark stale arcs dormant without changing visibility or content."""
+        reference = datetime.now(timezone.utc)
+
+        def read(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+            rows = conn.execute(
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE "
+                "memory_type = 'arc' AND status = 'active' AND hidden = 0 AND pinned = 0 "
+                "AND COALESCE(identity_layer, '') = ''"
+            ).fetchall()
+            candidates: list[dict[str, Any]] = []
+            for row in rows:
+                memory = _cmem_row_to_dict(row)
+                assessment = self._assess_retention_memory(
+                    conn,
+                    memory,
+                    reference=reference,
+                    scope=MemoryScope.create(
+                        str(memory.get("owner_id") or DEFAULT_OWNER_ID),
+                        str(memory.get("workspace_id") or DEFAULT_WORKSPACE_ID),
+                    ),
+                    dormant_after_days=self.config.dormant_arc_after_days,
+                    purge_event_after_days=180,
+                    purge_scene_after_days=365,
+                    purge_event_max_importance=0.35,
+                    purge_scene_max_importance=0.45,
+                    purge_max_confidence=0.5,
+                )
+                if assessment["dormant_candidate"]:
+                    candidates.append(memory)
+            return candidates
+
+        candidates = self._repository_read(read)
+        if not candidates:
+            return 0
+
+        def write(conn: sqlite3.Connection) -> int:
+            refreshed = 0
+            now = datetime.now(timezone.utc).isoformat()
+            for memory in candidates:
+                cursor = conn.execute(
+                    "UPDATE compressed_memories SET activity_state = 'dormant', "
+                    "dormant_at = COALESCE(dormant_at, ?), dormant_reason = COALESCE(dormant_reason, ?), "
+                    "retention_state = COALESCE(retention_state, 'retained') "
+                    "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+                    "AND status = 'active' AND hidden = 0 AND pinned = 0",
+                    (
+                        now,
+                        "auto_dormant_window",
+                        memory["memory_id"],
+                        memory["owner_id"],
+                        memory["workspace_id"],
+                        memory["memory_domain"],
+                    ),
+                )
+                refreshed += max(0, int(cursor.rowcount or 0))
+            return refreshed
+
+        refreshed = await self._repository_write_async(write)
+        if refreshed:
+            logger.info("Marked %d dormant arcs", refreshed)
+        return refreshed
 
     def _http_handlers(self) -> Dict[str, Callable[..., object]]:
         """Expose only application handlers required by the HTTP adapter."""
@@ -1355,6 +1691,7 @@ class MemoryApplicationService:
             "tier2_compress": self.tier2_compress,
             "tier1_stats": self.tier1_stats,
             "search_compressed": self.search_compressed,
+            "review_retention": self.review_retention,
             "trace_compressed_by_turn": self.trace_compressed_by_turn,
             "trigger_lifecycle": self.trigger_lifecycle,
             "run_all_rules": self.run_all_rules,
@@ -2300,6 +2637,7 @@ class MemoryApplicationService:
             ("identity_experience", self._identity_experience_cycle),
             ("tier1_decay", self._tier1_decay_cycle),
             ("tier2_bridge", self._tier2_bridge_cycle),
+            ("refresh_dormant_arcs", self._refresh_dormant_arcs),
             ("lifecycle_escalation", self._apply_compression_lifecycle),
             ("purge_expired", self._purge_expired_memories),
         ]
@@ -2534,10 +2872,21 @@ class MemoryApplicationService:
                     "last_run": self._last_rule_run.get(name),
                     "run_count": self._rule_run_counts.get(name, 0),
                 }
-                for name in ["tier1_decay", "tier2_bridge", "lifecycle_escalation", "purge_expired"]
+                for name in [
+                    "tier1_decay",
+                    "tier2_bridge",
+                    "refresh_dormant_arcs",
+                    "lifecycle_escalation",
+                    "purge_expired",
+                ]
             },
             "compression_interval": self.config.compression_interval,
             "tier1_retention_days": self.config.tier1_retention_days,
+            "dormant_arc_after_days": self.config.dormant_arc_after_days,
+            "purge_event_after_days": self.config.purge_event_after_days,
+            "purge_scene_after_days": self.config.purge_scene_after_days,
+            "purge_candidate_grace_days": self.config.purge_candidate_grace_days,
+            "purge_audit_retention_days": self.config.purge_audit_retention_days,
             "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
             "lifecycle_escalation_enabled": self._AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED,
             "lifecycle_state": lifecycle_state,
@@ -3370,8 +3719,13 @@ class MemoryApplicationService:
                     timezone_name=self.config.time_summary_timezone,
                 )
             )
+        target_month_anchor = (
+            str(week_summary["period_start"])
+            if week_summary is not None
+            else str(day_summary["period_start"])
+        )
         target_month_key = month_bucket_for_timestamp(
-            str(day_summary["period_start"]),
+            target_month_anchor,
             timezone_name=self.config.time_summary_timezone,
         )
         for month_key in sorted(affected_month_keys):
@@ -4490,6 +4844,427 @@ class MemoryApplicationService:
 
     # ── Compressed Memories Query ─────────────────────────────────
 
+    async def review_retention(self, request: RetentionReviewRequest):
+        """Return a read-only dormant/purge dry-run report for durable memory."""
+        scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        source_domains = _authorized_read_domains(
+            request.memory_actor,
+            request.source_domains or None,
+        )
+        reference = _parse_review_datetime(request.reference_time)
+        if request.reference_time and reference is None:
+            raise HTTPException(
+                status_code=400,
+                detail="reference_time must be an ISO datetime",
+            )
+        reference = reference or datetime.now(timezone.utc)
+        domain_placeholders = ",".join("?" for _ in source_domains)
+
+        def read(conn: sqlite3.Connection) -> dict[str, Any]:
+            overview_rows = conn.execute(
+                "SELECT memory_type, status, COUNT(*) FROM compressed_memories "
+                "WHERE ((owner_id = ? AND workspace_id = ?) OR "
+                "(owner_id = ? AND workspace_id = ?)) "
+                f"AND memory_domain IN ({domain_placeholders}) "
+                "GROUP BY memory_type, status ORDER BY memory_type, status",
+                (
+                    scope.owner_id,
+                    scope.workspace_id,
+                    GLOBAL_SCOPE_ID,
+                    GLOBAL_SCOPE_ID,
+                    *source_domains,
+                ),
+            ).fetchall()
+            rows = conn.execute(
+                f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE "
+                "((owner_id = ? AND workspace_id = ?) OR "
+                "(owner_id = ? AND workspace_id = ?)) "
+                f"AND memory_domain IN ({domain_placeholders}) "
+                "ORDER BY timespan_end ASC, memory_id ASC LIMIT ?",
+                (
+                    scope.owner_id,
+                    scope.workspace_id,
+                    GLOBAL_SCOPE_ID,
+                    GLOBAL_SCOPE_ID,
+                    *source_domains,
+                    request.scan_limit,
+                ),
+            ).fetchall()
+            memories = [_cmem_row_to_dict(row) for row in rows]
+            dormant_candidates: list[dict[str, Any]] = []
+            purge_candidates: list[dict[str, Any]] = []
+            protected: list[dict[str, Any]] = []
+            dormant_candidate_count = 0
+            purge_candidate_count = 0
+
+            for memory in memories:
+                assessment = self._assess_retention_memory(
+                    conn,
+                    memory,
+                    reference=reference,
+                    scope=scope,
+                    dormant_after_days=request.dormant_after_days,
+                    purge_event_after_days=request.purge_event_after_days,
+                    purge_scene_after_days=request.purge_scene_after_days,
+                    purge_event_max_importance=request.purge_event_max_importance,
+                    purge_scene_max_importance=request.purge_scene_max_importance,
+                    purge_max_confidence=request.purge_max_confidence,
+                )
+                if assessment["dormant_candidate"]:
+                    dormant_candidate_count += 1
+                    if len(dormant_candidates) < request.limit:
+                        dormant_candidates.append(assessment["record"])
+                if assessment["purge_candidate"]:
+                    purge_candidate_count += 1
+                    if len(purge_candidates) < request.limit:
+                        purge_candidates.append(assessment["record"])
+                if (
+                    request.include_protected
+                    and not assessment["purge_candidate"]
+                    and assessment["protected_reasons"]
+                    and len(protected) < request.limit
+                ):
+                    protected.append(
+                        {
+                            **assessment["record"],
+                            "protected_reasons": assessment["protected_reasons"],
+                        }
+                    )
+
+            return {
+                "status": "dry_run",
+                "dry_run": True,
+                "reference_time": reference.isoformat(),
+                "scope": scope.as_dict(),
+                "source_domains": list(source_domains),
+                "thresholds": {
+                    "dormant_after_days": request.dormant_after_days,
+                    "purge_event_after_days": request.purge_event_after_days,
+                    "purge_scene_after_days": request.purge_scene_after_days,
+                    "purge_event_max_importance": request.purge_event_max_importance,
+                    "purge_scene_max_importance": request.purge_scene_max_importance,
+                    "purge_max_confidence": request.purge_max_confidence,
+                    "protected_event_kinds": sorted(
+                        _RETENTION_PURGE_EVENT_KINDS_PROTECTED
+                    ),
+                },
+                "overview": [
+                    {
+                        "memory_type": str(memory_type),
+                        "status": str(status),
+                        "count": int(count),
+                    }
+                    for memory_type, status, count in overview_rows
+                ],
+                "counts": {
+                    "scanned": len(memories),
+                    "dormant_candidates": dormant_candidate_count,
+                    "purge_candidates": purge_candidate_count,
+                    "protected_returned": len(protected),
+                },
+                "dormant_candidates": dormant_candidates,
+                "purge_candidates": purge_candidates,
+                "protected": protected,
+            }
+
+        return self._repository_read(read)
+
+    def _assess_retention_memory(
+        self,
+        conn: sqlite3.Connection,
+        memory: dict[str, Any],
+        *,
+        reference: datetime,
+        scope: MemoryScope,
+        dormant_after_days: int,
+        purge_event_after_days: int,
+        purge_scene_after_days: int,
+        purge_event_max_importance: float,
+        purge_scene_max_importance: float,
+        purge_max_confidence: float,
+    ) -> dict[str, Any]:
+        memory_id = str(memory.get("memory_id") or "")
+        memory_type = str(memory.get("memory_type") or "")
+        status = str(memory.get("status") or "")
+        identity_layer = str(memory.get("identity_layer") or "")
+        pinned = bool(memory.get("pinned"))
+        hidden = bool(memory.get("hidden"))
+        timespan_end = memory.get("timespan_end")
+        last_accessed_at = memory.get("last_accessed_at")
+        compressed_at = memory.get("compressed_at")
+        child_anchor, child_count = self._retention_child_anchor(
+            conn,
+            memory_id=memory_id,
+            owner_id=str(memory.get("owner_id") or scope.owner_id),
+            workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
+            memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+        )
+        anchor = _latest_review_datetime(timespan_end, last_accessed_at, child_anchor)
+        if anchor is None:
+            anchor = _parse_review_datetime(compressed_at)
+        anchor_age_days = _days_between(reference, anchor.isoformat() if anchor else None)
+        importance = float(memory.get("importance") or 0.0)
+        confidence = float(memory.get("confidence") or 0.0)
+        citation_count = int(memory.get("citation_count") or 0)
+        access_count = int(memory.get("access_count") or 0)
+        relevant_feedback = self._retention_feedback_count(
+            conn,
+            memory_id=memory_id,
+            owner_id=str(memory.get("owner_id") or scope.owner_id),
+            workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
+            memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+            verdict="relevant",
+        )
+        promotion_refs = self._retention_promotion_ref_count(
+            conn,
+            memory_id=memory_id,
+            owner_id=str(memory.get("owner_id") or scope.owner_id),
+            workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
+            memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+        )
+        pending_promotions = self._retention_pending_promotion_count(
+            conn,
+            memory_id=memory_id,
+            owner_id=str(memory.get("owner_id") or scope.owner_id),
+            workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
+            memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+        )
+        parent_active = self._retention_parent_active(
+            conn,
+            memory=memory,
+            expected_parent_type="scene" if memory_type == "event" else "arc",
+        )
+        source_turns = [
+            item
+            for item in _json_string_list(json.dumps(memory.get("source_turns") or []))
+            if item
+        ]
+        archived_sources = self._retention_archived_source_count(
+            conn,
+            source_turns=source_turns,
+            owner_id=str(memory.get("owner_id") or scope.owner_id),
+            workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
+            memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+        )
+
+        protected_reasons: list[str] = []
+        if status != "active":
+            protected_reasons.append("status_not_active")
+        if pinned:
+            protected_reasons.append("pinned")
+        if hidden:
+            protected_reasons.append("hidden")
+        if identity_layer:
+            protected_reasons.append("identity_layer")
+        if memory_id.startswith("identity-founding-"):
+            protected_reasons.append("founding_identity")
+        if citation_count > 0:
+            protected_reasons.append("cited")
+        if relevant_feedback > 0:
+            protected_reasons.append("relevant_feedback")
+        if promotion_refs > 0:
+            protected_reasons.append("active_promotion_reference")
+        if pending_promotions > 0:
+            protected_reasons.append("pending_promotion_candidate")
+
+        dormant_reasons: list[str] = []
+        dormant_candidate = False
+        if memory_type == "arc" and status == "active":
+            if pinned or hidden or identity_layer or memory_id.startswith("identity-founding-"):
+                pass
+            elif anchor_age_days is not None and anchor_age_days >= dormant_after_days:
+                dormant_candidate = True
+                dormant_reasons.append("arc_inactive_past_dormant_window")
+
+        purge_reasons: list[str] = []
+        purge_candidate = False
+        if memory_type not in {"event", "scene"}:
+            protected_reasons.append("not_automatic_purge_target")
+        elif not parent_active:
+            protected_reasons.append("missing_active_parent_summary")
+        elif memory_type == "event" and str(memory.get("event_kind") or "") in _RETENTION_PURGE_EVENT_KINDS_PROTECTED:
+            protected_reasons.append("protected_event_kind")
+        else:
+            max_age = (
+                purge_event_after_days if memory_type == "event" else purge_scene_after_days
+            )
+            max_importance = (
+                purge_event_max_importance
+                if memory_type == "event"
+                else purge_scene_max_importance
+            )
+            if anchor_age_days is None or anchor_age_days < max_age:
+                protected_reasons.append("recent_activity")
+            if importance >= max_importance:
+                protected_reasons.append("importance_protected")
+            if confidence >= purge_max_confidence:
+                protected_reasons.append("confidence_protected")
+            if memory_type == "event" and not source_turns:
+                protected_reasons.append("missing_source_turns")
+            if source_turns and archived_sources < len(set(source_turns)):
+                protected_reasons.append("source_turns_not_archived")
+            if not protected_reasons:
+                purge_candidate = True
+                purge_reasons.extend(
+                    [
+                        "old_low_importance",
+                        "low_confidence",
+                        "represented_by_active_parent",
+                        "no_feedback_or_external_reference",
+                    ]
+                )
+                if source_turns:
+                    purge_reasons.append("source_turns_archived")
+
+        record = {
+            "memory_id": memory_id,
+            "memory_type": memory_type,
+            "title": memory.get("title"),
+            "memory_domain": memory.get("memory_domain"),
+            "status": status,
+            "activity_state": memory.get("activity_state"),
+            "retention_state": memory.get("retention_state"),
+            "importance": importance,
+            "confidence": confidence,
+            "event_kind": memory.get("event_kind"),
+            "timespan_end": timespan_end,
+            "last_accessed_at": last_accessed_at,
+            "activity_anchor": anchor.isoformat() if anchor else None,
+            "activity_age_days": round(anchor_age_days, 2) if anchor_age_days is not None else None,
+            "access_count": access_count,
+            "citation_count": citation_count,
+            "child_count": child_count,
+            "relevant_feedback_count": relevant_feedback,
+            "promotion_reference_count": promotion_refs,
+            "pending_promotion_count": pending_promotions,
+            "parent_active": parent_active,
+            "source_turn_count": len(set(source_turns)),
+            "archived_source_turn_count": archived_sources,
+            "dormant_reasons": dormant_reasons,
+            "purge_reasons": purge_reasons,
+        }
+        return {
+            "record": record,
+            "dormant_candidate": dormant_candidate,
+            "purge_candidate": purge_candidate,
+            "protected_reasons": list(dict.fromkeys(protected_reasons)),
+            "purge_reasons": purge_reasons,
+        }
+
+    @staticmethod
+    def _retention_child_anchor(
+        conn: sqlite3.Connection,
+        *,
+        memory_id: str,
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+    ) -> tuple[str | None, int]:
+        row = conn.execute(
+            "SELECT MAX(timespan_end), COUNT(*) FROM compressed_memories "
+            "WHERE timeline_parent_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ? AND status = 'active' AND hidden = 0",
+            (memory_id, owner_id, workspace_id, memory_domain),
+        ).fetchone()
+        return (str(row[0]) if row and row[0] else None, int(row[1] or 0) if row else 0)
+
+    @staticmethod
+    def _retention_feedback_count(
+        conn: sqlite3.Connection,
+        *,
+        memory_id: str,
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+        verdict: str,
+    ) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM recall_feedback WHERE memory_id = ? "
+            "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+            "AND verdict = ?",
+            (memory_id, owner_id, workspace_id, memory_domain, verdict),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    @staticmethod
+    def _retention_promotion_ref_count(
+        conn: sqlite3.Connection,
+        *,
+        memory_id: str,
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+    ) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM memory_promotion_refs WHERE source_memory_id = ? "
+            "AND owner_id = ? AND workspace_id = ? AND source_domain = ? "
+            "AND status = 'active'",
+            (memory_id, owner_id, workspace_id, memory_domain),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    @staticmethod
+    def _retention_pending_promotion_count(
+        conn: sqlite3.Connection,
+        *,
+        memory_id: str,
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+    ) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM memory_promotion_candidates "
+            "WHERE source_memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND source_domain = ? AND status = 'pending'",
+            (memory_id, owner_id, workspace_id, memory_domain),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    @staticmethod
+    def _retention_parent_active(
+        conn: sqlite3.Connection,
+        *,
+        memory: dict[str, Any],
+        expected_parent_type: str,
+    ) -> bool:
+        parent_id = str(memory.get("timeline_parent_id") or "").strip()
+        if not parent_id:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM compressed_memories WHERE memory_id = ? "
+            "AND memory_type = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ? AND status = 'active' AND hidden = 0",
+            (
+                parent_id,
+                expected_parent_type,
+                str(memory.get("owner_id") or DEFAULT_OWNER_ID),
+                str(memory.get("workspace_id") or DEFAULT_WORKSPACE_ID),
+                str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
+            ),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _retention_archived_source_count(
+        conn: sqlite3.Connection,
+        *,
+        source_turns: list[str],
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+    ) -> int:
+        unique = sorted(set(source_turns))
+        if not unique:
+            return 0
+        placeholders = ",".join("?" for _ in unique)
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT turn_id) FROM turns_archive "
+            f"WHERE turn_id IN ({placeholders}) AND owner_id = ? "
+            "AND workspace_id = ? AND memory_domain = ?",
+            (*unique, owner_id, workspace_id, memory_domain),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+
     async def search_compressed(self, request: dict):
         """Search compressed memories by type, topic, time range, or text.
 
@@ -4569,6 +5344,7 @@ class MemoryApplicationService:
             results = [_cmem_row_to_dict(row) for row in rows]
             results.sort(key=lambda item: item.get("dynamic_weight", 0), reverse=True)
             now_iso = datetime.now().isoformat()
+            reactivated: list[dict[str, str]] = []
             for item in results[:limit]:
                 conn.execute(
                     "UPDATE compressed_memories SET access_count = access_count + 1, "
@@ -4579,6 +5355,23 @@ class MemoryApplicationService:
                     (now_iso, item["memory_id"], scope.owner_id, scope.workspace_id,
                      GLOBAL_SCOPE_ID, GLOBAL_SCOPE_ID, *source_domains),
                 )
+                if item.get("memory_type") == "arc" and item.get("activity_state") == "dormant":
+                    conn.execute(
+                        "UPDATE compressed_memories SET "
+                        + self._retention_reactivation_update_clause()
+                        + " WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                        "AND memory_domain IN (" + domain_placeholders + ")",
+                        (now_iso, item["memory_id"], scope.owner_id, scope.workspace_id, *source_domains),
+                    )
+                    reactivated.append({"memory_id": item["memory_id"], "memory_type": "arc"})
+            if reactivated:
+                for item in results:
+                    if item["memory_id"] in {entry["memory_id"] for entry in reactivated}:
+                        item["activity_state"] = "active"
+                        item["dormant_at"] = None
+                        item["dormant_reason"] = None
+                        item["last_reactivated_at"] = now_iso
+                        item["retention_state"] = "retained"
             return results
 
         results = await self._repository_write_async(read_and_touch)
@@ -5549,15 +6342,19 @@ class MemoryApplicationService:
                 "INSERT INTO compressed_memories "
                 "(memory_id, memory_domain, memory_type, title, summary, timespan_start, timespan_end, "
                 "importance, confidence, topics, entities, source_turns, compressed_at, "
-                "compression_level, status, weight, event_kind, pinned, hidden, "
-                "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, created_at) "
+                "compression_level, status, weight, activity_state, retention_state, "
+                "event_kind, pinned, hidden, evidence_refs, origin_type, origin_id, "
+                "verified_at, owner_id, workspace_id, created_at, last_reactivated_at) "
                 "VALUES (?, ?, 'event', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?, 0, 'active', "
-                "0.8, ?, 0, 0, ?, 'agent_explicit_memory', ?, ?, ?, ?, ?) "
+                "0.8, 'active', 'retained', ?, 0, 0, ?, 'agent_explicit_memory', ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(memory_id) DO UPDATE SET "
                 "title = excluded.title, summary = excluded.summary, "
                 "importance = excluded.importance, topics = excluded.topics, "
                 "entities = excluded.entities, source_turns = excluded.source_turns, "
-                "event_kind = excluded.event_kind, evidence_refs = excluded.evidence_refs",
+                "event_kind = excluded.event_kind, evidence_refs = excluded.evidence_refs, "
+                "activity_state = 'active', dormant_at = NULL, dormant_reason = NULL, "
+                "last_reactivated_at = excluded.last_reactivated_at, retention_state = 'retained', "
+                "purge_candidate_at = NULL, purge_reason = NULL, purged_at = NULL",
                 (
                     memory_id,
                     memory_domain,
@@ -5576,6 +6373,7 @@ class MemoryApplicationService:
                     now,
                     scope.owner_id,
                     scope.workspace_id,
+                    now,
                     now,
                 ),
             )
@@ -5680,12 +6478,32 @@ class MemoryApplicationService:
         )
         cached = self._cached_read(cache_key)
         if cached is not None:
+            if cached.get("status") == "purged":
+                raise HTTPException(status_code=404, detail="Compressed memory not found")
+            if cached.get("memory_type") == "arc" and cached.get("activity_state") == "dormant":
+                await self.reactivate_memory(
+                    memory_id,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    memory_actor=memory_actor,
+                    memory_domain=memory_domain,
+                )
+                cached.update(
+                    {
+                        "activity_state": "active",
+                        "dormant_at": None,
+                        "dormant_reason": None,
+                        "last_reactivated_at": datetime.now(timezone.utc).isoformat(),
+                        "retention_state": "retained",
+                    }
+                )
             return cached
         row = self._repository_read(
             lambda conn: conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE memory_id = ? AND "
                 "((owner_id = ? AND workspace_id = ?) OR "
-                "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ?",
+                "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ? "
+                "AND status != 'purged'",
                 (
                     memory_id,
                     scope.owner_id,
@@ -5699,6 +6517,32 @@ class MemoryApplicationService:
         if not row:
             raise HTTPException(status_code=404, detail="Compressed memory not found")
         payload = _cmem_row_to_dict(row)
+        if payload.get("memory_type") == "arc" and payload.get("activity_state") == "dormant":
+            def wake(conn: sqlite3.Connection) -> None:
+                conn.execute(
+                    "UPDATE compressed_memories SET "
+                    + self._retention_reactivation_update_clause()
+                    + " WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ?",
+                    (
+                        datetime.now(timezone.utc).isoformat(),
+                        memory_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        authorized_domain,
+                    ),
+                )
+
+            await self._repository_write_async(wake)
+            payload.update(
+                {
+                    "activity_state": "active",
+                    "dormant_at": None,
+                    "dormant_reason": None,
+                    "last_reactivated_at": datetime.now(timezone.utc).isoformat(),
+                    "retention_state": "retained",
+                }
+            )
         payload["commit_revision"] = getattr(self._repository, "commit_revision", 0)
         return self._store_cached_read(cache_key, payload)
 
@@ -5719,6 +6563,7 @@ class MemoryApplicationService:
                 "((c.owner_id = ? AND c.workspace_id = ?) OR "
                 "(c.owner_id = ? AND c.workspace_id = ?)) "
                 "AND c.memory_domain = ? "
+                "AND c.status != 'purged' "
                 "AND EXISTS (SELECT 1 FROM json_each(c.source_turns) WHERE value = ?)",
                 (
                     scope.owner_id,
@@ -5780,6 +6625,104 @@ class MemoryApplicationService:
             memory_domain=memory_domain,
         )
 
+    @staticmethod
+    def _retention_reactivation_update_clause() -> str:
+        return (
+            "activity_state = 'active', dormant_at = NULL, dormant_reason = NULL, "
+            "last_reactivated_at = ?, retention_state = 'retained', "
+            "purge_candidate_at = NULL, purge_reason = NULL, purged_at = NULL"
+        )
+
+    async def mark_memory_dormant(
+        self,
+        memory_id: str,
+        *,
+        reason: str,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
+    ):
+        self._reject_founding_identity_mutation(memory_id)
+        scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
+        now = datetime.now(timezone.utc).isoformat()
+
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            cur = conn.execute(
+                "UPDATE compressed_memories SET activity_state = 'dormant', "
+                "dormant_at = COALESCE(dormant_at, ?), dormant_reason = ?, "
+                "retention_state = COALESCE(NULLIF(retention_state, 'purged'), 'retained') "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND status = 'active' AND hidden = 0",
+                (
+                    now,
+                    str(reason)[:2000],
+                    memory_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    authorized_domain,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            return {
+                "memory_id": memory_id,
+                "activity_state": "dormant",
+                "dormant_at": now,
+                "reason": str(reason)[:2000],
+                **scope.as_dict(),
+            }
+
+        return await self._repository_write_async(write)
+
+    async def reactivate_memory(
+        self,
+        memory_id: str,
+        *,
+        reason: str = "",
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
+    ):
+        self._reject_founding_identity_mutation(memory_id)
+        scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
+        now = datetime.now(timezone.utc).isoformat()
+
+        def write(conn: sqlite3.Connection) -> dict[str, Any]:
+            cur = conn.execute(
+                "UPDATE compressed_memories SET "
+                + self._retention_reactivation_update_clause()
+                + " WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND status = 'active'",
+                (
+                    now,
+                    memory_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    authorized_domain,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Memory not found")
+            if reason:
+                conn.execute(
+                    "UPDATE compressed_memories SET dormant_reason = NULL WHERE memory_id = ? "
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+                )
+            return {
+                "memory_id": memory_id,
+                "activity_state": "active",
+                "last_reactivated_at": now,
+                "reason": str(reason)[:2000],
+                **scope.as_dict(),
+            }
+
+        return await self._repository_write_async(write)
+
     async def pin_memory(
         self,
         memory_id: str,
@@ -5795,9 +6738,10 @@ class MemoryApplicationService:
         def write(conn: sqlite3.Connection) -> None:
             cur = conn.execute(
                 "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
-                "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                "AND memory_domain = ?",
-                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+                "weight = 1.0, " + self._retention_reactivation_update_clause() + " "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND status = 'active'",
+                (datetime.now(timezone.utc).isoformat(), memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
             )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Memory not found")
@@ -5825,9 +6769,10 @@ class MemoryApplicationService:
         def write(conn: sqlite3.Connection) -> None:
             cur = conn.execute(
                 "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
-                "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                "AND memory_domain = ?",
-                (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+                "weight = 0.0, " + self._retention_reactivation_update_clause() + " "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND status = 'active'",
+                (datetime.now(timezone.utc).isoformat(), memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
             )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Memory not found")
@@ -5865,9 +6810,17 @@ class MemoryApplicationService:
             base_w = self._LEVEL_WEIGHT.get(level, 0.2)
             conn.execute(
                 "UPDATE compressed_memories SET pinned = 0, hidden = 0, "
-                "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                "AND memory_domain = ?",
-                (base_w, memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
+                f"weight = ?, {self._retention_reactivation_update_clause()} "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_domain = ? AND status = 'active'",
+                (
+                    base_w,
+                    datetime.now(timezone.utc).isoformat(),
+                    memory_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    authorized_domain,
+                ),
             )
             self._rebuild_scoped_entity_graph(
                 conn,

@@ -118,6 +118,24 @@ def test_rollback_can_be_redone_and_new_writes_close_redo_branch(store):
         store.redo(project_id=project_id, batch_id=applied["batch_id"])
 
 
+def test_completion_claims_are_verified_on_all_write_paths(store):
+    project = store.create_project("P", reason="init")
+    pid = project["project"]["id"]
+    with pytest.raises(ValueError, match="progress=1"):
+        store.create_node(pid, {"node_type": "task", "title": "T", "status": "completed", "progress": 0.5}, reason="invalid")
+    node = store.create_node(pid, {"node_type": "task", "title": "T"}, reason="add")["node"]
+    with pytest.raises(ValueError, match="progress=1"):
+        store.update_node(node["id"], 1, {"status": "completed", "progress": 0.5}, reason="invalid")
+    with pytest.raises(ValueError, match="progress=1"):
+        store.apply_batch(pid, [{"op": "update_node", "node_id": node["id"], "patch": {"status": "completed", "progress": 0.5}}], reason="invalid")
+    with pytest.raises(ValueError, match="acceptance criteria"):
+        store.update_node(node["id"], 1, {"status": "completed", "progress": 1, "acceptance_criteria": [{"title": "test", "met": False}]}, reason="invalid")
+    valid = store.update_node(node["id"], 1, {"status": "completed", "progress": 1}, reason="finish")
+    assert valid["node"]["completed_at"] is not None
+    reopened = store.update_node(node["id"], 2, {"status": "in_progress", "progress": 0.5}, reason="reopen")
+    assert reopened["node"]["completed_at"] is None
+
+
 def test_optimistic_lock_and_soft_delete(store):
     project = store.create_project("P", reason="init")
     node = store.create_node(project["project"]["id"], {"node_type": "task", "title": "T"}, reason="add")["node"]
@@ -188,6 +206,8 @@ def test_api_and_tool_schemas(tmp_path):
         app.state.goal_store.db_path.with_name("test_goal_service_api.db.owner").unlink(missing_ok=True)
 
     assert len(SCHEMAS) == 14
+    from plugins.goal_manager.tools.agent_tools import NON_IDEMPOTENT_WRITE_TOOLS, READ_TOOLS
+    assert READ_TOOLS.isdisjoint(NON_IDEMPOTENT_WRITE_TOOLS)
     for schema in SCHEMAS.values():
         assert schema["parameters"]["type"] == "object"
         assert "properties" in schema["parameters"]

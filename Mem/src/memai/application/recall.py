@@ -1137,7 +1137,7 @@ def _tier2_candidates(
     rows = conn.execute(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
-        "event_kind, access_count, citation_count, pinned, weight, "
+        "event_kind, access_count, citation_count, pinned, weight, activity_state, "
         "identity_layer, evidence_refs, memory_domain, identity_metadata "
         "FROM compressed_memories WHERE "
         + " AND ".join(clauses)
@@ -1170,6 +1170,7 @@ def _tier2_candidates(
         dynamic_weight = _dynamic_weight(
             float(row[15] or 0.0),
             event_kind=row[11],
+            activity_state=row[16],
             access_count=int(row[12] or 0),
             citation_count=int(row[13] or 0),
             pinned=bool(row[14]),
@@ -1216,10 +1217,11 @@ def _tier2_candidates(
                 "topics": topics,
                 "entities": entities,
                 "source_turns": _json_list(row[10]),
-                "identity_layer": row[16],
-                "evidence_refs": _json_list(row[17]),
-                "memory_domain": row[18],
-                "identity_metadata": _json_object(row[19]),
+                "activity_state": row[16],
+                "identity_layer": row[17],
+                "evidence_refs": _json_list(row[18]),
+                "memory_domain": row[19],
+                "identity_metadata": _json_object(row[20]),
                 "raw_score": round(score, 6),
                 "normalized_score": round(min(score, 1.0), 6),
                 "score": round(min(score, 1.0), 6),
@@ -1583,7 +1585,7 @@ def _graph_candidates(
     rows = conn.execute(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
-        "event_kind, access_count, citation_count, pinned, weight, "
+        "event_kind, access_count, citation_count, pinned, weight, activity_state, "
         "identity_layer, evidence_refs, memory_domain "
         f"FROM compressed_memories WHERE memory_id IN ({placeholders}) "
         "AND status = 'active' AND hidden = 0 AND "
@@ -1619,6 +1621,7 @@ def _graph_candidates(
             access_count=int(row[12] or 0),
             citation_count=int(row[13] or 0),
             pinned=bool(row[14]),
+            activity_state=row[16],
         )
         importance = float(row[6] or 0.0)
         recency = _recency_score(row[5], now)
@@ -2393,10 +2396,12 @@ def _dynamic_weight(
     access_count: int,
     citation_count: int,
     pinned: bool,
+    activity_state: str | None,
 ) -> float:
     return compute_dynamic_weight(
         base_weight,
         event_kind=event_kind,
+        activity_state=activity_state,
         access_count=access_count,
         citation_count=citation_count,
         pinned=pinned,

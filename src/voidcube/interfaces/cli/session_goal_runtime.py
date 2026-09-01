@@ -79,6 +79,47 @@ def clear_goal(host: Any) -> bool:
     return True
 
 
+def bind_goal_backend(host: Any, objective: str) -> dict[str, Any] | None:
+    """Best-effort bind to Goal Manager; session goal remains usable on failure."""
+    try:
+        from plugins.goal_manager.tools.client import GoalClient
+        client = GoalClient()
+        if not client.health():
+            return {"backend": "goal_manager", "backend_status": "unavailable"}
+        session_id = str(getattr(host, "session_id", "") or "")
+        payload = client.create_session_project(objective, session_id)
+        project = payload.get("project") or {}
+        root = payload.get("root") or {}
+        binding = {
+            "backend": "goal_manager",
+            "project_id": project.get("id"),
+            "root_node_id": root.get("id"),
+            "backend_status": "available",
+        }
+        repository = getattr(host, "_session_db", None)
+        if repository is not None and hasattr(repository, "bind_session_goal_backend"):
+            repository.bind_session_goal_backend(session_id, **binding)
+        else:
+            goal = _memory_goals(host).get(session_id)
+            if goal:
+                goal.update(binding)
+        return binding
+    except Exception:
+        return {"backend": "goal_manager", "backend_status": "unavailable"}
+
+
+def backend_status(host: Any, goal: Mapping[str, Any]) -> dict[str, Any] | None:
+    project_id = str(goal.get("project_id") or "").strip()
+    if not project_id or goal.get("backend") != "goal_manager":
+        return None
+    try:
+        from plugins.goal_manager.tools.client import GoalClient
+        project = GoalClient().project(project_id)
+        return {"backend_status": "available", "backend_project": project}
+    except Exception:
+        return {"backend_status": "unavailable"}
+
+
 def goal_prompt(goal: Mapping[str, Any] | None) -> str:
     """Render an active goal as a bounded instruction for the agent."""
     if not goal or goal.get("status") != ACTIVE:
@@ -86,9 +127,17 @@ def goal_prompt(goal: Mapping[str, Any] | None) -> str:
     objective = str(goal.get("objective") or "").strip()
     if not objective:
         return ""
+    binding = ""
+    if goal.get("project_id"):
+        binding = (
+            f"\nGoal Manager project_id: {goal['project_id']}"
+            f"\nGoal Manager root_node_id: {goal.get('root_node_id') or 'unknown'}"
+            "\nUse the project context and next_actions, create verifiable child goals when needed, "
+            "attach evidence for completed work, and never mark completion without validation."
+        )
     return (
         "## Active Session Goal\n"
-        f"Objective: {objective}\n"
+        f"Objective: {objective}{binding}\n"
         "Treat this as the governing objective for the current session. "
         "Make measurable progress toward it, keep the user informed, and "
         "do not claim completion without evidence."
@@ -103,5 +152,7 @@ __all__ = [
     "create_goal",
     "update_goal",
     "clear_goal",
+    "bind_goal_backend",
+    "backend_status",
     "goal_prompt",
 ]

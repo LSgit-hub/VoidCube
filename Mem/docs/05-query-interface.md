@@ -106,6 +106,33 @@ final_rank =
 
 ## 8. 规范响应结构
 
+### Retention review
+
+`POST /compressed/retention-review` 是只读维护报告接口，用于审查长期记忆的
+休眠和遗忘候选，不执行状态变更或删除。实际自动维护由后台规则推进：先写入
+`purge_candidate`，观察期后逻辑 `purged`，再在审计保留期后物理清理。
+
+请求字段：
+
+```json
+{
+  "owner_id": "local-user",
+  "workspace_id": "default",
+  "memory_actor": "api_a",
+  "source_domains": ["agent_interaction"],
+  "reference_time": "2026-09-01T00:00:00Z",
+  "include_protected": true,
+  "limit": 50
+}
+```
+
+响应中：
+
+- `dormant_candidates` 只包含可考虑休眠的 `Arc`；
+- `purge_candidates` 只包含可考虑遗忘的低价值 `Event` / `Scene`；
+- `protected` 说明未入选 purge 的保护原因；
+- `dry_run` 必须为 `true`，表示该审查接口不会改变数据库。
+
 ### 范围摘要响应
 
 ```json

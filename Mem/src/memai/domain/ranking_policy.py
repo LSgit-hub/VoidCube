@@ -66,6 +66,7 @@ def compute_dynamic_weight(
     base_weight: float,
     *,
     event_kind: str | None = None,
+    activity_state: str | None = None,
     access_count: int = 0,
     citation_count: int = 0,
     pinned: bool = False,
@@ -79,4 +80,8 @@ def compute_dynamic_weight(
     del access_count
     content_bonus = _CONTENT_IMPORTANCE_BONUS.get(str(event_kind or ""), 0.0)
     citation_bonus = min(citation_count / 5.0, 1.0) * 0.10
-    return max(0.0, min(1.0, base_weight + content_bonus + citation_bonus))
+    activity_penalty = 0.75 if str(activity_state or "active") == "dormant" else 1.0
+    return max(
+        0.0,
+        min(1.0, (base_weight + content_bonus + citation_bonus) * activity_penalty),
+    )

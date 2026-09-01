@@ -397,6 +397,18 @@ class MemoryDatabaseBootstrap:
                 status TEXT DEFAULT 'active',
                 superseded_by TEXT,
                 weight REAL DEFAULT 1.0,
+                activity_state TEXT NOT NULL DEFAULT 'active'
+                    CHECK(activity_state IN ('active', 'dormant', 'resolved')),
+                dormant_at TEXT,
+                dormant_reason TEXT,
+                last_reactivated_at TEXT,
+                retention_state TEXT NOT NULL DEFAULT 'retained'
+                    CHECK(retention_state IN (
+                        'retained', 'purge_candidate', 'purged'
+                    )),
+                purge_candidate_at TEXT,
+                purge_reason TEXT,
+                purged_at TEXT,
                 event_kind TEXT,
                 access_count INTEGER DEFAULT 0,
                 last_accessed_at TEXT,
@@ -801,6 +813,14 @@ class MemoryDatabaseBootstrap:
             ("status", "TEXT DEFAULT 'active'"),
             ("superseded_by", "TEXT"),
             ("weight", "REAL DEFAULT 1.0"),
+            ("activity_state", "TEXT NOT NULL DEFAULT 'active'"),
+            ("dormant_at", "TEXT"),
+            ("dormant_reason", "TEXT"),
+            ("last_reactivated_at", "TEXT"),
+            ("retention_state", "TEXT NOT NULL DEFAULT 'retained'"),
+            ("purge_candidate_at", "TEXT"),
+            ("purge_reason", "TEXT"),
+            ("purged_at", "TEXT"),
             ("created_at", "TEXT"),
             ("event_kind", "TEXT"),
             ("access_count", "INTEGER DEFAULT 0"),
@@ -1038,6 +1058,10 @@ class MemoryDatabaseBootstrap:
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON "
             "compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
+            "CREATE INDEX IF NOT EXISTS idx_cmem_activity_state ON "
+            "compressed_memories(owner_id, workspace_id, memory_domain, activity_state, timespan_end)",
+            "CREATE INDEX IF NOT EXISTS idx_cmem_retention_state ON "
+            "compressed_memories(owner_id, workspace_id, memory_domain, retention_state, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_level ON "
             "compressed_memories(compression_level)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_identity_layer ON "

@@ -75,6 +75,27 @@ class GoalClient:
         except URLError as exc:
             raise GoalServiceError(503, {"detail": "goal_service_unavailable"}) from exc
 
+    def health(self) -> bool:
+        try:
+            payload = self.request("GET", "/health")
+            return payload.get("status") == "ok"
+        except GoalServiceError:
+            return False
+
+    def create_session_project(self, objective: str, session_id: str) -> dict[str, Any]:
+        return self.request("POST", "/api/goals/projects", {
+            "name": objective[:200],
+            "description": objective,
+            "created_by": "agent",
+            "reason": "bind session goal",
+            "actor_type": "agent",
+            "actor_id": "voidcube",
+            "session_id": session_id,
+        })
+
+    def project(self, project_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/goals/projects/{project_id}")
+
     def projects(self) -> dict[str, Any]:
         return self.request("GET", "/api/goals/projects")
 

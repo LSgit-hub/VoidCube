@@ -215,6 +215,7 @@ async def test_public_maintenance_request_shares_background_rule_cadence(
     assert rules["identity_experience"] == {"skipped": "cadence"}
     assert rules["tier1_decay"] == {"skipped": "cadence"}
     assert rules["tier2_bridge"] == {"skipped": "cadence"}
+    assert rules["refresh_dormant_arcs"] == {"skipped": "cadence"}
     assert rules["lifecycle_escalation"]["skipped"] == "disabled"
     assert rules["purge_expired"] == {"skipped": "cadence"}
     assert rules["_effective_work"] == 0
@@ -726,6 +727,7 @@ async def test_rules_status_exposes_memory_maintenance_due_gate(tmp_path):
             "identity_experience",
             "tier1_decay",
             "tier2_bridge",
+            "refresh_dormant_arcs",
             "lifecycle_escalation",
             "purge_expired",
         )

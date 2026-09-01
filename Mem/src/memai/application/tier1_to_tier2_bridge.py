@@ -200,9 +200,10 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "timeline_parent_id, compressed_at, compression_level, status, weight, "
+            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
@@ -231,9 +232,10 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "timeline_parent_id, compressed_at, compression_level, status, weight, "
+            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
@@ -261,9 +263,10 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "timeline_parent_id, compressed_at, compression_level, status, weight, "
+            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
@@ -285,9 +288,10 @@ def _write_compressed_memories_to_db(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id, memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "timeline_parent_id, compressed_at, compression_level, status, weight, "
+            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "memory_domain, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),

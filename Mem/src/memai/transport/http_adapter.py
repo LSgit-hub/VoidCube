@@ -85,6 +85,7 @@ MEMORY_HTTP_ROUTES = (
     MemoryHttpRoute("/tier2/compress", "tier2_compress", ("POST",)),
     MemoryHttpRoute("/tier1/stats", "tier1_stats", ("GET",)),
     MemoryHttpRoute("/compressed/search", "search_compressed", ("POST",)),
+    MemoryHttpRoute("/compressed/retention-review", "review_retention", ("POST",)),
     MemoryHttpRoute(
         "/compressed/trace/{turn_id}",
         "trace_compressed_by_turn",
