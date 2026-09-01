@@ -20,6 +20,7 @@
           "status": "Show the current goal status",
           "complete": "Mark the active goal as completed",
           "blocked": "Mark the active goal as blocked; add a reason",
+          "resume": "Resume a blocked goal and continue execution",
           "clear": "Clear a finished goal"
         }
       },
@@ -225,6 +226,7 @@
     "goal_command": {
       "none": "No goal is set for this session.",
       "no_active": "There is no active goal to update.",
+      "no_blocked": "There is no blocked goal to resume.",
       "header": "Session Goal",
       "status_active": "Status: active",
       "status_completed": "Status: completed",
@@ -236,6 +238,7 @@
       "complete_blocked": "Goal Manager completion checks failed; the goal remains active.",
       "complete_blocked_reason": "The goal remains active: {reason}",
       "blocked": "Goal marked blocked: {reason}",
+      "resumed": "Goal resumed.",
       "blocked_usage": "Usage: /goal blocked <reason>",
       "clear_active": "Finish or block the active goal before clearing it.",
       "cleared": "Goal cleared.",

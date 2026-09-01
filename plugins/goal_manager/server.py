@@ -28,6 +28,7 @@ class ProjectCreate(BaseModel):
     actor_id: str | None = None
     session_id: str | None = None
     idempotency_key: str | None = None
+    root_status: str = "planned"
 
 
 class NodeCreate(BaseModel):

@@ -11,6 +11,7 @@ from voidcube.interfaces.cli.session_goal_runtime import (
     BLOCKED,
     COMPLETED,
     backend_status,
+    bind_goal_backend,
     clear_goal,
     create_goal,
     get_goal,
@@ -18,6 +19,7 @@ from voidcube.interfaces.cli.session_goal_runtime import (
     goal_update_error,
     update_goal,
 )
+from plugins.goal_manager.db.connection import GoalStore
 from voidcube.interfaces.cli.application import VoidcubeCLI
 
 
@@ -54,6 +56,22 @@ def test_active_goal_is_included_in_agent_system_prompt():
     assert prompt.startswith("Base instructions")
     assert "Active Session Goal" in prompt
     assert "Keep the command surface canonical" in prompt
+
+
+def test_active_goal_prompt_teaches_goal_manager_workflow():
+    host = _host()
+    create_goal(host, "Plan and verify a multi-step change")
+    host._session_goals[host.session_id].update({
+        "backend": "goal_manager", "project_id": "proj-1", "root_node_id": "root-1",
+    })
+
+    prompt = goal_prompt(get_goal(host))
+
+    assert "read the project/root context and next_actions" in prompt
+    assert "decompose the root" in prompt
+    assert "Re-read the latest node version" in prompt
+    assert "Attach real test, CI, Git, file" in prompt
+    assert "Never claim completion" in prompt
 
 
 def test_blocked_goal_is_mirrored_to_goal_manager_root(monkeypatch):
@@ -201,6 +219,32 @@ def test_status_reconciles_blocked_goal_after_backend_recovery(monkeypatch):
     assert get_goal(host)["backend_status"] == "available"
 
 
+def test_status_reconciles_resumed_goal_after_backend_recovery(monkeypatch):
+    host = _host()
+    create_goal(host, "Resume after outage")
+    host._session_goals[host.session_id].update({
+        "status": ACTIVE, "reason": "Dependency restored",
+        "backend": "goal_manager", "project_id": "proj-1", "root_node_id": "root-1",
+        "backend_status": "unavailable",
+    })
+    updates: list[tuple[str, int, str, str]] = []
+
+    class RecoveringClient:
+        def project(self, project_id):
+            return {"root": {"id": "root-1", "version": 7, "status": "blocked"}}
+
+        def update_node_status(self, node_id, expected_version, status, reason, *, session_id=None):
+            updates.append((node_id, expected_version, status, reason))
+            return {"node": {"id": node_id, "version": expected_version + 1, "status": status}}
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", RecoveringClient)
+    result = backend_status(host, get_goal(host))
+
+    assert result["backend_project"]["root"]["status"] == "in_progress"
+    assert updates == [("root-1", 7, "in_progress", "Dependency restored")]
+    assert get_goal(host)["backend_status"] == "available"
+
+
 def test_goal_handler_creates_and_queues_objective():
     state: dict[str, object] = {"goal": None}
     output: list[str] = []
@@ -265,3 +309,68 @@ def test_goal_handler_requires_terminal_transition_before_clear():
     assert state["goal"]["status"] == BLOCKED
     handle_goal_command(parse_cli_command("/goal clear"), ports=ports)
     assert state["goal"] is None
+
+
+def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_path):
+    store = GoalStore(tmp_path / "goal-flow.db")
+    host = _host()
+    output: list[str] = []
+    queued: list[str] = []
+
+    class StoreClient:
+        def health(self):
+            return True
+
+        def create_session_project(self, objective, session_id):
+            return store.create_project(
+                objective, description=objective, reason="bind session goal",
+                session_id=session_id, idempotency_key=f"session:{session_id}",
+                root_status="in_progress",
+            )
+
+        def project(self, project_id):
+            return store.get_project(project_id)
+
+        def update_node_status(self, node_id, expected_version, status, reason, *, session_id=None):
+            return store.update_node(
+                node_id, expected_version, {"status": status}, reason=reason,
+                session_id=session_id,
+            )
+
+        def complete_node(self, node_id, reason, *, session_id=None):
+            return store.complete_node(node_id, reason=reason, session_id=session_id)
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", StoreClient)
+    ports = GoalCommandPorts(
+        get_goal=lambda: get_goal(host),
+        create_goal=lambda objective: create_goal(host, objective),
+        update_goal=lambda status, reason: update_goal(host, status, reason),
+        clear_goal=lambda: clear_goal(host),
+        start_goal=queued.append,
+        bind_backend=lambda objective: bind_goal_backend(host, objective),
+        get_backend_status=lambda goal: backend_status(host, goal),
+        get_update_error=lambda: goal_update_error(host),
+        reset_agent=lambda: None,
+        emit=output.append,
+        translate=lambda key, **kwargs: key,
+    )
+    try:
+        handle_goal_command(parse_cli_command("/goal Run the full flow"), ports=ports)
+        binding = get_goal(host)
+        assert binding["backend"] == "goal_manager"
+        assert store.get_node(binding["root_node_id"])["status"] == "in_progress"
+
+        handle_goal_command(parse_cli_command("/goal blocked waiting for input"), ports=ports)
+        assert get_goal(host)["status"] == BLOCKED
+        assert store.get_node(binding["root_node_id"])["status"] == "blocked"
+
+        handle_goal_command(parse_cli_command("/goal resume input restored"), ports=ports)
+        assert get_goal(host)["status"] == ACTIVE
+        assert store.get_node(binding["root_node_id"])["status"] == "in_progress"
+
+        handle_goal_command(parse_cli_command("/goal complete verified"), ports=ports)
+        assert get_goal(host)["status"] == COMPLETED
+        assert store.get_node(binding["root_node_id"])["status"] == "completed"
+        assert queued == ["Run the full flow", "Run the full flow"]
+    finally:
+        store.close()

@@ -101,6 +101,7 @@ class GoalClient:
             "actor_id": "voidcube",
             "session_id": session_id,
             "idempotency_key": idempotency_key,
+            "root_status": "in_progress",
         }
         try:
             return self.request("POST", "/api/goals/projects", payload)
@@ -144,10 +145,18 @@ class GoalClient:
         if tool_name == "goal_project_get":
             return self.request("GET", f"/api/goals/projects/{args['projectId']}")
         if tool_name == "goal_project_create":
+            session_id = actor.get("session_id")
+            idempotency_key = args.get("idempotencyKey")
+            if session_id and not idempotency_key:
+                normalized = " ".join(str(args.get("description", args["name"])).split())
+                digest = hashlib.sha256(
+                    f"voidcube-session-goal\0{session_id}\0{normalized}\0{args['name']}".encode("utf-8")
+                ).hexdigest()
+                idempotency_key = f"session:{digest}"
             return self.request("POST", "/api/goals/projects", {
                 "name": args["name"], "description": args.get("description", ""),
                 "created_by": args.get("createdBy", "agent"), "reason": args["reason"],
-                "idempotency_key": args.get("idempotencyKey"), **actor,
+                "idempotency_key": idempotency_key, "root_status": "in_progress" if session_id else "planned", **actor,
             })
         if tool_name == "goal_get_context":
             return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/context")

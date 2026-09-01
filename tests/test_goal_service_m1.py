@@ -42,6 +42,11 @@ def test_project_creates_root_and_audit_event(store):
     assert {event["event_type"] for event in events} >= {"create_project", "create_node"}
 
 
+def test_session_project_can_start_in_progress(store):
+    result = store.create_project("Active", reason="session start", root_status="in_progress")
+    assert result["root"]["status"] == "in_progress"
+
+
 def test_project_creation_is_idempotent(store):
     first = store.create_project(
         "Retryable goal", description="same objective", reason="bind", idempotency_key="session:key-1"
@@ -96,6 +101,24 @@ def test_session_project_client_uses_stable_idempotency_key(monkeypatch):
 
     assert calls[0][2]["idempotency_key"] == calls[1][2]["idempotency_key"]
     assert calls[0][2]["idempotency_key"].startswith("session:")
+    assert calls[0][2]["root_status"] == "in_progress"
+
+
+def test_generic_project_create_derives_session_idempotency_key(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    calls = []
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append(payload)
+        return {"project": {"id": "proj_test"}, "root": {"id": "root_test"}}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_project_create", {
+        "name": "Mem analysis", "description": "Analyze Mem", "reason": "plan",
+        "session_id": "session-42",
+    })
+    assert calls[0]["idempotency_key"].startswith("session:")
+    assert calls[0]["root_status"] == "in_progress"
 
 
 def test_session_project_client_retries_server_failure_with_same_key(monkeypatch):

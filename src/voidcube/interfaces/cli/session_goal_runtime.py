@@ -61,9 +61,12 @@ def update_goal(host: Any, status: str, reason: str | None = None) -> bool:
         updated = bool(repository.update_session_goal(session_id, status, reason))
         if updated and status == BLOCKED:
             _sync_blocked_backend(host, reason)
+        elif updated and status == ACTIVE:
+            _sync_active_backend(host, reason)
         return updated
     goal = _memory_goals(host).get(session_id)
-    if not goal or goal.get("status") != ACTIVE:
+    expected_status = BLOCKED if status == ACTIVE else ACTIVE
+    if not goal or goal.get("status") != expected_status:
         return False
     from time import time
 
@@ -72,6 +75,8 @@ def update_goal(host: Any, status: str, reason: str | None = None) -> bool:
     goal["updated_at"] = time()
     if status == BLOCKED:
         _sync_blocked_backend(host, reason)
+    elif status == ACTIVE:
+        _sync_active_backend(host, reason)
     return True
 
 
@@ -159,6 +164,32 @@ def _sync_blocked_backend(host: Any, reason: str | None) -> None:
         if version is None:
             raise RuntimeError("goal manager root node version missing")
         client.update_node_status(root_node_id, int(version), BLOCKED, reason or "session goal blocked", session_id=session_id)
+        _set_backend_status(host, session_id, goal, "available")
+    except Exception:
+        _set_backend_status(host, session_id, goal, "unavailable")
+
+
+def _sync_active_backend(host: Any, reason: str | None) -> None:
+    """Best-effort mirror of a resumed session goal onto the project root."""
+    session_id = str(getattr(host, "session_id", "") or "").strip()
+    goal = get_goal(host)
+    project_id = str((goal or {}).get("project_id") or "").strip()
+    root_node_id = str((goal or {}).get("root_node_id") or "").strip()
+    if not project_id or not root_node_id or (goal or {}).get("backend") != "goal_manager":
+        return
+    try:
+        from plugins.goal_manager.tools.client import GoalClient
+
+        client = GoalClient()
+        project = client.project(project_id)
+        root = project.get("root") or {}
+        if str(root.get("id") or "") != root_node_id or root.get("version") is None:
+            raise RuntimeError("goal manager root node cannot be resumed")
+        if root.get("status") != "in_progress":
+            client.update_node_status(
+                root_node_id, int(root["version"]), "in_progress",
+                reason or "session goal resumed", session_id=session_id,
+            )
         _set_backend_status(host, session_id, goal, "available")
     except Exception:
         _set_backend_status(host, session_id, goal, "unavailable")
@@ -252,6 +283,22 @@ def backend_status(host: Any, goal: Mapping[str, Any]) -> dict[str, Any] | None:
             _set_backend_status(
                 host, str(getattr(host, "session_id", "") or "").strip(), goal, "available",
             )
+        elif goal.get("status") == ACTIVE and goal.get("backend_status") == "unavailable":
+            root = project.get("root") or {}
+            if root.get("status") in {"planned", "blocked"}:
+                version = root.get("version")
+                if version is None or str(root.get("id") or "") != str(goal.get("root_node_id") or ""):
+                    raise RuntimeError("goal manager root node cannot be reconciled")
+                result = client.update_node_status(
+                    str(goal["root_node_id"]), int(version), "in_progress",
+                    str(goal.get("reason") or "session goal resumed"),
+                    session_id=str(getattr(host, "session_id", "") or "").strip(),
+                )
+                if result.get("node"):
+                    project["root"] = result["node"]
+            _set_backend_status(
+                host, str(getattr(host, "session_id", "") or "").strip(), goal, "available",
+            )
         return {"backend_status": "available", "backend_project": project}
     except Exception:
         return {"backend_status": "unavailable"}
@@ -269,8 +316,15 @@ def goal_prompt(goal: Mapping[str, Any] | None) -> str:
         binding = (
             f"\nGoal Manager project_id: {goal['project_id']}"
             f"\nGoal Manager root_node_id: {goal.get('root_node_id') or 'unknown'}"
-            "\nUse the project context and next_actions, create verifiable child goals when needed, "
-            "attach evidence for completed work, and never mark completion without validation."
+            "\nGoal Manager operating protocol:"
+            "\n1. This project and root already exist. Do not call goal_project_create and do not create another root."
+            "\n2. First call goal_get_context for the root and goal_next_actions for this project."
+            "\n3. For analysis or work with more than one step, create at least 3 concrete child goals under this root."
+            "\n4. Wire decomposes_to edges from the root and depends_on edges between prerequisites."
+            "\n5. Re-read the latest node version before updates; after meaningful work, update status and progress."
+            "\n6. Attach real test, CI, Git, file, or other verifiable evidence; do not invent evidence."
+            "\n7. Record blockers with a reason and do not retry a blocked action without resolving its dependency."
+            "\n8. Never claim completion until the Goal Manager completion check accepts the root."
         )
     return (
         "## Active Session Goal\n"

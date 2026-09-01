@@ -863,16 +863,17 @@ class SessionDB:
         status: str,
         reason: str | None = None,
     ) -> bool:
-        """Update a goal terminal status and optional explanation."""
-        if status not in {"completed", "blocked"}:
+        """Update a goal status while enforcing valid session transitions."""
+        if status not in {"active", "completed", "blocked"}:
             raise ValueError(f"Unsupported goal status: {status}")
         now = time.time()
 
         def _do(conn):
+            source_status = "blocked" if status == "active" else "active"
             cursor = conn.execute(
                 "UPDATE session_goals SET status = ?, reason = ?, updated_at = ? "
-                "WHERE session_id = ? AND status = 'active'",
-                (status, reason, now, session_id),
+                "WHERE session_id = ? AND status = ?",
+                (status, reason, now, session_id, source_status),
             )
             return cursor.rowcount
 

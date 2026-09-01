@@ -7,6 +7,7 @@ transactional operations and the service owns its SQLite file exclusively.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -39,6 +40,17 @@ def _text(value: Any, field: str, *, required: bool = False) -> str:
     if required and not result:
         raise ValueError(f"{field} is required")
     return result
+
+
+def session_project_key(session_id: str | None, name: str, description: str) -> str | None:
+    session = _text(session_id, "session_id")
+    if not session:
+        return None
+    normalized = " ".join(description.split())
+    digest = hashlib.sha256(
+        f"voidcube-session-goal\0{session}\0{normalized}\0{name}".encode("utf-8")
+    ).hexdigest()
+    return f"session:{digest}"
 
 
 def _number(value: Any, field: str, default: float = 0.0) -> float:
@@ -342,13 +354,16 @@ class GoalStore:
         self, name: str, description: str = "", *,
         created_by: str = "agent", reason: str = "create project",
         actor_type: str = "agent", actor_id: str | None = None, session_id: str | None = None,
-        idempotency_key: str | None = None,
+        idempotency_key: str | None = None, root_status: str = "planned",
     ) -> dict[str, Any]:
         actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
         name = _text(name, "name", required=True)
         description = _text(description, "description")
         reason = _text(reason, "reason", required=True)
-        idempotency_key = _text(idempotency_key, "idempotency_key") or None
+        idempotency_key = _text(idempotency_key, "idempotency_key") or session_project_key(session_id, name, description)
+        root_status = _text(root_status, "root_status") or "planned"
+        if root_status not in {"planned", "in_progress"}:
+            raise ValueError("root_status must be planned or in_progress")
         project_id = new_id("proj_")
         batch_id = new_id("batch_")
         with self._transaction() as conn:
@@ -387,7 +402,10 @@ class GoalStore:
             )
             root = self._insert_node(
                 conn, project_id=project_id,
-                data={"node_type": "project", "title": name, "description": description},
+                data={
+                    "node_type": "project", "title": name,
+                    "description": description, "status": root_status,
+                },
                 created_by=created_by, reason=reason, batch_id=batch_id,
                 actor_type=actor_type, actor_id=actor_id, session_id=session_id,
                 node_id=new_id("root_"), allow_project=True,

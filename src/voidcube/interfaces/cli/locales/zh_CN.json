@@ -20,11 +20,12 @@
       },
       "goal": {
         "description": "管理当前会话目标",
-        "usage": "用法: /goal [目标|status|complete|blocked|clear]",
+        "usage": "用法: /goal [目标|status|complete|blocked|resume|clear]",
         "subcommands": {
           "status": "查看当前目标状态",
           "complete": "将活动目标标记为完成",
           "blocked": "将活动目标标记为阻塞，后接原因",
+          "resume": "恢复受阻目标并继续执行",
           "clear": "清除已结束的目标"
         }
       },
@@ -326,6 +327,7 @@
     "goal_command": {
       "none": "当前会话尚未设置目标。",
       "no_active": "当前没有可更新的活动目标。",
+      "no_blocked": "当前没有可恢复的受阻目标。",
       "header": "会话目标",
       "status_active": "状态：进行中",
       "status_completed": "状态：已完成",
@@ -337,6 +339,7 @@
       "complete_blocked": "Goal Manager 尚未通过完成校验，目标仍保持进行中。",
       "complete_blocked_reason": "目标仍保持进行中：{reason}",
       "blocked": "目标已标记为受阻：{reason}",
+      "resumed": "目标已恢复执行。",
       "blocked_usage": "用法：/goal blocked <原因>",
       "clear_active": "请先完成目标或将其标记为受阻，再清除目标。",
       "cleared": "目标已清除。",

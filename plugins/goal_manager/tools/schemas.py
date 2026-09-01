@@ -24,7 +24,7 @@ SCHEMAS = {
         ["projectId"],
     ),
     "goal_project_create": _schema(
-        "创建目标项目并在同一事务中创建项目根节点。",
+        "仅在当前会话没有已绑定项目时创建项目；已有 Goal Manager project_id 时禁止调用本工具，必须复用现有根节点。",
         {"name": {"type": "string"}, "description": {"type": "string"}, "reason": {"type": "string"},
          "createdBy": {"type": "string"}, "idempotencyKey": {"type": "string"}, **COMMON_CONTEXT},
         ["name", "reason"],

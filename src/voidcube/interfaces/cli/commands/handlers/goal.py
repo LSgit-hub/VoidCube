@@ -66,6 +66,17 @@ def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -
             ports.emit(ports.translate("goal_command.blocked", reason=reason))
         return
 
+    if action == "resume":
+        if not current or current.get("status") != "blocked":
+            ports.emit(ports.translate("goal_command.no_blocked"))
+            return
+        if ports.update_goal("active", reason):
+            ports.reset_agent()
+            ports.emit(ports.translate("goal_command.resumed"))
+            if ports.start_goal is not None:
+                ports.start_goal(str(current.get("objective") or ""))
+        return
+
     if action == "clear" and not remainder:
         if not current:
             ports.emit(ports.translate("goal_command.none"))

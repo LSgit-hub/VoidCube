@@ -15,6 +15,9 @@ def test_session_goal_persists_and_enforces_one_active_goal(tmp_path):
 
     assert db.update_session_goal("session-a", "blocked", "No TTY") is True
     assert db.get_session_goal("session-a")["reason"] == "No TTY"
+    assert db.update_session_goal("session-a", "active", "TTY restored") is True
+    assert db.get_session_goal("session-a")["status"] == "active"
+    assert db.update_session_goal("session-a", "blocked", "Done testing") is True
     assert db.clear_session_goal("session-a") is True
     assert db.get_session_goal("session-a") is None
 

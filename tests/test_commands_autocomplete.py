@@ -51,6 +51,7 @@ def test_goal_subcommands_include_localized_completion_descriptions():
         "status": "查看当前目标状态",
         "complete": "将活动目标标记为完成",
         "blocked": "将活动目标标记为阻塞，后接原因",
+        "resume": "恢复受阻目标并继续执行",
         "clear": "清除已结束的目标",
     }
 
