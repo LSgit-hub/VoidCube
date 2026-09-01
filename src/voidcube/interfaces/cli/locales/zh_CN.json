@@ -334,6 +334,8 @@
       "reason": "原因：{reason}",
       "created": "目标已创建并加入执行队列：{objective}",
       "completed": "目标已标记为完成。",
+      "complete_blocked": "Goal Manager 尚未通过完成校验，目标仍保持进行中。",
+      "complete_blocked_reason": "目标仍保持进行中：{reason}",
       "blocked": "目标已标记为受阻：{reason}",
       "blocked_usage": "用法：/goal blocked <原因>",
       "clear_active": "请先完成目标或将其标记为受阻，再清除目标。",

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS goal_projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT,
     root_node_id TEXT,
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,

@@ -1017,6 +1017,7 @@ def _goal_command_ports(
         create_goal,
         get_goal,
         update_goal,
+        goal_update_error,
     )
 
     pending_input = getattr(host, "_pending_input", None)
@@ -1028,6 +1029,7 @@ def _goal_command_ports(
         start_goal=pending_input.put if pending_input is not None else None,
         bind_backend=lambda objective: __import__("voidcube.interfaces.cli.session_goal_runtime", fromlist=["bind_goal_backend"]).bind_goal_backend(host, objective),
         get_backend_status=lambda goal: __import__("voidcube.interfaces.cli.session_goal_runtime", fromlist=["backend_status"]).backend_status(host, goal),
+        get_update_error=lambda: goal_update_error(host),
         reset_agent=lambda: setattr(host, "agent", None),
         emit=emit,
         translate=translate,

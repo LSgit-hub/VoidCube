@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any
@@ -83,7 +84,15 @@ class GoalClient:
             return False
 
     def create_session_project(self, objective: str, session_id: str) -> dict[str, Any]:
-        return self.request("POST", "/api/goals/projects", {
+        normalized = " ".join(str(objective).split())
+        normalized_session = str(session_id or "").strip()
+        idempotency_key = None
+        if normalized_session:
+            digest = hashlib.sha256(
+                f"voidcube-session-goal\0{normalized_session}\0{normalized}".encode("utf-8")
+            ).hexdigest()
+            idempotency_key = f"session:{digest}"
+        payload = {
             "name": objective[:200],
             "description": objective,
             "created_by": "agent",
@@ -91,10 +100,38 @@ class GoalClient:
             "actor_type": "agent",
             "actor_id": "voidcube",
             "session_id": session_id,
-        })
+            "idempotency_key": idempotency_key,
+        }
+        try:
+            return self.request("POST", "/api/goals/projects", payload)
+        except GoalServiceError as exc:
+            if exc.status_code < 500 or idempotency_key is None:
+                raise
+            return self.request("POST", "/api/goals/projects", payload)
 
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/goals/projects/{project_id}")
+
+    def update_node_status(
+        self, node_id: str, expected_version: int, status: str, reason: str,
+        *, session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.request("PATCH", f"/api/goals/nodes/{node_id}", {
+            "expected_version": expected_version,
+            "patch": {"status": status},
+            "reason": reason,
+            "actor_type": "agent",
+            "actor_id": "voidcube",
+            "session_id": session_id,
+        })
+
+    def complete_node(self, node_id: str, reason: str, *, session_id: str | None = None) -> dict[str, Any]:
+        return self.request("POST", f"/api/goals/nodes/{node_id}/complete", {
+            "reason": reason,
+            "actor_type": "agent",
+            "actor_id": "voidcube",
+            "session_id": session_id,
+        })
 
     def projects(self) -> dict[str, Any]:
         return self.request("GET", "/api/goals/projects")
@@ -109,7 +146,8 @@ class GoalClient:
         if tool_name == "goal_project_create":
             return self.request("POST", "/api/goals/projects", {
                 "name": args["name"], "description": args.get("description", ""),
-                "created_by": args.get("createdBy", "agent"), "reason": args["reason"], **actor,
+                "created_by": args.get("createdBy", "agent"), "reason": args["reason"],
+                "idempotency_key": args.get("idempotencyKey"), **actor,
             })
         if tool_name == "goal_get_context":
             return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/context")

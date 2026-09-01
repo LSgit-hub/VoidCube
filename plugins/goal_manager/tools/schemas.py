@@ -26,7 +26,7 @@ SCHEMAS = {
     "goal_project_create": _schema(
         "创建目标项目并在同一事务中创建项目根节点。",
         {"name": {"type": "string"}, "description": {"type": "string"}, "reason": {"type": "string"},
-         "createdBy": {"type": "string"}, **COMMON_CONTEXT},
+         "createdBy": {"type": "string"}, "idempotencyKey": {"type": "string"}, **COMMON_CONTEXT},
         ["name", "reason"],
     ),
     "goal_get_context": _schema(

@@ -27,6 +27,7 @@ class ProjectCreate(BaseModel):
     actor_type: str = "agent"
     actor_id: str | None = None
     session_id: str | None = None
+    idempotency_key: str | None = None
 
 
 class NodeCreate(BaseModel):
@@ -58,6 +59,13 @@ class NodeUpdate(BaseModel):
     model_config = ConfigDict(extra="allow")
     expected_version: int
     patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class NodeComplete(BaseModel):
     reason: str
     actor_type: str = "agent"
     actor_id: str | None = None
@@ -288,6 +296,14 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.patch("/api/goals/nodes/{node_id}")
     def update_node(node_id: str, payload: NodeUpdate) -> dict[str, Any]:
         return store.update_node(node_id, payload.expected_version, payload.patch, **payload.model_dump(exclude={"expected_version", "patch"}))
+
+    @app.get("/api/goals/nodes/{node_id}/completion-check")
+    def completion_check(node_id: str) -> dict[str, Any]:
+        return store.completion_check(node_id)
+
+    @app.post("/api/goals/nodes/{node_id}/complete")
+    def complete_node(node_id: str, payload: NodeComplete) -> dict[str, Any]:
+        return store.complete_node(node_id, **payload.model_dump())
 
     @app.delete("/api/goals/nodes/{node_id}")
     def delete_node(

@@ -233,6 +233,8 @@
       "reason": "Reason: {reason}",
       "created": "Goal created and queued: {objective}",
       "completed": "Goal marked completed.",
+      "complete_blocked": "Goal Manager completion checks failed; the goal remains active.",
+      "complete_blocked_reason": "The goal remains active: {reason}",
       "blocked": "Goal marked blocked: {reason}",
       "blocked_usage": "Usage: /goal blocked <reason>",
       "clear_active": "Finish or block the active goal before clearing it.",

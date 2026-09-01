@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from plugins.goal_manager.db.connection import GoalStore
 from plugins.goal_manager.domain.graph import GoalConflict
 from plugins.goal_manager.server import create_app
+from plugins.goal_manager.tools.client import GoalClient, GoalServiceError
 from plugins.goal_manager.tools.schemas import SCHEMAS
 from voidcube.extensions.plugins import registry as plugin_registry
 from voidcube.extensions.tools import model_tools
@@ -39,6 +40,80 @@ def test_project_creates_root_and_audit_event(store):
     assert result["project"]["root_node_id"] == result["root"]["id"]
     events = store.list_events(result["project"]["id"])
     assert {event["event_type"] for event in events} >= {"create_project", "create_node"}
+
+
+def test_project_creation_is_idempotent(store):
+    first = store.create_project(
+        "Retryable goal", description="same objective", reason="bind", idempotency_key="session:key-1"
+    )
+    second = store.create_project(
+        "Retryable goal", description="same objective", reason="bind retry", idempotency_key="session:key-1"
+    )
+
+    assert second["idempotent_reused"] is True
+    assert second["project"]["id"] == first["project"]["id"]
+    assert second["root"]["id"] == first["root"]["id"]
+    assert len(store.list_events(first["project"]["id"])) == 2
+    assert len(store.list_projects()) == 1
+
+    with pytest.raises(ValueError, match="different project"):
+        store.create_project(
+            "Different goal", description="same objective", reason="bad reuse", idempotency_key="session:key-1"
+        )
+
+
+def test_project_idempotency_schema_migrates_existing_database(tmp_path):
+    db_path = tmp_path / "legacy-goals.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE goal_projects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+                root_node_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL, deleted_at TEXT
+            );
+            """
+        )
+    legacy = GoalStore(db_path)
+    try:
+        result = legacy.create_project("Migrated", reason="migration", idempotency_key="legacy:key")
+        assert result["project"]["idempotency_key"] == "legacy:key"
+    finally:
+        legacy.close()
+
+
+def test_session_project_client_uses_stable_idempotency_key(monkeypatch):
+    calls = []
+    client = GoalClient(base_url="http://goal.test")
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append((method, path, payload))
+        return {"project": {"id": "proj_test"}, "root": {"id": "root_test"}}
+
+    monkeypatch.setattr(client, "request", request)
+    client.create_session_project("  Ship   the goal flow ", "session-42")
+    client.create_session_project("Ship the goal flow", "session-42")
+
+    assert calls[0][2]["idempotency_key"] == calls[1][2]["idempotency_key"]
+    assert calls[0][2]["idempotency_key"].startswith("session:")
+
+
+def test_session_project_client_retries_server_failure_with_same_key(monkeypatch):
+    payloads = []
+    client = GoalClient(base_url="http://goal.test")
+
+    def request(method, path, payload=None, **kwargs):
+        payloads.append(dict(payload))
+        if len(payloads) == 1:
+            raise GoalServiceError(503, {"detail": "response lost"})
+        return {"project": {"id": "proj_test"}, "root": {"id": "root_test"}}
+
+    monkeypatch.setattr(client, "request", request)
+    result = client.create_session_project("Retry safely", "session-42")
+
+    assert result["project"]["id"] == "proj_test"
+    assert len(payloads) == 2
+    assert payloads[0]["idempotency_key"] == payloads[1]["idempotency_key"]
 
 
 def test_cycle_detection_returns_path(store):
@@ -136,6 +211,24 @@ def test_completion_claims_are_verified_on_all_write_paths(store):
     assert reopened["node"]["completed_at"] is None
 
 
+def test_goal_manager_complete_checks_required_children(store):
+    project = store.create_project("P", reason="init")
+    pid = project["project"]["id"]
+    child = store.create_node(pid, {"node_type": "task", "title": "Child"}, reason="add")["node"]
+    store.create_edge(
+        {"source_id": project["root"]["id"], "target_id": child["id"], "edge_type": "decomposes_to"},
+        reason="decompose",
+    )
+    check = store.completion_check(project["root"]["id"])
+    assert check["valid"] is False
+    assert check["blockers"][0]["node_id"] == child["id"]
+    with pytest.raises(GoalConflict, match="completion blocked"):
+        store.complete_node(project["root"]["id"], reason="finish")
+    store.update_node(child["id"], 1, {"status": "completed", "progress": 1}, reason="finish child")
+    completed = store.complete_node(project["root"]["id"], reason="finish")
+    assert completed["node"]["status"] == "completed"
+
+
 def test_optimistic_lock_and_soft_delete(store):
     project = store.create_project("P", reason="init")
     node = store.create_node(project["project"]["id"], {"node_type": "task", "title": "T"}, reason="add")["node"]
@@ -184,11 +277,24 @@ def test_api_and_tool_schemas(tmp_path):
         with TestClient(app) as client:
             response = client.post(
                 "/api/goals/projects",
-                json={"name": "API", "reason": "M1 test"},
+                json={"name": "API", "reason": "M1 test", "idempotency_key": "api:key-1"},
             )
             assert response.status_code == 201
             project_id = response.json()["project"]["id"]
             root_id = response.json()["root"]["id"]
+            assert client.get(f"/api/goals/nodes/{root_id}/completion-check").json()["valid"] is True
+            completed = client.post(
+                f"/api/goals/nodes/{root_id}/complete",
+                json={"reason": "API completion"},
+            )
+            assert completed.status_code == 200
+            assert completed.json()["node"]["status"] == "completed"
+            retry = client.post(
+                "/api/goals/projects",
+                json={"name": "API", "reason": "retry", "idempotency_key": "api:key-1"},
+            )
+            assert retry.status_code == 201
+            assert retry.json()["project"]["id"] == project_id
             edge_response = client.post(
                 "/api/goals/edges",
                 json={

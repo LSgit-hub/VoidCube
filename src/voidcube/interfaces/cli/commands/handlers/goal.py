@@ -24,6 +24,7 @@ class GoalCommandPorts:
     translate: Callable[..., str]
     bind_backend: Callable[[str], Mapping[str, Any] | None] | None = None
     get_backend_status: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None
+    get_update_error: Callable[[], str | None] | None = None
 
 
 def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -> None:
@@ -45,6 +46,12 @@ def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -
         if ports.update_goal("completed", reason):
             ports.reset_agent()
             ports.emit(ports.translate("goal_command.completed"))
+        else:
+            detail = ports.get_update_error() if ports.get_update_error is not None else None
+            if detail:
+                ports.emit(ports.translate("goal_command.complete_blocked_reason", reason=detail))
+            else:
+                ports.emit(ports.translate("goal_command.complete_blocked"))
         return
 
     if action == "blocked":

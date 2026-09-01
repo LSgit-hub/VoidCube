@@ -92,6 +92,18 @@ class GoalStore:
         with self._connect() as conn:
             schema_path = Path(__file__).with_name("schema.sql")
             conn.executescript(schema_path.read_text(encoding="utf-8"))
+            # Existing installations predate project idempotency. SQLite does
+            # not support ADD COLUMN IF NOT EXISTS, so migrate by inspection.
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(goal_projects)").fetchall()
+            }
+            if "idempotency_key" not in columns:
+                conn.execute("ALTER TABLE goal_projects ADD COLUMN idempotency_key TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_projects_idempotency "
+                "ON goal_projects(idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL AND deleted_at IS NULL"
+            )
             conn.commit()
 
     @contextmanager
@@ -330,18 +342,48 @@ class GoalStore:
         self, name: str, description: str = "", *,
         created_by: str = "agent", reason: str = "create project",
         actor_type: str = "agent", actor_id: str | None = None, session_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
         name = _text(name, "name", required=True)
+        description = _text(description, "description")
         reason = _text(reason, "reason", required=True)
+        idempotency_key = _text(idempotency_key, "idempotency_key") or None
         project_id = new_id("proj_")
         batch_id = new_id("batch_")
         with self._transaction() as conn:
+            if idempotency_key:
+                existing = _row(conn.execute(
+                    "SELECT * FROM goal_projects WHERE idempotency_key = ? "
+                    "AND deleted_at IS NULL",
+                    (idempotency_key,),
+                ).fetchone())
+                if existing is not None:
+                    if existing["name"] != name or existing["description"] != description:
+                        raise ValueError("idempotency_key already belongs to a different project")
+                    root_row = conn.execute(
+                        "SELECT * FROM goal_nodes WHERE id = ? AND deleted_at IS NULL",
+                        (existing["root_node_id"],),
+                    ).fetchone()
+                    if root_row is None:
+                        raise RuntimeError("idempotent project is missing its root node")
+                    prior_event = conn.execute(
+                        "SELECT batch_id FROM goal_events WHERE project_id = ? "
+                        "AND event_type = 'create_project' ORDER BY created_at LIMIT 1",
+                        (existing["id"],),
+                    ).fetchone()
+                    return {
+                        "project": existing,
+                        "root": _node_payload(dict(root_row)),
+                        "batch_id": prior_event["batch_id"] if prior_event else None,
+                        "idempotent_reused": True,
+                    }
             now = utc_now()
             conn.execute(
-                "INSERT INTO goal_projects (id, name, description, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (project_id, name, _text(description, "description"), created_by, now, now),
+                "INSERT INTO goal_projects "
+                "(id, name, description, idempotency_key, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project_id, name, description, idempotency_key, created_by, now, now),
             )
             root = self._insert_node(
                 conn, project_id=project_id,
@@ -805,6 +847,59 @@ class GoalStore:
                 ).fetchall()
             ]
             return node
+
+    def _completion_check(self, conn: sqlite3.Connection, node: dict[str, Any]) -> dict[str, Any]:
+        children = [
+            _node_payload(dict(row)) for row in conn.execute(
+                "SELECT n.* FROM goal_nodes n JOIN goal_edges e ON e.target_id=n.id "
+                "WHERE e.source_id=? AND e.edge_type='decomposes_to' AND e.required=1 "
+                "AND e.deleted_at IS NULL AND n.deleted_at IS NULL ORDER BY n.created_at",
+                (node["id"],),
+            ).fetchall()
+        ]
+        blockers = [
+            {"code": "child_incomplete", "node_id": child["id"], "title": child["title"], "status": child["status"]}
+            for child in children if child["status"] != "completed"
+        ]
+        blockers.extend(
+            {"code": "acceptance_criteria_unmet", "index": index, "criterion": criterion}
+            for index, criterion in enumerate(node.get("acceptance_criteria") or [])
+            if not isinstance(criterion, dict) or criterion.get("met") is not True
+        )
+        return {"valid": not blockers, "node": node, "children": children, "blockers": blockers}
+
+    def completion_check(self, node_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            return self._completion_check(conn, self._get_node(conn, node_id))
+
+    def complete_node(
+        self, node_id: str, *, reason: str, actor_type: str = "agent",
+        actor_id: str | None = None, session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            before = self._get_node(conn, node_id)
+            if before["status"] == "completed":
+                return {"node": before, "already_completed": True}
+            check = self._completion_check(conn, before)
+            if not check["valid"]:
+                raise GoalConflict("goal completion blocked", blockers=check["blockers"], latest=before)
+            fields = self._validate_node_fields({**before, "status": "completed", "progress": 1}, creating=False)
+            now = utc_now()
+            conn.execute(
+                "UPDATE goal_nodes SET status=?, progress=?, completed_at=?, version=version+1, updated_at=? WHERE id=?",
+                (fields["status"], fields["progress"], now, now, node_id),
+            )
+            after = self._get_node(conn, node_id)
+            self._event(
+                conn, project_id=after["project_id"], event_type="update_node", entity_type="node",
+                entity_id=node_id, before=before, after=after, reason=reason, batch_id=batch_id,
+                actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            self._recompute_project_progress(conn, after["project_id"])
+            return {"node": after, "batch_id": batch_id}
 
     def get_focus(self, project_id: str, node_id: str | None = None) -> dict[str, Any]:
         with self._connect() as conn:
