@@ -58,6 +58,7 @@ class ContextCompressionPolicy:
         config_context_length: int | None = None,
         provider: str = "",
         adaptive_by_model: bool = False,
+        startup_probe: bool = False,
     ) -> "ContextCompressionPolicy":
         context_length, source = resolve_model_context_length(
             model,
@@ -65,6 +66,7 @@ class ContextCompressionPolicy:
             api_key=api_key,
             config_context_length=config_context_length,
             provider=provider,
+            startup_probe=startup_probe,
         )
         return cls(
             model=model,
@@ -136,14 +138,48 @@ def configured_context_length(
                 break
     if not isinstance(entry, dict):
         return None
+    # Accept the canonical map first, then the two structures emitted by
+    # provider registries and model pickers.  All forms remain model-specific:
+    # a provider-wide context value must never leak across model switches.
     model_contexts = entry.get("model_context_lengths")
     if not isinstance(model_contexts, dict):
         model_contexts = entry.get("context_lengths")
-    # A provider-wide value is intentionally ignored: switching models must
-    # never inherit the previous model's context window.
-    if not isinstance(model_contexts, dict):
+    candidate = model_contexts.get(model) if isinstance(model_contexts, dict) else None
+
+    if candidate is None:
+        model_entries = entry.get("models")
+        if isinstance(model_entries, dict):
+            model_entry = model_entries.get(model)
+            if isinstance(model_entry, dict):
+                candidate = _context_value_from_mapping(model_entry)
+            elif model_entry is not None:
+                candidate = model_entry
+
+    if candidate is None:
+        catalog = entry.get("model_catalog")
+        catalog_models = catalog.get("models") if isinstance(catalog, dict) else None
+        if isinstance(catalog_models, list):
+            for model_entry in catalog_models:
+                if not isinstance(model_entry, dict):
+                    continue
+                model_id = str(
+                    model_entry.get("id")
+                    or model_entry.get("name")
+                    or model_entry.get("model")
+                    or ""
+                ).strip()
+                if model_id == model:
+                    candidate = _context_value_from_mapping(model_entry)
+                    break
+
+    if candidate is None:
+        capabilities = entry.get("model_capabilities")
+        model_capability = capabilities.get(model) if isinstance(capabilities, dict) else None
+        if isinstance(model_capability, dict):
+            candidate = _context_value_from_mapping(model_capability)
+
+    if candidate is None:
         return None
-    candidate = model_contexts.get(model)
     try:
         if isinstance(candidate, str):
             raw = candidate.strip().replace(",", "").replace(" ", "")
@@ -160,3 +196,21 @@ def configured_context_length(
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _context_value_from_mapping(value: dict[str, Any]) -> Any:
+    """Return a context field from a model metadata/config mapping."""
+    for key in (
+        "context_length",
+        "context_window",
+        "context_window_size",
+        "max_context_tokens",
+        "max_context_length",
+        "max_model_len",
+        "max_input_tokens",
+        "input_token_limit",
+        "prompt_token_limit",
+    ):
+        if key in value and value[key] not in (None, ""):
+            return value[key]
+    return None

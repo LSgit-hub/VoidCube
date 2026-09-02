@@ -731,6 +731,7 @@ class AIAgent:
         compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
         compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
         compression_adaptive = str(_compression_cfg.get("adaptive_by_model", False)).lower() in ("true", "1", "yes")
+        compression_startup_probe = str(_compression_cfg.get("startup_probe", True)).lower() in ("true", "1", "yes")
 
         # Read explicit context_length override from model config
         _model_cfg = _agent_cfg.get("model", {})
@@ -837,6 +838,7 @@ class AIAgent:
                 config_context_length=_config_context_length,
                 provider=self.provider,
                 adaptive_by_model=compression_adaptive,
+                startup_probe=compression_startup_probe,
             )
             self.context_compressor = ContextCompressor(
                 model=self.model,
@@ -1136,6 +1138,7 @@ class AIAgent:
                 api_key=self.api_key,
                 provider=self.provider,
                 config_context_length=_new_config_context_length,
+                startup_probe=True,
             )
             update_kwargs = {
                 "model": self.model,
@@ -1165,6 +1168,9 @@ class AIAgent:
             "compressor_provider": getattr(_cc, "provider", self.provider) if _cc else self.provider,
             "compressor_context_length": _cc.context_length if _cc else 0,
             "compressor_threshold_tokens": _cc.threshold_tokens if _cc else 0,
+            "compressor_source": getattr(
+                getattr(_cc, "policy", None), "source", "probe"
+            ),
         }
         # ── Reset fallback state ──
         self._fallback_activated = False

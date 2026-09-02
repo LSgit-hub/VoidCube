@@ -4,6 +4,7 @@ Pure utility functions with no AIAgent dependency. Used by ContextCompressor
 and the Agent runtime for pre-flight context checks.
 """
 
+import json
 import logging
 import os
 import re
@@ -75,6 +76,11 @@ CONTEXT_PROBE_TIERS = [
     8_000,
 ]
 
+# A single startup capability probe.  This is deliberately separate from the
+# runtime recovery tiers: it runs only when explicitly requested by the Agent
+# initializer and never while a conversation is being compressed.
+STARTUP_CONTEXT_PROBE_LENGTH = 1_000_000
+
 # Default context length when no detection method succeeds.
 DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
 
@@ -86,10 +92,17 @@ MINIMUM_CONTEXT_LENGTH = 64_000
 _CONTEXT_LENGTH_KEYS = (
     "context_length",
     "context_window",
+    "context_window_size",
+    "context_size",
+    "max_context_tokens",
+    "max_context",
     "max_context_length",
     "max_position_embeddings",
     "max_model_len",
     "max_input_tokens",
+    "input_token_limit",
+    "prompt_token_limit",
+    "token_limit",
     "max_sequence_length",
     "max_seq_len",
     "n_ctx_train",
@@ -505,13 +518,14 @@ def detect_model_context_length(
     api_key: str = "",
     provider: str = "",
     config_context_length: int | None = None,
+    startup_probe: bool = False,
 ) -> tuple[int, str]:
-    """Detect a model's context limit without sending a chat completion.
+    """Detect a model's context limit from metadata, optionally probing startup.
 
     This probes the provider's model metadata endpoints and persistent cache.
     If the provider does not publish a limit, the returned source is
-    ``fallback``; the first real context error is then used to calibrate and
-    persist the exact limit.
+    ``fallback`` unless ``startup_probe`` is enabled.  The first real context
+    error remains available as a later exact calibration path.
     """
     return resolve_model_context_length(
         model,
@@ -519,7 +533,67 @@ def detect_model_context_length(
         api_key=api_key,
         config_context_length=config_context_length,
         provider=provider,
+        startup_probe=startup_probe,
     )
+
+
+def probe_endpoint_context_length(
+    model: str,
+    *,
+    base_url: str = "",
+    api_key: str = "",
+    timeout: tuple[float, float] = (0.5, 20.0),
+) -> Optional[int]:
+    """Probe an OpenAI-compatible endpoint for a large context capability.
+
+    There is no standard context-limit endpoint in the OpenAI-compatible
+    protocol.  When metadata is absent, a minimal completion request with a
+    large output allowance is the only non-history probe available.  A
+    successful response establishes a lower bound for the accepted window;
+    an error is used only when it contains an explicit context limit.  Other
+    errors (including output-cap errors) are intentionally ignored.
+
+    Callers should invoke this at startup and persist the result.  This
+    function must not be called from the compression loop.
+    """
+    normalized = _normalize_base_url(base_url)
+    if not normalized or not api_key or not model:
+        return None
+    endpoint = normalized + "/chat/completions"
+    payload = {
+        "model": _strip_provider_prefix(model),
+        "messages": [{
+            "role": "user",
+            "content": "Return exactly OK and stop.",
+        }],
+        "max_tokens": STARTUP_CONTEXT_PROBE_LENGTH,
+        "temperature": 0,
+        "stream": False,
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        if response.ok:
+            return STARTUP_CONTEXT_PROBE_LENGTH
+        try:
+            body = response.json()
+            error_text = json.dumps(body, ensure_ascii=False)
+        except Exception:
+            error_text = response.text or ""
+        # A provider may reject the requested output allowance because its
+        # completion cap is smaller than 1M.  That says nothing about the
+        # input context window and must not be recorded as one.
+        error_lower = error_text.lower()
+        if "context" not in error_lower and (
+            "max_tokens" in error_lower
+            or "max completion" in error_lower
+            or "output token" in error_lower
+        ):
+            return None
+        return parse_context_limit_from_error(error_text)
+    except Exception as exc:
+        logger.debug("Startup context probe failed for %s: %s", model, exc)
+        return None
 
 
 def _get_context_cache_path() -> Path:
@@ -864,6 +938,7 @@ def get_model_context_length(
     provider: str = "",
     *,
     with_source: bool = False,
+    startup_probe: bool = False,
 ) -> int | tuple[int, str]:
     """Get the context length for a model.
 
@@ -874,7 +949,8 @@ def get_model_context_length(
     3. Local server query (for reachable local endpoints)
     4. Nous suffix-match via OpenRouter cache
     5. OpenRouter live API metadata (OpenRouter endpoints only)
-    6. Default fallback (128K)
+    6. Optional startup capability probe
+    7. Default fallback (128K)
     """
     def result(value: int, source: str) -> int | tuple[int, str]:
         return (int(value), source) if with_source else int(value)
@@ -928,6 +1004,13 @@ def get_model_context_length(
 
         # Metadata from an unrelated provider is not authoritative for custom
         # endpoints, even when they happen to use the same model identifier.
+        if startup_probe:
+            probed = probe_endpoint_context_length(
+                model, base_url=base_url, api_key=api_key
+            )
+            if probed and probed > 0:
+                save_context_length(model, base_url, probed)
+                return result(probed, "startup_probe")
         return result(DEFAULT_FALLBACK_CONTEXT, "fallback_endpoint")
 
     # 4. Provider-aware lookups (before generic OpenRouter cache)
@@ -954,6 +1037,7 @@ def resolve_model_context_length(
     api_key: str = "",
     config_context_length: int | None = None,
     provider: str = "",
+    startup_probe: bool = False,
 ) -> tuple[int, str]:
     """Resolve a model context window together with the resolution source."""
     value = get_model_context_length(
@@ -963,6 +1047,7 @@ def resolve_model_context_length(
         config_context_length=config_context_length,
         provider=provider,
         with_source=True,
+        startup_probe=startup_probe,
     )
     if isinstance(value, tuple):
         return value

@@ -67,6 +67,12 @@ def test_custom_endpoint_does_not_fall_back_to_unrelated_provider_metadata(monke
 def test_context_metadata_accepts_human_readable_million_tokens():
     assert model_metadata._extract_context_length({"context_window": "1M"}) == 1_000_000
     assert model_metadata._extract_context_length({"max_context_length": "1,048,576"}) == 1_048_576
+    assert model_metadata._extract_context_length(
+        {"limits": {"max_context_tokens": "1M"}}
+    ) == 1_000_000
+    assert model_metadata._extract_context_length(
+        {"input_token_limit": 1_048_576}
+    ) == 1_048_576
 
 
 def test_cached_endpoint_metadata_allows_model_detail_enrichment(monkeypatch):
@@ -104,3 +110,53 @@ def test_cached_endpoint_metadata_allows_model_detail_enrichment(monkeypatch):
     )
     assert result["model-a"]["context_length"] == 1_000_000
     assert any(url.endswith("/models/model-a") for url in calls)
+
+
+def test_startup_probe_accepts_large_context_capability(monkeypatch):
+    calls = []
+
+    class Response:
+        ok = True
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        return Response()
+
+    monkeypatch.setattr(model_metadata.requests, "post", fake_post)
+    result = model_metadata.probe_endpoint_context_length(
+        "model-a", base_url="https://models.example.test/v1", api_key="secret"
+    )
+    assert result == 1_000_000
+    assert calls[0][0].endswith("/chat/completions")
+    assert calls[0][1]["max_tokens"] == 1_000_000
+
+
+def test_startup_probe_uses_explicit_context_error_limit(monkeypatch):
+    class Response:
+        ok = False
+        text = ""
+
+        def json(self):
+            return {"error": {"message": "maximum context length is 262144 tokens"}}
+
+    monkeypatch.setattr(model_metadata.requests, "post", lambda *args, **kwargs: Response())
+    assert model_metadata.probe_endpoint_context_length(
+        "model-a", base_url="https://models.example.test/v1", api_key="secret"
+    ) == 262_144
+
+
+def test_startup_probe_does_not_treat_output_cap_as_context_limit(monkeypatch):
+    class Response:
+        ok = False
+        text = "max_tokens must be less than or equal to 32768"
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(model_metadata.requests, "post", lambda *args, **kwargs: Response())
+    assert model_metadata.probe_endpoint_context_length(
+        "model-a", base_url="https://models.example.test/v1", api_key="secret"
+    ) is None

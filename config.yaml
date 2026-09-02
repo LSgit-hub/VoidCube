@@ -119,6 +119,7 @@ compression:
   threshold: 0.5
   target_ratio: 0.2
   protect_last_n: 20
+  startup_probe: true
   adaptive_by_model: false
 smart_model_routing:
   enabled: false

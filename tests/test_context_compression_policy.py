@@ -107,3 +107,31 @@ def test_provider_context_override_accepts_human_readable_value():
     assert configured_context_length(
         config, provider="api-a", model="model-a"
     ) == 1_000_000
+
+
+def test_provider_context_override_reads_model_registry_shapes():
+    config = {
+        "providers": {
+            "api-a": {
+                "models": {
+                    "model-a": {"max_context_tokens": "1M"},
+                },
+            },
+            "api-b": {
+                "model_catalog": {
+                    "models": [
+                        {"id": "model-b", "input_token_limit": 1_048_576},
+                    ],
+                },
+            },
+            "api-c": {
+                "model_capabilities": {
+                    "model-c": {"context_window_size": "1,048,576"},
+                },
+            },
+        }
+    }
+
+    assert configured_context_length(config, provider="api-a", model="model-a") == 1_000_000
+    assert configured_context_length(config, provider="api-b", model="model-b") == 1_048_576
+    assert configured_context_length(config, provider="api-c", model="model-c") == 1_048_576
