@@ -127,6 +127,7 @@ from .context_compressor import (
     ContextRecoveryKind,
     execute_context_recovery,
 )
+from .context_policy import ContextCompressionPolicy
 from ...domain.agent.api_attempt import ApiAttemptState
 from .client_lifecycle import ChatClientLifecycle
 from .client_initialization import (
@@ -729,6 +730,7 @@ class AIAgent:
         compression_enabled = str(_compression_cfg.get("enabled", True)).lower() in ("true", "1", "yes")
         compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
         compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
+        compression_adaptive = str(_compression_cfg.get("adaptive_by_model", False)).lower() in ("true", "1", "yes")
 
         # Read explicit context_length override from model config
         _model_cfg = _agent_cfg.get("model", {})
@@ -813,6 +815,17 @@ class AIAgent:
             if not self.quiet_mode:
                 logger.info("Using context engine: %s", _selected_engine.name)
         else:
+            _context_policy = ContextCompressionPolicy.for_model(
+                self.model,
+                threshold_percent=compression_threshold,
+                target_ratio=compression_target_ratio,
+                protect_last_n=compression_protect_last,
+                base_url=self.base_url,
+                api_key=getattr(self, "api_key", ""),
+                config_context_length=_config_context_length,
+                provider=self.provider,
+                adaptive_by_model=compression_adaptive,
+            )
             self.context_compressor = ContextCompressor(
                 model=self.model,
                 threshold_percent=compression_threshold,
@@ -824,6 +837,7 @@ class AIAgent:
                 api_key=getattr(self, "api_key", ""),
                 config_context_length=_config_context_length,
                 provider=self.provider,
+                policy=_context_policy,
             )
         self.compression_enabled = compression_enabled
 

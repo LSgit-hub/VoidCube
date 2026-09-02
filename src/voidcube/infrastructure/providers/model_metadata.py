@@ -795,7 +795,9 @@ def get_model_context_length(
     api_key: str = "",
     config_context_length: int | None = None,
     provider: str = "",
-) -> int:
+    *,
+    with_source: bool = False,
+) -> int | tuple[int, str]:
     """Get the context length for a model.
 
     Resolution order:
@@ -807,9 +809,12 @@ def get_model_context_length(
     5. OpenRouter live API metadata (OpenRouter endpoints only)
     6. Default fallback (128K)
     """
+    def result(value: int, source: str) -> int | tuple[int, str]:
+        return (int(value), source) if with_source else int(value)
+
     # 0. Explicit config override — user knows best
     if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
-        return config_context_length
+        return result(config_context_length, "config")
 
     # Normalise provider-prefixed model names (e.g. "local:model-name" →
     # "model-name") so cache lookups and server queries use the bare ID that
@@ -820,14 +825,14 @@ def get_model_context_length(
     if base_url:
         cached = get_cached_context_length(model, base_url)
         if cached is not None:
-            return cached
+            return result(cached, "persistent_cache")
 
     # 2. Active endpoint metadata is authoritative when available. Avoid a
     # chain of long synchronous probes when a configured local server is down.
     if _is_custom_endpoint(base_url):
         local_endpoint = is_local_endpoint(base_url)
         if local_endpoint and detect_local_server_type(base_url) is None:
-            return DEFAULT_FALLBACK_CONTEXT
+            return result(DEFAULT_FALLBACK_CONTEXT, "fallback_local_unavailable")
 
         endpoint_metadata = fetch_endpoint_model_metadata(base_url, api_key=api_key)
         matched = endpoint_metadata.get(model)
@@ -844,17 +849,17 @@ def get_model_context_length(
         if matched:
             context_length = matched.get("context_length")
             if isinstance(context_length, int):
-                return context_length
+                return result(context_length, "endpoint_metadata")
         # 3. Try querying a local server directly when /models omits metadata.
         if local_endpoint:
             local_ctx = _query_local_context_length(model, base_url)
             if local_ctx and local_ctx > 0:
                 save_context_length(model, base_url, local_ctx)
-                return local_ctx
+                return result(local_ctx, "local_probe")
 
         # Metadata from an unrelated provider is not authoritative for custom
         # endpoints, even when they happen to use the same model identifier.
-        return DEFAULT_FALLBACK_CONTEXT
+        return result(DEFAULT_FALLBACK_CONTEXT, "fallback_endpoint")
 
     # 4. Provider-aware lookups (before generic OpenRouter cache)
     # These are provider-specific and take priority over the generic OR cache,
@@ -862,16 +867,37 @@ def get_model_context_length(
     if provider == "nous":
         ctx = _resolve_nous_context_length(model)
         if ctx:
-            return ctx
+            return result(ctx, "provider_metadata")
 
     # 5. OpenRouter live metadata is only authoritative for OpenRouter routes.
     if _is_openrouter_base_url(base_url) or provider == "openrouter":
         metadata = fetch_model_metadata()
         if model in metadata:
-            return metadata[model].get("context_length", DEFAULT_FALLBACK_CONTEXT)
+            return result(metadata[model].get("context_length", DEFAULT_FALLBACK_CONTEXT), "openrouter_metadata")
 
     # 6. Default fallback — 128K
-    return DEFAULT_FALLBACK_CONTEXT
+    return result(DEFAULT_FALLBACK_CONTEXT, "fallback")
+
+
+def resolve_model_context_length(
+    model: str,
+    base_url: str = "",
+    api_key: str = "",
+    config_context_length: int | None = None,
+    provider: str = "",
+) -> tuple[int, str]:
+    """Resolve a model context window together with the resolution source."""
+    value = get_model_context_length(
+        model,
+        base_url=base_url,
+        api_key=api_key,
+        config_context_length=config_context_length,
+        provider=provider,
+        with_source=True,
+    )
+    if isinstance(value, tuple):
+        return value
+    return int(value), "fallback"
 
 
 def estimate_tokens_rough(text: str) -> int:

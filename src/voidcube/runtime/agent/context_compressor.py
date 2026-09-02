@@ -33,13 +33,12 @@ try:
 except ModuleNotFoundError:
     from voidcube.domain.agent.context_engine import ContextEngine
 from ...infrastructure.providers.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH,
     get_next_probe_tier,
-    get_model_context_length,
     estimate_messages_tokens_rough,
     parse_available_output_tokens_from_error,
     parse_context_limit_from_error,
 )
+from .context_policy import ContextCompressionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -407,17 +406,16 @@ class ContextCompressor(ContextEngine):
         self.base_url = base_url
         self.api_key = api_key
         self.provider = provider
-        self.context_length = context_length
-        self.threshold_tokens = max(
-            int(context_length * self.threshold_percent),
-            MINIMUM_CONTEXT_LENGTH,
+        self.policy = self.policy.with_context_length(
+            context_length, model=model, source="probe"
         )
+        self.context_length = self.policy.context_length
+        self.threshold_tokens = self.policy.threshold_tokens
         self._refresh_derived_budgets()
 
     def _refresh_derived_budgets(self) -> None:
         """Recalculate budgets that depend on the active model context."""
-        target_tokens = int(self.threshold_tokens * self.summary_target_ratio)
-        self.tail_token_budget = target_tokens
+        self.tail_token_budget = self.policy.tail_token_budget
         self.max_summary_tokens = min(
             int(self.context_length * 0.05), _SUMMARY_TOKENS_CEILING,
         )
@@ -434,6 +432,7 @@ class ContextCompressor(ContextEngine):
         api_key: str = "",
         config_context_length: int | None = None,
         provider: str = "",
+        policy: ContextCompressionPolicy | None = None,
     ):
         self.model = model
         self.base_url = base_url
@@ -444,20 +443,22 @@ class ContextCompressor(ContextEngine):
         self.protect_last_n = protect_last_n
         self.summary_target_ratio = max(0.10, min(summary_target_ratio, 0.80))
         self.quiet_mode = quiet_mode
-
-        self.context_length = get_model_context_length(
-            model, base_url=base_url, api_key=api_key,
+        self.policy = policy or ContextCompressionPolicy.for_model(
+            model,
+            threshold_percent=threshold_percent,
+            target_ratio=summary_target_ratio,
+            protect_last_n=protect_last_n,
+            base_url=base_url,
+            api_key=api_key,
             config_context_length=config_context_length,
             provider=provider,
         )
+        self.context_length = self.policy.context_length
         # Floor: never compress below MINIMUM_CONTEXT_LENGTH tokens even if
         # the percentage would suggest a lower value.  This prevents premature
         # compression on large-context models at 50% while keeping the % sane
         # for models right at the minimum.
-        self.threshold_tokens = max(
-            int(self.context_length * threshold_percent),
-            MINIMUM_CONTEXT_LENGTH,
-        )
+        self.threshold_tokens = self.policy.threshold_tokens
         self.compression_count = 0
 
         # Derive token budgets: ratio is relative to the threshold, not total context.
@@ -469,9 +470,9 @@ class ContextCompressor(ContextEngine):
                 "threshold=%d (%.0f%%) target_ratio=%.0f%% tail_budget=%d "
                 "provider=%s base_url=%s",
                 model, self.context_length, self.threshold_tokens,
-                threshold_percent * 100, self.summary_target_ratio * 100,
+                self.policy.threshold_percent * 100, self.policy.target_ratio * 100,
                 self.tail_token_budget,
-                provider or "none", base_url or "none",
+                f"{provider or 'none'} ({self.policy.source})", base_url or "none",
             )
         self._context_probed = False  # True after a step-down from context error
 
@@ -1233,7 +1234,7 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             logger.info(
                 "Model context limit: %d tokens (%.0f%% = %d)",
                 self.context_length,
-                self.threshold_percent * 100,
+                self.policy.threshold_percent * 100,
                 self.threshold_tokens,
             )
             tail_msgs = n_messages - compress_end

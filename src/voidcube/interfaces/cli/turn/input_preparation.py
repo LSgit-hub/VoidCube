@@ -30,6 +30,7 @@ class CliTurnInputPreparationPorts:
     should_emit: Callable[[], bool]
     emit: Callable[[str], None]
     context_length: Optional[Callable[[str, str, str], int]] = None
+    context_policy: Optional[Callable[[], Any]] = None
     expand_context: Optional[Callable[..., Any]] = None
     sanitize: Optional[Callable[[str], str]] = None
     begin_turn: Optional[Callable[[Any], TurnInput]] = None
@@ -169,14 +170,24 @@ class CliTurnInputPreparationRuntime:
         context_length = ports.context_length or self._default_context_length
         expand_context = ports.expand_context or self._default_expand_context
         try:
+            policy = ports.context_policy() if ports.context_policy is not None else None
+            kwargs = {
+                "cwd": ports.cwd(),
+                "context_length": (
+                    policy.context_length
+                    if policy is not None
+                    else context_length(
+                        ports.model,
+                        ports.base_url or "",
+                        ports.api_key or "",
+                    )
+                ),
+            }
+            if policy is not None:
+                kwargs["policy"] = policy
             return expand_context(
                 message,
-                cwd=ports.cwd(),
-                context_length=context_length(
-                    ports.model,
-                    ports.base_url or "",
-                    ports.api_key or "",
-                ),
+                **kwargs,
             )
         except Exception as error:
             logging.debug("@ context reference expansion failed: %s", error)

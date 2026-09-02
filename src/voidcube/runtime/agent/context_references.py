@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from ...infrastructure.providers.model_metadata import estimate_tokens_rough
+from .context_policy import ContextCompressionPolicy
 
 _QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_PATTERN = re.compile(
@@ -106,7 +107,8 @@ def preprocess_context_references(
     message: str,
     *,
     cwd: str | Path,
-    context_length: int,
+    context_length: int | None = None,
+    policy: ContextCompressionPolicy | None = None,
     url_fetcher: Callable[[str], str | Awaitable[str]] | None = None,
     allowed_root: str | Path | None = None,
 ) -> ContextReferenceResult:
@@ -114,6 +116,7 @@ def preprocess_context_references(
         message,
         cwd=cwd,
         context_length=context_length,
+        policy=policy,
         url_fetcher=url_fetcher,
         allowed_root=allowed_root,
     )
@@ -133,7 +136,8 @@ async def preprocess_context_references_async(
     message: str,
     *,
     cwd: str | Path,
-    context_length: int,
+    context_length: int | None = None,
+    policy: ContextCompressionPolicy | None = None,
     url_fetcher: Callable[[str], str | Awaitable[str]] | None = None,
     allowed_root: str | Path | None = None,
 ) -> ContextReferenceResult:
@@ -164,8 +168,21 @@ async def preprocess_context_references_async(
             blocks.append(block)
             injected_tokens += estimate_tokens_rough(block)
 
-    hard_limit = max(1, int(context_length * 0.50))
-    soft_limit = max(1, int(context_length * 0.25))
+    effective_policy = policy
+    if effective_policy is not None:
+        context_length = effective_policy.context_length
+    if context_length is None:
+        raise ValueError("context_length or policy is required")
+    hard_limit = (
+        effective_policy.hard_reference_limit
+        if effective_policy is not None
+        else max(1, int(context_length * 0.50))
+    )
+    soft_limit = (
+        effective_policy.soft_reference_limit
+        if effective_policy is not None
+        else max(1, int(context_length * 0.25))
+    )
     if injected_tokens > hard_limit:
         warnings.append(
             f"@ context injection refused: {injected_tokens} tokens exceeds the 50% hard limit ({hard_limit})."

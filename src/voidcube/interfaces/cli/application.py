@@ -4203,6 +4203,11 @@ class VoidcubeCLI:
                 begin_turn=application_runtime.begin_turn,
                 native_input_modalities=native_input_modalities,
                 build_attachments=build_attachments,
+                context_policy=lambda: getattr(
+                    getattr(owner, "agent", None), "context_compressor", None
+                ).policy if getattr(
+                    getattr(owner, "agent", None), "context_compressor", None
+                ) is not None else None,
             )
 
         def record_user_message(message: Any) -> None:
