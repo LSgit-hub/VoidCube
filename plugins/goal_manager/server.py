@@ -132,6 +132,20 @@ class EvidenceCreate(BaseModel):
     session_id: str | None = None
 
 
+class IntentContractRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    outcome: str
+    success_criteria: list[str] = Field(default_factory=list)
+    scope: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    reason: str = "set intent contract"
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
 def _error_response(exc: Exception) -> JSONResponse:
     if isinstance(exc, ConfirmationRequired):
         return JSONResponse(
@@ -165,7 +179,7 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         ],
         allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Accept", "Content-Type", "Authorization", "X-Goal-Service-Token"],
     )
     store = GoalStore(runtime_config["db_path"])
@@ -260,6 +274,32 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.get("/api/goals/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
         return store.get_project(project_id)
+
+    @app.put("/api/goals/projects/{project_id}/intent-contract")
+    def set_intent_contract(project_id: str, payload: IntentContractRequest) -> dict[str, Any]:
+        data = payload.model_dump()
+        contract = {key: data[key] for key in (
+            "outcome", "success_criteria", "scope", "constraints", "assumptions", "open_questions"
+        )}
+        return store.set_intent_contract(
+            project_id, contract, reason=data["reason"], actor_type=data["actor_type"],
+            actor_id=data["actor_id"], session_id=data["session_id"],
+        )
+
+    @app.get("/api/goals/projects/{project_id}/intent-contract")
+    def get_intent_contract(project_id: str) -> dict[str, Any]:
+        return store.get_intent_contract(project_id)
+
+    @app.get("/api/goals/projects/{project_id}/plan-review")
+    def plan_review(project_id: str) -> dict[str, Any]:
+        return store.review_plan(project_id)
+
+    @app.get("/api/goals/projects/{project_id}/protocol-next-action")
+    def protocol_next_action(
+        project_id: str,
+        limit: int = Query(10, ge=1, le=100),
+    ) -> dict[str, Any]:
+        return store.protocol_next_action(project_id, limit)
 
     @app.get("/api/goals/projects/{project_id}/focus")
     def focus(project_id: str, node: str | None = None) -> dict[str, Any]:

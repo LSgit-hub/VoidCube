@@ -293,6 +293,73 @@ def test_next_actions_respects_dependency_direction(store):
     assert dependent["id"] in {item["id"] for item in store.next_actions(pid)}
 
 
+def test_execution_protocol_intent_review_and_actions(store):
+    project = store.create_project("Protocol", reason="init", root_status="in_progress")
+    pid = project["project"]["id"]
+    assert store.protocol_next_action(pid)["action_type"] == "clarify"
+    review = store.review_plan(pid)
+    assert review["valid"] is False
+    assert any(item["code"] == "missing_intent_contract" for item in review["findings"])
+
+    store.set_intent_contract(
+        pid,
+        {"outcome": "ship", "success_criteria": ["tests pass"], "open_questions": ["which environment?"]},
+        reason="capture intent",
+    )
+    assert store.protocol_next_action(pid)["action_type"] == "clarify"
+
+    store.set_intent_contract(
+        pid,
+        {"outcome": "ship", "success_criteria": ["tests pass"]},
+        reason="resolve intent",
+    )
+    task = store.create_node(
+        pid,
+        {"node_type": "task", "title": "Run tests", "acceptance_criteria": [{"title": "tests pass"}]},
+        reason="add task",
+    )["node"]
+    store.create_edge(
+        {"source_id": project["root"]["id"], "target_id": task["id"], "edge_type": "decomposes_to"},
+        reason="decompose",
+    )
+    action = store.protocol_next_action(pid)
+    assert action["action_type"] == "execute"
+    assert action["nodes"][0]["id"] == task["id"]
+
+
+def test_execution_protocol_investigate_and_blocked(store):
+    project = store.create_project("Protocol", reason="init", root_status="in_progress")
+    pid = project["project"]["id"]
+    store.set_intent_contract(pid, {"outcome": "ship"}, reason="intent")
+    task = store.create_node(
+        pid,
+        {
+            "node_type": "task", "title": "Research", "acceptance_criteria": [
+                {"title": "answer unknown", "requires_investigation": True}
+            ],
+        },
+        reason="add task",
+    )["node"]
+    store.create_edge(
+        {"source_id": project["root"]["id"], "target_id": task["id"], "edge_type": "decomposes_to"},
+        reason="decompose",
+    )
+    assert store.protocol_next_action(pid)["action_type"] == "investigate"
+
+    store.update_node(task["id"], 1, {"status": "blocked"}, reason="external blocker")
+    assert store.protocol_next_action(pid)["action_type"] == "blocked"
+
+
+def test_intent_contract_rollback_and_redo(store):
+    project = store.create_project("Protocol", reason="init")
+    pid = project["project"]["id"]
+    applied = store.set_intent_contract(pid, {"outcome": "first"}, reason="first intent")
+    store.rollback(applied["batch_id"])
+    assert store.get_intent_contract(pid)["intent_contract"] is None
+    store.redo(project_id=pid)
+    assert store.get_intent_contract(pid)["intent_contract"]["outcome"] == "first"
+
+
 def test_api_and_tool_schemas(tmp_path):
     db_path = tmp_path / "test_goal_service_api.db"
     app = create_app({"db_path": str(db_path)})
@@ -330,6 +397,16 @@ def test_api_and_tool_schemas(tmp_path):
             assert edge_response.status_code == 409
             assert edge_response.json()["cycle_path"]
             assert client.get(f"/api/goals/projects/{project_id}/next-actions").status_code == 200
+            contract = client.put(
+                f"/api/goals/projects/{project_id}/intent-contract",
+                json={"outcome": "ship", "success_criteria": ["green"], "reason": "API intent"},
+            )
+            assert contract.status_code == 200
+            assert client.get(f"/api/goals/projects/{project_id}/intent-contract").json()["intent_contract"]["outcome"] == "ship"
+            assert client.get(f"/api/goals/projects/{project_id}/plan-review").status_code == 200
+            protocol = client.get(f"/api/goals/projects/{project_id}/protocol-next-action")
+            assert protocol.status_code == 200
+            assert protocol.json()["action_type"] == "complete"
     finally:
         app.state.goal_store.db_path.unlink(missing_ok=True)
         app.state.goal_store.db_path.with_name("test_goal_service_api.db.owner").unlink(missing_ok=True)

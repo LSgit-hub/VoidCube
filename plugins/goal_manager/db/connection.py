@@ -18,6 +18,11 @@ from voidcube.infrastructure.config.runtime_paths import get_VoidCube_home
 from voidcube.infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
 
 from ..domain.events import dump_json, load_json, new_id
+from ..domain.execution_protocol import (
+    normalize_intent_contract,
+    review_plan as review_execution_plan,
+    select_protocol_action,
+)
 from ..domain.graph import GoalConflict, bounded_subgraph, find_cycle_path
 from ..domain.guard import ConfirmationGuard, ConfirmationRequired
 from ..domain.progress import evidence_progress, weighted_children_progress
@@ -444,6 +449,89 @@ class GoalStore:
                 "SELECT * FROM goal_nodes WHERE id = ?", (project["root_node_id"],)
             ).fetchone()))
             return result
+
+    def set_intent_contract(
+        self,
+        project_id: str,
+        contract: dict[str, Any],
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        normalized = normalize_intent_contract(contract)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            self._ensure_project(conn, project_id)
+            before = self._latest_intent_contract(conn, project_id)
+            self._event(
+                conn, project_id=project_id, event_type="set_intent_contract",
+                entity_type="intent_contract", entity_id=project_id, before=before,
+                after=normalized, reason=reason, batch_id=batch_id,
+                actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            return {"intent_contract": normalized, "batch_id": batch_id}
+
+    def get_intent_contract(self, project_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            self._ensure_project(conn, project_id)
+            return {"intent_contract": self._latest_intent_contract(conn, project_id)}
+
+    def _latest_intent_contract(self, conn: sqlite3.Connection, project_id: str) -> dict[str, Any] | None:
+        rows = conn.execute(
+            "SELECT rowid, batch_id, after_json FROM goal_events WHERE project_id=? "
+            "AND event_type='set_intent_contract' AND entity_type='intent_contract' "
+            "AND entity_id=? ORDER BY rowid DESC",
+            (project_id, project_id),
+        ).fetchall()
+        for row in rows:
+            if row["batch_id"] and self._batch_marker(conn, row["batch_id"]) == "rollback":
+                continue
+            value = load_json(row["after_json"], None)
+            if isinstance(value, dict):
+                return value
+        return None
+
+    def _project_snapshot(self, conn: sqlite3.Connection, project_id: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        project = self._ensure_project(conn, project_id)
+        nodes = [_node_payload(dict(row)) for row in conn.execute(
+            "SELECT * FROM goal_nodes WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
+            (project_id,),
+        ).fetchall()]
+        edges = [_edge_payload(dict(row)) for row in conn.execute(
+            "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
+            (project_id,),
+        ).fetchall()]
+        return dict(project), nodes, edges
+
+    def review_plan(self, project_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            project, nodes, edges = self._project_snapshot(conn, project_id)
+            ready_nodes = self._eligible_next_actions(
+                [node for node in nodes if node["status"] in {"planned", "in_progress"} and node["node_type"] in {"task", "bug", "test", "feature"}],
+                edges,
+                {node["id"]: node for node in nodes},
+                100,
+            )
+            contract = self._latest_intent_contract(conn, project_id)
+            review = review_execution_plan(project, nodes, edges, contract, ready_nodes)
+            return {"project_id": project_id, "intent_contract": contract, **review}
+
+    def protocol_next_action(self, project_id: str, limit: int = 10) -> dict[str, Any]:
+        with self._connect() as conn:
+            project, nodes, edges = self._project_snapshot(conn, project_id)
+            ready_nodes = self._eligible_next_actions(
+                [node for node in nodes if node["status"] in {"planned", "in_progress"} and node["node_type"] in {"task", "bug", "test", "feature"}],
+                edges,
+                {node["id"]: node for node in nodes},
+                limit,
+            )
+            contract = self._latest_intent_contract(conn, project_id)
+            review = review_execution_plan(project, nodes, edges, contract, ready_nodes)
+            action = select_protocol_action(project, nodes, contract, review, ready_nodes)
+            return {"project_id": project_id, "intent_contract": contract, "review": review, **action}
 
     def _project_progress(self, conn: sqlite3.Connection, project_id: str) -> float:
         rows = conn.execute(
@@ -1167,6 +1255,48 @@ class GoalStore:
                     after["created_at"], after["updated_at"], after.get("deleted_at"), entity_id,
                 ),
             )
+        elif event["entity_type"] == "intent_contract" and event["event_type"] == "set_intent_contract":
+            # Intent contracts are event-backed; redo republishes the original
+            # payload so the latest non-rolled-back event becomes authoritative.
+            self._event(
+                conn,
+                project_id=event["project_id"],
+                event_type="set_intent_contract",
+                entity_type="intent_contract",
+                entity_id=entity_id,
+                before=load_json(event["before_json"]),
+                after=after,
+                reason="redo intent contract",
+                batch_id=event["batch_id"],
+                actor_type=event["actor_type"],
+                actor_id=event["actor_id"],
+                session_id=event["session_id"],
+            )
+
+    @staticmethod
+    def _eligible_next_actions(
+        candidates: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        by_id: dict[str, dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        available = []
+        for node in candidates:
+            blocked = node["status"] == "blocked"
+            for edge in edges:
+                if edge["edge_type"] == "depends_on" and edge["source_id"] == node["id"]:
+                    prerequisite = by_id.get(edge["target_id"])
+                elif edge["edge_type"] == "blocks" and edge["target_id"] == node["id"]:
+                    prerequisite = by_id.get(edge["source_id"])
+                else:
+                    continue
+                if prerequisite and prerequisite["status"] not in {"completed", "cancelled"}:
+                    blocked = True
+                    break
+            if not blocked:
+                available.append(node)
+        available.sort(key=lambda n: (-int(n["priority"]), n["due_at"] is None, n["due_at"] or "", float(n["progress"])))
+        return available[:max(1, min(100, int(limit)))]
 
     def next_actions(self, project_id: str, limit: int = 10, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
@@ -1185,29 +1315,11 @@ class GoalStore:
                 "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL", (project_id,)
             ).fetchall()]
             by_id = {
-                row["id"]: row for row in conn.execute(
+                row["id"]: _node_payload(dict(row)) for row in conn.execute(
                     "SELECT * FROM goal_nodes WHERE project_id=? AND deleted_at IS NULL", (project_id,)
                 ).fetchall()
             }
-            available = []
-            for node in candidates:
-                blocked = False
-                for edge in edges:
-                    if edge["edge_type"] == "depends_on" and edge["source_id"] == node["id"]:
-                        prerequisite = by_id.get(edge["target_id"])
-                    elif edge["edge_type"] == "blocks" and edge["target_id"] == node["id"]:
-                        prerequisite = by_id.get(edge["source_id"])
-                    else:
-                        continue
-                    if prerequisite and prerequisite["status"] not in {"completed", "cancelled"}:
-                        blocked = True
-                        break
-                if node["status"] == "blocked":
-                    blocked = True
-                if not blocked:
-                    available.append(node)
-            available.sort(key=lambda n: (-int(n["priority"]), n["due_at"] is None, n["due_at"] or "", float(n["progress"])))
-            return available[:max(1, min(100, int(limit)))]
+            return self._eligible_next_actions(candidates, edges, by_id, limit)
 
     def rollback(self, batch_id: str, *, reason: str = "rollback batch",
                  actor_type: str = "agent", actor_id: str | None = None,
