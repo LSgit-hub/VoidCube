@@ -1,4 +1,5 @@
 import socket
+import time
 
 from voidcube.infrastructure.providers import model_metadata
 
@@ -61,3 +62,45 @@ def test_custom_endpoint_does_not_fall_back_to_unrelated_provider_metadata(monke
     )
 
     assert result == model_metadata.DEFAULT_FALLBACK_CONTEXT
+
+
+def test_context_metadata_accepts_human_readable_million_tokens():
+    assert model_metadata._extract_context_length({"context_window": "1M"}) == 1_000_000
+    assert model_metadata._extract_context_length({"max_context_length": "1,048,576"}) == 1_048_576
+
+
+def test_cached_endpoint_metadata_allows_model_detail_enrichment(monkeypatch):
+    base_url = "https://models.example.test/v1"
+    model_metadata._endpoint_model_metadata_cache[base_url] = {
+        "model-a": {"name": "model-a"}
+    }
+    model_metadata._endpoint_model_metadata_cache_time[base_url] = time.time()
+    calls = []
+
+    class Response:
+        ok = True
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"id": "model-a"}]}
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if url.endswith("/models/model-a"):
+            class Detail:
+                ok = True
+
+                def json(self):
+                    return {"context_window": "1M"}
+
+            return Detail()
+        return Response()
+
+    monkeypatch.setattr(model_metadata.requests, "get", fake_get)
+    result = model_metadata.fetch_endpoint_model_metadata(
+        base_url, model="model-a"
+    )
+    assert result["model-a"]["context_length"] == 1_000_000
+    assert any(url.endswith("/models/model-a") for url in calls)

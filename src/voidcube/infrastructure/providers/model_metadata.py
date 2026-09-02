@@ -10,7 +10,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 import yaml
@@ -269,8 +269,18 @@ def _coerce_reasonable_int(value: Any, minimum: int = 1024, maximum: int = 10_00
         if isinstance(value, bool):
             return None
         if isinstance(value, str):
-            value = value.strip().replace(",", "")
-        result = int(value)
+            raw = value.strip().replace(",", "").replace(" ", "")
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmMbB])?", raw)
+            if match:
+                result = float(match.group(1))
+                multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(
+                    (match.group(2) or "").lower(), 1
+                )
+                result = int(result * multiplier)
+            else:
+                result = int(raw)
+        else:
+            result = int(value)
     except (TypeError, ValueError):
         return None
     if minimum <= result <= maximum:
@@ -368,6 +378,7 @@ def fetch_endpoint_model_metadata(
     base_url: str,
     api_key: str = "",
     force_refresh: bool = False,
+    model: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Fetch model metadata from an OpenAI-compatible ``/models`` endpoint.
 
@@ -382,7 +393,15 @@ def fetch_endpoint_model_metadata(
         cached = _endpoint_model_metadata_cache.get(normalized)
         cached_at = _endpoint_model_metadata_cache_time.get(normalized, 0)
         if cached is not None and (time.time() - cached_at) < _ENDPOINT_MODEL_CACHE_TTL:
-            return cached
+            # A collection request may have populated entries without a
+            # context length. Permit a later model-specific detail probe to
+            # enrich that cached entry instead of returning it unchanged.
+            cached_entry = cached.get(model) if model else None
+            if not model or (
+                isinstance(cached_entry, dict)
+                and "context_length" in cached_entry
+            ):
+                return cached
 
     candidates = [normalized]
     if normalized.endswith("/v1"):
@@ -402,23 +421,44 @@ def fetch_endpoint_model_metadata(
             response.raise_for_status()
             payload = response.json()
             cache: Dict[str, Dict[str, Any]] = {}
-            for model in payload.get("data", []):
-                if not isinstance(model, dict):
+            for model_entry in payload.get("data", []):
+                if not isinstance(model_entry, dict):
                     continue
-                model_id = model.get("id")
+                model_id = model_entry.get("id")
                 if not model_id:
                     continue
-                entry: Dict[str, Any] = {"name": model.get("name", model_id)}
-                context_length = _extract_context_length(model)
+                entry: Dict[str, Any] = {"name": model_entry.get("name", model_id)}
+                context_length = _extract_context_length(model_entry)
                 if context_length is not None:
                     entry["context_length"] = context_length
-                max_completion_tokens = _extract_max_completion_tokens(model)
+                max_completion_tokens = _extract_max_completion_tokens(model_entry)
                 if max_completion_tokens is not None:
                     entry["max_completion_tokens"] = max_completion_tokens
-                pricing = _extract_pricing(model)
+                pricing = _extract_pricing(model_entry)
                 if pricing:
                     entry["pricing"] = pricing
                 _add_model_aliases(cache, model_id, entry)
+
+            # Some hosted OpenAI-compatible endpoints omit context fields from
+            # the collection response but expose them on /models/{id}.
+            # Query details only for entries still missing a context length.
+            detail_ids = [model] if model and model in cache else []
+            for model_id in detail_ids:
+                entry = cache[model_id]
+                if "context_length" in entry:
+                    continue
+                try:
+                    detail = requests.get(
+                        candidate.rstrip("/") + "/models/" + quote(model_id, safe=""),
+                        headers=headers,
+                        timeout=(0.5, 3.0),
+                    )
+                    if detail.ok:
+                        detail_context = _extract_context_length(detail.json())
+                        if detail_context is not None:
+                            entry["context_length"] = detail_context
+                except Exception:
+                    continue
 
             # If this is a llama.cpp server, query /props for actual allocated context
             is_llamacpp = any(
@@ -450,9 +490,36 @@ def fetch_endpoint_model_metadata(
 
     if last_error:
         logger.debug("Failed to fetch model metadata from %s/models: %s", normalized, last_error)
+        # Do not cache authentication/network failures. A later call may have
+        # credentials available and must be allowed to retry the endpoint.
+        return {}
     _endpoint_model_metadata_cache[normalized] = {}
     _endpoint_model_metadata_cache_time[normalized] = time.time()
     return {}
+
+
+def detect_model_context_length(
+    model: str,
+    *,
+    base_url: str = "",
+    api_key: str = "",
+    provider: str = "",
+    config_context_length: int | None = None,
+) -> tuple[int, str]:
+    """Detect a model's context limit without sending a chat completion.
+
+    This probes the provider's model metadata endpoints and persistent cache.
+    If the provider does not publish a limit, the returned source is
+    ``fallback``; the first real context error is then used to calibrate and
+    persist the exact limit.
+    """
+    return resolve_model_context_length(
+        model,
+        base_url=base_url,
+        api_key=api_key,
+        config_context_length=config_context_length,
+        provider=provider,
+    )
 
 
 def _get_context_cache_path() -> Path:
@@ -834,7 +901,9 @@ def get_model_context_length(
         if local_endpoint and detect_local_server_type(base_url) is None:
             return result(DEFAULT_FALLBACK_CONTEXT, "fallback_local_unavailable")
 
-        endpoint_metadata = fetch_endpoint_model_metadata(base_url, api_key=api_key)
+        endpoint_metadata = fetch_endpoint_model_metadata(
+            base_url, api_key=api_key, model=model
+        )
         matched = endpoint_metadata.get(model)
         if not matched:
             # Single-model servers: if only one model is loaded, use it

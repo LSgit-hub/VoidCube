@@ -127,7 +127,7 @@ from .context_compressor import (
     ContextRecoveryKind,
     execute_context_recovery,
 )
-from .context_policy import ContextCompressionPolicy
+from .context_policy import ContextCompressionPolicy, configured_context_length
 from ...domain.agent.api_attempt import ApiAttemptState
 from .client_lifecycle import ChatClientLifecycle
 from .client_initialization import (
@@ -744,8 +744,16 @@ class AIAgent:
             except (TypeError, ValueError):
                 _config_context_length = None
 
-        # Store for reuse in switch_model (so config override persists across model switches)
-        self._config_context_length = _config_context_length
+        # Unified provider config may carry a provider-wide or model-specific
+        # context window. This is important for private OpenAI-compatible
+        # endpoints whose /models route omits metadata or requires auth.
+        if _config_context_length is None:
+            _config_context_length = configured_context_length(
+                _agent_cfg,
+                provider=self.provider,
+                model=self.model,
+                base_url=self.base_url,
+            )
 
         # Check custom_providers per-model context_length
         if _config_context_length is None:
@@ -767,6 +775,10 @@ class AIAgent:
                                     except (TypeError, ValueError):
                                         pass
                         break
+
+        # Retain the effective initial-model override for diagnostics and
+        # compatibility. Model switches resolve their own value below.
+        self._config_context_length = _config_context_length
         
         # Select context engine: config-driven (like memory providers).
         # 1. Check config.yaml context.engine setting
@@ -839,6 +851,26 @@ class AIAgent:
                 provider=self.provider,
                 policy=_context_policy,
             )
+        if not self.quiet_mode:
+            _policy = getattr(self.context_compressor, "policy", None)
+            if _policy is not None:
+                logger.info(
+                    "Context policy resolved: model=%s context=%s source=%s threshold=%s tail=%s",
+                    _policy.model,
+                    f"{_policy.context_length:,}",
+                    _policy.source,
+                    f"{_policy.threshold_tokens:,}",
+                    f"{_policy.tail_token_budget:,}",
+                )
+                if not _policy.detection_known:
+                    logger.warning(
+                        "Context length unavailable for model=%s provider=%s; "
+                        "using %s-token fallback until the provider reports a "
+                        "context limit in metadata or an error",
+                        _policy.model,
+                        self.provider or "unknown",
+                        f"{_policy.context_length:,}",
+                    )
         self.compression_enabled = compression_enabled
 
         # Reject models whose context window is below the minimum required
@@ -923,10 +955,12 @@ class AIAgent:
             )
 
         if not self.quiet_mode:
+            _policy = getattr(self.context_compressor, "policy", None)
+            _source_label = f" · source={_policy.source}" if _policy is not None else ""
             if compression_enabled:
-                print(f"📊 Context limit: {self.context_compressor.context_length:,} tokens (compress at {int(compression_threshold*100)}% = {self.context_compressor.threshold_tokens:,})")
+                print(f"📊 Context limit: {self.context_compressor.context_length:,} tokens (compress at {int(compression_threshold*100)}% = {self.context_compressor.threshold_tokens:,}{_source_label})")
             else:
-                print(f"📊 Context limit: {self.context_compressor.context_length:,} tokens (auto-compression disabled)")
+                print(f"📊 Context limit: {self.context_compressor.context_length:,} tokens (auto-compression disabled{_source_label})")
 
         # Check immediately so CLI users see the warning at startup.
         # Gateway status_callback is not yet wired, so any warning is stored
@@ -954,6 +988,9 @@ class AIAgent:
             "compressor_provider": getattr(_cc, "provider", self.provider),
             "compressor_context_length": _cc.context_length,
             "compressor_threshold_tokens": _cc.threshold_tokens,
+            "compressor_source": getattr(
+                getattr(_cc, "policy", None), "source", "probe"
+            ),
         }
     def reset_session_state(self):
         """Reset all session-scoped token counters to 0 for a fresh session.
@@ -1086,21 +1123,30 @@ class AIAgent:
 
         # ── Update context compressor ──
         if hasattr(self, "context_compressor") and self.context_compressor:
-            from voidcube.infrastructure.providers.model_metadata import get_model_context_length
-            new_context_length = get_model_context_length(
+            from voidcube.infrastructure.providers.model_metadata import resolve_model_context_length
+            _new_config_context_length = configured_context_length(
+                self.config if isinstance(getattr(self, "config", None), dict) else {},
+                provider=self.provider,
+                model=self.model,
+                base_url=self.base_url,
+            )
+            new_context_length, context_source = resolve_model_context_length(
                 self.model,
                 base_url=self.base_url,
                 api_key=self.api_key,
                 provider=self.provider,
-                config_context_length=getattr(self, "_config_context_length", None),
+                config_context_length=_new_config_context_length,
             )
-            self.context_compressor.update_model(
-                model=self.model,
-                context_length=new_context_length,
-                base_url=self.base_url,
-                api_key=getattr(self, "api_key", ""),
-                provider=self.provider,
-            )
+            update_kwargs = {
+                "model": self.model,
+                "context_length": new_context_length,
+                "base_url": self.base_url,
+                "api_key": getattr(self, "api_key", ""),
+                "provider": self.provider,
+            }
+            if isinstance(self.context_compressor, ContextCompressor):
+                update_kwargs["source"] = context_source
+            self.context_compressor.update_model(**update_kwargs)
 
         # ── Invalidate cached system prompt so it rebuilds next turn ──
         self._cached_system_prompt = None
@@ -2628,18 +2674,21 @@ class AIAgent:
             # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
             # causing oversized sessions to overflow the fallback.
             if hasattr(self, 'context_compressor') and self.context_compressor:
-                from voidcube.infrastructure.providers.model_metadata import get_model_context_length
-                fb_context_length = get_model_context_length(
+                from voidcube.infrastructure.providers.model_metadata import resolve_model_context_length
+                fb_context_length, fb_context_source = resolve_model_context_length(
                     self.model, base_url=self.base_url,
                     api_key=self.api_key, provider=self.provider,
                 )
-                self.context_compressor.update_model(
-                    model=self.model,
-                    context_length=fb_context_length,
-                    base_url=self.base_url,
-                    api_key=getattr(self, "api_key", ""),
-                    provider=self.provider,
-                )
+                update_kwargs = {
+                    "model": self.model,
+                    "context_length": fb_context_length,
+                    "base_url": self.base_url,
+                    "api_key": getattr(self, "api_key", ""),
+                    "provider": self.provider,
+                }
+                if isinstance(self.context_compressor, ContextCompressor):
+                    update_kwargs["source"] = fb_context_source
+                self.context_compressor.update_model(**update_kwargs)
 
             self._emit_status(
                 f"🔄 Primary model failed — switching to fallback: "
@@ -2695,13 +2744,16 @@ class AIAgent:
 
             # ── Restore context engine state ──
             cc = self.context_compressor
-            cc.update_model(
-                model=rt["compressor_model"],
-                context_length=rt["compressor_context_length"],
-                base_url=rt["compressor_base_url"],
-                api_key=rt["compressor_api_key"],
-                provider=rt["compressor_provider"],
-            )
+            update_kwargs = {
+                "model": rt["compressor_model"],
+                "context_length": rt["compressor_context_length"],
+                "base_url": rt["compressor_base_url"],
+                "api_key": rt["compressor_api_key"],
+                "provider": rt["compressor_provider"],
+            }
+            if isinstance(cc, ContextCompressor):
+                update_kwargs["source"] = rt.get("compressor_source", "probe")
+            cc.update_model(**update_kwargs)
 
             # ── Reset fallback chain for the new turn ──
             self._fallback_activated = False

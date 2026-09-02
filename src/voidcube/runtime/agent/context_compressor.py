@@ -221,13 +221,20 @@ def apply_context_recovery_plan(
     """Apply a planned context-window reduction and return whether it changed."""
     if plan.attempt.exhausted or not plan.context_length_changed:
         return False
-    compressor.update_model(
-        model=model,
-        context_length=plan.next_context_length,
-        base_url=base_url,
-        api_key=api_key,
-        provider=provider,
-    )
+    update_kwargs = {
+        "model": model,
+        "context_length": plan.next_context_length,
+        "base_url": base_url,
+        "api_key": api_key,
+        "provider": provider,
+    }
+    # ``source`` is an internal field of the built-in policy. Third-party
+    # ContextEngine implementations retain the original update_model contract.
+    if isinstance(compressor, ContextCompressor):
+        update_kwargs["source"] = (
+            "error_context" if plan.parsed_context_limit else "probe_tier"
+        )
+    compressor.update_model(**update_kwargs)
     if hasattr(compressor, "_context_probed"):
         compressor._context_probed = True
         compressor._context_probe_persistable = plan.parsed_context_limit
@@ -400,6 +407,7 @@ class ContextCompressor(ContextEngine):
         base_url: str = "",
         api_key: str = "",
         provider: str = "",
+        source: str = "probe",
     ) -> None:
         """Update model info after a model switch or fallback activation."""
         self.model = model
@@ -407,7 +415,7 @@ class ContextCompressor(ContextEngine):
         self.api_key = api_key
         self.provider = provider
         self.policy = self.policy.with_context_length(
-            context_length, model=model, source="probe"
+            context_length, model=model, source=source
         )
         self.context_length = self.policy.context_length
         self.threshold_tokens = self.policy.threshold_tokens

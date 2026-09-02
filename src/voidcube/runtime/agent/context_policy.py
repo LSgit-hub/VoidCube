@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from typing import Any
+import re
 
 from ...infrastructure.providers.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
@@ -75,6 +76,17 @@ class ContextCompressionPolicy:
             adaptive_by_model=bool(adaptive_by_model),
         )
 
+    @property
+    def detection_known(self) -> bool:
+        """Whether the length came from a provider/configured source."""
+        return self.source not in {
+            "fallback",
+            "fallback_endpoint",
+            "fallback_local_unavailable",
+            "probe",
+            "probe_tier",
+        }
+
     def with_context_length(
         self,
         context_length: int,
@@ -101,3 +113,50 @@ class ContextCompressionPolicy:
             "source": self.source,
             "adaptive_by_model": self.adaptive_by_model,
         }
+
+
+def configured_context_length(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    base_url: str = "",
+) -> int | None:
+    """Read provider/model context overrides from the normalized config."""
+    providers = config.get("providers") if isinstance(config, dict) else None
+    if not isinstance(providers, dict):
+        return None
+    entry = providers.get(provider)
+    if not isinstance(entry, dict):
+        for candidate in providers.values():
+            if not isinstance(candidate, dict):
+                continue
+            if str(candidate.get("base_url") or "").rstrip("/") == base_url.rstrip("/"):
+                entry = candidate
+                break
+    if not isinstance(entry, dict):
+        return None
+    model_contexts = entry.get("model_context_lengths")
+    if not isinstance(model_contexts, dict):
+        model_contexts = entry.get("context_lengths")
+    # A provider-wide value is intentionally ignored: switching models must
+    # never inherit the previous model's context window.
+    if not isinstance(model_contexts, dict):
+        return None
+    candidate = model_contexts.get(model)
+    try:
+        if isinstance(candidate, str):
+            raw = candidate.strip().replace(",", "").replace(" ", "")
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmMbB])?", raw)
+            if match:
+                multiplier = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(
+                    (match.group(2) or "").lower(), 1
+                )
+                value = int(float(match.group(1)) * multiplier)
+            else:
+                value = int(raw)
+        else:
+            value = int(candidate)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
