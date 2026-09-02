@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import voidcube.infrastructure.providers.auxiliary_client as auxiliary
+from voidcube.domain.contracts.integration_policy import RetiredIntegrationError
 from src.voidcube.infrastructure.providers.client_factory import normalize_base_url
 
 
@@ -316,6 +317,36 @@ def test_fallback_skips_the_failed_provider_chain_entry(monkeypatch):
     client, model, provider = auxiliary._try_provider_fallback("deepseek")
 
     assert (client, model, provider) == (fallback_client, "fallback-model", "nous")
+    assert attempted == ["openrouter", "nous"]
+
+
+def test_fallback_skips_retired_candidate_and_continues(monkeypatch):
+    attempted: list[str] = []
+
+    def retired_candidate():
+        attempted.append("openrouter")
+        raise RetiredIntegrationError(
+            "Requested provider or model is retired by project policy"
+        )
+
+    fallback_client = _client(_SyncCompletions(_response()))
+
+    def active_candidate():
+        attempted.append("nous")
+        return fallback_client, "active-model"
+
+    monkeypatch.setattr(
+        auxiliary,
+        "_get_provider_chain",
+        lambda: [
+            ("openrouter", retired_candidate),
+            ("nous", active_candidate),
+        ],
+    )
+
+    client, model, provider = auxiliary._try_provider_fallback("gpt")
+
+    assert (client, model, provider) == (fallback_client, "active-model", "nous")
     assert attempted == ["openrouter", "nous"]
 
 

@@ -1359,11 +1359,18 @@ class AIAgent:
                 except (TypeError, ValueError):
                     _aux_context_config = None
 
-            aux_context = get_model_context_length(
+            aux_context_result = get_model_context_length(
                 aux_model,
                 base_url=aux_base_url,
                 api_key=aux_api_key,
                 config_context_length=_aux_context_config,
+            )
+            # ``get_model_context_length`` supports an optional source-bearing
+            # tuple; this call uses the default integer-only mode.
+            aux_context = (
+                aux_context_result[0]
+                if isinstance(aux_context_result, tuple)
+                else aux_context_result
             )
 
             threshold = self.context_compressor.threshold_tokens

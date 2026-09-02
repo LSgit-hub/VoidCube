@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable
 
+from ...domain.contracts.integration_policy import RetiredIntegrationError
 from .auxiliary_policy import normalize_auxiliary_provider
 
 
@@ -48,7 +49,19 @@ def try_provider_fallback(
     for label, try_fn in chain:
         if label == skip_label:
             continue
-        client, model = try_fn()
+        try:
+            client, model = try_fn()
+        except RetiredIntegrationError:
+            # A configured fallback can become retired between config refreshes.
+            # Treat that candidate as unavailable and continue through the chain;
+            # retired-policy failures must never abort auxiliary summarization.
+            tried.append(f"{label} (retired)")
+            log.warning(
+                "Auxiliary %s: skipping retired fallback candidate %s",
+                task or "call",
+                label,
+            )
+            continue
         if client is not None:
             log.info(
                 "Auxiliary %s: %s on %s - falling back to %s (%s)",
